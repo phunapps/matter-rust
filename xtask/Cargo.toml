@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Internal build helpers, code generation, and test vector capture tools."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# Intentionally empty. Add tools (codegen, test-vector capture, release helpers)
+# as the milestones that need them arrive.

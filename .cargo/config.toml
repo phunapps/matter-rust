@@ -1,0 +1,5 @@
+# Workspace-wide cargo configuration.
+
+[alias]
+# `cargo xtask <cmd>` runs the helper binary in the `xtask/` crate.
+xtask = "run --quiet --package xtask --"
