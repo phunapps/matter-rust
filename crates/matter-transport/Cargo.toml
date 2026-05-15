@@ -1,0 +1,21 @@
+[package]
+name = "matter-transport"
+version = "0.0.0"
+description = "Matter protocol network transport: UDP, mDNS, framing, MRP."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["matter", "udp", "mdns", "mrp", "iot"]
+categories = ["network-programming"]
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+matter-codec = { path = "../matter-codec", version = "0.0.0" }
+matter-crypto = { path = "../matter-crypto", version = "0.0.0" }
+thiserror = { workspace = true }

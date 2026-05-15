@@ -1,0 +1,57 @@
+# matter.js comparison notes
+
+`matter.js` is the production-grade controller library in the Matter ecosystem
+today. It is our primary cross-reference for byte-level correctness. This
+document records places where `matter-rust`'s shape differs from matter.js, so
+that contributors moving between the two projects understand why.
+
+## High-level shape
+
+| Aspect               | matter.js                                      | matter-rust                                                 |
+| -------------------- | ---------------------------------------------- | ----------------------------------------------------------- |
+| Language             | TypeScript                                     | Rust                                                        |
+| Runtime              | Node.js, browsers, React Native                | Tokio (later milestones); plain Rust at lower layers        |
+| Crypto primitives    | `node:crypto`, browser SubtleCrypto, fallbacks | `ring`                                                      |
+| Distribution         | Single npm package (`@project-chip/matter.js`) | Many small crates, independently versioned                  |
+| Cluster definitions  | Generated at runtime from spec descriptors     | Generated at build time by `xtask` codegen                  |
+| Async style          | Promises, async iterators                      | `async fn`, `Stream`, `tokio::sync` channels                |
+
+## Why workspace of small crates instead of one mega-crate
+
+`matter.js` ships as one importable package. For Rust, we prefer many small
+crates so that:
+
+- An embedded user who only needs TLV decoding can depend on `matter-codec` and
+  pay nothing for the rest.
+- Cryptographic code lives in its own crate (`matter-crypto`) with a clear
+  release-review boundary.
+- Each crate's API surface is small enough to actually keep stable across
+  versions.
+
+The trade-off is more `Cargo.toml`s to maintain. We accept it.
+
+## Why code generation at build time instead of runtime
+
+`matter.js` builds cluster definitions at runtime from descriptor objects. That
+suits a dynamic language well. In Rust, build-time code generation gives us:
+
+- Typed `read` / `write` / `invoke` calls with compile-time field checking.
+- Zero runtime cost for descriptor traversal.
+- IDE autocomplete on real types, not stringly-typed cluster IDs.
+
+The cost is a `build.rs` / `xtask` step. We accept it.
+
+## Where we expect to disagree at the bytes
+
+In principle, never. If `matter-rust` produces different bytes than
+`matter.js` for the same input, **`matter-rust` is wrong by default** and we
+investigate. Add the divergence as a test vector, then fix the Rust side.
+
+## Where we will diverge on ergonomics
+
+- Error types are typed enums (`thiserror`), not stringly typed.
+- Streams of attribute reports are `impl Stream` rather than `EventEmitter`.
+- Subscriptions are explicit handles with `Drop` cancelling the subscription,
+  rather than callback registration.
+
+These are language-idiomatic differences. They do not affect interop.

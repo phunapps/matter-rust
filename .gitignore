@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Claude / AI assistant scaffolding (must never be committed)
+claude.md
+CLAUDE.md
+.claude/
+AGENTS.md
+GEMINI.md
+.gemini/
+.cursor/
+.cursorrules
+
+# Internal planning / process artefacts (kept local, not part of the repo)
+plans/
+specs/
+superpowers/
+.superpowers/
+notes/
+scratch/
+
+# Fuzzing artefacts
+**/fuzz/corpus/
+**/fuzz/artifacts/

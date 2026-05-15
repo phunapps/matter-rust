@@ -1,0 +1,20 @@
+[package]
+name = "matter-cert"
+version = "0.0.0"
+description = "Matter protocol certificate parsing and chain validation."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["matter", "certificate", "x509", "iot"]
+categories = ["cryptography", "parser-implementations"]
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+matter-codec = { path = "../matter-codec", version = "0.0.0" }
+thiserror = { workspace = true }

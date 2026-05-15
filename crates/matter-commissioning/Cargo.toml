@@ -1,0 +1,23 @@
+[package]
+name = "matter-commissioning"
+version = "0.0.0"
+description = "Matter commissioning state machine: setup payload, attestation, NOC issuance, network commissioning."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["matter", "commissioning", "iot", "smart-home"]
+categories = ["network-programming", "embedded"]
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+matter-codec = { path = "../matter-codec", version = "0.0.0" }
+matter-cert = { path = "../matter-cert", version = "0.0.0" }
+matter-crypto = { path = "../matter-crypto", version = "0.0.0" }
+matter-transport = { path = "../matter-transport", version = "0.0.0" }
+thiserror = { workspace = true }
