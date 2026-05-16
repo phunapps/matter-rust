@@ -246,8 +246,8 @@ impl<'a> TlvWriter<'a> {
             Value::Int(v) => self.put_int(tag, *v),
             Value::Float(v) => self.put_float(tag, *v),
             Value::Double(v) => self.put_double(tag, *v),
-            // Temporary — Task 5 replaces with put_utf8/put_bytes arms.
-            Value::Utf8(_) | Value::Bytes(_) => unreachable!("phase 2 task 5"),
+            Value::Utf8(v) => self.put_utf8(tag, v),
+            Value::Bytes(v) => self.put_bytes(tag, v),
         }
     }
 }
@@ -595,6 +595,25 @@ mod tests {
     }
 
     // --- Cycle 7: write_value dispatch ---
+
+    #[test]
+    fn write_value_dispatches_on_utf8_and_bytes_variants() {
+        for (value, expected) in [
+            (
+                Value::Utf8(String::from("Hello!")),
+                vec![0x0C, 0x06, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x21],
+            ),
+            (
+                Value::Bytes(vec![0x00, 0x01, 0x02, 0x03, 0x04]),
+                vec![0x10, 0x05, 0x00, 0x01, 0x02, 0x03, 0x04],
+            ),
+        ] {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.write_value(Tag::Anonymous, &value).unwrap();
+            assert_eq!(buf, expected, "value={value:?}");
+        }
+    }
 
     #[test]
     fn write_value_dispatches_on_variant() {
