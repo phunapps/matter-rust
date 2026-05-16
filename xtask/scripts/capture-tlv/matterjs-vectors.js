@@ -22,14 +22,13 @@ import { TlvUInt8, TlvBoolean, TlvObject, TlvArray, TlvField } from "./api.js";
 //   0x29 = context-tag bool-true (tag byte follows, no value bytes)
 
 const EmptyStruct = TlvObject({});
-const EmptyArrayOfU8 = TlvArray(TlvUInt8);
+const TlvArrayOfU8 = TlvArray(TlvUInt8);
 const StructWithU8AtCtxTag0 = TlvObject({
   a: TlvField(0, TlvUInt8),
 });
 const StructWithBoolAtCtxTag7 = TlvObject({
   flag: TlvField(7, TlvBoolean),
 });
-const ArrayOfU8 = TlvArray(TlvUInt8);
 
 export const matterjsVectors = [
   {
@@ -47,7 +46,7 @@ export const matterjsVectors = [
     id: "0020-array-empty-anonymous",
     description: "Empty array, anonymous tag",
     source: "matter.js capture",
-    codec: EmptyArrayOfU8,
+    codec: TlvArrayOfU8,
     input: [],
     encode: {
       tag: { kind: "anonymous" },
@@ -77,7 +76,7 @@ export const matterjsVectors = [
     id: "0022-array-of-three-uint8-anonymous",
     description: "Array of three uint8 values [1, 2, 3], anonymous tag",
     source: "matter.js capture",
-    codec: ArrayOfU8,
+    codec: TlvArrayOfU8,
     input: [1, 2, 3],
     encode: {
       tag: { kind: "anonymous" },
