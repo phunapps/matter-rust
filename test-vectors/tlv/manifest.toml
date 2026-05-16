@@ -176,7 +176,7 @@ kind = "anonymous"
 [vector.encode.value]
 kind = "float"
 width = 4
-value = 0
+value = "0.0"
 
 [[vector]]
 id = "0014-float64-0-anonymous"
@@ -188,8 +188,9 @@ file = "0014-float64-0-anonymous.bin"
 kind = "anonymous"
 
 [vector.encode.value]
-kind = "double"
-value = 0
+kind = "float"
+width = 8
+value = "0.0"
 
 [[vector]]
 id = "0015-utf8-hello-anonymous"

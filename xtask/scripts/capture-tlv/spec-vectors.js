@@ -130,13 +130,17 @@ export const specVectors = [
   },
 
   // -- floats --
+  // Float values are stored as strings in the manifest because `@iarna/toml`
+  // serialises JS `0.0` as the integer `0`, losing the float type. Storing as
+  // strings makes the precision and type unambiguous when the Rust harness
+  // deserialises them. Same rationale as 64-bit integers (see below).
   {
     id: "0013-float32-0-anonymous",
     description: "Single-precision float 0.0, anonymous tag",
     source: "Matter Core 1.4 §A.2 (Single-precision 0.0)",
     codec: TlvFloat, input: 0.0,
     expectedBytes: u8(0x0A, 0x00, 0x00, 0x00, 0x00),
-    encode: { tag: { kind: "anonymous" }, value: { kind: "float", width: 4, value: 0.0 } },
+    encode: { tag: { kind: "anonymous" }, value: { kind: "float", width: 4, value: "0.0" } },
   },
   {
     id: "0014-float64-0-anonymous",
@@ -144,7 +148,7 @@ export const specVectors = [
     source: "derived from spec §A.2 encoding rules",
     codec: TlvDouble, input: 0.0,
     expectedBytes: u8(0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00),
-    encode: { tag: { kind: "anonymous" }, value: { kind: "double", value: 0.0 } },
+    encode: { tag: { kind: "anonymous" }, value: { kind: "float", width: 8, value: "0.0" } },
   },
 
   // -- strings --
