@@ -182,6 +182,25 @@ impl<'a> TlvWriter<'a> {
         )
     }
 
+    /// Emit an octet string with the given tag. The minimum-width length
+    /// field (1, 2, 4, or 8 bytes) is chosen automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::LengthOverflow`] if the slice is longer than
+    /// `u64::MAX` bytes (impossible in practice on any supported platform,
+    /// but the return type is `Result` for portability).
+    pub fn put_bytes(&mut self, tag: Tag, v: &[u8]) -> Result<()> {
+        self.put_string_payload(
+            tag,
+            v,
+            et::BYTES_LEN8,
+            et::BYTES_LEN16,
+            et::BYTES_LEN32,
+            et::BYTES_LEN64,
+        )
+    }
+
     fn put_string_payload(
         &mut self,
         tag: Tag,
@@ -542,6 +561,37 @@ mod tests {
         assert_eq!(buf[0], 0x0E);
         assert_eq!(&buf[1..5], &[0x00, 0x00, 0x01, 0x00]);
         assert_eq!(buf.len(), 1 + 4 + len);
+    }
+
+    // --- Cycle 12: put_bytes ---
+
+    #[test]
+    fn put_bytes_five_bytes_anonymous_matches_vector_0017() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_bytes(Tag::Anonymous, &[0x00, 0x01, 0x02, 0x03, 0x04])
+            .unwrap();
+        assert_eq!(buf, [0x10, 0x05, 0x00, 0x01, 0x02, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn put_bytes_empty_anonymous_matches_vector_0018() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_bytes(Tag::Anonymous, &[]).unwrap();
+        assert_eq!(buf, [0x10, 0x00]);
+    }
+
+    #[test]
+    fn put_bytes_at_256_bytes_picks_len16() {
+        let data = vec![0xAB; 256];
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_bytes(Tag::Anonymous, &data).unwrap();
+        assert_eq!(buf[0], 0x11);
+        assert_eq!(&buf[1..3], &[0x00, 0x01]);
+        assert_eq!(buf.len(), 1 + 2 + 256);
+        assert!(buf[3..].iter().all(|&b| b == 0xAB));
     }
 
     // --- Cycle 7: write_value dispatch ---
