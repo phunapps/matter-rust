@@ -1,0 +1,18 @@
+{
+  "name": "matter-rust-capture-tlv",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Captures TLV test vectors from matter.js for matter-rust.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "capture": "node index.js"
+  },
+  "dependencies": {
+    "@iarna/toml": "2.2.5",
+    "@matter/types": "0.13.0",
+    "@project-chip/matter.js": "0.13.0"
+  }
+}
