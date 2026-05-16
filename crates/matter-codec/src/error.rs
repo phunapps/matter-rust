@@ -23,9 +23,10 @@ pub enum Error {
     #[error("invalid element type 0x{0:02x}")]
     InvalidElementType(u8),
 
-    /// A UTF-8 string element contained invalid UTF-8.
+    /// A UTF-8 string element contained an invalid byte sequence.
     ///
-    /// Phase 1 does not produce this variant; it is reserved for phase 2.
+    /// Produced by `TlvReader::next` when reading a UTF-8 element whose
+    /// payload bytes fail `core::str::from_utf8` validation.
     #[error("invalid UTF-8 in TLV string: {0}")]
     InvalidUtf8(#[from] core::str::Utf8Error),
 

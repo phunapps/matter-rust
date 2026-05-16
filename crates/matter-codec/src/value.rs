@@ -1,8 +1,7 @@
 //! Matter TLV element values.
 //!
-//! Phase 1 of `matter-codec` defines only the scalar variants. Strings
-//! (`Utf8`, `Bytes`) ship in phase 2; container variants
-//! (`Structure`, `Array`, `List`) ship in phase 3.
+//! Phase 2 of `matter-codec` adds UTF-8 string and octet-string variants.
+//! Container variants (`Structure`, `Array`, `List`) ship in phase 3.
 
 /// A decoded Matter TLV value, collapsed across wire widths.
 ///
@@ -30,6 +29,17 @@ pub enum Value {
 
     /// An 8-byte IEEE 754 double-precision float.
     Double(f64),
+
+    /// A UTF-8 string. The wire format is a 1/2/4/8-byte little-endian
+    /// length field (writer picks the minimal width) followed by the
+    /// raw UTF-8 bytes. The reader rejects invalid UTF-8 with
+    /// [`crate::Error::InvalidUtf8`].
+    Utf8(String),
+
+    /// An octet string. The wire format is a 1/2/4/8-byte little-endian
+    /// length field (writer picks the minimal width) followed by the
+    /// raw bytes.
+    Bytes(Vec<u8>),
 
     /// The TLV null value (element type `0x14`).
     Null,

@@ -45,25 +45,10 @@ struct Encode {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TagDesc {
     Anonymous,
-    Context {
-        number: u8,
-    },
-    CommonProfile {
-        #[allow(dead_code)]
-        number: u32,
-    },
-    ImplicitProfile {
-        #[allow(dead_code)]
-        number: u32,
-    },
-    FullyQualified {
-        #[allow(dead_code)]
-        vendor: u16,
-        #[allow(dead_code)]
-        profile: u16,
-        #[allow(dead_code)]
-        tag: u32,
-    },
+    Context { number: u8 },
+    CommonProfile { number: u32 },
+    ImplicitProfile { number: u32 },
+    FullyQualified { vendor: u16, profile: u16, tag: u32 },
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,11 +73,9 @@ enum ValueDesc {
         value: String,
     },
     Utf8 {
-        #[allow(dead_code)]
         value: String,
     },
     Bytes {
-        #[allow(dead_code)]
         value: String,
     },
     Structure {
@@ -159,13 +142,26 @@ fn load_bin(file: &str) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
+// build_tag keeps Result<_, &str> signature so the caller loop can use the
+// same `match build_tag(...) { Ok => ..., Err => skip }` pattern uniformly,
+// even though all arms are currently Ok. The lint fires because no arm is Err;
+// future phases may add tag forms we don't yet support, keeping Err reachable.
+#[allow(clippy::unnecessary_wraps)]
 fn build_tag(desc: &TagDesc) -> Result<Tag, &'static str> {
     match desc {
         TagDesc::Anonymous => Ok(Tag::Anonymous),
         TagDesc::Context { number } => Ok(Tag::Context(*number)),
-        TagDesc::CommonProfile { .. } => Err("common_profile tag (phase 2)"),
-        TagDesc::ImplicitProfile { .. } => Err("implicit_profile tag (phase 2)"),
-        TagDesc::FullyQualified { .. } => Err("fully_qualified tag (phase 2)"),
+        TagDesc::CommonProfile { number } => Ok(Tag::CommonProfile(*number)),
+        TagDesc::ImplicitProfile { number } => Ok(Tag::ImplicitProfile(*number)),
+        TagDesc::FullyQualified {
+            vendor,
+            profile,
+            tag,
+        } => Ok(Tag::FullyQualified {
+            vendor: *vendor,
+            profile: *profile,
+            tag: *tag,
+        }),
     }
 }
 
@@ -202,11 +198,39 @@ fn build_value(desc: &ValueDesc) -> Result<Value, &'static str> {
                 _ => Err("float width != 4 or 8"),
             }
         }
-        ValueDesc::Utf8 { .. } => Err("utf8 (phase 2)"),
-        ValueDesc::Bytes { .. } => Err("bytes (phase 2)"),
+        ValueDesc::Utf8 { value } => Ok(Value::Utf8(value.clone())),
+        ValueDesc::Bytes { value } => {
+            let bytes = hex_decode(value).map_err(|()| "bytes hex literal")?;
+            Ok(Value::Bytes(bytes))
+        }
         ValueDesc::Structure { .. } => Err("structure (phase 3)"),
         ValueDesc::Array { .. } => Err("array (phase 3)"),
         ValueDesc::List { .. } => Err("list (phase 3)"),
+    }
+}
+
+// MSRV 1.75: `is_multiple_of` (stable 1.87) is not available; use `% 2 != 0`.
+#[allow(clippy::result_unit_err)]
+fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
+    if s.len() % 2 != 0 {
+        return Err(());
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for chunk in s.as_bytes().chunks_exact(2) {
+        let hi = hex_nibble(chunk[0])?;
+        let lo = hex_nibble(chunk[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+#[allow(clippy::result_unit_err)]
+fn hex_nibble(b: u8) -> Result<u8, ()> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err(()),
     }
 }
 
@@ -269,13 +293,14 @@ fn all_phase_1_vectors_encode_and_decode_correctly() {
         processed += 1;
     }
 
-    // Sanity: we must have processed *some* vectors. M0 shipped 23; phase 1
-    // should handle at least 14 (booleans + uints + ints + float + double,
-    // all anonymous tag). If this assertion fails we are either silently
-    // skipping vectors we should handle, or the manifest is empty.
+    // Sanity: we must have processed *some* vectors. M0 shipped 23 + 1
+    // post-M0 (vector 0024 added in phase 2 as a context-tag scalar);
+    // phase 2 handles vectors 0001-0018 + 0024 = 19. If this assertion
+    // fails we are either silently skipping vectors we should handle, or
+    // the manifest is empty.
     assert!(
-        processed >= 14,
-        "expected at least 14 vectors to be processed, got {processed}; skipped = {skipped:?}"
+        processed >= 19,
+        "expected at least 19 vectors to be processed, got {processed}; skipped = {skipped:?}"
     );
 
     eprintln!(

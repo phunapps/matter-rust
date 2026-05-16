@@ -351,3 +351,18 @@ number = 7
 [vector.encode.value.members.value]
 kind = "bool"
 value = true
+
+[[vector]]
+id = "0024-uint8-42-context-5"
+description = "Unsigned 8-bit integer 42 with context tag 5"
+source = "derived from spec §A.2 encoding rules (context-tag form 0b001, uint 1-byte = 0x04)"
+file = "0024-uint8-42-context-5.bin"
+
+[vector.encode.tag]
+kind = "context"
+number = 5
+
+[vector.encode.value]
+kind = "uint"
+width = 1
+value = 42
