@@ -14,16 +14,15 @@
 //! # Usage
 //!
 //! ```
-//! use matter_codec::{Tag, TlvWriter, Value};
-//!
+//! use matter_codec::{Tag, TlvWriter};
+//! # fn main() -> Result<(), matter_codec::Error> {
 //! let mut bytes = Vec::new();
 //! let mut writer = TlvWriter::new(&mut bytes);
-//! writer.put_bool(Tag::Anonymous, true).unwrap();
+//! writer.put_bool(Tag::Anonymous, true)?;
 //! assert_eq!(bytes, [0x09]);
+//! # Ok(())
+//! # }
 //! ```
-//!
-//! The example in the doc-test uses `unwrap()`; in real library code you
-//! must propagate the `Result` instead.
 
 #![forbid(unsafe_code)]
 
