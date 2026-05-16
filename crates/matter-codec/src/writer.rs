@@ -2,6 +2,7 @@
 
 use crate::error::Result;
 use crate::tag::Tag;
+use crate::value::Value;
 use crate::{element_type as et, tag_control as tc};
 
 /// A streaming TLV encoder that appends to a caller-provided `Vec<u8>`.
@@ -125,6 +126,26 @@ impl<'a> TlvWriter<'a> {
         self.write_tag(tag, et::FLOAT64);
         self.out.extend_from_slice(&v.to_le_bytes());
         Ok(())
+    }
+
+    /// Walk a [`Value`] tree and emit the appropriate sequence of TLV
+    /// elements. Phase 1 only handles scalar variants; container variants
+    /// arrive in phase 3.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any error returned by the underlying `put_*` method. In
+    /// phase 1, all `put_*` methods are infallible; the `Result` return type
+    /// is reserved for future I/O-backed writers and container variants.
+    pub fn write_value(&mut self, tag: Tag, value: &Value) -> Result<()> {
+        match value {
+            Value::Bool(v) => self.put_bool(tag, *v),
+            Value::Null => self.put_null(tag),
+            Value::Uint(v) => self.put_uint(tag, *v),
+            Value::Int(v) => self.put_int(tag, *v),
+            Value::Float(v) => self.put_float(tag, *v),
+            Value::Double(v) => self.put_double(tag, *v),
+        }
     }
 }
 
@@ -274,5 +295,28 @@ mod tests {
         // 0b001_00100 = 0x24 (context-tag form | UINT8 element type),
         // then tag number 0x05, then payload 0x2A.
         assert_eq!(buf, [0x24, 0x05, 0x2A]);
+    }
+
+    // --- Cycle 7: write_value dispatch ---
+
+    #[test]
+    fn write_value_dispatches_on_variant() {
+        // One sanity case per variant. Bytes are taken from earlier per-method tests.
+        for (value, expected) in [
+            (Value::Bool(true), vec![0x09]),
+            (Value::Null, vec![0x14]),
+            (Value::Uint(42), vec![0x04, 0x2A]),
+            (Value::Int(-17), vec![0x00, 0xEF]),
+            (Value::Float(0.0), vec![0x0A, 0x00, 0x00, 0x00, 0x00]),
+            (
+                Value::Double(0.0),
+                vec![0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+        ] {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.write_value(Tag::Anonymous, &value).unwrap();
+            assert_eq!(buf, expected, "value={value:?}");
+        }
     }
 }
