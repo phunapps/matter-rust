@@ -26,13 +26,23 @@ mod tests {
     }
 
     #[test]
-    fn context_high_bit() {
+    fn context_is_0x20() {
+        assert_eq!(CONTEXT, 0x20);
         assert_eq!(CONTEXT, 0b0010_0000);
     }
 
     #[test]
     fn mask_round_trips() {
-        for high in [ANONYMOUS, CONTEXT, COMMON_PROFILE_2, FULLY_QUALIFIED_8] {
+        for high in [
+            ANONYMOUS,
+            CONTEXT,
+            COMMON_PROFILE_2,
+            COMMON_PROFILE_4,
+            IMPLICIT_PROFILE_2,
+            IMPLICIT_PROFILE_4,
+            FULLY_QUALIFIED_6,
+            FULLY_QUALIFIED_8,
+        ] {
             let combined = high | 0x07; // 0x07 is in the element-type range
             assert_eq!(combined & TAG_CONTROL_MASK, high);
         }
