@@ -17,3 +17,7 @@ workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
