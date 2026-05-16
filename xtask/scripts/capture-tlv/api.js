@@ -14,6 +14,21 @@ function pick(name) {
 }
 
 export const TlvBoolean = pick("TlvBoolean");
+export const TlvUInt8 = pick("TlvUInt8");
+export const TlvUInt16 = pick("TlvUInt16");
+export const TlvUInt32 = pick("TlvUInt32");
+export const TlvUInt64 = pick("TlvUInt64");
+export const TlvInt8 = pick("TlvInt8");
+export const TlvInt16 = pick("TlvInt16");
+export const TlvInt32 = pick("TlvInt32");
+export const TlvInt64 = pick("TlvInt64");
+export const TlvFloat = pick("TlvFloat");
+export const TlvDouble = pick("TlvDouble");
+export const TlvString = pick("TlvString");
+export const TlvByteString = pick("TlvByteString");
+// Note: TlvNull is NOT exported. Neither TlvVoid nor TlvAny encodes a standalone
+// Matter null element (0x14) — TlvVoid.encode(null) errors, TlvVoid.encode(undefined)
+// returns empty bytes, TlvAny.encode(null) errors. The null vector is omitted.
 
 // Encode a value via a matter.js TLV codec and return raw bytes as a Uint8Array.
 export function encode(codec, value) {
