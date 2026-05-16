@@ -65,19 +65,40 @@ mod tests {
     #[test]
     fn element_type_codes_are_distinct() {
         let codes = [
-            INT8, INT16, INT32, INT64,
-            UINT8, UINT16, UINT32, UINT64,
-            BOOL_FALSE, BOOL_TRUE,
-            FLOAT32, FLOAT64,
-            UTF8_LEN8, UTF8_LEN16, UTF8_LEN32, UTF8_LEN64,
-            BYTES_LEN8, BYTES_LEN16, BYTES_LEN32, BYTES_LEN64,
-            NULL, STRUCTURE, ARRAY, LIST, END_OF_CONTAINER,
+            INT8,
+            INT16,
+            INT32,
+            INT64,
+            UINT8,
+            UINT16,
+            UINT32,
+            UINT64,
+            BOOL_FALSE,
+            BOOL_TRUE,
+            FLOAT32,
+            FLOAT64,
+            UTF8_LEN8,
+            UTF8_LEN16,
+            UTF8_LEN32,
+            UTF8_LEN64,
+            BYTES_LEN8,
+            BYTES_LEN16,
+            BYTES_LEN32,
+            BYTES_LEN64,
+            NULL,
+            STRUCTURE,
+            ARRAY,
+            LIST,
+            END_OF_CONTAINER,
         ];
         let mut seen = [false; 256];
         for c in codes {
             assert!(!seen[c as usize], "duplicate element type code 0x{c:02x}");
             seen[c as usize] = true;
-            assert!(c & !ELEMENT_TYPE_MASK == 0, "code 0x{c:02x} bleeds outside element-type bits");
+            assert!(
+                c & !ELEMENT_TYPE_MASK == 0,
+                "code 0x{c:02x} bleeds outside element-type bits"
+            );
         }
     }
 }
