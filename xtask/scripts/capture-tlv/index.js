@@ -36,6 +36,13 @@ async function main() {
     });
   }
 
+  // Abort before touching Tier-2 if Tier-1 had any disagreements.
+  if (errors.length > 0) {
+    console.error("matter.js disagreed with spec on the following vectors:");
+    for (const e of errors) console.error(e);
+    process.exit(1);
+  }
+
   // Tier-2: matter.js bytes are the source of truth — no pre-declared expectation.
   for (const v of matterjsVectors) {
     const actual = encode(v.codec, v.input);
@@ -46,12 +53,6 @@ async function main() {
       source: v.source,
       encode: v.encode,
     });
-  }
-
-  if (errors.length > 0) {
-    console.error("matter.js disagreed with spec on the following vectors:");
-    for (const e of errors) console.error(e);
-    process.exit(1);
   }
 
   await writeManifest(written);

@@ -81,6 +81,9 @@ plus the updated `manifest.toml`.
 - No common-profile / implicit-profile / fully-qualified tag vectors.
   matter.js does emit these via lower-level codec primitives; deferred
   to M1.
+- No `list` container vector. matter.js exposes `TlvList` for the
+  spec's `0x17` element type, but it has no current high-level use; we
+  add the vector when the M1 codec needs it.
 
 ## What the future Rust harness does with these
 
@@ -89,3 +92,19 @@ encodes each `encode` block via `TlvWriter`, asserts byte equality with
 the matching `.bin`, then round-trips the `.bin` through `TlvReader`
 and asserts structural equality. The harness lives with the codec
 crate, not here; see the M1 plan when it lands.
+
+## Schema notes
+
+- **`encode.value.kind`.** The spec's value-kinds list separates `float`
+  and `double`. The manifest collapses both under `kind = "float"` with
+  `width = 4` or `width = 8`, mirroring the `uint` / `int` width
+  pattern. The Rust harness can therefore branch on `(kind, width)`
+  uniformly across all numeric types.
+- **Float values are TOML strings.** `value = "0.0"` (quoted) rather
+  than `value = 0.0` (bare). `@iarna/toml` serialises JS `0.0` as the
+  integer `0`, which a Rust deserialiser would type as `i64`. Strings
+  make the precision and type unambiguous.
+- **64-bit integer values are TOML strings.** Same reason — JavaScript
+  loses precision past `2^53` for plain numbers. The string carries the
+  full value, in lowercase hex for unsigned (`"0x0123456789abcdef"`) or
+  decimal for signed (`"-9223372036854775808"`).
