@@ -20,6 +20,20 @@ async function main() {
 
   // Tier-1: cross-check matter.js against pre-declared bytes.
   for (const v of specVectors) {
+    if (v.handEncoded) {
+      // Spec-derived bytes that matter.js cannot reproduce because its
+      // public API does not expose tagging at the per-element level.
+      // The vector's `source` cites the spec section the bytes derive
+      // from; reviewers verify by hand.
+      await writeBin(v.id, v.expectedBytes);
+      written.push({
+        id: v.id,
+        description: v.description,
+        source: v.source,
+        encode: v.encode,
+      });
+      continue;
+    }
     const actual = encode(v.codec, v.input);
     if (!bytesEqual(actual, v.expectedBytes)) {
       errors.push(

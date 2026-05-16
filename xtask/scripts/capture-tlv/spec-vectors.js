@@ -186,4 +186,15 @@ export const specVectors = [
     expectedBytes: u8(0x10, 0x00),
     encode: { tag: { kind: "anonymous" }, value: { kind: "bytes", value: "" } },
   },
+  {
+    id: "0024-uint8-42-context-5",
+    description: "Unsigned 8-bit integer 42 with context tag 5",
+    source: "derived from spec §A.2 encoding rules (context-tag form 0b001, uint 1-byte = 0x04)",
+    handEncoded: true,
+    expectedBytes: u8(0x24, 0x05, 0x2A),
+    encode: {
+      tag: { kind: "context", number: 5 },
+      value: { kind: "uint", width: 1, value: 42 },
+    },
+  },
 ];

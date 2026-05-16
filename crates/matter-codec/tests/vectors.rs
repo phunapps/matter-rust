@@ -298,8 +298,8 @@ fn all_phase_1_vectors_encode_and_decode_correctly() {
     // all anonymous tag). If this assertion fails we are either silently
     // skipping vectors we should handle, or the manifest is empty.
     assert!(
-        processed >= 18,
-        "expected at least 18 vectors to be processed, got {processed}; skipped = {skipped:?}"
+        processed >= 19,
+        "expected at least 19 vectors to be processed, got {processed}; skipped = {skipped:?}"
     );
 
     eprintln!(
