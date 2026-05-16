@@ -1,0 +1,50 @@
+import { encode } from "./api.js";
+import { specVectors } from "./spec-vectors.js";
+import { ensureOutDir, writeBin, writeManifest } from "./manifest.js";
+
+function bytesEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function toHex(bytes) {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
+}
+
+async function main() {
+  await ensureOutDir();
+  const errors = [];
+  const written = [];
+
+  for (const v of specVectors) {
+    const actual = encode(v.codec, v.input);
+    if (!bytesEqual(actual, v.expectedBytes)) {
+      errors.push(
+        `vector ${v.id} (${v.source}):\n  expected: ${toHex(v.expectedBytes)}\n  matter.js: ${toHex(actual)}`,
+      );
+      continue;
+    }
+    await writeBin(v.id, v.expectedBytes);
+    written.push({
+      id: v.id,
+      description: v.description,
+      source: v.source,
+      encode: v.encode,
+    });
+  }
+
+  if (errors.length > 0) {
+    console.error("matter.js disagreed with spec on the following vectors:");
+    for (const e of errors) console.error(e);
+    process.exit(1);
+  }
+
+  await writeManifest(written);
+  console.log(`wrote ${written.length} vector(s) to test-vectors/tlv/`);
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

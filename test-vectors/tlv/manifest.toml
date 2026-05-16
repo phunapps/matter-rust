@@ -1,0 +1,12 @@
+[[vector]]
+id = "0001-bool-true-anonymous"
+description = "Boolean true, anonymous tag"
+source = "Matter Core 1.4 §A.2 (Boolean true)"
+file = "0001-bool-true-anonymous.bin"
+
+[vector.encode.tag]
+kind = "anonymous"
+
+[vector.encode.value]
+kind = "bool"
+value = true
