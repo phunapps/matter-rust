@@ -11,7 +11,8 @@
     "capture": "node index.js"
   },
   "dependencies": {
-    "@project-chip/matter.js": "0.13.0",
-    "@iarna/toml": "2.2.5"
+    "@iarna/toml": "2.2.5",
+    "@matter/types": "0.13.0",
+    "@project-chip/matter.js": "0.13.0"
   }
 }
