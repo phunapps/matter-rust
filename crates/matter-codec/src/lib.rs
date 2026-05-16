@@ -1,28 +1,42 @@
 //! Matter TLV (Tag-Length-Value) encoding and decoding.
 //!
-//! This is Milestone 1 of the `matter-rust` roadmap. The crate is currently a
-//! placeholder; the real implementation arrives in subsequent commits.
+//! This is Milestone 1 of the `matter-rust` roadmap.
 //!
 //! # Scope
 //!
-//! - [`reader`]: streaming TLV decoder (`TlvReader`).
-//! - [`writer`]: streaming TLV encoder (`TlvWriter`).
-//! - [`tag`]: every Matter tag form (anonymous, context, common profile,
-//!   implicit profile, fully qualified).
-//! - [`value`]: TLV value types — signed/unsigned ints of every width, bool,
-//!   float, double, UTF-8 string, byte string, null, structure, array, list.
-//! - [`error`]: the crate error type.
+//! Phase 1 (current): scalar element types (`bool`, `uint`, `int`, `float`,
+//! `double`, `null`) under anonymous and context tags.
 //!
-//! # Non-goals
+//! Phase 2 adds string types and the remaining tag forms; phase 3 adds
+//! containers (structure, array, list); phase 4 adds property tests, a
+//! fuzz target, and the first `0.1.0` release.
 //!
-//! This crate does not implement higher-level Matter concepts (clusters,
-//! certificates, sessions). Those live in their own crates.
+//! # Usage
+//!
+//! ```
+//! use matter_codec::{Tag, TlvWriter};
+//! # fn main() -> Result<(), matter_codec::Error> {
+//! let mut bytes = Vec::new();
+//! let mut writer = TlvWriter::new(&mut bytes);
+//! writer.put_bool(Tag::Anonymous, true)?;
+//! assert_eq!(bytes, [0x09]);
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
-#![no_std]
+
+mod element_type;
+mod tag_control;
 
 pub mod error;
 pub mod reader;
 pub mod tag;
 pub mod value;
 pub mod writer;
+
+pub use error::{Error, Result};
+pub use reader::{Element, TlvReader};
+pub use tag::Tag;
+pub use value::Value;
+pub use writer::TlvWriter;
