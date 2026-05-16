@@ -106,8 +106,75 @@ impl<'a> TlvReader<'a> {
                 let n = self.next_byte()?;
                 Ok(Tag::Context(n))
             }
+            tc::COMMON_PROFILE_2 => {
+                let raw: [u8; 2] = self
+                    .next_bytes(2)?
+                    .try_into()
+                    .map_err(|_| Error::UnexpectedEof)?;
+                Ok(Tag::CommonProfile(u32::from(u16::from_le_bytes(raw))))
+            }
+            tc::COMMON_PROFILE_4 => {
+                let raw: [u8; 4] = self
+                    .next_bytes(4)?
+                    .try_into()
+                    .map_err(|_| Error::UnexpectedEof)?;
+                Ok(Tag::CommonProfile(u32::from_le_bytes(raw)))
+            }
+            tc::IMPLICIT_PROFILE_2 => {
+                let raw: [u8; 2] = self
+                    .next_bytes(2)?
+                    .try_into()
+                    .map_err(|_| Error::UnexpectedEof)?;
+                Ok(Tag::ImplicitProfile(u32::from(u16::from_le_bytes(raw))))
+            }
+            tc::IMPLICIT_PROFILE_4 => {
+                let raw: [u8; 4] = self
+                    .next_bytes(4)?
+                    .try_into()
+                    .map_err(|_| Error::UnexpectedEof)?;
+                Ok(Tag::ImplicitProfile(u32::from_le_bytes(raw)))
+            }
+            tc::FULLY_QUALIFIED_6 => {
+                let vendor = self.read_u16_le()?;
+                let profile = self.read_u16_le()?;
+                let tag = u32::from(self.read_u16_le()?);
+                Ok(Tag::FullyQualified {
+                    vendor,
+                    profile,
+                    tag,
+                })
+            }
+            tc::FULLY_QUALIFIED_8 => {
+                let vendor = self.read_u16_le()?;
+                let profile = self.read_u16_le()?;
+                let tag = self.read_u32_le()?;
+                Ok(Tag::FullyQualified {
+                    vendor,
+                    profile,
+                    tag,
+                })
+            }
+            // The 3-bit tag-control field has only 8 possible values, and
+            // we have arms for all 8. This arm is unreachable in practice
+            // but rustc cannot prove that statically.
             other => Err(Error::InvalidTagControl(other)),
         }
+    }
+
+    fn read_u16_le(&mut self) -> Result<u16> {
+        let raw: [u8; 2] = self
+            .next_bytes(2)?
+            .try_into()
+            .map_err(|_| Error::UnexpectedEof)?;
+        Ok(u16::from_le_bytes(raw))
+    }
+
+    fn read_u32_le(&mut self) -> Result<u32> {
+        let raw: [u8; 4] = self
+            .next_bytes(4)?
+            .try_into()
+            .map_err(|_| Error::UnexpectedEof)?;
+        Ok(u32::from_le_bytes(raw))
     }
 
     #[allow(clippy::cast_possible_wrap)] // `b as i8`: reinterprets the byte pattern as signed, not truncation.
@@ -387,12 +454,89 @@ mod tests {
     }
 
     #[test]
-    fn next_errors_on_invalid_tag_control() {
-        let mut r = TlvReader::new(&[0xE0]); // tag form 0b111 (fully-qualified
-                                             // 8-byte) is spec-valid but not
-                                             // yet supported in phase 1
-        let err = r.next().unwrap_err();
-        assert!(matches!(err, Error::InvalidTagControl(_)));
+    fn next_decodes_uint_with_common_profile_2_byte_tag() {
+        let mut r = TlvReader::new(&[0x44, 0x07, 0x00, 0x2A]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::Scalar {
+                tag: Tag::CommonProfile(7),
+                value: Value::Uint(42)
+            }
+        );
+    }
+
+    #[test]
+    fn next_decodes_uint_with_common_profile_4_byte_tag() {
+        let mut r = TlvReader::new(&[0x64, 0x45, 0x23, 0x01, 0x00, 0x2A]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::Scalar {
+                tag: Tag::CommonProfile(0x0001_2345),
+                value: Value::Uint(42)
+            }
+        );
+    }
+
+    #[test]
+    fn next_decodes_uint_with_implicit_profile_2_byte_tag() {
+        let mut r = TlvReader::new(&[0x84, 0x07, 0x00, 0x2A]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::Scalar {
+                tag: Tag::ImplicitProfile(7),
+                value: Value::Uint(42)
+            }
+        );
+    }
+
+    #[test]
+    fn next_decodes_uint_with_implicit_profile_4_byte_tag() {
+        let mut r = TlvReader::new(&[0xA4, 0x45, 0x23, 0x01, 0x00, 0x2A]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::Scalar {
+                tag: Tag::ImplicitProfile(0x0001_2345),
+                value: Value::Uint(42)
+            }
+        );
+    }
+
+    #[test]
+    fn next_decodes_uint_with_fully_qualified_6_byte() {
+        let mut r = TlvReader::new(&[0xC4, 0xF1, 0xFF, 0x06, 0x00, 0x05, 0x00, 0x2A]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::Scalar {
+                tag: Tag::FullyQualified {
+                    vendor: 0xFFF1,
+                    profile: 0x0006,
+                    tag: 5
+                },
+                value: Value::Uint(42),
+            }
+        );
+    }
+
+    #[test]
+    fn next_decodes_uint_with_fully_qualified_8_byte() {
+        let mut r = TlvReader::new(&[0xE4, 0xF1, 0xFF, 0x06, 0x00, 0x45, 0x23, 0x01, 0x00, 0x2A]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::Scalar {
+                tag: Tag::FullyQualified {
+                    vendor: 0xFFF1,
+                    profile: 0x0006,
+                    tag: 0x0001_2345
+                },
+                value: Value::Uint(42),
+            }
+        );
     }
 
     #[test]
