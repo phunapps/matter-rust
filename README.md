@@ -1,5 +1,8 @@
 # matter-rust
 
+[![CI](https://github.com/phunapps/matter-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/phunapps/matter-rust/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A Rust implementation of the **Matter** protocol — controller side.
 
 > Status: **pre-release, Milestone 0.** Nothing here is publishable yet. The repository

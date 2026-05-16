@@ -1,0 +1,52 @@
+# Dependabot configuration.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # Cargo workspace at the repo root. Picks up every crate listed under
+  # `[workspace.members]` and any transitive dependencies.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "cargo"
+    commit-message:
+      prefix: "deps(cargo)"
+
+  # GitHub Actions used by .github/workflows/*. Keeps action versions current
+  # so we don't drift onto deprecated runtimes.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps(ci)"
+
+  # npm in the capture-tlv tooling. matter.js is pinned exact, so most PRs
+  # here will be transitive bumps unless the upstream releases a new version.
+  - package-ecosystem: "npm"
+    directory: "/xtask/scripts/capture-tlv"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps(capture-tlv)"
