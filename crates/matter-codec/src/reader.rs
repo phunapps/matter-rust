@@ -70,6 +70,22 @@ impl<'a> TlvReader<'a> {
         Ok(Some(Element::Scalar { tag, value }))
     }
 
+    /// Materialise one full TLV element as a `(Tag, Value)`. Scalars are
+    /// returned directly; container traversal arrives in phase 3.
+    ///
+    /// Returns [`Error::UnexpectedEof`] if there is no element to read.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the input is empty ([`Error::UnexpectedEof`]) or if
+    /// the underlying [`Self::next`] call fails for any reason.
+    pub fn read_value(&mut self) -> Result<(Tag, Value)> {
+        match self.next()? {
+            Some(Element::Scalar { tag, value }) => Ok((tag, value)),
+            None => Err(Error::UnexpectedEof),
+        }
+    }
+
     fn next_byte(&mut self) -> Result<u8> {
         let b = *self.bytes.get(self.pos).ok_or(Error::UnexpectedEof)?;
         self.pos += 1;
@@ -384,5 +400,19 @@ mod tests {
         let mut r = TlvReader::new(&[0x18]); // end-of-container outside container
         let err = r.next().unwrap_err();
         assert!(matches!(err, Error::InvalidElementType(0x18)));
+    }
+
+    #[test]
+    fn read_value_returns_tag_and_value_for_scalar() {
+        let mut r = TlvReader::new(&[0x24, 0x05, 0x2A]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Context(5));
+        assert_eq!(value, Value::Uint(42));
+    }
+
+    #[test]
+    fn read_value_errors_on_empty_input() {
+        let mut r = TlvReader::new(&[]);
+        assert!(matches!(r.read_value(), Err(Error::UnexpectedEof)));
     }
 }
