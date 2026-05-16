@@ -1,5 +1,6 @@
 import { encode } from "./api.js";
 import { specVectors } from "./spec-vectors.js";
+import { matterjsVectors } from "./matterjs-vectors.js";
 import { ensureOutDir, writeBin, writeManifest } from "./manifest.js";
 
 function bytesEqual(a, b) {
@@ -17,6 +18,7 @@ async function main() {
   const errors = [];
   const written = [];
 
+  // Tier-1: cross-check matter.js against pre-declared bytes.
   for (const v of specVectors) {
     const actual = encode(v.codec, v.input);
     if (!bytesEqual(actual, v.expectedBytes)) {
@@ -26,6 +28,18 @@ async function main() {
       continue;
     }
     await writeBin(v.id, v.expectedBytes);
+    written.push({
+      id: v.id,
+      description: v.description,
+      source: v.source,
+      encode: v.encode,
+    });
+  }
+
+  // Tier-2: matter.js bytes are the source of truth — no pre-declared expectation.
+  for (const v of matterjsVectors) {
+    const actual = encode(v.codec, v.input);
+    await writeBin(v.id, actual);
     written.push({
       id: v.id,
       description: v.description,

@@ -243,3 +243,111 @@ kind = "anonymous"
 [vector.encode.value]
 kind = "bytes"
 value = ""
+
+[[vector]]
+id = "0019-structure-empty-anonymous"
+description = "Empty structure, anonymous tag"
+source = "matter.js capture"
+file = "0019-structure-empty-anonymous.bin"
+
+[vector.encode.tag]
+kind = "anonymous"
+
+[vector.encode.value]
+kind = "structure"
+members = [ ]
+
+[[vector]]
+id = "0020-array-empty-anonymous"
+description = "Empty array, anonymous tag"
+source = "matter.js capture"
+file = "0020-array-empty-anonymous.bin"
+
+[vector.encode.tag]
+kind = "anonymous"
+
+[vector.encode.value]
+kind = "array"
+elements = [ ]
+
+[[vector]]
+id = "0021-structure-uint8-at-context-0"
+description = "Structure containing a single uint8=42 at context tag 0"
+source = "matter.js capture"
+file = "0021-structure-uint8-at-context-0.bin"
+
+[vector.encode.tag]
+kind = "anonymous"
+
+[vector.encode.value]
+kind = "structure"
+
+  [[vector.encode.value.members]]
+[vector.encode.value.members.tag]
+kind = "context"
+number = 0
+
+[vector.encode.value.members.value]
+kind = "uint"
+width = 1
+value = 42
+
+[[vector]]
+id = "0022-array-of-three-uint8-anonymous"
+description = "Array of three uint8 values [1, 2, 3], anonymous tag"
+source = "matter.js capture"
+file = "0022-array-of-three-uint8-anonymous.bin"
+
+[vector.encode.tag]
+kind = "anonymous"
+
+[vector.encode.value]
+kind = "array"
+
+  [[vector.encode.value.elements]]
+[vector.encode.value.elements.tag]
+kind = "anonymous"
+
+[vector.encode.value.elements.value]
+kind = "uint"
+width = 1
+value = 1
+
+  [[vector.encode.value.elements]]
+[vector.encode.value.elements.tag]
+kind = "anonymous"
+
+[vector.encode.value.elements.value]
+kind = "uint"
+width = 1
+value = 2
+
+  [[vector.encode.value.elements]]
+[vector.encode.value.elements.tag]
+kind = "anonymous"
+
+[vector.encode.value.elements.value]
+kind = "uint"
+width = 1
+value = 3
+
+[[vector]]
+id = "0023-structure-bool-at-context-7"
+description = "Structure containing a single bool=true at context tag 7"
+source = "matter.js capture"
+file = "0023-structure-bool-at-context-7.bin"
+
+[vector.encode.tag]
+kind = "anonymous"
+
+[vector.encode.value]
+kind = "structure"
+
+  [[vector.encode.value.members]]
+[vector.encode.value.members.tag]
+kind = "context"
+number = 7
+
+[vector.encode.value.members.value]
+kind = "bool"
+value = true

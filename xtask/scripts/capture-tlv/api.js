@@ -29,6 +29,9 @@ export const TlvByteString = pick("TlvByteString");
 // Note: TlvNull is NOT exported. Neither TlvVoid nor TlvAny encodes a standalone
 // Matter null element (0x14) — TlvVoid.encode(null) errors, TlvVoid.encode(undefined)
 // returns empty bytes, TlvAny.encode(null) errors. The null vector is omitted.
+export const TlvObject = pick("TlvObject");
+export const TlvArray = pick("TlvArray");
+export const TlvField = pick("TlvField");
 
 // Encode a value via a matter.js TLV codec and return raw bytes as a Uint8Array.
 export function encode(codec, value) {
