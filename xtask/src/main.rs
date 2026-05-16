@@ -23,7 +23,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("xtask capture-tlv: {err}");
-                ExitCode::from(1)
+                ExitCode::FAILURE
             }
         },
         Some(other) => {
@@ -51,6 +51,12 @@ fn run_capture_tlv() -> Result<(), String> {
     let workspace_root = workspace_root()?;
     let script_dir = workspace_root.join("xtask/scripts/capture-tlv");
 
+    if !script_dir.exists() {
+        return Err(format!(
+            "capture-tlv script directory not found: {}",
+            script_dir.display()
+        ));
+    }
     if !script_dir.join("node_modules").exists() {
         return Err(format!(
             "node_modules not found in {}; run `npm install` there first",
