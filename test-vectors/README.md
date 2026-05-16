@@ -7,7 +7,7 @@ byte-for-byte.
 Layout:
 
 ```
-tlv/      Milestone 1 — TLV encoding test cases
+tlv/      Milestone 0–1 — TLV encoding test cases (see test-vectors/tlv/README.md)
 certs/    Milestone 2 — Matter certificate samples
 pase/     Milestone 3 — PASE / SPAKE2+ exchanges
 case/     Milestone 4 — CASE / SIGMA exchanges
