@@ -293,10 +293,11 @@ fn all_phase_1_vectors_encode_and_decode_correctly() {
         processed += 1;
     }
 
-    // Sanity: we must have processed *some* vectors. M0 shipped 23; phase 1
-    // should handle at least 14 (booleans + uints + ints + float + double,
-    // all anonymous tag). If this assertion fails we are either silently
-    // skipping vectors we should handle, or the manifest is empty.
+    // Sanity: we must have processed *some* vectors. M0 shipped 23 + 1
+    // post-M0 (vector 0024 added in phase 2 as a context-tag scalar);
+    // phase 2 handles vectors 0001-0018 + 0024 = 19. If this assertion
+    // fails we are either silently skipping vectors we should handle, or
+    // the manifest is empty.
     assert!(
         processed >= 19,
         "expected at least 19 vectors to be processed, got {processed}; skipped = {skipped:?}"
