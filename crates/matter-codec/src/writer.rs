@@ -1,6 +1,6 @@
 //! Streaming TLV encoder. Appends to a caller-provided `Vec<u8>`.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::tag::Tag;
 use crate::value::Value;
 use crate::{element_type as et, tag_control as tc};
@@ -160,6 +160,53 @@ impl<'a> TlvWriter<'a> {
     pub fn put_double(&mut self, tag: Tag, v: f64) -> Result<()> {
         self.write_tag(tag, et::FLOAT64);
         self.out.extend_from_slice(&v.to_le_bytes());
+        Ok(())
+    }
+
+    /// Emit a UTF-8 string with the given tag. The minimum-width length
+    /// field (1, 2, 4, or 8 bytes) is chosen automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::LengthOverflow`] if the string is longer than
+    /// `u64::MAX` bytes (impossible in practice on any supported platform,
+    /// but the return type is `Result` for portability).
+    pub fn put_utf8(&mut self, tag: Tag, v: &str) -> Result<()> {
+        self.put_string_payload(
+            tag,
+            v.as_bytes(),
+            et::UTF8_LEN8,
+            et::UTF8_LEN16,
+            et::UTF8_LEN32,
+            et::UTF8_LEN64,
+        )
+    }
+
+    fn put_string_payload(
+        &mut self,
+        tag: Tag,
+        bytes: &[u8],
+        et_len8: u8,
+        et_len16: u8,
+        et_len32: u8,
+        et_len64: u8,
+    ) -> Result<()> {
+        let len = bytes.len();
+        if let Ok(len8) = u8::try_from(len) {
+            self.write_tag(tag, et_len8);
+            self.out.push(len8);
+        } else if let Ok(len16) = u16::try_from(len) {
+            self.write_tag(tag, et_len16);
+            self.out.extend_from_slice(&len16.to_le_bytes());
+        } else if let Ok(len32) = u32::try_from(len) {
+            self.write_tag(tag, et_len32);
+            self.out.extend_from_slice(&len32.to_le_bytes());
+        } else {
+            let len64 = u64::try_from(len).map_err(|_| Error::LengthOverflow)?;
+            self.write_tag(tag, et_len64);
+            self.out.extend_from_slice(&len64.to_le_bytes());
+        }
+        self.out.extend_from_slice(bytes);
         Ok(())
     }
 
@@ -430,6 +477,71 @@ mod tests {
             buf,
             [0xE4, 0xF1, 0xFF, 0x06, 0x00, 0x45, 0x23, 0x01, 0x00, 0x2A]
         );
+    }
+
+    // --- Cycle 11: put_utf8 ---
+
+    #[test]
+    fn put_utf8_hello_anonymous_matches_vector_0015() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Anonymous, "Hello!").unwrap();
+        assert_eq!(buf, [0x0C, 0x06, 0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x21]);
+    }
+
+    #[test]
+    fn put_utf8_empty_anonymous_matches_vector_0016() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Anonymous, "").unwrap();
+        assert_eq!(buf, [0x0C, 0x00]);
+    }
+
+    #[test]
+    fn put_utf8_at_255_byte_boundary_uses_len8() {
+        let s: String = "a".repeat(255);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Anonymous, &s).unwrap();
+        assert_eq!(buf.len(), 1 + 1 + 255);
+        assert_eq!(buf[0], 0x0C);
+        assert_eq!(buf[1], 0xFF);
+        assert!(buf[2..].iter().all(|&b| b == b'a'));
+    }
+
+    #[test]
+    fn put_utf8_at_256_bytes_picks_len16() {
+        let s: String = "a".repeat(256);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Anonymous, &s).unwrap();
+        assert_eq!(buf.len(), 1 + 2 + 256);
+        assert_eq!(buf[0], 0x0D);
+        assert_eq!(&buf[1..3], &[0x00, 0x01]);
+        assert!(buf[3..].iter().all(|&b| b == b'a'));
+    }
+
+    #[test]
+    fn put_utf8_at_u16_max_uses_len16() {
+        let s: String = "a".repeat(usize::from(u16::MAX));
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Anonymous, &s).unwrap();
+        assert_eq!(buf[0], 0x0D);
+        assert_eq!(&buf[1..3], &[0xFF, 0xFF]);
+        assert_eq!(buf.len(), 1 + 2 + usize::from(u16::MAX));
+    }
+
+    #[test]
+    fn put_utf8_above_u16_max_picks_len32() {
+        let len = usize::from(u16::MAX) + 1; // 65,536
+        let s: String = "a".repeat(len);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Anonymous, &s).unwrap();
+        assert_eq!(buf[0], 0x0E);
+        assert_eq!(&buf[1..5], &[0x00, 0x00, 0x01, 0x00]);
+        assert_eq!(buf.len(), 1 + 4 + len);
     }
 
     // --- Cycle 7: write_value dispatch ---
