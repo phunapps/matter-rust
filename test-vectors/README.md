@@ -13,6 +13,8 @@ pase/     Milestone 3 — PASE / SPAKE2+ exchanges
 case/     Milestone 4 — CASE / SIGMA exchanges
 ```
 
+For TLV specifically, see [test-vectors/tlv/README.md](tlv/README.md).
+
 Each subdirectory has its own `README.md` (added when the corresponding
 milestone starts) describing the capture procedure and the on-disk format.
 
