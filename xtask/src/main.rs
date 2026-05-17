@@ -3,10 +3,11 @@
 //! Invoked as `cargo xtask <command>` (via the alias in `.cargo/config.toml`).
 //! Real subcommands are added milestone by milestone:
 //!
-//! - `capture-tlv`  — drive `matter.js` to capture TLV vectors (Milestone 0).
-//! - `codegen`      — generate cluster definitions from the Matter spec
+//! - `capture-tlv`   — drive `matter.js` to capture TLV vectors (Milestone 0).
+//! - `capture-cert`  — drive `matter.js` to capture certificate vectors (Milestone 2).
+//! - `codegen`       — generate cluster definitions from the Matter spec
 //!   (Milestone 7).
-//! - `release`      — workspace release helper (post-Milestone 1).
+//! - `release`       — workspace release helper (post-Milestone 1).
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -26,6 +27,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-cert") => match run_capture_cert() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-cert: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -42,8 +50,9 @@ fn print_help() {
              cargo xtask <subcommand>\n\
          \n\
          SUBCOMMANDS:\n  \
-             help          Show this message.\n  \
-             capture-tlv   Capture TLV test vectors from matter.js.\n"
+             help           Show this message.\n  \
+             capture-tlv    Capture TLV test vectors from matter.js.\n  \
+             capture-cert   Capture Matter test certificates from matter.js.\n"
     );
 }
 
@@ -54,6 +63,35 @@ fn run_capture_tlv() -> Result<(), String> {
     if !script_dir.exists() {
         return Err(format!(
             "capture-tlv script directory not found: {}",
+            script_dir.display()
+        ));
+    }
+    if !script_dir.join("node_modules").exists() {
+        return Err(format!(
+            "node_modules not found in {}; run `npm install` there first",
+            script_dir.display()
+        ));
+    }
+
+    let status = Command::new("node")
+        .arg("index.js")
+        .current_dir(&script_dir)
+        .status()
+        .map_err(|err| format!("failed to spawn node: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("node index.js exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn run_capture_cert() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let script_dir = workspace_root.join("xtask/scripts/capture-cert");
+
+    if !script_dir.exists() {
+        return Err(format!(
+            "capture-cert script directory not found: {}",
             script_dir.display()
         ));
     }

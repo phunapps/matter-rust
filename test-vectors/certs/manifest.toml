@@ -1,0 +1,20 @@
+[[certificate]]
+id = "rcac-no-icac"
+description = "Matter RCAC (Root CA certificate) for a fabric with no intermediate CA"
+source = "@matter/protocol CertificateAuthority (root-only) → Rcac.asSignedTlv()"
+file = "rcac-no-icac.bin"
+kind = "rcac"
+
+[[certificate]]
+id = "icac"
+description = "Matter ICAC (Intermediate CA certificate) in a three-tier fabric chain"
+source = "@matter/protocol CertificateAuthority (with ICAC) → Icac.asSignedTlv()"
+file = "icac.bin"
+kind = "icac"
+
+[[certificate]]
+id = "noc"
+description = "Matter NOC (Node Operational Certificate) for node 1 in fabric 1"
+source = "@matter/protocol CertificateAuthority.generateNoc() → Noc.asSignedTlv()"
+file = "noc.bin"
+kind = "noc"
