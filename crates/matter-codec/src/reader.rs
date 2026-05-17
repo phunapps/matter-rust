@@ -140,19 +140,53 @@ impl<'a> TlvReader<'a> {
     }
 
     /// Materialise one full TLV element as a `(Tag, Value)`. Scalars are
-    /// returned directly; container traversal arrives in the next step.
+    /// returned directly; containers are read recursively up to
+    /// [`MAX_DEPTH`] levels (enforced by [`Self::next`]'s depth counter).
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the input is empty ([`Error::UnexpectedEof`]) or if
-    /// the underlying [`Self::next`] call fails for any reason.
+    /// - [`Error::UnexpectedEof`] — the input is empty.
+    /// - [`Error::UnexpectedEndOfContainer`] — the first element is a stray
+    ///   end-of-container marker.
+    /// - [`Error::UnclosedContainer`] — end of input was reached before the
+    ///   container's closing marker.
+    /// - Any error returned by [`Self::next`].
     pub fn read_value(&mut self) -> Result<(Tag, Value)> {
         match self.next()? {
             Some(Element::Scalar { tag, value }) => Ok((tag, value)),
+            Some(Element::ContainerStart { tag, kind }) => {
+                let value = self.read_container_body(kind)?;
+                Ok((tag, value))
+            }
             Some(Element::ContainerEnd) => Err(Error::UnexpectedEndOfContainer),
-            // Container traversal extended in the next step; treat as EOF for now.
-            Some(Element::ContainerStart { .. }) | None => Err(Error::UnexpectedEof),
+            None => Err(Error::UnexpectedEof),
         }
+    }
+
+    fn read_container_body(&mut self, kind: ContainerKind) -> Result<Value> {
+        let mut members: Vec<(Tag, Value)> = Vec::new();
+        loop {
+            match self.next()? {
+                None => return Err(Error::UnclosedContainer),
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar { tag, value }) => members.push((tag, value)),
+                Some(Element::ContainerStart {
+                    tag,
+                    kind: inner_kind,
+                }) => {
+                    let inner = self.read_container_body(inner_kind)?;
+                    members.push((tag, inner));
+                }
+            }
+        }
+        Ok(match kind {
+            ContainerKind::Structure => Value::Structure(members),
+            ContainerKind::List => Value::List(members),
+            ContainerKind::Array => {
+                // Arrays discard child tags (spec requires them to be anonymous).
+                Value::Array(members.into_iter().map(|(_, v)| v).collect())
+            }
+        })
     }
 
     fn next_byte(&mut self) -> Result<u8> {
@@ -853,5 +887,89 @@ mod tests {
         }
         let mut r2 = TlvReader::new(&[0x18]);
         assert!(matches!(r2.next(), Err(Error::UnexpectedEndOfContainer)));
+    }
+
+    // --- Task 5: read_value tree builder tests ---
+
+    #[test]
+    fn read_value_returns_empty_structure_vector_0019() {
+        let mut r = TlvReader::new(&[0x15, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(value, Value::Structure(Vec::new()));
+    }
+
+    #[test]
+    fn read_value_returns_empty_array_vector_0020() {
+        let mut r = TlvReader::new(&[0x16, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(value, Value::Array(Vec::new()));
+    }
+
+    #[test]
+    fn read_value_returns_structure_with_ctx_member_vector_0021() {
+        let mut r = TlvReader::new(&[0x15, 0x24, 0x00, 0x2A, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(
+            value,
+            Value::Structure(vec![(Tag::Context(0), Value::Uint(42))])
+        );
+    }
+
+    #[test]
+    fn read_value_returns_array_of_three_uint8_vector_0022() {
+        let mut r = TlvReader::new(&[0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(
+            value,
+            Value::Array(vec![Value::Uint(1), Value::Uint(2), Value::Uint(3)])
+        );
+    }
+
+    #[test]
+    fn read_value_returns_structure_with_bool_at_ctx7_vector_0023() {
+        let mut r = TlvReader::new(&[0x15, 0x29, 0x07, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(
+            value,
+            Value::Structure(vec![(Tag::Context(7), Value::Bool(true))])
+        );
+    }
+
+    #[test]
+    fn read_value_returns_empty_list() {
+        let mut r = TlvReader::new(&[0x17, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(value, Value::List(Vec::new()));
+    }
+
+    #[test]
+    fn read_value_handles_nested_structure() {
+        let mut r = TlvReader::new(&[0x15, 0x35, 0x00, 0x24, 0x00, 0x2A, 0x18, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        let inner = Value::Structure(vec![(Tag::Context(0), Value::Uint(42))]);
+        let outer = Value::Structure(vec![(Tag::Context(0), inner)]);
+        assert_eq!(value, outer);
+    }
+
+    #[test]
+    fn read_value_errors_on_unclosed_container() {
+        let mut r = TlvReader::new(&[0x15]);
+        assert!(matches!(r.read_value(), Err(Error::UnclosedContainer)));
+    }
+
+    #[test]
+    fn read_value_errors_on_dangling_end_of_container() {
+        let mut r = TlvReader::new(&[0x18]);
+        assert!(matches!(
+            r.read_value(),
+            Err(Error::UnexpectedEndOfContainer)
+        ));
     }
 }
