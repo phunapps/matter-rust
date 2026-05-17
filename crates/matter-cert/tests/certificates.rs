@@ -40,6 +40,14 @@ struct CertificateEntry {
     file: String,
     #[allow(dead_code)]
     kind: String,
+    /// Whether this cert is self-signed (root). For roots, the
+    /// signature must verify against the cert's own public key.
+    #[serde(default)]
+    is_self_signed: bool,
+    /// `id` of the cert whose public key signed this one. Absent on
+    /// self-signed roots.
+    #[serde(default)]
+    signed_by_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -110,4 +118,52 @@ fn every_certificate_parses_and_round_trips() {
     }
 
     eprintln!("processed {processed} certificate(s) — all parsed and round-tripped");
+}
+
+#[test]
+fn every_certificate_signature_verifies_against_its_issuer() {
+    let manifest = load_manifest();
+
+    // Parse every certificate first; index by id for lookup during chain walk.
+    let mut by_id: std::collections::HashMap<String, MatterCertificate> =
+        std::collections::HashMap::new();
+    for entry in &manifest.certificate {
+        let bytes = load_bin(&entry.file);
+        let cert = MatterCertificate::from_tlv(&bytes)
+            .unwrap_or_else(|e| panic!("parse failed for {}: {e}", entry.id));
+        by_id.insert(entry.id.clone(), cert);
+    }
+
+    let mut verified = 0;
+    for entry in &manifest.certificate {
+        let cert = by_id.get(&entry.id).expect("cert missing from map");
+
+        let issuer_key = if entry.is_self_signed {
+            cert.public_key()
+        } else {
+            let issuer_id = entry.signed_by_id.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "{}: must have either is_self_signed = true or signed_by_id set",
+                    entry.id,
+                )
+            });
+            let issuer = by_id.get(issuer_id).unwrap_or_else(|| {
+                panic!(
+                    "{}: signed_by_id = {} but no cert with that id in the manifest",
+                    entry.id, issuer_id,
+                )
+            });
+            issuer.public_key()
+        };
+
+        cert.verify_signed_by(issuer_key)
+            .unwrap_or_else(|e| panic!("verify_signed_by failed for {}: {e}", entry.id));
+        verified += 1;
+    }
+
+    assert!(
+        verified >= 2,
+        "expected at least 2 verifications (a root + one descendant); got {verified}",
+    );
+    eprintln!("verified signatures for {verified} certificate(s)");
 }
