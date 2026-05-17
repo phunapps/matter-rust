@@ -1,7 +1,9 @@
 //! Matter TLV element values.
 //!
-//! Phase 2 of `matter-codec` adds UTF-8 string and octet-string variants.
-//! Container variants (`Structure`, `Array`, `List`) ship in phase 3.
+//! Phase 3 of `matter-codec` adds container variants. The full TLV value
+//! space is now represented.
+
+use crate::tag::Tag;
 
 /// A decoded Matter TLV value, collapsed across wire widths.
 ///
@@ -40,6 +42,20 @@ pub enum Value {
     /// length field (writer picks the minimal width) followed by the
     /// raw bytes.
     Bytes(Vec<u8>),
+
+    /// A structure. Each member carries its own tag; members are
+    /// typically context-tagged but the spec permits any non-anonymous
+    /// form.
+    Structure(Vec<(Tag, Value)>),
+
+    /// An array. Elements share a single type; the spec requires every
+    /// element to carry an anonymous tag, which the reader enforces and
+    /// the writer always emits.
+    Array(Vec<Value>),
+
+    /// A list. Members may carry any tag form (including anonymous), and
+    /// member types are not required to be uniform.
+    List(Vec<(Tag, Value)>),
 
     /// The TLV null value (element type `0x14`).
     Null,
