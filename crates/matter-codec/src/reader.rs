@@ -1,40 +1,75 @@
 //! Streaming TLV decoder.
 //!
 //! [`TlvReader::next`] walks the input one element at a time. Scalars are
-//! materialised in one call; container elements (phase 3) will yield separate
-//! `ContainerStart`/`ContainerEnd` markers. A `read_value` convenience method
-//! that materialises a single element as a [`Value`] tree is planned for a
-//! later phase.
+//! returned as [`Element::Scalar`]; containers emit a [`Element::ContainerStart`]
+//! immediately followed by the children's elements and then a matching
+//! [`Element::ContainerEnd`]. Use [`TlvReader::read_value`] to materialise an
+//! entire element tree in one call.
 
 use crate::error::{Error, Result};
 use crate::tag::Tag;
 use crate::value::Value;
 use crate::{element_type as et, tag_control as tc};
 
+/// Which kind of TLV container a [`ContainerStart`](Element::ContainerStart)
+/// announces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ContainerKind {
+    /// `Value::Structure` — children carry their own (typically context-tagged) tags.
+    Structure,
+    /// `Value::Array` — children carry anonymous tags only.
+    Array,
+    /// `Value::List` — children may carry any tag form.
+    List,
+}
+
 /// One step of the streaming reader.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Element {
-    /// A complete scalar element. Phase 1 always produces this variant.
+    /// A complete scalar (or string/bytes) element.
     Scalar {
         /// The tag that identifies this element within its enclosing context.
         tag: Tag,
         /// The decoded scalar value.
         value: Value,
     },
-    // ContainerStart / ContainerEnd arrive in phase 3.
+
+    /// A container has just been opened. Subsequent `next()` calls
+    /// return the container's children until a matching
+    /// [`ContainerEnd`](Element::ContainerEnd).
+    ContainerStart {
+        /// The tag that identifies this container within its enclosing context.
+        tag: Tag,
+        /// Which container kind was opened.
+        kind: ContainerKind,
+    },
+
+    /// The most recently-opened container has been closed.
+    ContainerEnd,
 }
+
+/// Maximum container nesting depth the reader accepts. The Matter spec
+/// recommends a 32-level limit to prevent stack blow-up on adversarial
+/// input.
+pub const MAX_DEPTH: usize = 32;
 
 /// A streaming TLV decoder over a borrowed byte slice.
 pub struct TlvReader<'a> {
     bytes: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> TlvReader<'a> {
     /// Construct a reader that walks `bytes` from the start.
     pub fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
+        Self {
+            bytes,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     /// Whether there is no more input to consume.
@@ -46,10 +81,15 @@ impl<'a> TlvReader<'a> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if the input is malformed: an unrecognised tag-control
-    /// form ([`Error::InvalidTagControl`]), an unknown element-type code
-    /// ([`Error::InvalidElementType`]), or truncated payload bytes
-    /// ([`Error::UnexpectedEof`]).
+    /// Returns `Err` if the input is malformed:
+    ///
+    /// - [`Error::InvalidTagControl`] — unrecognised tag-control byte form.
+    /// - [`Error::InvalidElementType`] — unknown element-type code.
+    /// - [`Error::UnexpectedEof`] — truncated payload bytes.
+    /// - [`Error::UnexpectedEndOfContainer`] — end-of-container marker (`0x18`)
+    ///   at the top level, with no container open.
+    /// - [`Error::ContainerTooDeep`] — a container open would exceed
+    ///   [`MAX_DEPTH`] nesting levels.
     ///
     /// # Note on naming
     ///
@@ -64,16 +104,43 @@ impl<'a> TlvReader<'a> {
             return Ok(None);
         }
         let control = self.next_byte()?;
-        let tag = self.read_tag(control)?;
         let elem_type = control & et::ELEMENT_TYPE_MASK;
+
+        // End-of-container is always emitted as anonymous tag form.
+        if elem_type == et::END_OF_CONTAINER {
+            if control & tc::TAG_CONTROL_MASK != tc::ANONYMOUS {
+                return Err(Error::InvalidTagControl(control & tc::TAG_CONTROL_MASK));
+            }
+            if self.depth == 0 {
+                return Err(Error::UnexpectedEndOfContainer);
+            }
+            self.depth -= 1;
+            return Ok(Some(Element::ContainerEnd));
+        }
+
+        let tag = self.read_tag(control)?;
+
+        // Container opens — record the kind and bump depth.
+        let kind = match elem_type {
+            et::STRUCTURE => Some(ContainerKind::Structure),
+            et::ARRAY => Some(ContainerKind::Array),
+            et::LIST => Some(ContainerKind::List),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            if self.depth >= MAX_DEPTH {
+                return Err(Error::ContainerTooDeep);
+            }
+            self.depth += 1;
+            return Ok(Some(Element::ContainerStart { tag, kind }));
+        }
+
         let value = self.read_value_body(elem_type)?;
         Ok(Some(Element::Scalar { tag, value }))
     }
 
     /// Materialise one full TLV element as a `(Tag, Value)`. Scalars are
-    /// returned directly; container traversal arrives in phase 3.
-    ///
-    /// Returns [`Error::UnexpectedEof`] if there is no element to read.
+    /// returned directly; container traversal arrives in the next step.
     ///
     /// # Errors
     ///
@@ -82,7 +149,9 @@ impl<'a> TlvReader<'a> {
     pub fn read_value(&mut self) -> Result<(Tag, Value)> {
         match self.next()? {
             Some(Element::Scalar { tag, value }) => Ok((tag, value)),
-            None => Err(Error::UnexpectedEof),
+            Some(Element::ContainerEnd) => Err(Error::UnexpectedEndOfContainer),
+            // Container traversal extended in the next step; treat as EOF for now.
+            Some(Element::ContainerStart { .. }) | None => Err(Error::UnexpectedEof),
         }
     }
 
@@ -579,13 +648,6 @@ mod tests {
     }
 
     #[test]
-    fn next_errors_on_invalid_element_type() {
-        let mut r = TlvReader::new(&[0x18]); // end-of-container outside container
-        let err = r.next().unwrap_err();
-        assert!(matches!(err, Error::InvalidElementType(0x18)));
-    }
-
-    #[test]
     fn read_value_returns_tag_and_value_for_scalar() {
         let mut r = TlvReader::new(&[0x24, 0x05, 0x2A]);
         let (tag, value) = r.read_value().unwrap();
@@ -684,5 +746,112 @@ mod tests {
         let bytes = [0x0C, 0x05, b'H', b'i']; // claims 5 bytes, has only 2
         let mut r = TlvReader::new(&bytes);
         assert!(matches!(r.next(), Err(Error::UnexpectedEof)));
+    }
+
+    // --- Task 4: container event tests ---
+
+    #[test]
+    fn next_decodes_structure_start_and_end_vector_0019() {
+        let mut r = TlvReader::new(&[0x15, 0x18]);
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(
+            el,
+            Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Structure,
+            }
+        );
+        let el = r.next().unwrap().unwrap();
+        assert_eq!(el, Element::ContainerEnd);
+        assert!(r.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn next_decodes_array_start_and_end_vector_0020() {
+        let mut r = TlvReader::new(&[0x16, 0x18]);
+        assert_eq!(
+            r.next().unwrap().unwrap(),
+            Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Array,
+            }
+        );
+        assert_eq!(r.next().unwrap().unwrap(), Element::ContainerEnd);
+    }
+
+    #[test]
+    fn next_decodes_list_start_and_end() {
+        let mut r = TlvReader::new(&[0x17, 0x18]);
+        assert_eq!(
+            r.next().unwrap().unwrap(),
+            Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::List,
+            }
+        );
+        assert_eq!(r.next().unwrap().unwrap(), Element::ContainerEnd);
+    }
+
+    #[test]
+    fn next_decodes_structure_with_child_streaming() {
+        let mut r = TlvReader::new(&[0x15, 0x24, 0x00, 0x2A, 0x18]);
+        assert_eq!(
+            r.next().unwrap().unwrap(),
+            Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Structure,
+            }
+        );
+        assert_eq!(
+            r.next().unwrap().unwrap(),
+            Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(42),
+            }
+        );
+        assert_eq!(r.next().unwrap().unwrap(), Element::ContainerEnd);
+        assert!(r.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn next_errors_on_end_of_container_at_top_level() {
+        let mut r = TlvReader::new(&[0x18]);
+        assert!(matches!(r.next(), Err(Error::UnexpectedEndOfContainer)));
+    }
+
+    #[test]
+    fn next_errors_on_end_of_container_with_non_anonymous_tag_form() {
+        // 0x38 = context-tag form (0b001) | END_OF_CONTAINER (0x18).
+        let mut r = TlvReader::new(&[0x38, 0x05]);
+        assert!(matches!(r.next(), Err(Error::InvalidTagControl(_))));
+    }
+
+    #[test]
+    fn next_errors_on_excessive_nesting() {
+        let bytes: Vec<u8> = std::iter::repeat(0x15u8).take(33).collect();
+        let mut r = TlvReader::new(&bytes);
+        for _ in 0..32 {
+            assert!(matches!(
+                r.next().unwrap().unwrap(),
+                Element::ContainerStart {
+                    kind: ContainerKind::Structure,
+                    ..
+                },
+            ));
+        }
+        assert!(matches!(r.next(), Err(Error::ContainerTooDeep)));
+    }
+
+    #[test]
+    fn depth_returns_to_zero_after_balanced_close() {
+        // Two readers — one balanced (depth returns to 0), then check that
+        // a fresh reader sees 0x18 at top level as UnexpectedEndOfContainer.
+        {
+            let mut r = TlvReader::new(&[0x15, 0x18]);
+            let _ = r.next(); // ContainerStart → depth = 1
+            let _ = r.next(); // ContainerEnd → depth = 0
+        }
+        let mut r2 = TlvReader::new(&[0x18]);
+        assert!(matches!(r2.next(), Err(Error::UnexpectedEndOfContainer)));
     }
 }
