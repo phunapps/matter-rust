@@ -96,7 +96,7 @@ impl Extensions {
     ///
     /// Returns an error if the TLV is malformed, a required type is wrong,
     /// a field is duplicated, or an unknown extension tag appears.
-    // Used by certificate.rs (Task 6). Suppress dead_code until then.
+    // Used only in tests — suppress dead_code lint.
     #[allow(dead_code)]
     pub(crate) fn read(reader: &mut TlvReader<'_>) -> Result<Self> {
         match reader.next()? {
@@ -117,8 +117,6 @@ impl Extensions {
     ///
     /// Returns an error if the TLV is malformed, a required type is wrong,
     /// a field is duplicated, or an unknown extension tag appears.
-    // Used by certificate.rs (Task 6). Suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) fn read_from_open_list(reader: &mut TlvReader<'_>) -> Result<Self> {
         let mut out = Self::default();
         loop {
@@ -186,8 +184,6 @@ impl Extensions {
     /// # Errors
     ///
     /// Propagates any [`matter_codec::Error`] from the underlying writer.
-    // Used by certificate.rs (Task 6). Suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) fn write(&self, writer: &mut TlvWriter<'_>, outer_tag: Tag) -> Result<()> {
         writer.start_list(outer_tag)?;
         if let Some(bc) = self.basic_constraints {
@@ -215,9 +211,6 @@ impl Extensions {
 }
 
 impl BasicConstraints {
-    // Used by Extensions::read_from_open_list. dead_code suppressed
-    // transitively via the allow on read_from_open_list.
-    #[allow(dead_code)]
     fn read_body(reader: &mut TlvReader<'_>) -> Result<Self> {
         let mut is_ca = false;
         let mut path_len = None;
@@ -250,7 +243,6 @@ impl BasicConstraints {
     }
 
     // `BasicConstraints` is `Copy` (bool + Option<u8>); take by value.
-    #[allow(dead_code)]
     fn write_body(self, writer: &mut TlvWriter<'_>, outer_tag: Tag) -> Result<()> {
         writer.start_structure(outer_tag)?;
         writer.put_bool(Tag::Context(tags::BC_IS_CA), self.is_ca)?;
@@ -263,7 +255,6 @@ impl BasicConstraints {
 }
 
 // Used by Extensions::read_from_open_list.
-#[allow(dead_code)]
 fn read_uint_array(reader: &mut TlvReader<'_>) -> Result<Vec<u32>> {
     let mut out = Vec::new();
     loop {
@@ -286,7 +277,6 @@ fn read_uint_array(reader: &mut TlvReader<'_>) -> Result<Vec<u32>> {
 }
 
 // Used by Extensions::read_from_open_list.
-#[allow(dead_code)]
 fn element_tag_number(elem: &Element) -> u8 {
     match elem {
         Element::Scalar { tag, .. } | Element::ContainerStart { tag, .. } => match tag {

@@ -152,7 +152,7 @@ impl DistinguishedName {
     ///
     /// Returns an error if the TLV stream is malformed or contains
     /// invalid DN attributes.
-    // Used by certificate.rs (Task 6). Suppress dead_code until then.
+    // Used only in tests — suppress dead_code lint.
     #[allow(dead_code)]
     pub(crate) fn read(reader: &mut TlvReader<'_>) -> Result<Self> {
         match reader.next()? {
@@ -174,8 +174,6 @@ impl DistinguishedName {
     ///
     /// Returns an error if the TLV stream is malformed or contains
     /// invalid DN attributes.
-    // Used by certificate.rs (Task 6). Suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) fn read_from_open_list(reader: &mut TlvReader<'_>) -> Result<Self> {
         let mut attrs = Vec::new();
         loop {
@@ -204,8 +202,6 @@ impl DistinguishedName {
     /// # Errors
     ///
     /// Propagates any [`matter_codec::Error`] from the underlying writer.
-    // Used by certificate.rs (Task 6). Suppress dead_code until then.
-    #[allow(dead_code)]
     pub(crate) fn write(&self, writer: &mut TlvWriter<'_>, outer_tag: Tag) -> Result<()> {
         writer.start_list(outer_tag)?;
         for attr in &self.0 {
@@ -228,8 +224,6 @@ impl<'a> IntoIterator for &'a DistinguishedName {
 /// Decode a single DN attribute given its context tag and TLV value.
 /// `pub(crate)` so `MatterCertificate::from_tlv` can use it for the
 /// already-consumed-ContainerStart fast path.
-// Used by certificate.rs (Task 6). Suppress dead_code until then.
-#[allow(dead_code)]
 pub(crate) fn decode_attribute(tag: u8, value: Value) -> Result<DnAttribute> {
     use DnAttribute as A;
     match (tag, value) {
@@ -284,8 +278,6 @@ pub(crate) fn decode_attribute(tag: u8, value: Value) -> Result<DnAttribute> {
     }
 }
 
-// Used by certificate.rs (Task 6). Suppress dead_code until then.
-#[allow(dead_code)]
 fn encode_attribute(writer: &mut TlvWriter<'_>, attr: &DnAttribute) -> Result<()> {
     use DnAttribute as A;
     match attr {
@@ -334,8 +326,6 @@ fn encode_attribute(writer: &mut TlvWriter<'_>, attr: &DnAttribute) -> Result<()
 /// Whether `tag` is in the spec-defined range for DN attributes
 /// (1–26 inclusive). Higher tags are rejected as `InvalidDnAttribute`
 /// because the spec does not define them today.
-// Used in decode_attribute (dead_code suppress propagates from there).
-#[allow(dead_code)]
 const fn is_dn_tag(tag: u8) -> bool {
     matches!(tag, 1..=26)
 }
@@ -347,8 +337,6 @@ const fn is_dn_tag(tag: u8) -> bool {
 ///
 /// Currently: tag 18 (matter-firmware-signing-id) and tags 23-26
 /// (vid/pid variants pending matter.js cross-verification).
-// Used in decode_attribute (dead_code suppress propagates from there).
-#[allow(dead_code)]
 const fn is_untyped_dn_tag(tag: u8) -> bool {
     matches!(tag, 18 | 23..=26)
 }
