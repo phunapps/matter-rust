@@ -280,13 +280,18 @@ impl<'a> TlvWriter<'a> {
 
     /// Walk a [`Value`] tree and emit the appropriate sequence of TLV
     /// elements. Scalar variants are dispatched to the corresponding
-    /// `put_*` method; container variants arrive in phase 3.
+    /// `put_*` method; container variants (`Structure`, `Array`, `List`)
+    /// recursively encode all members and close with [`Self::end_container`].
+    ///
+    /// Array elements are always written with [`Tag::Anonymous`] regardless of
+    /// what tag is stored in the `Value`, enforcing the Matter spec requirement
+    /// that array elements carry no tag.
     ///
     /// # Errors
     ///
-    /// Propagates any error returned by the underlying `put_*` method. In
-    /// phase 1 and 2, all `put_*` methods are infallible; the `Result` return
-    /// type is reserved for future I/O-backed writers and container variants.
+    /// Propagates any error returned by the underlying `put_*` or container
+    /// method. Currently all paths are infallible; the `Result` return type is
+    /// reserved for future I/O-backed writers.
     pub fn write_value(&mut self, tag: Tag, value: &Value) -> Result<()> {
         match value {
             Value::Bool(v) => self.put_bool(tag, *v),
@@ -297,9 +302,26 @@ impl<'a> TlvWriter<'a> {
             Value::Double(v) => self.put_double(tag, *v),
             Value::Utf8(v) => self.put_utf8(tag, v),
             Value::Bytes(v) => self.put_bytes(tag, v),
-            // Temporary — Task 3 replaces with recursive container dispatch.
-            Value::Structure(_) | Value::Array(_) | Value::List(_) => {
-                unreachable!("phase 3 task 3")
+            Value::Structure(members) => {
+                self.start_structure(tag)?;
+                for (member_tag, member_value) in members {
+                    self.write_value(*member_tag, member_value)?;
+                }
+                self.end_container()
+            }
+            Value::Array(elements) => {
+                self.start_array(tag)?;
+                for element in elements {
+                    self.write_value(Tag::Anonymous, element)?;
+                }
+                self.end_container()
+            }
+            Value::List(members) => {
+                self.start_list(tag)?;
+                for (member_tag, member_value) in members {
+                    self.write_value(*member_tag, member_value)?;
+                }
+                self.end_container()
             }
         }
     }
@@ -750,5 +772,77 @@ mod tests {
         w.put_uint(Tag::Context(0), 42).unwrap();
         w.end_container().unwrap();
         assert_eq!(buf, [0x15, 0x24, 0x00, 0x2A, 0x18]);
+    }
+
+    // --- Phase 3 Task 3: write_value recursive container dispatch ---
+
+    #[test]
+    fn write_value_empty_structure_matches_vector_0019() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &Value::Structure(Vec::new()))
+            .unwrap();
+        assert_eq!(buf, [0x15, 0x18]);
+    }
+
+    #[test]
+    fn write_value_empty_array_matches_vector_0020() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &Value::Array(Vec::new()))
+            .unwrap();
+        assert_eq!(buf, [0x16, 0x18]);
+    }
+
+    #[test]
+    fn write_value_structure_with_ctx_member_matches_vector_0021() {
+        let value = Value::Structure(vec![(Tag::Context(0), Value::Uint(42))]);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &value).unwrap();
+        assert_eq!(buf, [0x15, 0x24, 0x00, 0x2A, 0x18]);
+    }
+
+    #[test]
+    fn write_value_array_of_three_uint8_matches_vector_0022() {
+        let value = Value::Array(vec![Value::Uint(1), Value::Uint(2), Value::Uint(3)]);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &value).unwrap();
+        assert_eq!(buf, [0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18]);
+    }
+
+    #[test]
+    fn write_value_structure_with_bool_at_ctx7_matches_vector_0023() {
+        let value = Value::Structure(vec![(Tag::Context(7), Value::Bool(true))]);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &value).unwrap();
+        assert_eq!(buf, [0x15, 0x29, 0x07, 0x18]);
+    }
+
+    #[test]
+    fn write_value_empty_list_emits_0x17_0x18() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &Value::List(Vec::new()))
+            .unwrap();
+        assert_eq!(buf, [0x17, 0x18]);
+    }
+
+    #[test]
+    fn write_value_nested_structure() {
+        // outer { ctx(0): inner { ctx(0): uint8=42 } }
+        let inner = Value::Structure(vec![(Tag::Context(0), Value::Uint(42))]);
+        let outer = Value::Structure(vec![(Tag::Context(0), inner)]);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &outer).unwrap();
+        // 0x15 = anon-struct-start
+        //   0x35 0x00 = ctx-tag-struct-start at tag 0 (0b001_10101)
+        //     0x24 0x00 0x2A = ctx-tag uint8=42 at tag 0
+        //   0x18 = inner end
+        // 0x18 = outer end
+        assert_eq!(buf, [0x15, 0x35, 0x00, 0x24, 0x00, 0x2A, 0x18, 0x18]);
     }
 }
