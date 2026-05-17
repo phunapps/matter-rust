@@ -16,6 +16,6 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-matter-codec = { path = "../matter-codec", version = "0.0.0" }
+matter-codec = { path = "../matter-codec", version = "0.1.0" }
 matter-crypto = { path = "../matter-crypto", version = "0.0.0" }
 thiserror = { workspace = true }
