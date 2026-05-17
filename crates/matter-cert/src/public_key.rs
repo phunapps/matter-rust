@@ -64,7 +64,10 @@ mod tests {
     fn new_rejects_non_0x04_prefix() {
         let mut bytes = [0u8; 65];
         bytes[0] = 0x02;
-        assert!(matches!(PublicKey::new(bytes), Err(Error::BadPublicKeyPrefix)));
+        assert!(matches!(
+            PublicKey::new(bytes),
+            Err(Error::BadPublicKeyPrefix)
+        ));
     }
 
     #[test]

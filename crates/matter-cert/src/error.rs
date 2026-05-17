@@ -26,7 +26,10 @@ pub enum Error {
 
     /// A certificate field's value was outside the spec-defined range.
     #[error("certificate field value out of range (context tag {tag})")]
-    FieldValueOutOfRange { tag: u8 },
+    FieldValueOutOfRange {
+        /// Context tag of the offending field.
+        tag: u8,
+    },
 
     /// Signature algorithm identifier was not `ecdsa-with-sha256` (1).
     #[error("certificate signature algorithm {0} is not supported")]
@@ -74,13 +77,23 @@ pub enum Error {
     ///
     /// Reserved for M2.3; not produced by phase 1.
     #[error("certificate is not yet valid (not_before={not_before:?}, at={at:?})")]
-    NotYetValid { not_before: MatterTime, at: MatterTime },
+    NotYetValid {
+        /// The certificate's `not_before` timestamp.
+        not_before: MatterTime,
+        /// The time at which validation was attempted.
+        at: MatterTime,
+    },
 
     /// A certificate's `not_after` is in the past.
     ///
     /// Reserved for M2.3; not produced by phase 1.
     #[error("certificate has expired (not_after={not_after:?}, at={at:?})")]
-    Expired { not_after: MatterTime, at: MatterTime },
+    Expired {
+        /// The certificate's `not_after` timestamp.
+        not_after: MatterTime,
+        /// The time at which validation was attempted.
+        at: MatterTime,
+    },
 
     /// A certificate chain did not terminate at a trusted root.
     ///
