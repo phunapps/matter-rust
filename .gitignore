@@ -31,6 +31,7 @@ superpowers/
 notes/
 scratch/
 
-# Fuzzing artefacts
-**/fuzz/corpus/
+# Fuzzing artefacts (cargo-fuzz adds these dirs; corpus seed files are
+# committed deliberately, so the corpus path is NOT ignored.)
+**/fuzz/target/
 **/fuzz/artifacts/
