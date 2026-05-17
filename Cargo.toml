@@ -49,6 +49,7 @@ missing_const_for_fn = "allow"
 # Common dependency versions, so every member crate pulls the same release.
 # Add to this table — do not bump per-crate without discussion.
 [workspace.dependencies]
+proptest = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"

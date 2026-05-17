@@ -1,6 +1,6 @@
 [package]
 name = "matter-codec"
-version = "0.0.0"
+version = "0.1.0"
 description = "Matter protocol TLV (Tag-Length-Value) encoder and decoder."
 edition.workspace = true
 rust-version.workspace = true
@@ -19,5 +19,6 @@ workspace = true
 thiserror = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
