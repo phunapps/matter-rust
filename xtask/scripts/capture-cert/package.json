@@ -7,6 +7,8 @@
   "engines": { "node": ">=20" },
   "dependencies": {
     "@iarna/toml": "2.2.5",
+    "@matter/general": "0.16.11",
+    "@matter/protocol": "0.16.11",
     "@matter/types": "0.16.11",
     "@project-chip/matter.js": "0.16.11"
   }
