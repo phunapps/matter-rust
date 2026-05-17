@@ -51,6 +51,23 @@ fn arb_scalar_value() -> impl Strategy<Value = Value> {
     ]
 }
 
+/// Generates an arbitrary `Value`, scalar or container, bounded to depth
+/// 4. Container children also use this strategy via `prop_recursive`.
+fn arb_value() -> impl Strategy<Value = Value> {
+    arb_scalar_value().prop_recursive(
+        4,  // max depth
+        32, // max total nodes
+        4,  // max children per container
+        |inner| {
+            prop_oneof![
+                prop::collection::vec((arb_tag(), inner.clone()), 0..=4).prop_map(Value::Structure),
+                prop::collection::vec(inner.clone(), 0..=4).prop_map(Value::Array),
+                prop::collection::vec((arb_tag(), inner), 0..=4).prop_map(Value::List),
+            ]
+        },
+    )
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
@@ -61,6 +78,23 @@ proptest! {
         TlvWriter::new(&mut buf).write_value(tag, &value).unwrap();
         let (decoded_tag, decoded_value) = TlvReader::new(&buf).read_value().unwrap();
         prop_assert_eq!(decoded_tag, tag);
+        prop_assert_eq!(decoded_value, value);
+    }
+
+    /// Full round-trip identity including containers up to depth 4.
+    #[test]
+    fn full_round_trip(tag in arb_tag(), value in arb_value()) {
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf).write_value(tag, &value).unwrap();
+        let (decoded_tag, decoded_value) = TlvReader::new(&buf).read_value().unwrap();
+        prop_assert_eq!(decoded_tag, tag);
+        // For Array specifically: the writer forces Tag::Anonymous on
+        // every element regardless of input, and the reader discards
+        // child tags. Both directions agree because `value` is the
+        // outer Value, not the inner element tags. The structural
+        // recursion bottoms out at scalars where tags are non-existent
+        // (scalars carry no tag of their own — the tag belongs to the
+        // element slot, supplied by the container parent).
         prop_assert_eq!(decoded_value, value);
     }
 }
