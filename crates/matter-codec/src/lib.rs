@@ -4,12 +4,14 @@
 //!
 //! # Scope
 //!
-//! Phase 1 (current): scalar element types (`bool`, `uint`, `int`, `float`,
-//! `double`, `null`) under anonymous and context tags.
+//! Phases 1-3 (complete): all scalar element types, UTF-8 and octet strings,
+//! every tag form (anonymous, context, common profile, implicit profile,
+//! fully-qualified), and containers (structure, array, list) with recursive
+//! tree-builder decoding and a 32-level depth limit.
 //!
-//! Phase 2 adds string types and the remaining tag forms; phase 3 adds
-//! containers (structure, array, list); phase 4 adds property tests, a
-//! fuzz target, and the first `0.1.0` release.
+//! Phase 4 (upcoming): property tests with `proptest`, a `cargo-fuzz` target
+//! seeded from the M0 test-vectors corpus, and the first `0.1.0` crates.io
+//! release.
 //!
 //! # Usage
 //!
@@ -36,7 +38,7 @@ pub mod value;
 pub mod writer;
 
 pub use error::{Error, Result};
-pub use reader::{Element, TlvReader};
+pub use reader::{ContainerKind, Element, TlvReader, MAX_DEPTH};
 pub use tag::Tag;
 pub use value::Value;
 pub use writer::TlvWriter;

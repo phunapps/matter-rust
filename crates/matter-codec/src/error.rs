@@ -44,6 +44,21 @@ pub enum Error {
     /// A length field would exceed `usize::MAX`.
     #[error("length field overflows usize")]
     LengthOverflow,
+
+    /// A bare end-of-container marker (`0x18`) was read at the top level,
+    /// with no container open.
+    #[error("unexpected end-of-container marker at top level")]
+    UnexpectedEndOfContainer,
+
+    /// End of input was reached while reading the children of a container,
+    /// before a closing end-of-container marker arrived.
+    #[error("container body truncated before end-of-container marker")]
+    UnclosedContainer,
+
+    /// A container was opened at a depth that exceeds the reader's nesting
+    /// limit (32 levels per the Matter spec recommendation).
+    #[error("container nesting exceeds depth limit")]
+    ContainerTooDeep,
 }
 
 /// `Result<T, Error>` for convenience.

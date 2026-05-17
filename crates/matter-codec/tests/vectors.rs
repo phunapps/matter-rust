@@ -79,15 +79,12 @@ enum ValueDesc {
         value: String,
     },
     Structure {
-        #[allow(dead_code)]
         members: Vec<MemberDesc>,
     },
     Array {
-        #[allow(dead_code)]
         elements: Vec<ElementDesc>,
     },
     List {
-        #[allow(dead_code)]
         members: Vec<MemberDesc>,
     },
 }
@@ -106,16 +103,20 @@ enum IntLit {
     Str(String),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MemberDesc {
     tag: TagDesc,
     value: ValueDesc,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ElementDesc {
+    // Tag is present on the manifest's array element entries but
+    // `Value::Array` discards it (the spec requires anonymous tags
+    // on array children, which the reader produces by construction).
+    // Kept #[allow(dead_code)] because TOML deserialization still
+    // reads the field even though build_value's Array branch ignores it.
+    #[allow(dead_code)]
     tag: TagDesc,
     value: ValueDesc,
 }
@@ -203,9 +204,35 @@ fn build_value(desc: &ValueDesc) -> Result<Value, &'static str> {
             let bytes = hex_decode(value).map_err(|()| "bytes hex literal")?;
             Ok(Value::Bytes(bytes))
         }
-        ValueDesc::Structure { .. } => Err("structure (phase 3)"),
-        ValueDesc::Array { .. } => Err("array (phase 3)"),
-        ValueDesc::List { .. } => Err("list (phase 3)"),
+        ValueDesc::Structure { members } => {
+            let mut out = Vec::with_capacity(members.len());
+            for m in members {
+                let t = build_tag(&m.tag)?;
+                let v = build_value(&m.value)?;
+                out.push((t, v));
+            }
+            Ok(Value::Structure(out))
+        }
+        ValueDesc::Array { elements } => {
+            let mut out = Vec::with_capacity(elements.len());
+            for e in elements {
+                // Tags on array elements are ignored — Value::Array stores
+                // only values, and the spec requires every array element
+                // to be anonymously tagged anyway. The reader produces
+                // anonymous tags inside arrays, which match by construction.
+                out.push(build_value(&e.value)?);
+            }
+            Ok(Value::Array(out))
+        }
+        ValueDesc::List { members } => {
+            let mut out = Vec::with_capacity(members.len());
+            for m in members {
+                let t = build_tag(&m.tag)?;
+                let v = build_value(&m.value)?;
+                out.push((t, v));
+            }
+            Ok(Value::List(out))
+        }
     }
 }
 
@@ -293,14 +320,14 @@ fn all_phase_1_vectors_encode_and_decode_correctly() {
         processed += 1;
     }
 
-    // Sanity: we must have processed *some* vectors. M0 shipped 23 + 1
-    // post-M0 (vector 0024 added in phase 2 as a context-tag scalar);
-    // phase 2 handles vectors 0001-0018 + 0024 = 19. If this assertion
-    // fails we are either silently skipping vectors we should handle, or
-    // the manifest is empty.
+    // Sanity: we must have processed every vector in the manifest. M0
+    // shipped 23 + 1 post-M0 (vector 0024 added in phase 2 as a
+    // context-tag scalar); phase 3 closes the last skip category
+    // (containers) so all 24 vectors are processable. The `>=` keeps
+    // the assertion forward-compatible with future manifest additions.
     assert!(
-        processed >= 19,
-        "expected at least 19 vectors to be processed, got {processed}; skipped = {skipped:?}"
+        processed >= 24,
+        "expected at least 24 vectors to be processed, got {processed}; skipped = {skipped:?}"
     );
 
     eprintln!(
