@@ -18,6 +18,7 @@ workspace = true
 [dependencies]
 bitflags = { workspace = true }
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
+ring = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

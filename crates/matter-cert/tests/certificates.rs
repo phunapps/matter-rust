@@ -40,6 +40,18 @@ struct CertificateEntry {
     file: String,
     #[allow(dead_code)]
     kind: String,
+    /// Whether this cert is self-signed (root). Currently unused — the
+    /// manifest annotation is preserved for future X.509-based
+    /// signature verification (matter-cert needs Matter-TLV → X.509-DER
+    /// conversion before `verify_signed_by` can work on real certs).
+    #[allow(dead_code)]
+    #[serde(default)]
+    is_self_signed: bool,
+    /// `id` of the cert whose public key signed this one. Same future-
+    /// use rationale as `is_self_signed`.
+    #[allow(dead_code)]
+    #[serde(default)]
+    signed_by_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

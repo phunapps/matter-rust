@@ -1,32 +1,28 @@
 /**
- * Captures Matter operational certificate test vectors from matter.js.
+ * Captures a coherent RCAC → ICAC → NOC chain from matter.js into
+ * test-vectors/certs/.
  *
  * DISCOVERY (probed 2026-05-17 against @matter/protocol 0.16.11):
  *
- *   Probe A  (@matter/types top-level) — no cert bytes, only pairing-code
- *            codecs and SoftwareVersionCertificationStatus.
- *   Probe B  (@project-chip/matter.js top-level) — no cert-related keys.
- *   Probe C  (@matter/protocol) — exports `CertificateAuthority`, `Rcac`,
- *            `Noc`, `Icac`, `TestCert_PAA_FFF1_Cert`, etc.  The TestCert_*
- *            exports are DER-encoded X.509 (first byte 0x30), not Matter TLV.
- *   Probe D  (filesystem grep) — no ready-to-use TLV cert bytes found.
+ *   `@matter/protocol` exposes `CertificateAuthority`. When created with
+ *   `generateIntermediateCert = true`, a single CA instance holds:
  *
- * OUTCOME: Outcome B (API-based generation).
+ *     ca.rootCert  — the RCAC (Root CA cert, self-signed), Uint8Array, 0x15
+ *     ca.icacCert  — the ICAC (Intermediate CA cert, signed by rootCert), 0x15
+ *     ca.generateNoc(pubKey, fabricId, nodeId) — NOC signed by the ICAC, 0x15
  *
- *   `@matter/protocol` exposes `CertificateAuthority` which — given a
- *   `NodeJsStyleCrypto` instance — can generate RCAC, ICAC, and NOC
- *   certificates and serialise them as Matter TLV (first byte 0x15).
+ *   All three TLV buffers come from one CA, so they form a verifiable chain:
  *
- *   We generate three certs:
- *     rcac-no-icac   — Root CA cert for a fabric without an intermediate CA.
- *     icac           — Intermediate CA cert in a chain that also has an RCAC.
- *     noc            — Node Operational Cert signed by a root-only CA.
+ *     RCAC  (self-signed)
+ *       └── ICAC  (signed by RCAC)
+ *             └── NOC  (signed by ICAC)
  *
- *   These cover the three operational cert types the matter-cert crate parses
- *   (MatterCertificate::from_tlv → to_tlv round-trip).
+ *   The manifest records `is_self_signed = true` on the root and
+ *   `signed_by_id = "<parent-id>"` on each descendant. The M2.2 integration
+ *   test uses these annotations to pair certs and exercise verify_signed_by.
  *
  * NOTE: Because keys are generated fresh each run, the binary output changes
- * on every invocation.  The committed .bin files are the source of truth for
+ * on every invocation. The committed .bin files are the source of truth for
  * the integration test; regenerate with `cargo xtask capture-cert` whenever
  * the test-vector set needs refreshing.
  */
@@ -61,74 +57,85 @@ async function main() {
   const crypto = new NodeJsStyleCrypto(nodeCrypto);
   const written = [];
 
-  // ── 1. RCAC (Root CA certificate, no intermediate) ────────────────────────
-  // CertificateAuthority with generateIntermediateCert=false produces only a
-  // root cert.  This is the most common operational fabric topology.
-  const caRoot = await CertificateAuthority.create(crypto, undefined, false);
-  await caRoot.construction;
+  // Build a single 3-tier CA so all three certs form one verifiable chain.
+  // generateIntermediateCert=true makes the CA emit both rootCert and icacCert
+  // from the same key material.  generateNoc() then signs the leaf with the
+  // ICAC key.
+  const ca = await CertificateAuthority.create(crypto, undefined, true);
+  await ca.construction;
 
-  const rcacBytes = caRoot.rootCert;
-  await writeFile(new URL("rcac-no-icac.bin", OUT_DIR), rcacBytes);
+  // ── 1. RCAC (Root CA certificate, self-signed) ───────────────────────────
+  const rcacBytes = ca.rootCert;
+  if (!rcacBytes || rcacBytes[0] !== 0x15) {
+    console.error(
+      `rootCert is invalid: ${rcacBytes ? `first byte 0x${rcacBytes[0].toString(16)}` : "undefined"}`,
+    );
+    process.exit(1);
+  }
+  await writeFile(new URL("rcac.bin", OUT_DIR), rcacBytes);
   written.push({
-    id: "rcac-no-icac",
-    description: "Matter RCAC (Root CA certificate) for a fabric with no intermediate CA",
-    source:
-      "@matter/protocol CertificateAuthority (root-only) → Rcac.asSignedTlv()",
+    id: "rcac",
+    description: "Root CA certificate (self-signed)",
+    source: "@matter/protocol CertificateAuthority (3-tier) → ca.rootCert",
+    file: "rcac.bin",
     kind: "rcac",
+    is_self_signed: true,
   });
 
-  // ── 2. ICAC (Intermediate CA certificate) ────────────────────────────────
-  // CertificateAuthority with generateIntermediateCert=true produces both an
-  // RCAC and an ICAC.  We capture only the ICAC here because its RCAC is
-  // structurally identical to the one above.
-  const caWithIcac = await CertificateAuthority.create(crypto, undefined, true);
-  await caWithIcac.construction;
-
-  const icacBytes = caWithIcac.icacCert;
-  if (!icacBytes) {
-    console.error("CertificateAuthority with ICAC returned undefined icacCert");
+  // ── 2. ICAC (Intermediate CA certificate, signed by RCAC) ────────────────
+  const icacBytes = ca.icacCert;
+  if (!icacBytes || icacBytes[0] !== 0x15) {
+    console.error(
+      `icacCert is invalid: ${icacBytes ? `first byte 0x${icacBytes[0].toString(16)}` : "undefined"}`,
+    );
     process.exit(1);
   }
   await writeFile(new URL("icac.bin", OUT_DIR), icacBytes);
   written.push({
     id: "icac",
-    description: "Matter ICAC (Intermediate CA certificate) in a three-tier fabric chain",
-    source:
-      "@matter/protocol CertificateAuthority (with ICAC) → Icac.asSignedTlv()",
+    description: "Intermediate CA certificate (signed by RCAC)",
+    source: "@matter/protocol CertificateAuthority (3-tier) → ca.icacCert",
+    file: "icac.bin",
     kind: "icac",
+    signed_by_id: "rcac",
   });
 
-  // ── 3. NOC (Node Operational Certificate) ─────────────────────────────────
-  // generateNoc signs a leaf cert with the root CA key.
+  // ── 3. NOC (Node Operational Certificate, signed by ICAC) ─────────────────
+  // generateNoc signs the leaf cert with the ICAC key when the CA was created
+  // with generateIntermediateCert=true.
   const nodeKeyPair = await crypto.createKeyPair();
   const fabricId = FabricId(BigInt("0x0000000000000001"));
   const nodeId = NodeId(BigInt("0x0000000000000001"));
-  const nocBytes = await caRoot.generateNoc(
+  const nocBytes = await ca.generateNoc(
     nodeKeyPair.publicKey,
     fabricId,
     nodeId,
     undefined,
   );
+  if (!nocBytes || nocBytes[0] !== 0x15) {
+    console.error(
+      `noc is invalid: ${nocBytes ? `first byte 0x${nocBytes[0].toString(16)}` : "undefined"}`,
+    );
+    process.exit(1);
+  }
   await writeFile(new URL("noc.bin", OUT_DIR), nocBytes);
   written.push({
     id: "noc",
-    description:
-      "Matter NOC (Node Operational Certificate) for node 1 in fabric 1",
+    description: "Node Operational Certificate (signed by ICAC)",
     source:
-      "@matter/protocol CertificateAuthority.generateNoc() → Noc.asSignedTlv()",
+      "@matter/protocol CertificateAuthority.generateNoc() → Noc TLV bytes",
+    file: "noc.bin",
     kind: "noc",
+    signed_by_id: "icac",
   });
 
+  if (written.length === 0) {
+    console.error("extraction yielded zero certificates; investigate.");
+    process.exit(1);
+  }
+
   // ── Write manifest ────────────────────────────────────────────────────────
-  const manifest = {
-    certificate: written.map((e) => ({
-      id: e.id,
-      description: e.description,
-      source: e.source,
-      file: `${e.id}.bin`,
-      kind: e.kind,
-    })),
-  };
+  const manifest = { certificate: written };
   await writeFile(new URL("manifest.toml", OUT_DIR), toml.stringify(manifest));
 
   console.log(
