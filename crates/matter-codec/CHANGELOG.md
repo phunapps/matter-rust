@@ -36,6 +36,8 @@ First publishable release.
 - 48 reader unit tests covering every element type, every tag form,
   three streaming error paths, and the recursive read_value tree
   builder with three additional container-specific error paths.
+- 5 internal unit tests for the private `element_type` and
+  `tag_control` modules (2 + 3 respectively).
 - 1 integration test loading 24 spec-derived TLV vectors and
   asserting byte-for-byte encode + structural decode round-trip.
 - 2 proptest round-trip properties (scalar + full Value with

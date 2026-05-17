@@ -4,14 +4,12 @@
 //!
 //! # Scope
 //!
-//! Phases 1-3 (complete): all scalar element types, UTF-8 and octet strings,
-//! every tag form (anonymous, context, common profile, implicit profile,
-//! fully-qualified), and containers (structure, array, list) with recursive
-//! tree-builder decoding and a 32-level depth limit.
-//!
-//! Phase 4 (upcoming): property tests with `proptest`, a `cargo-fuzz` target
-//! seeded from the M0 test-vectors corpus, and the first `0.1.0` crates.io
-//! release.
+//! Phases 1-4 (complete, shipping as `matter-codec` 0.1.0): all scalar
+//! element types, UTF-8 and octet strings, every tag form (anonymous,
+//! context, common profile, implicit profile, fully-qualified), and
+//! containers (structure, array, list) with recursive tree-builder
+//! decoding and a 32-level depth limit. Verified by spec test vectors,
+//! a `proptest` round-trip property, and a `cargo-fuzz` target.
 //!
 //! # Usage
 //!
