@@ -43,6 +43,27 @@ impl PublicKey {
     pub fn as_bytes(&self) -> &[u8; 65] {
         &self.0
     }
+
+    /// Verify an ECDSA-P256-SHA256 signature against a message.
+    ///
+    /// The signature is the 64-byte raw `r || s` form; ring's
+    /// `ECDSA_P256_SHA256_FIXED` algorithm consumes exactly this layout
+    /// and computes the SHA-256 hash internally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SignatureVerificationFailed`] if the signature
+    /// is not a valid signature over `message` by the private key
+    /// corresponding to this public key. The error variant does NOT
+    /// distinguish between malformed signatures, wrong-key signatures,
+    /// and signatures over different messages — ring deliberately
+    /// keeps this opaque to avoid side-channel leaks.
+    pub fn verify(&self, message: &[u8], signature: &crate::signature::Signature) -> Result<()> {
+        use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_FIXED};
+        let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, &self.0[..]);
+        key.verify(message, signature.as_bytes())
+            .map_err(|_| Error::SignatureVerificationFailed)
+    }
 }
 
 impl fmt::Debug for PublicKey {
@@ -58,7 +79,67 @@ impl fmt::Debug for PublicKey {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
+    use ring::rand::SystemRandom;
+    use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+
     use super::*;
+    use crate::signature::Signature;
+
+    /// Generate a fresh test keypair via ring. Returns the public key
+    /// (in our `PublicKey` newtype) and the key pair (for signing).
+    fn make_keypair() -> (PublicKey, EcdsaKeyPair) {
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let key_pair =
+            EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+                .unwrap();
+        let our_pub = PublicKey::from_slice(key_pair.public_key().as_ref()).unwrap();
+        (our_pub, key_pair)
+    }
+
+    fn sign(key_pair: &EcdsaKeyPair, message: &[u8]) -> Signature {
+        let rng = SystemRandom::new();
+        let sig = key_pair.sign(&rng, message).unwrap();
+        Signature::from_slice(sig.as_ref()).unwrap()
+    }
+
+    #[test]
+    fn verify_accepts_correct_signature() {
+        let (pub_key, key_pair) = make_keypair();
+        let message = b"matter-cert phase 2 test message";
+        let sig = sign(&key_pair, message);
+        assert!(pub_key.verify(message, &sig).is_ok());
+    }
+
+    #[test]
+    fn verify_rejects_signature_from_different_key() {
+        let (_, key_a) = make_keypair();
+        let (pub_b, _) = make_keypair();
+        let message = b"signed by A, verified against B";
+        let sig = sign(&key_a, message);
+        let err = pub_b.verify(message, &sig).unwrap_err();
+        assert!(matches!(err, Error::SignatureVerificationFailed));
+    }
+
+    #[test]
+    fn verify_rejects_signature_for_different_message() {
+        let (pub_key, key_pair) = make_keypair();
+        let sig = sign(&key_pair, b"signed message");
+        let err = pub_key.verify(b"different message", &sig).unwrap_err();
+        assert!(matches!(err, Error::SignatureVerificationFailed));
+    }
+
+    #[test]
+    fn verify_rejects_tampered_signature() {
+        let (pub_key, key_pair) = make_keypair();
+        let message = b"this is the original message";
+        let mut sig = sign(&key_pair, message);
+        let mut raw = *sig.as_bytes();
+        raw[0] ^= 0x01;
+        sig = Signature::from_slice(&raw).unwrap();
+        let err = pub_key.verify(message, &sig).unwrap_err();
+        assert!(matches!(err, Error::SignatureVerificationFailed));
+    }
 
     #[test]
     fn new_rejects_non_0x04_prefix() {
