@@ -309,6 +309,74 @@ impl MatterCertificate {
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
+
+    /// Compute the TBS (To-Be-Signed) bytes by re-serialising every
+    /// field except the signature. This is the byte sequence that was
+    /// hashed and signed when the certificate was issued.
+    ///
+    /// Requires canonical-form input: our serialiser must produce the
+    /// same bytes the issuer's encoder produced. Matter spec mandates
+    /// canonical encoding (minimal-width tags and lengths); all
+    /// matter.js-issued certs we've tested round-trip cleanly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`Codec`](Error::Codec) error if the underlying
+    /// `TlvWriter` fails. In practice this is unreachable for
+    /// well-formed `MatterCertificate` values.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn to_tbs_tlv(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous)?;
+        w.put_bytes(Tag::Context(tags::CERT_SERIAL_NUMBER), &self.serial)?;
+        w.put_uint(
+            Tag::Context(tags::CERT_SIG_ALGORITHM),
+            u64::from(tags::SIG_ALGORITHM_ECDSA_SHA256),
+        )?;
+        self.issuer.write(&mut w, Tag::Context(tags::CERT_ISSUER))?;
+        w.put_uint(
+            Tag::Context(tags::CERT_NOT_BEFORE),
+            u64::from(self.not_before.0),
+        )?;
+        w.put_uint(
+            Tag::Context(tags::CERT_NOT_AFTER),
+            u64::from(self.not_after.0),
+        )?;
+        self.subject
+            .write(&mut w, Tag::Context(tags::CERT_SUBJECT))?;
+        w.put_uint(
+            Tag::Context(tags::CERT_PUBKEY_ALGORITHM),
+            u64::from(tags::PUBKEY_ALGORITHM_EC_PUBLIC_KEY),
+        )?;
+        w.put_uint(
+            Tag::Context(tags::CERT_EC_CURVE),
+            u64::from(tags::EC_CURVE_PRIME256V1),
+        )?;
+        w.put_bytes(
+            Tag::Context(tags::CERT_EC_PUBLIC_KEY),
+            self.public_key.as_bytes(),
+        )?;
+        self.extensions
+            .write(&mut w, Tag::Context(tags::CERT_EXTENSIONS))?;
+        // NOTE: the signature field (context tag 11) is intentionally
+        // omitted — this is the TBS.
+        w.end_container()?;
+        Ok(buf)
+    }
+
+    /// Verify this certificate's signature against the issuer's public
+    /// key. The TBS bytes are re-serialised internally (every field
+    /// except the signature, in canonical TLV order).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SignatureVerificationFailed`] if `issuer_key`
+    /// did not sign this certificate's TBS bytes.
+    pub fn verify_signed_by(&self, issuer_key: &PublicKey) -> Result<()> {
+        let tbs = self.to_tbs_tlv()?;
+        issuer_key.verify(&tbs, &self.signature)
+    }
 }
 
 /// Extract the context-tag number from a [`Tag`], or return
@@ -332,6 +400,9 @@ fn ensure_first_seen<T>(tag: u8, slot: Option<&T>) -> Result<()> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
+    use ring::rand::SystemRandom;
+    use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+
     use super::*;
     use crate::extensions::{BasicConstraints, Extensions};
     use crate::name::DnAttribute;
@@ -375,5 +446,74 @@ mod tests {
         let err = MatterCertificate::from_tlv(&bytes).unwrap_err();
         // matter-codec's UnclosedContainer propagates as Error::Codec.
         assert!(matches!(err, Error::Codec(_)));
+    }
+
+    fn make_keypair() -> (PublicKey, EcdsaKeyPair) {
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+        let kp = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref(), &rng)
+            .unwrap();
+        let pk = PublicKey::from_slice(kp.public_key().as_ref()).unwrap();
+        (pk, kp)
+    }
+
+    /// Construct a self-signed certificate where `subject_pub_key` is
+    /// both the cert's public key and the verification key. Returns
+    /// the resulting cert with a real signature over the TBS bytes.
+    fn make_self_signed(subject_pub_key: PublicKey, kp: &EcdsaKeyPair) -> MatterCertificate {
+        let unsigned = MatterCertificate {
+            serial: vec![0xCA, 0xFE],
+            issuer: DistinguishedName::new(vec![DnAttribute::RcacId(1)]),
+            not_before: MatterTime(0),
+            not_after: MatterTime::NO_EXPIRY,
+            subject: DistinguishedName::new(vec![DnAttribute::RcacId(1)]),
+            public_key: subject_pub_key,
+            extensions: Extensions {
+                basic_constraints: Some(BasicConstraints {
+                    is_ca: true,
+                    path_len_constraint: None,
+                }),
+                ..Default::default()
+            },
+            signature: Signature::new([0u8; 64]),
+        };
+
+        let tbs = unsigned.to_tbs_tlv().unwrap();
+        let rng = SystemRandom::new();
+        let sig_bytes = kp.sign(&rng, &tbs).unwrap();
+        let signature = Signature::from_slice(sig_bytes.as_ref()).unwrap();
+
+        MatterCertificate {
+            signature,
+            ..unsigned
+        }
+    }
+
+    #[test]
+    fn verify_signed_by_accepts_real_signature() {
+        let (pub_key, kp) = make_keypair();
+        let cert = make_self_signed(pub_key.clone(), &kp);
+        assert!(cert.verify_signed_by(&pub_key).is_ok());
+    }
+
+    #[test]
+    fn verify_signed_by_rejects_wrong_issuer_key() {
+        let (pub_a, kp_a) = make_keypair();
+        let (pub_b, _) = make_keypair();
+        let cert = make_self_signed(pub_a, &kp_a);
+        let err = cert.verify_signed_by(&pub_b).unwrap_err();
+        assert!(matches!(err, Error::SignatureVerificationFailed));
+    }
+
+    #[test]
+    fn tbs_then_re_parse_round_trips_via_re_serialise() {
+        let cert = sample_cert();
+        let full = cert.to_tlv().unwrap();
+        let tbs = cert.to_tbs_tlv().unwrap();
+        assert!(tbs.len() < full.len());
+        assert_eq!(full[0], 0x15);
+        assert_eq!(tbs[0], 0x15);
+        assert_eq!(full[full.len() - 1], 0x18);
+        assert_eq!(tbs[tbs.len() - 1], 0x18);
     }
 }
