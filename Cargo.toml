@@ -51,6 +51,7 @@ missing_const_for_fn = "allow"
 [workspace.dependencies]
 bitflags = "2"
 proptest = "1"
+ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
