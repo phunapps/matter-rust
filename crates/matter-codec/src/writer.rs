@@ -229,15 +229,64 @@ impl<'a> TlvWriter<'a> {
         Ok(())
     }
 
+    /// Begin a structure with the given tag. Children must be emitted
+    /// with their own `put_*` / `write_value` calls; the structure is
+    /// closed with [`Self::end_container`].
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Ok(())` always. The `Result` return
+    /// type is reserved for future I/O-backed writers.
+    pub fn start_structure(&mut self, tag: Tag) -> Result<()> {
+        self.write_tag(tag, et::STRUCTURE);
+        Ok(())
+    }
+
+    /// Begin an array with the given tag. Children MUST be emitted with
+    /// `Tag::Anonymous` per the Matter spec.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Ok(())` always. The `Result` return
+    /// type is reserved for future I/O-backed writers.
+    pub fn start_array(&mut self, tag: Tag) -> Result<()> {
+        self.write_tag(tag, et::ARRAY);
+        Ok(())
+    }
+
+    /// Begin a list with the given tag. List members may carry any tag
+    /// form (including anonymous).
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Ok(())` always. The `Result` return
+    /// type is reserved for future I/O-backed writers.
+    pub fn start_list(&mut self, tag: Tag) -> Result<()> {
+        self.write_tag(tag, et::LIST);
+        Ok(())
+    }
+
+    /// Emit the end-of-container marker (`0x18`) closing the most
+    /// recently-opened container. The marker has no tag.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Ok(())` always. The `Result` return
+    /// type is reserved for future I/O-backed writers.
+    pub fn end_container(&mut self) -> Result<()> {
+        self.out.push(et::END_OF_CONTAINER);
+        Ok(())
+    }
+
     /// Walk a [`Value`] tree and emit the appropriate sequence of TLV
-    /// elements. Phase 1 only handles scalar variants; container variants
-    /// arrive in phase 3.
+    /// elements. Scalar variants are dispatched to the corresponding
+    /// `put_*` method; container variants arrive in phase 3.
     ///
     /// # Errors
     ///
     /// Propagates any error returned by the underlying `put_*` method. In
-    /// phase 1, all `put_*` methods are infallible; the `Result` return type
-    /// is reserved for future I/O-backed writers and container variants.
+    /// phase 1 and 2, all `put_*` methods are infallible; the `Result` return
+    /// type is reserved for future I/O-backed writers and container variants.
     pub fn write_value(&mut self, tag: Tag, value: &Value) -> Result<()> {
         match value {
             Value::Bool(v) => self.put_bool(tag, *v),
@@ -248,6 +297,10 @@ impl<'a> TlvWriter<'a> {
             Value::Double(v) => self.put_double(tag, *v),
             Value::Utf8(v) => self.put_utf8(tag, v),
             Value::Bytes(v) => self.put_bytes(tag, v),
+            // Temporary — Task 3 replaces with recursive container dispatch.
+            Value::Structure(_) | Value::Array(_) | Value::List(_) => {
+                unreachable!("phase 3 task 3")
+            }
         }
     }
 }
@@ -634,5 +687,68 @@ mod tests {
             w.write_value(Tag::Anonymous, &value).unwrap();
             assert_eq!(buf, expected, "value={value:?}");
         }
+    }
+
+    // --- Phase 3 Task 2: container primitives ---
+
+    #[test]
+    fn start_structure_anonymous_emits_0x15() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        assert_eq!(buf, [0x15]);
+    }
+
+    #[test]
+    fn start_array_anonymous_emits_0x16() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        assert_eq!(buf, [0x16]);
+    }
+
+    #[test]
+    fn start_list_anonymous_emits_0x17() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_list(Tag::Anonymous).unwrap();
+        assert_eq!(buf, [0x17]);
+    }
+
+    #[test]
+    fn end_container_emits_0x18() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.end_container().unwrap();
+        assert_eq!(buf, [0x18]);
+    }
+
+    #[test]
+    fn start_structure_with_context_tag_emits_combined_byte() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Context(7)).unwrap();
+        // 0b001_10101 = 0x35 (context tag form | STRUCTURE element type)
+        assert_eq!(buf, [0x35, 0x07]);
+    }
+
+    #[test]
+    fn empty_structure_anonymous_matches_vector_0019() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.end_container().unwrap();
+        assert_eq!(buf, [0x15, 0x18]);
+    }
+
+    #[test]
+    fn structure_with_one_member_matches_vector_0021() {
+        // [0x15, 0x24, 0x00, 0x2A, 0x18]
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 42).unwrap();
+        w.end_container().unwrap();
+        assert_eq!(buf, [0x15, 0x24, 0x00, 0x2A, 0x18]);
     }
 }
