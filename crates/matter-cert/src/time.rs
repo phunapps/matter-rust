@@ -79,6 +79,30 @@ mod tests {
     }
 
     #[test]
+    fn unix_at_matter_u32_max_boundary_is_exact() {
+        // The largest Matter-representable Unix second: epoch offset
+        // plus u32::MAX. This must NOT saturate — it's the highest
+        // exact-representable point.
+        let unix = MATTER_EPOCH_UNIX_OFFSET + u64::from(u32::MAX);
+        assert_eq!(MatterTime::from_unix_secs(unix), MatterTime(u32::MAX));
+    }
+
+    #[test]
+    fn unix_just_above_matter_u32_max_saturates() {
+        // One second past the boundary must saturate to u32::MAX (not
+        // wrap to 0). Exercises the `u32::try_from(...).unwrap_or(u32::MAX)`
+        // branch in from_unix_secs.
+        let unix = MATTER_EPOCH_UNIX_OFFSET + u64::from(u32::MAX) + 1;
+        assert_eq!(MatterTime::from_unix_secs(unix), MatterTime(u32::MAX));
+    }
+
+    #[test]
+    fn unix_u64_max_saturates_to_u32_max() {
+        // The most extreme overflow input.
+        assert_eq!(MatterTime::from_unix_secs(u64::MAX), MatterTime(u32::MAX));
+    }
+
+    #[test]
     fn ordering_uses_native_u32() {
         assert!(MatterTime(100) < MatterTime(200));
         assert!(MatterTime(u32::MAX) > MatterTime(0));
