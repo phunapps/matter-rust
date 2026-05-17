@@ -1,0 +1,34 @@
+name: Fuzz
+
+on:
+  schedule:
+    # 06:00 UTC every Monday. Avoids the PR-CI traffic peaks.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fuzz_decode:
+    name: fuzz_decode (5 min)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/matter-codec/fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.12
+      - name: Run fuzz_decode for 5 minutes
+        working-directory: crates/matter-codec/fuzz
+        run: cargo +nightly fuzz run fuzz_decode -- -max_total_time=300
+      - name: Upload artifacts on crash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: crates/matter-codec/fuzz/artifacts/
+          if-no-files-found: ignore
