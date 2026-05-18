@@ -6,13 +6,20 @@
 //!
 //! # Scope
 //!
-//! M2.1 (current): types, TLV parser, TLV serialiser. Byte-for-byte
-//! round-trip is enforced by the integration test against captured
-//! CSA test certificates.
+//! M2.1: types, TLV parser, TLV serialiser. Byte-for-byte round-trip
+//! is enforced by the integration test against captured CSA test
+//! certificates.
 //!
-//! M2.2 adds public-key extraction + ECDSA-P256-SHA256 signature
-//! verification via `ring`. M2.3 adds `CertificateChain::validate`
-//! against trusted roots plus the first `0.1.0` crates.io release.
+//! M2.2: public-key extraction + ECDSA-P256-SHA256 signature verification
+//! primitive via `ring`.
+//!
+//! M2.3 (current): Matter-TLV → X.509-DER `TBSCertificate` conversion that
+//! lets `MatterCertificate::verify_signed_by` work on signatures
+//! produced by matter.js (and the broader Matter ecosystem). Byte parity
+//! against matter.js's `asUnsignedDer()` is the correctness gate.
+//!
+//! M2.4 adds `CertificateChain::validate` against trusted roots plus
+//! the first `0.1.0` crates.io release.
 //!
 //! Cryptographic verification is delegated to `ring`. This crate
 //! never implements the underlying maths.
@@ -20,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 mod tlv_tags;
+mod x509;
 
 pub mod certificate;
 pub mod error;
