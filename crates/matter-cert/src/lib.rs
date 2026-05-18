@@ -35,6 +35,8 @@ pub mod extensions;
 pub mod name;
 pub mod public_key;
 pub mod signature;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod time;
 
 pub use certificate::MatterCertificate;
