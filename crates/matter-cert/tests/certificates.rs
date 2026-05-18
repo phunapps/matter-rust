@@ -52,6 +52,14 @@ struct CertificateEntry {
     #[allow(dead_code)]
     #[serde(default)]
     signed_by_id: Option<String>,
+    /// Path (relative to test-vectors/certs/) of matter.js's
+    /// `asUnsignedDer()` output for this cert. The bytes whose
+    /// signature should verify against this cert's signature.
+    /// Consumed by Task 10's byte-parity integration test.
+    // Allow unused until Task 10 adds the byte-parity test that reads this.
+    #[allow(dead_code)]
+    #[serde(default)]
+    tbs_file: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

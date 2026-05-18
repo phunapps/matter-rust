@@ -4,6 +4,7 @@ description = "Root CA certificate (self-signed)"
 source = "@matter/protocol CertificateAuthority (3-tier) → ca.rootCert"
 file = "rcac.bin"
 kind = "rcac"
+tbs_file = "rcac.tbs.bin"
 is_self_signed = true
 
 [[certificate]]
@@ -12,6 +13,7 @@ description = "Intermediate CA certificate (signed by RCAC)"
 source = "@matter/protocol CertificateAuthority (3-tier) → ca.icacCert"
 file = "icac.bin"
 kind = "icac"
+tbs_file = "icac.tbs.bin"
 signed_by_id = "rcac"
 
 [[certificate]]
@@ -20,4 +22,5 @@ description = "Node Operational Certificate (signed by ICAC)"
 source = "@matter/protocol CertificateAuthority.generateNoc() → Noc TLV bytes"
 file = "noc.bin"
 kind = "noc"
+tbs_file = "noc.tbs.bin"
 signed_by_id = "icac"
