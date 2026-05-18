@@ -224,6 +224,60 @@ fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+// =============================================================================
+// AlgorithmIdentifier (signature) encoder
+// =============================================================================
+
+/// Encode the X.509 `AlgorithmIdentifier` for ecdsa-with-SHA256.
+///
+/// Per RFC 5758 §3.2, this OID has no parameters — the SEQUENCE
+/// contains only the OID itself.
+fn encode_algorithm_identifier_ecdsa_sha256() -> Vec<u8> {
+    let oid = encode_oid(&OID_ECDSA_WITH_SHA256);
+    wrap_sequence(&oid)
+}
+
+// =============================================================================
+// SubjectPublicKeyInfo encoder
+// =============================================================================
+
+/// Encode an X.509 `SubjectPublicKeyInfo` for a P-256 uncompressed point.
+fn encode_subject_public_key_info(key: &crate::PublicKey) -> Vec<u8> {
+    // Inner AlgorithmIdentifier: SEQUENCE { OID(id-ecPublicKey), OID(prime256v1) }
+    let mut alg = Vec::new();
+    alg.extend_from_slice(&encode_oid(&OID_EC_PUBLIC_KEY));
+    alg.extend_from_slice(&encode_oid(&OID_EC_CURVE_P256));
+    let alg_seq = wrap_sequence(&alg);
+
+    // BIT STRING: 0x03 || length || 0x00 (unused bits) || 65-byte point
+    let point = key.as_bytes();
+    let mut bit_string = Vec::with_capacity(point.len() + 3);
+    bit_string.push(0x03);
+    encode_definite_length(&mut bit_string, point.len() + 1);
+    bit_string.push(0x00); // unused-bits prefix
+    bit_string.extend_from_slice(point);
+
+    let mut inner = Vec::with_capacity(alg_seq.len() + bit_string.len());
+    inner.extend_from_slice(&alg_seq);
+    inner.extend_from_slice(&bit_string);
+    wrap_sequence(&inner)
+}
+
+/// Encode a `der::asn1::ObjectIdentifier` as a complete TLV element
+/// (tag 0x06, length, content).
+#[allow(clippy::expect_used)] // see note inside.
+fn encode_oid(oid: &ObjectIdentifier) -> Vec<u8> {
+    // der's encoder writes tag+length+content for us via `Encode`. The
+    // expect is safe: ObjectIdentifier::new_unwrap (used at module load
+    // for every OID constant) has already validated the OID; der's
+    // encode_to_vec cannot fail for a validated OID.
+    use der::Encode;
+    let mut buf = Vec::new();
+    oid.encode_to_vec(&mut buf)
+        .expect("internal: der OID encoder rejected a validated ObjectIdentifier");
+    buf
+}
+
 /// Wrap content bytes in a DER SEQUENCE.
 fn wrap_sequence(content: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(content.len() + 4);
@@ -367,5 +421,53 @@ mod tests {
     fn serial_empty_is_rejected() {
         // Spec disallows zero-length serials; we mirror that.
         assert!(encode_serial_number(&[]).is_err());
+    }
+
+    // ---- encode_algorithm_identifier_ecdsa_sha256 ------------------------
+
+    #[test]
+    fn alg_id_ecdsa_sha256_has_no_parameters() {
+        let bytes = encode_algorithm_identifier_ecdsa_sha256();
+        // SEQUENCE { OID(1.2.840.10045.4.3.2) } — no parameters
+        // Tag 0x30, length 0x0A (10), then OID tag 0x06, length 0x08, 8 OID bytes
+        assert_eq!(bytes[0], 0x30);
+        assert_eq!(bytes[1], 0x0A);
+        assert_eq!(bytes[2], 0x06);
+        assert_eq!(bytes[3], 0x08);
+        // OID DER for 1.2.840.10045.4.3.2: 2A 86 48 CE 3D 04 03 02
+        assert_eq!(
+            &bytes[4..12],
+            &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
+        );
+    }
+
+    // ---- encode_subject_public_key_info ----------------------------------
+
+    #[test]
+    fn spki_has_correct_curve_oid_and_bitstring_prefix() {
+        // 65-byte point: 0x04 || X(32) || Y(32). Use deterministic bytes.
+        let mut point = [0u8; 65];
+        point[0] = 0x04;
+        for (i, slot) in point.iter_mut().enumerate().skip(1) {
+            *slot = u8::try_from(i).unwrap();
+        }
+        let key = crate::PublicKey::new(point).unwrap();
+        let bytes = encode_subject_public_key_info(&key);
+
+        // Structure: SEQUENCE {
+        //   AlgorithmIdentifier SEQUENCE { OID(id-ecPublicKey), OID(prime256v1) },
+        //   BIT STRING(0x00 || 65-byte-point)
+        // }
+        assert_eq!(bytes[0], 0x30); // outer SEQUENCE
+                                    // BIT STRING tag is 0x03; locate it by scanning past the inner SEQUENCE.
+                                    // Inner SEQUENCE: 0x30 0x13 then 2 OIDs (id-ecPublicKey 7 bytes, prime256v1 8 bytes).
+                                    // Inner SEQUENCE total = 2 header + 2 + 7 + 2 + 8 = 21 bytes. Outer header = 2 bytes.
+                                    // BIT STRING starts at offset 2 + 21 = 23.
+        let bit_string_idx = 23;
+        assert_eq!(bytes[bit_string_idx], 0x03); // BIT STRING tag
+                                                 // length is 66 (65 point bytes + 1 unused-bits prefix byte)
+        assert_eq!(bytes[bit_string_idx + 1], 66);
+        assert_eq!(bytes[bit_string_idx + 2], 0x00); // unused-bits = 0
+        assert_eq!(&bytes[bit_string_idx + 3..bit_string_idx + 68], &point);
     }
 }
