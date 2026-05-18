@@ -34,38 +34,32 @@ use crate::error::{Error, Result};
 //   /** matter-vvs-id             = ASN.1 OID 1.3.6.1.4.1.37244.1.7 */  ← present in matter.js; not in the plan template
 //   /** matter-oid-vid            = ASN.1 OID 1.3.6.1.4.1.37244.2.1 */
 //   /** matter-oid-pid            = ASN.1 OID 1.3.6.1.4.1.37244.2.2 */
-
 /// Operational-certificate attribute: Matter node-id.
-const OID_MATTER_NODE_ID: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.1");
+const OID_MATTER_NODE_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.1");
 
 /// Operational-certificate attribute: Matter firmware-signing-id.
 const OID_MATTER_FIRMWARE_SIGNING_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.2");
 
 /// Operational-certificate attribute: Matter ICAC id.
-const OID_MATTER_ICAC_ID: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.3");
+const OID_MATTER_ICAC_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.3");
 
 /// Operational-certificate attribute: Matter RCAC id.
-const OID_MATTER_RCAC_ID: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.4");
+const OID_MATTER_RCAC_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.4");
 
 /// Operational-certificate attribute: Matter fabric-id.
 const OID_MATTER_FABRIC_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.5");
 
 /// Operational-certificate attribute: Matter NOC CASE Authenticated Tag.
-const OID_MATTER_NOC_CAT: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.6");
+const OID_MATTER_NOC_CAT: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.6");
 
 /// Operational-certificate attribute: Matter VVS id.
 ///
 /// Present in matter.js (arc `.1.7`) but absent from the plan template.
 /// Included here for completeness; used in Vendor Verification Service
 /// certificates introduced in a later Matter specification revision.
-const OID_MATTER_VVS_ID: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.7");
+const OID_MATTER_VVS_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.7");
 
 /// Attestation-certificate attribute: Matter vendor-id.
 const OID_MATTER_VENDOR_ID: ObjectIdentifier =
@@ -104,8 +98,7 @@ const OID_DOMAIN_COMPONENT: ObjectIdentifier =
 const OID_EXT_BASIC_CONSTRAINTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.19");
 const OID_EXT_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.15");
 const OID_EXT_EXTENDED_KEY_USAGE: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.37");
-const OID_EXT_SUBJECT_KEY_IDENTIFIER: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("2.5.29.14");
+const OID_EXT_SUBJECT_KEY_IDENTIFIER: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.5.29.14");
 const OID_EXT_AUTHORITY_KEY_IDENTIFIER: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("2.5.29.35");
 
@@ -115,8 +108,7 @@ const OID_EXT_AUTHORITY_KEY_IDENTIFIER: ObjectIdentifier =
 
 const OID_EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
 const OID_EC_CURVE_P256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
-const OID_ECDSA_WITH_SHA256: ObjectIdentifier =
-    ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+const OID_ECDSA_WITH_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
 
 // =============================================================================
 // Top-level entry point
