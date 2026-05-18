@@ -31,7 +31,7 @@ import { createRequire } from "node:module";
 import { writeFile, mkdir, readdir, unlink } from "node:fs/promises";
 import toml from "@iarna/toml";
 import { NodeJsStyleCrypto } from "@matter/general";
-import { CertificateAuthority } from "@matter/protocol";
+import { CertificateAuthority, Rcac, Icac, Noc } from "@matter/protocol";
 import { FabricId, NodeId } from "@matter/types";
 
 // node:crypto is a CommonJS built-in; import it via createRequire so ESM
@@ -49,6 +49,21 @@ async function clearExistingBins() {
       await unlink(new URL(e, OUT_DIR));
     }
   }
+}
+
+/**
+ * Write both the raw TLV bytes (<id>.bin) and the X.509 DER TBSCertificate
+ * bytes (<id>.tbs.bin) for a given cert object.
+ *
+ * @param {string}     id       — manifest entry id (e.g. "rcac")
+ * @param {Uint8Array} tlvBytes — raw Matter TLV bytes
+ * @param {object}     certObj  — matter.js Certificate subclass instance
+ *                               (Rcac, Icac, or Noc) with .asUnsignedDer()
+ */
+async function writeCertFiles(id, tlvBytes, certObj) {
+  await writeFile(new URL(`${id}.bin`, OUT_DIR), tlvBytes);
+  const tbsDer = certObj.asUnsignedDer();
+  await writeFile(new URL(`${id}.tbs.bin`, OUT_DIR), tbsDer);
 }
 
 async function main() {
@@ -72,13 +87,15 @@ async function main() {
     );
     process.exit(1);
   }
-  await writeFile(new URL("rcac.bin", OUT_DIR), rcacBytes);
+  const rcacObj = Rcac.fromTlv(rcacBytes);
+  await writeCertFiles("rcac", rcacBytes, rcacObj);
   written.push({
     id: "rcac",
     description: "Root CA certificate (self-signed)",
     source: "@matter/protocol CertificateAuthority (3-tier) → ca.rootCert",
     file: "rcac.bin",
     kind: "rcac",
+    tbs_file: "rcac.tbs.bin",
     is_self_signed: true,
   });
 
@@ -90,13 +107,15 @@ async function main() {
     );
     process.exit(1);
   }
-  await writeFile(new URL("icac.bin", OUT_DIR), icacBytes);
+  const icacObj = Icac.fromTlv(icacBytes);
+  await writeCertFiles("icac", icacBytes, icacObj);
   written.push({
     id: "icac",
     description: "Intermediate CA certificate (signed by RCAC)",
     source: "@matter/protocol CertificateAuthority (3-tier) → ca.icacCert",
     file: "icac.bin",
     kind: "icac",
+    tbs_file: "icac.tbs.bin",
     signed_by_id: "rcac",
   });
 
@@ -118,7 +137,8 @@ async function main() {
     );
     process.exit(1);
   }
-  await writeFile(new URL("noc.bin", OUT_DIR), nocBytes);
+  const nocObj = Noc.fromTlv(nocBytes);
+  await writeCertFiles("noc", nocBytes, nocObj);
   written.push({
     id: "noc",
     description: "Node Operational Certificate (signed by ICAC)",
@@ -126,6 +146,7 @@ async function main() {
       "@matter/protocol CertificateAuthority.generateNoc() → Noc TLV bytes",
     file: "noc.bin",
     kind: "noc",
+    tbs_file: "noc.tbs.bin",
     signed_by_id: "icac",
   });
 

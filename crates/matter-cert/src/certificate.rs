@@ -309,6 +309,39 @@ impl MatterCertificate {
     pub fn signature(&self) -> &Signature {
         &self.signature
     }
+
+    /// Compute the X.509 DER `TBSCertificate` bytes derived from this cert.
+    ///
+    /// These are the bytes whose signature is stored in [`Self::signature`].
+    /// Byte-identical to matter.js's `Certificate.asUnsignedDer()` for the
+    /// same input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DnAttributeHasNoX509Oid`] if a parsed
+    /// [`crate::DnAttribute::Other`] has no defined X.509 OID mapping.
+    /// Returns [`Error::InvalidDnAttributeForX509`] if a DN attribute's
+    /// value cannot be encoded in its X.509 ASN.1 string type.
+    pub fn to_x509_tbs_der(&self) -> Result<Vec<u8>> {
+        crate::x509::matter_cert_to_x509_tbs_der(self)
+    }
+
+    /// Verify this certificate's signature against the given issuer's
+    /// public key.
+    ///
+    /// Computes the X.509 DER `TBSCertificate` from this cert's fields,
+    /// then verifies `self.signature()` against the TBS using
+    /// ECDSA-P256-SHA256 via the `ring` library.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SignatureVerificationFailed`] if the signature
+    /// does not verify. Returns any error [`Self::to_x509_tbs_der`]
+    /// would return on conversion failure.
+    pub fn verify_signed_by(&self, issuer_key: &PublicKey) -> Result<()> {
+        let tbs = self.to_x509_tbs_der()?;
+        issuer_key.verify(&tbs, &self.signature)
+    }
 }
 
 /// Extract the context-tag number from a [`Tag`], or return

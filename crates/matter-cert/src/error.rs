@@ -67,6 +67,27 @@ pub enum Error {
     #[error("key identifier has wrong length: expected 20, got {0}")]
     WrongKeyIdentifierLength(usize),
 
+    /// A Matter DN attribute had no defined X.509 OID mapping.
+    ///
+    /// Occurs when a [`crate::DnAttribute::Other`] is encountered during
+    /// X.509 conversion. We cannot invent an X.509 OID, and matter.js
+    /// wouldn't have signed against one we made up.
+    #[error("Matter DN attribute (tag {0}) has no defined X.509 OID mapping")]
+    DnAttributeHasNoX509Oid(u8),
+
+    /// A DN attribute's value cannot be encoded in its X.509 ASN.1
+    /// string type.
+    ///
+    /// E.g., a `CountryName` containing non-printable bytes cannot
+    /// be encoded as `PrintableString`.
+    #[error("DN attribute value cannot be encoded as X.509 {asn1_type}: {reason}")]
+    InvalidDnAttributeForX509 {
+        /// The ASN.1 string type that the encoding attempt targeted.
+        asn1_type: &'static str,
+        /// Why the value did not fit.
+        reason: &'static str,
+    },
+
     /// Signature verification failed.
     ///
     /// Reserved for M2.2; not produced by phase 1.

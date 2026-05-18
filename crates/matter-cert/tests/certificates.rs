@@ -40,18 +40,22 @@ struct CertificateEntry {
     file: String,
     #[allow(dead_code)]
     kind: String,
-    /// Whether this cert is self-signed (root). Currently unused — the
-    /// manifest annotation is preserved for future X.509-based
-    /// signature verification (matter-cert needs Matter-TLV → X.509-DER
-    /// conversion before `verify_signed_by` can work on real certs).
-    #[allow(dead_code)]
+    /// Whether this cert is self-signed (root). Used by the byte-parity and
+    /// signature-verification integration tests to identify which key to
+    /// verify against.
     #[serde(default)]
     is_self_signed: bool,
-    /// `id` of the cert whose public key signed this one. Same future-
-    /// use rationale as `is_self_signed`.
-    #[allow(dead_code)]
+    /// `id` of the cert whose public key signed this one. Used by
+    /// `every_certificate_signature_verifies_against_its_issuer` to chain
+    /// through the manifest.
     #[serde(default)]
     signed_by_id: Option<String>,
+    /// Path (relative to test-vectors/certs/) of matter.js's
+    /// `asUnsignedDer()` output for this cert. The bytes whose
+    /// signature should verify against this cert's signature.
+    /// Consumed by the byte-parity integration test.
+    #[serde(default)]
+    tbs_file: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -122,4 +126,99 @@ fn every_certificate_parses_and_round_trips() {
     }
 
     eprintln!("processed {processed} certificate(s) — all parsed and round-tripped");
+}
+
+// ---------------------------------------------------------------------------
+// Task 10: byte-parity + signature verification
+// ---------------------------------------------------------------------------
+
+/// Assert that `to_x509_tbs_der()` produces byte-identical output to
+/// matter.js's `asUnsignedDer()` for every cert in the manifest.
+///
+/// This is the strict correctness gate for the X.509 encoder.  If it fails,
+/// the first differing byte identifies which encoder function to fix.
+#[test]
+fn every_certificate_x509_tbs_matches_matter_js() {
+    let entries = load_manifest().certificate;
+
+    for entry in &entries {
+        let cert_bytes = load_bin(&entry.file);
+        let cert = MatterCertificate::from_tlv(&cert_bytes).unwrap_or_else(|e| {
+            panic!("parse {}: {e}", entry.id);
+        });
+
+        let our_tbs = cert.to_x509_tbs_der().unwrap_or_else(|e| {
+            panic!("to_x509_tbs_der for {}: {e}", entry.id);
+        });
+
+        let tbs_file = entry
+            .tbs_file
+            .as_ref()
+            .unwrap_or_else(|| panic!("manifest entry {} missing tbs_file", entry.id));
+        let captured_tbs = load_bin(tbs_file);
+
+        assert_eq!(
+            our_tbs, captured_tbs,
+            "byte-parity mismatch for {}: our TBS differs from matter.js's asUnsignedDer()",
+            entry.id
+        );
+    }
+}
+
+/// For each cert in the manifest, verify its signature using the issuer's
+/// public key (or the cert's own key if self-signed).
+#[test]
+fn every_certificate_signature_verifies_against_its_issuer() {
+    let entries = load_manifest().certificate;
+
+    for entry in &entries {
+        let cert_bytes = load_bin(&entry.file);
+        let cert = MatterCertificate::from_tlv(&cert_bytes).unwrap_or_else(|e| {
+            panic!("parse {}: {e}", entry.id);
+        });
+
+        let issuer_key = if entry.is_self_signed {
+            cert.public_key().clone()
+        } else {
+            let issuer_id = entry.signed_by_id.as_ref().unwrap_or_else(|| {
+                panic!("non-self-signed entry {} missing signed_by_id", &entry.id)
+            });
+            let issuer_entry = entries
+                .iter()
+                .find(|e| &e.id == issuer_id)
+                .unwrap_or_else(|| panic!("issuer {issuer_id} not in manifest"));
+            let issuer_bytes = load_bin(&issuer_entry.file);
+            let issuer_cert = MatterCertificate::from_tlv(&issuer_bytes).unwrap();
+            issuer_cert.public_key().clone()
+        };
+
+        cert.verify_signed_by(&issuer_key)
+            .unwrap_or_else(|e| panic!("signature verification failed for {}: {e}", entry.id));
+    }
+}
+
+/// Verify that `verify_signed_by` correctly rejects a signature when the
+/// wrong issuer key is provided (NOC signed by ICAC, verified against RCAC).
+#[test]
+fn signature_verification_rejects_wrong_issuer() {
+    let entries = load_manifest().certificate;
+    let noc_entry = entries
+        .iter()
+        .find(|e| e.id == "noc")
+        .expect("noc in manifest");
+    let rcac_entry = entries
+        .iter()
+        .find(|e| e.id == "rcac")
+        .expect("rcac in manifest");
+
+    let noc_bytes = load_bin(&noc_entry.file);
+    let noc = MatterCertificate::from_tlv(&noc_bytes).unwrap();
+    let rcac_bytes = load_bin(&rcac_entry.file);
+    let rcac = MatterCertificate::from_tlv(&rcac_bytes).unwrap();
+
+    let err = noc.verify_signed_by(rcac.public_key()).unwrap_err();
+    assert!(
+        matches!(err, matter_cert::Error::SignatureVerificationFailed),
+        "expected SignatureVerificationFailed, got {err:?}"
+    );
 }
