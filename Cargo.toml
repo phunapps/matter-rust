@@ -55,7 +55,7 @@ proptest = "1"
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-toml = "0.8"
+toml = "1.1"
 
 # Release profile defaults. Keep these conservative; consumers can override.
 [profile.release]
