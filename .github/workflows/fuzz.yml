@@ -27,7 +27,7 @@ jobs:
         run: cargo +nightly fuzz run fuzz_decode -- -max_total_time=300
       - name: Upload artifacts on crash
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-artifacts
           path: crates/matter-codec/fuzz/artifacts/
