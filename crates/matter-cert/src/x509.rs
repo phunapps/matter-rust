@@ -533,10 +533,242 @@ fn unix_to_ymdhms(unix_secs: u64) -> (u32, u32, u32, u32, u32, u32) {
     (year_u32, m, d, hour, minute, second)
 }
 
+// =============================================================================
+// Extension encoders
+// =============================================================================
+
+use crate::extensions::{BasicConstraints, Extensions, KeyIdentifier, KeyUsage};
+
+/// Encode an X.509 `Extension`:
+/// `SEQUENCE { extnID OID, critical BOOLEAN DEFAULT FALSE, extnValue OCTET STRING }`.
+///
+/// The `critical` field is omitted when `false` per DER's DEFAULT encoding rule.
+/// When `true`, it is encoded as `BOOLEAN TRUE` (`01 01 FF`).
+/// `extn_value` is the pre-encoded content of the extension — it is wrapped in an
+/// outer `OCTET STRING` here, as RFC 5280 §4.1 requires.
+fn encode_extension(oid: &ObjectIdentifier, critical: bool, extn_value: &[u8]) -> Vec<u8> {
+    let oid_bytes = encode_oid(oid);
+    // extnValue OCTET STRING wraps the already-DER-encoded extension value.
+    let octet_string = wrap_primitive(0x04, extn_value);
+
+    let mut inner = Vec::with_capacity(oid_bytes.len() + 3 + octet_string.len());
+    inner.extend_from_slice(&oid_bytes);
+    if critical {
+        // BOOLEAN TRUE: tag 0x01, length 0x01, value 0xFF.
+        inner.extend_from_slice(&[0x01, 0x01, 0xFF]);
+    }
+    inner.extend_from_slice(&octet_string);
+    wrap_sequence(&inner)
+}
+
+/// Encode the `BasicConstraints` extension.
+///
+/// The extension OID is `2.5.29.19`. matter.js always marks this extension as
+/// critical (`critical: true`) regardless of the `is_ca` field. The inner
+/// `SEQUENCE` contains `BOOLEAN TRUE` only when `is_ca = true`; omitting the
+/// BOOLEAN when `false` follows the DER DEFAULT encoding rule. `path_len` is
+/// encoded as `INTEGER` only when `is_ca = true` and the constraint is set.
+fn encode_basic_constraints(bc: BasicConstraints) -> Vec<u8> {
+    // Inner BasicConstraints SEQUENCE:
+    // { BOOLEAN(is_ca) OPTIONAL DEFAULT FALSE, INTEGER(path_len) OPTIONAL }
+    let mut inner = Vec::new();
+    if bc.is_ca {
+        inner.extend_from_slice(&[0x01, 0x01, 0xFF]); // BOOLEAN TRUE
+        if let Some(path_len) = bc.path_len_constraint {
+            // INTEGER: tag 0x02, length 0x01, value = path_len (fits in one byte).
+            inner.push(0x02);
+            inner.push(0x01);
+            inner.push(path_len);
+        }
+    }
+    let value = wrap_sequence(&inner);
+    // matter.js always emits BasicConstraints as critical.
+    encode_extension(&OID_EXT_BASIC_CONSTRAINTS, /* critical */ true, &value)
+}
+
+/// Encode the `KeyUsage` extension.
+///
+/// The extension OID is `2.5.29.15`. `KeyUsage` is always critical per Matter spec
+/// and matter.js. The value is a DER `BIT STRING`.
+///
+/// X.509 BIT STRING layout: the first content byte is the "unused bits" count,
+/// followed by the flag bytes. The bitflags value uses LSB = bit 0
+/// (digitalSignature), which maps to the MSB of the first flag byte in the
+/// X.509 encoding:
+///
+/// - `bitflags bit 0 (DIGITAL_SIGNATURE, 0x0001)` → bit 7 of byte 0 (value 0x80)
+/// - `bitflags bit 1 (CONTENT_COMMITMENT, 0x0002)` → bit 6 of byte 0 (value 0x40)
+/// - …
+/// - `bitflags bit 8 (DECIPHER_ONLY, 0x0100)` → bit 7 of byte 1 (value 0x80)
+///
+/// To produce the correct bit order, we bit-reverse each byte. Only the minimum
+/// number of bytes needed to represent the set bits is emitted; trailing zero bytes
+/// are dropped and the unused-bit count is set to the trailing-zero count of the
+/// last emitted byte.
+fn encode_key_usage(ku: KeyUsage) -> Vec<u8> {
+    let raw = ku.bits(); // u16, LSB = digitalSignature
+
+    // Split into low byte (bits 0–7) and high byte (bits 8–15).
+    // Bit-reverse each so the X.509 MSB-first ordering is satisfied.
+    #[allow(clippy::cast_possible_truncation)]
+    let byte0_rev = (raw as u8).reverse_bits();
+    #[allow(clippy::cast_possible_truncation)]
+    let byte1_rev = ((raw >> 8) as u8).reverse_bits();
+
+    // Build the BIT STRING content: [unused_bits_byte, flag_byte(s)].
+    // Emit only the minimum number of flag bytes.
+    let bit_string_content: Vec<u8> = if byte1_rev != 0 {
+        // Two flag bytes needed. Unused bits = trailing zeros of the last byte.
+        // trailing_zeros() on a u8 returns at most 8, which fits in u8.
+        #[allow(clippy::cast_possible_truncation)]
+        let ub = byte1_rev.trailing_zeros() as u8;
+        vec![ub, byte0_rev, byte1_rev]
+    } else if byte0_rev != 0 {
+        // One flag byte. Unused bits = trailing zeros of byte0_rev.
+        // trailing_zeros() on a u8 returns at most 8, which fits in u8.
+        #[allow(clippy::cast_possible_truncation)]
+        let ub = byte0_rev.trailing_zeros() as u8;
+        vec![ub, byte0_rev]
+    } else {
+        // All bits clear: emit a single zero byte with 0 unused bits.
+        vec![0x00, 0x00]
+    };
+
+    let mut bit_string = Vec::with_capacity(2 + bit_string_content.len());
+    bit_string.push(0x03); // BIT STRING tag
+    encode_definite_length(&mut bit_string, bit_string_content.len());
+    bit_string.extend_from_slice(&bit_string_content);
+
+    encode_extension(&OID_EXT_KEY_USAGE, /* critical */ true, &bit_string)
+}
+
+// Extended key usage OIDs, encoded once as constants.
+// matter.js maps TLV integer values 1–6 to these OIDs.
+// These are the DER OID string forms of the id-kp-* arcs (RFC 5280 / RFC 4945).
+const OID_KP_SERVER_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.1");
+const OID_KP_CLIENT_AUTH: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.2");
+const OID_KP_CODE_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.3");
+const OID_KP_EMAIL_PROTECTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.4");
+const OID_KP_TIME_STAMPING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.8");
+const OID_KP_OCSP_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.9");
+
+/// Encode the `ExtendedKeyUsage` extension.
+///
+/// The extension OID is `2.5.29.37`. matter.js always marks this extension as
+/// critical (`critical: true`).
+///
+/// Each u32 in `eku` is a Matter TLV compact integer that maps to an
+/// `id-kp-*` OID (see matter.js `X509.ExtendedKeyUsage`):
+/// - `1` → `id-kp-serverAuth`   (1.3.6.1.5.5.7.3.1)
+/// - `2` → `id-kp-clientAuth`   (1.3.6.1.5.5.7.3.2)
+/// - `3` → `id-kp-codeSigning`  (1.3.6.1.5.5.7.3.3)
+/// - `4` → `id-kp-emailProtection` (1.3.6.1.5.5.7.3.4)
+/// - `5` → `id-kp-timeStamping` (1.3.6.1.5.5.7.3.8)
+/// - `6` → `id-kp-OCSPSigning`  (1.3.6.1.5.5.7.3.9)
+///
+/// Values outside 1–6 are skipped (unknown extensions are not surfaced by the
+/// TLV decoder, but we guard defensively).
+///
+/// # Errors
+///
+/// Currently infallible — returns an empty extension body for unknown values
+/// rather than failing, because the task-7 scope does not include error variants
+/// for unknown EKU values.
+fn encode_extended_key_usage(eku: &[u32], critical: bool) -> Vec<u8> {
+    let mut inner = Vec::new();
+    for &val in eku {
+        let oid = match val {
+            1 => &OID_KP_SERVER_AUTH,
+            2 => &OID_KP_CLIENT_AUTH,
+            3 => &OID_KP_CODE_SIGNING,
+            4 => &OID_KP_EMAIL_PROTECTION,
+            5 => &OID_KP_TIME_STAMPING,
+            6 => &OID_KP_OCSP_SIGNING,
+            _ => continue,
+        };
+        inner.extend_from_slice(&encode_oid(oid));
+    }
+    let value = wrap_sequence(&inner);
+    encode_extension(&OID_EXT_EXTENDED_KEY_USAGE, critical, &value)
+}
+
+/// Encode the `SubjectKeyIdentifier` extension.
+///
+/// The extension OID is `2.5.29.14`. Non-critical. The `extnValue` wraps an
+/// `OCTET STRING` containing the 20-byte SHA-1 key fingerprint (the `extnValue`
+/// field itself is also an OCTET STRING per RFC 5280, so the 20 bytes end up
+/// doubly-wrapped: outer OCTET STRING from `encode_extension`, inner OCTET STRING
+/// encoding the key identifier).
+fn encode_subject_key_identifier(ski: &KeyIdentifier) -> Vec<u8> {
+    // Inner: OCTET STRING containing the 20-byte key identifier.
+    let inner = wrap_primitive(0x04, &ski.0);
+    encode_extension(
+        &OID_EXT_SUBJECT_KEY_IDENTIFIER,
+        /* critical */ false,
+        &inner,
+    )
+}
+
+/// Encode the `AuthorityKeyIdentifier` extension.
+///
+/// The extension OID is `2.5.29.35`. Non-critical. The value is:
+/// `SEQUENCE { keyIdentifier [0] IMPLICIT OCTET STRING(20) OPTIONAL, ... }`.
+///
+/// Only the `keyIdentifier` field is populated (matter.js does the same).
+/// `[0] IMPLICIT OCTET STRING` has tag `0x80` (context-class primitive, tag 0).
+fn encode_authority_key_identifier(aki: &KeyIdentifier) -> Vec<u8> {
+    // [0] IMPLICIT OCTET STRING: tag 0x80, length 20, 20 bytes.
+    let mut inner = Vec::with_capacity(2 + 20);
+    inner.push(0x80);
+    encode_definite_length(&mut inner, 20);
+    inner.extend_from_slice(&aki.0);
+    let value = wrap_sequence(&inner);
+    encode_extension(
+        &OID_EXT_AUTHORITY_KEY_IDENTIFIER,
+        /* critical */ false,
+        &value,
+    )
+}
+
+/// Encode the X.509 `extensions [3] EXPLICIT SEQUENCE OF Extension OPTIONAL`.
+///
+/// Extensions are emitted in Matter TLV declaration order (basic-constraints,
+/// key-usage, extended-key-usage, subject-key-identifier, authority-key-identifier).
+/// This order matches matter.js's `matterToX509` / `extensionsToAst` order
+/// and is verified by the byte-parity test in Task 10.
+pub(crate) fn encode_extensions_block(ext: &Extensions) -> Vec<u8> {
+    let mut inner = Vec::new();
+    if let Some(bc) = &ext.basic_constraints {
+        inner.extend_from_slice(&encode_basic_constraints(*bc));
+    }
+    if let Some(ku) = ext.key_usage {
+        inner.extend_from_slice(&encode_key_usage(ku));
+    }
+    if let Some(eku) = &ext.extended_key_usage {
+        // matter.js always marks ExtendedKeyUsage as critical.
+        inner.extend_from_slice(&encode_extended_key_usage(eku, /* critical */ true));
+    }
+    if let Some(ski) = &ext.subject_key_identifier {
+        inner.extend_from_slice(&encode_subject_key_identifier(ski));
+    }
+    if let Some(aki) = &ext.authority_key_identifier {
+        inner.extend_from_slice(&encode_authority_key_identifier(aki));
+    }
+    let extensions_seq = wrap_sequence(&inner);
+
+    // Wrap in [3] EXPLICIT: context-class constructed tag = 0xA3.
+    let mut out = Vec::with_capacity(extensions_seq.len() + 4);
+    out.push(0xA3);
+    encode_definite_length(&mut out, extensions_seq.len());
+    out.extend_from_slice(&extensions_seq);
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
+    use crate::extensions::{BasicConstraints, KeyIdentifier, KeyUsage};
     use crate::time::MatterTime;
 
     // ---- encode_validity --------------------------------------------------
@@ -716,6 +948,71 @@ mod tests {
         assert_eq!(bytes[0], 0x30); // outer SEQUENCE
                                     // SET tag is 0x31; it appears at offset 2.
         assert_eq!(bytes[2], 0x31);
+    }
+
+    // ---- encode_basic_constraints ----------------------------------------
+
+    #[test]
+    fn basic_constraints_ca_true_is_critical_and_has_boolean_true() {
+        let bc = BasicConstraints {
+            is_ca: true,
+            path_len_constraint: None,
+        };
+        let bytes = encode_basic_constraints(bc);
+        // critical flag is TLV { 0x01, 0x01, 0xFF } — BOOLEAN TRUE
+        assert!(
+            bytes.windows(3).any(|w| w == [0x01, 0x01, 0xFF]),
+            "BOOLEAN(true) for critical flag must be present"
+        );
+        // Inner BasicConstraints SEQUENCE { BOOLEAN(true) } — value bytes 30 03 01 01 FF
+        assert!(
+            bytes
+                .windows(5)
+                .any(|w| w == [0x30, 0x03, 0x01, 0x01, 0xFF]),
+            "Inner BasicConstraints must contain BOOLEAN(true)"
+        );
+    }
+
+    #[test]
+    fn basic_constraints_ca_false_omits_boolean() {
+        let bc = BasicConstraints {
+            is_ca: false,
+            path_len_constraint: None,
+        };
+        let bytes = encode_basic_constraints(bc);
+        // Inner BasicConstraints SEQUENCE is empty (DER default for BOOLEAN false).
+        // No BOOLEAN(false) appears.
+        assert!(
+            !bytes.windows(3).any(|w| w == [0x01, 0x01, 0x00]),
+            "BOOLEAN(false) must NOT be encoded (DER default rule)"
+        );
+    }
+
+    // ---- encode_key_usage ------------------------------------------------
+
+    #[test]
+    fn key_usage_packs_bits_correctly() {
+        let ku = KeyUsage::DIGITAL_SIGNATURE | KeyUsage::KEY_CERT_SIGN;
+        let bytes = encode_key_usage(ku);
+        // Critical flag must be present (KeyUsage is always critical).
+        assert!(bytes.windows(3).any(|w| w == [0x01, 0x01, 0xFF]));
+    }
+
+    // ---- encode_subject_key_identifier -----------------------------------
+
+    #[test]
+    fn ski_wraps_20_bytes_in_octet_string() {
+        let ski = KeyIdentifier([0xABu8; 20]);
+        let bytes = encode_subject_key_identifier(&ski);
+        // Inner OCTET STRING: tag 0x04, length 20, then 20 bytes of 0xAB.
+        let needle: Vec<u8> = std::iter::once(0x04u8)
+            .chain(std::iter::once(20u8))
+            .chain(std::iter::repeat(0xABu8).take(20))
+            .collect();
+        assert!(
+            bytes.windows(needle.len()).any(|w| w == needle.as_slice()),
+            "inner OCTET STRING with 20 bytes of 0xAB must be present"
+        );
     }
 
     // ---- encode_subject_public_key_info ----------------------------------
