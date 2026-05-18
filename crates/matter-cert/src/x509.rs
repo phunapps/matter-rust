@@ -196,6 +196,34 @@ fn encode_generalized_time_literal(s: &[u8]) -> Vec<u8> {
     out
 }
 
+// =============================================================================
+// Serial number encoder
+// =============================================================================
+
+/// Encode a Matter serial number (1–20 raw bytes) as an X.509 INTEGER.
+///
+/// DER INTEGER rules require prepending `0x00` if the high bit of the
+/// first content byte is set, to keep the integer non-negative.
+fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
+    if serial_bytes.is_empty() {
+        return Err(Error::FieldValueOutOfRange {
+            tag: crate::tlv_tags::CERT_SERIAL_NUMBER,
+        });
+    }
+
+    let needs_leading_zero = (serial_bytes[0] & 0x80) != 0;
+    let content_len = serial_bytes.len() + usize::from(needs_leading_zero);
+
+    let mut out = Vec::with_capacity(content_len + 2);
+    out.push(0x02); // INTEGER tag
+    encode_definite_length(&mut out, content_len);
+    if needs_leading_zero {
+        out.push(0x00);
+    }
+    out.extend_from_slice(serial_bytes);
+    Ok(out)
+}
+
 /// Wrap content bytes in a DER SEQUENCE.
 fn wrap_sequence(content: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(content.len() + 4);
@@ -311,5 +339,33 @@ mod tests {
         assert_eq!(bytes[17], 0x18); // GeneralizedTime tag
         assert_eq!(bytes[18], 0x0F);
         assert_eq!(&bytes[19..34], b"99991231235959Z");
+    }
+
+    // ---- encode_serial_number --------------------------------------------
+
+    #[test]
+    fn serial_high_bit_clear_no_leading_zero() {
+        let bytes = encode_serial_number(&[0x01, 0x02, 0x03]).unwrap();
+        // INTEGER tag 0x02, length 3, value 01 02 03
+        assert_eq!(bytes, vec![0x02, 0x03, 0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn serial_high_bit_set_prepends_leading_zero() {
+        let bytes = encode_serial_number(&[0x80, 0x12, 0x34]).unwrap();
+        // INTEGER tag 0x02, length 4, value 00 80 12 34
+        assert_eq!(bytes, vec![0x02, 0x04, 0x00, 0x80, 0x12, 0x34]);
+    }
+
+    #[test]
+    fn serial_single_byte_high_bit_set() {
+        let bytes = encode_serial_number(&[0xFF]).unwrap();
+        assert_eq!(bytes, vec![0x02, 0x02, 0x00, 0xFF]);
+    }
+
+    #[test]
+    fn serial_empty_is_rejected() {
+        // Spec disallows zero-length serials; we mirror that.
+        assert!(encode_serial_number(&[]).is_err());
     }
 }
