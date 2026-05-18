@@ -3,6 +3,7 @@
 //! Invoked as `cargo xtask <command>` (via the alias in `.cargo/config.toml`).
 //! Real subcommands are added milestone by milestone:
 //!
+//! - `check`         — run every gate CI runs, locally.
 //! - `capture-tlv`   — drive `matter.js` to capture TLV vectors (Milestone 0).
 //! - `capture-cert`  — drive `matter.js` to capture certificate vectors (Milestone 2).
 //! - `codegen`       — generate cluster definitions from the Matter spec
@@ -20,6 +21,13 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
+        Some("check") => match run_check() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask check: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some("capture-tlv") => match run_capture_tlv() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -51,9 +59,123 @@ fn print_help() {
          \n\
          SUBCOMMANDS:\n  \
              help           Show this message.\n  \
+             check          Run every gate CI runs, locally.\n  \
              capture-tlv    Capture TLV test vectors from matter.js.\n  \
              capture-cert   Capture Matter test certificates from matter.js.\n"
     );
+}
+
+/// Run every CI gate locally so a developer can validate the same things
+/// CI will validate before pushing. Mirrors `.github/workflows/ci.yml`:
+/// rustfmt, clippy, test, rustdoc, cargo audit, cargo deny.
+///
+/// `cargo audit` and `cargo deny` are optional locally — if they're not
+/// installed we print an install hint and skip them, rather than failing
+/// the whole command. Everything else is mandatory.
+fn run_check() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let mut failures: Vec<&'static str> = Vec::new();
+
+    println!("xtask check: rustfmt --check");
+    if !run_cargo(&workspace_root, &["fmt", "--all", "--", "--check"]) {
+        failures.push("rustfmt");
+    }
+
+    println!("\nxtask check: clippy -D warnings");
+    if !run_cargo(
+        &workspace_root,
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    ) {
+        failures.push("clippy");
+    }
+
+    println!("\nxtask check: cargo test");
+    if !run_cargo(&workspace_root, &["test", "--workspace", "--all-features"]) {
+        failures.push("test");
+    }
+
+    println!("\nxtask check: cargo doc -D warnings");
+    if !run_cargo_with_env(
+        &workspace_root,
+        &["doc", "--workspace", "--all-features", "--no-deps"],
+        &[("RUSTDOCFLAGS", "-D warnings")],
+    ) {
+        failures.push("doc");
+    }
+
+    println!("\nxtask check: cargo audit");
+    if tool_installed("cargo-audit") {
+        if !run_cargo(&workspace_root, &["audit"]) {
+            failures.push("audit");
+        }
+    } else {
+        println!(
+            "  skipped — `cargo-audit` not installed.\n  \
+             install with: cargo install cargo-audit --locked"
+        );
+    }
+
+    println!("\nxtask check: cargo deny check");
+    if tool_installed("cargo-deny") {
+        if !run_cargo(&workspace_root, &["deny", "--all-features", "check"]) {
+            failures.push("deny");
+        }
+    } else {
+        println!(
+            "  skipped — `cargo-deny` not installed.\n  \
+             install with: cargo install cargo-deny --locked"
+        );
+    }
+
+    println!();
+    if failures.is_empty() {
+        println!("xtask check: all gates green ✓");
+        Ok(())
+    } else {
+        Err(format!("gates failed: {}", failures.join(", ")))
+    }
+}
+
+fn run_cargo(cwd: &PathBuf, args: &[&str]) -> bool {
+    run_cargo_with_env(cwd, args, &[])
+}
+
+fn run_cargo_with_env(cwd: &PathBuf, args: &[&str], env: &[(&str, &str)]) -> bool {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut cmd = Command::new(cargo);
+    cmd.args(args).current_dir(cwd);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(err) => {
+            eprintln!("  failed to spawn cargo: {err}");
+            false
+        }
+    }
+}
+
+/// Check whether a cargo subcommand binary is installed.
+///
+/// `cargo <tool>` looks up `cargo-<tool>` on $PATH; we mirror that by
+/// trying `cargo-<tool> --version`. This is cheap (~ms) and avoids
+/// running the actual subcommand only to fail.
+fn tool_installed(binary_name: &str) -> bool {
+    Command::new(binary_name)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn run_capture_tlv() -> Result<(), String> {

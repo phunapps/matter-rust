@@ -47,13 +47,37 @@ Please **open an issue first** before starting work on:
 2. Fork, branch, write code, write tests.
 3. Run the full local check:
    ```
-   cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features -- -D warnings
-   cargo test --workspace --all-features
+   cargo xtask check
    ```
+   This runs every gate CI runs: `rustfmt --check`, `clippy -D warnings`,
+   `cargo test`, `cargo doc -D warnings`, `cargo audit`, and
+   `cargo deny check`. See **Local toolchain** below for one-time
+   installation of `cargo-audit` and `cargo-deny` — without them,
+   `cargo xtask check` skips those two gates (CI will still run them,
+   so the gap can surface only after push).
 4. Open a PR. Fill in the template completely.
 5. Address review feedback. Expect at least one full reviewer pass on anything
    that touches protocol code.
+
+## Local toolchain
+
+CI runs six gates on every PR. To run them locally with one command, install
+these once:
+
+```
+cargo install cargo-audit --locked
+cargo install cargo-deny --locked
+```
+
+`rustfmt` and `clippy` ship with `rustup` and don't need separate installation.
+`cargo doc` is in the base toolchain too.
+
+Once installed, `cargo xtask check` runs the full battery. It's the same set of
+checks CI runs, so a green local result means CI will be green too.
+
+If you can't or don't want to install `cargo-audit` and `cargo-deny`, push
+anyway — CI will catch the cases those gates would have. The local command
+will just skip them with an install hint rather than fail.
 
 ## Crypto-touching changes
 
