@@ -35,4 +35,4 @@ proptest = { workspace = true }
 # Self-reference so test compilation enables the test-support feature,
 # making the test_support module visible to tests/* without exposing
 # it to downstream crates.
-matter-cert = { path = ".", features = ["test-support"] }
+matter-cert = { path = ".", version = "0.1.0-pre", features = ["test-support"] }
