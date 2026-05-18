@@ -12,10 +12,26 @@ keywords = ["matter", "spake2", "sigma", "iot", "cryptography"]
 categories = ["cryptography"]
 readme = "README.md"
 
+[features]
+# Enables `matter_crypto::test_support` — used by this crate's own tests
+# to inject fixed SPAKE2+ scalars for matter.js byte-parity verification.
+# NOT part of the stable public API. Production callers must not enable.
+test-support = []
+
 [lints]
 workspace = true
 
 [dependencies]
-matter-codec = { path = "../matter-codec", version = "0.1.0" }
+hex-literal = { workspace = true }
 matter-cert = { path = "../matter-cert", version = "0.1.0-pre" }
+matter-codec = { path = "../matter-codec", version = "0.1.0" }
+p256 = { workspace = true }
+ring = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# Self-reference so test compilation enables the test-support feature,
+# making the test_support module visible to tests/* without exposing
+# it to downstream crates.
+matter-crypto = { path = ".", version = "0.0.0", features = ["test-support"] }
