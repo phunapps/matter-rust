@@ -6,6 +6,7 @@
 //! - M3.3: matter.js byte-parity verification + readiness markers.
 
 pub(crate) mod kdf;
+pub(crate) mod messages;
 pub(crate) mod spake2plus;
 
 /// Identifies one of the 5 PASE message types. Used by
