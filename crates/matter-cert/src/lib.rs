@@ -13,13 +13,18 @@
 //! M2.2: public-key extraction + ECDSA-P256-SHA256 signature verification
 //! primitive via `ring`.
 //!
-//! M2.3 (current): Matter-TLV → X.509-DER `TBSCertificate` conversion that
+//! M2.3: Matter-TLV → X.509-DER `TBSCertificate` conversion that
 //! lets `MatterCertificate::verify_signed_by` work on signatures
 //! produced by matter.js (and the broader Matter ecosystem). Byte parity
 //! against matter.js's `asUnsignedDer()` is the correctness gate.
 //!
-//! M2.4 adds `CertificateChain::validate` against trusted roots plus
-//! the first `0.1.0` crates.io release.
+//! M2.4 (current): `CertificateChain::validate` against trusted roots,
+//! plus `TrustAnchor` / `TrustedRoots`. Per-cert checks: time bounds,
+//! CA bit (above the leaf), DN linkage, path-length constraint, and
+//! signature verification via M2.3's `verify_signed_by`.
+//!
+//! crates.io publish remains user-driven (the crate is feature-complete
+//! at `0.1.0-pre` after M2.4).
 //!
 //! Cryptographic verification is delegated to `ring`. This crate
 //! never implements the underlying maths.
@@ -30,6 +35,7 @@ mod tlv_tags;
 mod x509;
 
 pub mod certificate;
+pub mod chain;
 pub mod error;
 pub mod extensions;
 pub mod name;
@@ -40,6 +46,7 @@ pub mod test_support;
 pub mod time;
 
 pub use certificate::MatterCertificate;
+pub use chain::{CertificateChain, TrustAnchor, TrustedRoots};
 pub use error::{Error, Result};
 pub use extensions::{BasicConstraints, Extensions, KeyIdentifier, KeyUsage};
 pub use name::{DistinguishedName, DnAttribute, DnAttributeValue};
