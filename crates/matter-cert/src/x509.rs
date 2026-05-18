@@ -278,6 +278,200 @@ fn encode_oid(oid: &ObjectIdentifier) -> Vec<u8> {
     buf
 }
 
+// =============================================================================
+// DN attribute encoder
+// =============================================================================
+
+use crate::name::{DistinguishedName, DnAttribute};
+
+/// ASN.1 string-type tags.
+const TAG_UTF8_STRING: u8 = 0x0C;
+const TAG_PRINTABLE_STRING: u8 = 0x13;
+const TAG_IA5_STRING: u8 = 0x16;
+
+/// Encode a single `DnAttribute` as an X.509 `AttributeTypeAndValue`:
+/// `SEQUENCE { type OID, value DirectoryString }`.
+fn encode_dn_attribute(attr: &DnAttribute) -> Result<Vec<u8>> {
+    let (oid, string_tag, value_bytes) = match attr {
+        // Matter-specific attributes: UTF8String of uppercase zero-padded hex.
+        DnAttribute::NodeId(v) => (
+            &OID_MATTER_NODE_ID,
+            TAG_UTF8_STRING,
+            format!("{v:016X}").into_bytes(),
+        ),
+        DnAttribute::FabricId(v) => (
+            &OID_MATTER_FABRIC_ID,
+            TAG_UTF8_STRING,
+            format!("{v:016X}").into_bytes(),
+        ),
+        DnAttribute::RcacId(v) => (
+            &OID_MATTER_RCAC_ID,
+            TAG_UTF8_STRING,
+            format!("{v:016X}").into_bytes(),
+        ),
+        DnAttribute::IcacId(v) => (
+            &OID_MATTER_ICAC_ID,
+            TAG_UTF8_STRING,
+            format!("{v:016X}").into_bytes(),
+        ),
+        // CaseAuthenticatedTag: 32-bit NOC-CAT value, 8 uppercase hex chars.
+        DnAttribute::CaseAuthenticatedTag(v) => (
+            &OID_MATTER_NOC_CAT,
+            TAG_UTF8_STRING,
+            format!("{v:08X}").into_bytes(),
+        ),
+
+        // Standard X.509 attributes.
+        DnAttribute::CommonName(s) => (
+            &OID_X520_COMMON_NAME,
+            TAG_UTF8_STRING,
+            s.as_bytes().to_vec(),
+        ),
+        DnAttribute::Surname(s) => (&OID_X520_SURNAME, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::SerialNumber(s) => {
+            verify_printable(s.as_bytes(), "SerialNumber")?;
+            (
+                &OID_X520_SERIAL_NUMBER,
+                TAG_PRINTABLE_STRING,
+                s.as_bytes().to_vec(),
+            )
+        }
+        DnAttribute::CountryName(s) => {
+            verify_printable(s.as_bytes(), "CountryName")?;
+            if s.len() != 2 {
+                return Err(Error::InvalidDnAttributeForX509 {
+                    asn1_type: "PrintableString",
+                    reason: "CountryName must be exactly 2 characters",
+                });
+            }
+            (
+                &OID_X520_COUNTRY_NAME,
+                TAG_PRINTABLE_STRING,
+                s.as_bytes().to_vec(),
+            )
+        }
+        DnAttribute::LocalityName(s) => (
+            &OID_X520_LOCALITY_NAME,
+            TAG_UTF8_STRING,
+            s.as_bytes().to_vec(),
+        ),
+        DnAttribute::StateOrProvinceName(s) => (
+            &OID_X520_STATE_OR_PROVINCE,
+            TAG_UTF8_STRING,
+            s.as_bytes().to_vec(),
+        ),
+        DnAttribute::OrganizationName(s) => (&OID_X520_ORG, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::OrganizationalUnitName(s) => {
+            (&OID_X520_ORG_UNIT, TAG_UTF8_STRING, s.as_bytes().to_vec())
+        }
+        DnAttribute::Title(s) => (&OID_X520_TITLE, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::Name(s) => (&OID_X520_NAME, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::GivenName(s) => (&OID_X520_GIVEN_NAME, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::Initials(s) => (&OID_X520_INITIALS, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::GenerationQualifier(s) => (
+            &OID_X520_GENERATION_QUALIFIER,
+            TAG_UTF8_STRING,
+            s.as_bytes().to_vec(),
+        ),
+        DnAttribute::DnQualifier(s) => {
+            verify_printable(s.as_bytes(), "DnQualifier")?;
+            (
+                &OID_X520_DN_QUALIFIER,
+                TAG_PRINTABLE_STRING,
+                s.as_bytes().to_vec(),
+            )
+        }
+        DnAttribute::Pseudonym(s) => (&OID_X520_PSEUDONYM, TAG_UTF8_STRING, s.as_bytes().to_vec()),
+        DnAttribute::DomainComponent(s) => {
+            verify_ia5(s.as_bytes(), "DomainComponent")?;
+            (&OID_DOMAIN_COMPONENT, TAG_IA5_STRING, s.as_bytes().to_vec())
+        }
+
+        // No mapping available — refuse to convert.
+        DnAttribute::Other { tag, .. } => return Err(Error::DnAttributeHasNoX509Oid(*tag)),
+    };
+
+    // Outer: SEQUENCE { OID, <string-type> { value } }
+    let oid_bytes = encode_oid(oid);
+    let string_bytes = wrap_primitive(string_tag, &value_bytes);
+
+    let mut inner = Vec::with_capacity(oid_bytes.len() + string_bytes.len());
+    inner.extend_from_slice(&oid_bytes);
+    inner.extend_from_slice(&string_bytes);
+    Ok(wrap_sequence(&inner))
+}
+
+/// Verify that all bytes are in the X.509 `PrintableString` character set
+/// (RFC 5280 Appendix B).
+///
+/// Allowed: A-Z, a-z, 0-9, space, `'`, `(`, `)`, `+`, `,`, `-`, `.`,
+/// `/`, `:`, `=`, `?`.
+fn verify_printable(s: &[u8], asn1_type: &'static str) -> Result<()> {
+    for &b in s {
+        let ok = b.is_ascii_alphanumeric()
+            || matches!(
+                b,
+                b' ' | b'\'' | b'(' | b')' | b'+' | b',' | b'-' | b'.' | b'/' | b':' | b'=' | b'?'
+            );
+        if !ok {
+            return Err(Error::InvalidDnAttributeForX509 {
+                asn1_type,
+                reason: "value contains a non-PrintableString character",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Verify that all bytes are in the ASCII range (`IA5String` = ASCII 0x00–0x7F).
+fn verify_ia5(s: &[u8], asn1_type: &'static str) -> Result<()> {
+    if s.iter().any(|&b| b > 0x7F) {
+        return Err(Error::InvalidDnAttributeForX509 {
+            asn1_type,
+            reason: "value contains a non-ASCII character",
+        });
+    }
+    Ok(())
+}
+
+/// Wrap value bytes in a primitive TLV with the given tag (`UTF8String`,
+/// `PrintableString`, `IA5String`, etc.).
+fn wrap_primitive(tag: u8, value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(value.len() + 4);
+    out.push(tag);
+    encode_definite_length(&mut out, value.len());
+    out.extend_from_slice(value);
+    out
+}
+
+// =============================================================================
+// Name (DistinguishedName) encoder
+// =============================================================================
+
+/// Encode an X.509 `Name`: `SEQUENCE OF RelativeDistinguishedName`,
+/// where each RDN is `SET OF AttributeTypeAndValue`.
+///
+/// Matter DNs use one attribute per RDN — we mirror matter.js's output.
+fn encode_dn(dn: &DistinguishedName) -> Result<Vec<u8>> {
+    let mut rdns_concat = Vec::new();
+    for attr in dn {
+        let atv = encode_dn_attribute(attr)?;
+        // Each RDN: SET { AttributeTypeAndValue }
+        let rdn = wrap_set(&atv);
+        rdns_concat.extend_from_slice(&rdn);
+    }
+    Ok(wrap_sequence(&rdns_concat))
+}
+
+/// Wrap content bytes in a DER SET (tag 0x31, constructed).
+fn wrap_set(content: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(content.len() + 4);
+    out.push(0x31); // SET tag (constructed)
+    encode_definite_length(&mut out, content.len());
+    out.extend_from_slice(content);
+    out
+}
+
 /// Wrap content bytes in a DER SEQUENCE.
 fn wrap_sequence(content: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(content.len() + 4);
@@ -340,7 +534,7 @@ fn unix_to_ymdhms(unix_secs: u64) -> (u32, u32, u32, u32, u32, u32) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
     use crate::time::MatterTime;
@@ -439,6 +633,89 @@ mod tests {
             &bytes[4..12],
             &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
         );
+    }
+
+    // ---- encode_dn_attribute ---------------------------------------------
+
+    #[test]
+    fn dn_attribute_node_id_uses_uppercase_hex_utf8string() {
+        // NodeId(0x10001) → UTF8String("0000000000010001")
+        let attr = crate::DnAttribute::NodeId(0x10001);
+        let bytes = encode_dn_attribute(&attr).unwrap();
+
+        // Inner shape: SEQUENCE { OID, UTF8String("0000000000010001") }
+        // Find the UTF8String (tag 0x0C) and check its value.
+        let utf8_start = bytes
+            .iter()
+            .position(|&b| b == 0x0C)
+            .expect("expected UTF8String tag 0x0C");
+        let len = bytes[utf8_start + 1] as usize;
+        assert_eq!(len, 16, "Matter-attribute hex is 16 chars for u64");
+        assert_eq!(
+            &bytes[utf8_start + 2..utf8_start + 2 + len],
+            b"0000000000010001"
+        );
+    }
+
+    #[test]
+    fn dn_attribute_common_name_uses_utf8string() {
+        let attr = crate::DnAttribute::CommonName("matter-test".to_string());
+        let bytes = encode_dn_attribute(&attr).unwrap();
+        let utf8_start = bytes.iter().position(|&b| b == 0x0C).unwrap();
+        let len = bytes[utf8_start + 1] as usize;
+        assert_eq!(&bytes[utf8_start + 2..utf8_start + 2 + len], b"matter-test");
+    }
+
+    #[test]
+    fn dn_attribute_country_name_uses_printablestring() {
+        let attr = crate::DnAttribute::CountryName("US".to_string());
+        let bytes = encode_dn_attribute(&attr).unwrap();
+        // PrintableString tag is 0x13
+        let ps_start = bytes.iter().position(|&b| b == 0x13).unwrap();
+        assert_eq!(bytes[ps_start + 1], 0x02);
+        assert_eq!(&bytes[ps_start + 2..ps_start + 4], b"US");
+    }
+
+    #[test]
+    fn dn_attribute_domain_component_uses_ia5string() {
+        let attr = crate::DnAttribute::DomainComponent("example".to_string());
+        let bytes = encode_dn_attribute(&attr).unwrap();
+        // IA5String tag is 0x16
+        let ia5_start = bytes.iter().position(|&b| b == 0x16).unwrap();
+        let len = bytes[ia5_start + 1] as usize;
+        assert_eq!(&bytes[ia5_start + 2..ia5_start + 2 + len], b"example");
+    }
+
+    #[test]
+    fn dn_attribute_other_is_rejected() {
+        use crate::DnAttributeValue;
+        let attr = crate::DnAttribute::Other {
+            tag: 99,
+            value: DnAttributeValue::Utf8("ignored".to_string()),
+        };
+        let err = encode_dn_attribute(&attr).unwrap_err();
+        assert!(matches!(err, Error::DnAttributeHasNoX509Oid(99)));
+    }
+
+    #[test]
+    fn dn_attribute_country_name_non_printable_rejected() {
+        // Cyrillic letter (UTF-8 multibyte) — not PrintableString-encodable.
+        let attr = crate::DnAttribute::CountryName("Я ".to_string());
+        let err = encode_dn_attribute(&attr).unwrap_err();
+        assert!(matches!(err, Error::InvalidDnAttributeForX509 { .. }));
+    }
+
+    // ---- encode_dn (Name) ------------------------------------------------
+
+    #[test]
+    fn dn_with_one_attribute_wraps_in_sequence_of_set() {
+        let dn =
+            crate::DistinguishedName::new(vec![crate::DnAttribute::CommonName("test".to_string())]);
+        let bytes = encode_dn(&dn).unwrap();
+        // Outer SEQUENCE { SET { SEQUENCE { OID, UTF8String("test") } } }
+        assert_eq!(bytes[0], 0x30); // outer SEQUENCE
+                                    // SET tag is 0x31; it appears at offset 2.
+        assert_eq!(bytes[2], 0x31);
     }
 
     // ---- encode_subject_public_key_info ----------------------------------
