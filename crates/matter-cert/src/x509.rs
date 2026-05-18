@@ -9,10 +9,16 @@
 //! See `docs/superpowers/specs/2026-05-18-matter-x509-conversion-design.md`
 //! for the full design and the byte-parity rationale.
 
-// The OID constants are defined now for completeness and documentation value;
-// they are wired into the encoder in Tasks 3–9. Suppress dead-code warnings
-// for the skeleton phase only — remove this attribute when the encoder lands.
-#![allow(dead_code)]
+// All OID constants are now reachable through matter_cert_to_x509_tbs_der
+// (which delegates to the per-encoder helpers). The skeleton-phase
+// dead-code suppression has been removed.
+//
+// The two OIDs below (VVS-ID and FIRMWARE-SIGNING-ID) are forward-looking:
+// they will be consumed when DnAttribute gains the corresponding variants.
+// Each carries its own per-item allow rather than a module-level blanket.
+//
+// NOTE: if clippy flags any other constant here, that is a real dead-code
+// issue and must be investigated, not silenced.
 
 use der::asn1::ObjectIdentifier;
 
@@ -38,6 +44,9 @@ use crate::error::{Error, Result};
 const OID_MATTER_NODE_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.1");
 
 /// Operational-certificate attribute: Matter firmware-signing-id.
+///
+/// Forward-looking: consumed when `DnAttribute` adds a `FirmwareSigningId` variant.
+#[allow(dead_code)]
 const OID_MATTER_FIRMWARE_SIGNING_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.2");
 
@@ -59,13 +68,23 @@ const OID_MATTER_NOC_CAT: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6
 /// Present in matter.js (arc `.1.7`) but absent from the plan template.
 /// Included here for completeness; used in Vendor Verification Service
 /// certificates introduced in a later Matter specification revision.
+/// Forward-looking: consumed when `DnAttribute` adds a `VvsId` variant.
+#[allow(dead_code)]
 const OID_MATTER_VVS_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.1.7");
 
 /// Attestation-certificate attribute: Matter vendor-id.
+///
+/// Forward-looking: consumed when `DnAttribute` adds a `VendorId` variant
+/// for attestation certificate (DAC/PAI) support.
+#[allow(dead_code)]
 const OID_MATTER_VENDOR_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.2.1");
 
 /// Attestation-certificate attribute: Matter product-id.
+///
+/// Forward-looking: consumed when `DnAttribute` adds a `ProductId` variant
+/// for attestation certificate (DAC/PAI) support.
+#[allow(dead_code)]
 const OID_MATTER_PRODUCT_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.2.2");
 
@@ -120,9 +139,34 @@ const OID_ECDSA_WITH_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.
 /// same input. Used internally by `MatterCertificate::verify_signed_by`
 /// and exposed publicly via `MatterCertificate::to_x509_tbs_der`.
 pub(crate) fn matter_cert_to_x509_tbs_der(cert: &MatterCertificate) -> Result<Vec<u8>> {
-    // Filled in by Task 9.
-    let _ = cert;
-    Err(Error::SignatureVerificationFailed) // placeholder so the file compiles
+    let mut tbs = Vec::with_capacity(256);
+
+    // version [0] EXPLICIT INTEGER (2)  — v3, always emitted.
+    // [0] EXPLICIT context tag is 0xA0 (constructed).
+    tbs.extend_from_slice(&[0xA0, 0x03, 0x02, 0x01, 0x02]);
+
+    // serialNumber INTEGER (fallible — empty serials rejected).
+    tbs.extend_from_slice(&encode_serial_number(cert.serial())?);
+
+    // signature AlgorithmIdentifier (infallible).
+    tbs.extend_from_slice(&encode_algorithm_identifier_ecdsa_sha256());
+
+    // issuer Name (fallible — Other DN attributes / bad CountryName).
+    tbs.extend_from_slice(&encode_dn(cert.issuer())?);
+
+    // validity SEQUENCE { notBefore, notAfter } (infallible — Vec<u8>).
+    tbs.extend_from_slice(&encode_validity(cert.not_before(), cert.not_after()));
+
+    // subject Name (fallible).
+    tbs.extend_from_slice(&encode_dn(cert.subject())?);
+
+    // subjectPublicKeyInfo (infallible).
+    tbs.extend_from_slice(&encode_subject_public_key_info(cert.public_key()));
+
+    // extensions [3] EXPLICIT SEQUENCE OF Extension OPTIONAL (infallible at this layer).
+    tbs.extend_from_slice(&encode_extensions_block(cert.extensions()));
+
+    Ok(wrap_sequence(&tbs))
 }
 
 // =============================================================================
@@ -1012,6 +1056,20 @@ mod tests {
         assert!(
             bytes.windows(needle.len()).any(|w| w == needle.as_slice()),
             "inner OCTET STRING with 20 bytes of 0xAB must be present"
+        );
+    }
+
+    // ---- matter_cert_to_x509_tbs_der --------------------------------------
+
+    #[test]
+    fn top_level_produces_outer_sequence() {
+        let bytes = std::fs::read("../../test-vectors/certs/rcac.bin").unwrap();
+        let cert = crate::MatterCertificate::from_tlv(&bytes).unwrap();
+        let tbs = matter_cert_to_x509_tbs_der(&cert).unwrap();
+        assert_eq!(tbs[0], 0x30, "TBS must start with a SEQUENCE tag");
+        assert!(
+            tbs.len() > 80,
+            "TBS must be substantial — at least 80 bytes"
         );
     }
 
