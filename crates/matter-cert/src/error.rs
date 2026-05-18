@@ -95,10 +95,10 @@ pub enum Error {
     SignatureVerificationFailed,
 
     /// A certificate's `not_before` is in the future.
-    ///
-    /// Reserved for M2.3; not produced by phase 1.
-    #[error("certificate is not yet valid (not_before={not_before:?}, at={at:?})")]
+    #[error("certificate is not yet valid (cert_index={cert_index}, not_before={not_before:?}, at={at:?})")]
     NotYetValid {
+        /// Index of the offending cert in the chain (0 = leaf).
+        cert_index: u8,
         /// The certificate's `not_before` timestamp.
         not_before: MatterTime,
         /// The time at which validation was attempted.
@@ -106,10 +106,12 @@ pub enum Error {
     },
 
     /// A certificate's `not_after` is in the past.
-    ///
-    /// Reserved for M2.3; not produced by phase 1.
-    #[error("certificate has expired (not_after={not_after:?}, at={at:?})")]
+    #[error(
+        "certificate has expired (cert_index={cert_index}, not_after={not_after:?}, at={at:?})"
+    )]
     Expired {
+        /// Index of the offending cert in the chain (0 = leaf).
+        cert_index: u8,
         /// The certificate's `not_after` timestamp.
         not_after: MatterTime,
         /// The time at which validation was attempted.
@@ -117,28 +119,29 @@ pub enum Error {
     },
 
     /// A certificate chain did not terminate at a trusted root.
-    ///
-    /// Reserved for M2.3.
     #[error("certificate chain does not reach a trusted root")]
     UntrustedRoot,
 
     /// A cert's `issuer` did not match the next cert's `subject`.
-    ///
-    /// Reserved for M2.3.
-    #[error("issuer DN does not match next cert's subject DN")]
-    IssuerSubjectMismatch,
+    #[error("issuer DN does not match next cert's subject DN (cert_index={cert_index})")]
+    IssuerSubjectMismatch {
+        /// Index of the cert whose `issuer` did not match (0 = leaf).
+        cert_index: u8,
+    },
 
     /// A non-leaf certificate did not have `basic_constraints.is_ca = true`.
-    ///
-    /// Reserved for M2.3.
-    #[error("non-leaf certificate is not a CA (basic_constraints.is_ca = false)")]
-    NotACa,
+    #[error("non-leaf certificate is not a CA (cert_index={cert_index})")]
+    NotACa {
+        /// Index of the non-CA intermediate (always > 0).
+        cert_index: u8,
+    },
 
     /// Chain length exceeded a cert's `path_len_constraint`.
-    ///
-    /// Reserved for M2.3.
-    #[error("chain length exceeds a path-length constraint")]
-    PathLengthExceeded,
+    #[error("chain length exceeds path-length constraint (cert_index={cert_index})")]
+    PathLengthExceeded {
+        /// Index of the cert whose path-length constraint was violated.
+        cert_index: u8,
+    },
 }
 
 /// `Result<T, Error>` for convenience.

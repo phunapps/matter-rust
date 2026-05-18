@@ -326,6 +326,42 @@ impl MatterCertificate {
         crate::x509::matter_cert_to_x509_tbs_der(self)
     }
 
+    /// Construct a [`MatterCertificate`] directly from its field values.
+    ///
+    /// `pub(crate)` because it is intended only for the `test_support`
+    /// module, which is gated behind the `test-support` Cargo feature.
+    /// Production callers should not need this — they consume Matter
+    /// certificates from device-presented byte streams via
+    /// [`Self::from_tlv`]. A public builder API will be introduced in
+    /// M6's commissioning work.
+    ///
+    /// Algorithm identifiers (`ecdsa-with-sha256`, `ec-public-key`,
+    /// `prime256v1`) are not stored; [`Self::to_tlv`] always emits them
+    /// at their single spec-allowed values.
+    #[cfg(feature = "test-support")]
+    #[allow(clippy::too_many_arguments)] // Eight fields mirror the eight spec §6.5 cert fields.
+    pub(crate) fn from_fields(
+        serial: Vec<u8>,
+        issuer: DistinguishedName,
+        not_before: MatterTime,
+        not_after: MatterTime,
+        subject: DistinguishedName,
+        public_key: PublicKey,
+        extensions: Extensions,
+        signature: Signature,
+    ) -> Self {
+        Self {
+            serial,
+            issuer,
+            not_before,
+            not_after,
+            subject,
+            public_key,
+            extensions,
+            signature,
+        }
+    }
+
     /// Verify this certificate's signature against the given issuer's
     /// public key.
     ///
