@@ -22,11 +22,11 @@ test-support = []
 workspace = true
 
 [dependencies]
-hex-literal = { workspace = true }
 matter-cert = { path = "../matter-cert", version = "0.1.0-pre" }
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
 p256 = { workspace = true }
 ring = { workspace = true }
+subtle = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

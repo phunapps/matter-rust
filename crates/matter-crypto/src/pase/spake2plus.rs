@@ -4,7 +4,8 @@
 //! Matter Core Spec §3.10.2 over P-256, using:
 //! - Matter-specific points M and N (spec §3.10.2, pinned from matter.js Spake2p.ts)
 //! - p256 for scalar/point arithmetic
-//! - ring for SHA-256, HMAC, HKDF, constant-time compare
+//! - ring for SHA-256, HMAC, HKDF
+//! - subtle for constant-time comparison (`ConstantTimeEq`)
 //!
 //! # Transcript hash layout (matter.js cross-reference)
 //!
@@ -49,6 +50,7 @@ use p256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar};
 use ring::digest::{digest, SHA256};
 use ring::hmac;
 use ring::rand::SecureRandom;
+use subtle::ConstantTimeEq;
 
 use crate::error::{Error, Result};
 use crate::pase::kdf::hkdf_expand;
@@ -388,14 +390,15 @@ pub(crate) fn compute_cb(kcb: &[u8; 16], x_bytes: &[u8; 65]) -> [u8; 32] {
 /// MUST be used instead of `==` for tag bytes to prevent timing side-channels.
 pub(crate) fn verify_tag(expected: &[u8; 32], received: &[u8; 32]) -> Result<()> {
     // CT-EQ: must NEVER use `==` on tag bytes — leaks timing info.
-    // `ring::constant_time::verify_slices_are_equal` is deprecated in ring 0.17
-    // (it is re-exported from `deprecated_constant_time`) but remains the
-    // idiomatic constant-time comparison available in ring. We suppress the
-    // deprecation warning here; the underlying function is not going away yet
-    // and correctly performs a constant-time byte comparison.
-    #[allow(deprecated)]
-    ring::constant_time::verify_slices_are_equal(expected.as_slice(), received.as_slice())
-        .map_err(|_| Error::ConfirmationTagMismatch)
+    // `subtle::ConstantTimeEq` is the idiomatic non-deprecated constant-time
+    // byte comparison in the Rust ecosystem and is already a transitive
+    // dependency via p256. `ct_eq` on `[u8]` returns `subtle::Choice`
+    // (1 = equal, 0 = not equal).
+    if expected.ct_eq(received).unwrap_u8() == 1 {
+        Ok(())
+    } else {
+        Err(Error::ConfirmationTagMismatch)
+    }
 }
 
 // =============================================================================
