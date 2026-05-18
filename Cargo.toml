@@ -50,6 +50,7 @@ missing_const_for_fn = "allow"
 # Add to this table — do not bump per-crate without discussion.
 [workspace.dependencies]
 bitflags = "2"
+der = { version = "0.7", default-features = false, features = ["oid", "alloc"] }
 proptest = "1"
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
