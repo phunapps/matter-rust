@@ -159,10 +159,92 @@ impl<'a> CertificateChain<'a> {
     /// (0 = leaf). [`Error::UntrustedRoot`] is returned for empty chains,
     /// no matching anchor, or anchor signature failure.
     pub fn validate(&self, roots: &TrustedRoots, at: MatterTime) -> Result<()> {
-        // Real implementation lands in Task 6. Placeholder so the file
-        // compiles; the empty-chain return value happens to match the
-        // final intended behaviour, so the test below stays valid.
-        let _ = (roots, at);
+        if self.certs.is_empty() {
+            return Err(Error::UntrustedRoot);
+        }
+
+        let len = self.certs.len();
+        for i in 0..len {
+            let cert = &self.certs[i];
+            let i_u8 = u8::try_from(i).unwrap_or(u8::MAX);
+
+            // ---- Time bounds (cheap; fail fast) ----
+            let nb = cert.not_before();
+            let na = cert.not_after();
+            if nb > at {
+                return Err(Error::NotYetValid {
+                    cert_index: i_u8,
+                    not_before: nb,
+                    at,
+                });
+            }
+            if na != MatterTime::NO_EXPIRY && na < at {
+                return Err(Error::Expired {
+                    cert_index: i_u8,
+                    not_after: na,
+                    at,
+                });
+            }
+
+            // ---- CA bit (above the leaf) ----
+            if i > 0 {
+                let is_ca = cert
+                    .extensions()
+                    .basic_constraints
+                    .as_ref()
+                    .is_some_and(|bc| bc.is_ca);
+                if !is_ca {
+                    return Err(Error::NotACa { cert_index: i_u8 });
+                }
+            }
+
+            // ---- Path-length constraint ----
+            if i > 0 {
+                if let Some(plc) = cert
+                    .extensions()
+                    .basic_constraints
+                    .as_ref()
+                    .and_then(|bc| bc.path_len_constraint)
+                {
+                    // Intermediates strictly between this cert and the leaf
+                    // (exclude the leaf at index 0).
+                    let intermediates_below = u8::try_from(i.saturating_sub(1)).unwrap_or(u8::MAX);
+                    if intermediates_below > plc {
+                        return Err(Error::PathLengthExceeded { cert_index: i_u8 });
+                    }
+                }
+            }
+
+            // ---- Issuer / subject linkage + signature (intra-chain) ----
+            if i + 1 < len {
+                let next = &self.certs[i + 1];
+                if cert.issuer() != next.subject() {
+                    return Err(Error::IssuerSubjectMismatch { cert_index: i_u8 });
+                }
+                cert.verify_signed_by(next.public_key())?;
+            }
+        }
+
+        // ---- Anchor the top cert against TrustedRoots ----
+        let top = &self.certs[len - 1];
+        for anchor in roots.iter() {
+            if top.issuer() != anchor.subject() {
+                continue;
+            }
+            // Asymmetric SKI gate: only the anchor's SKI controls strictness.
+            // When anchor.SKI is Some(X), the cert MUST present a matching AKI.
+            // When anchor.SKI is None, the gate is skipped (DN-only match).
+            if let Some(anchor_ski) = anchor.subject_key_identifier() {
+                let top_aki = top.extensions().authority_key_identifier;
+                if top_aki != Some(*anchor_ski) {
+                    continue;
+                }
+            }
+            if top.verify_signed_by(anchor.public_key()).is_ok() {
+                return Ok(());
+            }
+        }
+
         Err(Error::UntrustedRoot)
     }
 }
@@ -188,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_validate_returns_untrusted_root_for_empty_chain() {
+    fn validate_returns_untrusted_root_for_empty_chain() {
         let roots = TrustedRoots::new();
         let chain = CertificateChain::new(&[]);
         let err = chain
