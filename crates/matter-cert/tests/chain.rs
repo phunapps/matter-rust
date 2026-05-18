@@ -308,3 +308,70 @@ fn path_len_zero_at_index_2_rejects_two_intermediates_below() {
         .unwrap_err();
     assert!(matches!(err, Error::PathLengthExceeded { cert_index: 2 }));
 }
+
+// ------- Tier 1: captured chain end-to-end -------------------------------
+
+#[test]
+fn captured_chain_validates_against_rcac_as_trust_anchor() {
+    let rcac = parse_cert("rcac");
+    let icac = parse_cert("icac");
+    let noc = parse_cert("noc");
+
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_root_cert(&rcac));
+
+    let leaf_for_window = noc.clone();
+    let chain_certs = vec![noc, icac];
+    let chain = CertificateChain::new(&chain_certs);
+    let at = at_inside_window(&leaf_for_window);
+    chain
+        .validate(&roots, at)
+        .expect("captured chain must validate against rcac as the trust anchor");
+}
+
+// ------- Tier 3: proptest properties -------------------------------------
+
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64, // sign-heavy; lower than default 256 for CI duration
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn synthetic_valid_chain_always_validates(seed in any::<u64>()) {
+        let (chain_certs, anchor) = common::synthesise_two_cert_chain(seed);
+        let at = at_inside_window(&chain_certs[0]);
+
+        let mut roots = TrustedRoots::new();
+        roots.add(anchor);
+
+        prop_assert!(CertificateChain::new(&chain_certs).validate(&roots, at).is_ok());
+    }
+
+    #[test]
+    fn random_byte_flip_never_panics(
+        seed in any::<u64>(),
+        flip_offset in any::<usize>(),
+        flip_bit in 0u8..8,
+    ) {
+        let (chain_certs, anchor) = common::synthesise_two_cert_chain(seed);
+        let leaf_bytes = chain_certs[0].to_tlv().unwrap();
+        let mut mutated = leaf_bytes.clone();
+        if !mutated.is_empty() {
+            let off = flip_offset % mutated.len();
+            mutated[off] ^= 1 << flip_bit;
+        }
+
+        // Parse may fail (codec error); if it succeeds, validate must
+        // not panic — only return Ok or Err.
+        if let Ok(leaf) = MatterCertificate::from_tlv(&mutated) {
+            let mut roots = TrustedRoots::new();
+            roots.add(anchor);
+            let new_chain = vec![leaf, chain_certs[1].clone()];
+            let _ = CertificateChain::new(&new_chain)
+                .validate(&roots, MatterTime::from_unix_secs(1_750_000_000));
+        }
+    }
+}
