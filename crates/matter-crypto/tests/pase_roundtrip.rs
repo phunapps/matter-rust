@@ -150,3 +150,84 @@ fn pase_roundtrip_out_of_order_call_returns_unexpected_message() {
     let err = prover.handle_pake2(&dummy_pake2).unwrap_err();
     assert!(matches!(err, Error::UnexpectedMessage { .. }));
 }
+
+// ── Property-based tests ──────────────────────────────────────────────────────
+//
+// proptest is already in [dev-dependencies] (workspace = true).
+// We cap `cases` at 16 because each case runs PBKDF2 (1 000 iterations) plus
+// four P-256 scalar multiplications — a full SPAKE2+ exchange.  That keeps the
+// per-PR wall-clock cost reasonable while still exercising a broad PIN space.
+
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 16,
+        ..ProptestConfig::default()
+    })]
+
+    /// Any valid Matter setup PIN in [1, 99_999_998] must drive a clean
+    /// known-params PASE handshake with both sides deriving the same `ke`.
+    ///
+    /// 99_999_999 is reserved by the Matter spec (§5.1.6 — the all-9s passcode
+    /// pattern is explicitly invalid), so the range stops at 99_999_998.
+    #[test]
+    fn random_pin_roundtrips(pin in 1u32..=99_999_998) {
+        let params = PasePbkdfParams {
+            iterations: 1_000,
+            salt: vec![0x42u8; 16],
+        };
+        let mut prover = PaseProver::new_with_known_params(pin, params.clone())
+            .expect("prover construction");
+        let mut verifier = PaseVerifier::new_from_pin(pin, params)
+            .expect("verifier construction");
+
+        let pake1 = prover.start().expect("prover.start");
+        verifier.handle_pake1(&pake1).expect("verifier handles Pake1");
+        let pake2 = verifier.next_message().expect("verifier sends Pake2");
+        prover.handle_pake2(&pake2).expect("prover handles Pake2");
+        let pake3 = prover.next_message().expect("prover sends Pake3");
+        verifier.handle_pake3(&pake3).expect("verifier handles Pake3");
+
+        let pk = prover.finish().expect("prover finishes");
+        let vk = verifier.finish().expect("verifier finishes");
+        prop_assert_eq!(pk.ke, vk.ke);
+    }
+
+    /// Flipping a single bit in a serialised Pake2 message must return an
+    /// error from `handle_pake2(...)`, never cause a panic.
+    ///
+    /// This covers the same state-machine surface that a fuzz target would
+    /// exercise, without requiring the `cargo-fuzz` toolchain on every PR
+    /// (fuzzing runs on a weekly schedule per CLAUDE.md).
+    #[test]
+    fn random_byte_flip_in_pake2_never_panics(
+        pin in 1u32..=99_999_998,
+        flip_offset in any::<usize>(),
+        flip_bit in 0u8..8,
+    ) {
+        let params = PasePbkdfParams {
+            iterations: 1_000,
+            salt: vec![0x42u8; 16],
+        };
+        let mut prover = PaseProver::new_with_known_params(pin, params.clone())
+            .expect("prover construction");
+        let mut verifier = PaseVerifier::new_from_pin(pin, params)
+            .expect("verifier construction");
+
+        let pake1 = prover.start().expect("prover.start");
+        verifier.handle_pake1(&pake1).expect("verifier handles Pake1");
+        let mut pake2 = verifier.next_message().expect("verifier sends Pake2");
+
+        // Only flip if the message is non-empty (it should never be for a
+        // well-formed verifier, but guard defensively).
+        if !pake2.is_empty() {
+            let off = flip_offset % pake2.len();
+            pake2[off] ^= 1 << flip_bit;
+        }
+
+        // Either returns Ok(()) (astronomically unlikely but not impossible for
+        // a lucky flip) or returns an Err — it must never panic.
+        let _ = prover.handle_pake2(&pake2);
+    }
+}

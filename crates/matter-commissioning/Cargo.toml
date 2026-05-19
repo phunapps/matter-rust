@@ -18,6 +18,6 @@ workspace = true
 [dependencies]
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
 matter-cert = { path = "../matter-cert", version = "0.1.0-pre" }
-matter-crypto = { path = "../matter-crypto", version = "0.0.0" }
+matter-crypto = { path = "../matter-crypto", version = "0.1.0-pre" }
 matter-transport = { path = "../matter-transport", version = "0.0.0" }
 thiserror = { workspace = true }

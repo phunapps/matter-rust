@@ -51,6 +51,45 @@ appropriate validation gates and renaming, e.g.,
 issuance crate. Decision deferred to whichever milestone first needs
 it.
 
+## matter-crypto
+
+### External cryptographic protocol review (M3 PASE)
+
+**Status:** owned by the user; pending arrangement.
+
+**Why it matters:** CLAUDE.md mandates external review for any crate
+implementing cryptographic protocols. PASE is the first such crate.
+
+**Concrete deliverable:** review completed, feedback applied, sign-off
+captured in a comment on `matter-crypto/README.md` or in a new
+`docs/` artefact. Required before any `cargo publish matter-crypto`.
+
+### CASE / SIGMA-I (M4)
+
+**Status:** not yet started.
+
+**Why it matters:** PASE only bootstraps commissioning sessions.
+Operational Matter communication uses CASE — certificate-authenticated
+sessions running on top of the NOC/ICAC/RCAC chain `matter-cert`
+validates.
+
+**Concrete deliverable:** M4 design + implementation + matter.js
+byte-parity + external review. Modelled on M3's structure.
+
+### matter.js capture-pase RNG patching
+
+**Status:** working, but fragile.
+
+**Why it matters:** `xtask capture-pase` monkey-patches matter.js's
+`Crypto.randomBytes` to inject fixed scalars. matter.js version bumps
+may break the patch. Hardcoded scenario inputs (PIN, salt, iterations,
+scalar bytes) live in the script.
+
+**Concrete deliverable:** before 1.0, either upstream a public RNG
+injection point to matter.js OR document the monkey-patch path
+clearly enough that it can be re-pinned against new matter.js
+versions in <30 minutes.
+
 ## Cross-cutting
 
 ### Benchmark suite

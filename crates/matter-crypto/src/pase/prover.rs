@@ -80,6 +80,10 @@ enum State {
         pin: u32,
         x_scalar: p256::Scalar,
         initiator_random: [u8; 32],
+        /// Session ID to include in the `PBKDFParamRequest`. Set to 0 by the
+        /// production constructors; overrideable for testing via
+        /// [`new_with_negotiation_with_scalar`].
+        initiator_session_id: u16,
     },
 
     /// `start()` has not been called yet — known-params path.
@@ -204,6 +208,7 @@ impl PaseProver {
                 pin,
                 x_scalar,
                 initiator_random,
+                initiator_session_id: 0,
             },
         })
     }
@@ -226,6 +231,31 @@ impl PaseProver {
         x_scalar_bytes: [u8; 32],
         initiator_random: [u8; 32],
     ) -> Result<Self> {
+        Self::new_with_negotiation_with_scalar_and_session_id(
+            pin,
+            x_scalar_bytes,
+            initiator_random,
+            0,
+        )
+    }
+
+    /// Deterministic constructor for testing — injects fixed `x` scalar,
+    /// `initiator_random`, and `initiator_session_id` directly.
+    ///
+    /// Used by `test_support` to reproduce matter.js fixture handshakes that
+    /// use a specific session ID in `PBKDFParamRequest`. Production code always
+    /// uses [`new_with_negotiation`][Self::new_with_negotiation].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidScalar`] if `x_scalar_bytes` is zero or not a valid
+    ///   P-256 scalar (i.e., ≥ curve order).
+    pub(crate) fn new_with_negotiation_with_scalar_and_session_id(
+        pin: u32,
+        x_scalar_bytes: [u8; 32],
+        initiator_random: [u8; 32],
+        initiator_session_id: u16,
+    ) -> Result<Self> {
         use p256::elliptic_curve::group::ff::{Field, PrimeField};
         let x_scalar_opt: Option<p256::Scalar> =
             p256::Scalar::from_repr(p256::FieldBytes::from(x_scalar_bytes)).into();
@@ -238,6 +268,7 @@ impl PaseProver {
                 pin,
                 x_scalar,
                 initiator_random,
+                initiator_session_id,
             },
         })
     }
@@ -352,13 +383,15 @@ impl PaseProver {
                 pin,
                 x_scalar,
                 initiator_random,
+                initiator_session_id,
             } => {
                 // §3.10.5 step 1: commissioner sends PBKDFParamRequest.
-                // initiator_session_id=0 and passcode_id=0 per spec defaults for the
-                // negotiation path (the actual session ID assignment happens at M5).
+                // passcode_id=0 per spec defaults for the negotiation path.
+                // The actual session ID assignment happens at M5; for now we use
+                // whatever was stored in the state (0 for production, fixture value for tests).
                 let req = PbkdfParamRequest {
                     initiator_random,
-                    initiator_session_id: 0,
+                    initiator_session_id,
                     passcode_id: 0,
                     has_pbkdf_parameters: false,
                     initiator_session_params: None,

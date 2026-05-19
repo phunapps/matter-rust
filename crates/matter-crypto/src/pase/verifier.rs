@@ -111,6 +111,9 @@ enum State {
         /// Pre-sampled 32-byte responder nonce, used if the commissioner sends
         /// a `PBKDFParamRequest`.
         responder_random: [u8; 32],
+        /// Session ID to include in `PBKDFParamResponse`. Set to 0 by the
+        /// production constructors; overrideable for testing.
+        responder_session_id: u16,
     },
 
     /// `PBKDFParamRequest` received; `next_message()` will emit the Response.
@@ -126,6 +129,7 @@ enum State {
         request_bytes: Vec<u8>,
         responder_random: [u8; 32],
         initiator_random: [u8; 32],
+        responder_session_id: u16,
     },
 
     /// `PBKDFParamResponse` sent; waiting for Pake1.
@@ -263,6 +267,7 @@ impl PaseVerifier {
                 params,
                 y_scalar,
                 responder_random,
+                responder_session_id: 0,
             },
         })
     }
@@ -306,9 +311,9 @@ impl PaseVerifier {
     /// Deterministic constructor for testing — injects a fixed `y` scalar
     /// directly, bypassing the RNG. Accepts pre-computed `w0` and `L`.
     ///
-    /// Used by `test_support` to construct a verifier with a known scalar for
-    /// matter.js byte-parity tests. `y_scalar_bytes` must be a valid non-zero
-    /// P-256 scalar in big-endian representation.
+    /// Uses an all-zero `responder_random` and `responder_session_id = 0`.
+    /// For full matter.js byte-parity tests, use
+    /// [`new_with_scalar_and_random`][Self::new_with_scalar_and_random] instead.
     ///
     /// Production code should always use [`new`][Self::new].
     ///
@@ -318,12 +323,35 @@ impl PaseVerifier {
     ///   if `params` are out of spec.
     /// - [`Error::InvalidScalar`] if `w0_bytes` or `y_scalar_bytes` is zero or
     ///   not a valid P-256 scalar.
-    /// - [`Error::PinDerivationFailed`] on nonce generation failure.
     pub(crate) fn new_with_scalar(
         w0_bytes: [u8; 32],
         l: [u8; 65],
         params: PasePbkdfParams,
         y_scalar_bytes: [u8; 32],
+    ) -> Result<Self> {
+        Self::new_with_scalar_and_random(w0_bytes, l, params, y_scalar_bytes, [0u8; 32], 0)
+    }
+
+    /// Deterministic constructor for testing — injects a fixed `y` scalar,
+    /// `responder_random`, and `responder_session_id` directly.
+    ///
+    /// Used by `test_support` to reproduce matter.js fixture handshakes that
+    /// capture a specific responder nonce and session ID in
+    /// `PBKDFParamResponse`. Production code always uses [`new`][Self::new].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::PbkdfIterationsTooLow`] / [`Error::PbkdfSaltLengthInvalid`]
+    ///   if `params` are out of spec.
+    /// - [`Error::InvalidScalar`] if `w0_bytes` or `y_scalar_bytes` is zero or
+    ///   not a valid P-256 scalar.
+    pub(crate) fn new_with_scalar_and_random(
+        w0_bytes: [u8; 32],
+        l: [u8; 65],
+        params: PasePbkdfParams,
+        y_scalar_bytes: [u8; 32],
+        responder_random: [u8; 32],
+        responder_session_id: u16,
     ) -> Result<Self> {
         use p256::elliptic_curve::group::ff::Field;
         validate_params(params.iterations, &params.salt)?;
@@ -342,11 +370,6 @@ impl PaseVerifier {
             return Err(Error::InvalidScalar);
         }
 
-        // Use a fixed all-zero responder random — this value is only used in
-        // the negotiation-path PBKDF response and has no cryptographic impact
-        // in the known-params path.
-        let responder_random = [0u8; 32];
-
         Ok(Self {
             state: State::AwaitingFirstMessage {
                 w0,
@@ -354,6 +377,7 @@ impl PaseVerifier {
                 params,
                 y_scalar,
                 responder_random,
+                responder_session_id,
             },
         })
     }
@@ -431,6 +455,7 @@ impl PaseVerifier {
                 params,
                 y_scalar,
                 responder_random,
+                responder_session_id,
             } => {
                 // Decode the request so we can capture `initiator_random`.
                 // We also keep the verbatim bytes for transcript context.
@@ -444,6 +469,7 @@ impl PaseVerifier {
                     request_bytes: bytes.to_vec(),
                     responder_random,
                     initiator_random: req.initiator_random,
+                    responder_session_id,
                 };
                 Ok(())
             }
@@ -493,7 +519,8 @@ impl PaseVerifier {
                 w0,
                 l,
                 y_scalar,
-                // params and responder_random are not used on the known-params path.
+                // params, responder_random, and responder_session_id are not used
+                // on the known-params path (no PbkdfParam exchange).
                 ..
             } => {
                 // context = SHA-256("CHIP PAKE V1 Commissioning") — no param exchange.
@@ -593,6 +620,7 @@ impl PaseVerifier {
                 request_bytes,
                 responder_random,
                 initiator_random,
+                responder_session_id,
             } => {
                 // §3.10.5 step 2: build and send PBKDFParamResponse.
                 // Include our PBKDF parameters (the commissioner set
@@ -600,7 +628,7 @@ impl PaseVerifier {
                 let resp = PbkdfParamResponse {
                     initiator_random,
                     responder_random,
-                    responder_session_id: 0, // M5 will assign real session IDs.
+                    responder_session_id,
                     pbkdf_parameters: Some(PbkdfParamsInner {
                         iterations: params.iterations,
                         salt: params.salt.clone(),
