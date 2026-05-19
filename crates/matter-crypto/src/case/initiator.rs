@@ -21,8 +21,31 @@
 //! finish() → CaseSessionOutput
 //! ```
 //!
-//! Resumption (`Sigma1` with resumption fields → `Sigma2Resume` / `Sigma3Resume`)
-//! lands in M4.2; this module implements only the new-session path.
+//! # Protocol flow (resumption path — Matter Core Spec §4.13.2.4)
+//!
+//! ```text
+//! Initiator (us)                    Responder
+//! ─────────────────────────────────────────────────────────
+//! new_with_resumption() / new_with_resumption_using_rng()
+//! start()
+//!   → Sigma1 (with resumption_id + initiator_resume_mic)  ──>
+//!
+//!   Case A — responder accepts resumption:
+//!              <──────────────── Sigma2_Resume
+//! handle_sigma2_resume()
+//! finish() → CaseSessionOutput   (NO Sigma3 or Sigma3_Resume to send)
+//!
+//!   Case B — responder declines (no matching record): sends normal Sigma2
+//!              <──────────────── Sigma2
+//! handle_sigma2()               (falls back to the new-session path)
+//! next_message()
+//!   → Sigma3  ──────────────────────────────────────────>
+//! finish() → CaseSessionOutput
+//! ```
+//!
+//! **Note:** `Sigma3_Resume` does NOT exist as a wire message. After
+//! `handle_sigma2_resume` the initiator transitions directly to `Complete`;
+//! the implicit mutual-key-confirmation is the first encrypted M5 message.
 //!
 //! # KDF inputs (pinned from matter.js `CaseClient.ts` + `NodeSession.ts`)
 //!
@@ -114,14 +137,16 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 use matter_cert::{CertificateChain, MatterCertificate, MatterTime, Signature, TrustedRoots};
 
-use crate::case::messages::{Sigma1, Sigma2, Sigma3};
+use crate::case::messages::{Sigma1, Sigma2, Sigma2Resume, Sigma3};
 use crate::case::sigma::{
-    aead_decrypt, aead_encrypt, compute_dest_id, decode_tbedata2, ecdh_shared_secret,
-    encode_tbedata3, encode_tbs_data, generate_ephemeral_keypair, hkdf_derive, transcript_hash,
+    aead_decrypt, aead_encrypt, compute_dest_id, compute_sigma1_resume_mic, decode_tbedata2,
+    derive_resume_session_keys, ecdh_shared_secret, encode_tbedata3, encode_tbs_data,
+    generate_ephemeral_keypair, hkdf_derive, transcript_hash, verify_sigma2_resume_mic,
     AEAD_KEY_LEN, HKDF_INFO_SIGMA2, HKDF_INFO_SIGMA3, NONCE_TBE_DATA2, NONCE_TBE_DATA3,
 };
 use crate::case::{
     CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,
+    ResumptionId, ResumptionRecord,
 };
 use crate::error::{Error, Result};
 
@@ -157,9 +182,13 @@ enum State {
         eph_pub: [u8; 65],
         initiator_random: [u8; 32],
         initiator_session_id: u16,
+        /// When `Some`, the caller supplied a prior-session record and `start()`
+        /// will populate Sigma1's resumption fields from it.
+        resumption_record: Option<ResumptionRecord>,
     },
 
-    /// `start()` emitted Sigma1; waiting for the responder's Sigma2.
+    /// `start()` emitted Sigma1; waiting for the responder's Sigma2 (or
+    /// `Sigma2_Resume` if `resumption_attempt` is `Some`).
     AwaitingSigma2 {
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
@@ -167,12 +196,14 @@ enum State {
         peer_fabric_id: u64,
         eph_secret: SecretKey,
         eph_pub: [u8; 65],
-        /// Stored for M4.2 resumption (`Sigma1_Resume` MIC uses the initiator random).
-        /// Not read in the new-session path implemented here.
-        #[allow(dead_code)]
+        /// Used for resumption MIC computation and for the fallback new-session
+        /// `Sigma2` path. Always present on the wire in `sigma1.initiator_random`.
         initiator_random: [u8; 32],
         initiator_session_id: u16,
         sigma1_bytes: Vec<u8>,
+        /// When `Some`, the Sigma1 we sent included resumption fields.
+        /// `handle_sigma2_resume` consumes this; `handle_sigma2` discards it.
+        resumption_attempt: Option<ResumptionRecord>,
     },
 
     /// `handle_sigma2()` has processed Sigma2 and produced Sigma3 + session
@@ -185,11 +216,16 @@ enum State {
         local: LocalInfo,
     },
 
-    /// `next_message()` has emitted Sigma3; `finish()` may be called.
+    /// `next_message()` has emitted Sigma3 (or `handle_sigma2_resume` completed
+    /// the resumption path); `finish()` may be called.
     Complete {
         session_keys: CaseSessionKeys,
         peer: PeerInfo,
         local: LocalInfo,
+        /// Resumption record for the caller to persist. `None` when the responder
+        /// did not supply resumption-supporting session parameters. On the resumption
+        /// path this carries the updated record with the new ID from `Sigma2_Resume`.
+        resumption_record: Option<ResumptionRecord>,
     },
 
     /// Sentinel during `std::mem::replace` transitions.
@@ -200,20 +236,26 @@ enum State {
 // CaseInitiator
 // ---------------------------------------------------------------------------
 
-/// Initiator-side CASE state machine (new-session path).
+/// Initiator-side CASE state machine (new-session and resumption paths).
 ///
-/// Drives the Sigma1 / Sigma2 / Sigma3 handshake from the initiator's
-/// (commissioner's) perspective. Sans-IO: the caller feeds raw bytes in via
-/// [`handle_sigma2`][Self::handle_sigma2] and reads raw bytes out via
-/// [`start`][Self::start] and [`next_message`][Self::next_message].
+/// Drives the Sigma1 / Sigma2 / Sigma3 handshake (or the faster
+/// Sigma1 / `Sigma2_Resume` resumption path) from the initiator's perspective.
+/// Sans-IO: the caller feeds raw bytes in via [`handle_sigma2`][Self::handle_sigma2]
+/// or [`handle_sigma2_resume`][Self::handle_sigma2_resume] and reads raw bytes
+/// out via [`start`][Self::start] and [`next_message`][Self::next_message].
 ///
 /// # Construction
 ///
+/// New-session path:
 /// - [`CaseInitiator::new`] — production constructor; uses the OS CSPRNG.
-/// - `new_using_rng` (crate-internal) — deterministic constructor for tests;
-///   accepts an injectable `ring::rand::SecureRandom`.
+/// - `new_using_rng` (crate-internal) — deterministic constructor for tests.
 ///
-/// # Driving the handshake
+/// Resumption path (M4.2):
+/// - [`CaseInitiator::new_with_resumption`] — production constructor with a
+///   prior-session [`ResumptionRecord`].
+/// - `new_with_resumption_using_rng` (crate-internal) — deterministic variant.
+///
+/// # Driving the new-session handshake
 ///
 /// 1. Call [`start`][Self::start] → get Sigma1 bytes; send them.
 /// 2. Receive Sigma2 bytes from the peer.
@@ -221,6 +263,15 @@ enum State {
 /// 4. Call [`next_message`][Self::next_message] → get Sigma3 bytes; send them.
 /// 5. After the peer confirms with a `StatusReport: Success`, call
 ///    [`finish`][Self::finish] to retrieve [`CaseSessionOutput`].
+///
+/// # Driving the resumption handshake
+///
+/// 1. Call [`start`][Self::start] → get Sigma1 bytes (with resumption fields); send them.
+/// 2. Receive the response from the peer:
+///    - If the peer accepts resumption: call [`handle_sigma2_resume`][Self::handle_sigma2_resume].
+///      Then call [`finish`][Self::finish] directly (no Sigma3 to send).
+///    - If the peer declines (sends a regular Sigma2): call [`handle_sigma2`][Self::handle_sigma2]
+///      normally, then [`next_message`][Self::next_message] and [`finish`][Self::finish].
 ///
 /// Use [`expected_inbound`][Self::expected_inbound] at any point to query
 /// which message the machine is currently waiting to receive.
@@ -231,10 +282,12 @@ pub struct CaseInitiator {
 impl CaseInitiator {
     // ─── Public constructors ──────────────────────────────────────────────
 
-    /// Construct an initiator using the OS CSPRNG.
+    /// Construct an initiator using the OS CSPRNG (new-session path).
     ///
     /// Pre-samples the ephemeral keypair and 32-byte initiator random so that
     /// [`start`][Self::start] cannot fail due to randomness.
+    ///
+    /// For the resumption path, use [`new_with_resumption`][Self::new_with_resumption].
     ///
     /// # Errors
     ///
@@ -247,11 +300,12 @@ impl CaseInitiator {
         peer_fabric_id: u64,
     ) -> Result<Self> {
         let rng = SystemRandom::new();
-        Self::new_using_rng(
+        Self::new_inner(
             credentials,
             trusted_roots,
             peer_node_id,
             peer_fabric_id,
+            None,
             &rng,
         )
     }
@@ -263,11 +317,92 @@ impl CaseInitiator {
     /// # Errors
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if the RNG fails.
+    // Used in the case roundtrip integration test (tests/case_roundtrip.rs).
+    #[allow(dead_code)]
     pub(crate) fn new_using_rng(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
         peer_node_id: u64,
         peer_fabric_id: u64,
+        rng: &dyn SecureRandom,
+    ) -> Result<Self> {
+        Self::new_inner(
+            credentials,
+            trusted_roots,
+            peer_node_id,
+            peer_fabric_id,
+            None,
+            rng,
+        )
+    }
+
+    /// Construct an initiator with a prior-session [`ResumptionRecord`], using
+    /// the OS CSPRNG.
+    ///
+    /// When [`start`][Self::start] is called, the Sigma1 message will include
+    /// `resumption_id` (tag 6) and `initiator_resume_mic` (tag 7). The
+    /// responder may reply with `Sigma2_Resume` (call
+    /// [`handle_sigma2_resume`][Self::handle_sigma2_resume]) or fall back to a
+    /// regular `Sigma2` (call [`handle_sigma2`][Self::handle_sigma2]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EphemeralKeyGenerationFailed`] if the OS RNG fails.
+    pub fn new_with_resumption(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        peer_node_id: u64,
+        peer_fabric_id: u64,
+        record: ResumptionRecord,
+    ) -> Result<Self> {
+        let rng = SystemRandom::new();
+        Self::new_with_resumption_using_rng(
+            credentials,
+            trusted_roots,
+            peer_node_id,
+            peer_fabric_id,
+            record,
+            &rng,
+        )
+    }
+
+    /// Deterministic resumption constructor for testing — accepts an injectable
+    /// RNG.
+    ///
+    /// Production code should always use
+    /// [`new_with_resumption`][Self::new_with_resumption].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EphemeralKeyGenerationFailed`] if the RNG fails.
+    pub(crate) fn new_with_resumption_using_rng(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        peer_node_id: u64,
+        peer_fabric_id: u64,
+        record: ResumptionRecord,
+        rng: &dyn SecureRandom,
+    ) -> Result<Self> {
+        Self::new_inner(
+            credentials,
+            trusted_roots,
+            peer_node_id,
+            peer_fabric_id,
+            Some(record),
+            rng,
+        )
+    }
+
+    /// Internal shared constructor: produces an `AwaitingStart` state with
+    /// an optional resumption record baked in.
+    ///
+    /// Called by all four public/crate-internal constructors.
+    fn new_inner(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        peer_node_id: u64,
+        peer_fabric_id: u64,
+        resumption_record: Option<ResumptionRecord>,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         let (eph_secret, eph_pub) = generate_ephemeral_keypair(rng)?;
@@ -284,6 +419,7 @@ impl CaseInitiator {
                 eph_pub,
                 initiator_random,
                 initiator_session_id: 0, // M6 commissioning assigns a real value.
+                resumption_record,
             },
         })
     }
@@ -293,9 +429,22 @@ impl CaseInitiator {
     /// Returns the CASE message kind the machine is currently waiting to
     /// receive, or `None` if the machine is in an outbound-only state,
     /// has completed, or has been poisoned.
+    ///
+    /// On the resumption path (after `start()` was called with a resumption
+    /// record), returns `Sigma2Resume` to indicate that the peer may send either
+    /// `Sigma2_Resume` (accepted) or a plain `Sigma2` (declined fallback). The
+    /// returned value is advisory — the caller must inspect the actual inbound
+    /// message type and route to the appropriate `handle_*` method.
     pub fn expected_inbound(&self) -> Option<CaseMessageKind> {
         match &self.state {
-            State::AwaitingSigma2 { .. } => Some(CaseMessageKind::Sigma2),
+            State::AwaitingSigma2 {
+                resumption_attempt: Some(_),
+                ..
+            } => Some(CaseMessageKind::Sigma2Resume),
+            State::AwaitingSigma2 {
+                resumption_attempt: None,
+                ..
+            } => Some(CaseMessageKind::Sigma2),
             _ => None,
         }
     }
@@ -304,10 +453,19 @@ impl CaseInitiator {
 
     /// Produce the Sigma1 message bytes and advance to `AwaitingSigma2`.
     ///
+    /// On the resumption path (constructed with
+    /// [`new_with_resumption`][Self::new_with_resumption]), the emitted Sigma1
+    /// will include `resumption_id` (tag 6) and `initiator_resume_mic` (tag 7),
+    /// signalling to the responder that it may send `Sigma2_Resume` instead of
+    /// `Sigma2`.
+    ///
     /// # Errors
     ///
     /// - [`Error::UnexpectedCaseMessage`] if called from the wrong state.
     /// - [`Error::Codec`] on TLV encoding failure.
+    /// - [`Error::EphemeralKeyGenerationFailed`] if MIC computation fails
+    ///   (only possible if AES-CCM internal state is inconsistent — not expected
+    ///   in practice).
     pub fn start(&mut self) -> Result<Vec<u8>> {
         let prev = std::mem::replace(&mut self.state, State::Poisoned);
         match prev {
@@ -320,6 +478,7 @@ impl CaseInitiator {
                 eph_pub,
                 initiator_random,
                 initiator_session_id,
+                resumption_record,
             } => {
                 let dest_id = compute_dest_id(
                     &credentials.ipk,
@@ -329,14 +488,32 @@ impl CaseInitiator {
                     &initiator_random,
                 );
 
+                // Populate resumption fields when we have a prior-session record.
+                // `sigma1_resume_mic` is derived from the shared_secret and the OLD
+                // resumption_id (the one already stored in the record), using the
+                // freshly-sampled initiator_random as part of the HKDF salt.
+                // This lets the responder verify we hold the correct shared secret
+                // without exposing the secret itself.
+                let (resumption_id_field, initiator_resume_mic_field) = match &resumption_record {
+                    Some(record) => {
+                        let mic = compute_sigma1_resume_mic(
+                            &record.shared_secret,
+                            &initiator_random,
+                            &record.id.0,
+                        )?;
+                        (Some(record.id.0), Some(mic))
+                    }
+                    None => (None, None),
+                };
+
                 let sigma1 = Sigma1 {
                     initiator_random,
                     initiator_session_id,
                     dest_id,
                     initiator_eph_pub: eph_pub,
                     initiator_session_params: None,
-                    resumption_id: None,
-                    initiator_resume_mic: None,
+                    resumption_id: resumption_id_field,
+                    initiator_resume_mic: initiator_resume_mic_field,
                 };
                 let sigma1_bytes = sigma1.encode()?;
 
@@ -350,6 +527,7 @@ impl CaseInitiator {
                     initiator_random,
                     initiator_session_id,
                     sigma1_bytes: sigma1_bytes.clone(),
+                    resumption_attempt: resumption_record,
                 };
                 Ok(sigma1_bytes)
             }
@@ -413,6 +591,7 @@ impl CaseInitiator {
                 initiator_random: _,
                 initiator_session_id,
                 sigma1_bytes,
+                resumption_attempt: _, // Responder declined (or never attempted) — discard.
             } => {
                 let (sigma3_bytes, session_keys, peer, local) = process_sigma2(
                     bytes,
@@ -443,6 +622,153 @@ impl CaseInitiator {
         }
     }
 
+    /// Process the inbound `Sigma2_Resume` message and complete the resumption
+    /// handshake.
+    ///
+    /// May only be called after [`start`][Self::start] when the initiator was
+    /// constructed with [`new_with_resumption`][Self::new_with_resumption] (i.e.,
+    /// the sent Sigma1 carried resumption fields).
+    ///
+    /// **No `Sigma3_Resume` or `Sigma3` to send.** After this call succeeds the
+    /// handshake is complete from the initiator's side. Call [`finish`][Self::finish]
+    /// directly to obtain the [`CaseSessionOutput`].
+    ///
+    /// # Resumption session-key layout
+    ///
+    /// Pinned from matter.js `NodeSession.create` (`isResumption = true` branch):
+    /// ```text
+    /// keys = HKDF(ikm  = shared_secret,
+    ///             salt = initiatorRandom || OLD_resumption_id,
+    ///             info = "SessionResumptionKeys",
+    ///             len  = 48)
+    /// keys[0..16]  → r2i_key          (responder-to-initiator)
+    /// keys[16..32] → i2r_key          (initiator-to-responder)
+    /// keys[32..48] → attestation_challenge
+    /// ```
+    /// Note the **reversed** byte assignment vs the new-session path
+    /// (where `keys[0..16]` is `i2r` and `keys[16..32]` is `r2i`).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnexpectedCaseMessage`] if called from the wrong state or if
+    ///   the initiator never attempted resumption.
+    /// - [`Error::Codec`] on TLV decode failure.
+    /// - [`Error::ResumptionMacMismatch`] if the `sigma2_resume_mic` in the
+    ///   message does not verify.
+    /// - [`Error::EphemeralKeyGenerationFailed`] on HKDF failure.
+    pub fn handle_sigma2_resume(&mut self, bytes: &[u8]) -> Result<()> {
+        let prev = std::mem::replace(&mut self.state, State::Poisoned);
+        match prev {
+            State::AwaitingSigma2 {
+                credentials,
+                initiator_random,
+                initiator_session_id,
+                resumption_attempt: Some(record),
+                // The new-session fields below are not needed for the resumption
+                // path but must be destructured to satisfy exhaustiveness.
+                trusted_roots: _,
+                peer_node_id: _,
+                peer_fabric_id: _,
+                eph_secret: _,
+                eph_pub: _,
+                sigma1_bytes: _,
+            } => {
+                let sigma2_resume = Sigma2Resume::decode(bytes)?;
+                let new_resumption_id = sigma2_resume.resumption_id;
+
+                // Step 1: Verify sigma2_resume_mic.
+                // The MIC is computed over the NEW resumption_id (generated by
+                // the responder for this session), using initiatorRandom as part
+                // of the HKDF salt. This proves the responder holds the same
+                // shared_secret as the record.
+                verify_sigma2_resume_mic(
+                    &record.shared_secret,
+                    &initiator_random,
+                    &new_resumption_id,
+                    &sigma2_resume.resume_mic,
+                )?;
+
+                // Step 2: Derive resumed session keys.
+                // Salt uses initiatorRandom || OLD resumptionId (record.id.0).
+                // info = "SessionResumptionKeys", len = 48.
+                // Key layout: [0..16]=r2i, [16..32]=i2r, [32..48]=attestation.
+                // This is OPPOSITE to the new-session layout.
+                let blob = derive_resume_session_keys(
+                    &record.shared_secret,
+                    &initiator_random,
+                    &record.id.0,
+                )?;
+                let mut r2i_key = [0u8; 16];
+                let mut i2r_key = [0u8; 16];
+                let mut attestation_challenge = [0u8; 16];
+                r2i_key.copy_from_slice(&blob[0..16]);
+                i2r_key.copy_from_slice(&blob[16..32]);
+                attestation_challenge.copy_from_slice(&blob[32..48]);
+                let session_keys = CaseSessionKeys {
+                    i2r_key,
+                    r2i_key,
+                    attestation_challenge,
+                };
+
+                // Step 3: Build the next resumption record.
+                // The responder supplied a fresh resumption_id (new_resumption_id)
+                // for use in the next resumption attempt. The shared_secret is
+                // re-used unchanged — matter.js does not re-derive it on resumption.
+                // (If this turns out to be wrong, M4.3 byte-parity testing will
+                // surface it; setting it to None is the safe conservative fallback,
+                // but re-using is the observed matter.js behaviour.)
+                let next_record = ResumptionRecord {
+                    id: ResumptionId(new_resumption_id),
+                    shared_secret: record.shared_secret, // re-use unchanged
+                    peer: record.peer.clone(),
+                    expires_at: None, // M6 commissioning sets a real expiry.
+                };
+
+                // Step 4: Build peer / local identity structs.
+                // The resumption path re-uses the cached peer identity from the
+                // record (we didn't verify a fresh NOC chain — that's the point of
+                // resumption). The peer's session ID comes from Sigma2_Resume.
+                let peer = PeerInfo {
+                    session_id: sigma2_resume.responder_session_id,
+                    ..record.peer
+                };
+                let local = LocalInfo {
+                    node_id: credentials.node_id,
+                    fabric_id: credentials.fabric_id,
+                    session_id: initiator_session_id,
+                };
+
+                // No Sigma3_Resume — transition directly to Complete.
+                self.state = State::Complete {
+                    session_keys,
+                    peer,
+                    local,
+                    resumption_record: Some(next_record),
+                };
+                Ok(())
+            }
+
+            // Initiator never attempted resumption; receiving Sigma2_Resume is a
+            // protocol violation. State is left Poisoned (unrecoverable).
+            State::AwaitingSigma2 {
+                resumption_attempt: None,
+                ..
+            } => Err(Error::UnexpectedCaseMessage {
+                expected: CaseMessageKind::Sigma2,
+                got: CaseMessageKind::Sigma2Resume,
+            }),
+
+            // Any other state is also invalid.
+            other => {
+                self.state = other;
+                Err(Error::UnexpectedCaseMessage {
+                    expected: CaseMessageKind::Sigma2Resume,
+                    got: CaseMessageKind::Sigma2Resume,
+                })
+            }
+        }
+    }
+
     /// Retrieve the next outbound message (Sigma3) and advance to `Complete`.
     ///
     /// Must be called after a successful [`handle_sigma2`][Self::handle_sigma2].
@@ -463,6 +789,11 @@ impl CaseInitiator {
                     session_keys,
                     peer,
                     local,
+                    // New-session path: resumption record comes from M4.2 responder
+                    // session params. For now, M4.2 populates this in
+                    // handle_sigma2_resume; the new-session path stores None here.
+                    // M6 commissioning will plumb the full record.
+                    resumption_record: None,
                 };
                 Ok(sigma3_bytes)
             }
@@ -491,11 +822,12 @@ impl CaseInitiator {
                 session_keys,
                 peer,
                 local,
+                resumption_record,
             } => Ok(CaseSessionOutput {
                 keys: session_keys,
                 peer,
                 local,
-                resumption_record: None, // M4.2 populates this.
+                resumption_record,
             }),
             _ => Err(Error::HandshakeIncomplete),
         }
@@ -918,5 +1250,246 @@ mod tests {
         roots.add(anchor);
         assert!(!roots.is_empty());
         assert_eq!(roots.len(), 1);
+    }
+
+    // ─── M4.2: Resumption constructors ────────────────────────────────────
+
+    /// Helper: build a minimal `PeerInfo` for use in `ResumptionRecord`.
+    fn make_test_peer_info(node_id: u64, fabric_id: u64) -> PeerInfo {
+        PeerInfo {
+            node_id,
+            fabric_id,
+            noc: make_test_cert(node_id, fabric_id),
+            session_id: 1,
+        }
+    }
+
+    /// Helper: build a `ResumptionRecord` with given `shared_secret` and id.
+    fn make_resumption_record(
+        secret: [u8; 16],
+        id: [u8; 16],
+        node_id: u64,
+        fabric_id: u64,
+    ) -> ResumptionRecord {
+        ResumptionRecord {
+            id: ResumptionId(id),
+            shared_secret: secret,
+            peer: make_test_peer_info(node_id, fabric_id),
+            expires_at: None,
+        }
+    }
+
+    /// `new_with_resumption` must succeed with valid inputs.
+    #[test]
+    fn new_with_resumption_succeeds() {
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let record = make_resumption_record([0x01u8; 16], [0x02u8; 16], 0x1234, 0x5678);
+        let _initiator =
+            CaseInitiator::new_with_resumption(creds, empty_roots(), 0x1234, 0x5678, record)
+                .unwrap();
+    }
+
+    /// When started with a resumption record, `start()` must produce a Sigma1
+    /// that round-trips through the decoder and includes non-`None` resumption
+    /// fields (`resumption_id` and `initiator_resume_mic`).
+    #[test]
+    fn start_with_resumption_populates_sigma1_resume_fields() {
+        use crate::case::messages::Sigma1;
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let record = make_resumption_record([0x01u8; 16], [0x02u8; 16], 0x1234, 0x5678);
+        let mut initiator =
+            CaseInitiator::new_with_resumption(creds, empty_roots(), 0x1234, 0x5678, record)
+                .unwrap();
+        let bytes = initiator.start().unwrap();
+        let decoded = Sigma1::decode(&bytes).unwrap();
+        assert!(
+            decoded.resumption_id.is_some(),
+            "Sigma1 must carry resumption_id when constructed with a record"
+        );
+        assert_eq!(
+            decoded.resumption_id.unwrap(),
+            [0x02u8; 16],
+            "resumption_id in Sigma1 must match the record's id"
+        );
+        assert!(
+            decoded.initiator_resume_mic.is_some(),
+            "Sigma1 must carry initiator_resume_mic when constructed with a record"
+        );
+        // After start(), expected_inbound should be Sigma2Resume (resumption path).
+        assert_eq!(
+            initiator.expected_inbound(),
+            Some(CaseMessageKind::Sigma2Resume)
+        );
+    }
+
+    /// When started WITHOUT a resumption record, `start()` must produce a Sigma1
+    /// with `None` resumption fields (the new-session path is unchanged).
+    #[test]
+    fn start_without_resumption_omits_sigma1_resume_fields() {
+        use crate::case::messages::Sigma1;
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let bytes = initiator.start().unwrap();
+        let decoded = Sigma1::decode(&bytes).unwrap();
+        assert!(
+            decoded.resumption_id.is_none(),
+            "Sigma1 must NOT carry resumption_id on the new-session path"
+        );
+        assert!(
+            decoded.initiator_resume_mic.is_none(),
+            "Sigma1 must NOT carry initiator_resume_mic on the new-session path"
+        );
+        // expected_inbound for non-resumption path must be Sigma2.
+        assert_eq!(initiator.expected_inbound(), Some(CaseMessageKind::Sigma2));
+    }
+
+    /// `handle_sigma2_resume` must succeed when given a correctly-computed
+    /// `Sigma2_Resume` message (valid MIC).
+    #[test]
+    fn handle_sigma2_resume_after_resumption_attempt_succeeds_with_valid_mic() {
+        use crate::case::messages::Sigma2Resume;
+        use crate::case::sigma::compute_sigma2_resume_mic;
+        use ring::rand::SystemRandom;
+
+        let shared_secret = [0x42u8; 16];
+        let old_id = [0x11u8; 16];
+        let new_id = [0x22u8; 16];
+
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let record = make_resumption_record(shared_secret, old_id, 0x1234, 0x5678);
+
+        // We need to know the initiator_random that will be sampled.
+        // Use new_with_resumption_using_rng with a deterministic RNG.
+        // ring's SystemRandom is not deterministic, so we use the production path
+        // and extract the random from the emitted Sigma1 to compute the expected MIC.
+        let rng = SystemRandom::new();
+        let mut initiator = CaseInitiator::new_with_resumption_using_rng(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            record,
+            &rng,
+        )
+        .unwrap();
+
+        // Start to emit Sigma1 (which contains the sampled initiator_random).
+        let sigma1_bytes = initiator.start().unwrap();
+        let sigma1 = crate::case::messages::Sigma1::decode(&sigma1_bytes).unwrap();
+        let initiator_random = sigma1.initiator_random;
+
+        // Compute the MIC as the responder would.
+        let mic = compute_sigma2_resume_mic(&shared_secret, &initiator_random, &new_id).unwrap();
+
+        // Build Sigma2_Resume.
+        let sigma2_resume = Sigma2Resume {
+            resumption_id: new_id,
+            resume_mic: mic,
+            responder_session_id: 0xBEEF,
+            responder_session_params: None,
+        };
+        let sigma2_resume_bytes = sigma2_resume.encode().unwrap();
+
+        // This must succeed.
+        initiator
+            .handle_sigma2_resume(&sigma2_resume_bytes)
+            .unwrap();
+
+        // finish() must succeed and carry the updated resumption record.
+        let output = initiator.finish().unwrap();
+        assert!(
+            output.resumption_record.is_some(),
+            "output must carry a resumption record after successful resumption"
+        );
+        assert_eq!(
+            output.resumption_record.as_ref().unwrap().id.0,
+            new_id,
+            "resumption record id must be the NEW id from Sigma2_Resume"
+        );
+        // Verify resumed key derivation produces 16-byte keys.
+        assert_ne!(
+            output.keys.r2i_key, output.keys.i2r_key,
+            "r2i and i2r keys must differ"
+        );
+    }
+
+    /// `handle_sigma2_resume` must return `ResumptionMacMismatch` when the MIC
+    /// in the `Sigma2_Resume` message is corrupted.
+    #[test]
+    fn handle_sigma2_resume_rejects_invalid_mic() {
+        use crate::case::messages::Sigma2Resume;
+        use crate::case::sigma::compute_sigma2_resume_mic;
+        use ring::rand::SystemRandom;
+
+        let shared_secret = [0x42u8; 16];
+        let old_id = [0x11u8; 16];
+        let new_id = [0x22u8; 16];
+
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let record = make_resumption_record(shared_secret, old_id, 0x1234, 0x5678);
+
+        let rng = SystemRandom::new();
+        let mut initiator = CaseInitiator::new_with_resumption_using_rng(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            record,
+            &rng,
+        )
+        .unwrap();
+
+        let sigma1_bytes = initiator.start().unwrap();
+        let sigma1 = crate::case::messages::Sigma1::decode(&sigma1_bytes).unwrap();
+        let initiator_random = sigma1.initiator_random;
+
+        let mut mic =
+            compute_sigma2_resume_mic(&shared_secret, &initiator_random, &new_id).unwrap();
+        // Corrupt one byte to make MIC invalid.
+        mic[0] ^= 0xFF;
+
+        let sigma2_resume = Sigma2Resume {
+            resumption_id: new_id,
+            resume_mic: mic,
+            responder_session_id: 0xBEEF,
+            responder_session_params: None,
+        };
+        let sigma2_resume_bytes = sigma2_resume.encode().unwrap();
+
+        assert!(
+            matches!(
+                initiator.handle_sigma2_resume(&sigma2_resume_bytes),
+                Err(Error::ResumptionMacMismatch)
+            ),
+            "Corrupted MIC must be rejected with ResumptionMacMismatch"
+        );
+    }
+
+    /// `handle_sigma2_resume` must return `UnexpectedCaseMessage` when the
+    /// initiator was constructed WITHOUT a resumption record (no attempt was made).
+    #[test]
+    fn handle_sigma2_resume_without_resumption_attempt_returns_unexpected_message() {
+        use crate::case::messages::Sigma2Resume;
+
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let _ = initiator.start().unwrap();
+
+        // Build any syntactically valid Sigma2_Resume.
+        let sigma2_resume = Sigma2Resume {
+            resumption_id: [0xAAu8; 16],
+            resume_mic: [0xBBu8; 16],
+            responder_session_id: 1,
+            responder_session_params: None,
+        };
+        let bytes = sigma2_resume.encode().unwrap();
+
+        assert!(
+            matches!(
+                initiator.handle_sigma2_resume(&bytes),
+                Err(Error::UnexpectedCaseMessage { .. })
+            ),
+            "Receiving Sigma2_Resume without having attempted resumption must fail"
+        );
     }
 }
