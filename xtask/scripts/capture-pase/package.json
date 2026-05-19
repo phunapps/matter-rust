@@ -1,0 +1,17 @@
+{
+  "name": "matter-rust-capture-pase",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Drives matter.js to capture full PASE handshakes with deterministic scalars for byte-parity tests in crates/matter-crypto/.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/general": "0.16.11",
+    "@matter/protocol": "0.16.11",
+    "@matter/types": "0.16.11",
+    "@project-chip/matter.js": "0.16.11"
+  }
+}
