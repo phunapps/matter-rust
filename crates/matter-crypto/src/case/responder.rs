@@ -20,8 +20,9 @@
 //!                                    finish() → CaseSessionOutput
 //! ```
 //!
-//! Resumption (`Sigma1` with resumption fields → `Sigma2Resume` / `Sigma3Resume`)
-//! lands in M4.2; this module implements only the new-session path.
+//! Resumption path (`Sigma1` with resumption fields → `Sigma2_Resume`) is
+//! implemented in M4.2. There is no `Sigma3_Resume` wire message — after
+//! `Sigma2_Resume` is sent, the handshake is complete on the responder side.
 //!
 //! # KDF inputs (pinned from matter.js `CaseServer.ts` + `NodeSession.ts`)
 //!
@@ -94,15 +95,16 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 use matter_cert::{CertificateChain, MatterCertificate, MatterTime, Signature, TrustedRoots};
 
-use crate::case::messages::{Sigma1, Sigma2, Sigma3};
+use crate::case::messages::{Sigma1, Sigma2, Sigma2Resume, Sigma3};
 use crate::case::sigma::{
-    aead_decrypt, aead_encrypt, compute_dest_id, decode_tbedata3, ecdh_shared_secret,
-    encode_tbedata2, encode_tbs_data, generate_ephemeral_keypair, hkdf_derive, transcript_hash,
+    aead_decrypt, aead_encrypt, compute_dest_id, compute_sigma2_resume_mic, decode_tbedata3,
+    derive_resume_session_keys, ecdh_shared_secret, encode_tbedata2, encode_tbs_data,
+    generate_ephemeral_keypair, hkdf_derive, transcript_hash, verify_sigma1_resume_mic,
     AEAD_KEY_LEN, HKDF_INFO_SIGMA2, HKDF_INFO_SIGMA3, NONCE_TBE_DATA2, NONCE_TBE_DATA3,
 };
 use crate::case::{
     CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,
-    ResumptionRecord, Sigma1Outcome,
+    ResumptionId, ResumptionRecord, Sigma1Outcome,
 };
 use crate::error::{Error, Result};
 
@@ -174,11 +176,51 @@ enum State {
         responder_session_id: u16,
     },
 
+    /// `handle_sigma1()` surfaced a resumption request; the caller must look
+    /// up the record in their session store and call either
+    /// [`CaseResponder::accept_resumption`] or [`CaseResponder::reject_resumption`].
+    AwaitingResumptionDecision {
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        /// Pre-generated ephemeral key (used if the caller falls back to the
+        /// new-session path via `reject_resumption`).
+        eph_secret: SecretKey,
+        eph_pub: [u8; 65],
+        responder_random: [u8; 32],
+        /// Preserved for the new-session fallback path.
+        initiator_random: [u8; 32],
+        /// Preserved for the new-session fallback path (Sigma2 transcript).
+        initiator_eph_pub: [u8; 65],
+        initiator_session_id: u16,
+        /// Raw Sigma1 bytes; needed for the new-session transcript if the caller
+        /// falls back via `reject_resumption`.
+        sigma1_bytes: Vec<u8>,
+        /// The 16-byte resumption ID the initiator presented (Sigma1 tag 6).
+        resumption_id_presented: [u8; 16],
+        /// The 16-byte MIC the initiator presented (Sigma1 tag 7).
+        initiator_resume_mic_received: [u8; 16],
+    },
+
+    /// `accept_resumption` completed; `next_message()` will return the
+    /// `Sigma2_Resume` bytes and transition directly to `Complete`.
+    ReadyToSendSigma2Resume {
+        sigma2_resume_bytes: Vec<u8>,
+        session_keys: CaseSessionKeys,
+        peer: PeerInfo,
+        local: LocalInfo,
+        /// The updated resumption record to hand back via `CaseSessionOutput`.
+        resumption_record: Option<ResumptionRecord>,
+    },
+
     /// `handle_sigma3()` succeeded; `finish()` may be called.
     Complete {
         session_keys: CaseSessionKeys,
         peer: PeerInfo,
         local: LocalInfo,
+        /// Populated with a fresh [`ResumptionRecord`] on the resumption path.
+        /// `None` on the new-session path (M6 commissioning will populate it
+        /// for the new-session path when `responder_session_params` is present).
+        resumption_record: Option<ResumptionRecord>,
     },
 
     /// Sentinel during `std::mem::replace` transitions.
@@ -283,24 +325,31 @@ impl CaseResponder {
     /// Process the inbound Sigma1 message.
     ///
     /// Verifies that the `dest_id` in Sigma1 matches the responder's fabric
-    /// identity. If it does, computes the ECDH shared secret, builds and
-    /// encrypts `TBEData2`, signs `TBSData2` with our NOC key, encodes the Sigma2
-    /// message, and advances to `ReadyToSendSigma2`.
+    /// identity.
     ///
-    /// # M4.1 stub behaviour for resumption
+    /// **New-session path:** If Sigma1 carries no resumption fields, computes
+    /// the ECDH shared secret, builds and encrypts `TBEData2`, signs `TBSData2`
+    /// with our NOC key, encodes the Sigma2 message, advances to
+    /// `ReadyToSendSigma2`, and returns [`Sigma1Outcome::NewSession`].
     ///
-    /// If Sigma1 carries a `resumption_id`, this method returns
-    /// [`Error::UnexpectedCaseMessage`]. Full resumption support lands in M4.2.
+    /// **Resumption path:** If Sigma1 carries both `resumption_id` (tag 6) and
+    /// `initiator_resume_mic` (tag 7), transitions to `AwaitingResumptionDecision`
+    /// and returns [`Sigma1Outcome::ResumptionRequested`]. The caller must then
+    /// look up the `ResumptionRecord` and call either
+    /// [`accept_resumption`][Self::accept_resumption] or
+    /// [`reject_resumption`][Self::reject_resumption].
     ///
     /// # Errors
     ///
-    /// - [`Error::UnexpectedCaseMessage`] if called from the wrong state, or
-    ///   if Sigma1 contains a `resumption_id` (M4.1 stub).
+    /// - [`Error::UnexpectedCaseMessage`] if called from the wrong state.
     /// - [`Error::InvalidParameter`] if the `dest_id` in Sigma1 does not match
     ///   our fabric identity, or TLV decode fails.
     /// - [`Error::EphemeralKeyGenerationFailed`] if ECDH or HKDF fails.
     /// - [`Error::SigningFailed`] if our NOC signing step fails.
     /// - [`Error::Codec`] on TLV encoding failure.
+    // The two-path (new-session + resumption) dispatch is intentionally kept in
+    // one function for auditability. The 100-line limit is relaxed here.
+    #[allow(clippy::too_many_lines)]
     pub fn handle_sigma1(&mut self, bytes: &[u8]) -> Result<Sigma1Outcome> {
         let prev = std::mem::replace(&mut self.state, State::Poisoned);
         match prev {
@@ -327,21 +376,6 @@ impl CaseResponder {
                     }
                 };
 
-                // M4.1 stub: reject resumption requests.
-                if sigma1.resumption_id.is_some() {
-                    self.state = State::AwaitingSigma1 {
-                        credentials,
-                        trusted_roots,
-                        eph_secret,
-                        eph_pub,
-                        responder_random,
-                    };
-                    return Err(Error::UnexpectedCaseMessage {
-                        expected: CaseMessageKind::Sigma1,
-                        got: CaseMessageKind::Sigma2Resume,
-                    });
-                }
-
                 // Verify dest_id matches our fabric identity.
                 let expected_dest_id = compute_dest_id(
                     &credentials.ipk,
@@ -361,7 +395,36 @@ impl CaseResponder {
                     return Err(Error::InvalidParameter);
                 }
 
-                // Build Sigma2.
+                let initiator_eph_pub = sigma1.initiator_eph_pub;
+                let initiator_random = sigma1.initiator_random;
+                let initiator_session_id = sigma1.initiator_session_id;
+                let sigma1_bytes = bytes.to_vec();
+
+                // Resumption path: both resumption_id AND initiator_resume_mic present.
+                // Transition to AwaitingResumptionDecision so the caller can look up the
+                // record and decide whether to accept or decline.
+                if let (Some(resumption_id), Some(resume_mic)) =
+                    (sigma1.resumption_id, sigma1.initiator_resume_mic)
+                {
+                    self.state = State::AwaitingResumptionDecision {
+                        credentials,
+                        trusted_roots,
+                        eph_secret,
+                        eph_pub,
+                        responder_random,
+                        initiator_random,
+                        initiator_eph_pub,
+                        initiator_session_id,
+                        sigma1_bytes,
+                        resumption_id_presented: resumption_id,
+                        initiator_resume_mic_received: resume_mic,
+                    };
+                    return Ok(Sigma1Outcome::ResumptionRequested {
+                        id: ResumptionId(resumption_id),
+                    });
+                }
+
+                // New-session path.
                 let (sigma2_bytes, shared_secret) = match build_sigma2(
                     bytes,
                     &sigma1,
@@ -382,11 +445,6 @@ impl CaseResponder {
                         return Err(e);
                     }
                 };
-
-                let initiator_eph_pub = sigma1.initiator_eph_pub;
-                let initiator_random = sigma1.initiator_random;
-                let initiator_session_id = sigma1.initiator_session_id;
-                let sigma1_bytes = bytes.to_vec();
 
                 self.state = State::ReadyToSendSigma2 {
                     credentials,
@@ -414,35 +472,256 @@ impl CaseResponder {
         }
     }
 
-    /// M4.1 stub: resumption acceptance is not yet implemented.
+    /// Accept a resumption attempt: verify the initiator's MIC, derive session
+    /// keys, build the `Sigma2_Resume` message, and advance to
+    /// `ReadyToSendSigma2Resume`.
     ///
-    /// M4.2 will implement the `Sigma2_Resume` path properly.
+    /// Must be called after [`handle_sigma1`][Self::handle_sigma1] returns
+    /// [`Sigma1Outcome::ResumptionRequested`] with the caller-supplied
+    /// [`ResumptionRecord`] that matches `id` in the outcome.
+    ///
+    /// # Resumption session-key layout
+    ///
+    /// Pinned from matter.js `NodeSession.create` (`isResumption = true` branch,
+    /// responder `isInitiator = false`):
+    /// ```text
+    /// keys = HKDF(ikm  = shared_secret,
+    ///             salt = initiatorRandom || OLD_resumption_id,
+    ///             info = "SessionResumptionKeys",
+    ///             len  = 48)
+    /// // Responder (isInitiator=false) key assignment:
+    /// keys[0..16]  → r2i_key          (responder encrypts to initiator)
+    /// keys[16..32] → i2r_key          (responder decrypts from initiator)
+    /// keys[32..48] → attestation_challenge
+    /// ```
+    ///
+    /// This layout is the *same byte positions* as the initiator uses, but the
+    /// semantic labels align with the responder's direction (see matter.js
+    /// `NodeSession.ts` `isInitiator=false` branch).
     ///
     /// # Errors
     ///
-    /// Always returns [`Error::UnexpectedCaseMessage`].
-    pub fn accept_resumption(&mut self, _record: ResumptionRecord) -> Result<()> {
-        Err(Error::UnexpectedCaseMessage {
-            expected: CaseMessageKind::Sigma2,
-            got: CaseMessageKind::Sigma2Resume,
-        })
+    /// - [`Error::UnexpectedCaseMessage`] if called from the wrong state.
+    /// - [`Error::InvalidParameter`] if `record.id` does not match the
+    ///   `resumption_id` the initiator presented.
+    /// - [`Error::ResumptionMacMismatch`] if the `initiator_resume_mic` in
+    ///   Sigma1 does not verify against `record.shared_secret`.
+    /// - [`Error::EphemeralKeyGenerationFailed`] if the OS RNG or HKDF fails.
+    /// - [`Error::Codec`] on TLV encoding failure.
+    pub fn accept_resumption(&mut self, record: ResumptionRecord) -> Result<()> {
+        let prev = std::mem::replace(&mut self.state, State::Poisoned);
+        match prev {
+            State::AwaitingResumptionDecision {
+                credentials,
+                trusted_roots: _,    // not needed on the resumption path
+                eph_secret: _,       // not needed on the resumption path
+                eph_pub: _,          // not needed on the resumption path
+                responder_random: _, // not used in sigma2_resume_mic (confirmed from matter.js)
+                initiator_random,
+                initiator_eph_pub: _,
+                initiator_session_id,
+                sigma1_bytes: _, // not needed on the resumption path
+                resumption_id_presented,
+                initiator_resume_mic_received,
+            } => {
+                // Step 1: Verify caller's record.id matches the resumption_id the
+                // initiator presented. A mismatch means the caller looked up the
+                // wrong record — this is an unrecoverable programming error, so we
+                // leave the state Poisoned rather than restoring it.
+                if record.id != ResumptionId(resumption_id_presented) {
+                    return Err(Error::InvalidParameter);
+                }
+
+                // Step 2: Verify the initiator's sigma1_resume_mic in constant time.
+                // Uses the OLD resumption_id (the one the initiator presented) and the
+                // freshly-received initiator_random as the HKDF salt.
+                verify_sigma1_resume_mic(
+                    &record.shared_secret,
+                    &initiator_random,
+                    &resumption_id_presented,
+                    &initiator_resume_mic_received,
+                )?;
+
+                // Step 3: Generate a fresh resumption ID for this new session.
+                // The NEW id is what goes into Sigma2_Resume and into the caller's
+                // persisted record after the handshake completes.
+                let mut new_resumption_id = [0u8; 16];
+                SystemRandom::new()
+                    .fill(&mut new_resumption_id)
+                    .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+
+                // Step 4: Compute sigma2_resume_mic using the NEW resumption_id.
+                // Pinned from matter.js CaseServer.ts `#resume`:
+                //   key salt = initiatorRandom || newResumptionId
+                //   info = "Sigma2_Resume"
+                //   AES-128-CCM(key, plaintext=[], nonce="NCASE_SigmaS2") → 16-byte tag
+                let sigma2_mic = compute_sigma2_resume_mic(
+                    &record.shared_secret,
+                    &initiator_random,
+                    &new_resumption_id,
+                )?;
+
+                // Step 5: Derive the resumed session keys using the OLD resumption ID.
+                // Pinned from matter.js NodeSession.create (isResumption=true):
+                //   salt = initiatorRandom || OLD_resumption_id
+                //   info = "SessionResumptionKeys"
+                //   len  = 48
+                //   layout: [0..16]=r2i_key, [16..32]=i2r_key, [32..48]=attestation
+                let blob = derive_resume_session_keys(
+                    &record.shared_secret,
+                    &initiator_random,
+                    &resumption_id_presented,
+                )?;
+                let mut r2i_key = [0u8; 16];
+                let mut i2r_key = [0u8; 16];
+                let mut attestation_challenge = [0u8; 16];
+                r2i_key.copy_from_slice(&blob[0..16]);
+                i2r_key.copy_from_slice(&blob[16..32]);
+                attestation_challenge.copy_from_slice(&blob[32..48]);
+                let session_keys = CaseSessionKeys {
+                    i2r_key,
+                    r2i_key,
+                    attestation_challenge,
+                };
+
+                // Step 6: Build the Sigma2_Resume wire message.
+                let responder_session_id: u16 = 0; // M6 commissioning assigns a real value.
+                let sigma2_resume = Sigma2Resume {
+                    resumption_id: new_resumption_id,
+                    resume_mic: sigma2_mic,
+                    responder_session_id,
+                    responder_session_params: None,
+                };
+                let sigma2_resume_bytes = sigma2_resume.encode()?;
+
+                // Step 7: Build identity structs.
+                // The resumption path re-uses the peer identity from the record; the
+                // peer session ID comes from initiator_session_id (what the initiator
+                // sent in Sigma1 tag 2, which is the session ID they want us to address
+                // when sending back to them).
+                let peer = PeerInfo {
+                    session_id: initiator_session_id,
+                    ..record.peer.clone()
+                };
+                let local = LocalInfo {
+                    node_id: credentials.node_id,
+                    fabric_id: credentials.fabric_id,
+                    session_id: responder_session_id,
+                };
+
+                // Step 8: Build the next resumption record.
+                // Carry the new_resumption_id forward; re-use shared_secret unchanged
+                // (confirmed by matter.js — NodeSession does not re-derive on resumption).
+                let next_record = ResumptionRecord {
+                    id: ResumptionId(new_resumption_id),
+                    shared_secret: record.shared_secret,
+                    peer: record.peer,
+                    expires_at: None, // M6 commissioning sets a real expiry.
+                };
+
+                // Transition: after next_message() returns Sigma2_Resume, we go
+                // directly to Complete. There is no inbound Sigma3_Resume to wait for
+                // (confirmed from matter.js — the protocol ends after Sigma2_Resume).
+                self.state = State::ReadyToSendSigma2Resume {
+                    sigma2_resume_bytes,
+                    session_keys,
+                    peer,
+                    local,
+                    resumption_record: Some(next_record),
+                };
+                Ok(())
+            }
+            other => {
+                self.state = other;
+                Err(Error::UnexpectedCaseMessage {
+                    expected: CaseMessageKind::Sigma1,
+                    got: CaseMessageKind::Sigma1,
+                })
+            }
+        }
     }
 
-    /// M4.1 stub: resumption rejection (no-op for the new-session path).
+    /// Decline a resumption attempt and fall back to the new-session path.
     ///
-    /// M4.2 will route the state machine to the new-session preparation when
-    /// the caller calls this after a `ResumptionRequested` outcome.
+    /// Must be called after [`handle_sigma1`][Self::handle_sigma1] returns
+    /// [`Sigma1Outcome::ResumptionRequested`]. After this call, the state
+    /// machine is in the same state as it would be after a regular Sigma1
+    /// (new-session path). The next call to [`next_message`][Self::next_message]
+    /// will return Sigma2 bytes (not `Sigma2_Resume`).
     ///
     /// # Errors
     ///
-    /// Never errors in M4.1.
+    /// - [`Error::UnexpectedCaseMessage`] if called from the wrong state.
     pub fn reject_resumption(&mut self) -> Result<()> {
-        Ok(())
+        let prev = std::mem::replace(&mut self.state, State::Poisoned);
+        match prev {
+            State::AwaitingResumptionDecision {
+                credentials,
+                trusted_roots,
+                eph_secret,
+                eph_pub,
+                responder_random,
+                initiator_random,
+                initiator_eph_pub,
+                initiator_session_id,
+                sigma1_bytes,
+                // The resumption-specific fields are dropped; we're falling back.
+                resumption_id_presented: _,
+                initiator_resume_mic_received: _,
+            } => {
+                // Re-compute the Sigma2 using the pre-generated ephemeral keypair.
+                // We pass a freshly decoded Sigma1 to build_sigma2; we have sigma1_bytes.
+                let sigma1 = Sigma1::decode(&sigma1_bytes)?;
+
+                let (sigma2_bytes, shared_secret) = build_sigma2(
+                    &sigma1_bytes,
+                    &sigma1,
+                    &credentials,
+                    &eph_secret,
+                    &eph_pub,
+                    &responder_random,
+                )?;
+
+                // Transition to the standard new-session state, identical to
+                // what handle_sigma1 (new-session path) would have produced.
+                self.state = State::ReadyToSendSigma2 {
+                    credentials,
+                    trusted_roots,
+                    sigma2_bytes,
+                    sigma1_bytes,
+                    shared_secret,
+                    initiator_random,
+                    responder_random,
+                    initiator_eph_pub,
+                    eph_pub,
+                    initiator_session_id,
+                    responder_session_id: 0, // M6 commissioning assigns a real value.
+                };
+                Ok(())
+            }
+            other => {
+                self.state = other;
+                Err(Error::UnexpectedCaseMessage {
+                    expected: CaseMessageKind::Sigma1,
+                    got: CaseMessageKind::Sigma1,
+                })
+            }
+        }
     }
 
-    /// Retrieve the Sigma2 message bytes and advance to `AwaitingSigma3`.
+    /// Retrieve the next outbound message and advance the state machine.
     ///
-    /// Must be called after a successful [`handle_sigma1`][Self::handle_sigma1].
+    /// **New-session path:** Returns the Sigma2 bytes and advances to
+    /// `AwaitingSigma3`. Must be called after a successful
+    /// [`handle_sigma1`][Self::handle_sigma1] that returned
+    /// [`Sigma1Outcome::NewSession`], or after
+    /// [`reject_resumption`][Self::reject_resumption].
+    ///
+    /// **Resumption path:** Returns the `Sigma2_Resume` bytes and advances
+    /// directly to `Complete`. Must be called after a successful
+    /// [`accept_resumption`][Self::accept_resumption]. There is no
+    /// `Sigma3_Resume` — the handshake completes after `Sigma2_Resume` is sent
+    /// (confirmed from matter.js).
     ///
     /// # Errors
     ///
@@ -478,6 +757,25 @@ impl CaseResponder {
                 };
                 Ok(sigma2_bytes)
             }
+
+            // Resumption path: return Sigma2_Resume and transition directly to
+            // Complete. No Sigma3_Resume to wait for (matter.js finding from Task 1).
+            State::ReadyToSendSigma2Resume {
+                sigma2_resume_bytes,
+                session_keys,
+                peer,
+                local,
+                resumption_record,
+            } => {
+                self.state = State::Complete {
+                    session_keys,
+                    peer,
+                    local,
+                    resumption_record,
+                };
+                Ok(sigma2_resume_bytes)
+            }
+
             other => {
                 self.state = other;
                 Err(Error::UnexpectedCaseMessage {
@@ -564,6 +862,10 @@ impl CaseResponder {
                     session_keys,
                     peer,
                     local,
+                    // New-session path: resumption record would be populated here
+                    // in M6 if the responder session params contained resumption
+                    // support. For now, it is always None on this path.
+                    resumption_record: None,
                 };
                 Ok(())
             }
@@ -592,11 +894,12 @@ impl CaseResponder {
                 session_keys,
                 peer,
                 local,
+                resumption_record,
             } => Ok(CaseSessionOutput {
                 keys: session_keys,
                 peer,
                 local,
-                resumption_record: None, // M4.2 populates this.
+                resumption_record,
             }),
             _ => Err(Error::HandshakeIncomplete),
         }
@@ -1018,41 +1321,94 @@ mod tests {
         ));
     }
 
-    // ─── handle_sigma1: resumption M4.1 stub ──────────────────────────────
+    // ─── handle_sigma1: resumption path ──────────────────────────────────
 
-    /// `handle_sigma1` with a `resumption_id` must return `UnexpectedCaseMessage`
-    /// (M4.1 stub behaviour; resumption is not yet supported).
+    /// Helper: build a Sigma1 that addresses the responder. Returns
+    /// `(sigma1_bytes, initiator_random, noc_cert)` so callers can build a
+    /// matching `ResumptionRecord`.
+    ///
+    /// When `resumption_id` and `resume_mic` are both `Some`, the Sigma1 carries
+    /// resumption fields and `handle_sigma1` must return
+    /// `Sigma1Outcome::ResumptionRequested`.
+    fn build_sigma1_for_responder(
+        ipk: &[u8; 16],
+        rcac_pub: &[u8; 65],
+        node_id: u64,
+        fabric_id: u64,
+        initiator_random: [u8; 32],
+        resumption_id: Option<[u8; 16]>,
+        resume_mic: Option<[u8; 16]>,
+    ) -> Vec<u8> {
+        let dest_id = compute_dest_id(ipk, rcac_pub, fabric_id, node_id, &initiator_random);
+        let rng = ring::rand::SystemRandom::new();
+        let (_, eph_pub) = generate_ephemeral_keypair(&rng).unwrap();
+        let sigma1 = Sigma1 {
+            initiator_random,
+            initiator_session_id: 7,
+            dest_id,
+            initiator_eph_pub: eph_pub,
+            initiator_session_params: None,
+            resumption_id,
+            initiator_resume_mic: resume_mic,
+        };
+        sigma1.encode().unwrap()
+    }
+
+    /// `handle_sigma1` with both `resumption_id` AND `initiator_resume_mic` must
+    /// return `Sigma1Outcome::ResumptionRequested` carrying the correct ID.
     #[test]
-    fn handle_sigma1_with_resumption_id_returns_unexpected_message() {
-        use crate::case::messages::Sigma1;
+    fn handle_sigma1_with_resumption_fields_returns_resumption_requested() {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
         let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
 
-        // Build a Sigma1 with the correct dest_id but also a resumption_id.
         let initiator_random = [0x42u8; 32];
-        let dest_id = compute_dest_id(&ipk, &rcac_pub, 0x5678, 0x1234, &initiator_random);
+        let resumption_id = [0xCC; 16];
+        // A plausible (but not verified-here) 16-byte MIC.
+        let resume_mic = [0xDD; 16];
 
-        let sigma1 = Sigma1 {
+        let sigma1_bytes = build_sigma1_for_responder(
+            &ipk,
+            &rcac_pub,
+            0x1234,
+            0x5678,
             initiator_random,
-            initiator_session_id: 1,
-            dest_id,
-            initiator_eph_pub: {
-                let rng = ring::rand::SystemRandom::new();
-                let (_, pub_bytes) = generate_ephemeral_keypair(&rng).unwrap();
-                pub_bytes
-            },
-            initiator_session_params: None,
-            resumption_id: Some([0xCC; 16]), // trigger M4.1 stub
-            initiator_resume_mic: None,
-        };
-        let sigma1_bytes = sigma1.encode().unwrap();
+            Some(resumption_id),
+            Some(resume_mic),
+        );
 
-        assert!(matches!(
-            responder.handle_sigma1(&sigma1_bytes),
-            Err(Error::UnexpectedCaseMessage { .. })
-        ));
+        let outcome = responder.handle_sigma1(&sigma1_bytes).unwrap();
+        assert_eq!(
+            outcome,
+            Sigma1Outcome::ResumptionRequested {
+                id: ResumptionId(resumption_id),
+            }
+        );
+    }
+
+    /// `handle_sigma1` with only `resumption_id` (no MIC) must fall through to
+    /// the new-session path since we require BOTH fields for resumption.
+    #[test]
+    fn handle_sigma1_with_only_resumption_id_takes_new_session_path() {
+        let ipk = [0xAB; 16];
+        let rcac_pub = dummy_rcac_pub();
+        let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
+        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+
+        let initiator_random = [0x42u8; 32];
+        let sigma1_bytes = build_sigma1_for_responder(
+            &ipk,
+            &rcac_pub,
+            0x1234,
+            0x5678,
+            initiator_random,
+            Some([0xCC; 16]), // resumption_id present
+            None,             // MIC absent — should NOT trigger resumption path
+        );
+
+        let outcome = responder.handle_sigma1(&sigma1_bytes).unwrap();
+        assert_eq!(outcome, Sigma1Outcome::NewSession);
     }
 
     // ─── Out-of-order rejection ────────────────────────────────────────────
@@ -1110,5 +1466,172 @@ mod tests {
         roots.add(anchor);
         assert!(!roots.is_empty());
         assert_eq!(roots.len(), 1);
+    }
+
+    // ─── Resumption: accept_resumption / reject_resumption ────────────────
+
+    /// Build a valid `ResumptionRecord` and the matching Sigma1 bytes
+    /// (i.e., the MIC was computed correctly and will verify successfully).
+    fn build_valid_resumption_setup(
+        ipk: &[u8; 16],
+        rcac_pub: &[u8; 65],
+        node_id: u64,
+        fabric_id: u64,
+    ) -> (Vec<u8>, ResumptionRecord, [u8; 32]) {
+        use crate::case::sigma::compute_sigma1_resume_mic;
+
+        let shared_secret = [0x55u8; 16];
+        let resumption_id = [0xAA; 16];
+        let initiator_random = [0x11; 32];
+
+        // Compute the MIC as the initiator would.
+        let mic =
+            compute_sigma1_resume_mic(&shared_secret, &initiator_random, &resumption_id).unwrap();
+
+        let sigma1_bytes = build_sigma1_for_responder(
+            ipk,
+            rcac_pub,
+            node_id,
+            fabric_id,
+            initiator_random,
+            Some(resumption_id),
+            Some(mic),
+        );
+
+        // Build a synthetic NOC to embed in the record (resumption re-uses cached peer).
+        let noc = make_test_cert(node_id + 1, fabric_id);
+        let peer = PeerInfo {
+            node_id: node_id + 1,
+            fabric_id,
+            noc,
+            session_id: 99,
+        };
+        let record = ResumptionRecord {
+            id: ResumptionId(resumption_id),
+            shared_secret,
+            peer,
+            expires_at: None,
+        };
+
+        (sigma1_bytes, record, initiator_random)
+    }
+
+    /// `accept_resumption` rejects a record whose ID doesn't match the one the
+    /// initiator presented.
+    #[test]
+    fn accept_resumption_rejects_wrong_id() {
+        let ipk = [0xAB; 16];
+        let rcac_pub = dummy_rcac_pub();
+        let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
+        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+
+        let (sigma1_bytes, mut record, _) =
+            build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
+
+        let outcome = responder.handle_sigma1(&sigma1_bytes).unwrap();
+        assert!(matches!(outcome, Sigma1Outcome::ResumptionRequested { .. }));
+
+        // Tamper with the record ID — it no longer matches the presented ID.
+        record.id = ResumptionId([0xFF; 16]);
+        assert!(matches!(
+            responder.accept_resumption(record),
+            Err(Error::InvalidParameter)
+        ));
+    }
+
+    /// `accept_resumption` rejects a record whose `shared_secret` produces a wrong MIC.
+    #[test]
+    fn accept_resumption_rejects_invalid_mic() {
+        let ipk = [0xAB; 16];
+        let rcac_pub = dummy_rcac_pub();
+        let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
+        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+
+        let (sigma1_bytes, mut record, _) =
+            build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
+
+        let outcome = responder.handle_sigma1(&sigma1_bytes).unwrap();
+        assert!(matches!(outcome, Sigma1Outcome::ResumptionRequested { .. }));
+
+        // Tamper with the shared secret — the MIC verification will fail.
+        record.shared_secret = [0xFF; 16];
+        assert!(matches!(
+            responder.accept_resumption(record),
+            Err(Error::ResumptionMacMismatch)
+        ));
+    }
+
+    /// After `handle_sigma1` (resumption) + `reject_resumption`, calling
+    /// `next_message` returns a Sigma2 (new-session path) rather than `Sigma2_Resume`.
+    #[test]
+    fn reject_resumption_transitions_to_new_session_path() {
+        use crate::case::messages::Sigma2;
+
+        let ipk = [0xAB; 16];
+        let rcac_pub = dummy_rcac_pub();
+        let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
+        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+
+        let (sigma1_bytes, _record, _) =
+            build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
+
+        let outcome = responder.handle_sigma1(&sigma1_bytes).unwrap();
+        assert!(matches!(outcome, Sigma1Outcome::ResumptionRequested { .. }));
+
+        responder.reject_resumption().unwrap();
+
+        // next_message() must succeed and return some bytes.
+        let outbound = responder.next_message().unwrap();
+        assert!(
+            !outbound.is_empty(),
+            "next_message after reject_resumption must return Sigma2 bytes"
+        );
+
+        // The returned bytes should decode as a valid Sigma2 (not Sigma2_Resume).
+        // Sigma2 has tag 3 = responder_eph_pub (65 bytes); Sigma2_Resume has tag 1 = resumption_id (16 bytes).
+        // A successful Sigma2::decode is sufficient confirmation.
+        Sigma2::decode(&outbound).unwrap();
+    }
+
+    /// `accept_resumption` + `next_message` returns `Sigma2_Resume` bytes and
+    /// transitions to Complete; `finish` returns a resumption record.
+    #[test]
+    fn accept_resumption_then_next_message_returns_sigma2_resume() {
+        use crate::case::messages::Sigma2Resume;
+
+        let ipk = [0xAB; 16];
+        let rcac_pub = dummy_rcac_pub();
+        let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
+        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+
+        let (sigma1_bytes, record, _) =
+            build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
+        let old_id = record.id;
+
+        let outcome = responder.handle_sigma1(&sigma1_bytes).unwrap();
+        assert!(matches!(outcome, Sigma1Outcome::ResumptionRequested { .. }));
+
+        responder.accept_resumption(record).unwrap();
+
+        // next_message() must return Sigma2_Resume bytes.
+        let outbound = responder.next_message().unwrap();
+        assert!(!outbound.is_empty());
+
+        // The bytes must decode as a Sigma2_Resume.
+        let sigma2_resume = Sigma2Resume::decode(&outbound).unwrap();
+
+        // The new resumption_id must differ from the old one (it was freshly generated).
+        assert_ne!(
+            sigma2_resume.resumption_id, old_id.0,
+            "Sigma2_Resume must carry a fresh resumption_id"
+        );
+
+        // finish() must succeed and carry a resumption_record with the new id.
+        let output = responder.finish().unwrap();
+        let next_record = output.resumption_record.unwrap();
+        assert_eq!(
+            next_record.id.0, sigma2_resume.resumption_id,
+            "CaseSessionOutput resumption_record.id must match Sigma2_Resume resumption_id"
+        );
     }
 }
