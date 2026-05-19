@@ -32,4 +32,4 @@ pub mod pase;
 pub mod test_support;
 
 pub use error::{Error, Result};
-pub use pase::PaseMessageKind;
+pub use pase::{PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys};
