@@ -2,6 +2,8 @@
 //!
 //! M4.1 stub. Real implementation lands in Task 3.
 
+use matter_cert::PublicKey;
+
 /// Errors returned by a [`CaseSigner`] implementation.
 ///
 /// This type is intentionally `#[non_exhaustive]` so that future backends
@@ -20,4 +22,23 @@ pub enum SignerError {
     /// Internal signer error (e.g., ring returned an opaque failure).
     #[error("internal signer error")]
     Internal,
+}
+
+/// Pluggable ECDSA-P256-SHA256 signer for CASE.
+///
+/// Full body (with `RingSigner` wrapper) lands in Task 3 of M4.1.
+/// This declaration exists so `CaseCredentials.signer` can be a
+/// `Box<dyn CaseSigner>` from Task 2 onwards.
+pub trait CaseSigner: Send + Sync + std::fmt::Debug {
+    /// Sign `message` with the NOC's private ECDSA-P256 key.
+    /// Returns raw 64-byte r||s signature (Matter wire format).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignerError`] if the signing operation fails (hardware
+    /// unavailable, policy rejection, or internal error).
+    fn sign_p256_sha256(&self, message: &[u8]) -> std::result::Result<[u8; 64], SignerError>;
+
+    /// The 65-byte SEC1-uncompressed P-256 public key matching the NOC.
+    fn public_key(&self) -> &PublicKey;
 }
