@@ -31,5 +31,6 @@ pub mod pase;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+pub use case::CaseMessageKind;
 pub use error::{Error, Result};
 pub use pase::{PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys, PaseVerifier};
