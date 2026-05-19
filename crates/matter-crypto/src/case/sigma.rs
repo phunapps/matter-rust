@@ -38,11 +38,6 @@
 //! acts as the domain-separating context in every HKDF salt (CaseClient.ts
 //! lines 153–159, 199–203, 220–223).
 
-// Constants and functions in this module are consumed by `initiator.rs` and
-// `responder.rs` (Tasks 6/7). Until those files are populated the compiler
-// sees them as dead code; this allow will be removed once Tasks 6/7 land.
-#![allow(dead_code)]
-
 use aes::Aes128;
 use ccm::{
     aead::{Aead, KeyInit, Payload},
@@ -55,6 +50,9 @@ use ring::digest::{digest, SHA256};
 use ring::hkdf;
 use ring::rand::SecureRandom;
 use subtle::ConstantTimeEq;
+
+use matter_cert::MatterCertificate;
+use matter_codec::{Tag, TlvWriter};
 
 use crate::error::{Error, Result};
 
@@ -78,6 +76,7 @@ type Aes128Ccm = Ccm<Aes128, U16, U13>;
 pub(crate) const AEAD_KEY_LEN: usize = 16;
 
 /// AES-128-CCM authentication tag length in bytes.
+#[allow(dead_code)] // Used in AEAD tests and will be consumed by M5 transport.
 pub(crate) const AEAD_TAG_LEN: usize = 16;
 
 /// AES-128-CCM nonce length in bytes.
@@ -101,11 +100,13 @@ pub(crate) const HKDF_INFO_SIGMA3: &[u8] = b"Sigma3";
 /// HKDF info for deriving the `Sigma1_Resume` resumption key.
 ///
 /// `KDFSR1_KEY_INFO = Bytes.fromString("Sigma1_Resume")` in matter.js.
+#[allow(dead_code)] // M4.2: consumed by session resumption key derivation.
 pub(crate) const HKDF_INFO_SIGMA1_RESUME: &[u8] = b"Sigma1_Resume";
 
 /// HKDF info for deriving the `Sigma2_Resume` resumption key.
 ///
 /// `KDFSR2_KEY_INFO = Bytes.fromString("Sigma2_Resume")` in matter.js.
+#[allow(dead_code)] // M4.2: consumed by session resumption key derivation.
 pub(crate) const HKDF_INFO_SIGMA2_RESUME: &[u8] = b"Sigma2_Resume";
 
 // ---------------------------------------------------------------------------
@@ -126,11 +127,13 @@ pub(crate) const NONCE_TBE_DATA3: &[u8; AEAD_NONCE_LEN] = b"NCASE_Sigma3N";
 /// AEAD nonce for the `Sigma1_Resume` MIC (resumption MAC).
 ///
 /// `RESUME1_MIC_NONCE = Bytes.fromString("NCASE_SigmaS1")` — 13 bytes.
+#[allow(dead_code)] // M4.2: consumed by the Sigma1_Resume / Sigma2_Resume path.
 pub(crate) const NONCE_RESUME1_MIC: &[u8; AEAD_NONCE_LEN] = b"NCASE_SigmaS1";
 
 /// AEAD nonce for the `Sigma2_Resume` MIC (resumption MAC).
 ///
 /// `RESUME2_MIC_NONCE = Bytes.fromString("NCASE_SigmaS2")` — 13 bytes.
+#[allow(dead_code)] // M4.2: consumed by the Sigma1_Resume / Sigma2_Resume path.
 pub(crate) const NONCE_RESUME2_MIC: &[u8; AEAD_NONCE_LEN] = b"NCASE_SigmaS2";
 
 // =============================================================================
@@ -219,6 +222,7 @@ pub(crate) fn ecdh_shared_secret(
 /// Returns an error only if `out.len()` exceeds ring's HKDF output limit
 /// (255 × hash-length = 8160 bytes for SHA-256), which is impossible for
 /// any Matter message length.
+#[allow(dead_code)] // M4.2: used by session resumption key derivation.
 pub(crate) fn hkdf_expand(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<()> {
     let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]);
     let prk_obj = salt.extract(prk);
@@ -380,12 +384,355 @@ pub(crate) fn aead_decrypt(
 /// # Errors
 ///
 /// Returns [`Error::ResumptionMacMismatch`] if the tags differ.
+#[allow(dead_code)] // M4.2: consumed by Sigma1_Resume / Sigma2_Resume MAC verification.
 pub(crate) fn verify_mac(expected: &[u8; 16], received: &[u8; 16]) -> Result<()> {
     if expected.ct_eq(received).unwrap_u8() == 1 {
         Ok(())
     } else {
         Err(Error::ResumptionMacMismatch)
     }
+}
+
+// =============================================================================
+// Shared SIGMA-I helpers used by both initiator and responder
+// =============================================================================
+
+/// Compute the `DestinationId` for Sigma1.
+///
+/// Matter Core Spec §4.13.2.4 and matter.js `Fabric.#generateSalt`:
+/// ```text
+/// salt = initiatorRandom(32) || rcacPublicKey(65) || fabricId_le8 || nodeId_le8
+/// DestinationId = HMAC-SHA256(key = IPK, message = salt)
+/// ```
+///
+/// Note the order of inputs matches matter.js exactly:
+/// random → rootPublicKey → fabricId → nodeId.
+///
+/// Both the initiator (when building Sigma1) and the responder (when
+/// cross-checking the `dest_id` in a received Sigma1) call this function.
+pub(crate) fn compute_dest_id(
+    ipk: &[u8; 16],
+    rcac_public_key: &[u8; 65],
+    fabric_id: u64,
+    node_id: u64,
+    initiator_random: &[u8; 32],
+) -> [u8; 32] {
+    use ring::hmac;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, ipk);
+    // Capacity: 32 (random) + 65 (rootPubKey) + 8 (fabricId) + 8 (nodeId) = 113 bytes.
+    let mut salt: Vec<u8> = Vec::with_capacity(113);
+    salt.extend_from_slice(initiator_random);
+    salt.extend_from_slice(rcac_public_key);
+    salt.extend_from_slice(&fabric_id.to_le_bytes());
+    salt.extend_from_slice(&node_id.to_le_bytes());
+    let tag = hmac::sign(&key, &salt);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(tag.as_ref());
+    out
+}
+
+/// Encode a `TlvSignedData` structure for ECDSA signing/verification.
+///
+/// matter.js `TlvSignedData` (CaseMessages.ts):
+/// ```ts
+/// TlvSignedData = TlvObject({
+///     1: responderNoc (bytes),
+///     2: responderIcac (bytes, optional),
+///     3: responderPublicKey (65 bytes),
+///     4: initiatorPublicKey (65 bytes),
+/// })
+/// ```
+///
+/// This structure is used symmetrically:
+/// - In Sigma2 verification: `responder_noc_tlv` = responder's NOC, keys are
+///   responder and initiator ephemeral public keys respectively.
+/// - In Sigma3 signing: `responder_noc_tlv` = initiator's NOC (because the
+///   initiator plays the "responder" role in the `TlvSignedData` field names,
+///   which were defined from the Sigma2 perspective).
+///
+/// # Errors
+///
+/// Propagates [`Error::Codec`] on TLV write failure.
+pub(crate) fn encode_tbs_data(
+    responder_noc_tlv: &[u8],
+    responder_icac_tlv: Option<&[u8]>,
+    responder_public_key: &[u8; 65],
+    initiator_public_key: &[u8; 65],
+) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)?;
+    w.put_bytes(Tag::Context(1), responder_noc_tlv)?;
+    if let Some(icac) = responder_icac_tlv {
+        w.put_bytes(Tag::Context(2), icac)?;
+    }
+    w.put_bytes(Tag::Context(3), responder_public_key)?;
+    w.put_bytes(Tag::Context(4), initiator_public_key)?;
+    w.end_container()?;
+    Ok(buf)
+}
+
+/// Encode the `TBEData2` plaintext (responder's NOC chain + signature).
+///
+/// Maps to `TlvEncryptedDataSigma2` in matter.js CaseMessages.ts:
+/// ```ts
+/// {
+///     1: responderNoc (bytes),
+///     2: responderIcac (bytes, optional),
+///     3: signature (64 bytes),
+///     4: resumptionId (16 bytes),
+/// }
+/// ```
+///
+/// Used by the *responder* when constructing Sigma2.
+/// `resumption_id` is 16 zero bytes in M4.1 (resumption support lands in M4.2).
+///
+/// # Errors
+///
+/// Propagates [`Error::Codec`] on TLV write failure.
+pub(crate) fn encode_tbedata2(
+    noc_tlv: &[u8],
+    icac_tlv: Option<&[u8]>,
+    signature: &[u8; 64],
+    resumption_id: &[u8; 16],
+) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)?;
+    w.put_bytes(Tag::Context(1), noc_tlv)?;
+    if let Some(icac) = icac_tlv {
+        w.put_bytes(Tag::Context(2), icac)?;
+    }
+    w.put_bytes(Tag::Context(3), signature)?;
+    w.put_bytes(Tag::Context(4), resumption_id)?;
+    w.end_container()?;
+    Ok(buf)
+}
+
+/// Parsed plaintext of the `encrypted` field in Sigma2.
+///
+/// Maps to `TlvEncryptedDataSigma2` in matter.js CaseMessages.ts.
+/// Used by the *initiator* when verifying a received Sigma2.
+pub(crate) struct TbeData2 {
+    /// Responder's Node Operational Certificate.
+    pub peer_noc: MatterCertificate,
+    /// Responder's Intermediate CA Certificate (optional).
+    pub peer_icac: Option<MatterCertificate>,
+    /// Raw 64-byte r||s ECDSA signature from the responder.
+    pub peer_signature: Vec<u8>,
+    /// 16-byte resumption ID. Not used on the new-session path (M4.2).
+    #[allow(dead_code)]
+    pub resumption_id: [u8; 16],
+}
+
+/// Decode the `TBEData2` plaintext (responder's NOC + signature inside Sigma2).
+///
+/// # Errors
+///
+/// - [`Error::InvalidParameter`] if a required field is absent,
+///   the structure is malformed, or a byte-string has the wrong length.
+/// - [`Error::Codec`] on TLV decode failure.
+/// - [`Error::InvalidPeerNocChain`] if the NOC or ICAC TLV cannot be
+///   parsed as a `MatterCertificate`.
+pub(crate) fn decode_tbedata2(plaintext: &[u8]) -> Result<TbeData2> {
+    use matter_codec::{ContainerKind, Element, Tag as MTag, TlvReader, Value};
+
+    let mut reader = TlvReader::new(plaintext);
+    // Outer anonymous structure.
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: MTag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(Error::InvalidParameter),
+    }
+
+    let mut noc_bytes: Option<Vec<u8>> = None;
+    let mut icac_bytes: Option<Vec<u8>> = None;
+    let mut signature: Option<Vec<u8>> = None;
+    let mut resumption_id: Option<[u8; 16]> = None;
+
+    loop {
+        match reader.next()? {
+            Some(Element::ContainerEnd) => break,
+
+            // Tag 1: responderNoc
+            Some(Element::Scalar {
+                tag: MTag::Context(1),
+                value: Value::Bytes(b),
+            }) => {
+                noc_bytes = Some(b);
+            }
+
+            // Tag 2: responderIcac (optional)
+            Some(Element::Scalar {
+                tag: MTag::Context(2),
+                value: Value::Bytes(b),
+            }) => {
+                icac_bytes = Some(b);
+            }
+
+            // Tag 3: signature (64 bytes)
+            Some(Element::Scalar {
+                tag: MTag::Context(3),
+                value: Value::Bytes(b),
+            }) => {
+                signature = Some(b);
+            }
+
+            // Tag 4: resumptionId (16 bytes)
+            Some(Element::Scalar {
+                tag: MTag::Context(4),
+                value: Value::Bytes(b),
+            }) => {
+                let arr: [u8; 16] = b.try_into().map_err(|_| Error::InvalidParameter)?;
+                resumption_id = Some(arr);
+            }
+
+            None | Some(_) => return Err(Error::InvalidParameter),
+        }
+    }
+
+    let noc_b = noc_bytes.ok_or(Error::InvalidParameter)?;
+    let sig = signature.ok_or(Error::InvalidParameter)?;
+    let rid = resumption_id.ok_or(Error::InvalidParameter)?;
+
+    let peer_noc = MatterCertificate::from_tlv(&noc_b).map_err(Error::InvalidPeerNocChain)?;
+    let peer_icac = match icac_bytes {
+        Some(b) => Some(MatterCertificate::from_tlv(&b).map_err(Error::InvalidPeerNocChain)?),
+        None => None,
+    };
+
+    Ok(TbeData2 {
+        peer_noc,
+        peer_icac,
+        peer_signature: sig,
+        resumption_id: rid,
+    })
+}
+
+/// Encode the `TBEData3` plaintext (sender's NOC chain + signature).
+///
+/// Maps to `TlvEncryptedDataSigma3` in matter.js CaseMessages.ts:
+/// ```ts
+/// {
+///     1: responderNoc (bytes),   -- sender's NOC TLV
+///     2: responderIcac (bytes, optional), -- sender's ICAC TLV (optional)
+///     3: signature (64 bytes),
+/// }
+/// ```
+///
+/// Note: both initiator (in Sigma3) and responder (when parsing) use this
+/// structure. The `responder` field names in the TLV come from the Sigma2
+/// perspective; they are re-used symmetrically in Sigma3.
+///
+/// # Errors
+///
+/// Propagates [`Error::Codec`] on TLV write failure.
+pub(crate) fn encode_tbedata3(
+    noc_tlv: &[u8],
+    icac_tlv: Option<&[u8]>,
+    signature: &[u8; 64],
+) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)?;
+    w.put_bytes(Tag::Context(1), noc_tlv)?;
+    if let Some(icac) = icac_tlv {
+        w.put_bytes(Tag::Context(2), icac)?;
+    }
+    w.put_bytes(Tag::Context(3), signature)?;
+    w.end_container()?;
+    Ok(buf)
+}
+
+/// Parsed plaintext of the `encrypted` field in Sigma3.
+///
+/// Maps to `TlvEncryptedDataSigma3` in matter.js CaseMessages.ts.
+/// Used by the *responder* when verifying a received Sigma3.
+// `peer_` prefix is intentional: mirrors `TbeData2` naming convention for symmetry.
+// All three fields describe the peer (initiator) so the prefix is meaningful, not redundant.
+#[allow(clippy::struct_field_names)]
+pub(crate) struct TbeData3 {
+    /// Initiator's Node Operational Certificate.
+    pub peer_noc: MatterCertificate,
+    /// Initiator's Intermediate CA Certificate (optional).
+    pub peer_icac: Option<MatterCertificate>,
+    /// Raw 64-byte r||s ECDSA signature from the initiator.
+    pub peer_signature: Vec<u8>,
+}
+
+/// Decode the `TBEData3` plaintext (initiator's NOC + signature inside Sigma3).
+///
+/// # Errors
+///
+/// - [`Error::InvalidParameter`] if a required field is absent,
+///   the structure is malformed, or a byte-string has the wrong length.
+/// - [`Error::Codec`] on TLV decode failure.
+/// - [`Error::InvalidPeerNocChain`] if the NOC or ICAC TLV cannot be
+///   parsed as a `MatterCertificate`.
+pub(crate) fn decode_tbedata3(plaintext: &[u8]) -> Result<TbeData3> {
+    use matter_codec::{ContainerKind, Element, Tag as MTag, TlvReader, Value};
+
+    let mut reader = TlvReader::new(plaintext);
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: MTag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(Error::InvalidParameter),
+    }
+
+    let mut noc_bytes: Option<Vec<u8>> = None;
+    let mut icac_bytes: Option<Vec<u8>> = None;
+    let mut signature: Option<Vec<u8>> = None;
+
+    loop {
+        match reader.next()? {
+            Some(Element::ContainerEnd) => break,
+
+            // Tag 1: initiatorNoc (labelled "responderNoc" in the TLV spec; re-used symmetrically)
+            Some(Element::Scalar {
+                tag: MTag::Context(1),
+                value: Value::Bytes(b),
+            }) => {
+                noc_bytes = Some(b);
+            }
+
+            // Tag 2: initiatorIcac (optional)
+            Some(Element::Scalar {
+                tag: MTag::Context(2),
+                value: Value::Bytes(b),
+            }) => {
+                icac_bytes = Some(b);
+            }
+
+            // Tag 3: signature (64 bytes)
+            Some(Element::Scalar {
+                tag: MTag::Context(3),
+                value: Value::Bytes(b),
+            }) => {
+                signature = Some(b);
+            }
+
+            None | Some(_) => return Err(Error::InvalidParameter),
+        }
+    }
+
+    let noc_b = noc_bytes.ok_or(Error::InvalidParameter)?;
+    let sig = signature.ok_or(Error::InvalidParameter)?;
+
+    let peer_noc = MatterCertificate::from_tlv(&noc_b).map_err(Error::InvalidPeerNocChain)?;
+    let peer_icac = match icac_bytes {
+        Some(b) => Some(MatterCertificate::from_tlv(&b).map_err(Error::InvalidPeerNocChain)?),
+        None => None,
+    };
+
+    Ok(TbeData3 {
+        peer_noc,
+        peer_icac,
+        peer_signature: sig,
+    })
 }
 
 // =============================================================================

@@ -32,6 +32,7 @@ pub mod pase;
 pub mod test_support;
 
 pub use case::initiator::CaseInitiator;
+pub use case::responder::CaseResponder;
 pub use case::signer::{CaseSigner, RingSigner, SignerError};
 pub use case::{
     CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,
