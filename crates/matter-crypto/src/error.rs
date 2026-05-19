@@ -114,6 +114,21 @@ pub enum Error {
     /// `CaseSigner` returned a `SignerError`.
     #[error("CASE: signing failed — {0}")]
     SigningFailed(#[source] crate::case::signer::SignerError),
+
+    /// Caller fed a CASE state machine a message that doesn't match its
+    /// current expected-inbound kind (e.g., calling `handle_sigma2` before
+    /// `start` has been invoked).
+    ///
+    /// A separate variant from [`Error::UnexpectedMessage`] keeps M3 PASE
+    /// callers unchanged while surfacing the correct
+    /// [`crate::case::CaseMessageKind`].
+    #[error("CASE: unexpected message: expected {expected:?}, got {got:?}")]
+    UnexpectedCaseMessage {
+        /// The message kind the state machine was waiting for.
+        expected: crate::case::CaseMessageKind,
+        /// The kind the caller tried to supply.
+        got: crate::case::CaseMessageKind,
+    },
 }
 
 /// `Result<T, Error>` for convenience.

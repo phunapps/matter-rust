@@ -31,6 +31,7 @@ pub mod pase;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+pub use case::initiator::CaseInitiator;
 pub use case::signer::{CaseSigner, RingSigner, SignerError};
 pub use case::{
     CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,

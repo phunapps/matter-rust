@@ -204,7 +204,7 @@ pub(crate) fn ecdh_shared_secret(
 // HKDF
 // =============================================================================
 
-/// HKDF-SHA256 expand.
+/// HKDF-SHA256 with empty salt (`Extract`-then-`Expand`).
 ///
 /// Mirrors `pase::kdf::hkdf_expand`. The caller passes a pseudo-random key
 /// (`prk`, 32 bytes in all CASE call sites) and an info label; the function
@@ -224,6 +224,35 @@ pub(crate) fn hkdf_expand(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<()>
     let prk_obj = salt.extract(prk);
     let info_arr = [info];
     let okm = prk_obj
+        .expand(&info_arr, OutLen(out.len()))
+        .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+    okm.fill(out)
+        .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+    Ok(())
+}
+
+/// Full HKDF-SHA256 (`Extract(salt, ikm)` → `Expand(prk, info)`).
+///
+/// Mirrors matter.js's `crypto.createHkdfKey(secret, salt, info, length)`
+/// which maps to the standard HKDF construction with a real salt:
+/// - `Extract(salt, ikm)` → PRK
+/// - `Expand(PRK, info, len)` → OKM
+///
+/// Used for all CASE key derivations where matter.js passes a compound salt
+/// (`IPK || ...`):
+/// - S2K: `createHkdfKey(sharedSecret, IPK||respRandom||respEphPub||H(σ1), "Sigma2", 16)`
+/// - S3K: `createHkdfKey(sharedSecret, IPK||H(σ1||σ2), "Sigma3", 16)`
+/// - Session keys: `createHkdfKey(sharedSecret, IPK||H(σ1||σ2||σ3), "SessionKeys", 48)`
+///
+/// # Errors
+///
+/// Returns [`Error::EphemeralKeyGenerationFailed`] if `out.len()` exceeds
+/// ring's HKDF output limit (impossible for any Matter key size).
+pub(crate) fn hkdf_derive(ikm: &[u8], salt: &[u8], info: &[u8], out: &mut [u8]) -> Result<()> {
+    let salt_obj = hkdf::Salt::new(hkdf::HKDF_SHA256, salt);
+    let prk = salt_obj.extract(ikm);
+    let info_arr = [info];
+    let okm = prk
         .expand(&info_arr, OutLen(out.len()))
         .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
     okm.fill(out)

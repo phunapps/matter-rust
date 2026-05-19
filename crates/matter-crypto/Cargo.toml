@@ -40,3 +40,7 @@ serde_json = "1.0"
 # making the test_support module visible to tests/* without exposing
 # it to downstream crates.
 matter-crypto = { path = ".", version = "0.1.0-pre", features = ["test-support"] }
+# Enable test-support on matter-cert so that unit tests in this crate
+# can construct synthetic MatterCertificate values via
+# `matter_cert::test_support::build_unsigned`.
+matter-cert = { path = "../matter-cert", version = "0.1.0-pre", features = ["test-support"] }

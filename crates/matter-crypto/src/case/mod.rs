@@ -39,7 +39,8 @@ pub enum CaseMessageKind {
 ///
 /// Packages the things that identify a participant on a fabric:
 /// NOC, optional ICAC, signer for the NOC's private key, the
-/// claimed `FabricId` + `NodeId`, and the fabric-scoped IPK.
+/// claimed `FabricId` + `NodeId`, the fabric-scoped IPK, and
+/// the RCAC's public key (needed for `DestinationId` computation).
 /// Consumed by both `CaseInitiator::new` and `CaseResponder::new`.
 #[derive(Debug)]
 pub struct CaseCredentials {
@@ -66,6 +67,15 @@ pub struct CaseCredentials {
     ///
     /// Pinned from matter.js: `operationalIdentityProtectionKey` (16 bytes).
     pub ipk: [u8; 16],
+    /// 65-byte SEC1-uncompressed public key of this fabric's Root CA (RCAC).
+    ///
+    /// Required for `DestinationId` computation (Matter Core Spec §4.13.2.4).
+    /// The `DestinationId` salt is
+    /// `HMAC-SHA256(IPK, initiatorRandom || rcacPublicKey || fabricId_le8 || nodeId_le8)`.
+    ///
+    /// Pinned from matter.js: `fabric.rootPublicKey` used in
+    /// `Fabric.#generateSalt(nodeId, random)`.
+    pub rcac_public_key: [u8; 65],
 }
 
 /// Output of a successful CASE handshake.
