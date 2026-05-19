@@ -8,6 +8,8 @@
 //! - `capture-cert`  — drive `matter.js` to capture certificate vectors (Milestone 2).
 //! - `capture-pase`  — drive matter.js to capture PASE handshakes with
 //!   fixed scalars (Milestone 3).
+//! - `capture-case`  — drive matter.js to capture CASE handshakes with
+//!   fixed scalars (Milestone 4).
 //! - `codegen`       — generate cluster definitions from the Matter spec
 //!   (Milestone 7).
 //! - `release`       — workspace release helper (post-Milestone 1).
@@ -51,6 +53,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-case") => match run_capture_case() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-case: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -71,7 +80,8 @@ fn print_help() {
              check          Run every gate CI runs, locally.\n  \
              capture-tlv    Capture TLV test vectors from matter.js.\n  \
              capture-cert   Capture Matter test certificates from matter.js.\n  \
-             capture-pase   Capture full PASE handshakes from matter.js with fixed scalars.\n"
+             capture-pase   Capture full PASE handshakes from matter.js with fixed scalars.\n  \
+             capture-case   Capture full CASE handshakes from matter.js with fixed scalars.\n"
     );
 }
 
@@ -253,6 +263,35 @@ fn run_capture_pase() -> Result<(), String> {
     if !script_dir.exists() {
         return Err(format!(
             "capture-pase script directory not found: {}",
+            script_dir.display()
+        ));
+    }
+    if !script_dir.join("node_modules").exists() {
+        return Err(format!(
+            "node_modules not found in {}; run `npm install` there first",
+            script_dir.display()
+        ));
+    }
+
+    let status = Command::new("node")
+        .arg("index.js")
+        .current_dir(&script_dir)
+        .status()
+        .map_err(|err| format!("failed to spawn node: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("node index.js exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn run_capture_case() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let script_dir = workspace_root.join("xtask/scripts/capture-case");
+
+    if !script_dir.exists() {
+        return Err(format!(
+            "capture-case script directory not found: {}",
             script_dir.display()
         ));
     }
