@@ -9,8 +9,10 @@ pub(crate) mod kdf;
 pub(crate) mod messages;
 pub(crate) mod prover;
 pub(crate) mod spake2plus;
+pub(crate) mod verifier;
 
 pub use prover::PaseProver;
+pub use verifier::PaseVerifier;
 
 /// Identifies one of the 5 PASE message types. Used by
 /// [`crate::Error::UnexpectedMessage`] and `expected_inbound()` accessors

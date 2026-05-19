@@ -49,7 +49,6 @@
 //! This will be verified in M3.3 if/when the known-params path is tested against
 //! matter.js.
 
-use ring::digest::{digest, SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::error::{Error, Result};
@@ -57,15 +56,10 @@ use crate::pase::kdf::{derive_w0_w1, validate_params};
 use crate::pase::messages::{Pake1, Pake2, Pake3, PbkdfParamRequest, PbkdfParamResponse};
 use crate::pase::spake2plus::{
     compute_ca, compute_cb, compute_x, compute_z_v_prover, derive_confirmation_keys,
-    derive_session_keys, ka_ke_from_transcript, sample_scalar, transcript_hash, verify_tag,
+    derive_session_keys, hash_context, ka_ke_from_transcript, sample_scalar, transcript_hash,
+    verify_tag,
 };
 use crate::pase::{PaseMessageKind, PasePbkdfParams, PaseSessionKeys};
-
-// =============================================================================
-// SPAKE2+ context string — pinned from matter.js PaseMessenger.ts
-// `export const SPAKE_CONTEXT = Bytes.fromString("CHIP PAKE V1 Commissioning");`
-// =============================================================================
-const SPAKE_CONTEXT: &[u8] = b"CHIP PAKE V1 Commissioning";
 
 // =============================================================================
 // Internal state enum
@@ -555,31 +549,6 @@ impl PaseProver {
 // Internal helpers
 // =============================================================================
 
-/// Compose the SPAKE2+ transcript context hash.
-///
-/// Computes `SHA-256("CHIP PAKE V1 Commissioning" || extra[0] || extra[1] || ...)`.
-///
-/// For the negotiation path, `extra = [pbkdfReq_bytes, pbkdfResp_bytes]`.
-/// For the known-params path, `extra = []`.
-///
-/// This matches matter.js `PaseClient.ts`:
-/// ```ts
-/// context = await crypto.computeHash([SPAKE_CONTEXT, requestPayload, responsePayload])
-/// ```
-/// where `computeHash(arr)` concatenates the array elements and hashes the result.
-fn hash_context(extras: &[&[u8]]) -> [u8; 32] {
-    let mut buf: Vec<u8> =
-        Vec::with_capacity(SPAKE_CONTEXT.len() + extras.iter().map(|e| e.len()).sum::<usize>());
-    buf.extend_from_slice(SPAKE_CONTEXT);
-    for e in extras {
-        buf.extend_from_slice(e);
-    }
-    let d = digest(&SHA256, &buf);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(d.as_ref());
-    out
-}
-
 /// Build a [`PaseSessionKeys`] from `Ke` and the 48-byte derived key blob.
 ///
 /// Key assignment for commissioner (= initiator), per matter.js `NodeSession.ts`:
@@ -781,37 +750,10 @@ mod tests {
         ));
     }
 
-    // ─── Internal helper: hash_context ───────────────────────────────────
-
-    #[test]
-    fn hash_context_empty_extras_is_deterministic() {
-        let a = hash_context(&[]);
-        let b = hash_context(&[]);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn hash_context_with_extras_differs_from_empty() {
-        let empty = hash_context(&[]);
-        let with_extra = hash_context(&[b"hello"]);
-        assert_ne!(empty, with_extra);
-    }
-
-    #[test]
-    fn hash_context_is_sha256_of_spake_context_concatenation() {
-        use ring::digest::{digest, SHA256};
-        let req = b"req_bytes";
-        let resp = b"resp_bytes";
-        // Manually compute: SHA-256("CHIP PAKE V1 Commissioning" || req || resp)
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"CHIP PAKE V1 Commissioning");
-        buf.extend_from_slice(req);
-        buf.extend_from_slice(resp);
-        let expected_raw = digest(&SHA256, &buf);
-        let mut expected = [0u8; 32];
-        expected.copy_from_slice(expected_raw.as_ref());
-
-        let got = hash_context(&[req, resp]);
-        assert_eq!(got, expected);
-    }
+    // ─── hash_context (now lives in spake2plus; tested there) ────────────
+    //
+    // The three hash_context tests have moved to `spake2plus::tests` since
+    // the function itself moved there. We reference it through the import at
+    // the top of this file (`use crate::pase::spake2plus::hash_context`) only
+    // in the production call sites; tests live with the implementation.
 }
