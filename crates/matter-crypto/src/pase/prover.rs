@@ -208,6 +208,40 @@ impl PaseProver {
         })
     }
 
+    /// Deterministic constructor for testing — injects fixed `x` scalar and
+    /// `initiator_random` bytes directly, bypassing the RNG.
+    ///
+    /// Used by `test_support` to construct a prover with known values for
+    /// matter.js byte-parity tests. `x_scalar_bytes` must be a valid non-zero
+    /// P-256 scalar in big-endian representation.
+    ///
+    /// Production code should always use [`new_with_negotiation`][Self::new_with_negotiation].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidScalar`] if `x_scalar_bytes` is zero or not a valid
+    ///   P-256 scalar (i.e., ≥ curve order).
+    pub(crate) fn new_with_negotiation_with_scalar(
+        pin: u32,
+        x_scalar_bytes: [u8; 32],
+        initiator_random: [u8; 32],
+    ) -> Result<Self> {
+        use p256::elliptic_curve::group::ff::{Field, PrimeField};
+        let x_scalar_opt: Option<p256::Scalar> =
+            p256::Scalar::from_repr(p256::FieldBytes::from(x_scalar_bytes)).into();
+        let x_scalar = x_scalar_opt.ok_or(Error::InvalidScalar)?;
+        if bool::from(x_scalar.is_zero()) {
+            return Err(Error::InvalidScalar);
+        }
+        Ok(Self {
+            state: State::AwaitingStartNegotiation {
+                pin,
+                x_scalar,
+                initiator_random,
+            },
+        })
+    }
+
     /// Construct a prover with PBKDF parameters already known (skips negotiation;
     /// first message is Pake1).
     ///
@@ -235,6 +269,44 @@ impl PaseProver {
     ) -> Result<Self> {
         validate_params(params.iterations, &params.salt)?;
         let x_scalar = sample_scalar(rng)?;
+        Ok(Self {
+            state: State::AwaitingStartKnownParams {
+                pin,
+                params,
+                x_scalar,
+            },
+        })
+    }
+
+    /// Deterministic constructor for testing — injects a fixed `x` scalar
+    /// directly, bypassing the RNG.
+    ///
+    /// Used by `test_support` to construct a prover with a known scalar for
+    /// matter.js byte-parity tests. `x_scalar_bytes` must be a valid non-zero
+    /// P-256 scalar in big-endian representation.
+    ///
+    /// Production code should always use
+    /// [`new_with_known_params`][Self::new_with_known_params].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::PbkdfIterationsTooLow`] if `params.iterations < 1000`.
+    /// - [`Error::PbkdfSaltLengthInvalid`] if `params.salt.len()` ∉ \[16, 32\].
+    /// - [`Error::InvalidScalar`] if `x_scalar_bytes` is zero or not a valid
+    ///   P-256 scalar.
+    pub(crate) fn new_with_known_params_with_scalar(
+        pin: u32,
+        params: PasePbkdfParams,
+        x_scalar_bytes: [u8; 32],
+    ) -> Result<Self> {
+        use p256::elliptic_curve::group::ff::{Field, PrimeField};
+        validate_params(params.iterations, &params.salt)?;
+        let x_scalar_opt: Option<p256::Scalar> =
+            p256::Scalar::from_repr(p256::FieldBytes::from(x_scalar_bytes)).into();
+        let x_scalar = x_scalar_opt.ok_or(Error::InvalidScalar)?;
+        if bool::from(x_scalar.is_zero()) {
+            return Err(Error::InvalidScalar);
+        }
         Ok(Self {
             state: State::AwaitingStartKnownParams {
                 pin,

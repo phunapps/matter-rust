@@ -280,14 +280,110 @@ impl PaseVerifier {
     /// - [`Error::PinDerivationFailed`] if PBKDF2 fails.
     /// - [`Error::InvalidScalar`] if the CSPRNG is broken.
     pub fn new_from_pin(pin: u32, params: PasePbkdfParams) -> Result<Self> {
+        let rng = SystemRandom::new();
+        Self::new_from_pin_using_rng(pin, params, &rng)
+    }
+
+    /// Deterministic constructor for testing — derives `w0`/`L` from the PIN
+    /// and accepts an injectable RNG for the SPAKE2+ scalar and nonce.
+    ///
+    /// Production code should always use [`new_from_pin`][Self::new_from_pin].
+    pub(crate) fn new_from_pin_using_rng(
+        pin: u32,
+        params: PasePbkdfParams,
+        rng: &dyn SecureRandom,
+    ) -> Result<Self> {
         let (w0_scalar, w1_scalar) = derive_w0_w1(pin, &params.salt, params.iterations)?;
         let l = derive_l(&w1_scalar);
-        // Encode w0 as 32-byte big-endian for the `new` constructor.
+        // Encode w0 as 32-byte big-endian for the `new_using_rng` constructor.
         // `Scalar::to_bytes()` returns `FieldBytes` in big-endian order.
         let w0_be: p256::FieldBytes = w0_scalar.to_bytes();
         let mut w0_arr = [0u8; 32];
         w0_arr.copy_from_slice(&w0_be);
-        Self::new(w0_arr, l, params)
+        Self::new_using_rng(w0_arr, l, params, rng)
+    }
+
+    /// Deterministic constructor for testing — injects a fixed `y` scalar
+    /// directly, bypassing the RNG. Accepts pre-computed `w0` and `L`.
+    ///
+    /// Used by `test_support` to construct a verifier with a known scalar for
+    /// matter.js byte-parity tests. `y_scalar_bytes` must be a valid non-zero
+    /// P-256 scalar in big-endian representation.
+    ///
+    /// Production code should always use [`new`][Self::new].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::PbkdfIterationsTooLow`] / [`Error::PbkdfSaltLengthInvalid`]
+    ///   if `params` are out of spec.
+    /// - [`Error::InvalidScalar`] if `w0_bytes` or `y_scalar_bytes` is zero or
+    ///   not a valid P-256 scalar.
+    /// - [`Error::PinDerivationFailed`] on nonce generation failure.
+    pub(crate) fn new_with_scalar(
+        w0_bytes: [u8; 32],
+        l: [u8; 65],
+        params: PasePbkdfParams,
+        y_scalar_bytes: [u8; 32],
+    ) -> Result<Self> {
+        use p256::elliptic_curve::group::ff::Field;
+        validate_params(params.iterations, &params.salt)?;
+
+        let w0_opt: Option<p256::Scalar> =
+            p256::Scalar::from_repr(p256::FieldBytes::from(w0_bytes)).into();
+        let w0 = w0_opt.ok_or(Error::InvalidScalar)?;
+        if bool::from(w0.is_zero()) {
+            return Err(Error::InvalidScalar);
+        }
+
+        let y_opt: Option<p256::Scalar> =
+            p256::Scalar::from_repr(p256::FieldBytes::from(y_scalar_bytes)).into();
+        let y_scalar = y_opt.ok_or(Error::InvalidScalar)?;
+        if bool::from(y_scalar.is_zero()) {
+            return Err(Error::InvalidScalar);
+        }
+
+        // Use a fixed all-zero responder random — this value is only used in
+        // the negotiation-path PBKDF response and has no cryptographic impact
+        // in the known-params path.
+        let responder_random = [0u8; 32];
+
+        Ok(Self {
+            state: State::AwaitingFirstMessage {
+                w0,
+                l,
+                params,
+                y_scalar,
+                responder_random,
+            },
+        })
+    }
+
+    /// Deterministic constructor for testing — derives `w0`/`L` from the PIN
+    /// and injects a fixed `y` scalar directly, bypassing the RNG.
+    ///
+    /// Used by `test_support` to construct a verifier with a known scalar for
+    /// matter.js byte-parity tests.
+    ///
+    /// Production code should always use [`new_from_pin`][Self::new_from_pin].
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::PbkdfIterationsTooLow`] / [`Error::PbkdfSaltLengthInvalid`]
+    ///   if `params` are out of spec.
+    /// - [`Error::PinDerivationFailed`] if PBKDF2 fails.
+    /// - [`Error::InvalidScalar`] if `y_scalar_bytes` is zero or not a valid
+    ///   P-256 scalar.
+    pub(crate) fn new_from_pin_with_scalar(
+        pin: u32,
+        params: PasePbkdfParams,
+        y_scalar_bytes: [u8; 32],
+    ) -> Result<Self> {
+        let (w0_scalar, w1_scalar) = derive_w0_w1(pin, &params.salt, params.iterations)?;
+        let l = derive_l(&w1_scalar);
+        let w0_be: p256::FieldBytes = w0_scalar.to_bytes();
+        let mut w0_arr = [0u8; 32];
+        w0_arr.copy_from_slice(&w0_be);
+        Self::new_with_scalar(w0_arr, l, params, y_scalar_bytes)
     }
 
     // ─── State inspection ─────────────────────────────────────────────────
