@@ -1,6 +1,6 @@
 [package]
 name = "matter-crypto"
-version = "0.0.0"
+version = "0.1.0-pre"
 description = "Matter protocol session establishment: PASE (SPAKE2+) and CASE (SIGMA)."
 edition.workspace = true
 rust-version.workspace = true
@@ -37,4 +37,4 @@ serde_json = "1.0"
 # Self-reference so test compilation enables the test-support feature,
 # making the test_support module visible to tests/* without exposing
 # it to downstream crates.
-matter-crypto = { path = ".", version = "0.0.0", features = ["test-support"] }
+matter-crypto = { path = ".", version = "0.1.0-pre", features = ["test-support"] }
