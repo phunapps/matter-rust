@@ -38,9 +38,9 @@ pub enum CaseMessageKind {
 /// Operational identity for a CASE session.
 ///
 /// Packages the things that identify a participant on a fabric:
-/// NOC, optional ICAC, signer for the NOC's private key, and the
-/// claimed `FabricId` + `NodeId`. Consumed by both `CaseInitiator::new`
-/// and `CaseResponder::new`.
+/// NOC, optional ICAC, signer for the NOC's private key, the
+/// claimed `FabricId` + `NodeId`, and the fabric-scoped IPK.
+/// Consumed by both `CaseInitiator::new` and `CaseResponder::new`.
 #[derive(Debug)]
 pub struct CaseCredentials {
     /// Node Operational Certificate. Issued by this fabric's CA chain.
@@ -56,6 +56,16 @@ pub struct CaseCredentials {
     /// Node ID this identity is associated with. Cross-checked against
     /// the `NodeId` attribute in the NOC's subject DN.
     pub node_id: u64,
+    /// 16-byte fabric-scoped Identity Protection Key (IPK).
+    ///
+    /// Used as the HKDF salt in CASE key derivations (`DestinationId`, S2RK,
+    /// S3SK, and attestation-challenge). Provides cross-fabric domain
+    /// separation: two fabrics sharing a NOC but using different IPKs cannot
+    /// impersonate each other. The IPK is derived during commissioning (M6
+    /// fabric storage persists it alongside the NOC).
+    ///
+    /// Pinned from matter.js: `operationalIdentityProtectionKey` (16 bytes).
+    pub ipk: [u8; 16],
 }
 
 /// Output of a successful CASE handshake.
