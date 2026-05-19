@@ -75,7 +75,9 @@ pub fn prover_with_scalar_and_random(
 ///
 /// In production a device stores `w0` and `L` at provisioning time (not the
 /// PIN). This constructor mirrors [`PaseVerifier::new`] but injects a fixed
-/// `y` scalar for deterministic testing.
+/// `y` scalar for deterministic testing. Uses an all-zero `responder_random`
+/// and `responder_session_id = 0`; for full byte-parity use
+/// [`verifier_with_scalar_and_random`] instead.
 ///
 /// # Parameters
 ///
@@ -97,6 +99,71 @@ pub fn verifier_with_scalar(
     y_scalar: [u8; 32],
 ) -> Result<PaseVerifier> {
     PaseVerifier::new_with_scalar(w0, l, params, y_scalar)
+}
+
+/// Construct a [`PaseVerifier`] from pre-computed verification values, with
+/// a fixed `y` scalar, `responder_random`, and `responder_session_id`.
+///
+/// Used by the M3.3 byte-parity test harness to reproduce `PBKDFParamResponse`
+/// bytes exactly as captured from a matter.js run with a deterministic RNG.
+///
+/// # Parameters
+///
+/// - `w0`: 32-byte big-endian P-256 scalar derived from the PIN.
+/// - `l`: 65-byte uncompressed P-256 point `L = w1·P`.
+/// - `params`: PBKDF2 parameters used when `w0`/`L` were derived.
+/// - `y_scalar`: the fixed 32-byte scalar to use instead of a random one.
+/// - `responder_random`: the fixed 32-byte responder nonce to embed in the response.
+/// - `responder_session_id`: the session ID to embed in the `PBKDFParamResponse`.
+///
+/// # Errors
+///
+/// - [`crate::Error::PbkdfIterationsTooLow`] if `params.iterations < 1000`.
+/// - [`crate::Error::PbkdfSaltLengthInvalid`] if `params.salt.len()` ∉ \[16, 32\].
+/// - [`crate::Error::InvalidScalar`] if `w0` or `y_scalar` is zero or not a
+///   valid P-256 scalar.
+pub fn verifier_with_scalar_and_random(
+    w0: [u8; 32],
+    l: [u8; 65],
+    params: PasePbkdfParams,
+    y_scalar: [u8; 32],
+    responder_random: [u8; 32],
+    responder_session_id: u16,
+) -> Result<PaseVerifier> {
+    PaseVerifier::new_with_scalar_and_random(
+        w0,
+        l,
+        params,
+        y_scalar,
+        responder_random,
+        responder_session_id,
+    )
+}
+
+/// Construct a [`PaseProver`] (negotiation path) with a fixed `x` scalar,
+/// `initiator_random`, and `initiator_session_id`.
+///
+/// The prover's first outbound message (after calling [`PaseProver::start`])
+/// will be `PBKDFParamRequest`, carrying the fixed `initiator_random` and
+/// `initiator_session_id`. Used in M3.3 byte-parity tests to reproduce the
+/// exact `PBKDFParamRequest` bytes captured from matter.js.
+///
+/// # Errors
+///
+/// - [`crate::Error::InvalidScalar`] if `x_scalar` is zero or not a valid
+///   P-256 scalar (i.e., ≥ curve order).
+pub fn prover_with_scalar_random_and_session_id(
+    pin: u32,
+    x_scalar: [u8; 32],
+    initiator_random: [u8; 32],
+    initiator_session_id: u16,
+) -> Result<PaseProver> {
+    PaseProver::new_with_negotiation_with_scalar_and_session_id(
+        pin,
+        x_scalar,
+        initiator_random,
+        initiator_session_id,
+    )
 }
 
 /// Construct a [`PaseVerifier`] from a PIN with a fixed `y` scalar.
