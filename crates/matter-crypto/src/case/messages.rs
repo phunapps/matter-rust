@@ -7,27 +7,34 @@
 //! # Tag numbers (pinned from matter.js `CaseMessages.ts`, 2026-05-19)
 //!
 //! ```text
-//! Message   Field                       Context tag   Length constraint
-//! ───────────────────────────────────────────────────────────────────────
-//! Sigma1    initiator_random            1             32 bytes
-//! Sigma1    initiator_session_id        2             u16
-//! Sigma1    dest_id                     3             32 bytes (CRYPTO_HASH_LEN_BYTES)
-//! Sigma1    initiator_eph_pub           4             65 bytes (CRYPTO_PUBLIC_KEY_SIZE_BYTES)
-//! Sigma1    initiator_session_params    5 (opt)       structure (pass-through)
-//! Sigma1    resumption_id               6 (opt)       16 bytes
-//! Sigma1    initiator_resume_mic        7 (opt)       16 bytes (CRYPTO_AEAD_MIC_LENGTH_BYTES)
-//! ───────────────────────────────────────────────────────────────────────
-//! Sigma2    responder_random            1             32 bytes
-//! Sigma2    responder_session_id        2             u16
-//! Sigma2    responder_eph_pub           3             65 bytes (CRYPTO_PUBLIC_KEY_SIZE_BYTES)
-//! Sigma2    encrypted                   4             variable bytes (opaque blob)
-//! Sigma2    responder_session_params    5 (opt)       structure (pass-through)
-//! ───────────────────────────────────────────────────────────────────────
-//! Sigma3    encrypted                   1             variable bytes (opaque blob)
-//! ───────────────────────────────────────────────────────────────────────
+//! Message        Field                       Context tag   Length constraint
+//! ─────────────────────────────────────────────────────────────────────────────
+//! Sigma1         initiator_random            1             32 bytes
+//! Sigma1         initiator_session_id        2             u16
+//! Sigma1         dest_id                     3             32 bytes (CRYPTO_HASH_LEN_BYTES)
+//! Sigma1         initiator_eph_pub           4             65 bytes (CRYPTO_PUBLIC_KEY_SIZE_BYTES)
+//! Sigma1         initiator_session_params    5 (opt)       structure (pass-through)
+//! Sigma1         resumption_id               6 (opt)       16 bytes
+//! Sigma1         initiator_resume_mic        7 (opt)       16 bytes (CRYPTO_AEAD_MIC_LENGTH_BYTES)
+//! ─────────────────────────────────────────────────────────────────────────────
+//! Sigma2         responder_random            1             32 bytes
+//! Sigma2         responder_session_id        2             u16
+//! Sigma2         responder_eph_pub           3             65 bytes (CRYPTO_PUBLIC_KEY_SIZE_BYTES)
+//! Sigma2         encrypted                   4             variable bytes (opaque blob)
+//! Sigma2         responder_session_params    5 (opt)       structure (pass-through)
+//! ─────────────────────────────────────────────────────────────────────────────
+//! Sigma2Resume   resumption_id               1             16 bytes
+//! Sigma2Resume   resume_mic                  2             16 bytes (CRYPTO_AEAD_MIC_LENGTH_BYTES)
+//! Sigma2Resume   responder_session_id        3             u16
+//! Sigma2Resume   responder_session_params    4 (opt)       structure (pass-through)
+//! ─────────────────────────────────────────────────────────────────────────────
+//! Sigma3         encrypted                   1             variable bytes (opaque blob)
+//! ─────────────────────────────────────────────────────────────────────────────
 //! ```
 //!
-//! `Sigma2_Resume` and `Sigma3_Resume` land in M4.2; they are not present here.
+//! Note: `Sigma3_Resume` does NOT exist as a wire message in matter.js.
+//! After the initiator verifies `Sigma2_Resume.resume_mic`, it sends a plain
+//! `Status=Success` message (handled by the transport layer, not this codec).
 //!
 //! # `SessionParams` (M4 pass-through, same as M3)
 //!
@@ -610,6 +617,152 @@ impl Sigma2 {
 }
 
 // ---------------------------------------------------------------------------
+// Sigma2Resume
+// ---------------------------------------------------------------------------
+
+/// The resumption response message: responder → initiator.
+///
+/// Sent instead of [`Sigma2`] when the responder successfully validates
+/// `sigma1_resume_mic` from a [`Sigma1`] that carried resumption fields.
+///
+/// After the initiator verifies `resume_mic` from this message it sends a
+/// plain `Status=Success` transport message. There is **no** `Sigma3_Resume`
+/// wire message — the protocol ends here.
+///
+/// Wire format: anonymous TLV structure, context tags 1–3, optional tag 4.
+///
+/// # matter.js cross-reference
+///
+/// `TlvCaseSigma2Resume` from `CaseMessages.ts`:
+/// ```ts
+/// TlvCaseSigma2Resume = TlvObject({
+///     1: resumptionId     (bytes, length=16),
+///     2: resumeMic        (bytes, length=16),
+///     3: responderSessionId (uint16),
+///     4: responderSessionParams (optional struct),
+/// })
+/// ```
+///
+/// # Matter spec reference
+/// Matter Core Spec §4.13.2.3 (`Sigma2_Resume` TLV structure).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Sigma2Resume {
+    /// 16-byte new resumption ID generated by the responder. Context tag 1.
+    ///
+    /// This replaces the old `resumption_id` in the caller's record after
+    /// the handshake completes.
+    pub resumption_id: [u8; RESUMPTION_ID_LEN],
+    /// 16-byte AES-128-CCM MAC tag computed by the responder. Context tag 2.
+    ///
+    /// Called `resumeMic` in matter.js. Verifier uses
+    /// [`super::sigma::verify_sigma2_resume_mic`].
+    pub resume_mic: [u8; RESUME_MIC_LEN],
+    /// Session ID proposed by the responder. Context tag 3.
+    pub responder_session_id: u16,
+    /// Optional session-capability advertisement. Context tag 4.
+    pub responder_session_params: Option<SessionParams>,
+}
+
+impl Sigma2Resume {
+    /// Encode this message as wire TLV bytes.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
+    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous)?;
+            w.put_bytes(Tag::Context(1), &self.resumption_id)?;
+            w.put_bytes(Tag::Context(2), &self.resume_mic)?;
+            w.put_uint(Tag::Context(3), u64::from(self.responder_session_id))?;
+            // Writer dropped here; buf is exclusively owned again.
+        }
+        // Append optional session params sub-element (context tag 4, raw bytes).
+        if let Some(sp) = &self.responder_session_params {
+            buf.extend_from_slice(&sp.raw_tlv);
+        }
+        // Close the outer anonymous structure.
+        buf.push(END_CONTAINER_BYTE);
+        Ok(buf)
+    }
+
+    /// Decode wire TLV bytes into a `Sigma2Resume`.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::InvalidParameter`] if a required field is absent, an
+    ///   unexpected context tag is present, or a byte-string has the wrong
+    ///   fixed length.
+    /// - [`Error::Codec`] on malformed TLV.
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+        let mut reader = TlvReader::new(bytes);
+        expect_anon_struct_start(&mut reader)?;
+
+        let mut resumption_id: Option<[u8; RESUMPTION_ID_LEN]> = None;
+        let mut resume_mic: Option<[u8; RESUME_MIC_LEN]> = None;
+        let mut responder_session_id: Option<u16> = None;
+        let mut responder_session_params: Option<SessionParams> = None;
+
+        loop {
+            match reader.next()? {
+                Some(Element::ContainerEnd) => break,
+
+                // Tag 1: resumption_id (16 bytes)
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Bytes(b),
+                }) => {
+                    let arr: [u8; RESUMPTION_ID_LEN] =
+                        b.try_into().map_err(|_| Error::InvalidParameter)?;
+                    resumption_id = Some(arr);
+                }
+
+                // Tag 2: resume_mic (16 bytes)
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Bytes(b),
+                }) => {
+                    let arr: [u8; RESUME_MIC_LEN] =
+                        b.try_into().map_err(|_| Error::InvalidParameter)?;
+                    resume_mic = Some(arr);
+                }
+
+                // Tag 3: responder_session_id (u16)
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Uint(v),
+                }) => {
+                    responder_session_id =
+                        Some(u16::try_from(v).map_err(|_| Error::InvalidParameter)?);
+                }
+
+                // Tag 4: responder_session_params (optional structure, pass-through)
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(4),
+                    kind: ContainerKind::Structure,
+                }) => {
+                    let raw = skip_and_capture_substructure(bytes, &mut reader, 4)?;
+                    responder_session_params = Some(SessionParams { raw_tlv: raw });
+                }
+
+                // Any unrecognised tag or unexpected element type.
+                // `Element` is `#[non_exhaustive]` so `Some(_)` is required.
+                None | Some(_) => return Err(Error::InvalidParameter),
+            }
+        }
+
+        Ok(Self {
+            resumption_id: resumption_id.ok_or(Error::InvalidParameter)?,
+            resume_mic: resume_mic.ok_or(Error::InvalidParameter)?,
+            responder_session_id: responder_session_id.ok_or(Error::InvalidParameter)?,
+            responder_session_params,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sigma3
 // ---------------------------------------------------------------------------
 
@@ -888,6 +1041,117 @@ mod tests {
         // tag 4 intentionally omitted
         w.end_container().unwrap();
         assert!(matches!(Sigma2::decode(&buf), Err(Error::InvalidParameter)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Sigma2Resume
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sigma2resume_roundtrip() {
+        let msg = Sigma2Resume {
+            resumption_id: [0xA1; 16],
+            resume_mic: [0xB2; 16],
+            responder_session_id: 0x9900,
+            responder_session_params: None,
+        };
+        let bytes = msg.encode().unwrap();
+        let decoded = Sigma2Resume::decode(&bytes).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn sigma2resume_with_session_params_roundtrips() {
+        let msg = Sigma2Resume {
+            resumption_id: [0xC3; 16],
+            resume_mic: [0xD4; 16],
+            responder_session_id: 0x1234,
+            responder_session_params: Some(minimal_session_params(4)),
+        };
+        let bytes = msg.encode().unwrap();
+        let decoded = Sigma2Resume::decode(&bytes).unwrap();
+        assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn sigma2resume_rejects_missing_resumption_id() {
+        // Omit tag 1 (resumption_id).
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        // tag 1 intentionally omitted
+        w.put_bytes(Tag::Context(2), &[0xB2u8; 16]).unwrap();
+        w.put_uint(Tag::Context(3), 0x9900_u64).unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            Sigma2Resume::decode(&buf),
+            Err(Error::InvalidParameter)
+        ));
+    }
+
+    #[test]
+    fn sigma2resume_rejects_missing_resume_mic() {
+        // Omit tag 2 (resume_mic).
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xA1u8; 16]).unwrap();
+        // tag 2 intentionally omitted
+        w.put_uint(Tag::Context(3), 0x9900_u64).unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            Sigma2Resume::decode(&buf),
+            Err(Error::InvalidParameter)
+        ));
+    }
+
+    #[test]
+    fn sigma2resume_rejects_wrong_resumption_id_length() {
+        // resumption_id must be exactly 16 bytes; send 15.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xA1u8; 15]).unwrap(); // wrong length
+        w.put_bytes(Tag::Context(2), &[0xB2u8; 16]).unwrap();
+        w.put_uint(Tag::Context(3), 0x9900_u64).unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            Sigma2Resume::decode(&buf),
+            Err(Error::InvalidParameter)
+        ));
+    }
+
+    #[test]
+    fn sigma2resume_rejects_wrong_resume_mic_length() {
+        // resume_mic must be exactly 16 bytes; send 17.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xA1u8; 16]).unwrap();
+        w.put_bytes(Tag::Context(2), &[0xB2u8; 17]).unwrap(); // wrong length
+        w.put_uint(Tag::Context(3), 0x9900_u64).unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            Sigma2Resume::decode(&buf),
+            Err(Error::InvalidParameter)
+        ));
+    }
+
+    #[test]
+    fn sigma2resume_rejects_extra_field() {
+        // Tag 5 is outside the spec; decoder must reject it.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xA1u8; 16]).unwrap();
+        w.put_bytes(Tag::Context(2), &[0xB2u8; 16]).unwrap();
+        w.put_uint(Tag::Context(3), 0x9900_u64).unwrap();
+        w.put_uint(Tag::Context(5), 42_u64).unwrap(); // unknown tag
+        w.end_container().unwrap();
+        assert!(matches!(
+            Sigma2Resume::decode(&buf),
+            Err(Error::InvalidParameter)
+        ));
     }
 
     // -----------------------------------------------------------------------
