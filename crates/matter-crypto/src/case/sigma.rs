@@ -100,14 +100,23 @@ pub(crate) const HKDF_INFO_SIGMA3: &[u8] = b"Sigma3";
 /// HKDF info for deriving the `Sigma1_Resume` resumption key.
 ///
 /// `KDFSR1_KEY_INFO = Bytes.fromString("Sigma1_Resume")` in matter.js.
-#[allow(dead_code)] // M4.2: consumed by session resumption key derivation.
+#[allow(dead_code)] // M4.3: consumed by the CaseInitiator / CaseResponder resumption paths.
 pub(crate) const HKDF_INFO_SIGMA1_RESUME: &[u8] = b"Sigma1_Resume";
 
 /// HKDF info for deriving the `Sigma2_Resume` resumption key.
 ///
 /// `KDFSR2_KEY_INFO = Bytes.fromString("Sigma2_Resume")` in matter.js.
-#[allow(dead_code)] // M4.2: consumed by session resumption key derivation.
+#[allow(dead_code)] // M4.3: consumed by the CaseInitiator / CaseResponder resumption paths.
 pub(crate) const HKDF_INFO_SIGMA2_RESUME: &[u8] = b"Sigma2_Resume";
+
+/// HKDF info for deriving session keys on the resumption path.
+///
+/// Pinned from matter.js `NodeSession.ts`:
+/// `SESSION_RESUMPTION_KEYS_INFO = Bytes.fromString("SessionResumptionKeys")`
+///
+/// Used instead of `"SessionKeys"` when `isResumption = true`.
+#[allow(dead_code)] // M4.3: consumed by the CaseInitiator / CaseResponder resumption paths.
+pub(crate) const HKDF_INFO_RESUMPTION_SESSION_KEYS: &[u8] = b"SessionResumptionKeys";
 
 // ---------------------------------------------------------------------------
 // AEAD nonces — exact UTF-8 bytes as used by matter.js.
@@ -127,13 +136,13 @@ pub(crate) const NONCE_TBE_DATA3: &[u8; AEAD_NONCE_LEN] = b"NCASE_Sigma3N";
 /// AEAD nonce for the `Sigma1_Resume` MIC (resumption MAC).
 ///
 /// `RESUME1_MIC_NONCE = Bytes.fromString("NCASE_SigmaS1")` — 13 bytes.
-#[allow(dead_code)] // M4.2: consumed by the Sigma1_Resume / Sigma2_Resume path.
+#[allow(dead_code)] // M4.3: consumed by the CaseInitiator / CaseResponder resumption paths.
 pub(crate) const NONCE_RESUME1_MIC: &[u8; AEAD_NONCE_LEN] = b"NCASE_SigmaS1";
 
 /// AEAD nonce for the `Sigma2_Resume` MIC (resumption MAC).
 ///
 /// `RESUME2_MIC_NONCE = Bytes.fromString("NCASE_SigmaS2")` — 13 bytes.
-#[allow(dead_code)] // M4.2: consumed by the Sigma1_Resume / Sigma2_Resume path.
+#[allow(dead_code)] // M4.3: consumed by the CaseInitiator / CaseResponder resumption paths.
 pub(crate) const NONCE_RESUME2_MIC: &[u8; AEAD_NONCE_LEN] = b"NCASE_SigmaS2";
 
 // =============================================================================
@@ -222,7 +231,7 @@ pub(crate) fn ecdh_shared_secret(
 /// Returns an error only if `out.len()` exceeds ring's HKDF output limit
 /// (255 × hash-length = 8160 bytes for SHA-256), which is impossible for
 /// any Matter message length.
-#[allow(dead_code)] // M4.2: used by session resumption key derivation.
+#[allow(dead_code)] // M4.3: consumed by the resumption session-key derivation path.
 pub(crate) fn hkdf_expand(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<()> {
     let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]);
     let prk_obj = salt.extract(prk);
@@ -384,13 +393,248 @@ pub(crate) fn aead_decrypt(
 /// # Errors
 ///
 /// Returns [`Error::ResumptionMacMismatch`] if the tags differ.
-#[allow(dead_code)] // M4.2: consumed by Sigma1_Resume / Sigma2_Resume MAC verification.
+#[allow(dead_code)] // M4.3: consumed via verify_sigma1/sigma2_resume_mic.
 pub(crate) fn verify_mac(expected: &[u8; 16], received: &[u8; 16]) -> Result<()> {
     if expected.ct_eq(received).unwrap_u8() == 1 {
         Ok(())
     } else {
         Err(Error::ResumptionMacMismatch)
     }
+}
+
+// =============================================================================
+// Resumption math — Sigma1_Resume / Sigma2_Resume MICs + session keys
+//
+// These helpers implement the resumption-specific cryptographic equations
+// pinned from matter.js CaseClient.js / CaseServer.js / NodeSession.js.
+//
+// IMPORTANT design note — how the MIC is computed:
+//   matter.js: `crypto.encrypt(resumeKey, new Uint8Array(0), RESUME1_MIC_NONCE)`
+//   This is AES-128-CCM(key, plaintext=[], nonce=..., aad=[]) → 16-byte tag only.
+//   There is no additional AAD. The MAC is purely over the empty plaintext.
+//   The domain separation is achieved by:
+//     (a) using a different HKDF salt for each direction's key, and
+//     (b) using different nonces for Sigma1 vs Sigma2.
+//
+// Key derivation salt layout (pinned from matter.js CaseClient.js):
+//   sigma1_resume_key_salt = initiatorRandom || resumptionId
+//   sigma2_resume_key_salt = initiatorRandom || newResumptionId   (responder's fresh ID)
+//
+// Session key derivation for resumed sessions (NodeSession.js):
+//   salt = initiatorRandom || resumptionId   (the OLD id, from the record)
+//   info = "SessionResumptionKeys"            (not "SessionKeys")
+//   len  = 48 bytes
+//   layout: [0..16] = r2i_key, [16..32] = i2r_key, [32..48] = attestation_challenge
+// =============================================================================
+
+/// Derive the resumption key used to compute or verify `sigma1_resume_mic`.
+///
+/// matter.js (CaseClient.js): `crypto.createHkdfKey(sharedSecret,
+///   Bytes.concat(initiatorRandom, resumptionId), KDFSR1_KEY_INFO)`
+///
+/// # Errors
+///
+/// Returns [`Error::EphemeralKeyGenerationFailed`] if HKDF fails (only
+/// possible if output length exceeds ring's limit — impossible here).
+#[allow(dead_code)]
+fn derive_sigma1_resume_key(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    resumption_id: &[u8; 16],
+) -> Result<[u8; AEAD_KEY_LEN]> {
+    // salt = initiatorRandom || resumptionId (48 bytes total).
+    let mut salt = [0u8; 48];
+    salt[..32].copy_from_slice(initiator_random);
+    salt[32..].copy_from_slice(resumption_id);
+
+    let mut key = [0u8; AEAD_KEY_LEN];
+    hkdf_derive(shared_secret, &salt, HKDF_INFO_SIGMA1_RESUME, &mut key)?;
+    Ok(key)
+}
+
+/// Derive the resumption key used to compute or verify `sigma2_resume_mic`.
+///
+/// matter.js (CaseServer.js `#resume`):
+/// `crypto.createHkdfKey(sharedSecret,
+///   Bytes.concat(cx.peerRandom, cx.localResumptionId), KDFSR2_KEY_INFO)`
+///
+/// Note: `new_resumption_id` is the **responder's** freshly-generated ID
+/// that will replace the old record's ID on the next resumption.
+///
+/// # Errors
+///
+/// Returns [`Error::EphemeralKeyGenerationFailed`] if HKDF fails.
+#[allow(dead_code)]
+fn derive_sigma2_resume_key(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    new_resumption_id: &[u8; 16],
+) -> Result<[u8; AEAD_KEY_LEN]> {
+    // salt = initiatorRandom || newResumptionId (48 bytes total).
+    let mut salt = [0u8; 48];
+    salt[..32].copy_from_slice(initiator_random);
+    salt[32..].copy_from_slice(new_resumption_id);
+
+    let mut key = [0u8; AEAD_KEY_LEN];
+    hkdf_derive(shared_secret, &salt, HKDF_INFO_SIGMA2_RESUME, &mut key)?;
+    Ok(key)
+}
+
+/// Compute the 16-byte `sigma1_resume_mic` (called `initiatorResumeMic`
+/// in matter.js).
+///
+/// This is the AES-128-CCM tag over an **empty plaintext** (no AAD):
+/// `AES-128-CCM(key=S1RK, nonce="NCASE_SigmaS1", plaintext=[])`.
+/// The tag is the only output — there is no ciphertext.
+///
+/// # Arguments
+///
+/// * `shared_secret` — 16-byte shared secret from the resumption record.
+/// * `initiator_random` — 32-byte random from the Sigma1 message.
+/// * `resumption_id` — 16-byte resumption ID from the resumption record.
+///
+/// # Errors
+///
+/// Returns [`Error::EphemeralKeyGenerationFailed`] on AES-CCM failure
+/// (impossible in practice for valid key/nonce lengths).
+#[allow(dead_code)] // M4.3: consumed by CaseInitiator::start (resumption path).
+pub(crate) fn compute_sigma1_resume_mic(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    resumption_id: &[u8; 16],
+) -> Result<[u8; 16]> {
+    let key = derive_sigma1_resume_key(shared_secret, initiator_random, resumption_id)?;
+    // Encrypt empty plaintext; the entire output is the 16-byte tag.
+    let tag_bytes = aead_encrypt(&key, NONCE_RESUME1_MIC, &[], &[])?;
+    // `aead_encrypt` of empty plaintext produces exactly 16 bytes (just the tag).
+    let tag: [u8; 16] = tag_bytes
+        .try_into()
+        .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+    Ok(tag)
+}
+
+/// Verify a received `sigma1_resume_mic` in constant time.
+///
+/// Recomputes the expected MIC from `shared_secret`, `initiator_random`, and
+/// `resumption_id`, then compares against `received_mic` via
+/// [`verify_mac`] (constant-time).
+///
+/// # Errors
+///
+/// - [`Error::EphemeralKeyGenerationFailed`] if key derivation fails.
+/// - [`Error::ResumptionMacMismatch`] if the MIC does not match.
+#[allow(dead_code)] // M4.3: consumed by CaseResponder::handle_sigma1 (resumption path).
+pub(crate) fn verify_sigma1_resume_mic(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    resumption_id: &[u8; 16],
+    received_mic: &[u8; 16],
+) -> Result<()> {
+    let expected = compute_sigma1_resume_mic(shared_secret, initiator_random, resumption_id)?;
+    verify_mac(&expected, received_mic)
+}
+
+/// Compute the 16-byte `sigma2_resume_mic` (called `resumeMic` in matter.js).
+///
+/// This is the AES-128-CCM tag over an **empty plaintext** (no AAD):
+/// `AES-128-CCM(key=S2RK, nonce="NCASE_SigmaS2", plaintext=[])`.
+///
+/// # Arguments
+///
+/// * `shared_secret` — 16-byte shared secret from the resumption record.
+/// * `initiator_random` — 32-byte random from the Sigma1 message.
+/// * `new_resumption_id` — 16-byte **new** resumption ID generated by the
+///   responder for this `Sigma2_Resume` message. This becomes the record ID
+///   after the handshake completes.
+///
+/// # Errors
+///
+/// Returns [`Error::EphemeralKeyGenerationFailed`] on AES-CCM failure.
+#[allow(dead_code)] // M4.3: consumed by CaseResponder::accept_resumption.
+pub(crate) fn compute_sigma2_resume_mic(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    new_resumption_id: &[u8; 16],
+) -> Result<[u8; 16]> {
+    let key = derive_sigma2_resume_key(shared_secret, initiator_random, new_resumption_id)?;
+    let tag_bytes = aead_encrypt(&key, NONCE_RESUME2_MIC, &[], &[])?;
+    let tag: [u8; 16] = tag_bytes
+        .try_into()
+        .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+    Ok(tag)
+}
+
+/// Verify a received `sigma2_resume_mic` in constant time.
+///
+/// Recomputes the expected MIC and compares against `received_mic` via
+/// [`verify_mac`] (constant-time).
+///
+/// # Errors
+///
+/// - [`Error::EphemeralKeyGenerationFailed`] if key derivation fails.
+/// - [`Error::ResumptionMacMismatch`] if the MIC does not match.
+#[allow(dead_code)] // M4.3: consumed by CaseInitiator::handle_sigma2_resume.
+pub(crate) fn verify_sigma2_resume_mic(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    new_resumption_id: &[u8; 16],
+    received_mic: &[u8; 16],
+) -> Result<()> {
+    let expected = compute_sigma2_resume_mic(shared_secret, initiator_random, new_resumption_id)?;
+    verify_mac(&expected, received_mic)
+}
+
+/// Derive the 48-byte session key material for a **resumed** CASE session.
+///
+/// Pinned from matter.js `NodeSession.create` (NodeSession.js):
+/// ```text
+/// const keys = crypto.createHkdfKey(
+///     sharedSecret,
+///     salt:  initiatorRandom || oldResumptionId,
+///     info:  "SessionResumptionKeys",
+///     len:   48,
+/// )
+/// // layout (same for both sides — direction swapped by isInitiator flag):
+/// // [0..16]  = r2i_key
+/// // [16..32] = i2r_key
+/// // [32..48] = attestation_challenge
+/// ```
+///
+/// The `old_resumption_id` here is the ID that was in the resumption record
+/// **before** this resumption (i.e., the one the initiator sent in Sigma1
+/// tag 6). This matches how matter.js forms `secureSessionSalt`:
+/// `Bytes.concat(cx.peerRandom, cx.peerResumptionId)`.
+///
+/// # Returns
+///
+/// 48-byte array. Slices:
+/// - `[0..16]`  — r2i encryption key (responder-to-initiator)
+/// - `[16..32]` — i2r encryption key (initiator-to-responder)
+/// - `[32..48]` — attestation challenge
+///
+/// # Errors
+///
+/// Returns [`Error::EphemeralKeyGenerationFailed`] if HKDF fails (impossible
+/// for valid input sizes).
+#[allow(dead_code)] // M4.3: consumed by CaseInitiator and CaseResponder on the resumption path.
+pub(crate) fn derive_resume_session_keys(
+    shared_secret: &[u8; 16],
+    initiator_random: &[u8; 32],
+    old_resumption_id: &[u8; 16],
+) -> Result<[u8; 48]> {
+    // salt = initiatorRandom || oldResumptionId (48 bytes total).
+    let mut salt = [0u8; 48];
+    salt[..32].copy_from_slice(initiator_random);
+    salt[32..].copy_from_slice(old_resumption_id);
+
+    let mut out = [0u8; 48];
+    hkdf_derive(
+        shared_secret,
+        &salt,
+        HKDF_INFO_RESUMPTION_SESSION_KEYS,
+        &mut out,
+    )?;
+    Ok(out)
 }
 
 // =============================================================================
@@ -901,5 +1145,154 @@ mod tests {
             matches!(verify_mac(&a, &b), Err(Error::ResumptionMacMismatch)),
             "Single-byte difference must fail MAC verify"
         );
+    }
+
+    // ─── Resumption MICs ────────────────────────────────────────────────────
+
+    /// `compute_sigma1_resume_mic` + `verify_sigma1_resume_mic` with the same
+    /// inputs must agree (round-trip).
+    #[test]
+    fn sigma1_resume_mic_round_trip() {
+        let secret = [0x01u8; 16];
+        let random = [0x02u8; 32];
+        let rid = [0x03u8; 16];
+
+        let mic = compute_sigma1_resume_mic(&secret, &random, &rid).unwrap();
+        // verify must succeed with the same inputs.
+        verify_sigma1_resume_mic(&secret, &random, &rid, &mic).unwrap();
+    }
+
+    /// Different `shared_secret` must produce a different MIC — verify rejects it.
+    #[test]
+    fn sigma1_resume_mic_rejects_wrong_secret() {
+        let secret_a = [0x01u8; 16];
+        let secret_b = [0xFFu8; 16]; // different secret
+        let random = [0x02u8; 32];
+        let rid = [0x03u8; 16];
+
+        let mic = compute_sigma1_resume_mic(&secret_a, &random, &rid).unwrap();
+        assert!(
+            matches!(
+                verify_sigma1_resume_mic(&secret_b, &random, &rid, &mic),
+                Err(Error::ResumptionMacMismatch)
+            ),
+            "Wrong shared_secret must cause MIC mismatch"
+        );
+    }
+
+    /// Different `resumption_id` must produce a different MIC.
+    #[test]
+    fn sigma1_resume_mic_rejects_wrong_resumption_id() {
+        let secret = [0x01u8; 16];
+        let random = [0x02u8; 32];
+        let rid_a = [0x03u8; 16];
+        let rid_b = [0x04u8; 16];
+
+        let mic = compute_sigma1_resume_mic(&secret, &random, &rid_a).unwrap();
+        assert!(
+            matches!(
+                verify_sigma1_resume_mic(&secret, &random, &rid_b, &mic),
+                Err(Error::ResumptionMacMismatch)
+            ),
+            "Wrong resumption_id must cause MIC mismatch"
+        );
+    }
+
+    /// `compute_sigma2_resume_mic` + `verify_sigma2_resume_mic` round-trip.
+    #[test]
+    fn sigma2_resume_mic_round_trip() {
+        let secret = [0x10u8; 16];
+        let random = [0x20u8; 32];
+        let new_rid = [0x30u8; 16];
+
+        let mic = compute_sigma2_resume_mic(&secret, &random, &new_rid).unwrap();
+        verify_sigma2_resume_mic(&secret, &random, &new_rid, &mic).unwrap();
+    }
+
+    /// Different `shared_secret` on the sigma2 side must be rejected.
+    #[test]
+    fn sigma2_resume_mic_rejects_wrong_secret() {
+        let secret_a = [0x10u8; 16];
+        let secret_b = [0xABu8; 16];
+        let random = [0x20u8; 32];
+        let new_rid = [0x30u8; 16];
+
+        let mic = compute_sigma2_resume_mic(&secret_a, &random, &new_rid).unwrap();
+        assert!(
+            matches!(
+                verify_sigma2_resume_mic(&secret_b, &random, &new_rid, &mic),
+                Err(Error::ResumptionMacMismatch)
+            ),
+            "Wrong shared_secret must cause Sigma2 MIC mismatch"
+        );
+    }
+
+    /// Sigma1 and Sigma2 MICs for the same key inputs must differ
+    /// (different nonces and info labels).
+    #[test]
+    fn sigma1_and_sigma2_resume_mics_differ() {
+        let secret = [0x42u8; 16];
+        let random = [0x43u8; 32];
+        let rid = [0x44u8; 16];
+
+        let mic1 = compute_sigma1_resume_mic(&secret, &random, &rid).unwrap();
+        let mic2 = compute_sigma2_resume_mic(&secret, &random, &rid).unwrap();
+        assert_ne!(
+            mic1, mic2,
+            "Sigma1 and Sigma2 resume MICs must differ (different keys and nonces)"
+        );
+    }
+
+    // ─── Resumption session keys ─────────────────────────────────────────────
+
+    /// `derive_resume_session_keys` is deterministic.
+    #[test]
+    fn derive_resume_session_keys_deterministic() {
+        let secret = [0x55u8; 16];
+        let random = [0x66u8; 32];
+        let rid = [0x77u8; 16];
+
+        let keys_a = derive_resume_session_keys(&secret, &random, &rid).unwrap();
+        let keys_b = derive_resume_session_keys(&secret, &random, &rid).unwrap();
+        assert_eq!(
+            keys_a, keys_b,
+            "Same inputs must produce identical key material"
+        );
+    }
+
+    /// Different `initiator_random` must produce different keys.
+    #[test]
+    fn derive_resume_session_keys_input_sensitive() {
+        let secret = [0x55u8; 16];
+        let random_a = [0x66u8; 32];
+        let mut random_b = random_a;
+        random_b[0] ^= 1;
+        let rid = [0x77u8; 16];
+
+        let keys_a = derive_resume_session_keys(&secret, &random_a, &rid).unwrap();
+        let keys_b = derive_resume_session_keys(&secret, &random_b, &rid).unwrap();
+        assert_ne!(
+            keys_a, keys_b,
+            "Different initiator_random must produce different keys"
+        );
+    }
+
+    /// The 48-byte output has three distinct non-overlapping 16-byte sections.
+    #[test]
+    fn derive_resume_session_keys_produces_48_bytes() {
+        let secret = [0x88u8; 16];
+        let random = [0x99u8; 32];
+        let rid = [0xAAu8; 16];
+
+        let keys = derive_resume_session_keys(&secret, &random, &rid).unwrap();
+        assert_eq!(keys.len(), 48);
+        // The three slices must all be different from each other (key material is
+        // pseudo-random; collision probability is negligible for any real input).
+        let r2i = &keys[0..16];
+        let i2r = &keys[16..32];
+        let att = &keys[32..48];
+        assert_ne!(r2i, i2r, "r2i and i2r keys must differ");
+        assert_ne!(r2i, att, "r2i and attestation keys must differ");
+        assert_ne!(i2r, att, "i2r and attestation keys must differ");
     }
 }
