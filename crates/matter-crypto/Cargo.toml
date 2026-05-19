@@ -24,6 +24,8 @@ workspace = true
 [dependencies]
 matter-cert = { path = "../matter-cert", version = "0.1.0-pre" }
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
+aes = { workspace = true }
+ccm = { workspace = true }
 p256 = { workspace = true }
 ring = { workspace = true }
 subtle = { workspace = true }
