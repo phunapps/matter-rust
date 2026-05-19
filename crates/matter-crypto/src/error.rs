@@ -71,6 +71,64 @@ pub enum Error {
     /// `finish()` called before the handshake completed all phases.
     #[error("`finish` called before handshake complete")]
     HandshakeIncomplete,
+
+    // --- CASE-specific internal errors (M4) ---
+    /// Peer's NOC chain failed validation against the trusted RCAC roots.
+    #[error("CASE: invalid peer NOC chain — {0}")]
+    InvalidPeerNocChain(#[source] matter_cert::Error),
+
+    /// Peer's NOC carried a `FabricId` attribute that does not match the
+    /// `FabricId` we expected (i.e., the peer is on a different fabric).
+    #[error("CASE: peer NOC's fabric_id ({peer}) doesn't match local fabric_id ({local})")]
+    FabricIdMismatch {
+        /// `FabricId` carried by the peer's NOC.
+        peer: u64,
+        /// `FabricId` we expected (from our own credentials).
+        local: u64,
+    },
+
+    /// Peer's NOC carried a `NodeId` attribute that does not match the
+    /// `NodeId` we expected.
+    #[error("CASE: peer NOC's node_id ({0}) doesn't match expected ({1})")]
+    PeerNodeIdMismatch(u64, u64),
+
+    /// Ephemeral P-256 keypair generation failed (RNG failure or
+    /// repeated zero scalars).
+    #[error("CASE: ephemeral key generation failed")]
+    EphemeralKeyGenerationFailed,
+
+    /// AEAD decryption of an encrypted blob (Sigma2 or Sigma3 ciphertext)
+    /// failed — corrupt ciphertext, wrong key, or wrong nonce.
+    #[error("CASE: AEAD decryption of encrypted blob failed")]
+    EncryptedBlobDecryptionFailed,
+
+    /// Peer's ECDSA signature over the SIGMA transcript did not verify.
+    #[error("CASE: peer signature did not verify")]
+    PeerSignatureInvalid,
+
+    /// Resumption MAC tag (`sigma2_resume_mic` / `sigma3_resume_mic`) did
+    /// not verify in constant time.
+    #[error("CASE: resumption MAC tag did not verify")]
+    ResumptionMacMismatch,
+
+    /// `CaseSigner` returned a `SignerError`.
+    #[error("CASE: signing failed — {0}")]
+    SigningFailed(#[source] crate::case::signer::SignerError),
+
+    /// Caller fed a CASE state machine a message that doesn't match its
+    /// current expected-inbound kind (e.g., calling `handle_sigma2` before
+    /// `start` has been invoked).
+    ///
+    /// A separate variant from [`Error::UnexpectedMessage`] keeps M3 PASE
+    /// callers unchanged while surfacing the correct
+    /// [`crate::case::CaseMessageKind`].
+    #[error("CASE: unexpected message: expected {expected:?}, got {got:?}")]
+    UnexpectedCaseMessage {
+        /// The message kind the state machine was waiting for.
+        expected: crate::case::CaseMessageKind,
+        /// The kind the caller tried to supply.
+        got: crate::case::CaseMessageKind,
+    },
 }
 
 /// `Result<T, Error>` for convenience.

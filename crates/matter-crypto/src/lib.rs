@@ -31,5 +31,12 @@ pub mod pase;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+pub use case::initiator::CaseInitiator;
+pub use case::responder::CaseResponder;
+pub use case::signer::{CaseSigner, RingSigner, SignerError};
+pub use case::{
+    CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,
+    ResumptionId, ResumptionRecord, Sigma1Outcome,
+};
 pub use error::{Error, Result};
 pub use pase::{PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys, PaseVerifier};
