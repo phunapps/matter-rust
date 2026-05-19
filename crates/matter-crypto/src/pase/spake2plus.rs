@@ -38,10 +38,7 @@
 //! No state. All functions take inputs and produce outputs. The state machine
 //! in `prover.rs` / `verifier.rs` (M3.2) chains them.
 
-// All items in this module are consumed by `prover.rs` / `verifier.rs` (M3.2).
-// Until those files are populated the compiler sees them as dead code;
-// this allow will be removed once M3.2 lands.
-#![allow(dead_code)]
+// The dead_code allow was removed when M3.2 landed (prover.rs + verifier.rs).
 
 use p256::elliptic_curve::group::ff::{Field, PrimeField}; // Field for is_zero; PrimeField for from_repr
 use p256::elliptic_curve::sec1::FromEncodedPoint;
@@ -425,6 +422,44 @@ pub(crate) fn derive_session_keys(ke: &[u8; 16]) -> Result<[u8; 48]> {
 }
 
 // =============================================================================
+// Transcript context hash
+// =============================================================================
+
+/// SPAKE2+ context string — pinned from matter.js PaseMessenger.ts.
+///
+/// `export const SPAKE_CONTEXT = Bytes.fromString("CHIP PAKE V1 Commissioning");`
+const SPAKE_CONTEXT: &[u8] = b"CHIP PAKE V1 Commissioning";
+
+/// Compose the SPAKE2+ transcript context hash.
+///
+/// Computes `SHA-256("CHIP PAKE V1 Commissioning" || extra[0] || extra[1] || ...)`.
+///
+/// - Negotiation path: `extras = [pbkdfReq_bytes, pbkdfResp_bytes]`.
+/// - Known-params path: `extras = []`.
+///
+/// This matches matter.js `PaseClient.ts` / `PaseServer.ts`:
+/// ```ts
+/// context = await crypto.computeHash([SPAKE_CONTEXT, requestPayload, responsePayload])
+/// ```
+/// where `computeHash(arr)` concatenates the array elements and SHA-256-hashes
+/// the result.
+///
+/// Both `PaseProver` and `PaseVerifier` call this function; it is the single
+/// canonical implementation of the context composition.
+pub(crate) fn hash_context(extras: &[&[u8]]) -> [u8; 32] {
+    let mut buf: Vec<u8> =
+        Vec::with_capacity(SPAKE_CONTEXT.len() + extras.iter().map(|e| e.len()).sum::<usize>());
+    buf.extend_from_slice(SPAKE_CONTEXT);
+    for e in extras {
+        buf.extend_from_slice(e);
+    }
+    let d = digest(&SHA256, &buf);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(d.as_ref());
+    out
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -433,6 +468,39 @@ pub(crate) fn derive_session_keys(ke: &[u8; 16]) -> Result<[u8; 48]> {
 mod tests {
     use super::*;
     use ring::rand::SystemRandom;
+
+    // ─── hash_context ─────────────────────────────────────────────────────
+
+    #[test]
+    fn hash_context_empty_extras_is_deterministic() {
+        let a = hash_context(&[]);
+        let b = hash_context(&[]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn hash_context_with_extras_differs_from_empty() {
+        let empty = hash_context(&[]);
+        let with_extra = hash_context(&[b"hello"]);
+        assert_ne!(empty, with_extra);
+    }
+
+    #[test]
+    fn hash_context_is_sha256_of_spake_context_concatenation() {
+        let req = b"req_bytes";
+        let resp = b"resp_bytes";
+        // Manually compute: SHA-256("CHIP PAKE V1 Commissioning" || req || resp).
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"CHIP PAKE V1 Commissioning");
+        buf.extend_from_slice(req);
+        buf.extend_from_slice(resp);
+        let expected_raw = digest(&SHA256, &buf);
+        let mut expected = [0u8; 32];
+        expected.copy_from_slice(expected_raw.as_ref());
+
+        let got = hash_context(&[req, resp]);
+        assert_eq!(got, expected);
+    }
 
     // ─── Point constant tests ──────────────────────────────────────────────
 
