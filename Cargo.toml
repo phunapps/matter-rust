@@ -53,7 +53,7 @@ aes = { version = "0.8", default-features = false }
 bitflags = "2"
 ccm = { version = "0.5", default-features = false, features = ["alloc"] }
 der = { version = "0.7", default-features = false, features = ["oid", "alloc"] }
-p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdh"] }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdh", "ecdsa", "pkcs8"] }
 subtle = { version = "2", default-features = false }
 proptest = "1"
 ring = "0.17"

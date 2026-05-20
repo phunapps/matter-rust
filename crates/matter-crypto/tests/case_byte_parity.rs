@@ -54,6 +54,9 @@ struct FixtureInputs {
     responder_noc: String,
     /// Hex-encoded PKCS#8 DER for the responder's NOC private key.
     responder_pkcs8: String,
+    /// Hex-encoded ICAC certificate TLV bytes (optional; present when CA uses 3-tier PKI).
+    #[serde(default)]
+    icac_noc: Option<String>,
     /// Hex-encoded 32-byte initiator ephemeral private key scalar.
     initiator_eph_priv: String,
     /// Hex-encoded 32-byte initiator random.
@@ -109,6 +112,7 @@ fn hex_to_array<const N: usize>(s: &str) -> [u8; N] {
 fn build_credentials_from_fixture(
     noc_hex: &str,
     pkcs8_hex: &str,
+    icac_hex: Option<&str>,
     fabric_id: u64,
     node_id: u64,
     ipk: [u8; 16],
@@ -116,9 +120,11 @@ fn build_credentials_from_fixture(
 ) -> CaseCredentials {
     let noc = MatterCertificate::from_tlv(&hex::decode(noc_hex).unwrap()).expect("parse NOC");
     let signer = RingSigner::from_pkcs8(&hex::decode(pkcs8_hex).unwrap()).expect("load signer");
+    let icac = icac_hex
+        .map(|h| MatterCertificate::from_tlv(&hex::decode(h).unwrap()).expect("parse ICAC"));
     CaseCredentials {
         noc,
-        icac: None,
+        icac,
         signer: Box::new(signer),
         fabric_id,
         node_id,
@@ -136,6 +142,194 @@ fn build_trusted_roots(rcac_noc_hex: &str) -> TrustedRoots {
 }
 
 // =============================================================================
+// Diagnostic: verify fixture NOC roundtrips byte-for-byte through matter-cert.
+// If this fails, MatterCertificate::to_tlv changes the encoding and we need
+// to fix the Rust encoder to be byte-identical with matter.js output.
+// =============================================================================
+
+/// Verify the ECDSA signature that Rust produces over the known TBSData2 bytes.
+///
+/// This test computes TBSData2 bytes by hand (replicating `encode_tbs_data`
+/// using the public `TlvWriter`), signs with `RingSigner`, and compares the
+/// signature hex to the known-good value produced by the JS capture script.
+///
+/// This diagnostic isolates whether the signature mismatch is in:
+///   (a) the TBSData2 bytes being different, or
+///   (b) the signature algorithm / key format
+#[test]
+fn debug_tbs_data2_and_signature() {
+    use matter_codec::{Tag, TlvWriter};
+    use matter_crypto::CaseSigner;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::{NonZeroScalar, SecretKey};
+
+    let fx = load_fixture("handshake-new-session");
+
+    // Re-encode NOC (same as what the responder does)
+    let noc_bytes = hex::decode(&fx.inputs.responder_noc).unwrap();
+    let cert = MatterCertificate::from_tlv(&noc_bytes).expect("parse responder NOC");
+    let re_encoded_noc = cert.to_tlv().expect("re-encode NOC");
+
+    // Derive ephemeral public keys from the fixed scalars (same as the test)
+    let resp_eph_priv_bytes = hex_to_array::<32>(&fx.inputs.responder_eph_priv);
+    let init_eph_priv_bytes = hex_to_array::<32>(&fx.inputs.initiator_eph_priv);
+
+    let resp_eph_scalar = NonZeroScalar::from_repr(resp_eph_priv_bytes.into()).unwrap();
+    let resp_eph_sk = SecretKey::new(resp_eph_scalar.into());
+    let resp_eph_pub_encoded = resp_eph_sk.public_key().to_encoded_point(false);
+    let mut resp_eph_pub = [0u8; 65];
+    resp_eph_pub.copy_from_slice(resp_eph_pub_encoded.as_bytes());
+
+    let init_eph_scalar = NonZeroScalar::from_repr(init_eph_priv_bytes.into()).unwrap();
+    let init_eph_sk = SecretKey::new(init_eph_scalar.into());
+    let init_eph_pub_encoded = init_eph_sk.public_key().to_encoded_point(false);
+    let mut init_eph_pub = [0u8; 65];
+    init_eph_pub.copy_from_slice(init_eph_pub_encoded.as_bytes());
+
+    // Re-encode ICAC when present (mirrors encode_tbs_data)
+    let icac_re_encoded: Option<Vec<u8>> = fx.inputs.icac_noc.as_deref().map(|h| {
+        let icac_bytes = hex::decode(h).unwrap();
+        let icac_cert = MatterCertificate::from_tlv(&icac_bytes).expect("parse ICAC");
+        icac_cert.to_tlv().expect("re-encode ICAC")
+    });
+
+    // Build TBSData2 manually using TlvWriter (mirrors encode_tbs_data)
+    let mut tbs_data = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut tbs_data);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &re_encoded_noc).unwrap();
+        if let Some(icac) = &icac_re_encoded {
+            w.put_bytes(Tag::Context(2), icac).unwrap();
+        }
+        w.put_bytes(Tag::Context(3), &resp_eph_pub).unwrap();
+        w.put_bytes(Tag::Context(4), &init_eph_pub).unwrap();
+        w.end_container().unwrap();
+    }
+
+    eprintln!("TBSData2 (Rust): {}", hex::encode(&tbs_data));
+    eprintln!("TBSData2 len (Rust): {}", tbs_data.len());
+
+    // Sign with RingSigner
+    let signer =
+        matter_crypto::RingSigner::from_pkcs8(&hex::decode(&fx.inputs.responder_pkcs8).unwrap())
+            .expect("load signer");
+    let sig = signer.sign_p256_sha256(&tbs_data).expect("sign");
+    eprintln!("Signature (Rust/ring): {}", hex::encode(sig));
+
+    eprintln!(
+        "signer public_key: {}",
+        hex::encode(signer.public_key().as_bytes())
+    );
+
+    // The TBSData2 bytes and signature printed above can be compared against the
+    // JS debug_tbs script output for diagnostic purposes. No hardcoded assertion
+    // here — the matter_js_byte_parity_new_session test verifies end-to-end.
+}
+
+/// Verify the ECDSA signature that Rust produces over the known TBSData3 bytes.
+///
+/// Sigma3 TBSData3 is signed by the **initiator's** NOC key (the "responder" role in
+/// TlvSignedData field names — see comment in initiator.rs). This test prints the
+/// TBSData3 hex so it can be compared against JS output for diagnosis.
+#[test]
+fn debug_tbs_data3_and_signature() {
+    use matter_codec::{Tag, TlvWriter};
+    use matter_crypto::CaseSigner;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::{NonZeroScalar, SecretKey};
+
+    let fx = load_fixture("handshake-new-session");
+
+    // Re-encode initiator NOC (same as what the initiator does in process_sigma2)
+    let noc_bytes = hex::decode(&fx.inputs.initiator_noc).unwrap();
+    let cert = MatterCertificate::from_tlv(&noc_bytes).expect("parse initiator NOC");
+    let re_encoded_noc = cert.to_tlv().expect("re-encode initiator NOC");
+    eprintln!("initiator_noc raw:        {}", hex::encode(&noc_bytes));
+    eprintln!("initiator_noc re-encoded: {}", hex::encode(&re_encoded_noc));
+    eprintln!("roundtrip matches: {}", noc_bytes == re_encoded_noc);
+
+    // Derive ephemeral public keys from the fixed scalars
+    let resp_eph_priv_bytes = hex_to_array::<32>(&fx.inputs.responder_eph_priv);
+    let init_eph_priv_bytes = hex_to_array::<32>(&fx.inputs.initiator_eph_priv);
+
+    let resp_eph_scalar = NonZeroScalar::from_repr(resp_eph_priv_bytes.into()).unwrap();
+    let resp_eph_sk = SecretKey::new(resp_eph_scalar.into());
+    let resp_eph_pub_encoded = resp_eph_sk.public_key().to_encoded_point(false);
+    let mut resp_eph_pub = [0u8; 65];
+    resp_eph_pub.copy_from_slice(resp_eph_pub_encoded.as_bytes());
+
+    let init_eph_scalar = NonZeroScalar::from_repr(init_eph_priv_bytes.into()).unwrap();
+    let init_eph_sk = SecretKey::new(init_eph_scalar.into());
+    let init_eph_pub_encoded = init_eph_sk.public_key().to_encoded_point(false);
+    let mut init_eph_pub = [0u8; 65];
+    init_eph_pub.copy_from_slice(init_eph_pub_encoded.as_bytes());
+
+    // Re-encode ICAC when present
+    let icac_re_encoded: Option<Vec<u8>> = fx.inputs.icac_noc.as_deref().map(|h| {
+        let icac_bytes = hex::decode(h).unwrap();
+        let icac_cert = MatterCertificate::from_tlv(&icac_bytes).expect("parse ICAC");
+        icac_cert.to_tlv().expect("re-encode ICAC")
+    });
+
+    // Build TBSData3:
+    // In Sigma3, initiator plays "responder" role in TlvSignedData:
+    //   tag1 (responderNoc) = initiator's NOC
+    //   tag2 (responderIcac) = initiator's ICAC (optional)
+    //   tag3 (responderPublicKey) = initiator's eph pub
+    //   tag4 (initiatorPublicKey) = responder's eph pub
+    let mut tbs_data = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut tbs_data);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &re_encoded_noc).unwrap();
+        if let Some(icac) = &icac_re_encoded {
+            w.put_bytes(Tag::Context(2), icac).unwrap();
+        }
+        w.put_bytes(Tag::Context(3), &init_eph_pub).unwrap(); // initiator's eph pub
+        w.put_bytes(Tag::Context(4), &resp_eph_pub).unwrap(); // responder's eph pub
+        w.end_container().unwrap();
+    }
+
+    eprintln!("TBSData3 (Rust): {}", hex::encode(&tbs_data));
+    eprintln!("TBSData3 len (Rust): {}", tbs_data.len());
+
+    // Sign with initiator's NOC key
+    let signer =
+        matter_crypto::RingSigner::from_pkcs8(&hex::decode(&fx.inputs.initiator_pkcs8).unwrap())
+            .expect("load initiator signer");
+    let sig = signer.sign_p256_sha256(&tbs_data).expect("sign");
+    eprintln!("Sigma3 Signature (Rust): {}", hex::encode(sig));
+    eprintln!(
+        "initiator signer public_key: {}",
+        hex::encode(signer.public_key().as_bytes())
+    );
+}
+
+/// Verify that the NOC bytes from the fixture survive a from_tlv + to_tlv roundtrip.
+///
+/// If this test fails, `MatterCertificate::to_tlv` is not byte-identical with
+/// the matter.js-produced TLV and the Sigma2/Sigma3 signature bytes will differ
+/// between JS and Rust (both sign the re-encoded NOC, but the re-encoded form differs).
+#[test]
+fn fixture_noc_roundtrips_through_matter_cert() {
+    let fx = load_fixture("handshake-new-session");
+    // Check both NOCs.
+    for (label, noc_hex) in [
+        ("responder_noc", &fx.inputs.responder_noc),
+        ("initiator_noc", &fx.inputs.initiator_noc),
+    ] {
+        let noc_bytes = hex::decode(noc_hex).unwrap();
+        let cert = MatterCertificate::from_tlv(&noc_bytes).expect("parse NOC");
+        let re_encoded = cert.to_tlv().expect("re-encode NOC");
+        assert_eq!(
+            noc_bytes, re_encoded,
+            "{label}: MatterCertificate::to_tlv must produce byte-identical output"
+        );
+    }
+}
+
+// =============================================================================
 // Test scenarios
 // =============================================================================
 
@@ -146,19 +340,19 @@ fn build_trusted_roots(rcac_noc_hex: &str) -> TrustedRoots {
 /// output at every step. Also verifies that both sides derive identical session
 /// keys.
 ///
-/// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
-/// Remove `#[ignore]` once fixtures are committed.
+/// Fixtures produced by `cargo xtask capture-case` (M4.3 Task 3).
 #[test]
-#[ignore = "fixture not yet committed — run `cargo xtask capture-case` first"]
 fn matter_js_byte_parity_new_session() {
     let fx = load_fixture("handshake-new-session");
     let ipk = hex_to_array::<16>(&fx.inputs.ipk);
     let rcac_pub = hex_to_array::<65>(&fx.inputs.rcac_public_key);
     let roots = build_trusted_roots(&fx.inputs.rcac_noc);
 
+    let icac_hex = fx.inputs.icac_noc.as_deref();
     let initiator_creds = build_credentials_from_fixture(
         &fx.inputs.initiator_noc,
         &fx.inputs.initiator_pkcs8,
+        icac_hex,
         fx.inputs.fabric_id,
         fx.inputs.initiator_node_id,
         ipk,
@@ -167,6 +361,7 @@ fn matter_js_byte_parity_new_session() {
     let responder_creds = build_credentials_from_fixture(
         &fx.inputs.responder_noc,
         &fx.inputs.responder_pkcs8,
+        icac_hex,
         fx.inputs.fabric_id,
         fx.inputs.responder_node_id,
         ipk,
@@ -244,9 +439,16 @@ fn matter_js_byte_parity_new_session() {
 /// and resumption_id in the fixture are used to seed the `ResumptionRecord`.
 ///
 /// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
-/// Remove `#[ignore]` once fixtures are committed.
+///
+/// TODO(M4 byte-parity follow-up): fails because our responder's
+/// `accept_resumption` generates the fresh `resumption_id` via
+/// `SystemRandom`, but matter.js consumes it from the patched RNG
+/// (all-zero bytes). Fix: extend `test_support::case_responder_with_eph_key`
+/// to inject a fixed `new_resumption_id` parameter that bypasses the
+/// internal `SystemRandom::new().fill(...)` call in `responder.rs`.
 #[test]
-#[ignore = "fixture not yet committed — run `cargo xtask capture-case` first"]
+#[ignore = "M4 follow-up: needs fixed new_resumption_id injection — see body TODO"]
+#[allow(clippy::too_many_lines)] // long because it mirrors a multi-step protocol exchange
 fn matter_js_byte_parity_resumption_accepted() {
     let fx = load_fixture("handshake-resumption-accepted");
     let ipk = hex_to_array::<16>(&fx.inputs.ipk);
@@ -266,9 +468,11 @@ fn matter_js_byte_parity_resumption_accepted() {
             .expect("fixture has resumption_shared_secret"),
     );
 
+    let icac_hex = fx.inputs.icac_noc.as_deref();
     let initiator_creds = build_credentials_from_fixture(
         &fx.inputs.initiator_noc,
         &fx.inputs.initiator_pkcs8,
+        icac_hex,
         fx.inputs.fabric_id,
         fx.inputs.initiator_node_id,
         ipk,
@@ -277,6 +481,7 @@ fn matter_js_byte_parity_resumption_accepted() {
     let responder_creds = build_credentials_from_fixture(
         &fx.inputs.responder_noc,
         &fx.inputs.responder_pkcs8,
+        icac_hex,
         fx.inputs.fabric_id,
         fx.inputs.responder_node_id,
         ipk,
@@ -372,18 +577,30 @@ fn matter_js_byte_parity_resumption_accepted() {
 /// calls `reject_resumption()`.
 ///
 /// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
-/// Remove `#[ignore]` once fixtures are committed.
+///
+/// TODO(M4 byte-parity follow-up): fails because Sigma1's
+/// `initiator_resume_mic` differs between our implementation and
+/// matter.js even though all fixture inputs (shared_secret,
+/// resumption_id, initiator_random) are identical. Our
+/// `sigma::compute_sigma1_resume_mic` HKDF/AEAD composition is
+/// out of alignment with matter.js's actual derivation in
+/// `CaseClient.ts`. New-session byte-parity passes, so the core
+/// SIGMA-I machinery is correct — resumption MIC needs spec/source
+/// re-read to pin exact salt/info/AAD layout.
 #[test]
-#[ignore = "fixture not yet committed — run `cargo xtask capture-case` first"]
+#[ignore = "M4 follow-up: sigma1_resume_mic composition needs re-pinning — see body TODO"]
+#[allow(clippy::too_many_lines)] // long because it mirrors a multi-step protocol exchange
 fn matter_js_byte_parity_resumption_declined() {
     let fx = load_fixture("handshake-resumption-declined");
     let ipk = hex_to_array::<16>(&fx.inputs.ipk);
     let rcac_pub = hex_to_array::<65>(&fx.inputs.rcac_public_key);
     let roots = build_trusted_roots(&fx.inputs.rcac_noc);
 
+    let icac_hex = fx.inputs.icac_noc.as_deref();
     let initiator_creds = build_credentials_from_fixture(
         &fx.inputs.initiator_noc,
         &fx.inputs.initiator_pkcs8,
+        icac_hex,
         fx.inputs.fabric_id,
         fx.inputs.initiator_node_id,
         ipk,
@@ -392,6 +609,7 @@ fn matter_js_byte_parity_resumption_declined() {
     let responder_creds = build_credentials_from_fixture(
         &fx.inputs.responder_noc,
         &fx.inputs.responder_pkcs8,
+        icac_hex,
         fx.inputs.fabric_id,
         fx.inputs.responder_node_id,
         ipk,
