@@ -53,42 +53,73 @@ it.
 
 ## matter-crypto
 
-### External cryptographic protocol review (M3 PASE)
+### External cryptographic protocol review (M3 PASE + M4 CASE)
 
 **Status:** owned by the user; pending arrangement.
 
 **Why it matters:** CLAUDE.md mandates external review for any crate
-implementing cryptographic protocols. PASE is the first such crate.
+implementing cryptographic protocols. PASE (M3) and CASE (M4) are both
+in scope. Implementations are complete; review is the remaining gate.
 
 **Concrete deliverable:** review completed, feedback applied, sign-off
 captured in a comment on `matter-crypto/README.md` or in a new
 `docs/` artefact. Required before any `cargo publish matter-crypto`.
 
-### CASE / SIGMA-I (M4)
+### CASE / SIGMA-I (M4) — DONE (new-session path)
 
-**Status:** not yet started.
+**Status:** feature-complete and byte-parity verified for new-session
+scenario against matter.js (M4.1 + M4.2 + M4.3).
 
-**Why it matters:** PASE only bootstraps commissioning sessions.
-Operational Matter communication uses CASE — certificate-authenticated
-sessions running on top of the NOC/ICAC/RCAC chain `matter-cert`
-validates.
+New-session byte-parity passes byte-for-byte for Sigma1, Sigma2, and
+Sigma3 against matter.js's `CaseClient.ts` / `CaseServer.ts`.
 
-**Concrete deliverable:** M4 design + implementation + matter.js
-byte-parity + external review. Modelled on M3's structure.
+### CASE resumption byte-parity — OPEN
 
-### matter.js capture-pase RNG patching
+**Status:** open follow-up. Two specific divergences from matter.js.
+
+**Why it matters:** The resumption fast-path (Sigma1 with resume fields
+→ Sigma2_Resume) works correctly in local roundtrip (all M4.2 tests
+pass). However, two byte-parity issues remain that prevent the
+fixture-driven `tests/case_byte_parity.rs` resumption tests from
+passing. Both tests are `#[ignore]`d with inline TODO comments.
+
+**Issue 1 — `sigma1_resume_mic` composition:**
+Our `compute_sigma1_resume_mic` in `initiator.rs` uses
+`HKDF(shared_secret, salt=initiatorRandom||resumptionId, info="...")`.
+matter.js's `CaseClient.ts` derives the MIC differently — the exact
+HKDF input / AEAD construction needs realignment against the TypeScript
+reference. The captured fixture's `initiator_resume_mic` field
+diverges from our output for the same inputs.
+
+**Issue 2 — fresh `resumption_id` in Sigma2_Resume:**
+Our `CaseResponder::accept_resumption` generates a fresh
+`resumption_id` via `SystemRandom::fill`. For byte-parity testing we
+need a `_with_new_resumption_id` constructor on `CaseResponder`
+(under the `test-support` feature) so the fixture's known
+`new_resumption_id` value can be injected. Without this, the random
+field causes Sigma2_Resume to differ from the fixture on every run.
+
+**Concrete deliverable before publish:**
+1. Align `compute_sigma1_resume_mic` with matter.js's derivation and
+   update the `handshake-resumption-accepted` fixture accordingly.
+2. Add `responder_with_new_resumption_id` to the `test-support` feature
+   and wire it into `case_byte_parity.rs`'s resumption tests.
+3. Remove the `#[ignore]` from both resumption byte-parity tests.
+
+### matter.js capture-pase / capture-case RNG patching
 
 **Status:** working, but fragile.
 
 **Why it matters:** `xtask capture-pase` monkey-patches matter.js's
-`Crypto.randomBytes` to inject fixed scalars. matter.js version bumps
-may break the patch. Hardcoded scenario inputs (PIN, salt, iterations,
-scalar bytes) live in the script.
+`Crypto.randomBytes` to inject fixed scalars; `xtask capture-case`
+injects fixed ECDH scalars into `@noble/curves`. Both scripts are
+sensitive to matter.js and @noble/curves version bumps. Hardcoded
+scenario inputs live in the scripts.
 
 **Concrete deliverable:** before 1.0, either upstream a public RNG
-injection point to matter.js OR document the monkey-patch path
-clearly enough that it can be re-pinned against new matter.js
-versions in <30 minutes.
+injection point to matter.js OR document the monkey-patch paths
+clearly enough that they can be re-pinned against new matter.js /
+@noble/curves versions in <30 minutes.
 
 ## Cross-cutting
 

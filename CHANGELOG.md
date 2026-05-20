@@ -7,9 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-crypto
 
-### [0.1.0-pre] — 2026-05-19 (not yet published)
+### [0.1.0-pre] — 2026-05-20 (not yet published)
 
-#### Added
+#### Added (M4 — CASE / SIGMA-I)
+
+- `CaseInitiator` + `CaseResponder` sans-IO state machines for Matter
+  operational session establishment (SIGMA-I, spec §4.13). [M4.1]
+- `CaseSigner` trait + `RingSigner` in-tree implementation. Embedded
+  callers can wire HSM/TPM/secure-element signers by providing their own
+  `CaseSigner` impl. [M4.1]
+- Full Sigma1/2/3 new-session handshake: ephemeral P-256 ECDH, mutual
+  ECDSA signatures, AES-CCM-128 encrypted blobs, NOC chain validation
+  via `matter-cert::CertificateChain::validate`. [M4.1]
+- Session resumption: Sigma1 + Sigma2_Resume fast path. Responder exposes
+  `accept_resumption` / `reject_resumption` for caller-driven store lookup
+  (sans-IO purity). [M4.2]
+- `CaseSessionOutput` with split `keys` / `peer` / `local` /
+  `resumption_record`. [M4.1–M4.2]
+- `Sigma1Outcome` enum surfaces resumption requests for the caller. [M4.2]
+- `xtask capture-case` subcommand — Node script using @noble/curves +
+  Node ECDH + matter.js TLV codecs to drive CASE handshakes with fixed
+  scalars and emit JSON fixtures. [M4.3]
+- Three captured test-vector scenarios in `test-vectors/case/`:
+  handshake-new-session, handshake-resumption-accepted,
+  handshake-resumption-declined. [M4.3]
+- `tests/case_byte_parity.rs` — new-session byte-parity passes
+  byte-for-byte against matter.js. Resumption byte-parity deferred
+  (see TODO-1.0.md). [M4.3]
+- Two proptest properties: random NodeID roundtrip; byte-flip-in-Sigma2
+  never panics. [M4.3]
+- New deps: `ccm 0.5` + `aes 0.8` (RustCrypto) for AES-CCM-128 —
+  `ring 0.17` does not expose AES-CCM which Matter requires.
+
+#### Added (M3 — PASE / SPAKE2+)
 
 - PASE state machines (`PaseProver`, `PaseVerifier`) with sans-IO API. [M3.1–M3.3]
 - TLV wire-format codec for the 5 PASE messages (PbkdfParamReq/Resp, Pake1/2/3). [M3.2]
@@ -25,9 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New deps: `p256 0.13` (P-256 scalar/point math), `subtle 2.6`
   (constant-time compare). ring stays as primary crypto provider.
 
+#### Fixed
+
+- `RingSigner::sign_p256_sha256` now applies low-s normalization via
+  `Signature::normalize_s()`. The `p256` crate's `SigningKey::sign()`
+  does not guarantee low-s output (depends on RFC 6979 nonce); matter.js
+  via @noble/curves always normalizes. Without this, ECDSA byte-parity
+  with matter.js fails roughly half the time at random. This affects every
+  signature produced by this crate, including matter-cert signing paths.
+
 #### Not yet shipped
 
-- CASE / SIGMA-I (M4 territory).
+- CASE resumption byte-parity (known divergences documented in TODO-1.0.md).
 - External cryptographic review (in progress; tracked in TODO-1.0.md).
 
 ## matter-cert
