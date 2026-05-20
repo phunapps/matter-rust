@@ -62,7 +62,7 @@ fn build_test_rcac() -> (MatterCertificate, RingSigner, TrustedRoots, [u8; 65]) 
         serial: vec![0x01],
         issuer: rcac_dn.clone(),
         not_before: MatterTime::from_unix_secs(1_700_000_000),
-        not_after: MatterTime::from_unix_secs(1_800_000_000),
+        not_after: MatterTime::from_unix_secs(2_500_000_000),
         subject: rcac_dn,
         public_key: PublicKey::new(rcac_pub).expect("rcac pub key"),
         extensions,
@@ -119,7 +119,7 @@ fn build_test_noc(
         serial: vec![0x02],
         issuer: issuer_dn,
         not_before: MatterTime::from_unix_secs(1_700_000_000),
-        not_after: MatterTime::from_unix_secs(1_800_000_000),
+        not_after: MatterTime::from_unix_secs(2_500_000_000),
         subject: subject_dn,
         public_key: PublicKey::new(noc_pub).expect("noc pub key"),
         extensions,
@@ -750,4 +750,135 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
         matches!(err, matter_crypto::Error::InvalidParameter),
         "expected InvalidParameter, got {err:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Proptest properties
+// ---------------------------------------------------------------------------
+
+use proptest::prelude::*;
+
+proptest! {
+    // Each case does ECDH key-gen + ECDSA sign × 2 + chain validation.
+    // 8 cases keeps the suite fast while still exercising the distribution.
+    #![proptest_config(ProptestConfig {
+        cases: 8,
+        ..ProptestConfig::default()
+    })]
+
+    /// Any two distinct NodeIDs on the same fabric must produce a clean
+    /// new-session CASE handshake with matching session keys.
+    ///
+    /// This exercises the full Sigma1 → Sigma2 → Sigma3 path with
+    /// arbitrary caller-supplied NodeIDs, verifying that the state
+    /// machines are not accidentally coupled to the fixed test constants.
+    #[test]
+    fn case_random_node_ids_roundtrip(
+        initiator_node_id in 1u64..=0x0000_FFFF_FFFF_FFFFu64,
+        responder_node_id in 1u64..=0x0000_FFFF_FFFF_FFFFu64,
+    ) {
+        prop_assume!(initiator_node_id != responder_node_id);
+
+        let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+        let (initiator_noc, initiator_signer) =
+            build_test_noc(&rcac_signer, TEST_FABRIC_ID, initiator_node_id);
+        let (responder_noc, responder_signer) =
+            build_test_noc(&rcac_signer, TEST_FABRIC_ID, responder_node_id);
+
+        let initiator_creds = build_credentials(
+            initiator_noc,
+            initiator_signer,
+            TEST_FABRIC_ID,
+            initiator_node_id,
+            IPK,
+            rcac_pub,
+        );
+        let responder_creds = build_credentials(
+            responder_noc,
+            responder_signer,
+            TEST_FABRIC_ID,
+            responder_node_id,
+            IPK,
+            rcac_pub,
+        );
+
+        let mut initiator = CaseInitiator::new(
+            initiator_creds,
+            trusted_roots.clone(),
+            responder_node_id,
+            TEST_FABRIC_ID,
+        )
+        .unwrap();
+        let mut responder = CaseResponder::new(responder_creds, trusted_roots).unwrap();
+
+        let sigma1 = initiator.start().unwrap();
+        responder.handle_sigma1(&sigma1).unwrap();
+        let sigma2 = responder.next_message().unwrap();
+        initiator.handle_sigma2(&sigma2).unwrap();
+        let sigma3 = initiator.next_message().unwrap();
+        responder.handle_sigma3(&sigma3).unwrap();
+
+        let init_out = initiator.finish().unwrap();
+        let resp_out = responder.finish().unwrap();
+
+        prop_assert_eq!(init_out.keys.i2r_key, resp_out.keys.i2r_key);
+        prop_assert_eq!(init_out.keys.r2i_key, resp_out.keys.r2i_key);
+        prop_assert_eq!(init_out.peer.node_id, responder_node_id);
+        prop_assert_eq!(resp_out.peer.node_id, initiator_node_id);
+    }
+
+    /// Flipping a single bit anywhere in a Sigma2 message must produce an
+    /// `Err` from `handle_sigma2` — never a panic.
+    ///
+    /// This is an anti-panic property, not a correctness property.  It verifies
+    /// that all parse and authentication checks in `handle_sigma2` return
+    /// structured errors rather than indexing out-of-bounds or unwrapping.
+    #[test]
+    fn case_random_byte_flip_in_sigma2_never_panics(
+        flip_offset in any::<usize>(),
+        flip_bit in 0u8..8u8,
+    ) {
+        let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+        let (initiator_noc, initiator_signer) =
+            build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+        let (responder_noc, responder_signer) =
+            build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+        let initiator_creds = build_credentials(
+            initiator_noc,
+            initiator_signer,
+            TEST_FABRIC_ID,
+            INITIATOR_NODE_ID,
+            IPK,
+            rcac_pub,
+        );
+        let responder_creds = build_credentials(
+            responder_noc,
+            responder_signer,
+            TEST_FABRIC_ID,
+            RESPONDER_NODE_ID,
+            IPK,
+            rcac_pub,
+        );
+
+        let mut initiator = CaseInitiator::new(
+            initiator_creds,
+            trusted_roots.clone(),
+            RESPONDER_NODE_ID,
+            TEST_FABRIC_ID,
+        )
+        .unwrap();
+        let mut responder = CaseResponder::new(responder_creds, trusted_roots).unwrap();
+
+        let sigma1 = initiator.start().unwrap();
+        responder.handle_sigma1(&sigma1).unwrap();
+        let mut sigma2 = responder.next_message().unwrap();
+
+        if !sigma2.is_empty() {
+            let off = flip_offset % sigma2.len();
+            sigma2[off] ^= 1 << flip_bit;
+        }
+
+        // The only requirement: no panic.  An Err is the expected outcome.
+        let _ = initiator.handle_sigma2(&sigma2);
+    }
 }

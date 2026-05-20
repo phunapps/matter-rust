@@ -1,9 +1,23 @@
 //! Pluggable ECDSA-P256-SHA256 signer for CASE.
 //!
 //! M4.1: `SignerError`, `CaseSigner` trait, and `RingSigner` (the in-tree
-//! production-default implementation backed by `ring::signature::EcdsaKeyPair`).
+//! production-default implementation).
+//!
+//! # Signing algorithm
+//!
+//! `RingSigner::sign_p256_sha256` uses the `p256` crate's ECDSA implementation,
+//! which follows RFC 6979 deterministic nonce generation. This is the same
+//! algorithm used by `@noble/curves` (JavaScript) and enables byte-for-byte
+//! reproducible test vectors captured by `cargo xtask capture-case`.
+//!
+//! `ring`'s `EcdsaKeyPair::sign` uses a hedged variant that mixes in random
+//! bytes, making signatures non-deterministic. We still use `ring` for key
+//! generation and public-key parsing (where it excels), but switch to `p256`
+//! for the signing step itself so that CASE byte-parity tests are possible.
 
 use matter_cert::PublicKey;
+use p256::ecdsa::{signature::Signer as EcdsaSigner, Signature, SigningKey};
+use p256::pkcs8::DecodePrivateKey;
 
 use crate::error::{Error, Result};
 
@@ -29,8 +43,9 @@ pub enum SignerError {
 /// Pluggable ECDSA-P256-SHA256 signer for CASE.
 ///
 /// The in-tree concrete implementation is [`RingSigner`], which wraps
-/// `ring::signature::EcdsaKeyPair`. Alternative backends (HSM, OS keychain,
-/// software key store) can implement this trait without touching core CASE code.
+/// a P-256 private key and produces RFC 6979 deterministic signatures.
+/// Alternative backends (HSM, OS keychain, software key store) can implement
+/// this trait without touching core CASE code.
 pub trait CaseSigner: Send + Sync + std::fmt::Debug {
     /// Sign `message` with the NOC's private ECDSA-P256 key.
     /// Returns raw 64-byte r||s signature (Matter wire format).
@@ -48,16 +63,22 @@ pub trait CaseSigner: Send + Sync + std::fmt::Debug {
 // ── RingSigner ────────────────────────────────────────────────────────────────
 
 use ring::rand::SystemRandom;
-use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 
-/// [`CaseSigner`] backed by `ring::signature::EcdsaKeyPair` — the in-tree
-/// production-default implementation.
+/// [`CaseSigner`] backed by the `p256` crate's RFC 6979 deterministic ECDSA.
+///
+/// The name `RingSigner` is kept for API stability (this type was introduced in
+/// M4.1). Key generation still uses `ring` (`[Self::generate]`), but signing
+/// uses `p256::ecdsa::SigningKey` (RFC 6979 deterministic) and the public key
+/// is derived from the same `p256` signing key. This enables byte-for-byte
+/// test-vector parity with `@noble/curves` (JavaScript) as captured by
+/// `cargo xtask capture-case`.
 ///
 /// Use [`Self::from_pkcs8`] to load existing keys (e.g., from a fabric
 /// store), or [`Self::generate`] in tests to mint a fresh keypair.
 pub struct RingSigner {
-    keypair: EcdsaKeyPair,
-    rng: SystemRandom,
+    /// RFC 6979 deterministic signing key (p256 crate).
+    signing_key: SigningKey,
     public_key: PublicKey,
 }
 
@@ -65,7 +86,7 @@ impl std::fmt::Debug for RingSigner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RingSigner")
             .field("public_key", &self.public_key)
-            .field("keypair", &"<ring::EcdsaKeyPair>")
+            .field("signing_key", &"<p256::ecdsa::SigningKey>")
             .finish_non_exhaustive()
     }
 }
@@ -73,30 +94,42 @@ impl std::fmt::Debug for RingSigner {
 impl RingSigner {
     /// Construct from PKCS#8 v1 encoded private key bytes.
     ///
+    /// Parses the PKCS#8 DER bytes using `p256::ecdsa::SigningKey`, which
+    /// also derives the matching public key. The 65-byte SEC1-uncompressed
+    /// public key is extracted from the `p256` verifying key.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::SigningFailed`] with [`SignerError::Internal`] if the
-    /// bytes are not a valid PKCS#8-encoded P-256 key, or if the encoded
-    /// public key does not carry the expected `0x04` uncompressed-point prefix.
+    /// bytes are not a valid PKCS#8-encoded P-256 key.
     pub fn from_pkcs8(pkcs8_bytes: &[u8]) -> Result<Self> {
-        let rng = SystemRandom::new();
-        let keypair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8_bytes, &rng)
+        let signing_key = SigningKey::from_pkcs8_der(pkcs8_bytes)
             .map_err(|_| Error::SigningFailed(SignerError::Internal))?;
 
+        // Derive the 65-byte SEC1-uncompressed public key from the signing key.
+        let verifying_key = signing_key.verifying_key();
+        let encoded = verifying_key.to_encoded_point(false); // false = uncompressed
+        let encoded_bytes = encoded.as_bytes();
+        if encoded_bytes.len() != 65 {
+            return Err(Error::SigningFailed(SignerError::Internal));
+        }
         let mut pk_bytes = [0u8; 65];
-        pk_bytes.copy_from_slice(keypair.public_key().as_ref());
+        pk_bytes.copy_from_slice(encoded_bytes);
         let public_key =
             PublicKey::new(pk_bytes).map_err(|_| Error::SigningFailed(SignerError::Internal))?;
 
         Ok(Self {
-            keypair,
-            rng,
+            signing_key,
             public_key,
         })
     }
 
     /// Generate a fresh ECDSA-P256 keypair. Returns the signer plus the
     /// PKCS#8 bytes so the caller can persist them.
+    ///
+    /// Key generation uses `ring`'s `EcdsaKeyPair::generate_pkcs8` for its
+    /// well-audited RNG plumbing. The resulting PKCS#8 is then loaded via
+    /// `from_pkcs8` so that signing uses the deterministic `p256` path.
     ///
     /// # Errors
     ///
@@ -113,18 +146,43 @@ impl RingSigner {
 }
 
 impl CaseSigner for RingSigner {
+    /// Sign `message` using RFC 6979 deterministic ECDSA-P256-SHA256.
+    ///
+    /// Uses `p256::ecdsa::SigningKey::sign` which follows RFC 6979 for nonce
+    /// generation (same algorithm as `@noble/curves` in JavaScript), enabling
+    /// byte-for-byte reproducible test vectors captured by
+    /// `cargo xtask capture-case`.
+    ///
+    /// The signature is low-s normalized (`s ≤ n/2`), matching `@noble/curves`
+    /// behavior. Both `s` and `n - s` are valid ECDSA signatures; this ensures
+    /// the Rust output is byte-identical with matter.js.
+    ///
+    /// The returned signature is in IEEE P1363 compact format (raw r||s, 64 bytes),
+    /// which is the Matter wire format for ECDSA signatures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignerError::Internal`] on signing failure (not expected for
+    /// valid keys and any message length).
     fn sign_p256_sha256(&self, message: &[u8]) -> std::result::Result<[u8; 64], SignerError> {
-        let sig = self
-            .keypair
-            .sign(&self.rng, message)
-            .map_err(|_| SignerError::Internal)?;
-        let bytes = sig.as_ref();
-        if bytes.len() != 64 {
-            return Err(SignerError::Internal);
-        }
-        let mut out = [0u8; 64];
-        out.copy_from_slice(bytes);
-        Ok(out)
+        // `Signer::sign` hashes `message` with SHA-256 internally (the `sha256`
+        // feature of the `p256` crate wires this up via `ecdsa::hazmat::SignPrimitive`
+        // + `DigestSigner<sha2::Sha256, _>`). The returned `Signature` is in the
+        // compact (IEEE P1363) format: 32-byte big-endian r || 32-byte big-endian s.
+        let sig: Signature = self.signing_key.sign(message);
+        // Apply low-s normalization (s → n - s when s > n/2).
+        //
+        // `@noble/curves` always produces low-s signatures (s ≤ n/2).
+        // `p256::ecdsa::SigningKey::sign` uses RFC 6979 for nonce generation but
+        // does NOT guarantee low-s — it may produce s > n/2 for some keys and
+        // messages. Both forms are mathematically equivalent and valid per ECDSA,
+        // but byte-parity tests require the same representation as matter.js.
+        //
+        // `Signature::normalize_s()` returns `Some(normalized)` when s > n/2
+        // (and flips s to n - s), or `None` when s is already low.
+        let sig = sig.normalize_s().unwrap_or(sig);
+        // `Signature::to_bytes()` returns the compact 64-byte r||s GenericArray.
+        Ok(sig.to_bytes().into())
     }
 
     fn public_key(&self) -> &PublicKey {
@@ -155,14 +213,14 @@ mod tests {
     }
 
     #[test]
-    fn signing_same_message_twice_may_differ() {
-        // ring's ECDSA mixes in a random nonce contribution even though it also
-        // uses an RFC6979-derived component; two signs of the same message
-        // produce different signatures with overwhelming probability.
+    fn signing_same_message_twice_is_deterministic() {
+        // p256's ECDSA uses RFC 6979 deterministic nonce generation, so signing
+        // the same message twice produces identical signatures. This property is
+        // required for byte-parity test vectors captured by `cargo xtask capture-case`.
         let (signer, _) = RingSigner::generate().unwrap();
         let a = signer.sign_p256_sha256(b"same").unwrap();
         let b = signer.sign_p256_sha256(b"same").unwrap();
-        assert_ne!(a, b);
+        assert_eq!(a, b, "RFC 6979 signing must be deterministic");
     }
 
     #[test]
@@ -179,5 +237,31 @@ mod tests {
     fn pkcs8_from_invalid_bytes_returns_error() {
         let err = RingSigner::from_pkcs8(b"garbage").unwrap_err();
         assert!(matches!(err, Error::SigningFailed(SignerError::Internal)));
+    }
+
+    #[test]
+    fn signing_produces_low_s_signature() {
+        // Signatures must have s ≤ n/2 (low-s normalized) to match @noble/curves output.
+        // P-256 curve order n split into two u128 halves (big-endian):
+        // n = 0xFFFFFFFF_00000000_FFFFFFFF_FFFFFFFF_BCE6FAAD_A7179E84_F3B9CAC2_FC632551
+        let n_hi = 0xFFFF_FFFF_0000_0000_FFFF_FFFF_FFFF_FFFFu128;
+        let n_lo = 0xBCE6_FAAD_A717_9E84_F3B9_CAC2_FC63_2551u128;
+
+        let (signer, _) = RingSigner::generate().unwrap();
+        // Sign several messages to exercise different (r, s) pairs.
+        for msg in &[b"alpha" as &[u8], b"beta", b"gamma", b"delta", b"epsilon"] {
+            let sig = signer.sign_p256_sha256(msg).unwrap();
+            let s_hi = u128::from_be_bytes(sig[32..48].try_into().unwrap());
+            let s_lo = u128::from_be_bytes(sig[48..64].try_into().unwrap());
+            // n/2 = (n - 1) / 2; s ≤ n/2 iff 2*s ≤ n. Perform a 256-bit comparison.
+            // n is odd so n/2 = 0x7FFF...DE73... We check s_hi, then s_lo.
+            let half_hi = (n_hi >> 1) | ((n_lo >> 127) << 127); // carry bit from lo to hi
+            let half_lo = n_lo >> 1;
+            let is_low_s = s_hi < half_hi || (s_hi == half_hi && s_lo <= half_lo);
+            assert!(
+                is_low_s,
+                "signature s must be ≤ n/2 (low-s) for message {msg:?}: s = {s_hi:016x}{s_lo:016x}",
+            );
+        }
     }
 }

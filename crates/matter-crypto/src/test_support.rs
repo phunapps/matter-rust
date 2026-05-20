@@ -21,6 +21,11 @@
 //! (big-endian, < curve order). Passing the zero scalar or a value ≥ the
 //! curve order returns `Err(Error::InvalidScalar)`.
 
+use matter_cert::TrustedRoots;
+
+use crate::case::initiator::CaseInitiator;
+use crate::case::responder::CaseResponder;
+use crate::case::{CaseCredentials, ResumptionRecord};
 use crate::error::Result;
 use crate::pase::{PasePbkdfParams, PaseProver, PaseVerifier};
 
@@ -185,6 +190,96 @@ pub fn verifier_with_scalar_from_pin(
     y_scalar: [u8; 32],
 ) -> Result<PaseVerifier> {
     PaseVerifier::new_from_pin_with_scalar(pin, params, y_scalar)
+}
+
+// =============================================================================
+// CASE helpers (M4.3)
+// =============================================================================
+
+/// Construct a [`CaseInitiator`] with a fixed ephemeral private key and
+/// initiator random.
+///
+/// Bypasses the OS RNG entirely — the ephemeral keypair is derived from
+/// `eph_private_key` and the 32-byte nonce is supplied directly.
+/// Used by the matter.js byte-parity tests to replay a captured handshake
+/// with deterministic inputs.
+///
+/// # Errors
+///
+/// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
+///   zero, >= the P-256 curve order, or otherwise not a valid scalar.
+pub fn case_initiator_with_eph_key(
+    credentials: CaseCredentials,
+    trusted_roots: TrustedRoots,
+    peer_node_id: u64,
+    peer_fabric_id: u64,
+    eph_private_key: [u8; 32],
+    initiator_random: [u8; 32],
+) -> Result<CaseInitiator> {
+    CaseInitiator::new_with_eph_and_random(
+        credentials,
+        trusted_roots,
+        peer_node_id,
+        peer_fabric_id,
+        eph_private_key,
+        initiator_random,
+    )
+}
+
+/// Resumption-path variant of [`case_initiator_with_eph_key`].
+///
+/// The Sigma1 message produced by [`CaseInitiator::start`] will include
+/// `resumption_id` (tag 6) and `initiator_resume_mic` (tag 7) derived from
+/// `record`. All random inputs are still bypassed.
+///
+/// # Errors
+///
+/// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
+///   zero, >= the P-256 curve order, or otherwise not a valid scalar.
+pub fn case_initiator_with_resumption_eph_key(
+    credentials: CaseCredentials,
+    trusted_roots: TrustedRoots,
+    peer_node_id: u64,
+    peer_fabric_id: u64,
+    record: ResumptionRecord,
+    eph_private_key: [u8; 32],
+    initiator_random: [u8; 32],
+) -> Result<CaseInitiator> {
+    CaseInitiator::new_with_resumption_eph_and_random(
+        credentials,
+        trusted_roots,
+        peer_node_id,
+        peer_fabric_id,
+        record,
+        eph_private_key,
+        initiator_random,
+    )
+}
+
+/// Construct a [`CaseResponder`] with a fixed ephemeral private key and
+/// responder random.
+///
+/// Bypasses the OS RNG entirely — the ephemeral keypair is derived from
+/// `eph_private_key` and the 32-byte nonce is supplied directly.
+/// Used by the matter.js byte-parity tests to replay a captured handshake
+/// with deterministic inputs.
+///
+/// # Errors
+///
+/// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
+///   zero, >= the P-256 curve order, or otherwise not a valid scalar.
+pub fn case_responder_with_eph_key(
+    credentials: CaseCredentials,
+    trusted_roots: TrustedRoots,
+    eph_private_key: [u8; 32],
+    responder_random: [u8; 32],
+) -> Result<CaseResponder> {
+    CaseResponder::new_with_eph_and_random(
+        credentials,
+        trusted_roots,
+        eph_private_key,
+        responder_random,
+    )
 }
 
 // =============================================================================
