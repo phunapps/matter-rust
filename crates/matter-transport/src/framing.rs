@@ -9,53 +9,57 @@ use bitflags::bitflags;
 use crate::error::{Error, Result};
 
 bitflags! {
-    /// First byte of the secured-message header. See Matter Core Spec
-    /// §4.4.1 ("Message Header Fields") for the canonical bit layout.
+    /// First byte of the secured-message header. The bit layout follows
+    /// matter.js's `PacketHeaderFlag` enum (`@matter/protocol`
+    /// `codec/MessageCodec.ts`), cross-verified byte-for-byte against
+    /// captured fixtures in `test-vectors/transport/`.
     ///
-    /// - Bits 0..=3: protocol version (must be `0` for current spec).
-    /// - Bit 4: reserved (must be `0`).
-    /// - Bit 5: `S` — source node ID present in header.
-    /// - Bits 6..=7: `DSIZ` — destination-node-ID size selector.
-    ///   `00` none, `01` 64-bit unicast, `10` 16-bit group, `11` reserved.
+    /// - Bit 0: `DSIZ` low bit — set if destination is a unicast Node ID.
+    /// - Bit 1: `DSIZ` high bit — set if destination is a 16-bit Group ID.
+    ///   (`DSIZ = 0b11` is reserved.)
+    /// - Bit 2: `S` — source node ID present in header.
+    /// - Bit 3: reserved (must be `0`).
+    /// - Bits 4..=7: protocol version (must be `0` for current spec).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct SecuredMessageFlags: u8 {
         /// `S = 1` — header carries an 8-byte source node ID.
-        const SOURCE_PRESENT = 0b0010_0000;
+        const SOURCE_PRESENT = 0b0000_0100;
         /// `DSIZ = 0b01` — header carries an 8-byte unicast destination node ID.
-        const DEST_UNICAST   = 0b0100_0000;
+        const DEST_UNICAST   = 0b0000_0001;
         /// `DSIZ = 0b10` — header carries a 2-byte group ID instead.
-        const DEST_GROUP     = 0b1000_0000;
-        // Version field (bits 0..=3) and reserved (bit 4) are zero in all
+        const DEST_GROUP     = 0b0000_0010;
+        // Version field (bits 4..=7) and reserved (bit 3) are zero in all
         // currently spec-defined messages — we surface no bitflag constants
         // for them; reads/writes round-trip the raw bits via `bits()`.
     }
 
-    /// Second-section byte of the secured-message header. See Matter Core
-    /// Spec §4.4.1.
+    /// Second-section byte of the secured-message header. Bit layout
+    /// follows matter.js's `SecurityFlag` enum.
     ///
-    /// - Bit 0: `P` — privacy enhancements applied to the message header.
-    /// - Bit 1: `C` — control message (Secure Channel protocol message).
-    /// - Bit 2: `MX` — message extensions present.
-    /// - Bits 3..=4: reserved.
-    /// - Bits 5..=7: session type. `0` unicast, `1` group; others reserved.
+    /// - Bits 0..=1: session type (`SessionTypeMask`). `0` unicast,
+    ///   `1` group; others reserved.
+    /// - Bits 2..=4: reserved.
+    /// - Bit 5: `MX` — message extensions present.
+    /// - Bit 6: `C` — control message (Secure Channel protocol message).
+    /// - Bit 7: `P` — privacy enhancements applied to the message header.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct SecurityFlags: u8 {
         /// `P` — privacy enhancements applied.
-        const PRIVACY            = 0b0000_0001;
+        const PRIVACY            = 0b1000_0000;
         /// `C` — control message.
-        const CONTROL            = 0b0000_0010;
+        const CONTROL            = 0b0100_0000;
         /// `MX` — message extensions present.
-        const EXTENSIONS_PRESENT = 0b0000_0100;
-        /// Session type bits set to "group" (`0b001` in the top three bits).
-        const SESSION_TYPE_GROUP = 0b0010_0000;
+        const EXTENSIONS_PRESENT = 0b0010_0000;
+        /// Session type bits set to "group" (`0b01` in the low two bits).
+        const SESSION_TYPE_GROUP = 0b0000_0001;
     }
 }
 
-const DSIZ_MASK: u8 = 0b1100_0000;
+const DSIZ_MASK: u8 = 0b0000_0011;
 const DSIZ_NONE: u8 = 0b0000_0000;
-const DSIZ_UNICAST: u8 = 0b0100_0000;
-const DSIZ_GROUP: u8 = 0b1000_0000;
-const DSIZ_RESERVED: u8 = 0b1100_0000;
+const DSIZ_UNICAST: u8 = 0b0000_0001;
+const DSIZ_GROUP: u8 = 0b0000_0010;
+const DSIZ_RESERVED: u8 = 0b0000_0011;
 
 /// Peer-allocated session identifier carried at byte offset 1 of the
 /// header (little-endian).
@@ -516,8 +520,8 @@ mod tests {
 
     #[test]
     fn header_decode_rejects_reserved_dsiz() {
-        // Flags byte with DSIZ=0b11 in the top two bits is reserved.
-        let bytes = [0b1100_0000, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        // Flags byte with DSIZ=0b11 in the low two bits is reserved.
+        let bytes = [0b0000_0011, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         let err = decode_header(&bytes).unwrap_err();
         assert!(matches!(err, Error::MalformedHeader(_)));
     }
