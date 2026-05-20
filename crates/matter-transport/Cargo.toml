@@ -18,4 +18,11 @@ workspace = true
 [dependencies]
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
 matter-crypto = { path = "../matter-crypto", version = "0.1.0-pre" }
+bitflags = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+hex = { version = "0.4", default-features = false, features = ["std"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1.0"

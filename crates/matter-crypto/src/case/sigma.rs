@@ -38,12 +38,6 @@
 //! acts as the domain-separating context in every HKDF salt (CaseClient.ts
 //! lines 153–159, 199–203, 220–223).
 
-use aes::Aes128;
-use ccm::{
-    aead::{Aead, KeyInit, Payload},
-    consts::{U13, U16},
-    Ccm, Nonce,
-};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{NonZeroScalar, PublicKey as P256PublicKey, SecretKey};
 use ring::digest::{digest, SHA256};
@@ -54,33 +48,24 @@ use subtle::ConstantTimeEq;
 use matter_cert::MatterCertificate;
 use matter_codec::{Tag, TlvWriter};
 
+use crate::aead;
 use crate::error::{Error, Result};
 
 // =============================================================================
-// AES-128-CCM type alias
+// AEAD constants — re-exported from `crate::aead`
 // =============================================================================
+//
+// Matter Core Spec §3.6:
+// - `CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES = 16` (AES-128) → `AEAD_KEY_LEN`
+// - `CRYPTO_AEAD_NONCE_LENGTH_BYTES   = 13`           → `AEAD_NONCE_LEN`
+// - `CRYPTO_AEAD_MIC_LENGTH_BYTES     = 16`           → `AEAD_TAG_LEN`
+//
+// The cipher itself lives in `crate::aead`; we re-export the size constants
+// at crate-private visibility so existing call sites
+// (`crate::case::sigma::AEAD_KEY_LEN`, etc.) keep compiling unchanged.
 
-/// AES-128-CCM with a 13-byte nonce and 16-byte (128-bit) authentication tag.
-///
-/// Matter Core Spec §3.6:
-/// - `CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES = 16` (AES-128)
-/// - `CRYPTO_AEAD_NONCE_LENGTH_BYTES = 13`
-/// - `CRYPTO_AEAD_MIC_LENGTH_BYTES = 16`
-type Aes128Ccm = Ccm<Aes128, U16, U13>;
-
-// =============================================================================
-// Constants pinned from matter.js
-// =============================================================================
-
-/// AES-128-CCM key length in bytes (16 = 128 bits).
-pub(crate) const AEAD_KEY_LEN: usize = 16;
-
-/// AES-128-CCM authentication tag length in bytes.
-#[allow(dead_code)] // Used in AEAD tests and will be consumed by M5 transport.
-pub(crate) const AEAD_TAG_LEN: usize = 16;
-
-/// AES-128-CCM nonce length in bytes.
-pub(crate) const AEAD_NONCE_LEN: usize = 13;
+#[allow(unused_imports)] // `AEAD_TAG_LEN` is consumed by the local AEAD tests.
+pub(crate) use crate::aead::{AEAD_KEY_LEN, AEAD_NONCE_LEN, AEAD_TAG_LEN};
 
 // ---------------------------------------------------------------------------
 // HKDF info labels — exact UTF-8 bytes as used by matter.js
@@ -332,19 +317,7 @@ pub(crate) fn aead_encrypt(
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>> {
-    let cipher = Aes128Ccm::new_from_slice(key).map_err(|_| Error::EphemeralKeyGenerationFailed)?;
-    // `(*nonce).into()` converts `[u8; 13]` → `GenericArray<u8, U13>` via
-    // the `From<[u8; N]>` impl present since generic-array 0.14.
-    let nonce_arr: Nonce<U13> = (*nonce).into();
-    cipher
-        .encrypt(
-            &nonce_arr,
-            Payload {
-                msg: plaintext,
-                aad,
-            },
-        )
-        .map_err(|_| Error::EphemeralKeyGenerationFailed)
+    aead::encrypt(key, nonce, aad, plaintext)
 }
 
 /// Decrypt an AES-128-CCM ciphertext blob (`ciphertext || tag`).
@@ -366,18 +339,7 @@ pub(crate) fn aead_decrypt(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Vec<u8>> {
-    let cipher =
-        Aes128Ccm::new_from_slice(key).map_err(|_| Error::EncryptedBlobDecryptionFailed)?;
-    let nonce_arr: Nonce<U13> = (*nonce).into();
-    cipher
-        .decrypt(
-            &nonce_arr,
-            Payload {
-                msg: ciphertext,
-                aad,
-            },
-        )
-        .map_err(|_| Error::EncryptedBlobDecryptionFailed)
+    aead::decrypt(key, nonce, aad, ciphertext)
 }
 
 // =============================================================================
