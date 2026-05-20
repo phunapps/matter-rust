@@ -393,6 +393,95 @@ impl CaseInitiator {
         )
     }
 
+    /// Deterministic new-session constructor for byte-parity testing — injects
+    /// a pre-computed ephemeral private key and initiator random, bypassing
+    /// the RNG entirely.
+    ///
+    /// This mirrors `new_using_rng` but derives the ephemeral public key
+    /// from the supplied private key bytes rather than sampling from an RNG.
+    /// The only valid caller is `test_support::case_initiator_with_eph_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
+    /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
+    pub(crate) fn new_with_eph_and_random(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        peer_node_id: u64,
+        peer_fabric_id: u64,
+        eph_private_key: [u8; 32],
+        initiator_random: [u8; 32],
+    ) -> Result<Self> {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        use p256::NonZeroScalar;
+        let scalar_opt = NonZeroScalar::from_repr(eph_private_key.into());
+        let scalar =
+            Option::<NonZeroScalar>::from(scalar_opt).ok_or(Error::EphemeralKeyGenerationFailed)?;
+        let eph_secret = SecretKey::new(scalar.into());
+        let encoded = eph_secret.public_key().to_encoded_point(false);
+        let mut eph_pub = [0u8; 65];
+        eph_pub.copy_from_slice(encoded.as_bytes());
+        Ok(Self {
+            state: State::AwaitingStart {
+                credentials,
+                trusted_roots,
+                peer_node_id,
+                peer_fabric_id,
+                eph_secret,
+                eph_pub,
+                initiator_random,
+                initiator_session_id: 0,
+                resumption_record: None,
+            },
+        })
+    }
+
+    /// Deterministic resumption constructor for byte-parity testing — injects
+    /// a pre-computed ephemeral private key and initiator random, bypassing
+    /// the RNG entirely.
+    ///
+    /// Same as `new_with_eph_and_random` but includes a prior-session
+    /// `ResumptionRecord` so that Sigma1 carries resumption fields.
+    /// The only valid caller is `test_support::case_initiator_with_resumption_eph_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
+    /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
+    pub(crate) fn new_with_resumption_eph_and_random(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        peer_node_id: u64,
+        peer_fabric_id: u64,
+        record: ResumptionRecord,
+        eph_private_key: [u8; 32],
+        initiator_random: [u8; 32],
+    ) -> Result<Self> {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        use p256::NonZeroScalar;
+        let scalar_opt = NonZeroScalar::from_repr(eph_private_key.into());
+        let scalar =
+            Option::<NonZeroScalar>::from(scalar_opt).ok_or(Error::EphemeralKeyGenerationFailed)?;
+        let eph_secret = SecretKey::new(scalar.into());
+        let encoded = eph_secret.public_key().to_encoded_point(false);
+        let mut eph_pub = [0u8; 65];
+        eph_pub.copy_from_slice(encoded.as_bytes());
+        Ok(Self {
+            state: State::AwaitingStart {
+                credentials,
+                trusted_roots,
+                peer_node_id,
+                peer_fabric_id,
+                eph_secret,
+                eph_pub,
+                initiator_random,
+                initiator_session_id: 0,
+                resumption_record: Some(record),
+            },
+        })
+    }
+
     /// Internal shared constructor: produces an `AwaitingStart` state with
     /// an optional resumption record baked in.
     ///

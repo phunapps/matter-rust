@@ -307,6 +307,44 @@ impl CaseResponder {
         })
     }
 
+    /// Deterministic constructor for byte-parity testing — injects a
+    /// pre-computed ephemeral private key and responder random, bypassing
+    /// the RNG entirely.
+    ///
+    /// This mirrors `new_using_rng` but derives the ephemeral public key
+    /// from the supplied private key bytes rather than sampling from an RNG.
+    /// The only valid caller is `test_support::case_responder_with_eph_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
+    /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
+    pub(crate) fn new_with_eph_and_random(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        eph_private_key: [u8; 32],
+        responder_random: [u8; 32],
+    ) -> Result<Self> {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        use p256::NonZeroScalar;
+        let scalar_opt = NonZeroScalar::from_repr(eph_private_key.into());
+        let scalar =
+            Option::<NonZeroScalar>::from(scalar_opt).ok_or(Error::EphemeralKeyGenerationFailed)?;
+        let eph_secret = SecretKey::new(scalar.into());
+        let encoded = eph_secret.public_key().to_encoded_point(false);
+        let mut eph_pub = [0u8; 65];
+        eph_pub.copy_from_slice(encoded.as_bytes());
+        Ok(Self {
+            state: State::AwaitingSigma1 {
+                credentials,
+                trusted_roots,
+                eph_secret,
+                eph_pub,
+                responder_random,
+            },
+        })
+    }
+
     // ─── State inspection ─────────────────────────────────────────────────
 
     /// Returns the CASE message kind the machine is currently waiting to
