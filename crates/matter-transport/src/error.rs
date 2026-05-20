@@ -1,1 +1,72 @@
-//! Error type for `matter-transport`. Implemented in Milestone 5.
+//! Error type for `matter-transport`.
+//!
+//! M5.1 ships the subset of variants the framing + session-manager layers
+//! produce. M5.2 adds MRP variants. M5.3 adds UDP and mDNS variants behind
+//! the relevant Cargo features.
+
+use thiserror::Error;
+
+/// Convenience `Result` alias for this crate.
+pub type Result<T> = core::result::Result<T, Error>;
+
+/// All failures that can surface from the `matter-transport` framing and
+/// session layers.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum Error {
+    /// The secured-message header bytes could not be parsed. The `usize` is
+    /// the byte offset at which parsing failed.
+    #[error("malformed secured-message header at byte {0}")]
+    MalformedHeader(usize),
+
+    /// AES-CCM tag verification failed. Indistinguishable from "ciphertext
+    /// was tampered with" by spec design — do NOT branch on this for
+    /// detection logic.
+    #[error("AES-CCM decryption failed (wrong key or tag mismatch)")]
+    DecryptionFailed,
+
+    /// Inbound message counter has already been seen and is inside the
+    /// replay window.
+    #[error("inbound counter {counter} already seen in replay window")]
+    ReplayedCounter {
+        /// Counter value that was rejected.
+        counter: u32,
+    },
+
+    /// Inbound message counter is older than the lowest counter the replay
+    /// window still tracks.
+    #[error("inbound counter {counter} too old (window: {window_low}..={window_high})")]
+    CounterTooOld {
+        /// Counter value that was rejected.
+        counter: u32,
+        /// Low end of the still-tracked window.
+        window_low: u32,
+        /// High end of the still-tracked window.
+        window_high: u32,
+    },
+
+    /// Inbound packet referenced a session ID we have no record of.
+    #[error("unknown session ID {0}")]
+    UnknownSession(u16),
+
+    /// Outbound message counter would wrap past `u32::MAX`. The session must
+    /// be torn down and re-established (a new CASE handshake) to continue.
+    #[error("session counter overflow — session must be re-keyed")]
+    CounterOverflow,
+
+    /// A payload was too large for the secured-message format
+    /// (`AES-CCM-128` has a hard cap; we additionally cap to keep MTU sane).
+    #[error("payload too large ({len} bytes; max {max})")]
+    PayloadTooLarge {
+        /// Length attempted.
+        len: usize,
+        /// Maximum allowed (constant set in `framing.rs`).
+        max: usize,
+    },
+
+    /// Bridge from the matter-crypto AEAD module. Currently surfaces as
+    /// `DecryptionFailed` in practice — this variant exists so the From impl
+    /// is total.
+    #[error("crypto error: {0}")]
+    Crypto(#[from] matter_crypto::Error),
+}

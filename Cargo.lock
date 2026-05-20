@@ -500,8 +500,13 @@ dependencies = [
 name = "matter-transport"
 version = "0.0.0"
 dependencies = [
+ "bitflags",
+ "hex",
  "matter-codec",
  "matter-crypto",
+ "proptest",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
