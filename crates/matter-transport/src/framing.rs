@@ -284,28 +284,103 @@ impl Default for ReplayWindow {
     }
 }
 
-// encode_secured / decode_secured are added by Task 5.
+/// Hard cap on encrypted payload size (in bytes). Matter Core Spec §4.4.4
+/// recommends staying well under MTU; we additionally cap at 1280 (the
+/// IPv6 minimum MTU) minus header (24 bytes max) minus AES-CCM tag
+/// (16 bytes) ≈ 1240. We round to 1024 for headroom — large messages use
+/// TCP transport (deferred post-1.0) or BDX.
+const MAX_PAYLOAD_LEN: usize = 1024;
 
-/// Encode a secured Matter message. Filled in by Task 5.
-#[allow(clippy::missing_errors_doc)]
+/// Encode + encrypt a Matter secured message.
+///
+/// The output layout is `header bytes || AES-CCM(payload) || 16-byte tag`,
+/// matching matter.js's `MessageCodec.encodePayload(...)` byte-for-byte.
+///
+/// # Errors
+///
+/// - [`Error::PayloadTooLarge`] if `payload.len() > MAX_PAYLOAD_LEN`.
+/// - [`Error::Crypto`] if the underlying AES-CCM cipher fails (not
+///   expected in practice for spec-bounded message sizes).
 pub fn encode_secured(
-    _header: &SecuredMessageHeader,
-    _payload: &[u8],
-    _keys: &crate::session::SessionKeys,
-    _role: crate::session::SessionRole,
+    header: &SecuredMessageHeader,
+    payload: &[u8],
+    keys: &crate::session::SessionKeys,
+    role: crate::session::SessionRole,
 ) -> Result<Vec<u8>> {
-    unimplemented!("filled in by Task 5")
+    if payload.len() > MAX_PAYLOAD_LEN {
+        return Err(Error::PayloadTooLarge {
+            len: payload.len(),
+            max: MAX_PAYLOAD_LEN,
+        });
+    }
+
+    let aad = encode_header(header);
+    let nonce = build_nonce(header);
+    let key = match role {
+        crate::session::SessionRole::Initiator => &keys.i2r_key,
+        crate::session::SessionRole::Responder => &keys.r2i_key,
+    };
+
+    let ciphertext = matter_crypto::aead::encrypt(key, &nonce, &aad, payload)?;
+    let mut out = aad;
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
 }
 
-/// Decode a secured Matter message. Filled in by Task 5.
-#[allow(clippy::missing_errors_doc)]
+/// Decrypt + decode a Matter secured message.
+///
+/// On success returns the parsed header and the decrypted payload. The
+/// caller's `replay_window` is consulted before decryption is even
+/// attempted: a replayed or too-old counter is rejected without burning
+/// AES-CCM cycles.
+///
+/// # Errors
+///
+/// - [`Error::MalformedHeader`] if the header bytes are truncated or
+///   reserved-value bits are set.
+/// - [`Error::ReplayedCounter`] / [`Error::CounterTooOld`] per
+///   [`ReplayWindow::check_and_record`].
+/// - [`Error::DecryptionFailed`] if the AES-CCM tag does not verify.
 pub fn decode_secured(
-    _bytes: &[u8],
-    _keys: &crate::session::SessionKeys,
-    _role: crate::session::SessionRole,
-    _replay_window: &mut ReplayWindow,
+    bytes: &[u8],
+    keys: &crate::session::SessionKeys,
+    role: crate::session::SessionRole,
+    replay_window: &mut ReplayWindow,
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
-    unimplemented!("filled in by Task 5")
+    let (header, rest) = decode_header(bytes)?;
+    replay_window.check_and_record(header.message_counter.0)?;
+
+    let aad = encode_header(&header);
+    let nonce = build_nonce(&header);
+    // We're decoding inbound from the peer; the peer's outbound key is
+    // the opposite of ours.
+    let key = match role {
+        crate::session::SessionRole::Initiator => &keys.r2i_key,
+        crate::session::SessionRole::Responder => &keys.i2r_key,
+    };
+
+    let plaintext = matter_crypto::aead::decrypt(key, &nonce, &aad, rest)
+        .map_err(|_| Error::DecryptionFailed)?;
+    Ok((header, plaintext))
+}
+
+/// Compose the AES-CCM nonce per Matter Core Spec §4.5:
+/// `nonce = SecurityFlags(1) || MessageCounter(4 LE) || SourceNodeId(8 LE)`.
+///
+/// When the header has no source node ID (S=0), the `SourceNodeId` portion
+/// is zero. Higher-level callers that know the operational Node ID (e.g.
+/// matter-controller in M8) may pre-fill `header.source_node_id` even
+/// though `S` is not set in the on-the-wire flags — but in M5.1 we always
+/// derive nonce `SourceNodeId` from `header.source_node_id` directly, so
+/// the two are coupled. Revisit if M6 needs the split.
+fn build_nonce(header: &SecuredMessageHeader) -> [u8; matter_crypto::aead::AEAD_NONCE_LEN] {
+    let mut nonce = [0u8; matter_crypto::aead::AEAD_NONCE_LEN];
+    nonce[0] = header.security_flags.bits();
+    nonce[1..5].copy_from_slice(&header.message_counter.0.to_le_bytes());
+    if let Some(NodeId(n)) = header.source_node_id {
+        nonce[5..13].copy_from_slice(&n.to_le_bytes());
+    }
+    nonce
 }
 
 #[cfg(test)]
