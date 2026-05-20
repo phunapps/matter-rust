@@ -201,13 +201,87 @@ pub fn decode_header(bytes: &[u8]) -> Result<(SecuredMessageHeader, &[u8])> {
     Ok((parsed, &bytes[offset..]))
 }
 
-// ReplayWindow is added by Task 3.
-
-/// Sliding-window dedup for inbound message counters per Matter Core Spec
-/// §4.4.3. Filled in by Task 3.
-#[derive(Debug, Clone, Default)]
+/// Sliding-window dedup for inbound message counters per Matter Core
+/// Specification §4.4.3.
+///
+/// Tracks the highest counter seen plus a 32-bit bitmap covering the 32
+/// counters immediately preceding it. Counters older than the window
+/// (below `highest_seen - 31`) are rejected as too old; counters in the
+/// window that have already been seen are rejected as duplicates;
+/// everything else is accepted and recorded.
+#[derive(Debug, Clone)]
 pub struct ReplayWindow {
-    _todo: (),
+    highest_seen: Option<u32>,
+    /// Bit `n` set ⇔ `highest_seen - n` has been observed.
+    /// Bit 0 always corresponds to `highest_seen` itself.
+    bitmap: u32,
+}
+
+impl ReplayWindow {
+    /// Width of the sliding window in counter slots (bits in `bitmap`).
+    pub const WIDTH: u32 = 32;
+
+    /// Create an empty window — every counter is novel until the first
+    /// `check_and_record` call.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            highest_seen: None,
+            bitmap: 0,
+        }
+    }
+
+    /// Validate `counter` against the window and, on success, record it.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ReplayedCounter`] if `counter` is inside the window and
+    ///   has already been observed.
+    /// - [`Error::CounterTooOld`] if `counter` is older than
+    ///   `highest_seen - 31`.
+    pub fn check_and_record(&mut self, counter: u32) -> Result<()> {
+        let Some(highest) = self.highest_seen else {
+            // Empty window: any counter is fresh.
+            self.highest_seen = Some(counter);
+            self.bitmap = 1;
+            return Ok(());
+        };
+
+        if counter > highest {
+            // Forward jump. Shift the bitmap so the new highest is bit 0
+            // and the previous highest moves to bit (counter - highest).
+            let shift = counter - highest;
+            self.bitmap = if shift >= Self::WIDTH {
+                0
+            } else {
+                self.bitmap << shift
+            };
+            self.bitmap |= 1;
+            self.highest_seen = Some(counter);
+            Ok(())
+        } else {
+            let offset = highest - counter;
+            if offset >= Self::WIDTH {
+                return Err(Error::CounterTooOld {
+                    counter,
+                    window_low: highest.saturating_sub(Self::WIDTH - 1),
+                    window_high: highest,
+                });
+            }
+            let bit = 1u32 << offset;
+            if self.bitmap & bit != 0 {
+                return Err(Error::ReplayedCounter { counter });
+            }
+            self.bitmap |= bit;
+            Ok(())
+        }
+    }
+}
+
+impl Default for ReplayWindow {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // encode_secured / decode_secured are added by Task 5.
@@ -371,5 +445,117 @@ mod tests {
         let bytes = [0b1100_0000, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         let err = decode_header(&bytes).unwrap_err();
         assert!(matches!(err, Error::MalformedHeader(_)));
+    }
+
+    mod replay_window {
+        use super::super::*;
+
+        #[test]
+        fn first_counter_accepted() {
+            let mut w = ReplayWindow::new();
+            assert!(w.check_and_record(100).is_ok());
+        }
+
+        #[test]
+        fn duplicate_rejected() {
+            let mut w = ReplayWindow::new();
+            w.check_and_record(100).unwrap();
+            let err = w.check_and_record(100).unwrap_err();
+            assert!(matches!(err, Error::ReplayedCounter { counter: 100 }));
+        }
+
+        #[test]
+        fn strictly_increasing_accepted() {
+            let mut w = ReplayWindow::new();
+            for n in [10u32, 11, 12, 13, 100, 101] {
+                w.check_and_record(n).unwrap();
+            }
+        }
+
+        #[test]
+        fn within_window_unseen_accepted() {
+            // After seeing 100, counters 100-31..=99 (within the 32-bit window)
+            // that we have NOT yet seen must be accepted exactly once each.
+            let mut w = ReplayWindow::new();
+            w.check_and_record(100).unwrap();
+            w.check_and_record(99).unwrap();
+            w.check_and_record(98).unwrap();
+            // Duplicates now rejected.
+            assert!(w.check_and_record(99).is_err());
+            assert!(w.check_and_record(98).is_err());
+        }
+
+        #[test]
+        fn outside_window_rejected_as_too_old() {
+            // After seeing 100, the window covers 69..=100 (32 entries).
+            // 68 and below are too old.
+            let mut w = ReplayWindow::new();
+            w.check_and_record(100).unwrap();
+            let err = w.check_and_record(68).unwrap_err();
+            assert!(
+                matches!(err, Error::CounterTooOld { counter: 68, .. }),
+                "expected CounterTooOld for 68; got {err:?}",
+            );
+        }
+
+        #[test]
+        fn forward_jump_slides_window() {
+            // Going from 100 to 200 must accept 200 and forget everything
+            // older than (200 - 31) = 169.
+            let mut w = ReplayWindow::new();
+            w.check_and_record(100).unwrap();
+            w.check_and_record(200).unwrap();
+            // 100 is now too old to deduplicate against.
+            let err = w.check_and_record(100).unwrap_err();
+            assert!(matches!(err, Error::CounterTooOld { .. }));
+            // 200 is now a duplicate.
+            let err = w.check_and_record(200).unwrap_err();
+            assert!(matches!(err, Error::ReplayedCounter { counter: 200 }));
+        }
+
+        #[test]
+        fn counter_zero_accepted() {
+            // Spec §4.4.3 says outbound counters start above 1<<31, but
+            // inbound counters from a peer can technically be anything; we
+            // do not special-case zero.
+            let mut w = ReplayWindow::new();
+            w.check_and_record(0).unwrap();
+            assert!(w.check_and_record(0).is_err());
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+mod replay_proptest {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Strictly-increasing counters are always accepted.
+        #[test]
+        fn monotonic_sequence_always_accepted(
+            seed in any::<u32>(),
+            len in 1usize..=100,
+        ) {
+            let mut window = ReplayWindow::new();
+            let mut counter = seed;
+            for _ in 0..len {
+                prop_assert!(window.check_and_record(counter).is_ok());
+                counter = counter.wrapping_add(1);
+                if counter == 0 {
+                    // Wrap-around isn't supported; we'd need re-keying.
+                    break;
+                }
+            }
+        }
+
+        /// Whatever counter we record, recording it twice always errors.
+        #[test]
+        fn idempotent_replay_rejection(c in any::<u32>()) {
+            let mut window = ReplayWindow::new();
+            window.check_and_record(c).unwrap();
+            prop_assert!(window.check_and_record(c).is_err());
+        }
     }
 }
