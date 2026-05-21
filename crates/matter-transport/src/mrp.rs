@@ -201,11 +201,6 @@ struct PendingAck {
 /// Per-session MRP state.
 pub struct MrpState {
     pending_acks: HashMap<MessageCounter, PendingAck>,
-    /// Per-exchange reliability flag, populated by `prepare_outbound`
-    /// and consumed by the next `mark_packet_sent` call for that
-    /// exchange. Lets `mark_packet_sent` no-op for unreliable sends
-    /// without a signature change.
-    pending_reliability: HashMap<u16, bool>,
     next_exchange_id: u16,
     last_outbound: Option<Instant>,
     config: MrpConfig,
@@ -217,7 +212,6 @@ impl MrpState {
     pub fn new(config: MrpConfig) -> Self {
         Self {
             pending_acks: HashMap::new(),
-            pending_reliability: HashMap::new(),
             next_exchange_id: 1,
             last_outbound: None,
             config,
@@ -272,12 +266,6 @@ impl MrpState {
         encode_protocol_header(&header, &mut wire_payload);
         wire_payload.extend_from_slice(app_payload);
 
-        // Record reliability for the next mark_packet_sent on this
-        // exchange. Tasks 5/6 may revisit how this is tracked alongside
-        // the full exchange table.
-        self.pending_reliability
-            .insert(exchange_id, mrp_flags.reliable);
-
         Ok(PreparedOutbound {
             wire_payload,
             exchange_id,
@@ -295,17 +283,10 @@ impl MrpState {
         id
     }
 
-    /// Register the encrypted wire bytes of a just-sent message so
-    /// [`MrpState::handle_timeout`] can retransmit them. Caller invokes
-    /// AFTER `framing::encode_secured`.
-    ///
-    /// Internally tracks `reliable` per exchange via the most recent
-    /// [`MrpState::prepare_outbound`] call. The pending-ack entry is only
-    /// inserted for reliable messages; unreliable calls update
-    /// `last_outbound` (so idle/active classification reflects the true
-    /// send cadence) but otherwise no-op. This satisfies the
-    /// `unreliable_send_no_pending_entry` contract without requiring the
-    /// caller to gate the call externally.
+    /// Register the encrypted wire bytes of a just-sent message. Caller
+    /// passes `reliable` to indicate whether MRP should track this message
+    /// for retransmit. Unreliable messages still update `last_outbound` so
+    /// idle-vs-active classification remains accurate.
     ///
     /// Idle vs active base is selected based on the gap from the previous
     /// `last_outbound`: if `now - last_outbound > config.idle_threshold`,
@@ -315,6 +296,7 @@ impl MrpState {
         counter: MessageCounter,
         exchange_id: u16,
         packet_bytes: Vec<u8>,
+        reliable: bool,
         now: Instant,
     ) {
         let is_active = match self.last_outbound {
@@ -323,13 +305,6 @@ impl MrpState {
         };
         self.last_outbound = Some(now);
 
-        // Look up whether the exchange's most recent prepare_outbound
-        // requested reliability. Missing entry (e.g. exchange unknown to
-        // MRP) is treated as not-reliable — the caller-discipline path.
-        let reliable = self
-            .pending_reliability
-            .remove(&exchange_id)
-            .unwrap_or(false);
         if !reliable {
             return;
         }
@@ -473,7 +448,13 @@ mod tests {
         assert_eq!(prepared.exchange_id, 1, "first allocated exchange_id");
         assert!(!prepared.piggyback_acked);
         // No pending_acks even after mark_packet_sent because R=0.
-        mrp.mark_packet_sent(MessageCounter(1), prepared.exchange_id, vec![0u8; 16], now);
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![0u8; 16],
+            false,
+            now,
+        );
         assert_eq!(mrp.poll_timeout(), None);
     }
 
@@ -496,6 +477,7 @@ mod tests {
             MessageCounter(1),
             prepared.exchange_id,
             vec![0xAAu8; 24],
+            true,
             now,
         );
 
@@ -518,7 +500,13 @@ mod tests {
             )
             .unwrap();
         let packet = vec![0xAAu8; 24];
-        mrp.mark_packet_sent(MessageCounter(1), prepared.exchange_id, packet.clone(), now);
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            packet.clone(),
+            true,
+            now,
+        );
 
         // Before the deadline — no events.
         assert!(mrp
@@ -560,7 +548,13 @@ mod tests {
                 now,
             )
             .unwrap();
-        mrp.mark_packet_sent(MessageCounter(1), prepared.exchange_id, vec![1u8; 8], now);
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![1u8; 8],
+            true,
+            now,
+        );
 
         // 5 attempts: 300, 300+480=780, 780+768=1548, 1548+1228=2776, 2776+1965=4741 ms.
         // After the 5th retransmit, attempts_remaining = 0; the NEXT timer
@@ -605,7 +599,7 @@ mod tests {
                 t,
             )
             .unwrap();
-        mrp.mark_packet_sent(MessageCounter(1), p1.exchange_id, vec![1u8; 4], t);
+        mrp.mark_packet_sent(MessageCounter(1), p1.exchange_id, vec![1u8; 4], true, t);
         assert_eq!(mrp.poll_timeout().unwrap(), t + Duration::from_millis(300));
 
         // Clear pending (simulate ack).
@@ -630,7 +624,7 @@ mod tests {
                 later,
             )
             .unwrap();
-        mrp.mark_packet_sent(MessageCounter(2), p2.exchange_id, vec![2u8; 4], later);
+        mrp.mark_packet_sent(MessageCounter(2), p2.exchange_id, vec![2u8; 4], true, later);
         assert_eq!(
             mrp.poll_timeout().unwrap(),
             later + Duration::from_millis(4200),
