@@ -6,7 +6,8 @@
 #![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 
 use matter_crypto::pase::PaseSessionKeys;
-use matter_transport::session::{MrpFlags, PeerHint, SessionKeys, SessionManager, SessionRole};
+use matter_transport::mrp::MrpFlags;
+use matter_transport::session::{PeerHint, SessionKeys, SessionManager, SessionRole};
 use matter_transport::{
     encode_secured, MessageCounter, SecuredMessageFlags, SecuredMessageHeader, SecurityFlags,
     SessionId,

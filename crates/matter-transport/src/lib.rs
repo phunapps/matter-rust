@@ -30,6 +30,7 @@ pub mod error;
 pub mod framing;
 pub mod mdns;
 pub mod mrp;
+pub mod protocol_header;
 pub mod session;
 pub mod udp;
 
@@ -37,5 +38,13 @@ pub use error::{Error, Result};
 pub use framing::{
     decode_secured, encode_secured, DestNodeId, MessageCounter, NodeId, ReplayWindow,
     SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
+};
+pub use mrp::{
+    InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent, PreparedOutbound,
+    RecentInboundView,
+};
+pub use protocol_header::{
+    build_standalone_ack_header, decode_protocol_header, encode_protocol_header, ExchangeFlags,
+    ProtocolHeader, ProtocolId,
 };
 pub use session::{PeerHint, Session, SessionKeys, SessionManager, SessionRole};

@@ -64,6 +64,26 @@ pub enum Error {
         max: usize,
     },
 
+    /// Decrypted protocol header bytes could not be parsed. The `usize` is
+    /// the byte offset within the decrypted payload (not the wire packet)
+    /// at which parsing failed. Surfaces only after successful AES-CCM
+    /// authentication, so a `MalformedProtocolHeader` necessarily
+    /// originates from an authenticated peer.
+    #[error("malformed protocol header at byte {0}")]
+    MalformedProtocolHeader(usize),
+
+    /// MRP retransmit attempts exhausted for a specific outbound message.
+    /// `MrpEvent::Expired` is emitted alongside via `handle_timeout`;
+    /// this variant exists for callers who prefer `Result`-style error
+    /// handling over event-loop consumption.
+    #[error("MRP retransmit exhausted for exchange {exchange_id} counter {counter}")]
+    MrpRetransmitExhausted {
+        /// Exchange ID whose pending message expired.
+        exchange_id: u16,
+        /// Outbound counter of the expired message.
+        counter: u32,
+    },
+
     /// Bridge from the matter-crypto AEAD module. Currently surfaces as
     /// `DecryptionFailed` in practice — this variant exists so the From impl
     /// is total.

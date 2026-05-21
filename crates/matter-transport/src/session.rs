@@ -99,18 +99,6 @@ pub struct Session {
     pub peer: PeerHint,
 }
 
-/// MRP control fields for an outbound message. Default = no ack required,
-/// no piggyback ack. M5.2 wires the real behaviour.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MrpFlags {
-    /// If `true`, the peer must reply with an MRP ack within the
-    /// retransmit deadline or the message is re-sent.
-    pub requires_ack: bool,
-    /// If `Some(c)`, this outbound message piggybacks an ack for the
-    /// peer's previously-received message `c`.
-    pub ack_for_counter: Option<MessageCounter>,
-}
-
 /// Owns all per-session state for one Matter node.
 #[derive(Debug, Default)]
 pub struct SessionManager {
@@ -227,7 +215,7 @@ impl SessionManager {
         &mut self,
         session_id: SessionId,
         payload: &[u8],
-        _mrp: MrpFlags,
+        _mrp: crate::mrp::MrpFlags,
     ) -> Result<Vec<u8>> {
         let session = self
             .sessions
