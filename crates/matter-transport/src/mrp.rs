@@ -210,10 +210,30 @@ struct PendingOutboundAck {
     deadline: Instant,
 }
 
+/// Cache entry for a recently-seen reliable inbound, kept in a 32-slot
+/// ring buffer for duplicate-reliable detection (Matter Core Spec §4.11.6
+/// dedup-resend path; M5.2 design Q5).
+struct RecentInbound {
+    exchange_id: u16,
+    counter: MessageCounter,
+    is_local_initiator: bool,
+}
+
+/// Per-exchange state tracked across `prepare_outbound` /
+/// `process_inbound` calls. Currently only carries `is_local_initiator`,
+/// which determines the `I` flag for subsequent messages we send in this
+/// exchange.
+struct ExchangeState {
+    is_local_initiator: bool,
+}
+
 /// Per-session MRP state.
 pub struct MrpState {
     pending_acks: HashMap<MessageCounter, PendingAck>,
     pending_outbound_ack: Option<PendingOutboundAck>,
+    recent_reliable: [Option<RecentInbound>; 32],
+    recent_next_slot: usize,
+    exchanges: HashMap<u16, ExchangeState>,
     next_exchange_id: u16,
     last_outbound: Option<Instant>,
     config: MrpConfig,
@@ -226,6 +246,9 @@ impl MrpState {
         Self {
             pending_acks: HashMap::new(),
             pending_outbound_ack: None,
+            recent_reliable: std::array::from_fn(|_| None),
+            recent_next_slot: 0,
+            exchanges: HashMap::new(),
             next_exchange_id: 1,
             last_outbound: None,
             config,
@@ -234,28 +257,23 @@ impl MrpState {
 
     /// Build an outbound wire payload (encoded protocol header concatenated
     /// with `app_payload`). Allocates a new exchange ID if `exchange_id` is
-    /// `None`.
-    ///
-    /// `Some(id)` is supported only for the piggyback-drain case in Task 5:
-    /// the caller-provided `id` must match `pending_outbound_ack.exchange_id`.
-    /// Task 6 lifts this with a proper exchange table that tracks
-    /// `is_local_initiator` for arbitrary caller-driven exchanges.
+    /// `None` (we initiate) and inserts a fresh `ExchangeState` with
+    /// `is_local_initiator = true`. For `Some(id)`, looks up the exchange
+    /// table to determine `is_local_initiator`; if the exchange is not yet
+    /// recorded (caller is using an arbitrary peer-assigned ID without a
+    /// prior inbound), inserts a default record with `is_local_initiator =
+    /// false` (we assume responding).
     ///
     /// When `pending_outbound_ack` is drained, the outgoing header carries
-    /// `A=1` and `ack_counter = pending.ack_counter`, and `is_local_initiator`
-    /// reflects the side recorded when the inbound reliable was processed
-    /// (we are the responder when the peer set `I=1`).
+    /// `A=1` and `ack_counter = pending.ack_counter`. The drain path's
+    /// `is_local_initiator` is guaranteed to agree with the exchange-table
+    /// lookup because both were populated from the same
+    /// `!peer_is_initiator` computation during `process_inbound`.
     ///
     /// # Errors
     ///
     /// Currently infallible in practice — returns `Result` for forward
-    /// compatibility with the exchange-table validation Task 6 adds.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `exchange_id` is `Some(id)` without a matching
-    /// `pending_outbound_ack` — Task 5 only supports the piggyback-drain
-    /// case for explicit exchange IDs (Task 6 lifts this).
+    /// compatibility with future exchange-table validation.
     pub fn prepare_outbound(
         &mut self,
         opcode: u8,
@@ -265,18 +283,33 @@ impl MrpState {
         mrp_flags: MrpFlags,
         _now: Instant,
     ) -> Result<PreparedOutbound> {
-        // Resolve exchange_id + is_local_initiator. For Some(id) we only
-        // support the piggyback-drain case in Task 5; the proper exchange
-        // table lands in Task 6.
+        // Resolve exchange_id + is_local_initiator via the exchange table.
         let (exchange_id, is_local_initiator) = match exchange_id {
-            None => (self.allocate_exchange_id(), true),
-            Some(id) => match &self.pending_outbound_ack {
-                Some(p) if p.exchange_id == id => (id, p.is_local_initiator),
-                _ => panic!(
-                    "MRP Task 5: caller-provided exchange_id with no matching piggyback \
-                     (exchange table arrives in Task 6)"
-                ),
-            },
+            None => {
+                let id = self.allocate_exchange_id();
+                self.exchanges.insert(
+                    id,
+                    ExchangeState {
+                        is_local_initiator: true,
+                    },
+                );
+                (id, true)
+            }
+            Some(id) => {
+                if let Some(state) = self.exchanges.get(&id) {
+                    (id, state.is_local_initiator)
+                } else {
+                    // No record yet for this caller-provided id. Assume we
+                    // are responding (safe default: I=0).
+                    self.exchanges.insert(
+                        id,
+                        ExchangeState {
+                            is_local_initiator: false,
+                        },
+                    );
+                    (id, false)
+                }
+            }
         };
 
         // Drain pending piggyback if it matches THIS exchange.
@@ -485,6 +518,14 @@ impl MrpState {
 
         let exchange_id = header.exchange_id;
         let peer_is_initiator = header.exchange_flags.contains(ExchangeFlags::INITIATOR);
+        let we_are_initiator = !peer_is_initiator;
+
+        // Record the exchange on first sight. `or_insert` ensures we don't
+        // overwrite an existing record if we already initiated this
+        // exchange and are now seeing the peer's first reply.
+        self.exchanges.entry(exchange_id).or_insert(ExchangeState {
+            is_local_initiator: we_are_initiator,
+        });
 
         if header.exchange_flags.contains(ExchangeFlags::ACK) {
             if let Some(MessageCounter(c)) = header.ack_counter {
@@ -509,9 +550,16 @@ impl MrpState {
             self.pending_outbound_ack = Some(PendingOutboundAck {
                 exchange_id,
                 ack_counter: peer_counter,
-                is_local_initiator: !peer_is_initiator,
+                is_local_initiator: we_are_initiator,
                 deadline: now + self.config.standalone_ack_deadline,
             });
+            // Insertion-order eviction into the 32-entry ring buffer.
+            self.recent_reliable[self.recent_next_slot] = Some(RecentInbound {
+                exchange_id,
+                counter: peer_counter,
+                is_local_initiator: we_are_initiator,
+            });
+            self.recent_next_slot = (self.recent_next_slot + 1) % 32;
         }
 
         Ok(InboundOutcome::AppMessage {
@@ -521,18 +569,47 @@ impl MrpState {
         })
     }
 
-    /// Stub for Task 6.
+    /// Look up `peer_counter` in the 32-entry recent-reliable cache.
+    /// Returns `Some(view)` if the counter was seen on a recent reliable
+    /// inbound (the wider system uses this to trigger an ack-resend
+    /// without re-delivering the application payload), or `None` if the
+    /// counter is not cached (either never seen or already evicted).
+    ///
+    /// Linear scan over 32 slots — trivial cost.
     #[must_use]
     pub fn check_duplicate_reliable(
         &self,
-        _peer_counter: MessageCounter,
+        peer_counter: MessageCounter,
     ) -> Option<RecentInboundView> {
-        unimplemented!("Task 6")
+        self.recent_reliable
+            .iter()
+            .flatten()
+            .find(|r| r.counter == peer_counter)
+            .map(|r| RecentInboundView {
+                exchange_id: r.exchange_id,
+                is_local_initiator: r.is_local_initiator,
+            })
     }
 
-    /// Stub for Task 6.
-    pub fn close_exchange(&mut self, _exchange_id: u16) {
-        unimplemented!("Task 6")
+    /// Close the exchange identified by `exchange_id`:
+    /// - Removes it from the exchange table.
+    /// - Drops any pending retransmits scoped to that exchange.
+    /// - Clears the pending piggyback-ack slot if it targets this
+    ///   exchange.
+    ///
+    /// `recent_reliable` entries for this exchange are intentionally
+    /// preserved: a late peer retransmit of a request from the now-closed
+    /// exchange should still trigger the ack-resend path rather than
+    /// surfacing as a fresh application message.
+    pub fn close_exchange(&mut self, exchange_id: u16) {
+        self.exchanges.remove(&exchange_id);
+        self.pending_acks
+            .retain(|_, p| p.exchange_id != exchange_id);
+        if let Some(p) = &self.pending_outbound_ack {
+            if p.exchange_id == exchange_id {
+                self.pending_outbound_ack = None;
+            }
+        }
     }
 }
 
@@ -1001,5 +1078,129 @@ mod tests {
         }
         // Deadline drains; no more pending.
         assert_eq!(mrp.poll_timeout(), None);
+    }
+
+    #[test]
+    fn caller_provided_exchange_id_responder_side() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Peer initiates exchange 0x99 by sending us a reliable message.
+        let inbound = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x99,
+            None,
+            b"req",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+
+        // We respond in the same exchange. We are NOT the initiator.
+        let prepared = mrp
+            .prepare_outbound(
+                0x03,
+                ProtocolId::INTERACTION_MODEL,
+                Some(0x99),
+                b"response",
+                MrpFlags { reliable: true },
+                now + Duration::from_millis(10),
+            )
+            .unwrap();
+        assert_eq!(prepared.exchange_id, 0x99);
+        assert!(!prepared.is_local_initiator);
+
+        let (header, _) =
+            crate::protocol_header::decode_protocol_header(&prepared.wire_payload).unwrap();
+        assert!(
+            !header.exchange_flags.contains(ExchangeFlags::INITIATOR),
+            "we are responder for this exchange"
+        );
+        assert!(header.exchange_flags.contains(ExchangeFlags::RELIABLE));
+        assert!(
+            header.exchange_flags.contains(ExchangeFlags::ACK),
+            "piggyback drained"
+        );
+        assert_eq!(header.ack_counter, Some(MessageCounter(100)));
+    }
+
+    #[test]
+    fn close_exchange_drops_pending() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        let prepared = mrp
+            .prepare_outbound(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                None,
+                b"x",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![1u8; 4],
+            true,
+            now,
+        );
+        assert!(mrp.poll_timeout().is_some());
+
+        mrp.close_exchange(prepared.exchange_id);
+        assert_eq!(
+            mrp.poll_timeout(),
+            None,
+            "closing exchange dropped pending retransmit"
+        );
+    }
+
+    #[test]
+    fn duplicate_reliable_returns_view() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Receive a reliable inbound.
+        let inbound = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"first",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+
+        // Same counter again — the replay window in the wider system
+        // would normally reject; in this test we directly query MRP's
+        // recent-reliable cache.
+        let view = mrp.check_duplicate_reliable(MessageCounter(100)).unwrap();
+        assert_eq!(view.exchange_id, 0x4242);
+        assert!(!view.is_local_initiator, "peer was initiator");
+    }
+
+    #[test]
+    fn recent_reliable_cache_evicts_after_32_entries() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Record 33 distinct reliable inbounds; the first should be evicted.
+        for n in 0u32..33 {
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x02,
+                u16::try_from(n).unwrap(),
+                None,
+                b"",
+            );
+            mrp.process_inbound(inbound, MessageCounter(n), now)
+                .unwrap();
+        }
+
+        // Oldest (counter=0) was evicted.
+        assert!(mrp.check_duplicate_reliable(MessageCounter(0)).is_none());
+        // Newest is still there.
+        assert!(mrp.check_duplicate_reliable(MessageCounter(32)).is_some());
     }
 }
