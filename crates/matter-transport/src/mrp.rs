@@ -191,6 +191,7 @@ pub struct RecentInboundView {
 }
 
 /// Pending retransmit entry for one outbound reliable message.
+#[derive(Debug)]
 struct PendingAck {
     packet_bytes: Vec<u8>,
     exchange_id: u16,
@@ -203,6 +204,7 @@ struct PendingAck {
 /// message is held here at a time; either drained by the next outbound in
 /// the same exchange (cheap) or flushed as a standalone-ack when the 200ms
 /// deadline expires (fallback).
+#[derive(Debug)]
 struct PendingOutboundAck {
     exchange_id: u16,
     ack_counter: MessageCounter,
@@ -213,6 +215,7 @@ struct PendingOutboundAck {
 /// Cache entry for a recently-seen reliable inbound, kept in a 32-slot
 /// ring buffer for duplicate-reliable detection (Matter Core Spec §4.11.6
 /// dedup-resend path; M5.2 design Q5).
+#[derive(Debug)]
 struct RecentInbound {
     exchange_id: u16,
     counter: MessageCounter,
@@ -223,11 +226,13 @@ struct RecentInbound {
 /// `process_inbound` calls. Currently only carries `is_local_initiator`,
 /// which determines the `I` flag for subsequent messages we send in this
 /// exchange.
+#[derive(Debug)]
 struct ExchangeState {
     is_local_initiator: bool,
 }
 
 /// Per-session MRP state.
+#[derive(Debug)]
 pub struct MrpState {
     pending_acks: HashMap<MessageCounter, PendingAck>,
     pending_outbound_ack: Option<PendingOutboundAck>,

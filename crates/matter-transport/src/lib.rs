@@ -47,4 +47,7 @@ pub use protocol_header::{
     build_standalone_ack_header, decode_protocol_header, encode_protocol_header, ExchangeFlags,
     ProtocolHeader, ProtocolId,
 };
-pub use session::{PeerHint, Session, SessionKeys, SessionManager, SessionRole};
+pub use session::{
+    DecodeInboundOutput, EncodeOutboundOutput, PeerHint, Session, SessionKeys, SessionManager,
+    SessionRole,
+};
