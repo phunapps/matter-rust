@@ -134,6 +134,7 @@ pub enum MrpEvent {
 }
 
 /// Outcome of processing an inbound decrypted payload through MRP.
+#[derive(Debug)]
 pub enum InboundOutcome {
     /// A new application message was received. `payload` is the bytes
     /// AFTER the protocol header.
@@ -198,9 +199,21 @@ struct PendingAck {
     is_active: bool,
 }
 
+/// Buffered piggyback-ack slot. At most one outstanding inbound reliable
+/// message is held here at a time; either drained by the next outbound in
+/// the same exchange (cheap) or flushed as a standalone-ack when the 200ms
+/// deadline expires (fallback).
+struct PendingOutboundAck {
+    exchange_id: u16,
+    ack_counter: MessageCounter,
+    is_local_initiator: bool,
+    deadline: Instant,
+}
+
 /// Per-session MRP state.
 pub struct MrpState {
     pending_acks: HashMap<MessageCounter, PendingAck>,
+    pending_outbound_ack: Option<PendingOutboundAck>,
     next_exchange_id: u16,
     last_outbound: Option<Instant>,
     config: MrpConfig,
@@ -212,6 +225,7 @@ impl MrpState {
     pub fn new(config: MrpConfig) -> Self {
         Self {
             pending_acks: HashMap::new(),
+            pending_outbound_ack: None,
             next_exchange_id: 1,
             last_outbound: None,
             config,
@@ -222,9 +236,15 @@ impl MrpState {
     /// with `app_payload`). Allocates a new exchange ID if `exchange_id` is
     /// `None`.
     ///
-    /// Task 4 constraint: `exchange_id` MUST be `None`. Task 6 lifts this
-    /// constraint with an exchange table that tracks `is_local_initiator`
-    /// for `Some(id)` callers.
+    /// `Some(id)` is supported only for the piggyback-drain case in Task 5:
+    /// the caller-provided `id` must match `pending_outbound_ack.exchange_id`.
+    /// Task 6 lifts this with a proper exchange table that tracks
+    /// `is_local_initiator` for arbitrary caller-driven exchanges.
+    ///
+    /// When `pending_outbound_ack` is drained, the outgoing header carries
+    /// `A=1` and `ack_counter = pending.ack_counter`, and `is_local_initiator`
+    /// reflects the side recorded when the inbound reliable was processed
+    /// (we are the responder when the peer set `I=1`).
     ///
     /// # Errors
     ///
@@ -233,8 +253,9 @@ impl MrpState {
     ///
     /// # Panics
     ///
-    /// Panics if `exchange_id` is `Some` — Task 4 only supports allocating
-    /// fresh exchange IDs.
+    /// Panics if `exchange_id` is `Some(id)` without a matching
+    /// `pending_outbound_ack` — Task 5 only supports the piggyback-drain
+    /// case for explicit exchange IDs (Task 6 lifts this).
     pub fn prepare_outbound(
         &mut self,
         opcode: u8,
@@ -244,14 +265,37 @@ impl MrpState {
         mrp_flags: MrpFlags,
         _now: Instant,
     ) -> Result<PreparedOutbound> {
-        // Task 4 constraint: only None supported. Task 6 implements Some.
-        assert!(
-            exchange_id.is_none(),
-            "MRP Task 4: caller-provided exchange_id not yet supported (Task 6)"
-        );
-        let exchange_id = self.allocate_exchange_id();
+        // Resolve exchange_id + is_local_initiator. For Some(id) we only
+        // support the piggyback-drain case in Task 5; the proper exchange
+        // table lands in Task 6.
+        let (exchange_id, is_local_initiator) = match exchange_id {
+            None => (self.allocate_exchange_id(), true),
+            Some(id) => match &self.pending_outbound_ack {
+                Some(p) if p.exchange_id == id => (id, p.is_local_initiator),
+                _ => panic!(
+                    "MRP Task 5: caller-provided exchange_id with no matching piggyback \
+                     (exchange table arrives in Task 6)"
+                ),
+            },
+        };
 
-        let mut flags = ExchangeFlags::INITIATOR;
+        // Drain pending piggyback if it matches THIS exchange.
+        let (ack_flag, ack_counter, piggyback_acked) = match self.pending_outbound_ack.take() {
+            Some(p) if p.exchange_id == exchange_id => {
+                (ExchangeFlags::ACK, Some(p.ack_counter), true)
+            }
+            Some(p) => {
+                // Different exchange — put it back, do not consume.
+                self.pending_outbound_ack = Some(p);
+                (ExchangeFlags::empty(), None, false)
+            }
+            None => (ExchangeFlags::empty(), None, false),
+        };
+
+        let mut flags = ack_flag;
+        if is_local_initiator {
+            flags |= ExchangeFlags::INITIATOR;
+        }
         if mrp_flags.reliable {
             flags |= ExchangeFlags::RELIABLE;
         }
@@ -260,7 +304,7 @@ impl MrpState {
             opcode,
             exchange_id,
             protocol_id,
-            ack_counter: None,
+            ack_counter,
         };
         let mut wire_payload = Vec::with_capacity(app_payload.len() + 16);
         encode_protocol_header(&header, &mut wire_payload);
@@ -269,8 +313,8 @@ impl MrpState {
         Ok(PreparedOutbound {
             wire_payload,
             exchange_id,
-            is_local_initiator: true,
-            piggyback_acked: false,
+            is_local_initiator,
+            piggyback_acked,
         })
     }
 
@@ -326,11 +370,18 @@ impl MrpState {
         );
     }
 
-    /// Earliest retransmit deadline across all pending acks, or `None`
-    /// if no retransmits pending.
+    /// Earliest pending deadline across retransmits and the
+    /// piggyback-ack flush deadline, or `None` if nothing pending.
     #[must_use]
     pub fn poll_timeout(&self) -> Option<Instant> {
-        self.pending_acks.values().map(|p| p.next_attempt).min()
+        let retransmit = self.pending_acks.values().map(|p| p.next_attempt).min();
+        let standalone = self.pending_outbound_ack.as_ref().map(|p| p.deadline);
+        match (retransmit, standalone) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
     }
 
     /// Advance retransmit timers. For each pending whose `next_attempt`
@@ -384,21 +435,90 @@ impl MrpState {
         for c in to_remove {
             self.pending_acks.remove(&c);
         }
+
+        // Standalone-ack deadline: if the buffered piggyback expired before
+        // the next outbound in its exchange, flush it as a standalone-ack.
+        if let Some(p) = &self.pending_outbound_ack {
+            if p.deadline <= now {
+                events.push(MrpTimerEvent::StandaloneAckDeadlineFired {
+                    exchange_id: p.exchange_id,
+                    ack_counter: p.ack_counter,
+                    is_local_initiator: p.is_local_initiator,
+                });
+                self.pending_outbound_ack = None;
+            }
+        }
         events
     }
 
-    /// Stub for Task 5.
+    /// Parse an inbound decrypted payload's protocol header and update MRP
+    /// bookkeeping.
+    ///
+    /// - On `A=1`: clears the matching pending retransmit (`ack_counter`).
+    ///   If the payload is a bare `StandaloneAck` (opcode `0x10`, empty app
+    ///   payload, `R=0`), returns [`InboundOutcome::AckOnly`].
+    /// - On `R=1`: buffers a piggyback ack (`pending_outbound_ack`) with the
+    ///   200ms deadline from [`MrpConfig::standalone_ack_deadline`]. The
+    ///   ack will be drained by the next outbound in the same exchange, or
+    ///   flushed as a standalone-ack via [`MrpTimerEvent::StandaloneAckDeadlineFired`].
+    /// - Otherwise: returns [`InboundOutcome::AppMessage`] with the
+    ///   post-header bytes.
     ///
     /// # Errors
     ///
-    /// Not yet implemented — currently panics.
+    /// Returns the underlying protocol-header decode error if the payload
+    /// is malformed.
     pub fn process_inbound(
         &mut self,
-        _decrypted_payload: Vec<u8>,
-        _peer_counter: MessageCounter,
-        _now: Instant,
+        decrypted_payload: Vec<u8>,
+        peer_counter: MessageCounter,
+        now: Instant,
     ) -> Result<InboundOutcome> {
-        unimplemented!("Task 5")
+        // Decode once and use the tail-slice length to split off app bytes.
+        let (header, header_len) = {
+            let (h, tail) = crate::protocol_header::decode_protocol_header(&decrypted_payload)?;
+            let header_len = decrypted_payload.len() - tail.len();
+            (h, header_len)
+        };
+        let mut bytes = decrypted_payload;
+        let app_payload: Vec<u8> = bytes.drain(header_len..).collect();
+
+        let exchange_id = header.exchange_id;
+        let peer_is_initiator = header.exchange_flags.contains(ExchangeFlags::INITIATOR);
+
+        if header.exchange_flags.contains(ExchangeFlags::ACK) {
+            if let Some(MessageCounter(c)) = header.ack_counter {
+                self.pending_acks.remove(&MessageCounter(c));
+            }
+            // StandaloneAck: opcode 0x10, empty app payload, A=1, R=0.
+            // `unwrap_or` here is safe — A=1 guarantees ack_counter is Some,
+            // but the lint-clean form keeps clippy::unwrap_used happy.
+            if header.opcode == crate::protocol_header::opcode::secure_channel::STANDALONE_ACK
+                && app_payload.is_empty()
+                && !header.exchange_flags.contains(ExchangeFlags::RELIABLE)
+            {
+                return Ok(InboundOutcome::AckOnly {
+                    exchange_id,
+                    acked_counter: header.ack_counter.unwrap_or(MessageCounter(0)),
+                });
+            }
+        }
+
+        if header.exchange_flags.contains(ExchangeFlags::RELIABLE) {
+            // Peer set I=1 ⇒ we are the responder for this exchange.
+            self.pending_outbound_ack = Some(PendingOutboundAck {
+                exchange_id,
+                ack_counter: peer_counter,
+                is_local_initiator: !peer_is_initiator,
+                deadline: now + self.config.standalone_ack_deadline,
+            });
+        }
+
+        Ok(InboundOutcome::AppMessage {
+            exchange_id,
+            is_initiator: peer_is_initiator,
+            payload: app_payload,
+        })
     }
 
     /// Stub for Task 6.
@@ -681,5 +801,205 @@ mod tests {
         assert!(header.exchange_flags.contains(ExchangeFlags::RELIABLE));
         assert_eq!(header.exchange_id, prepared.exchange_id);
         assert_eq!(tail, b"data");
+    }
+
+    use crate::protocol_header::opcode;
+
+    fn build_inbound_payload(
+        flags: ExchangeFlags,
+        opcode_value: u8,
+        exchange_id: u16,
+        ack_counter: Option<MessageCounter>,
+        app_tail: &[u8],
+    ) -> Vec<u8> {
+        let header = ProtocolHeader {
+            exchange_flags: flags,
+            opcode: opcode_value,
+            exchange_id,
+            protocol_id: ProtocolId::INTERACTION_MODEL,
+            ack_counter,
+        };
+        let mut out = Vec::new();
+        encode_protocol_header(&header, &mut out);
+        out.extend_from_slice(app_tail);
+        out
+    }
+
+    #[test]
+    fn process_inbound_app_message_delivers_payload() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+        let payload = build_inbound_payload(
+            ExchangeFlags::INITIATOR, // peer initiated this exchange
+            0x02,
+            0x4242,
+            None,
+            b"hello from peer",
+        );
+        let outcome = mrp
+            .process_inbound(payload, MessageCounter(100), now)
+            .unwrap();
+        match outcome {
+            InboundOutcome::AppMessage {
+                exchange_id,
+                is_initiator,
+                payload,
+            } => {
+                assert_eq!(exchange_id, 0x4242);
+                assert!(is_initiator, "peer set I=1 → peer is the initiator");
+                assert_eq!(payload, b"hello from peer");
+            }
+            other => panic!("expected AppMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_inbound_ack_clears_pending() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Send a reliable outbound first.
+        let prepared = mrp
+            .prepare_outbound(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                None,
+                b"x",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![0xAAu8; 8],
+            true,
+            now,
+        );
+        assert!(mrp.poll_timeout().is_some());
+
+        // Peer sending standalone-ack to us — they did NOT initiate our exchange. I=0 for them.
+        let ack_payload = build_inbound_payload(
+            ExchangeFlags::ACK,
+            opcode::secure_channel::STANDALONE_ACK,
+            prepared.exchange_id,
+            Some(MessageCounter(1)),
+            &[],
+        );
+        let outcome = mrp
+            .process_inbound(ack_payload, MessageCounter(50), now)
+            .unwrap();
+        match outcome {
+            InboundOutcome::AckOnly {
+                exchange_id,
+                acked_counter,
+            } => {
+                assert_eq!(exchange_id, prepared.exchange_id);
+                assert_eq!(acked_counter, MessageCounter(1));
+            }
+            other => panic!("expected AckOnly, got {other:?}"),
+        }
+        assert_eq!(mrp.poll_timeout(), None, "pending_acks cleared");
+    }
+
+    #[test]
+    fn reliable_inbound_queues_piggyback_ack() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+        let payload = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"reliable inbound",
+        );
+        let _ = mrp
+            .process_inbound(payload, MessageCounter(100), now)
+            .unwrap();
+
+        // 200ms standalone-ack deadline should be the poll deadline now.
+        assert_eq!(
+            mrp.poll_timeout().unwrap(),
+            now + Duration::from_millis(200),
+        );
+    }
+
+    #[test]
+    fn piggyback_drained_by_next_outbound() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Inbound reliable to queue the piggyback.
+        let payload = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"in",
+        );
+        mrp.process_inbound(payload, MessageCounter(100), now)
+            .unwrap();
+        assert!(mrp.poll_timeout().is_some());
+
+        // Next outbound in the SAME exchange — should piggyback the ack.
+        let prepared = mrp
+            .prepare_outbound(
+                0x10,
+                ProtocolId::SECURE_CHANNEL,
+                Some(0x4242),
+                b"",
+                MrpFlags::default(),
+                now + Duration::from_millis(50),
+            )
+            .unwrap();
+
+        assert!(prepared.piggyback_acked);
+        // The encoded header should have A=1 with ack_counter = 100.
+        let (header, _) =
+            crate::protocol_header::decode_protocol_header(&prepared.wire_payload).unwrap();
+        assert!(header.exchange_flags.contains(ExchangeFlags::ACK));
+        assert_eq!(header.ack_counter, Some(MessageCounter(100)));
+
+        // Piggyback consumed → no standalone deadline pending.
+        assert_eq!(mrp.poll_timeout(), None);
+    }
+
+    #[test]
+    fn standalone_ack_deadline_fires_after_200ms() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+        let payload = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"in",
+        );
+        mrp.process_inbound(payload, MessageCounter(100), now)
+            .unwrap();
+
+        // Before deadline.
+        assert!(mrp
+            .handle_timeout(now + Duration::from_millis(199))
+            .is_empty());
+
+        // At deadline.
+        let events = mrp.handle_timeout(now + Duration::from_millis(200));
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            MrpTimerEvent::StandaloneAckDeadlineFired {
+                exchange_id,
+                ack_counter,
+                is_local_initiator,
+            } => {
+                assert_eq!(*exchange_id, 0x4242);
+                assert_eq!(*ack_counter, MessageCounter(100));
+                // Peer set I=1, so peer is initiator, we are responder.
+                assert!(!*is_local_initiator);
+            }
+            other => panic!("expected StandaloneAckDeadlineFired, got {other:?}"),
+        }
+        // Deadline drains; no more pending.
+        assert_eq!(mrp.poll_timeout(), None);
     }
 }
