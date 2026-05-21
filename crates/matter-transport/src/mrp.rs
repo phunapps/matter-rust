@@ -100,6 +100,7 @@ pub enum MrpTimerEvent {
 /// `session_id` field disambiguates events across the manager's
 /// per-session timer streams. `SessionManager` pre-builds standalone-ack
 /// packets before pushing `SendStandaloneAck` here.
+#[derive(Debug)]
 pub enum MrpEvent {
     /// A pending reliable message must be re-sent.
     Retransmit {
