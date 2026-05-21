@@ -68,7 +68,7 @@ pub struct SessionId(pub u16);
 
 /// 32-bit monotonic message counter; per Matter Core Spec §4.4.3, sessions
 /// initialise this to a random value `> 1 << 31`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MessageCounter(pub u32);
 
 /// 64-bit Node ID used in source/destination header fields and the

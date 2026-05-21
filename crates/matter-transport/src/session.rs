@@ -1,14 +1,23 @@
 //! Per-session state and the [`SessionManager`] that owns it.
 //!
-//! M5.1 ships:
-//! - [`SessionRole`], [`SessionKeys`], [`PeerHint`], [`Session`].
-//! - [`SessionManager`] with `register_pase` / `register_case` /
-//!   `encode_outbound` / `decode_inbound` / `get` / `get_mut` / `remove`.
+//! M5.1 shipped the registration / counter / replay-window layer. M5.2
+//! threads the protocol header and the per-session [`MrpState`] machine
+//! through the manager so the same `SessionManager` value drives both the
+//! framing and the reliability layers.
 //!
-//! MRP-related methods (`poll_timeout`, `handle_timeout`) are added in
-//! M5.2; their signatures are reserved here.
+//! Public surface added in M5.2:
+//! - [`Session::mrp`] — one [`MrpState`] per session.
+//! - [`SessionManager::encode_outbound`] / [`SessionManager::decode_inbound`]
+//!   — new richer signatures that take the protocol-header inputs (opcode,
+//!   protocol id, exchange id, MRP flags, `now`) and return structured
+//!   output values rather than raw byte buffers.
+//! - [`SessionManager::poll_timeout`] / [`SessionManager::handle_timeout`]
+//!   — fold per-session [`MrpTimerEvent`]s into manager-wide
+//!   [`MrpEvent`]s and build standalone-ack packets for the
+//!   `StandaloneAckDeadlineFired` and duplicate-reliable-resend paths.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use matter_crypto::case::CaseSessionOutput;
 use matter_crypto::pase::PaseSessionKeys;
@@ -18,6 +27,8 @@ use crate::framing::{
     decode_secured, encode_secured, MessageCounter, NodeId, ReplayWindow, SecuredMessageFlags,
     SecuredMessageHeader, SecurityFlags, SessionId,
 };
+use crate::mrp::{InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent};
+use crate::protocol_header::{build_standalone_ack_header, encode_protocol_header, ProtocolId};
 
 /// Which side of a session this end occupies. Decides which key in
 /// [`SessionKeys`] is used for encoding vs decoding.
@@ -77,7 +88,8 @@ pub struct PeerHint {
     pub fabric_id: Option<u64>,
 }
 
-/// Single session — keys, counters, replay tracking, role, peer hint.
+/// Single session — keys, counters, replay tracking, role, peer hint, MRP
+/// state.
 #[derive(Debug)]
 pub struct Session {
     /// Our local ID. Peers send packets addressed to this ID.
@@ -97,18 +109,77 @@ pub struct Session {
     pub replay_window: ReplayWindow,
     /// Peer identity hint (CASE) or default (PASE).
     pub peer: PeerHint,
+    /// Per-session MRP state. Holds the exchange table, pending retransmits,
+    /// pending piggyback-ack slot, and recent-reliable cache.
+    pub mrp: MrpState,
 }
 
-/// MRP control fields for an outbound message. Default = no ack required,
-/// no piggyback ack. M5.2 wires the real behaviour.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MrpFlags {
-    /// If `true`, the peer must reply with an MRP ack within the
-    /// retransmit deadline or the message is re-sent.
-    pub requires_ack: bool,
-    /// If `Some(c)`, this outbound message piggybacks an ack for the
-    /// peer's previously-received message `c`.
-    pub ack_for_counter: Option<MessageCounter>,
+/// Structured output of [`SessionManager::encode_outbound`]. Carries the
+/// wire bytes plus the bookkeeping the caller needs to track the message
+/// (exchange id, counter, whether a piggyback ack was attached).
+#[derive(Debug)]
+pub struct EncodeOutboundOutput {
+    /// Fully-encrypted secured-message bytes ready to hand to the UDP
+    /// transport.
+    pub wire_bytes: Vec<u8>,
+    /// Exchange identifier this message belongs to. Allocated by MRP if the
+    /// caller did not provide one.
+    pub exchange_id: u16,
+    /// Whether the local side originated the exchange. Mirrors the `I` flag
+    /// in the protocol header.
+    pub is_local_initiator: bool,
+    /// Outbound message counter consumed by this send (the slot used in the
+    /// secured-message header before [`Session::outbound_counter`] was
+    /// advanced).
+    pub message_counter: MessageCounter,
+    /// Whether MRP drained a pending piggyback-ack into this outbound
+    /// header. Useful for tests and instrumentation; the caller usually
+    /// does not need to act on it.
+    pub piggyback_acked: bool,
+}
+
+/// Structured output of [`SessionManager::decode_inbound`]. The three
+/// variants cover the cases a caller cares about: a fresh application
+/// message, a standalone-ack-only inbound, and a duplicate-reliable inbound
+/// for which the manager has already pre-built a standalone-ack packet to
+/// re-send.
+#[derive(Debug)]
+pub enum DecodeInboundOutput {
+    /// A new application message arrived. `payload` is the bytes AFTER the
+    /// protocol header.
+    AppMessage {
+        /// Local session ID this message was demuxed onto.
+        session_id: SessionId,
+        /// Exchange the message belongs to.
+        exchange_id: u16,
+        /// Whether the peer is the initiator (i.e. we are the responder).
+        is_initiator: bool,
+        /// Decrypted application payload (post-header).
+        payload: Vec<u8>,
+    },
+    /// The inbound was a standalone-ack-only message; no application bytes
+    /// follow. MRP has already cleared any matching pending retransmit.
+    AckOnly {
+        /// Local session ID this message was demuxed onto.
+        session_id: SessionId,
+        /// Exchange identifier.
+        exchange_id: u16,
+        /// Counter that was acknowledged.
+        acked_counter: MessageCounter,
+    },
+    /// The inbound packet's counter sat inside the replay window AND
+    /// matched a recently-cached reliable peer message. The manager
+    /// re-built a standalone-ack packet (consuming one outbound counter
+    /// slot) to re-send to the peer; the caller need not deliver any
+    /// application payload.
+    DuplicateReliableAckResent {
+        /// Local session ID this message was demuxed onto.
+        session_id: SessionId,
+        /// Exchange identifier from the cached entry.
+        exchange_id: u16,
+        /// Fully-encrypted standalone-ack packet ready to send.
+        ack_packet: Vec<u8>,
+    },
 }
 
 /// Owns all per-session state for one Matter node.
@@ -173,6 +244,7 @@ impl SessionManager {
             outbound_counter: 1,
             replay_window: ReplayWindow::new(),
             peer,
+            mrp: MrpState::new(MrpConfig::default()),
         };
         self.sessions.insert(local_id, session);
         local_id
@@ -210,25 +282,37 @@ impl SessionManager {
         self.sessions.remove(&id)
     }
 
-    /// Encode an outbound Matter message via the named session. Bumps the
-    /// session's outbound counter; returns the wire bytes.
+    /// Encode an outbound Matter message via the named session.
     ///
-    /// MRP fields are accepted for forward compatibility but ignored in
-    /// M5.1 — M5.2 wires them into the protocol header.
+    /// The pipeline is:
+    /// 1. MRP builds the wire payload (protocol header || `app_payload`),
+    ///    allocating a new exchange id if `exchange_id` is `None` and
+    ///    draining any pending piggyback-ack that targets the same
+    ///    exchange.
+    /// 2. Framing encrypts the payload under the session keys, producing
+    ///    the secured-message wire bytes.
+    /// 3. MRP records the packet for retransmit if `mrp_flags.reliable` is
+    ///    set, and updates the idle/active timing baseline regardless.
     ///
     /// # Errors
     ///
     /// - [`Error::UnknownSession`] if `session_id` does not exist.
-    /// - [`Error::CounterOverflow`] if the outbound counter would wrap
-    ///   past `u32::MAX`. The session must be re-keyed.
-    /// - [`Error::PayloadTooLarge`] if `payload` exceeds the framing
-    ///   cap.
+    /// - [`Error::CounterOverflow`] if the session's outbound counter would
+    ///   wrap past `u32::MAX`. The session must be re-keyed (a new PASE /
+    ///   CASE handshake) to continue.
+    /// - [`Error::PayloadTooLarge`] if the encoded wire payload (protocol
+    ///   header + `app_payload`) exceeds the framing cap.
+    #[allow(clippy::too_many_arguments)] // Threaded protocol-header inputs.
     pub fn encode_outbound(
         &mut self,
         session_id: SessionId,
-        payload: &[u8],
-        _mrp: MrpFlags,
-    ) -> Result<Vec<u8>> {
+        exchange_id: Option<u16>,
+        opcode: u8,
+        protocol_id: ProtocolId,
+        app_payload: &[u8],
+        mrp_flags: MrpFlags,
+        now: Instant,
+    ) -> Result<EncodeOutboundOutput> {
         let session = self
             .sessions
             .get_mut(&session_id)
@@ -238,7 +322,18 @@ impl SessionManager {
             return Err(Error::CounterOverflow);
         }
 
-        let header = SecuredMessageHeader {
+        // 1. MRP builds the wire payload (protocol header || app_payload).
+        let prepared = session.mrp.prepare_outbound(
+            opcode,
+            protocol_id,
+            exchange_id,
+            app_payload,
+            mrp_flags,
+            now,
+        )?;
+
+        // 2. Framing encrypts.
+        let secured_header = SecuredMessageHeader {
             flags: SecuredMessageFlags::empty(),
             session_id: session.peer_id,
             security_flags: SecurityFlags::empty(),
@@ -246,39 +341,256 @@ impl SessionManager {
             source_node_id: None,
             destination_node_id: None,
         };
-        let wire = encode_secured(&header, payload, &session.keys, session.role)?;
+        let wire_bytes = encode_secured(
+            &secured_header,
+            &prepared.wire_payload,
+            &session.keys,
+            session.role,
+        )?;
+        let counter = MessageCounter(session.outbound_counter);
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
-        Ok(wire)
+
+        // 3. Record the send. mark_packet_sent always updates the
+        //    idle/active timing baseline; pending-ack registration is gated
+        //    internally by the `reliable` flag.
+        session.mrp.mark_packet_sent(
+            counter,
+            prepared.exchange_id,
+            wire_bytes.clone(),
+            mrp_flags.reliable,
+            now,
+        );
+
+        Ok(EncodeOutboundOutput {
+            wire_bytes,
+            exchange_id: prepared.exchange_id,
+            is_local_initiator: prepared.is_local_initiator,
+            message_counter: counter,
+            piggyback_acked: prepared.piggyback_acked,
+        })
     }
 
-    /// Decode + verify + replay-check an inbound packet. Returns the
-    /// plaintext payload and the local session ID it belongs to.
+    /// Decode + verify + replay-check an inbound packet, then dispatch into
+    /// MRP for exchange / ack / duplicate-reliable handling.
+    ///
+    /// The replay window is consulted as part of [`decode_secured`]; if it
+    /// rejects the counter the manager checks the per-session
+    /// recent-reliable cache and, on a hit, builds a fresh standalone-ack
+    /// packet to re-send (the
+    /// [`DecodeInboundOutput::DuplicateReliableAckResent`] variant).
     ///
     /// # Errors
     ///
-    /// - [`Error::MalformedHeader`] if the header bytes cannot be parsed.
+    /// - [`Error::MalformedHeader`] if the secured-message header is
+    ///   malformed.
     /// - [`Error::UnknownSession`] if the header's `session_id` does not
     ///   match a registered session.
     /// - [`Error::ReplayedCounter`] / [`Error::CounterTooOld`] per the
-    ///   session's replay window.
+    ///   session's replay window — but only when the counter is NOT a
+    ///   recognised duplicate-reliable resend.
     /// - [`Error::DecryptionFailed`] on AES-CCM tag failure.
-    pub fn decode_inbound(&mut self, packet: &[u8]) -> Result<(SessionId, Vec<u8>)> {
-        // Peek at the header to learn the session ID. We re-parse fully
-        // inside decode_secured below, but this peek is the only way to
-        // route by session_id without doubling the cost.
+    /// - [`Error::MalformedProtocolHeader`] if the decrypted bytes do not
+    ///   parse as a valid Matter protocol header.
+    /// - [`Error::CounterOverflow`] if building a duplicate-reliable
+    ///   standalone-ack packet would overflow the outbound counter.
+    pub fn decode_inbound(&mut self, packet: &[u8], now: Instant) -> Result<DecodeInboundOutput> {
+        // Peek the secured header to learn the session_id.
         let (peeked, _) = crate::framing::decode_header(packet)?;
         let local_id = peeked.session_id;
+        let peer_counter = peeked.message_counter;
+
         let session = self
             .sessions
             .get_mut(&local_id)
             .ok_or(Error::UnknownSession(local_id.0))?;
 
-        let (_header, plaintext) = decode_secured(
+        // Attempt full decode.
+        match decode_secured(
             packet,
             &session.keys,
             session.role,
             &mut session.replay_window,
-        )?;
-        Ok((local_id, plaintext))
+        ) {
+            Ok((_, decrypted)) => {
+                let outcome = session.mrp.process_inbound(decrypted, peer_counter, now)?;
+                Ok(match outcome {
+                    InboundOutcome::AppMessage {
+                        exchange_id,
+                        is_initiator,
+                        payload,
+                    } => DecodeInboundOutput::AppMessage {
+                        session_id: local_id,
+                        exchange_id,
+                        is_initiator,
+                        payload,
+                    },
+                    InboundOutcome::AckOnly {
+                        exchange_id,
+                        acked_counter,
+                    } => DecodeInboundOutput::AckOnly {
+                        session_id: local_id,
+                        exchange_id,
+                        acked_counter,
+                    },
+                    InboundOutcome::DuplicateReliable { .. } => {
+                        // process_inbound only emits DuplicateReliable on
+                        // the replay-window rejection path, which is
+                        // handled in the Err arm below. If we ever get
+                        // here, MRP and the replay window are out of sync
+                        // — surface as DecryptionFailed (the closest
+                        // existing variant) rather than panicking.
+                        return Err(Error::DecryptionFailed);
+                    }
+                })
+            }
+            Err(Error::ReplayedCounter { counter }) => {
+                // Check whether MRP recognises this as a reliable duplicate.
+                if let Some(view) = session
+                    .mrp
+                    .check_duplicate_reliable(MessageCounter(counter))
+                {
+                    let ack_packet = Self::build_standalone_ack_packet(
+                        session,
+                        view.exchange_id,
+                        MessageCounter(counter),
+                        view.is_local_initiator,
+                    )?;
+                    Ok(DecodeInboundOutput::DuplicateReliableAckResent {
+                        session_id: local_id,
+                        exchange_id: view.exchange_id,
+                        ack_packet,
+                    })
+                } else {
+                    Err(Error::ReplayedCounter { counter })
+                }
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Earliest pending MRP deadline across every registered session, or
+    /// `None` if no session has any pending retransmit or piggyback-ack
+    /// flush deadline.
+    #[must_use]
+    pub fn poll_timeout(&self) -> Option<Instant> {
+        self.sessions
+            .values()
+            .filter_map(|s| s.mrp.poll_timeout())
+            .min()
+    }
+
+    /// Drain every session's MRP timer events at `now`, folding them into
+    /// manager-wide [`MrpEvent`]s. Standalone-ack-deadline events are
+    /// materialised into encrypted ack packets here (consuming a session
+    /// outbound counter slot) so the caller only sees ready-to-send bytes.
+    ///
+    /// If building a standalone-ack packet for a session fails (e.g.
+    /// counter overflow), the event is silently dropped — the caller will
+    /// observe `Session::outbound_counter == u32::MAX` on the next
+    /// `encode_outbound` and tear the session down.
+    pub fn handle_timeout(&mut self, now: Instant) -> Vec<MrpEvent> {
+        let mut out = Vec::new();
+        let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        for sid in session_ids {
+            let timer_events = match self.sessions.get_mut(&sid) {
+                Some(s) => s.mrp.handle_timeout(now),
+                None => continue,
+            };
+            for event in timer_events {
+                match event {
+                    MrpTimerEvent::Retransmit {
+                        exchange_id,
+                        counter,
+                        packet,
+                    } => {
+                        out.push(MrpEvent::Retransmit {
+                            session_id: sid,
+                            exchange_id,
+                            counter,
+                            packet,
+                        });
+                    }
+                    MrpTimerEvent::Expired {
+                        exchange_id,
+                        counter,
+                    } => {
+                        out.push(MrpEvent::Expired {
+                            session_id: sid,
+                            exchange_id,
+                            counter,
+                        });
+                    }
+                    MrpTimerEvent::StandaloneAckDeadlineFired {
+                        exchange_id,
+                        ack_counter,
+                        is_local_initiator,
+                    } => {
+                        // Build the standalone-ack packet (consumes one
+                        // outbound counter slot). Lookup is fallible to
+                        // keep the borrow checker happy and to tolerate
+                        // mid-iteration session removal, even though we
+                        // just listed the IDs from the same HashMap.
+                        if let Some(session) = self.sessions.get_mut(&sid) {
+                            if let Ok(packet) = Self::build_standalone_ack_packet(
+                                session,
+                                exchange_id,
+                                ack_counter,
+                                is_local_initiator,
+                            ) {
+                                out.push(MrpEvent::SendStandaloneAck {
+                                    session_id: sid,
+                                    exchange_id,
+                                    packet,
+                                });
+                            }
+                            // If build fails (CounterOverflow), drop the
+                            // ack — caller will see outbound_counter at
+                            // MAX and tear the session down.
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Build a standalone-ack secured-message packet. Used by both
+    /// [`Self::decode_inbound`]'s duplicate-reliable-resend path and
+    /// [`Self::handle_timeout`]'s standalone-ack-deadline-fired path.
+    ///
+    /// Consumes one outbound counter slot on `session`.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::CounterOverflow`] if `session.outbound_counter` is
+    ///   already `u32::MAX`.
+    /// - [`Error::PayloadTooLarge`] surfacing from the underlying
+    ///   [`encode_secured`] call (will not occur in practice for a
+    ///   standalone-ack header — the encoded form is well under 16 bytes
+    ///   — but is propagated for completeness).
+    pub(crate) fn build_standalone_ack_packet(
+        session: &mut Session,
+        exchange_id: u16,
+        ack_counter: MessageCounter,
+        is_local_initiator: bool,
+    ) -> Result<Vec<u8>> {
+        if session.outbound_counter == u32::MAX {
+            return Err(Error::CounterOverflow);
+        }
+        let header = build_standalone_ack_header(exchange_id, ack_counter, is_local_initiator);
+        let mut payload = Vec::with_capacity(16);
+        encode_protocol_header(&header, &mut payload);
+        // No app payload.
+        let secured_header = SecuredMessageHeader {
+            flags: SecuredMessageFlags::empty(),
+            session_id: session.peer_id,
+            security_flags: SecurityFlags::empty(),
+            message_counter: MessageCounter(session.outbound_counter),
+            source_node_id: None,
+            destination_node_id: None,
+        };
+        let packet = encode_secured(&secured_header, &payload, &session.keys, session.role)?;
+        session.outbound_counter = session.outbound_counter.wrapping_add(1);
+        Ok(packet)
     }
 }
