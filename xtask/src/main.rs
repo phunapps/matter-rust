@@ -14,6 +14,8 @@
 //!   framings with fixed AES-CCM keys + counters (Milestone 5).
 //! - `capture-protocol-header` — drive matter.js to capture Matter
 //!   application protocol header fixtures (Milestone 5.2).
+//! - `capture-setup` — drive matter.js to capture Matter setup-payload
+//!   fixtures (Milestone 6.1).
 //! - `codegen`       — generate cluster definitions from the Matter spec
 //!   (Milestone 7).
 //! - `release`       — workspace release helper (post-Milestone 1).
@@ -78,6 +80,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-setup") => match run_capture_setup() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-setup: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -101,7 +110,8 @@ fn print_help() {
              capture-pase   Capture full PASE handshakes from matter.js with fixed scalars.\n  \
              capture-case   Capture full CASE handshakes from matter.js with fixed scalars.\n  \
              capture-framing Capture Matter secured-message framings from matter.js.\n  \
-             capture-protocol-header Capture Matter application protocol header fixtures from matter.js.\n"
+             capture-protocol-header Capture Matter application protocol header fixtures from matter.js.\n  \
+             capture-setup            Capture Matter setup-payload fixtures from matter.js.\n"
     );
 }
 
@@ -397,6 +407,35 @@ fn run_capture_protocol_header() -> Result<(), String> {
     if !script_dir.exists() {
         return Err(format!(
             "capture-protocol-header script directory not found: {}",
+            script_dir.display()
+        ));
+    }
+    if !script_dir.join("node_modules").exists() {
+        return Err(format!(
+            "node_modules not found in {}; run `npm install` there first",
+            script_dir.display()
+        ));
+    }
+
+    let status = Command::new("node")
+        .arg("index.js")
+        .current_dir(&script_dir)
+        .status()
+        .map_err(|err| format!("failed to spawn node: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("node index.js exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn run_capture_setup() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let script_dir = workspace_root.join("xtask/scripts/capture-setup");
+
+    if !script_dir.exists() {
+        return Err(format!(
+            "capture-setup script directory not found: {}",
             script_dir.display()
         ));
     }

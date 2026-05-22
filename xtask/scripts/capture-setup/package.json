@@ -1,0 +1,17 @@
+{
+  "name": "matter-rust-capture-setup",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Drives matter.js's QrPairingCodeCodec and ManualPairingCodeCodec to capture setup-payload fixtures for crates/matter-commissioning/tests/setup_byte_parity.rs.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/general": "0.16.11",
+    "@matter/protocol": "0.16.11",
+    "@matter/types": "0.16.11",
+    "@project-chip/matter.js": "0.16.11"
+  }
+}
