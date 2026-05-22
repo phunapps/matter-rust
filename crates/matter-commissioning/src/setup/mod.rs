@@ -108,7 +108,11 @@ impl Discriminator {
 ///
 /// Note: the standard test passcode `20_202_021` is NOT on this list —
 /// the spec carves it out as a permitted test value.
-pub(super) const DISALLOWED_PASSCODES: &[u32] = &[
+///
+/// Re-exported so tests and external callers can filter values
+/// generated for synthetic payloads (the proptest roundtrip suite in
+/// `tests/setup_proptest.rs` is the primary in-tree consumer).
+pub const DISALLOWED_PASSCODES: &[u32] = &[
     0,
     11_111_111,
     22_222_222,
