@@ -19,6 +19,39 @@ mod manual_packer;
 mod qr_packer;
 mod verhoeff;
 
+/// Twelve-bit long discriminator identifying a Matter device while it
+/// is commissionable (Matter Core Spec §5.1.2.2).
+///
+/// Constructors enforce the 12-bit range. The short discriminator (the
+/// upper 4 bits) is what manual pairing codes carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Discriminator(u16);
+
+impl Discriminator {
+    /// Construct from a 12-bit value.
+    ///
+    /// # Errors
+    /// Returns [`Error::DiscriminatorOutOfRange`] if `value > 0x0FFF`.
+    pub const fn new(value: u16) -> Result<Self> {
+        if value > 0x0FFF {
+            Err(Error::DiscriminatorOutOfRange(value))
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    /// The discriminator as a raw `u16` in the range `0..=0x0FFF`.
+    pub const fn as_u16(self) -> u16 {
+        self.0
+    }
+
+    /// Upper 4 bits — the *short* discriminator carried by manual
+    /// pairing codes.
+    pub const fn short(self) -> u8 {
+        ((self.0 >> 8) & 0x0F) as u8
+    }
+}
+
 /// Errors from setup-payload parsing and encoding.
 ///
 /// All variants carry enough context (position, value, expected) for
@@ -130,5 +163,37 @@ mod error_tests {
             Error::ManualCodeBadChecksum.to_string(),
             "manual code Verhoeff check digit failed"
         );
+    }
+}
+
+#[cfg(test)]
+mod discriminator_tests {
+    use super::{Discriminator, Error};
+
+    #[test]
+    fn new_accepts_zero() {
+        let d = Discriminator::new(0).unwrap();
+        assert_eq!(d.as_u16(), 0);
+        assert_eq!(d.short(), 0);
+    }
+
+    #[test]
+    fn new_accepts_max_12_bit() {
+        let d = Discriminator::new(0x0FFF).unwrap();
+        assert_eq!(d.as_u16(), 0x0FFF);
+        assert_eq!(d.short(), 0x0F);
+    }
+
+    #[test]
+    fn new_rejects_13_bit() {
+        let err = Discriminator::new(0x1000).unwrap_err();
+        assert!(matches!(err, Error::DiscriminatorOutOfRange(0x1000)));
+    }
+
+    #[test]
+    fn short_is_upper_4_bits() {
+        // 0xABC = bits 10101011 1100; upper 4 bits = 0xA
+        let d = Discriminator::new(0x0ABC).unwrap();
+        assert_eq!(d.short(), 0xA);
     }
 }
