@@ -146,6 +146,28 @@ impl CommissioningFlow {
     }
 }
 
+bitflags::bitflags! {
+    /// Matter Core Spec §5.1.3.1 Table 39 "Discovery Capabilities" — the
+    /// 8-bit bitmask advertising which discovery transports the device
+    /// supports while commissionable.
+    ///
+    /// Bits 3-7 are spec-reserved but preserved on roundtrip — we use
+    /// `from_bits_retain` rather than `from_bits` so unknown future bits
+    /// pass through unchanged.
+    ///
+    /// Bit positions are verified against matter.js's
+    /// `DiscoveryCapabilitiesSchema`. See the file's leading comment.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct DiscoveryCapabilities: u8 {
+        /// Device hosts a Soft-AP for direct connection.
+        const SOFT_AP    = 0b0000_0001;
+        /// Device advertises commissioning over Bluetooth LE.
+        const BLE        = 0b0000_0010;
+        /// Device is reachable via an IP network (Wi-Fi / Ethernet / Thread).
+        const ON_NETWORK = 0b0000_0100;
+    }
+}
+
 /// Errors from setup-payload parsing and encoding.
 ///
 /// All variants carry enough context (position, value, expected) for
@@ -395,5 +417,46 @@ mod commissioning_flow_tests {
         assert_eq!(CommissioningFlow::Standard.as_u8(), 0);
         assert_eq!(CommissioningFlow::UserIntent.as_u8(), 1);
         assert_eq!(CommissioningFlow::Custom.as_u8(), 2);
+    }
+}
+
+#[cfg(test)]
+mod discovery_capabilities_tests {
+    use super::DiscoveryCapabilities;
+
+    #[test]
+    fn empty_set() {
+        let d = DiscoveryCapabilities::empty();
+        assert_eq!(d.bits(), 0);
+        assert!(!d.contains(DiscoveryCapabilities::BLE));
+    }
+
+    #[test]
+    fn ble_only() {
+        let d = DiscoveryCapabilities::BLE;
+        assert_eq!(d.bits(), 0b0000_0010);
+        assert!(d.contains(DiscoveryCapabilities::BLE));
+        assert!(!d.contains(DiscoveryCapabilities::ON_NETWORK));
+    }
+
+    #[test]
+    fn on_network_only() {
+        let d = DiscoveryCapabilities::ON_NETWORK;
+        assert_eq!(d.bits(), 0b0000_0100);
+    }
+
+    #[test]
+    fn combined() {
+        let d = DiscoveryCapabilities::BLE | DiscoveryCapabilities::ON_NETWORK;
+        assert_eq!(d.bits(), 0b0000_0110);
+    }
+
+    #[test]
+    fn from_bits_preserves_reserved() {
+        // bits 3..7 are reserved; we preserve unknown bits on roundtrip
+        // rather than reject them.
+        let d = DiscoveryCapabilities::from_bits_retain(0b1100_0001);
+        assert_eq!(d.bits(), 0b1100_0001);
+        assert!(d.contains(DiscoveryCapabilities::SOFT_AP));
     }
 }
