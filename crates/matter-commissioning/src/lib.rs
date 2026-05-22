@@ -37,7 +37,6 @@ pub mod setup;
 pub mod state_machine;
 
 pub use setup::{
-    encode_manual_code, encode_qr, parse_manual_code, parse_qr,
-    CommissioningFlow, Discriminator, DiscoveryCapabilities, Error as SetupError, Passcode,
-    SetupPayload,
+    encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow,
+    DiscoveryCapabilities, Discriminator, Error as SetupError, Passcode, SetupPayload,
 };

@@ -15,8 +15,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use matter_commissioning::setup::{
-    encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow, Discriminator,
-    DiscoveryCapabilities, Passcode, SetupPayload,
+    encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow,
+    DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
 };
 use serde::Deserialize;
 
@@ -106,11 +106,9 @@ fn load_fixtures(prefix: &str) -> Vec<(String, Fixture)> {
 fn qr_encode_matches_matterjs() {
     for (name, fixture) in load_fixtures("qr-") {
         let payload = input_to_payload(&fixture.input);
-        let expected_qr = fixture
-            .expected
-            .qr
-            .as_ref()
-            .unwrap_or_else(|| panic!("fixture {name} ({}) is missing expected.qr", fixture.intent));
+        let expected_qr = fixture.expected.qr.as_ref().unwrap_or_else(|| {
+            panic!("fixture {name} ({}) is missing expected.qr", fixture.intent)
+        });
         let got = encode_qr(&payload)
             .unwrap_or_else(|e| panic!("encode_qr failed for {name} ({}): {e}", fixture.intent));
         assert_eq!(
@@ -157,6 +155,9 @@ fn manual_decode_matches_matterjs() {
         let payload = parse_manual_code(expected_manual)
             .unwrap_or_else(|e| panic!("parse_manual_code failed for {name}: {e}"));
         let expected = input_to_payload(&fixture.input);
-        assert_eq!(payload, expected, "parse_manual_code value mismatch for {name}");
+        assert_eq!(
+            payload, expected,
+            "parse_manual_code value mismatch for {name}"
+        );
     }
 }

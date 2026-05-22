@@ -6,7 +6,7 @@
 use core::fmt::Write as _;
 
 use crate::setup::{
-    verhoeff, CommissioningFlow, Discriminator, DiscoveryCapabilities, Error, Passcode, Result,
+    verhoeff, CommissioningFlow, DiscoveryCapabilities, Discriminator, Error, Passcode, Result,
     SetupPayload,
 };
 
@@ -93,8 +93,8 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
     #[allow(clippy::cast_possible_truncation)] // 4-bit value, fits u16 trivially.
     let short = ((short_upper << 2) | short_lower) as u16; // 4-bit short discriminator
 
-    let passcode_lo = chunk1 & 0x3FFF;                 // bits 0..=13
-    let passcode_hi = chunk2 & 0x1FFF;                 // bits 14..=26
+    let passcode_lo = chunk1 & 0x3FFF; // bits 0..=13
+    let passcode_hi = chunk2 & 0x1FFF; // bits 14..=26
     let passcode = passcode_lo | (passcode_hi << 14);
 
     let (vendor_id, product_id) = if has_vid_pid {
@@ -108,7 +108,8 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
         let pid: u32 = s[15..20]
             .parse()
             .map_err(|_| Error::ManualCodeNonDigit('?', 15))?;
-        #[allow(clippy::cast_possible_truncation)] // VID/PID are 5-digit decimals; max 99_999 fits u16.
+        #[allow(clippy::cast_possible_truncation)]
+        // VID/PID are 5-digit decimals; max 99_999 fits u16.
         (Some(vid as u16), Some(pid as u16))
     } else {
         if s.len() != 11 {
@@ -220,7 +221,10 @@ mod tests {
         // Pick any other digit:
         let bad = if last == '0' { '1' } else { '0' };
         s.push(bad);
-        assert!(matches!(unpack(&s).unwrap_err(), Error::ManualCodeBadChecksum));
+        assert!(matches!(
+            unpack(&s).unwrap_err(),
+            Error::ManualCodeBadChecksum
+        ));
     }
 
     #[test]

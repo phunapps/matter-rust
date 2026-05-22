@@ -124,7 +124,7 @@ mod tests {
             "1234567890",
             "0000000001",
             "9999999998",
-            "3497011233",  // 10-digit prefix shape used by Matter manual codes
+            "3497011233", // 10-digit prefix shape used by Matter manual codes
         ];
         for s in cases {
             let with_check = format!("{s}{}", check_digit(s));

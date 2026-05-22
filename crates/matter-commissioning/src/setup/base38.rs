@@ -15,9 +15,7 @@ pub(super) fn encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 5);
     let mut chunks = bytes.chunks_exact(3);
     for chunk in &mut chunks {
-        let value = u32::from(chunk[0])
-            | (u32::from(chunk[1]) << 8)
-            | (u32::from(chunk[2]) << 16);
+        let value = u32::from(chunk[0]) | (u32::from(chunk[1]) << 8) | (u32::from(chunk[2]) << 16);
         push_chars(&mut out, value, 5);
     }
     match chunks.remainder() {

@@ -2,7 +2,7 @@
 //! (Matter Core Spec §5.1.3.1). Private to the `setup` module.
 
 use crate::setup::{
-    CommissioningFlow, Discriminator, DiscoveryCapabilities, Error, Passcode, Result, SetupPayload,
+    CommissioningFlow, DiscoveryCapabilities, Discriminator, Error, Passcode, Result, SetupPayload,
 };
 
 pub(super) const FIXED_BYTE_LEN: usize = 11;

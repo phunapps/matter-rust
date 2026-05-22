@@ -113,18 +113,8 @@ impl Discriminator {
 /// generated for synthetic payloads (the proptest roundtrip suite in
 /// `tests/setup_proptest.rs` is the primary in-tree consumer).
 pub const DISALLOWED_PASSCODES: &[u32] = &[
-    0,
-    11_111_111,
-    22_222_222,
-    33_333_333,
-    44_444_444,
-    55_555_555,
-    66_666_666,
-    77_777_777,
-    88_888_888,
-    99_999_999,
-    12_345_678,
-    87_654_321,
+    0, 11_111_111, 22_222_222, 33_333_333, 44_444_444, 55_555_555, 66_666_666, 77_777_777,
+    88_888_888, 99_999_999, 12_345_678, 87_654_321,
 ];
 
 /// 27-bit Matter setup passcode (Matter Core Spec §5.1.7).
@@ -342,7 +332,9 @@ pub fn encode_qr(payload: &SetupPayload) -> Result<String> {
 /// Base38 alphabet.
 /// Returns [`Error::QrPayloadWrongLength`] or [`Error::QrTrailingBytes`]
 /// for payload-length problems.
-/// Returns the per-field range errors via [`qr_packer::unpack`].
+/// Returns per-field range errors (`DiscriminatorOutOfRange`,
+/// `PasscodeOutOfRange`, `PasscodeDisallowedTrivial`,
+/// `CommissioningFlowReserved`) raised by the QR bit unpacker.
 ///
 /// # Examples
 ///
@@ -358,9 +350,7 @@ pub fn encode_qr(payload: &SetupPayload) -> Result<String> {
 /// assert_eq!(payload.passcode.as_u32(), 20_202_021);
 /// ```
 pub fn parse_qr(s: &str) -> Result<SetupPayload> {
-    let payload = s
-        .strip_prefix(QR_PREFIX)
-        .ok_or(Error::MissingMtPrefix)?;
+    let payload = s.strip_prefix(QR_PREFIX).ok_or(Error::MissingMtPrefix)?;
     let bytes = base38::decode(payload)?;
     let need = qr_packer::FIXED_BYTE_LEN;
     if bytes.len() < need {
@@ -562,17 +552,26 @@ mod commissioning_flow_tests {
 
     #[test]
     fn from_u8_standard() {
-        assert_eq!(CommissioningFlow::from_u8(0).unwrap(), CommissioningFlow::Standard);
+        assert_eq!(
+            CommissioningFlow::from_u8(0).unwrap(),
+            CommissioningFlow::Standard
+        );
     }
 
     #[test]
     fn from_u8_user_intent() {
-        assert_eq!(CommissioningFlow::from_u8(1).unwrap(), CommissioningFlow::UserIntent);
+        assert_eq!(
+            CommissioningFlow::from_u8(1).unwrap(),
+            CommissioningFlow::UserIntent
+        );
     }
 
     #[test]
     fn from_u8_custom() {
-        assert_eq!(CommissioningFlow::from_u8(2).unwrap(), CommissioningFlow::Custom);
+        assert_eq!(
+            CommissioningFlow::from_u8(2).unwrap(),
+            CommissioningFlow::Custom
+        );
     }
 
     #[test]
@@ -668,7 +667,9 @@ mod setup_payload_tests {
         assert_eq!(p.discriminator.as_u16(), 0xF00);
         assert_eq!(p.passcode.as_u32(), 20_202_021);
         assert_eq!(p.commissioning_flow, CommissioningFlow::Standard);
-        assert!(p.discovery_capabilities.contains(DiscoveryCapabilities::ON_NETWORK));
+        assert!(p
+            .discovery_capabilities
+            .contains(DiscoveryCapabilities::ON_NETWORK));
     }
 
     #[test]
@@ -723,13 +724,19 @@ mod qr_api_tests {
         let mut s = encode_qr(&p).unwrap();
         s.push_str("000");
         let err = parse_qr(&s).unwrap_err();
-        assert!(matches!(err, Error::QrTrailingBytes { extra: 2 }), "got {err:?}");
+        assert!(
+            matches!(err, Error::QrTrailingBytes { extra: 2 }),
+            "got {err:?}"
+        );
     }
 
     #[test]
     fn parse_qr_rejects_short_payload() {
         let err = parse_qr("MT:00000").unwrap_err();
-        assert!(matches!(err, Error::QrPayloadWrongLength { .. }), "got {err:?}");
+        assert!(
+            matches!(err, Error::QrPayloadWrongLength { .. }),
+            "got {err:?}"
+        );
     }
 }
 

@@ -7,8 +7,8 @@
 #![allow(clippy::expect_used)]
 
 use matter_commissioning::setup::{
-    encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow, Discriminator,
-    DiscoveryCapabilities, Passcode, SetupPayload, DISALLOWED_PASSCODES,
+    encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow,
+    DiscoveryCapabilities, Discriminator, Passcode, SetupPayload, DISALLOWED_PASSCODES,
 };
 use proptest::prelude::*;
 
