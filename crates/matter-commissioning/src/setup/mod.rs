@@ -294,6 +294,7 @@ pub enum Error {
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod error_tests {
     use super::Error;
 
@@ -331,6 +332,7 @@ mod error_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod discriminator_tests {
     use super::{Discriminator, Error};
 
@@ -363,6 +365,7 @@ mod discriminator_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod passcode_tests {
     use super::{Error, Passcode};
 
@@ -427,6 +430,7 @@ mod passcode_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod commissioning_flow_tests {
     use super::{CommissioningFlow, Error};
 
@@ -469,6 +473,7 @@ mod commissioning_flow_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod discovery_capabilities_tests {
     use super::DiscoveryCapabilities;
 
@@ -510,12 +515,13 @@ mod discovery_capabilities_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod setup_payload_tests {
     use super::*;
 
     /// Returns the spec's worked-example payload from Matter Core Spec §5.1.3.1.
-    /// VID 0xFFF1, PID 0x8000, discriminator 0xF00, passcode 20_202_021,
-    /// flow Standard, discovery ON_NETWORK only.
+    /// VID 0xFFF1, PID 0x8000, discriminator 0xF00, passcode `20_202_021`,
+    /// flow Standard, discovery `ON_NETWORK` only.
     pub(super) fn spec_example_payload() -> SetupPayload {
         SetupPayload {
             version: 0,
