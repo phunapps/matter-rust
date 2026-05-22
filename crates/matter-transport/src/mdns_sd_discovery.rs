@@ -279,6 +279,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires host mDNS multicast support; CI containers (GitHub \
+                Actions ubuntu-latest, macos-latest) don't deliver loopback \
+                mDNS announces between two ServiceDaemon instances even with \
+                enable_interface(LoopbackV{4,6}). Run locally with `cargo test \
+                --features tokio,mdns-sd -- --ignored self_publish_self_discover`. \
+                Tracked in TODO-1.0.md as 'mDNS loopback interop in CI'."]
     fn self_publish_self_discover() {
         // Daemon A publishes; adapter B (with its own daemon) queries
         // and observes the service within 5 seconds via poll_results.

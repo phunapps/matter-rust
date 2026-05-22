@@ -185,6 +185,29 @@ peer_info, last_seen)` with lifecycle management
 mDNS-update). M8 spec defines the exact shape; M6 may foreshadow with
 a smaller commissioning-scope map.
 
+### mDNS loopback interop in CI
+
+**Status:** known limitation; test marked `#[ignore]`.
+
+**Why it matters:** `mdns_sd_discovery::tests::self_publish_self_discover`
+runs two `ServiceDaemon` instances on loopback (`::1`) and verifies the
+querier observes the publisher's service. The test passes locally on
+macOS and Linux dev hosts (~1s observed) but fails on both GitHub
+Actions `ubuntu-latest` and `macos-latest` CI runners — the
+containerized/VM network stacks don't deliver loopback mDNS announces
+even when `enable_interface(IfKind::LoopbackV{4,6})` is set on both
+daemons. The other 6 mDNS adapter tests cover the publish/query/
+poll_results API surface; only the full publish→discover roundtrip is
+affected.
+
+**Concrete deliverable:** before 1.0, either (a) move the test to a
+manual `xtask test-mdns-interop` invocation that runs outside CI, (b)
+diagnose what GitHub Actions' network namespace blocks (likely
+multicast on `lo`), and document the workaround, or (c) replace with
+an in-process mDNS mock that doesn't touch sockets. Until then, run
+`cargo test --features tokio,mdns-sd -- --ignored self_publish_self_discover`
+locally to verify the full path.
+
 ### mdns-sd background-thread fragility
 
 **Status:** known, not blocking M5.3 publish.
