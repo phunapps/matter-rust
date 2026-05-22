@@ -150,6 +150,80 @@ Cargo feature (default-on) and gate `std`-only paths behind it. The
 decision can wait until a real consumer surfaces, but should not wait
 until after 1.0.
 
+## matter-transport
+
+### Real-device MRP timing tests (M6)
+
+**Status:** deferred from M5.3 per Q5 design choice.
+
+**Why it matters:** M5.2's simulated-clock tests cover the MRP state
+machine exhaustively. M5.3's loopback test verifies the full stack on
+real sockets but DOES NOT assert MRP retransmit timing (CI flake risk).
+We have no integration test that confirms `tokio::time::sleep_until`
+fires at the right moment under load.
+
+**Concrete deliverable:** at M6's first-real-device commissioning, add
+a timing-assertion integration test that observes the actual retransmit
+counter on a deliberately-dropped packet and confirms the deadlines
+match `MrpConfig::default()`. Bounded-time, with a generous upper bound
+to tolerate CI variance.
+
+### M8 `SessionRegistry` design
+
+**Status:** open architectural decision for M8.
+
+**Why it matters:** matter-transport's `SessionManager` deliberately
+holds NO peer-address state. Sessions are transport-agnostic. The
+caller (M6 commissioning, M8 controller) maintains its own
+`HashMap<SessionId, PeerAddress>` populated at session-establishment
+time.
+
+**Concrete deliverable:** M8's `MatterController` introduces a
+long-lived `SessionRegistry` mapping `SessionId → (PeerAddress,
+peer_info, last_seen)` with lifecycle management
+(register-on-session-establish, evict-on-session-close, refresh-on-
+mDNS-update). M8 spec defines the exact shape; M6 may foreshadow with
+a smaller commissioning-scope map.
+
+### mDNS loopback interop in CI
+
+**Status:** known limitation; test marked `#[ignore]`.
+
+**Why it matters:** `mdns_sd_discovery::tests::self_publish_self_discover`
+runs two `ServiceDaemon` instances on loopback (`::1`) and verifies the
+querier observes the publisher's service. The test passes locally on
+macOS and Linux dev hosts (~1s observed) but fails on both GitHub
+Actions `ubuntu-latest` and `macos-latest` CI runners — the
+containerized/VM network stacks don't deliver loopback mDNS announces
+even when `enable_interface(IfKind::LoopbackV{4,6})` is set on both
+daemons. The other 6 mDNS adapter tests cover the publish/query/
+poll_results API surface; only the full publish→discover roundtrip is
+affected.
+
+**Concrete deliverable:** before 1.0, either (a) move the test to a
+manual `xtask test-mdns-interop` invocation that runs outside CI, (b)
+diagnose what GitHub Actions' network namespace blocks (likely
+multicast on `lo`), and document the workaround, or (c) replace with
+an in-process mDNS mock that doesn't touch sockets. Until then, run
+`cargo test --features tokio,mdns-sd -- --ignored self_publish_self_discover`
+locally to verify the full path.
+
+### mdns-sd background-thread fragility
+
+**Status:** known, not blocking M5.3 publish.
+
+**Why it matters:** the `mdns-sd` crate spawns a process-wide
+background daemon thread on `ServiceDaemon::new()`. If that thread
+dies (panic, OS resource exhaustion, channel close), our
+`MdnsSdDiscovery` adapter doesn't currently detect the death — the
+caller just sees empty `poll_results` and timeouts.
+
+**Concrete deliverable:** before 1.0, add either (a) a heartbeat check
+(`MdnsSdDiscovery::is_healthy() -> bool` that pings the daemon), or
+(b) automatic daemon respawn on detected channel disconnection. Track
+upstream mdns-sd issue tracker for a "watchdog" API; consider
+contributing one if not present.
+
 ### External cryptographic protocol review
 
 **Status:** owned by the user; runs in parallel with development.

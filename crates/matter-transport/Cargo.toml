@@ -1,6 +1,6 @@
 [package]
 name = "matter-transport"
-version = "0.0.0"
+version = "0.1.0-pre"
 description = "Matter protocol network transport: UDP, mDNS, framing, MRP."
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,11 @@ keywords = ["matter", "udp", "mdns", "mrp", "iot"]
 categories = ["network-programming"]
 readme = "README.md"
 
+[features]
+default = ["tokio", "mdns-sd"]
+tokio = ["dep:tokio", "dep:socket2"]
+mdns-sd = ["dep:mdns-sd"]
+
 [lints]
 workspace = true
 
@@ -20,9 +25,13 @@ matter-codec = { path = "../matter-codec", version = "0.1.0" }
 matter-crypto = { path = "../matter-crypto", version = "0.1.0-pre" }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt", "io-util"], optional = true }
+socket2 = { version = "0.5", default-features = false, optional = true }
+mdns-sd = { version = "0.13", default-features = false, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = "1.0"
+tokio = { workspace = true, features = ["net", "rt", "io-util", "macros", "time", "rt-multi-thread"] }
