@@ -1,0 +1,17 @@
+{
+  "intent": "largest 27-bit passcode that is not on the disallowed list",
+  "input": {
+    "version": 0,
+    "vendor_id": 65521,
+    "product_id": 32768,
+    "commissioning_flow": "Standard",
+    "discovery_capabilities": [
+      "OnNetwork"
+    ],
+    "discriminator": 512,
+    "passcode": 134217726
+  },
+  "expected": {
+    "qr": "MT:Y.K90AFN00GYR18TV20"
+  }
+}

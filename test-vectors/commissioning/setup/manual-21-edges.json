@@ -1,0 +1,15 @@
+{
+  "intent": "short=0xF, passcode near max, VID/PID near max",
+  "input": {
+    "version": 0,
+    "vendor_id": 65524,
+    "product_id": 65535,
+    "commissioning_flow": "Standard",
+    "discovery_capabilities": [],
+    "discriminator": 3840,
+    "passcode": 134217726
+  },
+  "expected": {
+    "manual": "765534819165524655350"
+  }
+}
