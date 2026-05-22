@@ -106,6 +106,46 @@ impl Passcode {
     }
 }
 
+/// Commissioning flow indicator from Matter Core Spec §5.1.3.1 Table 39.
+///
+/// Two bits on the wire. Value `3` is reserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CommissioningFlow {
+    /// `0` — Device is fully configured; commissioning works as published.
+    Standard,
+    /// `1` — Device requires user-intent (a button press or similar) before
+    /// it begins advertising commissioning.
+    UserIntent,
+    /// `2` — Custom commissioning flow; commissioner must consult the
+    /// vendor's instructions. Not supported by matter-rust.
+    Custom,
+}
+
+impl CommissioningFlow {
+    /// Decode a wire-format value.
+    ///
+    /// # Errors
+    /// Returns [`Error::CommissioningFlowReserved`] for any input outside
+    /// `0..=2` (including the spec-reserved value `3`).
+    pub const fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Standard),
+            1 => Ok(Self::UserIntent),
+            2 => Ok(Self::Custom),
+            other => Err(Error::CommissioningFlowReserved(other)),
+        }
+    }
+
+    /// Encode as the wire-format 2-bit value.
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::Standard => 0,
+            Self::UserIntent => 1,
+            Self::Custom => 2,
+        }
+    }
+}
+
 /// Errors from setup-payload parsing and encoding.
 ///
 /// All variants carry enough context (position, value, expected) for
@@ -313,5 +353,47 @@ mod passcode_tests {
                 "expected DisallowedTrivial for {v}, got {err:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod commissioning_flow_tests {
+    use super::{CommissioningFlow, Error};
+
+    #[test]
+    fn from_u8_standard() {
+        assert_eq!(CommissioningFlow::from_u8(0).unwrap(), CommissioningFlow::Standard);
+    }
+
+    #[test]
+    fn from_u8_user_intent() {
+        assert_eq!(CommissioningFlow::from_u8(1).unwrap(), CommissioningFlow::UserIntent);
+    }
+
+    #[test]
+    fn from_u8_custom() {
+        assert_eq!(CommissioningFlow::from_u8(2).unwrap(), CommissioningFlow::Custom);
+    }
+
+    #[test]
+    fn from_u8_reserved() {
+        let err = CommissioningFlow::from_u8(3).unwrap_err();
+        assert!(matches!(err, Error::CommissioningFlowReserved(3)));
+    }
+
+    #[test]
+    fn from_u8_out_of_range() {
+        // 4..255 are all invalid; the 2-bit field can only ever yield 0..=3
+        // when read from a real QR, but a programmatic caller could pass
+        // anything.
+        let err = CommissioningFlow::from_u8(99).unwrap_err();
+        assert!(matches!(err, Error::CommissioningFlowReserved(99)));
+    }
+
+    #[test]
+    fn as_u8_roundtrip() {
+        assert_eq!(CommissioningFlow::Standard.as_u8(), 0);
+        assert_eq!(CommissioningFlow::UserIntent.as_u8(), 1);
+        assert_eq!(CommissioningFlow::Custom.as_u8(), 2);
     }
 }
