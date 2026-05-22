@@ -1,38 +1,44 @@
 //! Matter network transport: secured-message framing, session management,
 //! UDP, mDNS, and MRP reliability.
 //!
-//! Milestone 5 of the `matter-rust` roadmap. This crate consumes session
-//! keys produced by completed PASE handshakes (`matter_crypto::pase`) or
+//! Milestone 5 of the `matter-rust` roadmap. Consumes session keys
+//! produced by completed PASE handshakes (`matter_crypto::pase`) or
 //! CASE handshakes (`matter_crypto::case`) and ships them over the wire
-//! in Matter's secured-message format (Matter Core Specification §4.4).
+//! in Matter's secured-message format.
 //!
 //! # Phase status
 //!
-//! - **M5.1 (this revision):** framing + session manager skeleton.
-//! - **M5.2 (next):** MRP — Matter's transport-layer reliability over UDP.
-//! - **M5.3 (after):** Tokio UDP transport + mdns-sd discovery. README +
-//!   version bump to `0.1.0-pre`.
+//! - **M5.1:** framing + session manager skeleton.
+//! - **M5.2:** MRP + application protocol header codec.
+//! - **M5.3 (this revision):** Transport + Discovery traits + default
+//!   Tokio UDP + mdns-sd adapters. Crate reaches `0.1.0-pre`.
 //!
-//! # Scope
+//! # Cargo features
 //!
-//! - [`framing`]: Matter secured-message header encode/decode + AES-CCM-128
-//!   payload encryption + sliding-window replay protection.
-//! - [`session`]: per-session key + counter + replay state, owned by
-//!   [`session::SessionManager`].
-//! - [`error`]: the crate error type.
-//! - [`mrp`]: (placeholder — M5.2 work).
-//! - [`udp`]: (placeholder — M5.3 work).
-//! - [`mdns`]: (placeholder — M5.3 work).
+//! - `tokio` (default): enables [`tokio_udp::TokioUdpTransport`] and the
+//!   `Error::Io` variant.
+//! - `mdns-sd` (default): enables [`mdns_sd_discovery::MdnsSdDiscovery`]
+//!   and the `Error::Mdns` variant.
+//!
+//! Embedded callers disable defaults: the sans-IO core (framing, MRP,
+//! protocol header, session manager, `Transport`/`Discovery` traits)
+//! is always available.
 
 #![forbid(unsafe_code)]
 
+pub mod discovery;
 pub mod error;
 pub mod framing;
-pub mod mdns;
 pub mod mrp;
 pub mod protocol_header;
 pub mod session;
-pub mod udp;
+pub mod transport;
+
+#[cfg(feature = "tokio")]
+pub mod tokio_udp;
+
+#[cfg(feature = "mdns-sd")]
+pub mod mdns_sd_discovery;
 
 pub use error::{Error, Result};
 pub use framing::{
@@ -51,3 +57,12 @@ pub use session::{
     DecodeInboundOutput, EncodeOutboundOutput, PeerHint, Session, SessionKeys, SessionManager,
     SessionRole,
 };
+
+pub use discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
+pub use transport::{PeerAddress, Transport};
+
+#[cfg(feature = "tokio")]
+pub use tokio_udp::TokioUdpTransport;
+
+#[cfg(feature = "mdns-sd")]
+pub use mdns_sd_discovery::MdnsSdDiscovery;

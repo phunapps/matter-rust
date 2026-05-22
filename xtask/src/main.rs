@@ -151,6 +151,33 @@ fn run_check() -> Result<(), String> {
         failures.push("doc");
     }
 
+    println!("\nxtask check: feature-matrix build smoke");
+    let matter_transport_invocations: [&[&str]; 3] = [
+        &["build", "-p", "matter-transport", "--no-default-features"],
+        &[
+            "build",
+            "-p",
+            "matter-transport",
+            "--no-default-features",
+            "--features",
+            "tokio",
+        ],
+        &[
+            "build",
+            "-p",
+            "matter-transport",
+            "--no-default-features",
+            "--features",
+            "mdns-sd",
+        ],
+    ];
+    for args in matter_transport_invocations {
+        if !run_cargo(&workspace_root, args) {
+            failures.push("feature-matrix");
+            break;
+        }
+    }
+
     println!("\nxtask check: cargo audit");
     if tool_installed("cargo-audit") {
         if !run_cargo(&workspace_root, &["audit"]) {

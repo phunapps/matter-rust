@@ -84,6 +84,19 @@ pub enum Error {
         counter: u32,
     },
 
+    /// UDP I/O failure from the Tokio adapter. Feature-gated so embedded
+    /// builds without `tokio` don't carry an `io::Error` dependency on
+    /// this variant.
+    #[cfg(feature = "tokio")]
+    #[error("UDP I/O: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// mDNS daemon failure. Stored as `String` because `mdns_sd::Error`
+    /// is not `Eq` and we want a uniform variant shape. Feature-gated.
+    #[cfg(feature = "mdns-sd")]
+    #[error("mDNS: {0}")]
+    Mdns(String),
+
     /// Bridge from the matter-crypto AEAD module. Currently surfaces as
     /// `DecryptionFailed` in practice — this variant exists so the From impl
     /// is total.
