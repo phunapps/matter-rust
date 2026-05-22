@@ -5,6 +5,81 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## matter-transport
+
+### [0.1.0-pre] — 2026-05-22 (not yet published)
+
+#### Added (M5.1 — framing + session manager skeleton)
+
+- Secured-message header encode/decode with bit positions matching matter.js's
+  `PacketHeaderFlag` (matter.js's actual wire layout differs from a literal
+  reading of Matter Core Spec §4.4.1; matter.js is the byte-parity source
+  of truth).
+- AES-CCM-128 payload wrapping (consumes `matter_crypto::aead`).
+- 32-bit sliding-window replay protection.
+- `SessionManager` skeleton: `register_pase`, `register_case`, encode/decode
+  outbound/inbound.
+- `framing::encode_secured` / `decode_secured` byte-identical to matter.js
+  across 3 captured fixtures (PASE-session keys, CASE-session keys, MRP-payload
+  variant).
+- `matter-crypto`: new public `aead` module promoting `aead_encrypt` /
+  `aead_decrypt` out of `case/sigma.rs` so `matter-transport` consumes
+  AES-CCM via one source of truth.
+
+#### Added (M5.2 — MRP + protocol header)
+
+- Matter application protocol header codec
+  (`protocol_header::{encode, decode, build_standalone_ack_header}`),
+  skip-and-ignore SX/V extensions.
+- Byte-identical to matter.js across 3 captured fixtures
+  (initiator-reliable, responder-ack, standalone-ack). Wire layout
+  rewritten from initial spec-text reading: matter.js conditionally
+  emits `vendor_id` and orders `protocol_short` before `vendor`.
+- Per-session `MrpState` sans-IO state machine: pending retransmits,
+  piggyback ack queue with 200ms standalone-ack deadline, exchange
+  table tracking `is_local_initiator`, 32-entry recent-reliable cache
+  for duplicate-reliable detection.
+- `MrpConfig` defaults match Matter Core Spec §4.11.8 (300ms / 4200ms
+  / ×1.6 / 5 attempts / 200ms ack-deadline / 5s idle threshold). No
+  jitter — controllers don't have the thundering-herd problem.
+- `SessionManager` now threads protocol header + MrpState through
+  `encode_outbound` / `decode_inbound`; new `poll_timeout` /
+  `handle_timeout` API; new `DecodeInboundOutput::DuplicateReliableAckResent`
+  variant for the duplicate-resend path.
+
+#### Added (M5.3 — Tokio UDP + mdns-sd adapters)
+
+- `transport::Transport` trait + `PeerAddress` newtype (around
+  `SocketAddr`; carries IPv6 link-local `scope_id` natively).
+- `discovery::Discovery` trait + `MatterService` + `ServiceKind`
+  (Commissionable / Commissioner / Operational) + `QueryHandle`.
+- `TokioUdpTransport` (cfg `tokio`): dual-stack
+  `[::]:port` binding with `IPV6_V6ONLY = false` via `socket2`; sync
+  `try_send_to` / `try_recv_from`; caller drives readiness.
+- `MdnsSdDiscovery` (cfg `mdns-sd`): two constructors (`new()` spawns
+  own daemon; `with_daemon(d)` reuses an injected one); publish + query
+  + stop_query + poll_results; `ServiceResolved` → `MatterService`.
+- New `Error::Io(io::Error)` cfg tokio + `Error::Mdns(String)` cfg
+  mdns-sd variants.
+- `xtask check` extended with feature-matrix smoke (no-default-features,
+  tokio-only, mdns-sd-only) catching cfg-gating bugs.
+- New deps: `tokio` 1.x (workspace, optional, features `net + rt + io-util`),
+  `mdns-sd` 0.13 (CLAUDE.md approved), `socket2` 0.5 (for the
+  `IPV6_V6ONLY` configure-before-bind step).
+- Loopback integration test: two `TokioUdpTransport` instances exchange
+  one reliable request + piggyback-acked response across the full M5
+  stack on real sockets.
+
+#### Not yet shipped
+
+- Real-device interop testing (M6 commissioning).
+- `cargo publish` (deferred per standing user stance).
+- Cross-host mDNS interop verification.
+- IPv4-only build path (Matter is IPv6-primary).
+- TCP transport (post-1.0).
+- BLE commissioning transport (post-1.0).
+- Group messaging (post-1.0).
+
 ## matter-crypto
 
 ### [0.1.0-pre] — 2026-05-20 (not yet published)

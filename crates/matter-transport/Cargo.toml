@@ -1,6 +1,6 @@
 [package]
 name = "matter-transport"
-version = "0.0.0"
+version = "0.1.0-pre"
 description = "Matter protocol network transport: UDP, mDNS, framing, MRP."
 edition.workspace = true
 rust-version.workspace = true
