@@ -19,6 +19,54 @@ mod manual_packer;
 mod qr_packer;
 mod verhoeff;
 
+/// The decoded contents of a Matter onboarding payload (QR code or manual
+/// pairing code), as defined in Matter Core Spec §5.1.3.
+///
+/// Roundtrip identities:
+///
+/// ```ignore
+/// // For every valid `p` produced by M6.1:
+/// assert_eq!(parse_qr(&encode_qr(&p)?)?, p);
+/// assert_eq!(parse_manual_code(&encode_manual_code(&p)), p);  // see caveat below
+/// ```
+///
+/// The manual-code roundtrip preserves the *upper four bits* of the
+/// discriminator (the short discriminator) and zero-extends the rest.
+/// A `SetupPayload` decoded from a manual code therefore has a
+/// discriminator whose lower 8 bits are zero, regardless of what the
+/// physical device's long discriminator actually is. Callers matching
+/// against mDNS records should compare on the short discriminator in
+/// that case.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupPayload {
+    /// Onboarding payload version. Currently always `0` (Matter Core
+    /// Spec §5.1.3.1 Table 39). Reserved for future use.
+    pub version: u8,
+
+    /// Vendor ID. `None` if the source was an 11-digit manual code,
+    /// which does not carry VID/PID.
+    pub vendor_id: Option<u16>,
+
+    /// Product ID. Pair with `vendor_id` — both are `Some` or both
+    /// `None`.
+    pub product_id: Option<u16>,
+
+    /// Commissioning flow indicator.
+    pub commissioning_flow: CommissioningFlow,
+
+    /// Bitmask of discovery transports the device supports while
+    /// commissionable. Always present in QR codes; manual codes do not
+    /// carry this field and decode it as the empty set.
+    pub discovery_capabilities: DiscoveryCapabilities,
+
+    /// 12-bit Long Discriminator. See the type-level rustdoc for the
+    /// manual-code caveat.
+    pub discriminator: Discriminator,
+
+    /// 27-bit passcode.
+    pub passcode: Passcode,
+}
+
 /// Twelve-bit long discriminator identifying a Matter device while it
 /// is commissionable (Matter Core Spec §5.1.2.2).
 ///
@@ -458,5 +506,51 @@ mod discovery_capabilities_tests {
         let d = DiscoveryCapabilities::from_bits_retain(0b1100_0001);
         assert_eq!(d.bits(), 0b1100_0001);
         assert!(d.contains(DiscoveryCapabilities::SOFT_AP));
+    }
+}
+
+#[cfg(test)]
+mod setup_payload_tests {
+    use super::*;
+
+    /// Returns the spec's worked-example payload from Matter Core Spec §5.1.3.1.
+    /// VID 0xFFF1, PID 0x8000, discriminator 0xF00, passcode 20_202_021,
+    /// flow Standard, discovery ON_NETWORK only.
+    pub(super) fn spec_example_payload() -> SetupPayload {
+        SetupPayload {
+            version: 0,
+            vendor_id: Some(0xFFF1),
+            product_id: Some(0x8000),
+            commissioning_flow: CommissioningFlow::Standard,
+            discovery_capabilities: DiscoveryCapabilities::ON_NETWORK,
+            discriminator: Discriminator::new(0xF00).unwrap(),
+            passcode: Passcode::new(20_202_021).unwrap(),
+        }
+    }
+
+    #[test]
+    fn spec_example_round_trips_through_struct() {
+        let p = spec_example_payload();
+        assert_eq!(p.vendor_id, Some(0xFFF1));
+        assert_eq!(p.product_id, Some(0x8000));
+        assert_eq!(p.discriminator.as_u16(), 0xF00);
+        assert_eq!(p.passcode.as_u32(), 20_202_021);
+        assert_eq!(p.commissioning_flow, CommissioningFlow::Standard);
+        assert!(p.discovery_capabilities.contains(DiscoveryCapabilities::ON_NETWORK));
+    }
+
+    #[test]
+    fn manual_only_payload_has_no_vid_pid() {
+        let p = SetupPayload {
+            version: 0,
+            vendor_id: None,
+            product_id: None,
+            commissioning_flow: CommissioningFlow::Standard,
+            discovery_capabilities: DiscoveryCapabilities::empty(),
+            discriminator: Discriminator::new(0xA00).unwrap(),
+            passcode: Passcode::new(20_202_021).unwrap(),
+        };
+        assert!(p.vendor_id.is_none());
+        assert!(p.product_id.is_none());
     }
 }
