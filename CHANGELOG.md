@@ -5,6 +5,33 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## matter-commissioning
+
+### [Unreleased] — M6.1 setup payload codec
+
+#### Added (M6.1 — setup payload codec)
+
+- `setup::SetupPayload` — canonical in-memory representation of a Matter
+  onboarding payload (Matter Core Spec §5.1).
+- `setup::Discriminator` and `setup::Passcode` newtypes with
+  range-validating constructors. The 12-bit discriminator's `short()`
+  accessor returns the 4-bit short form carried by manual pairing codes.
+- `setup::CommissioningFlow` enum (Standard / UserIntent / Custom);
+  reserved values rejected on parse.
+- `setup::DiscoveryCapabilities` bitflags preserving spec-reserved bits
+  on roundtrip.
+- `setup::parse_qr` / `setup::encode_qr` — `MT:`-prefixed Base38 codec
+  for the 88-bit fixed block. Vendor TLV extensions are not yet supported
+  (deferred to a later phase).
+- `setup::parse_manual_code` / `setup::encode_manual_code` — 11- and
+  21-digit manual pairing codes with Verhoeff (ISO/IEC 7064 mod-11,10)
+  check digit.
+- Byte parity against matter.js across 13 captured fixtures
+  (spec-example, edge discriminators / passcodes, all-discovery, UserIntent,
+  high VID/PID, 11- and 21-digit manual codes).
+- Fuzz targets for `parse_qr` and `parse_manual_code` (no-panic property).
+- Proptest roundtrip suite (3 properties × 256 cases default).
+
 ## matter-transport
 
 ### [0.1.0-pre] — 2026-05-22 (not yet published)
