@@ -8,41 +8,52 @@
 // MATTER.JS ENTRY POINTS
 // =====================================================================
 //
-// `@matter/protocol`:
+// `@matter/types` (NOT `@matter/protocol` — verified by enumerating the
+// installed package's exports):
 //
-//   QrPairingCodeCodec.encode(payload)  → string starting with "MT:"
-//   QrPairingCodeCodec.decode(qrString) → payload
+//   QrPairingCodeCodec.encode(payloads)       → "MT:..." string
+//   QrPairingCodeCodec.decode(qrString)       → QrCodeData[]
+//   ManualPairingCodeCodec.encode(payload)    → 11- or 21-digit string
+//   ManualPairingCodeCodec.decode(s)          → ManualPairingData
 //
-//   ManualPairingCodeCodec.encode(payload)  → 11- or 21-digit string
-//   ManualPairingCodeCodec.decode(s)        → payload
-//
-// matter.js's "payload" object shape (see node_modules/@matter/protocol/
-// dist/esm/codec/QrCodeCodec.js for the canonical interface):
+// QR codec input is an ARRAY of QrCodeData (it supports multi-payload
+// concatenation separated by '*'). Each entry is:
 //
 //   {
-//     version: number,                 // 0
+//     version: number,                 // 0..7
 //     vendorId: number,                // 16-bit
 //     productId: number,               // 16-bit
-//     flowType: 0 | 1 | 2,
+//     flowType: 0 | 1 | 2,             // Standard | UserIntent | Custom
+//     discoveryCapabilities: number,   // 8-bit RAW bitmap (NOT object)
 //     discriminator: number,           // 12-bit
-//     discoveryCapabilities: { ble?: boolean, softAccessPoint?: boolean,
-//                              onIpNetwork?: boolean },
 //     passcode: number,                // 27-bit
+//     // optional tlvData?: Bytes — we do not use it
 //   }
 //
-// Verify these names against the installed matter.js. If matter.js
-// disagrees, the Rust integration test in Task 22 will detect mismatches
-// — fix names here, not in Rust.
+// `discoveryCapabilities` is fed to a `BitField(37, 8)` in
+// QrCodeDataSchema — i.e. an opaque 8-bit integer. Matter-rust's
+// `DiscoveryCapabilities` bitflags (SOFT_AP=bit0, BLE=bit1,
+// ON_NETWORK=bit2) define the wire layout; we compute that bitmap
+// here and pass the resulting integer.
+//
+// Manual codec input is a single object:
+//
+//   {
+//     discriminator: number,           // 12-bit
+//     passcode: number,                // 27-bit
+//     vendorId?: number,               // present iff long form
+//     productId?: number,              // present iff long form
+//   }
+//
+// The codec emits the 21-digit (long) form iff BOTH vendorId AND
+// productId are defined; otherwise the 11-digit (short) form. It
+// ignores flowType and discoveryCapabilities entirely.
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Both codecs live in @matter/protocol/dist/esm/codec/ — names verified
-// at install time. If the import below fails, run
-// `node -e "console.log(Object.keys(await import('@matter/protocol')))"`
-// inside this directory to enumerate exports.
-import { QrPairingCodeCodec, ManualPairingCodeCodec } from '@matter/protocol';
+import { QrPairingCodeCodec, ManualPairingCodeCodec } from '@matter/types';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -245,21 +256,49 @@ const manualScenarios = [
 
 const FLOW = { Standard: 0, UserIntent: 1, Custom: 2 };
 
-function toMatterJsPayload(input) {
-    const cap = new Set(input.discovery_capabilities ?? []);
+// matter-rust `DiscoveryCapabilities` bitflag layout — this is the byte
+// that gets stored in the QR payload's 8-bit `discoveryCapabilities` field.
+// Keep in sync with `crates/matter-commissioning/src/setup/mod.rs`.
+const DISCOVERY_BIT = {
+    SoftAp: 1 << 0,
+    Ble: 1 << 1,
+    OnNetwork: 1 << 2,
+};
+
+function discoveryBitmap(caps) {
+    let v = 0;
+    for (const c of caps ?? []) {
+        if (!(c in DISCOVERY_BIT)) {
+            throw new Error(`unknown discovery capability: ${c}`);
+        }
+        v |= DISCOVERY_BIT[c];
+    }
+    return v;
+}
+
+function toQrPayload(input) {
     return {
         version: input.version,
         vendorId: input.vendor_id ?? 0,
         productId: input.product_id ?? 0,
         flowType: FLOW[input.commissioning_flow],
         discriminator: input.discriminator,
-        discoveryCapabilities: {
-            ble: cap.has('Ble'),
-            softAccessPoint: cap.has('SoftAp'),
-            onIpNetwork: cap.has('OnNetwork'),
-        },
+        discoveryCapabilities: discoveryBitmap(input.discovery_capabilities),
         passcode: input.passcode,
     };
+}
+
+function toManualPayload(input) {
+    const has_vid_pid = input.vendor_id != null && input.product_id != null;
+    const payload = {
+        discriminator: input.discriminator,
+        passcode: input.passcode,
+    };
+    if (has_vid_pid) {
+        payload.vendorId = input.vendor_id;
+        payload.productId = input.product_id;
+    }
+    return payload;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,8 +306,9 @@ function toMatterJsPayload(input) {
 // ---------------------------------------------------------------------------
 
 for (const scenario of qrScenarios) {
-    const mjs = toMatterJsPayload(scenario.input);
-    const expected_qr = QrPairingCodeCodec.encode(mjs);
+    const mjs = toQrPayload(scenario.input);
+    // QR codec encodes an ARRAY of payloads; we always pass a singleton.
+    const expected_qr = QrPairingCodeCodec.encode([mjs]);
     const fixture = {
         intent: scenario.intent,
         input: scenario.input,
@@ -280,7 +320,7 @@ for (const scenario of qrScenarios) {
 }
 
 for (const scenario of manualScenarios) {
-    const mjs = toMatterJsPayload(scenario.input);
+    const mjs = toManualPayload(scenario.input);
     const expected_manual = ManualPairingCodeCodec.encode(mjs);
     const fixture = {
         intent: scenario.intent,
