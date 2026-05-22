@@ -491,6 +491,7 @@ dependencies = [
 name = "matter-commissioning"
 version = "0.0.0"
 dependencies = [
+ "bitflags",
  "matter-cert",
  "matter-codec",
  "matter-crypto",

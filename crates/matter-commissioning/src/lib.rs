@@ -1,15 +1,14 @@
 //! Matter commissioning state machine.
 //!
-//! This is Milestone 6 of the `matter-rust` roadmap. The crate is currently a
-//! placeholder.
+//! This is Milestone 6 of the `matter-rust` roadmap. The crate is currently
+//! shipping in phases:
 //!
-//! # Scope
-//!
-//! - [`setup`]: setup payload parsing (QR codes and manual codes).
-//! - [`state_machine`]: the ten-stage commissioning state machine.
-//! - [`attestation`]: device attestation verification (DAC → PAI → PAA).
-//! - [`noc`]: Node Operational Certificate issuance from a trust root.
-//! - [`error`]: the crate error type.
+//! - **M6.1 (current):** setup payload codec — see [`setup`].
+//! - **M6.2:** device attestation verification — see [`attestation`].
+//! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
+//! - **M6.4:** ten-stage commissioning state machine — see [`state_machine`].
+//! - **M6.5:** Wi-Fi network commissioning.
+//! - **M6.6:** Tokio driver + first real-device commission.
 
 #![forbid(unsafe_code)]
 
