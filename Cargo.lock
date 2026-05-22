@@ -496,6 +496,8 @@ dependencies = [
  "matter-codec",
  "matter-crypto",
  "matter-transport",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
