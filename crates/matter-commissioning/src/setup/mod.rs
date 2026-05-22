@@ -52,6 +52,60 @@ impl Discriminator {
     }
 }
 
+/// Disallowed-trivial passcode values from Matter Core Spec §5.1.7.1.
+///
+/// All-same-digit values plus the counting-up and counting-down sequences.
+/// The Matter spec rejects these because they offer no protection against
+/// guessing during the commissioning window.
+///
+/// Note: the standard test passcode `20_202_021` is NOT on this list —
+/// the spec carves it out as a permitted test value.
+pub(super) const DISALLOWED_PASSCODES: &[u32] = &[
+    0,
+    11_111_111,
+    22_222_222,
+    33_333_333,
+    44_444_444,
+    55_555_555,
+    66_666_666,
+    77_777_777,
+    88_888_888,
+    99_999_999,
+    12_345_678,
+    87_654_321,
+];
+
+/// 27-bit Matter setup passcode (Matter Core Spec §5.1.7).
+///
+/// Constructors enforce the 27-bit range and exclude the disallowed-trivial
+/// values from spec §5.1.7.1. The standard test passcode `20_202_021` is
+/// permitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Passcode(u32);
+
+impl Passcode {
+    /// Construct from a 27-bit value.
+    ///
+    /// # Errors
+    /// Returns [`Error::PasscodeOutOfRange`] if `value >= 1 << 27`.
+    /// Returns [`Error::PasscodeDisallowedTrivial`] if `value` is one of
+    /// the spec-disallowed values listed in [`DISALLOWED_PASSCODES`].
+    pub fn new(value: u32) -> Result<Self> {
+        if value >= 1 << 27 {
+            return Err(Error::PasscodeOutOfRange(value));
+        }
+        if DISALLOWED_PASSCODES.contains(&value) {
+            return Err(Error::PasscodeDisallowedTrivial(value));
+        }
+        Ok(Self(value))
+    }
+
+    /// The passcode as a raw `u32` in the range `0..1 << 27`.
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
 /// Errors from setup-payload parsing and encoding.
 ///
 /// All variants carry enough context (position, value, expected) for
@@ -195,5 +249,69 @@ mod discriminator_tests {
         // 0xABC = bits 10101011 1100; upper 4 bits = 0xA
         let d = Discriminator::new(0x0ABC).unwrap();
         assert_eq!(d.short(), 0xA);
+    }
+}
+
+#[cfg(test)]
+mod passcode_tests {
+    use super::{Error, Passcode};
+
+    #[test]
+    fn new_accepts_normal_value() {
+        // 20202021 is the standard Matter test passcode. The spec excludes
+        // a handful of trivial all-same-digit and counting-sequence
+        // values, but 20202021 is allowed.
+        let p = Passcode::new(20_202_021).unwrap();
+        assert_eq!(p.as_u32(), 20_202_021);
+    }
+
+    #[test]
+    fn new_rejects_28_bit_value() {
+        let too_large = 1u32 << 27;
+        let err = Passcode::new(too_large).unwrap_err();
+        assert!(matches!(err, Error::PasscodeOutOfRange(v) if v == too_large));
+    }
+
+    #[test]
+    fn new_accepts_max_27_bit() {
+        // Largest 27-bit value not on the disallowed list. We use 99_000_001
+        // (well under 2^27 = 134_217_728, and not on any trivial-pattern list).
+        let p = Passcode::new(99_000_001).unwrap();
+        assert_eq!(p.as_u32(), 99_000_001);
+    }
+
+    #[test]
+    fn new_rejects_all_zeros() {
+        let err = Passcode::new(0).unwrap_err();
+        assert!(matches!(err, Error::PasscodeDisallowedTrivial(0)));
+    }
+
+    #[test]
+    fn new_rejects_all_ones() {
+        let err = Passcode::new(11_111_111).unwrap_err();
+        assert!(matches!(err, Error::PasscodeDisallowedTrivial(11_111_111)));
+    }
+
+    #[test]
+    fn new_rejects_counting_up() {
+        let err = Passcode::new(12_345_678).unwrap_err();
+        assert!(matches!(err, Error::PasscodeDisallowedTrivial(12_345_678)));
+    }
+
+    #[test]
+    fn new_rejects_counting_down() {
+        let err = Passcode::new(87_654_321).unwrap_err();
+        assert!(matches!(err, Error::PasscodeDisallowedTrivial(87_654_321)));
+    }
+
+    #[test]
+    fn new_rejects_all_disallowed() {
+        for &v in super::DISALLOWED_PASSCODES {
+            let err = Passcode::new(v).unwrap_err();
+            assert!(
+                matches!(err, Error::PasscodeDisallowedTrivial(x) if x == v),
+                "expected DisallowedTrivial for {v}, got {err:?}"
+            );
+        }
     }
 }
