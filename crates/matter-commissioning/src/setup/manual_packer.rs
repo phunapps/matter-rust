@@ -14,20 +14,31 @@ use crate::setup::{
 ///
 /// Emits the 21-digit form when both VID and PID are `Some`, otherwise
 /// the 11-digit form. Always appends the Verhoeff check digit.
+///
+/// Bit layout follows Matter Core Spec §5.1.4 / matter.js's
+/// `ManualPairingCodeSchema`:
+///
+/// - chunk0 (1 digit, decimal): bits 0-1 = discriminator bits 10-11,
+///   bit 2 = has-VID/PID flag.
+/// - chunk1 (5 digits, decimal): bits 0-13 = passcode bits 0-13,
+///   bits 14-15 = discriminator bits 8-9.
+/// - chunk2 (4 digits, decimal): passcode bits 14-26.
+/// - optional chunks 3 and 4 (5 digits each): vendor ID and product ID.
+/// - final digit: Verhoeff check digit over all preceding digits.
 pub(super) fn pack(payload: &SetupPayload) -> String {
     let has_vid_pid = payload.vendor_id.is_some() && payload.product_id.is_some();
-    let short = u16::from(payload.discriminator.short());
+    let discriminator = u32::from(payload.discriminator.as_u16());
     let passcode = payload.passcode.as_u32();
 
-    // First chunk: 1 bit (has-VID/PID flag) | 2 bits (upper 2 bits of short).
-    let chunk0 =
-        (u32::from(has_vid_pid) & 0b1) | ((u32::from(short) >> 2) & 0b11) << 1;
+    // chunk0: discriminator bits 10-11 | has-VID/PID flag at bit 2.
+    let chunk0 = (discriminator >> 10) | (u32::from(has_vid_pid) << 2);
 
-    // Second chunk: 2 bits (lower 2 bits of short) | 14 bits (passcode 0..=13).
-    let chunk1 = (u32::from(short) & 0b11) | ((passcode & 0x3FFF) << 2);
+    // chunk1: passcode bits 0-13 | discriminator bits 8-9 placed at chunk1 bits 14-15.
+    // `(discriminator & 0x300) << 6` lifts bits 8-9 to bit positions 14-15.
+    let chunk1 = ((discriminator & 0x300) << 6) | (passcode & 0x3FFF);
 
-    // Third chunk: 13 bits (passcode 14..=26).
-    let chunk2 = (passcode >> 14) & 0x1FFF;
+    // chunk2: passcode bits 14-26.
+    let chunk2 = passcode >> 14;
 
     let mut s = format!("{chunk0:01}{chunk1:05}{chunk2:04}");
 
@@ -70,14 +81,20 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
         .parse()
         .map_err(|_| Error::ManualCodeNonDigit('?', 6))?;
 
-    let has_vid_pid = (chunk0 & 0b1) == 1;
-    let short_upper = (chunk0 >> 1) & 0b11;
-    let short_lower = chunk1 & 0b11;
+    // Mirror of `pack`'s layout:
+    // - chunk0 bit 2          = has-VID/PID flag
+    // - chunk0 bits 0-1       = discriminator bits 10-11 (upper 2 bits of the 4-bit short)
+    // - chunk1 bits 14-15     = discriminator bits 8-9   (lower 2 bits of the 4-bit short)
+    // - chunk1 bits 0-13      = passcode bits 0-13
+    // - chunk2                = passcode bits 14-26
+    let has_vid_pid = ((chunk0 >> 2) & 0b1) == 1;
+    let short_upper = chunk0 & 0b11;
+    let short_lower = (chunk1 >> 14) & 0b11;
     #[allow(clippy::cast_possible_truncation)] // 4-bit value, fits u16 trivially.
     let short = ((short_upper << 2) | short_lower) as u16; // 4-bit short discriminator
 
-    let passcode_lo = (chunk1 >> 2) & 0x3FFF;          // bits 0..=13
-    let passcode_hi = chunk2 & 0x1FFF;                  // bits 14..=26
+    let passcode_lo = chunk1 & 0x3FFF;                 // bits 0..=13
+    let passcode_hi = chunk2 & 0x1FFF;                 // bits 14..=26
     let passcode = passcode_lo | (passcode_hi << 14);
 
     let (vendor_id, product_id) = if has_vid_pid {
