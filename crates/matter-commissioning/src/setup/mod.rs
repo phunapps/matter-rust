@@ -370,6 +370,46 @@ pub fn parse_qr(s: &str) -> Result<SetupPayload> {
     qr_packer::unpack(&fixed)
 }
 
+/// Encode a `SetupPayload` as a manual pairing code (Matter Core Spec §5.1.4).
+///
+/// Emits the 21-digit form if `vendor_id` and `product_id` are both
+/// `Some`, otherwise the 11-digit form. The final digit is always the
+/// Verhoeff check digit.
+///
+/// # Examples
+///
+/// ```
+/// use matter_commissioning::setup::{
+///     encode_manual_code, parse_manual_code,
+///     CommissioningFlow, Discriminator, DiscoveryCapabilities,
+///     Passcode, SetupPayload,
+/// };
+/// let payload = SetupPayload {
+///     version: 0,
+///     vendor_id: None,
+///     product_id: None,
+///     commissioning_flow: CommissioningFlow::Standard,
+///     discovery_capabilities: DiscoveryCapabilities::empty(),
+///     discriminator: Discriminator::new(0xF00).unwrap(),
+///     passcode: Passcode::new(20_202_021).unwrap(),
+/// };
+/// let code = encode_manual_code(&payload);
+/// assert_eq!(code.len(), 11);
+/// assert_eq!(parse_manual_code(&code).unwrap(), payload);
+/// ```
+pub fn encode_manual_code(payload: &SetupPayload) -> String {
+    manual_packer::pack(payload)
+}
+
+/// Parse a Matter manual pairing code (11 or 21 digits).
+///
+/// # Errors
+/// Returns [`Error::ManualCodeWrongLength`], [`Error::ManualCodeNonDigit`],
+/// [`Error::ManualCodeBadChecksum`], or any per-field range error.
+pub fn parse_manual_code(s: &str) -> Result<SetupPayload> {
+    manual_packer::unpack(s)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod error_tests {
@@ -681,5 +721,55 @@ mod qr_api_tests {
     fn parse_qr_rejects_short_payload() {
         let err = parse_qr("MT:00000").unwrap_err();
         assert!(matches!(err, Error::QrPayloadWrongLength { .. }), "got {err:?}");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+mod manual_api_tests {
+    use super::*;
+
+    fn payload_11() -> SetupPayload {
+        SetupPayload {
+            version: 0,
+            vendor_id: None,
+            product_id: None,
+            commissioning_flow: CommissioningFlow::Standard,
+            discovery_capabilities: DiscoveryCapabilities::empty(),
+            discriminator: Discriminator::new(0x0F00).unwrap(),
+            passcode: Passcode::new(20_202_021).unwrap(),
+        }
+    }
+
+    #[test]
+    fn encode_manual_11_then_parse() {
+        let p = payload_11();
+        let s = encode_manual_code(&p);
+        assert_eq!(s.len(), 11);
+        let back = parse_manual_code(&s).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn encode_manual_21_then_parse() {
+        let mut p = payload_11();
+        p.vendor_id = Some(0xFFF1);
+        p.product_id = Some(0x8000);
+        let s = encode_manual_code(&p);
+        assert_eq!(s.len(), 21);
+        let back = parse_manual_code(&s).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn parse_manual_rejects_wrong_length() {
+        let err = parse_manual_code("12345").unwrap_err();
+        assert!(matches!(err, Error::ManualCodeWrongLength(5)));
+    }
+
+    #[test]
+    fn parse_manual_rejects_non_digit() {
+        let err = parse_manual_code("1234567890A").unwrap_err();
+        assert!(matches!(err, Error::ManualCodeNonDigit('A', 10)));
     }
 }

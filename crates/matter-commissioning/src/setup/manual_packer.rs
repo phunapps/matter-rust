@@ -3,11 +3,6 @@
 //! Two forms: 11 digits (no VID/PID) or 21 digits (with VID/PID).
 //! Both end in a Verhoeff check digit.
 
-// M6.1 build-staging: this submodule lands ahead of its consumer
-// (`setup::encode_manual_code` / `setup::parse_manual_code`, Task 13).
-// The allow comes off in Task 13's commit. Precedent: `matter-crypto/src/case/sigma.rs`.
-#![allow(dead_code)]
-
 use core::fmt::Write as _;
 
 use crate::setup::{

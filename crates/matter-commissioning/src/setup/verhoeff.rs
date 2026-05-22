@@ -4,14 +4,6 @@
 //! detect single-digit transcription errors. Private to the `setup`
 //! module.
 
-// M6.1 build-staging: this submodule lands ahead of its consumer
-// (`setup::manual_packer`, Task 12). Until Task 12 lands, every item
-// here looks dead to the compiler. The workspace convention is to silence
-// the lint at the staging point and remove the allow once the consumer
-// arrives — see `crates/matter-crypto/src/case/sigma.rs` for the same
-// pattern used during M4.3.
-#![allow(dead_code)]
-
 /// Compute the Verhoeff check digit for `digits` (the value to be
 /// protected, **without** the check digit appended).
 ///
