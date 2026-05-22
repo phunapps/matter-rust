@@ -342,11 +342,16 @@ pub fn encode_qr(payload: &SetupPayload) -> Result<String> {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use matter_commissioning::setup::parse_qr;
-/// let qr_from_a_real_device: &str = "MT:..."; // filled in at Task 21
-/// let payload = parse_qr(qr_from_a_real_device).unwrap();
-/// let _ = payload.vendor_id;
+/// // Captured from matter.js for the Matter Core Spec §5.1.3.1 worked
+/// // example (VID 0xFFF1, PID 0x8000, discriminator 0xF00, passcode
+/// // 20_202_021). Source:
+/// // test-vectors/commissioning/setup/qr-spec-example.json
+/// let payload = parse_qr("MT:Y.K90AFN00KA0648G00").unwrap();
+/// assert_eq!(payload.vendor_id, Some(0xFFF1));
+/// assert_eq!(payload.product_id, Some(0x8000));
+/// assert_eq!(payload.passcode.as_u32(), 20_202_021);
 /// ```
 pub fn parse_qr(s: &str) -> Result<SetupPayload> {
     let payload = s
