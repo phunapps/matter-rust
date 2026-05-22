@@ -293,6 +293,83 @@ pub enum Error {
 /// Convenience alias for `Result<T, Error>` inside the setup module.
 pub type Result<T> = core::result::Result<T, Error>;
 
+const QR_PREFIX: &str = "MT:";
+
+/// Encode a `SetupPayload` as a Matter QR string (Matter Core Spec §5.1.3.1).
+///
+/// The returned string always begins with `MT:` followed by Matter Base38.
+///
+/// # Errors
+/// Returns [`Error::QrRequiresVidPid`] if either VID or PID is `None`.
+/// Returns [`Error::CustomFlowUnsupported`] for `CommissioningFlow::Custom`.
+///
+/// # Examples
+///
+/// ```
+/// use matter_commissioning::setup::{
+///     encode_qr, parse_qr,
+///     CommissioningFlow, Discriminator, DiscoveryCapabilities,
+///     Passcode, SetupPayload,
+/// };
+/// let payload = SetupPayload {
+///     version: 0,
+///     vendor_id: Some(0xFFF1),
+///     product_id: Some(0x8000),
+///     commissioning_flow: CommissioningFlow::Standard,
+///     discovery_capabilities: DiscoveryCapabilities::ON_NETWORK,
+///     discriminator: Discriminator::new(0xF00).unwrap(),
+///     passcode: Passcode::new(20_202_021).unwrap(),
+/// };
+/// let qr = encode_qr(&payload).unwrap();
+/// assert!(qr.starts_with("MT:"));
+/// assert_eq!(parse_qr(&qr).unwrap(), payload);
+/// ```
+pub fn encode_qr(payload: &SetupPayload) -> Result<String> {
+    let bytes = qr_packer::pack(payload)?;
+    Ok(format!("{QR_PREFIX}{}", base38::encode(&bytes)))
+}
+
+/// Parse a Matter QR string into a `SetupPayload`.
+///
+/// # Errors
+/// Returns [`Error::MissingMtPrefix`] if the string does not begin with
+/// `MT:`.
+/// Returns [`Error::InvalidBase38Char`] for any character outside Matter's
+/// Base38 alphabet.
+/// Returns [`Error::QrPayloadWrongLength`] or [`Error::QrTrailingBytes`]
+/// for payload-length problems.
+/// Returns the per-field range errors via [`qr_packer::unpack`].
+///
+/// # Examples
+///
+/// ```no_run
+/// use matter_commissioning::setup::parse_qr;
+/// let qr_from_a_real_device: &str = "MT:..."; // filled in at Task 21
+/// let payload = parse_qr(qr_from_a_real_device).unwrap();
+/// let _ = payload.vendor_id;
+/// ```
+pub fn parse_qr(s: &str) -> Result<SetupPayload> {
+    let payload = s
+        .strip_prefix(QR_PREFIX)
+        .ok_or(Error::MissingMtPrefix)?;
+    let bytes = base38::decode(payload)?;
+    let need = qr_packer::FIXED_BYTE_LEN;
+    if bytes.len() < need {
+        return Err(Error::QrPayloadWrongLength {
+            got: bytes.len(),
+            need,
+        });
+    }
+    if bytes.len() > need {
+        return Err(Error::QrTrailingBytes {
+            extra: bytes.len() - need,
+        });
+    }
+    let mut fixed = [0u8; qr_packer::FIXED_BYTE_LEN];
+    fixed.copy_from_slice(&bytes[..need]);
+    qr_packer::unpack(&fixed)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod error_tests {
@@ -558,5 +635,51 @@ mod setup_payload_tests {
         };
         assert!(p.vendor_id.is_none());
         assert!(p.product_id.is_none());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+mod qr_api_tests {
+    use super::*;
+    use crate::setup::setup_payload_tests::spec_example_payload;
+
+    /// The spec example must encode AND decode without errors. (Exact
+    /// byte parity against matter.js is verified by the integration test
+    /// `tests/setup_byte_parity.rs` once fixtures are captured in
+    /// Task 21.)
+    #[test]
+    fn spec_example_qr_encode_decode_roundtrip() {
+        let p = spec_example_payload();
+        let s = encode_qr(&p).unwrap();
+        assert!(s.starts_with("MT:"), "got {s:?}");
+        let back = parse_qr(&s).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn parse_qr_rejects_missing_prefix() {
+        let err = parse_qr("Y.K9042C00KA0648G00").unwrap_err();
+        assert!(matches!(err, Error::MissingMtPrefix));
+    }
+
+    #[test]
+    fn parse_qr_rejects_trailing_bytes() {
+        // The spec-example payload encodes to 19 Base38 chars (3 full
+        // 5-char chunks plus a 4-char tail → 11 bytes). Appending 3 chars
+        // turns the tail into a 5-char chunk (3 bytes) plus a fresh
+        // 2-char chunk (1 byte), decoding to 13 bytes total — 2 bytes
+        // past the fixed block.
+        let p = spec_example_payload();
+        let mut s = encode_qr(&p).unwrap();
+        s.push_str("000");
+        let err = parse_qr(&s).unwrap_err();
+        assert!(matches!(err, Error::QrTrailingBytes { extra: 2 }), "got {err:?}");
+    }
+
+    #[test]
+    fn parse_qr_rejects_short_payload() {
+        let err = parse_qr("MT:00000").unwrap_err();
+        assert!(matches!(err, Error::QrPayloadWrongLength { .. }), "got {err:?}");
     }
 }

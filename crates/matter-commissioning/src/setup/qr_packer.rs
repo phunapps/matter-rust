@@ -1,11 +1,6 @@
 //! Bit-level pack and unpack of the 88-bit QR-code fixed-field block
 //! (Matter Core Spec §5.1.3.1). Private to the `setup` module.
 
-// M6.1 build-staging: this submodule lands ahead of its consumer
-// (`setup::encode_qr` / `setup::parse_qr`, Task 11). The allow comes
-// off in Task 11's commit. Precedent: `matter-crypto/src/case/sigma.rs`.
-#![allow(dead_code)]
-
 use crate::setup::{
     CommissioningFlow, Discriminator, DiscoveryCapabilities, Error, Passcode, Result, SetupPayload,
 };

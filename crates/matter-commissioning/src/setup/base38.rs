@@ -6,12 +6,6 @@
 //!
 //! Private to the `setup` module.
 
-// M6.1 build-staging: this submodule lands ahead of its consumers
-// (`setup::encode_qr` / `setup::parse_qr`, Task 11). The allow is removed
-// once Task 11 lands. See sibling note in `verhoeff.rs` and the
-// precedent in `matter-crypto/src/case/sigma.rs`.
-#![allow(dead_code)]
-
 use crate::setup::{Error, Result};
 
 const ALPHABET: &[u8; 38] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-.";
