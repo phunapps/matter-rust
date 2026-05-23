@@ -35,9 +35,20 @@ LICENSE file.
 
 To update against a newer upstream tag:
 
-1. Bump the tag in this README and re-run the steps in
-   `docs/superpowers/plans/2026-05-23-matter-commissioning-attestation-phase-1.md` Task 1.
-2. Re-run `cargo test -p matter-commissioning attestation` to confirm
-   the new DER still parses through `Paa::from_der`.
-3. If parsing fails, the upstream file format may have changed
+1. Clone the upstream repo at the target tag (shallow):
+   ```bash
+   git clone --depth 1 --branch <tag> \
+     https://github.com/project-chip/connectedhomeip.git /tmp/chip-attestation-vendor
+   ```
+2. Copy `Chip-Test-PAA-FFF1-Cert.der` and `Chip-Test-PAA-NoVID-Cert.der`
+   from `/tmp/chip-attestation-vendor/credentials/test/attestation/` into
+   this directory, overwriting the existing files. (Note: the path was
+   `credentials/development/attestation/` in older releases. If the
+   files aren't where this README expects them, search the upstream
+   tree with `find /tmp/chip-attestation-vendor -name 'Chip-Test-PAA-FFF1-Cert.der'`.)
+3. Record the new upstream commit SHA and tag near the top of this
+   README.
+4. Run `cargo test -p matter-commissioning attestation` to confirm the
+   new DER still parses through the trust-store loader.
+5. If parsing fails, the upstream cert profile may have changed
    meaningfully — escalate.
