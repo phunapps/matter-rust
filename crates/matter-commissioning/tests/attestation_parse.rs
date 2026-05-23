@@ -6,9 +6,7 @@
 //! crate boundary. A regression here means the crate's public API has
 //! changed in a way that breaks downstream consumers.
 
-use matter_commissioning::{
-    AttestationError, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
-};
+use matter_commissioning::{AttestationError, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId};
 
 const DAC_DER: &[u8] = include_bytes!(
     "../../../test-vectors/certs/attestation/happy-path/Chip-Test-DAC-FFF1-8000-0004-Cert.der"

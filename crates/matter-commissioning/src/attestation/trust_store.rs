@@ -40,10 +40,8 @@ impl PaaTrustStore {
         // inside the crate (see `csa_test_roots/README.md`) so this
         // path is stable regardless of where the crate is consumed
         // from (workspace path, git dep, or — eventually — crates.io).
-        const PAA_FFF1: &[u8] =
-            include_bytes!("csa_test_roots/Chip-Test-PAA-FFF1-Cert.der");
-        const PAA_NOVID: &[u8] =
-            include_bytes!("csa_test_roots/Chip-Test-PAA-NoVID-Cert.der");
+        const PAA_FFF1: &[u8] = include_bytes!("csa_test_roots/Chip-Test-PAA-FFF1-Cert.der");
+        const PAA_NOVID: &[u8] = include_bytes!("csa_test_roots/Chip-Test-PAA-NoVID-Cert.der");
 
         // The bundled DER files are vendored from a known commit of
         // connectedhomeip and verified-parsing in the unit tests
@@ -97,9 +95,7 @@ mod tests {
     use crate::attestation::extensions::VendorId;
     use crate::attestation::x509::Paa;
 
-    const PAA_FFF1_DER: &[u8] = include_bytes!(
-        "csa_test_roots/Chip-Test-PAA-FFF1-Cert.der"
-    );
+    const PAA_FFF1_DER: &[u8] = include_bytes!("csa_test_roots/Chip-Test-PAA-FFF1-Cert.der");
 
     #[test]
     fn empty_store_is_empty_and_zero_length() {

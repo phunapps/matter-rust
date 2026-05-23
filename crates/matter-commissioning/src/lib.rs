@@ -46,6 +46,4 @@ pub use setup::{
     DiscoveryCapabilities, Discriminator, Error as SetupError, Passcode, SetupPayload,
 };
 
-pub use attestation::{
-    AttestationError, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
-};
+pub use attestation::{AttestationError, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId};

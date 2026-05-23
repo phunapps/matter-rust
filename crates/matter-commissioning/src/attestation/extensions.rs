@@ -86,12 +86,14 @@ use x509_parser::x509::X509Name;
 ///
 /// Per Matter Core Spec §6.5.6.1, the attribute value is a UTF-8
 /// string of 4 UPPERCASE hex characters encoding the u16 VID.
+#[rustfmt::skip]
 pub(crate) const MATTER_VID_OID: Oid<'static> =
     x509_parser::der_parser::oid!(1.3.6.1.4.1.37244.2.1);
 
 /// Matter [`ProductId`] DN attribute OID: `1.3.6.1.4.1.37244.2.2`.
 ///
 /// Same encoding rules as [`MATTER_VID_OID`].
+#[rustfmt::skip]
 pub(crate) const MATTER_PID_OID: Oid<'static> =
     x509_parser::der_parser::oid!(1.3.6.1.4.1.37244.2.2);
 
@@ -103,25 +105,18 @@ pub(crate) const MATTER_PID_OID: Oid<'static> =
 /// - `Err(_)` — VID DN attribute present but its value is malformed
 ///   (not 4 hex chars, not UTF-8, or hex doesn't fit a u16, or not
 ///   UPPERCASE per Matter §6.5.6.1).
-pub(crate) fn extract_vid(
-    name: &X509Name<'_>,
-) -> Result<Option<VendorId>, MatterDnError> {
+pub(crate) fn extract_vid(name: &X509Name<'_>) -> Result<Option<VendorId>, MatterDnError> {
     extract_matter_u16(name, &MATTER_VID_OID).map(|opt| opt.map(VendorId::new))
 }
 
 /// Extract the Matter [`ProductId`] from an X.509 subject DN, if present.
 ///
 /// Same semantics as [`extract_vid`].
-pub(crate) fn extract_pid(
-    name: &X509Name<'_>,
-) -> Result<Option<ProductId>, MatterDnError> {
+pub(crate) fn extract_pid(name: &X509Name<'_>) -> Result<Option<ProductId>, MatterDnError> {
     extract_matter_u16(name, &MATTER_PID_OID).map(|opt| opt.map(ProductId::new))
 }
 
-fn extract_matter_u16(
-    name: &X509Name<'_>,
-    oid: &Oid<'_>,
-) -> Result<Option<u16>, MatterDnError> {
+fn extract_matter_u16(name: &X509Name<'_>, oid: &Oid<'_>) -> Result<Option<u16>, MatterDnError> {
     let Some(attr) = name.iter_attributes().find(|a| a.attr_type() == oid) else {
         return Ok(None);
     };
@@ -129,8 +124,7 @@ fn extract_matter_u16(
     if raw.len() != 4 {
         return Err(MatterDnError::WrongLength { actual: raw.len() });
     }
-    let value =
-        u16::from_str_radix(raw, 16).map_err(|_| MatterDnError::NotHex)?;
+    let value = u16::from_str_radix(raw, 16).map_err(|_| MatterDnError::NotHex)?;
     // Reject lowercase by re-formatting and comparing — Matter §6.5.6.1
     // is explicit about UPPERCASE.
     let canonical = format!("{value:04X}");
@@ -199,8 +193,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
     fn extract_vid_finds_dac_vid() {
-        let (_, cert) =
-            X509Certificate::from_der(DAC_DER).expect("happy-path DAC parses");
+        let (_, cert) = X509Certificate::from_der(DAC_DER).expect("happy-path DAC parses");
         let vid = super::extract_vid(cert.subject())
             .expect("VID well-formed")
             .expect("VID present");
@@ -210,8 +203,7 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
     fn extract_pid_finds_dac_pid() {
-        let (_, cert) =
-            X509Certificate::from_der(DAC_DER).expect("happy-path DAC parses");
+        let (_, cert) = X509Certificate::from_der(DAC_DER).expect("happy-path DAC parses");
         let pid = super::extract_pid(cert.subject())
             .expect("PID well-formed")
             .expect("PID present");
@@ -223,10 +215,7 @@ mod tests {
     fn matter_vid_oid_constant_matches_spec_arc() {
         // Round-trip the OID's components to confirm the const
         // assembles the arc we intended (Matter §6.5.6.1).
-        let parts: Vec<u64> = super::MATTER_VID_OID
-            .iter()
-            .expect("iterable")
-            .collect();
+        let parts: Vec<u64> = super::MATTER_VID_OID.iter().expect("iterable").collect();
         assert_eq!(parts, vec![1, 3, 6, 1, 4, 1, 37244, 2, 1]);
     }
 }

@@ -43,25 +43,16 @@ impl Dac {
         let vid = extensions::extract_vid(subject)
             .map_err(|e| AttestationError::Parse(Box::new(e)))?
             .ok_or_else(|| {
-                AttestationError::Parse(Box::new(MissingRequired(
-                    "DAC subject VendorId",
-                )))
+                AttestationError::Parse(Box::new(MissingRequired("DAC subject VendorId")))
             })?;
 
         let pid = extensions::extract_pid(subject)
             .map_err(|e| AttestationError::Parse(Box::new(e)))?
             .ok_or_else(|| {
-                AttestationError::Parse(Box::new(MissingRequired(
-                    "DAC subject ProductId",
-                )))
+                AttestationError::Parse(Box::new(MissingRequired("DAC subject ProductId")))
             })?;
 
-        let public_key = cert
-            .public_key()
-            .subject_public_key
-            .data
-            .as_ref()
-            .to_vec();
+        let public_key = cert.public_key().subject_public_key.data.as_ref().to_vec();
 
         Ok(Self {
             der: bytes.to_vec(),
@@ -128,20 +119,13 @@ impl Pai {
         let vid = extensions::extract_vid(subject)
             .map_err(|e| AttestationError::Parse(Box::new(e)))?
             .ok_or_else(|| {
-                AttestationError::Parse(Box::new(MissingRequired(
-                    "PAI subject VendorId",
-                )))
+                AttestationError::Parse(Box::new(MissingRequired("PAI subject VendorId")))
             })?;
 
-        let pid = extensions::extract_pid(subject)
-            .map_err(|e| AttestationError::Parse(Box::new(e)))?;
+        let pid =
+            extensions::extract_pid(subject).map_err(|e| AttestationError::Parse(Box::new(e)))?;
 
-        let public_key = cert
-            .public_key()
-            .subject_public_key
-            .data
-            .as_ref()
-            .to_vec();
+        let public_key = cert.public_key().subject_public_key.data.as_ref().to_vec();
 
         Ok(Self {
             der: bytes.to_vec(),
@@ -205,8 +189,8 @@ impl Paa {
             .map_err(|e| AttestationError::Parse(Box::new(e.clone())))?;
         let subject = cert.subject();
 
-        let vid = extensions::extract_vid(subject)
-            .map_err(|e| AttestationError::Parse(Box::new(e)))?;
+        let vid =
+            extensions::extract_vid(subject).map_err(|e| AttestationError::Parse(Box::new(e)))?;
 
         // PID in PAA subject is forbidden — error out if present.
         if extensions::extract_pid(subject)
@@ -218,12 +202,7 @@ impl Paa {
             ))));
         }
 
-        let public_key = cert
-            .public_key()
-            .subject_public_key
-            .data
-            .as_ref()
-            .to_vec();
+        let public_key = cert.public_key().subject_public_key.data.as_ref().to_vec();
 
         Ok(Self {
             der: bytes.to_vec(),
@@ -260,7 +239,6 @@ struct MissingRequired(&'static str);
 /// [`AttestationError::Parse`] by callers.
 #[derive(Debug, thiserror::Error)]
 #[error("forbidden field present: {0}")]
-#[allow(dead_code)] // M6.2.2 negative-fixture consumer pending.
 struct ForbiddenField(&'static str);
 
 #[cfg(test)]
@@ -354,12 +332,8 @@ mod tests {
         assert!(matches!(err, AttestationError::Parse(_)));
     }
 
-    const PAA_FFF1_DER: &[u8] = include_bytes!(
-        "csa_test_roots/Chip-Test-PAA-FFF1-Cert.der"
-    );
-    const PAA_NOVID_DER: &[u8] = include_bytes!(
-        "csa_test_roots/Chip-Test-PAA-NoVID-Cert.der"
-    );
+    const PAA_FFF1_DER: &[u8] = include_bytes!("csa_test_roots/Chip-Test-PAA-FFF1-Cert.der");
+    const PAA_NOVID_DER: &[u8] = include_bytes!("csa_test_roots/Chip-Test-PAA-NoVID-Cert.der");
 
     #[test]
     #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
