@@ -206,4 +206,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project documentation: `README.md`, `CONTRIBUTING.md`, `docs/`.
 - Pull request template.
 
+### Changed
+
+- Workspace MSRV raised from Rust 1.75 to Rust 1.88. Required to
+  land `time >= 0.3.47` (RUSTSEC-2026-0009) pulled in transitively
+  by `x509-parser` / `asn1-rs` in `matter-commissioning`. The
+  patched `time` crate's `rust-version` is 1.88. Rationale captured
+  in `docs/decisions/0001-workspace-layout.md`.
+
 [Unreleased]: https://github.com/phunapps/matter-rust/commits/main

@@ -75,7 +75,10 @@ treat it as a bug in `matter-codec` and investigate.
 
 ## MSRV
 
-Rust 1.75.
+Rust 1.88. The workspace MSRV was raised from 1.75 to 1.88 on
+2026-05-24 to land patched `time >= 0.3.47` (RUSTSEC-2026-0009)
+pulled in transitively by `x509-parser` / `asn1-rs` in the
+`matter-commissioning` crate. See the workspace `CHANGELOG.md`.
 
 ## License
 
