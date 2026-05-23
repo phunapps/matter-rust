@@ -17,11 +17,21 @@
 /// Wraps a `u16` for type-distinct API surface. `Display` formatting
 /// emits a 4-character zero-padded UPPERCASE hex string — matches
 /// Matter §6.5.6.1's encoding of [`VendorId`] inside cert DNs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VendorId(u16);
 
 impl VendorId {
     /// Wrap a raw `u16` as a `VendorId`.
+    ///
+    /// `VendorId` and [`ProductId`] are deliberately distinct types
+    /// to prevent accidental interchange at API boundaries. The
+    /// following must fail to compile:
+    ///
+    /// ```compile_fail
+    /// use matter_commissioning::attestation::{ProductId, VendorId};
+    /// fn takes_vid(_: VendorId) {}
+    /// takes_vid(ProductId::new(0));
+    /// ```
     pub const fn new(value: u16) -> Self {
         Self(value)
     }
@@ -41,7 +51,7 @@ impl core::fmt::Display for VendorId {
 /// A Matter product identifier. 16-bit, allocated by the vendor.
 ///
 /// Same shape as [`VendorId`] — see its docs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ProductId(u16);
 
 impl ProductId {
@@ -89,16 +99,5 @@ mod tests {
     fn product_id_display_is_4char_uppercase_hex() {
         assert_eq!(ProductId::new(0x0001).to_string(), "0001");
         assert_eq!(ProductId::new(0x8000).to_string(), "8000");
-    }
-
-    #[test]
-    fn ids_are_distinct_types() {
-        // Compile-time check: `VendorId` and `ProductId` cannot be
-        // accidentally interchanged. If a future refactor collapses
-        // them, this test's body should fail to compile.
-        fn _takes_vid(_: VendorId) {}
-        fn _takes_pid(_: ProductId) {}
-        let _ = _takes_vid;
-        let _ = _takes_pid;
     }
 }
