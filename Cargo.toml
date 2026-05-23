@@ -63,6 +63,13 @@ serde_json = "1"
 thiserror = "2"
 toml = "1.1"
 x509-parser = { version = "0.16", default-features = false }
+# Pin transitive deps to keep MSRV at 1.75 (required by workspace rust-version):
+# x509-parser 0.16 -> asn1-rs -> time/deranged chain is otherwise free-floating
+# and resolves to versions declaring `rust-version = "1.88"` / "1.85", which
+# breaks the `msrv (1.75)` CI job (.github/workflows/ci.yml). Revisit when
+# x509-parser is bumped or when the project MSRV is intentionally raised.
+time = "=0.3.36"
+deranged = "=0.3.11"
 
 # Release profile defaults. Keep these conservative; consumers can override.
 [profile.release]

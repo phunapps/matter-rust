@@ -23,6 +23,12 @@ matter-transport = { path = "../matter-transport", version = "0.1.0-pre" }
 x509-parser = { workspace = true }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
+# Transitive pins to hold MSRV at 1.75 (see workspace `Cargo.toml` for rationale).
+# x509-parser 0.16 -> asn1-rs -> time/deranged otherwise free-float to versions
+# declaring rust-version 1.85/1.88. These crates are not used directly; they are
+# listed here so the resolver applies the workspace `=` pins across the tree.
+time = { workspace = true }
+deranged = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
