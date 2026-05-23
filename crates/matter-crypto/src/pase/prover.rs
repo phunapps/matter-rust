@@ -522,6 +522,10 @@ impl PaseProver {
     ///   constant-time verification (wrong PIN or compromised peer).
     /// - [`Error::Codec`] on TLV decoding failure.
     /// - [`Error::PinDerivationFailed`] on HKDF failure.
+    // kca / kcb are the SPAKE2+ confirmation key names from Matter
+    // Core Spec §3.10 (RFC 9383 §3.3). Renaming would impair
+    // verification against the spec.
+    #[allow(clippy::similar_names)]
     pub fn handle_pake2(&mut self, bytes: &[u8]) -> Result<()> {
         let prev = std::mem::replace(&mut self.state, State::Poisoned);
         match prev {

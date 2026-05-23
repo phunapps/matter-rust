@@ -350,6 +350,10 @@ pub(crate) fn ka_ke_from_transcript(t_t: &[u8; 32]) -> ([u8; 16], [u8; 16]) {
 /// const KcA = KcAB.slice(0, 16);
 /// const KcB = KcAB.slice(16, 32);
 /// ```
+// kca / kcb are the SPAKE2+ confirmation key names from Matter
+// Core Spec §3.10 (RFC 9383 §3.3). Renaming would impair
+// verification against the spec.
+#[allow(clippy::similar_names)]
 pub(crate) fn derive_confirmation_keys(ka: &[u8; 16]) -> Result<([u8; 16], [u8; 16])> {
     let mut out = [0u8; 32];
     hkdf_expand(ka, INFO_CONFIRMATION_KEYS, &mut out)?;
@@ -652,6 +656,9 @@ mod tests {
     // ─── Confirmation keys ────────────────────────────────────────────────
 
     #[test]
+    // kca / kcb are the SPAKE2+ confirmation key names from Matter Core
+    // Spec §3.10 (RFC 9383 §3.3).
+    #[allow(clippy::similar_names)]
     fn confirmation_keys_split_correctly() {
         let ka = [0x42u8; 16];
         let (kca, kcb) = derive_confirmation_keys(&ka).unwrap();

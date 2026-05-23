@@ -275,6 +275,11 @@ mod tests {
     // ─── derive_w0_w1 ────────────────────────────────────────────────────────
 
     #[test]
+    // w0 / w0b / w1 / w1b are the SPAKE2+ PBKDF output binding names
+    // from Matter Core Spec §3.10 (RFC 9383 §3.3). The `b` suffix denotes
+    // the verifier-side mirror used in cross-check tests. Renaming would
+    // impair verification against the spec.
+    #[allow(clippy::similar_names)]
     fn derive_w0_w1_is_deterministic() {
         let salt = [0x42u8; 16];
         let (w0a, w1a) = derive_w0_w1(20_202_021, &salt, 1_000).unwrap();
@@ -284,6 +289,10 @@ mod tests {
     }
 
     #[test]
+    // w0 / w0b are the SPAKE2+ PBKDF output binding names from Matter
+    // Core Spec §3.10 (RFC 9383 §3.3); the `b` suffix denotes the
+    // verifier-side mirror used in cross-check tests.
+    #[allow(clippy::similar_names)]
     fn derive_w0_w1_changes_with_pin() {
         let salt = [0x42u8; 16];
         let (w0a, _) = derive_w0_w1(20_202_021, &salt, 1_000).unwrap();
@@ -292,6 +301,10 @@ mod tests {
     }
 
     #[test]
+    // w0 / w0b are the SPAKE2+ PBKDF output binding names from Matter
+    // Core Spec §3.10 (RFC 9383 §3.3); the `b` suffix denotes the
+    // verifier-side mirror used in cross-check tests.
+    #[allow(clippy::similar_names)]
     fn derive_w0_w1_changes_with_salt() {
         let (w0a, _) = derive_w0_w1(20_202_021, &[0x42u8; 16], 1_000).unwrap();
         let (w0b, _) = derive_w0_w1(20_202_021, &[0x43u8; 16], 1_000).unwrap();
@@ -299,6 +312,10 @@ mod tests {
     }
 
     #[test]
+    // w0 / w0b are the SPAKE2+ PBKDF output binding names from Matter
+    // Core Spec §3.10 (RFC 9383 §3.3); the `b` suffix denotes the
+    // verifier-side mirror used in cross-check tests.
+    #[allow(clippy::similar_names)]
     fn derive_w0_w1_changes_with_iterations() {
         let salt = [0x42u8; 16];
         let (w0a, _) = derive_w0_w1(20_202_021, &salt, 1_000).unwrap();
@@ -336,6 +353,10 @@ mod tests {
     }
 
     #[test]
+    // w1 / w1b are the SPAKE2+ PBKDF output binding names from Matter
+    // Core Spec §3.10 (RFC 9383 §3.3); the `b` suffix denotes the
+    // verifier-side mirror used in cross-check tests.
+    #[allow(clippy::similar_names)]
     fn derive_l_changes_with_w1() {
         let (_, w1a) = derive_w0_w1(20_202_021, &[0x42u8; 16], 1_000).unwrap();
         let (_, w1b) = derive_w0_w1(20_202_022, &[0x42u8; 16], 1_000).unwrap();

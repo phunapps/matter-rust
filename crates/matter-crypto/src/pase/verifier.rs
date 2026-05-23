@@ -712,6 +712,10 @@ impl PaseVerifier {
     /// The state machine must be in `Poisoned` before this call (the caller
     /// has already `mem::replace`d it out). On error, the machine remains
     /// `Poisoned` — the caller should not recover from a crypto failure.
+    // kca / kcb are the SPAKE2+ confirmation key names from Matter
+    // Core Spec §3.10 (RFC 9383 §3.3). Renaming would impair
+    // verification against the spec.
+    #[allow(clippy::similar_names)]
     fn compute_pake2(
         &mut self,
         w0: p256::Scalar,

@@ -547,6 +547,11 @@ fn encode_definite_length(out: &mut Vec<u8>, len: usize) {
 ///
 /// Uses the civil-from-days algorithm from Howard Hinnant's date library
 /// (public domain). Valid for any Unix second since 1970.
+// These short identifiers (doy, doe, yoe, era, mp) are from the
+// canonical Howard Hinnant chrono::civil_from_days algorithm and
+// match the algorithm's published pseudocode. Renaming would
+// make this function harder to verify against the reference.
+#[allow(clippy::similar_names)]
 fn unix_to_ymdhms(unix_secs: u64) -> (u32, u32, u32, u32, u32, u32) {
     // unix_secs / 86_400 fits in i64 for all values we will see
     // (the max Matter cert date 9999-12-31 is well within i64 range).
@@ -1051,7 +1056,7 @@ mod tests {
         // Inner OCTET STRING: tag 0x04, length 20, then 20 bytes of 0xAB.
         let needle: Vec<u8> = std::iter::once(0x04u8)
             .chain(std::iter::once(20u8))
-            .chain(std::iter::repeat(0xABu8).take(20))
+            .chain(std::iter::repeat_n(0xABu8, 20))
             .collect();
         assert!(
             bytes.windows(needle.len()).any(|w| w == needle.as_slice()),
