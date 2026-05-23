@@ -174,14 +174,94 @@ impl Pai {
     }
 }
 
-/// Placeholder. Real implementation lands in T8.
-pub struct Paa;
+/// Product Attestation Authority — the trust root for a Matter
+/// attestation chain.
+///
+/// Matter Core Spec §6.2.3: a self-signed X.509v3 CA cert serving as
+/// a root of trust. Subject DN MAY contain a [`VendorId`]; MUST NOT
+/// contain a [`ProductId`].
+#[derive(Debug, Clone)]
+pub struct Paa {
+    der: Vec<u8>,
+    subject_vid: Option<VendorId>,
+    public_key: Vec<u8>,
+}
+
+impl Paa {
+    /// Parse and validate the structural shape of a PAA from its DER
+    /// bytes. Rejects with [`AttestationError::Parse`] if the subject
+    /// contains a [`ProductId`] attribute (forbidden by Matter §6.5).
+    /// Does NOT validate the self-signature — that's the job of
+    /// `verify_chain` in M6.2.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttestationError::Parse`] if the DER is malformed,
+    /// if the subject DN contains a forbidden [`ProductId`]
+    /// attribute, or if the VID attribute (when present) is itself
+    /// malformed (not 4 UPPERCASE hex chars per Matter §6.5.6.1).
+    pub fn from_der(bytes: &[u8]) -> Result<Self, AttestationError> {
+        let (_, cert) = X509Certificate::from_der(bytes)
+            .map_err(|e| AttestationError::Parse(Box::new(e.clone())))?;
+        let subject = cert.subject();
+
+        let vid = extensions::extract_vid(subject)
+            .map_err(|e| AttestationError::Parse(Box::new(e)))?;
+
+        // PID in PAA subject is forbidden — error out if present.
+        if extensions::extract_pid(subject)
+            .map_err(|e| AttestationError::Parse(Box::new(e)))?
+            .is_some()
+        {
+            return Err(AttestationError::Parse(Box::new(ForbiddenField(
+                "PAA subject must not contain a ProductId",
+            ))));
+        }
+
+        let public_key = cert
+            .public_key()
+            .subject_public_key
+            .data
+            .as_ref()
+            .to_vec();
+
+        Ok(Self {
+            der: bytes.to_vec(),
+            subject_vid: vid,
+            public_key,
+        })
+    }
+
+    /// Borrow the original DER bytes.
+    pub fn der(&self) -> &[u8] {
+        &self.der
+    }
+
+    /// Subject [`VendorId`] (Matter spec: optional on PAA; `None`
+    /// means the PAA covers any vendor).
+    pub fn subject_vid(&self) -> Option<VendorId> {
+        self.subject_vid
+    }
+
+    /// Subject Public Key Info — raw P-256 SEC1 uncompressed bytes
+    /// (`0x04` || X || Y, 65 bytes total).
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+}
 
 /// Internal error: a required DN attribute was missing. Wrapped into
 /// [`AttestationError::Parse`] by callers.
 #[derive(Debug, thiserror::Error)]
 #[error("required field absent: {0}")]
 struct MissingRequired(&'static str);
+
+/// Internal error: a forbidden DN attribute was present. Wrapped into
+/// [`AttestationError::Parse`] by callers.
+#[derive(Debug, thiserror::Error)]
+#[error("forbidden field present: {0}")]
+#[allow(dead_code)] // M6.2.2 negative-fixture consumer pending.
+struct ForbiddenField(&'static str);
 
 #[cfg(test)]
 mod tests {
@@ -271,6 +351,49 @@ mod tests {
     #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
     fn pai_from_der_rejects_garbage() {
         let err = Pai::from_der(&vec![0xAA; 256]).expect_err("garbage must error");
+        assert!(matches!(err, AttestationError::Parse(_)));
+    }
+
+    const PAA_FFF1_DER: &[u8] = include_bytes!(
+        "csa_test_roots/Chip-Test-PAA-FFF1-Cert.der"
+    );
+    const PAA_NOVID_DER: &[u8] = include_bytes!(
+        "csa_test_roots/Chip-Test-PAA-NoVID-Cert.der"
+    );
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn paa_from_der_parses_vid_scoped_root() {
+        let paa = Paa::from_der(PAA_FFF1_DER).expect("VID-scoped PAA parses");
+        assert_eq!(paa.subject_vid(), Some(VendorId::new(0xFFF1)));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn paa_from_der_parses_unscoped_root() {
+        let paa = Paa::from_der(PAA_NOVID_DER).expect("non-VID-scoped PAA parses");
+        assert_eq!(paa.subject_vid(), None);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn paa_round_trips_der_bytes() {
+        let paa = Paa::from_der(PAA_FFF1_DER).unwrap();
+        assert_eq!(paa.der(), PAA_FFF1_DER);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn paa_public_key_is_sec1_uncompressed_p256() {
+        let paa = Paa::from_der(PAA_FFF1_DER).unwrap();
+        assert_eq!(paa.public_key().len(), 65);
+        assert_eq!(paa.public_key()[0], 0x04);
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn paa_from_der_rejects_garbage() {
+        let err = Paa::from_der(&vec![0xAA; 256]).expect_err("garbage must error");
         assert!(matches!(err, AttestationError::Parse(_)));
     }
 }
