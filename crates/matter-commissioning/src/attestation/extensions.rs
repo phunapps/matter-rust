@@ -86,18 +86,12 @@ use x509_parser::x509::X509Name;
 ///
 /// Per Matter Core Spec §6.5.6.1, the attribute value is a UTF-8
 /// string of 4 UPPERCASE hex characters encoding the u16 VID.
-//
-// Consumed by extract_vid (this file) and by x509.rs in T6/T7. The
-// dead-code allow is removed in T6 when the first non-test caller
-// lands; for now only the test module references it.
-#[allow(dead_code)] // T6 consumer pending.
 pub(crate) const MATTER_VID_OID: Oid<'static> =
     x509_parser::der_parser::oid!(1.3.6.1.4.1.37244.2.1);
 
 /// Matter [`ProductId`] DN attribute OID: `1.3.6.1.4.1.37244.2.2`.
 ///
 /// Same encoding rules as [`MATTER_VID_OID`].
-#[allow(dead_code)] // T6 consumer pending.
 pub(crate) const MATTER_PID_OID: Oid<'static> =
     x509_parser::der_parser::oid!(1.3.6.1.4.1.37244.2.2);
 
@@ -109,7 +103,6 @@ pub(crate) const MATTER_PID_OID: Oid<'static> =
 /// - `Err(_)` — VID DN attribute present but its value is malformed
 ///   (not 4 hex chars, not UTF-8, or hex doesn't fit a u16, or not
 ///   UPPERCASE per Matter §6.5.6.1).
-#[allow(dead_code)] // T6 consumer pending.
 pub(crate) fn extract_vid(
     name: &X509Name<'_>,
 ) -> Result<Option<VendorId>, MatterDnError> {
@@ -119,14 +112,12 @@ pub(crate) fn extract_vid(
 /// Extract the Matter [`ProductId`] from an X.509 subject DN, if present.
 ///
 /// Same semantics as [`extract_vid`].
-#[allow(dead_code)] // T7 consumer pending.
 pub(crate) fn extract_pid(
     name: &X509Name<'_>,
 ) -> Result<Option<ProductId>, MatterDnError> {
     extract_matter_u16(name, &MATTER_PID_OID).map(|opt| opt.map(ProductId::new))
 }
 
-#[allow(dead_code)] // Used by extract_vid / extract_pid; T6 consumer pending.
 fn extract_matter_u16(
     name: &X509Name<'_>,
     oid: &Oid<'_>,
@@ -151,7 +142,6 @@ fn extract_matter_u16(
 
 /// Internal error type for Matter DN extraction failures. Wrapped into
 /// [`crate::attestation::error::AttestationError::Parse`] by callers.
-#[allow(dead_code)] // T6 consumer pending.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum MatterDnError {
     /// The Matter VID/PID attribute value is not valid UTF-8.
