@@ -10,7 +10,7 @@
 //!
 //! - **M6.2.1 (current):** typed [`Dac`], [`Pai`], [`Paa`] wrappers
 //!   around X.509 DER; [`PaaTrustStore`] with bundled CSA test roots
-//!   via [`PaaTrustStore::with_csa_test_roots`]; [`VendorId`] and
+//!   via `PaaTrustStore::with_csa_test_roots()`; [`VendorId`] and
 //!   [`ProductId`] newtypes. Parsing only — no chain validation,
 //!   no `AttestationResponse`.
 //! - **M6.2.2:** `verify_chain` (path validation via `rustls-webpki`
@@ -20,9 +20,9 @@
 //!
 //! # Trust scope
 //!
-//! [`PaaTrustStore::with_csa_test_roots`] embeds **test** roots only.
-//! Production callers must build their own store via
-//! [`PaaTrustStore::empty`] + [`PaaTrustStore::add`].
+//! [`PaaTrustStore`]'s `with_csa_test_roots()` constructor embeds
+//! **test** roots only. Production callers must build their own
+//! store via `PaaTrustStore::empty()` + `PaaTrustStore::add()`.
 
 #![forbid(unsafe_code)]
 

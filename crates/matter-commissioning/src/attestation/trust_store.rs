@@ -3,5 +3,5 @@
 
 // Implementation lands in Tasks 9–10.
 
-/// Placeholder. Real implementation lands in T9/T10.
+/// Placeholder. Real implementation lands in T9.
 pub struct PaaTrustStore;

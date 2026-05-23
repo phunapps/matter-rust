@@ -12,7 +12,7 @@
 //! identifier (Matter §6.5.6.1). e.g. VID `0xFFF1` appears as the
 //! UTF-8 string `"FFF1"`.
 
-// Implementation lands in Task 5.
+// VendorId/ProductId newtype impls land in T4; OID extraction helpers in T5.
 
 /// Placeholder. Real implementation lands in T4.
 pub struct VendorId;
