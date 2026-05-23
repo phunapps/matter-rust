@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec
+### [Unreleased] — M6.1 setup payload codec, M6.2.1 attestation foundation
+
+#### Added (M6.2.1 — attestation foundation)
+
+- `attestation::Dac`, `attestation::Pai`, `attestation::Paa` — typed
+  X.509 wrappers around DER-encoded Matter Device Attestation
+  Certificates, Product Attestation Intermediates, and Product
+  Attestation Authorities (Matter Core Spec §6.2). Each exposes
+  `from_der`, `der`, `public_key`, and Matter-specific subject-DN
+  accessors (`subject_vid` / `subject_pid`). Parsing only — chain
+  validation arrives in M6.2.2 and `AttestationResponse` signature
+  verification in M6.2.3.
+- `attestation::PaaTrustStore` with `empty()` / `add()` / `len()` /
+  `is_empty()` / `iter()` and a `with_csa_test_roots()` constructor
+  that embeds the vendored CSA test PAAs via `include_bytes!` —
+  test-roots only; production callers build their own store.
+- `attestation::VendorId` and `attestation::ProductId` newtypes around
+  `u16` with `new()` constructors and Matter VID/PID OID extraction
+  helpers used by the cert wrappers.
+- `attestation::AttestationError` enum (`#[non_exhaustive]`) with the
+  `Parse` variant carrying a boxed source error. Future
+  validation/signature variants land in M6.2.2 / M6.2.3.
+- Crate-root re-exports for `Dac`, `Pai`, `Paa`, `PaaTrustStore`,
+  `VendorId`, `ProductId`, `AttestationError`.
+- New dependency: `x509-parser` 0.16 for X.509 DER field extraction.
+- Vendored CSA test attestation fixtures (PAA / PAI / DAC, VID
+  `0xFFF1`) from `project-chip/connectedhomeip` (Apache-2.0) under
+  `crates/matter-commissioning/src/attestation/csa_test_roots/` and
+  `test-vectors/commissioning/attestation/`.
+- Integration test `tests/attestation_parse.rs` covering happy-path
+  DAC + PAI + PAA parsing against the bundled CSA test chain.
 
 #### Added (M6.1 — setup payload codec)
 
