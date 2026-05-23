@@ -94,8 +94,86 @@ impl Dac {
     }
 }
 
-/// Placeholder. Real implementation lands in T7.
-pub struct Pai;
+/// Product Attestation Intermediate certificate.
+///
+/// Matter Core Spec §6.2.3: an intermediate X.509v3 CA cert issued by
+/// a PAA, that in turn issues DACs. Subject DN MUST contain a
+/// [`VendorId`]; MAY contain a [`ProductId`] (which, when present,
+/// scopes the PAI to a single product within the vendor).
+#[derive(Debug, Clone)]
+pub struct Pai {
+    der: Vec<u8>,
+    subject_vid: VendorId,
+    subject_pid: Option<ProductId>,
+    public_key: Vec<u8>,
+}
+
+impl Pai {
+    /// Parse and validate the structural shape of a PAI from its DER
+    /// bytes. Does NOT validate the signature chain — that's the job
+    /// of `verify_chain` in M6.2.2.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttestationError::Parse`] if the DER is malformed,
+    /// or if the subject DN is missing the required Matter
+    /// [`VendorId`] attribute, or if the VID/PID attribute values
+    /// are themselves malformed (not 4 UPPERCASE hex chars per
+    /// Matter §6.5.6.1).
+    pub fn from_der(bytes: &[u8]) -> Result<Self, AttestationError> {
+        let (_, cert) = X509Certificate::from_der(bytes)
+            .map_err(|e| AttestationError::Parse(Box::new(e.clone())))?;
+        let subject = cert.subject();
+
+        let vid = extensions::extract_vid(subject)
+            .map_err(|e| AttestationError::Parse(Box::new(e)))?
+            .ok_or_else(|| {
+                AttestationError::Parse(Box::new(MissingRequired(
+                    "PAI subject VendorId",
+                )))
+            })?;
+
+        let pid = extensions::extract_pid(subject)
+            .map_err(|e| AttestationError::Parse(Box::new(e)))?;
+
+        let public_key = cert
+            .public_key()
+            .subject_public_key
+            .data
+            .as_ref()
+            .to_vec();
+
+        Ok(Self {
+            der: bytes.to_vec(),
+            subject_vid: vid,
+            subject_pid: pid,
+            public_key,
+        })
+    }
+
+    /// Borrow the original DER bytes.
+    pub fn der(&self) -> &[u8] {
+        &self.der
+    }
+
+    /// Subject [`VendorId`] (Matter spec: required on PAI).
+    pub fn subject_vid(&self) -> VendorId {
+        self.subject_vid
+    }
+
+    /// Subject [`ProductId`] (Matter spec: optional on PAI; `None`
+    /// means the PAI authorises any product within its vendor).
+    pub fn subject_pid(&self) -> Option<ProductId> {
+        self.subject_pid
+    }
+
+    /// Subject Public Key Info — raw P-256 SEC1 uncompressed bytes
+    /// (`0x04` || X || Y, 65 bytes total).
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+}
+
 /// Placeholder. Real implementation lands in T8.
 pub struct Paa;
 
@@ -157,6 +235,42 @@ mod tests {
     fn dac_from_der_rejects_random_bytes() {
         let garbage = vec![0xAA; 256];
         let err = Dac::from_der(&garbage).expect_err("garbage must error");
+        assert!(matches!(err, AttestationError::Parse(_)));
+    }
+
+    const PAI_DER: &[u8] = include_bytes!(
+        "../../../../test-vectors/certs/attestation/happy-path/Chip-Test-PAI-FFF1-8000-Cert.der"
+    );
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn pai_from_der_parses_happy_path() {
+        let pai = Pai::from_der(PAI_DER).expect("happy-path PAI parses");
+        assert_eq!(pai.subject_vid(), VendorId::new(0xFFF1));
+        // The vendored fixture is a VID+PID-scoped PAI.
+        assert_eq!(pai.subject_pid(), Some(ProductId::new(0x8000)));
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn pai_round_trips_der_bytes() {
+        let pai = Pai::from_der(PAI_DER).unwrap();
+        assert_eq!(pai.der(), PAI_DER);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn pai_public_key_is_sec1_uncompressed_p256() {
+        let pai = Pai::from_der(PAI_DER).unwrap();
+        let pk = pai.public_key();
+        assert_eq!(pk.len(), 65);
+        assert_eq!(pk[0], 0x04);
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn pai_from_der_rejects_garbage() {
+        let err = Pai::from_der(&vec![0xAA; 256]).expect_err("garbage must error");
         assert!(matches!(err, AttestationError::Parse(_)));
     }
 }
