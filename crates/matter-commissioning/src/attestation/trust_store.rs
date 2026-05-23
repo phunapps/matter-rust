@@ -26,14 +26,48 @@ impl PaaTrustStore {
     /// Construct a trust store seeded with bundled CSA **test** PAA
     /// roots. **Do not use in production.** See the module-level
     /// docs.
-    //
-    // Real body lands in T10 via include_bytes! of
-    // src/attestation/csa_test_roots/*.der. T9 ships an empty store
-    // so the public API surface is callable without compile
-    // breakage; the integration test that confirms the bundled
-    // roots load also lands in T10.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the in-crate bundled DER files
+    /// (`src/attestation/csa_test_roots/*.der`) fail to parse — a
+    /// build-tree integrity problem, not a runtime input. The
+    /// `with_csa_test_roots_loads_both` unit test catches this in
+    /// CI, so a panic here would mean the crate sources themselves
+    /// have been corrupted.
     pub fn with_csa_test_roots() -> Self {
-        Self::empty()
+        // `include_bytes!` is crate-relative; the DER files live
+        // inside the crate (see `csa_test_roots/README.md`) so this
+        // path is stable regardless of where the crate is consumed
+        // from (workspace path, git dep, or — eventually — crates.io).
+        const PAA_FFF1: &[u8] =
+            include_bytes!("csa_test_roots/Chip-Test-PAA-FFF1-Cert.der");
+        const PAA_NOVID: &[u8] =
+            include_bytes!("csa_test_roots/Chip-Test-PAA-NoVID-Cert.der");
+
+        // The bundled DER files are vendored from a known commit of
+        // connectedhomeip and verified-parsing in the unit tests
+        // below. If `Paa::from_der` ever rejects one, we want a hard
+        // compile-time-ish failure (the unit test
+        // `with_csa_test_roots_loads_both` catches it), not a silent
+        // empty store. We propagate any parse error by panicking
+        // here — only reachable if the bundled files become corrupt,
+        // which is a build-tree integrity problem, not a runtime
+        // input problem.
+        //
+        // This is one of the very few places `expect` is acceptable
+        // in library code: the input is a compile-time-known
+        // constant shipped inside the crate, not untrusted runtime
+        // data.
+        #[allow(clippy::expect_used)]
+        let roots = vec![
+            Paa::from_der(PAA_FFF1)
+                .expect("bundled CSA test PAA FFF1 must parse — build-tree integrity issue"),
+            Paa::from_der(PAA_NOVID)
+                .expect("bundled CSA test PAA NoVID must parse — build-tree integrity issue"),
+        ];
+
+        Self { roots }
     }
 
     /// Push a trusted PAA into the store.
@@ -60,6 +94,7 @@ impl PaaTrustStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attestation::extensions::VendorId;
     use crate::attestation::x509::Paa;
 
     const PAA_FFF1_DER: &[u8] = include_bytes!(
@@ -95,5 +130,27 @@ mod tests {
         assert_eq!(collected.len(), 2);
         assert_eq!(collected[0], PAA_FFF1_DER);
         assert_eq!(collected[1], PAA_FFF1_DER);
+    }
+
+    #[test]
+    fn with_csa_test_roots_loads_both() {
+        let s = PaaTrustStore::with_csa_test_roots();
+        assert_eq!(s.len(), 2, "exactly two bundled CSA test roots");
+    }
+
+    #[test]
+    fn with_csa_test_roots_contains_vid_scoped_fff1() {
+        let s = PaaTrustStore::with_csa_test_roots();
+        let has_fff1 = s
+            .iter()
+            .any(|paa| paa.subject_vid() == Some(VendorId::new(0xFFF1)));
+        assert!(has_fff1, "bundled roots include the VID 0xFFF1 PAA");
+    }
+
+    #[test]
+    fn with_csa_test_roots_contains_unscoped() {
+        let s = PaaTrustStore::with_csa_test_roots();
+        let has_unscoped = s.iter().any(|paa| paa.subject_vid().is_none());
+        assert!(has_unscoped, "bundled roots include a non-VID-scoped PAA");
     }
 }
