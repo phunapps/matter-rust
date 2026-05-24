@@ -3,8 +3,13 @@
 //! This is Milestone 6 of the `matter-rust` roadmap. The crate is currently
 //! shipping in phases:
 //!
-//! - **M6.1 (current):** setup payload codec — see [`setup`].
-//! - **M6.2:** device attestation verification — see [`attestation`].
+//! - **M6.1:** setup payload codec — see [`setup`].
+//! - **M6.2.1 (current):** typed attestation cert wrappers
+//!   ([`Dac`], [`Pai`], [`Paa`]) and [`PaaTrustStore`] — see
+//!   [`attestation`]. No chain validation or `AttestationResponse`
+//!   yet; those land in M6.2.2 and M6.2.3.
+//! - **M6.2.2–M6.2.6:** remaining device attestation verification —
+//!   see [`attestation`].
 //! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
 //! - **M6.4:** ten-stage commissioning state machine — see [`state_machine`].
 //! - **M6.5:** Wi-Fi network commissioning.
@@ -40,3 +45,5 @@ pub use setup::{
     encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow,
     DiscoveryCapabilities, Discriminator, Error as SetupError, Passcode, SetupPayload,
 };
+
+pub use attestation::{AttestationError, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId};

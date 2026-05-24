@@ -227,12 +227,12 @@ fn run_cargo(cwd: &PathBuf, args: &[&str]) -> bool {
 
 fn run_cargo_with_env(cwd: &PathBuf, args: &[&str], env: &[(&str, &str)]) -> bool {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut cmd = Command::new(cargo);
-    cmd.args(args).current_dir(cwd);
+    let mut command = Command::new(cargo);
+    command.args(args).current_dir(cwd);
     for (k, v) in env {
-        cmd.env(k, v);
+        command.env(k, v);
     }
-    match cmd.status() {
+    match command.status() {
         Ok(status) => status.success(),
         Err(err) => {
             eprintln!("  failed to spawn cargo: {err}");

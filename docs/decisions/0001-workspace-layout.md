@@ -77,9 +77,10 @@ do not fork it. We may converge later — see CLAUDE.md.
 ## Edition and MSRV
 
 - Edition: `2021`.
-- MSRV: `1.75`. Picked as a low ceiling that still gives us `let … else`,
-  `OnceLock`, and async-fn-in-trait. Revise upwards when a concrete need
-  arises; document the bump and the reason in a new ADR.
+- MSRV: `1.88`. Originally `1.75`; raised on 2026-05-23 to land the patched
+  `time` crate (`>= 0.3.47`, requires rustc 1.88) for RUSTSEC-2026-0009,
+  pulled in transitively via `x509-parser` / `asn1-rs`. Revise upwards when
+  a concrete need arises; document the bump and the reason in a new ADR.
 
 ## References
 

@@ -28,7 +28,7 @@ fn at_inside_window(cert: &MatterCertificate) -> MatterTime {
     } else {
         cert.not_after().to_unix_secs()
     };
-    MatterTime::from_unix_secs((lo + hi) / 2)
+    MatterTime::from_unix_secs(u64::midpoint(lo, hi))
 }
 
 // ------- smoke test (gates the negative suite) ---------------------------

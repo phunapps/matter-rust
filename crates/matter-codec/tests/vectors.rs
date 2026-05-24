@@ -236,10 +236,9 @@ fn build_value(desc: &ValueDesc) -> Result<Value, &'static str> {
     }
 }
 
-// MSRV 1.75: `is_multiple_of` (stable 1.87) is not available; use `% 2 != 0`.
 #[allow(clippy::result_unit_err)]
 fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);

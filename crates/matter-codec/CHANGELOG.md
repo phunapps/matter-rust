@@ -5,6 +5,13 @@ All notable changes to `matter-codec` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- MSRV raised from Rust 1.75 to Rust 1.88 (workspace-level bump).
+  See workspace `CHANGELOG.md` for rationale.
+
 ## [0.1.0] - 2026-05-17
 
 First publishable release.

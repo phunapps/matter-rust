@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn next_decodes_utf8_len16_path() {
         let mut bytes = vec![0x0D, 0x00, 0x01]; // UTF8_LEN16, length 256 LE
-        bytes.extend(std::iter::repeat(b'a').take(256));
+        bytes.extend(std::iter::repeat_n(b'a', 256));
         let mut r = TlvReader::new(&bytes);
         let el = r.next().unwrap().unwrap();
         let Element::Scalar {
@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn next_errors_on_excessive_nesting() {
-        let bytes: Vec<u8> = std::iter::repeat(0x15u8).take(33).collect();
+        let bytes: Vec<u8> = std::iter::repeat_n(0x15u8, 33).collect();
         let mut r = TlvReader::new(&bytes);
         for _ in 0..32 {
             assert!(matches!(
