@@ -50,7 +50,7 @@ jobs:
       - run: cargo test --workspace --all-features --no-fail-fast
 
   msrv:
-    name: msrv (1.88)
+    name: msrv
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
