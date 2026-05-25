@@ -96,12 +96,12 @@ pub enum AttestationError {
 pub(crate) fn map_webpki_error(err: webpki::Error) -> AttestationError {
     use webpki::Error as W;
     match err {
-        W::CertExpired { .. }
-        | W::CertNotValidYet { .. }
-        | W::InvalidCertValidity => AttestationError::TimeBoundsViolation,
-        W::PathLenConstraintViolated
-        | W::EndEntityUsedAsCa
-        | W::CaUsedAsEndEntity => AttestationError::BasicConstraintsViolation,
+        W::CertExpired { .. } | W::CertNotValidYet { .. } | W::InvalidCertValidity => {
+            AttestationError::TimeBoundsViolation
+        }
+        W::PathLenConstraintViolated | W::EndEntityUsedAsCa | W::CaUsedAsEndEntity => {
+            AttestationError::BasicConstraintsViolation
+        }
         W::UnknownIssuer => AttestationError::UntrustedRoot,
         other => AttestationError::InvalidChain(Box::new(other)),
     }

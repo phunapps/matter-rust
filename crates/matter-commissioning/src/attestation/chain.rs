@@ -222,8 +222,8 @@ pub fn verify_chain(
     // `trust_anchor.rs`). So we strip the SEQUENCE wrapper from the
     // PAI's issuer to put both sides on the same footing before
     // byte-comparing.
-    let pai_issuer_contents = strip_sequence_wrapper(pai.issuer_raw())
-        .ok_or(AttestationError::UntrustedRoot)?;
+    let pai_issuer_contents =
+        strip_sequence_wrapper(pai.issuer_raw()).ok_or(AttestationError::UntrustedRoot)?;
     let paa_subject = trust_store
         .iter()
         .find_map(|paa| {
