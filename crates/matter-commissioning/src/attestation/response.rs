@@ -175,4 +175,98 @@ mod tests {
         verify_attestation_response(&response, &challenge, &pubkey)
             .expect("valid signature must verify");
     }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn verify_rejects_flipped_signature_byte() {
+        let elements = b"some elements".to_vec();
+        let challenge = [0x42u8; 16];
+        let (pubkey, mut sig) = mint_signed(&elements, &challenge, 0x02);
+        // Flip one bit in `r` (first 32 bytes). `s` would work too;
+        // either half being wrong fails verification.
+        sig[0] ^= 0x80;
+        let response = AttestationResponse {
+            attestation_elements: elements,
+            signature: sig,
+        };
+        let err = verify_attestation_response(&response, &challenge, &pubkey)
+            .expect_err("flipped signature byte must fail");
+        assert!(matches!(err, AttestationError::BadResponseSignature));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn verify_rejects_wrong_challenge() {
+        let elements = b"some elements".to_vec();
+        let challenge_correct = [0x42u8; 16];
+        let (pubkey, sig) = mint_signed(&elements, &challenge_correct, 0x03);
+        let response = AttestationResponse {
+            attestation_elements: elements,
+            signature: sig,
+        };
+        // Same key, same elements, same signature, but a different
+        // challenge — must fail.
+        let challenge_wrong = [0x43u8; 16];
+        let err = verify_attestation_response(&response, &challenge_wrong, &pubkey)
+            .expect_err("wrong challenge must fail");
+        assert!(matches!(err, AttestationError::BadResponseSignature));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn verify_rejects_tampered_elements() {
+        let elements = b"some elements".to_vec();
+        let challenge = [0x42u8; 16];
+        let (pubkey, sig) = mint_signed(&elements, &challenge, 0x04);
+        // Flip the high bit of byte 0 of elements. Anything other than
+        // the original input invalidates the signature.
+        let mut tampered = elements.clone();
+        tampered[0] ^= 0x80;
+        let response = AttestationResponse {
+            attestation_elements: tampered,
+            signature: sig,
+        };
+        let err = verify_attestation_response(&response, &challenge, &pubkey)
+            .expect_err("tampered elements must fail");
+        assert!(matches!(err, AttestationError::BadResponseSignature));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn verify_rejects_wrong_public_key() {
+        let elements = b"some elements".to_vec();
+        let challenge = [0x42u8; 16];
+        let (_pubkey_correct, sig) = mint_signed(&elements, &challenge, 0x05);
+        // Different seed -> different keypair. Same elements, same
+        // challenge, same signature — but verified against the *wrong*
+        // public key.
+        let (pubkey_wrong, _other_sig) = mint_signed(&elements, &challenge, 0x06);
+        let response = AttestationResponse {
+            attestation_elements: elements,
+            signature: sig,
+        };
+        let err = verify_attestation_response(&response, &challenge, &pubkey_wrong)
+            .expect_err("wrong public key must fail");
+        assert!(matches!(err, AttestationError::BadResponseSignature));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn verify_rejects_malformed_public_key() {
+        // Build a valid (elements, challenge, sig) tuple, then point
+        // verify at a malformed pubkey blob (wrong length). ring must
+        // reject internally — we must surface that as
+        // BadResponseSignature, not panic.
+        let elements = b"some elements".to_vec();
+        let challenge = [0x42u8; 16];
+        let (_pubkey, sig) = mint_signed(&elements, &challenge, 0x07);
+        let response = AttestationResponse {
+            attestation_elements: elements,
+            signature: sig,
+        };
+        let too_short = vec![0u8; 32];
+        let err = verify_attestation_response(&response, &challenge, &too_short)
+            .expect_err("malformed pubkey must fail");
+        assert!(matches!(err, AttestationError::BadResponseSignature));
+    }
 }
