@@ -4,12 +4,14 @@
 //! shipping in phases:
 //!
 //! - **M6.1:** setup payload codec — see [`setup`].
-//! - **M6.2.1 (current):** typed attestation cert wrappers
-//!   ([`Dac`], [`Pai`], [`Paa`]) and [`PaaTrustStore`] — see
-//!   [`attestation`]. No chain validation or `AttestationResponse`
-//!   yet; those land in M6.2.2 and M6.2.3.
-//! - **M6.2.2–M6.2.6:** remaining device attestation verification —
-//!   see [`attestation`].
+//! - **M6.2.1:** typed attestation cert wrappers ([`Dac`], [`Pai`],
+//!   [`Paa`]) and [`PaaTrustStore`] — see [`attestation`].
+//! - **M6.2.2 (current):** [`verify_chain`] — `rustls-webpki` path
+//!   validation with `KeyUsage::client_auth()`, plus a Matter
+//!   VID/PID equality overlay. Six new [`AttestationError`] variants.
+//! - **M6.2.3:** `verify_attestation_response` + matter.js
+//!   byte-parity capture.
+//! - **M6.2.4–M6.2.6:** see [`attestation`].
 //! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
 //! - **M6.4:** ten-stage commissioning state machine — see [`state_machine`].
 //! - **M6.5:** Wi-Fi network commissioning.
@@ -46,4 +48,7 @@ pub use setup::{
     DiscoveryCapabilities, Discriminator, Error as SetupError, Passcode, SetupPayload,
 };
 
-pub use attestation::{AttestationError, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId};
+pub use attestation::{
+    verify_chain, AttestationError, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId,
+    VendorId,
+};

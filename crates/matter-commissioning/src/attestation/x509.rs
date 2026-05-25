@@ -97,6 +97,7 @@ pub struct Pai {
     subject_vid: VendorId,
     subject_pid: Option<ProductId>,
     public_key: Vec<u8>,
+    issuer_raw: Vec<u8>,
 }
 
 impl Pai {
@@ -127,17 +128,38 @@ impl Pai {
 
         let public_key = cert.public_key().subject_public_key.data.as_ref().to_vec();
 
+        // Cache the issuer Name's raw DER so M6.2.2's `verify_chain`
+        // can match PAI -> PAA on the trust-store side without
+        // re-parsing the certificate. Each anchor's `subject` field
+        // (a `rustls_pki_types::Der`) compares byte-for-byte against
+        // this slice — both come from the same encoding of the same
+        // Name in the chain.
+        let issuer_raw = cert.tbs_certificate.issuer.as_raw().to_vec();
+
         Ok(Self {
             der: bytes.to_vec(),
             subject_vid: vid,
             subject_pid: pid,
             public_key,
+            issuer_raw,
         })
     }
 
     /// Borrow the original DER bytes.
     pub fn der(&self) -> &[u8] {
         &self.der
+    }
+
+    /// Issuer Name (DER-encoded `Name` SEQUENCE, exactly as it
+    /// appears in the certificate's `tbsCertificate.issuer` field).
+    ///
+    /// Used by `verify_chain` to identify which PAA in the trust
+    /// store actually anchored the validated chain — the matching
+    /// anchor's `subject` (per RFC 5280 §4.1.2.4 a self-signed
+    /// root's `issuer` and `subject` are identical) is the value
+    /// returned here.
+    pub fn issuer_raw(&self) -> &[u8] {
+        &self.issuer_raw
     }
 
     /// Subject [`VendorId`] (Matter spec: required on PAI).

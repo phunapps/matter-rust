@@ -31,7 +31,12 @@ superpowers/
 notes/
 scratch/
 
+# Git worktrees created via the using-git-worktrees workflow.
+.worktrees/
+
 # Fuzzing artefacts (cargo-fuzz adds these dirs; corpus seed files are
-# committed deliberately, so the corpus path is NOT ignored.)
+# committed deliberately, so the corpus path is NOT ignored. The per-target
+# Cargo.lock is local-only — fuzz targets are dev-only, never published.)
 **/fuzz/target/
 **/fuzz/artifacts/
+**/fuzz/Cargo.lock
