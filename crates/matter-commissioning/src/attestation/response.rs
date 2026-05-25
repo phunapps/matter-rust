@@ -10,8 +10,12 @@
 //!
 //! Pure sans-I/O — no network, no clock, no internal state. Callers
 //! supply the `attestation_challenge` from the active PASE/CASE
-//! session (16 bytes per Matter §3.5; the CASE key-derivation places
-//! it at `keys[32..48]` of the 48-byte session-key blob).
+//! session — a 16-byte field at offset `[32..48]` of the 48-byte HKDF
+//! key blob (Matter §3.5). In our `matter-crypto` API this is exposed
+//! as [`matter_crypto::CaseSessionKeys::attestation_challenge`] on the
+//! CASE side and [`matter_crypto::PaseSessionKeys::attestation_key`]
+//! on the PASE side — both are the same 16-byte slice; only the field
+//! name differs.
 //!
 //! [`verify_chain`]: crate::attestation::verify_chain
 
