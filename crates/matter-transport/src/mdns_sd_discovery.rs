@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{Receiver, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 
 use crate::discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
 use crate::error::{Error, Result};
@@ -158,30 +158,38 @@ impl Discovery for MdnsSdDiscovery {
     }
 }
 
-/// Translate an mdns-sd `ServiceInfo` into our `MatterService`.
+/// Translate an mdns-sd `ResolvedService` into our `MatterService`.
 /// Returns `None` if the service has no resolved addresses (the spec
 /// guarantees `ServiceResolved` only fires once at least one address
 /// is known, but we double-check defensively).
-fn service_info_to_matter(info: &ServiceInfo) -> Option<MatterService> {
-    let addresses: Vec<IpAddr> = info.get_addresses().iter().copied().collect();
+///
+/// `ResolvedService` replaced `ServiceInfo` here in mdns-sd 0.20: the
+/// resolver now emits a plain data struct rather than the
+/// builder-style cert. Field access shifts from `info.get_*()` to
+/// public fields (`info.fullname`, `info.port`, `info.addresses`,
+/// `info.ty_domain`, `info.txt_properties`). The `addresses` field
+/// also changed to `HashSet<ScopedIp>`; we flatten each entry into
+/// `IpAddr` via `ScopedIp::to_ip_addr` since matter-transport doesn't
+/// (yet) thread interface scope through.
+fn service_info_to_matter(info: &ResolvedService) -> Option<MatterService> {
+    let addresses: Vec<IpAddr> = info
+        .addresses
+        .iter()
+        .map(mdns_sd::ScopedIp::to_ip_addr)
+        .collect();
     if addresses.is_empty() {
         return None;
     }
-    let kind = kind_from_service_type(info.get_type())?;
+    let kind = kind_from_service_type(&info.ty_domain)?;
     let mut txt = HashMap::new();
-    for prop in info.get_properties().iter() {
+    for prop in info.txt_properties.iter() {
         txt.insert(prop.key().to_string(), prop.val_str().to_string());
     }
     Some(MatterService {
-        instance_name: info
-            .get_fullname()
-            .split('.')
-            .next()
-            .unwrap_or("")
-            .to_string(),
+        instance_name: info.fullname.split('.').next().unwrap_or("").to_string(),
         kind,
         addresses,
-        port: info.get_port(),
+        port: info.port,
         txt_records: txt,
     })
 }
