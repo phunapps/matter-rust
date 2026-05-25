@@ -146,6 +146,7 @@ def build_dac(
     not_before: datetime | None = None,
     not_after: datetime | None = None,
     include_client_auth_eku: bool = True,
+    eku_override: list[x509.ObjectIdentifier] | None = None,
     is_ca: bool = False,
 ) -> tuple[x509.Certificate, ec.EllipticCurvePrivateKey]:
     key = new_p256_key()
@@ -177,7 +178,9 @@ def build_dac(
             critical=True,
         )
     )
-    if include_client_auth_eku:
+    if eku_override is not None:
+        b = b.add_extension(x509.ExtendedKeyUsage(eku_override), critical=False)
+    elif include_client_auth_eku:
         b = b.add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]),
             critical=False,
@@ -269,11 +272,21 @@ def main() -> None:
     dac, _ = build_dac(pai, pai_key, is_ca=True)
     write_fixture("dac-with-ca-bit", paa, pai, dac)
 
-    # 8. missing-eku
+    # 8. wrong-eku
+    # DAC has an EKU extension but with id-kp-serverAuth instead of
+    # id-kp-clientAuth. webpki's `KeyUsage::client_auth()` rejects this
+    # because it requires the leaf cert's EKU to contain clientAuth.
+    # An *absent* EKU would actually pass (RFC 5280 §4.2.1.12: no
+    # constraint means all usages permitted) — so a "missing-eku"
+    # fixture wouldn't exercise the rejection path.
     paa, paa_key = build_paa()
     pai, pai_key = build_pai(paa, paa_key)
-    dac, _ = build_dac(pai, pai_key, include_client_auth_eku=False)
-    write_fixture("missing-eku", paa, pai, dac)
+    dac, _ = build_dac(
+        pai, pai_key,
+        include_client_auth_eku=False,
+        eku_override=[ExtendedKeyUsageOID.SERVER_AUTH],
+    )
+    write_fixture("wrong-eku", paa, pai, dac)
 
     print(f"\nDone. Tests should pin `at` to MatterTime::from_unix_secs({AT_UNIX})")
 

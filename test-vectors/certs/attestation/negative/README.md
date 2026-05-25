@@ -22,7 +22,14 @@ MatterTime::from_unix_secs(1_800_000_000)`.
 | `wrong-vid-dac/` | DAC subject VID=0xFFF2; PAI subject VID=0xFFF1 | `VidMismatch` |
 | `untrusted-paa/` | Chain rooted in PAA-OTHER; trust store has PAA-FFF1 instead | `UntrustedRoot` |
 | `dac-with-ca-bit/` | DAC `BasicConstraints.cA = true` (forbidden on leaf) | `BasicConstraintsViolation` |
-| `missing-eku/` | DAC has no `id-kp-clientAuth` EKU | `InvalidChain` (webpki rejects) |
+| `wrong-eku/` | DAC EKU contains `id-kp-serverAuth` instead of `id-kp-clientAuth` | `InvalidChain` (webpki rejects with `RequiredEkuNotFound`) |
+
+> Note: the M6.2 spec originally specified a `missing-eku` fixture
+> ("DAC lacks `id-kp-clientAuth` EKU"). webpki (correctly, per RFC
+> 5280 §4.2.1.12) treats an absent EKU extension as unconstrained
+> — no required-EKU check fires. So this fixture instead has an
+> EKU extension with the *wrong* OID, which webpki rejects with
+> `RequiredEkuNotFound`.
 
 ## Regeneration
 

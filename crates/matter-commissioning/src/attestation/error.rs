@@ -72,17 +72,24 @@ pub enum AttestationError {
 /// "Well-known [`webpki::Error`] kinds"), adapted to `webpki 0.103`'s
 /// actual variant set:
 ///
-/// | [`webpki::Error`] kind                                            | [`AttestationError`]          |
-/// |-------------------------------------------------------------------|-------------------------------|
-/// | `CertExpired{..}`, `CertNotValidYet{..}`, `InvalidCertValidity`   | `TimeBoundsViolation`         |
-/// | `PathLenConstraintViolated`, `EndEntityUsedAsCa`                  | `BasicConstraintsViolation`   |
-/// | `UnknownIssuer`                                                   | `UntrustedRoot`               |
-/// | (any other kind)                                                  | `InvalidChain(boxed)`         |
+/// | [`webpki::Error`] kind                                                              | [`AttestationError`]          |
+/// |-------------------------------------------------------------------------------------|-------------------------------|
+/// | `CertExpired{..}`, `CertNotValidYet{..}`, `InvalidCertValidity`                     | `TimeBoundsViolation`         |
+/// | `PathLenConstraintViolated`, `EndEntityUsedAsCa`, `CaUsedAsEndEntity`               | `BasicConstraintsViolation`   |
+/// | `UnknownIssuer`                                                                     | `UntrustedRoot`               |
+/// | (any other kind)                                                                    | `InvalidChain(boxed)`         |
 ///
-/// [`AttestationError::BasicConstraintsViolation`] covers BOTH "non-CA
-/// leaf is being used as CA" (webpki: `EndEntityUsedAsCa`) and
-/// "path-length constraint exceeded" (`PathLenConstraintViolated`) —
-/// both are `BasicConstraints` extension semantics per RFC 5280 §4.2.1.9.
+/// [`AttestationError::BasicConstraintsViolation`] covers three
+/// distinct `BasicConstraints`-extension errors webpki distinguishes:
+/// - `EndEntityUsedAsCa` — a CA-marked cert was relied on as a leaf
+///   (this is what fires when a DAC has `cA = true`, since webpki then
+///   refuses to use it as the end-entity).
+/// - `CaUsedAsEndEntity` — same family of bug from the other direction.
+/// - `PathLenConstraintViolated` — chain too long for the intermediate's
+///   declared `pathLenConstraint`.
+///
+/// All three are `BasicConstraints` extension semantics per RFC 5280
+/// §4.2.1.9, so they fold into our single typed variant.
 //
 // pub(crate) because the only legitimate caller is chain.rs::verify_chain.
 // Directed tests in chain.rs / this file cover every row of the table.
@@ -92,9 +99,9 @@ pub(crate) fn map_webpki_error(err: webpki::Error) -> AttestationError {
         W::CertExpired { .. }
         | W::CertNotValidYet { .. }
         | W::InvalidCertValidity => AttestationError::TimeBoundsViolation,
-        W::PathLenConstraintViolated | W::EndEntityUsedAsCa => {
-            AttestationError::BasicConstraintsViolation
-        }
+        W::PathLenConstraintViolated
+        | W::EndEntityUsedAsCa
+        | W::CaUsedAsEndEntity => AttestationError::BasicConstraintsViolation,
         W::UnknownIssuer => AttestationError::UntrustedRoot,
         other => AttestationError::InvalidChain(Box::new(other)),
     }
@@ -143,6 +150,12 @@ mod tests {
     #[test]
     fn maps_end_entity_used_as_ca_to_basic_constraints_violation() {
         let err = map_webpki_error(webpki::Error::EndEntityUsedAsCa);
+        assert!(matches!(err, AttestationError::BasicConstraintsViolation));
+    }
+
+    #[test]
+    fn maps_ca_used_as_end_entity_to_basic_constraints_violation() {
+        let err = map_webpki_error(webpki::Error::CaUsedAsEndEntity);
         assert!(matches!(err, AttestationError::BasicConstraintsViolation));
     }
 
