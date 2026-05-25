@@ -45,6 +45,6 @@ pub mod x509;
 pub use chain::{verify_chain, ChainVerification};
 pub use error::AttestationError;
 pub use extensions::{ProductId, VendorId};
-pub use response::AttestationResponse;
+pub use response::{verify_attestation_response, AttestationResponse};
 pub use trust_store::PaaTrustStore;
 pub use x509::{Dac, Paa, Pai};
