@@ -582,6 +582,7 @@ dependencies = [
  "matter-crypto",
  "matter-transport",
  "proptest",
+ "rustls-pki-types",
  "rustls-webpki",
  "serde",
  "serde_json",

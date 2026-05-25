@@ -22,6 +22,7 @@ matter-crypto = { path = "../matter-crypto", version = "0.1.0-pre" }
 matter-transport = { path = "../matter-transport", version = "0.1.0-pre" }
 x509-parser = { workspace = true }
 rustls-webpki = { workspace = true }
+rustls-pki-types = { workspace = true }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
 
