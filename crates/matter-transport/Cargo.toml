@@ -27,7 +27,7 @@ bitflags = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt", "io-util"], optional = true }
 socket2 = { version = "0.6", default-features = false, optional = true }
-mdns-sd = { version = "0.13", default-features = false, optional = true }
+mdns-sd = { version = "0.20", default-features = false, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
