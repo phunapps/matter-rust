@@ -11,13 +11,15 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
 > - **M6.1:** the setup-payload codec (QR + manual pairing code).
 > - **M6.2.1:** typed attestation cert wrappers (`Dac` / `Pai` /
 >   `Paa`), `PaaTrustStore` with bundled CSA test roots, `VendorId` /
->   `ProductId` newtypes. Parsing only — chain validation lands in
->   M6.2.2, `AttestationResponse` signature verification in M6.2.3.
+>   `ProductId` newtypes. Parsing only.
+> - **M6.2.2:** `verify_chain` — `rustls-webpki` 0.103 path validation
+>   with `KeyUsage::client_auth()` plus a Matter VID/PID equality
+>   overlay. Six granular `AttestationError` variants with a
+>   documented `webpki::Error` mapping. 8-row negative-fixture matrix.
 >
-> Remaining phases (M6.2.2 chain validation, M6.2.3
-> `AttestationResponse` + matter.js byte-parity, M6.3 NOC issuance,
-> M6.4 state machine, M6.5 network commissioning, M6.6 wire-up) are
-> in flight.
+> Remaining phases (M6.2.3 `AttestationResponse` + matter.js
+> byte-parity, M6.3 NOC issuance, M6.4 state machine, M6.5 network
+> commissioning, M6.6 wire-up) are in flight.
 
 ## Example: parse a QR code
 
@@ -57,6 +59,29 @@ assert!(trust_store.len() > 0);
 ```
 
 Chain validation against the trust store is M6.2.2.
+
+## Example: validate an attestation chain (M6.2.2)
+
+```rust,no_run
+use matter_cert::time::MatterTime;
+use matter_commissioning::{verify_chain, Dac, Pai, PaaTrustStore};
+
+# fn run(dac_der: &[u8], pai_der: &[u8])
+#   -> Result<(), matter_commissioning::AttestationError> {
+let dac = Dac::from_der(dac_der)?;
+let pai = Pai::from_der(pai_der)?;
+let store = PaaTrustStore::with_csa_test_roots();
+let now = MatterTime::from_unix_secs(1_704_067_200);
+
+let chain = verify_chain(&dac, &pai, &store, now)?;
+println!("DAC verified for VID={} PID={}", chain.vendor_id, chain.product_id);
+# Ok(())
+# }
+```
+
+Production callers build their own `PaaTrustStore` from CSA-published
+production roots (M8 deliverable). The bundled `with_csa_test_roots()`
+is for examples and integration tests only.
 
 ## Byte parity
 
