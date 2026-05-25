@@ -11,10 +11,19 @@
 //! - **M6.2.1:** typed [`Dac`], [`Pai`], [`Paa`] wrappers around
 //!   X.509 DER; [`PaaTrustStore`] with bundled CSA test roots;
 //!   [`VendorId`] and [`ProductId`] newtypes. Parsing only.
-//! - **M6.2.2 (current):** [`verify_chain`] — `rustls-webpki` path
-//!   validation with `KeyUsage::client_auth()`, plus a Matter VID/PID
-//!   equality overlay. Six new [`AttestationError`] variants come
-//!   online.
+//! - **M6.2.2 (current):** [`verify_chain`] — `rustls-webpki` 0.103
+//!   path validation with `KeyUsage::client_auth()`, plus a Matter
+//!   VID/PID equality overlay. Six new [`AttestationError`] variants:
+//!   [`AttestationError::InvalidChain`],
+//!   [`AttestationError::TimeBoundsViolation`],
+//!   [`AttestationError::BasicConstraintsViolation`],
+//!   [`AttestationError::UntrustedRoot`],
+//!   [`AttestationError::VidMismatch`],
+//!   [`AttestationError::PaiVidNotAuthorized`].
+//!   Coverage: happy-path test against the bundled CSA chain, 7
+//!   directed mapping tests on `webpki::Error` -> typed variant, an
+//!   8-row negative-fixture integration matrix, and a libfuzzer
+//!   target on [`Dac::from_der`].
 //! - **M6.2.3:** `verify_attestation_response` and matter.js
 //!   byte-parity capture.
 //!
