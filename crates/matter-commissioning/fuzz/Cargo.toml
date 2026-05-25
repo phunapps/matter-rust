@@ -29,3 +29,10 @@ path = "fuzz_targets/fuzz_parse_manual.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_dac_from_der"
+path = "fuzz_targets/fuzz_dac_from_der.rs"
+test = false
+doc = false
+bench = false
