@@ -58,7 +58,7 @@ subtle = { version = "2", default-features = false }
 tokio = { version = "1", default-features = false }
 proptest = "1"
 ring = "0.17"
-rustls-webpki = { version = "0.103", default-features = false, features = ["std"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["std", "ring"] }
 # rustls-pki-types ships the `CertificateDer` / `TrustAnchor` types
 # that rustls-webpki 0.103 takes by reference — unlike webpki 0.102,
 # webpki 0.103 does NOT re-export these as `webpki::types::*`, so any

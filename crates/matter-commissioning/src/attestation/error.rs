@@ -86,7 +86,6 @@ pub enum AttestationError {
 //
 // pub(crate) because the only legitimate caller is chain.rs::verify_chain.
 // Directed tests in chain.rs / this file cover every row of the table.
-#[allow(dead_code)] // T6 consumer pending.
 pub(crate) fn map_webpki_error(err: webpki::Error) -> AttestationError {
     use webpki::Error as W;
     match err {
