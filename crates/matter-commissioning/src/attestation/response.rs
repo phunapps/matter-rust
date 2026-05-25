@@ -135,11 +135,14 @@ mod tests {
         seed: u8,
     ) -> ([u8; 65], [u8; 64]) {
         // Deterministic 32-byte scalar so test failures repro byte-
-        // identically. Any non-zero scalar < curve order is valid;
-        // a single-byte seed in the high position is plenty for
-        // uniqueness across tests.
+        // identically. P-256 scalars are big-endian; placing `seed` at
+        // index 0 (most-significant byte) yields a scalar around
+        // `seed * 2^248`, well below the curve order for any
+        // `seed <= 0xfe` and far from the pathological scalar 1
+        // (which is what `scalar[31] = seed` with `seed == 1` would
+        // produce). Any non-zero such scalar is a valid signing key.
         let mut scalar = [0u8; 32];
-        scalar[31] = seed;
+        scalar[0] = seed;
         let signing_key = SigningKey::from_slice(&scalar)
             .expect("non-zero 32-byte scalar is a valid P-256 scalar");
         let verifying_key = signing_key.verifying_key();
