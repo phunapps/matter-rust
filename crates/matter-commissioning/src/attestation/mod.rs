@@ -8,13 +8,13 @@
 //!
 //! # Phase status
 //!
-//! - **M6.2.1 (current):** typed [`Dac`], [`Pai`], [`Paa`] wrappers
-//!   around X.509 DER; [`PaaTrustStore`] with bundled CSA test roots
-//!   via `PaaTrustStore::with_csa_test_roots()`; [`VendorId`] and
-//!   [`ProductId`] newtypes. Parsing only — no chain validation,
-//!   no `AttestationResponse`.
-//! - **M6.2.2:** `verify_chain` (path validation via `rustls-webpki`
-//!   plus a Matter-specific VID/PID overlay).
+//! - **M6.2.1:** typed [`Dac`], [`Pai`], [`Paa`] wrappers around
+//!   X.509 DER; [`PaaTrustStore`] with bundled CSA test roots;
+//!   [`VendorId`] and [`ProductId`] newtypes. Parsing only.
+//! - **M6.2.2 (current):** [`verify_chain`] — `rustls-webpki` path
+//!   validation with `KeyUsage::client_auth()`, plus a Matter VID/PID
+//!   equality overlay. Six new [`AttestationError`] variants come
+//!   online.
 //! - **M6.2.3:** `verify_attestation_response` and matter.js
 //!   byte-parity capture.
 //!
@@ -26,11 +26,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chain;
 pub mod error;
 pub mod extensions;
 pub mod trust_store;
 pub mod x509;
 
+pub use chain::{verify_chain, ChainVerification};
 pub use error::AttestationError;
 pub use extensions::{ProductId, VendorId};
 pub use trust_store::PaaTrustStore;
