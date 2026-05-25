@@ -99,3 +99,65 @@ pub(crate) fn map_webpki_error(err: webpki::Error) -> AttestationError {
         other => AttestationError::InvalidChain(Box::new(other)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::time::Duration;
+    use rustls_pki_types::UnixTime;
+
+    fn epoch() -> UnixTime {
+        UnixTime::since_unix_epoch(Duration::from_secs(0))
+    }
+
+    #[test]
+    fn maps_cert_expired_to_time_bounds_violation() {
+        let err = map_webpki_error(webpki::Error::CertExpired {
+            time: epoch(),
+            not_after: epoch(),
+        });
+        assert!(matches!(err, AttestationError::TimeBoundsViolation));
+    }
+
+    #[test]
+    fn maps_cert_not_valid_yet_to_time_bounds_violation() {
+        let err = map_webpki_error(webpki::Error::CertNotValidYet {
+            time: epoch(),
+            not_before: epoch(),
+        });
+        assert!(matches!(err, AttestationError::TimeBoundsViolation));
+    }
+
+    #[test]
+    fn maps_invalid_cert_validity_to_time_bounds_violation() {
+        let err = map_webpki_error(webpki::Error::InvalidCertValidity);
+        assert!(matches!(err, AttestationError::TimeBoundsViolation));
+    }
+
+    #[test]
+    fn maps_path_len_constraint_violated_to_basic_constraints_violation() {
+        let err = map_webpki_error(webpki::Error::PathLenConstraintViolated);
+        assert!(matches!(err, AttestationError::BasicConstraintsViolation));
+    }
+
+    #[test]
+    fn maps_end_entity_used_as_ca_to_basic_constraints_violation() {
+        let err = map_webpki_error(webpki::Error::EndEntityUsedAsCa);
+        assert!(matches!(err, AttestationError::BasicConstraintsViolation));
+    }
+
+    #[test]
+    fn maps_unknown_issuer_to_untrusted_root() {
+        let err = map_webpki_error(webpki::Error::UnknownIssuer);
+        assert!(matches!(err, AttestationError::UntrustedRoot));
+    }
+
+    #[test]
+    fn maps_long_tail_to_invalid_chain() {
+        // Pick a kind that's NOT in the mapping table — signature
+        // failure is a representative member of the "everything else"
+        // bucket.
+        let err = map_webpki_error(webpki::Error::InvalidSignatureForPublicKey);
+        assert!(matches!(err, AttestationError::InvalidChain(_)));
+    }
+}
