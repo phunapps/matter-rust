@@ -1,8 +1,9 @@
 //! Error type for the attestation module.
 //!
 //! M6.2.1 shipped only the [`AttestationError::Parse`] variant.
-//! M6.2.2 adds the six chain-validation outcomes. The
-//! signature-related variant (`BadResponseSignature`) lands in M6.2.3.
+//! M6.2.2 added six chain-validation outcomes. M6.2.3 adds the single
+//! signature-verification outcome
+//! ([`AttestationError::BadResponseSignature`]).
 
 use thiserror::Error;
 
@@ -64,6 +65,26 @@ pub enum AttestationError {
     /// product.
     #[error("PAI is not authorized for DAC's product")]
     PaiVidNotAuthorized,
+
+    /// ECDSA verification of the device's attestation-response signature
+    /// over `attestation_elements || attestation_challenge` did not
+    /// succeed against the DAC public key.
+    ///
+    /// **Deliberately coarse.** Per the M6.2 design (§Error handling —
+    /// information leakage table), this variant does NOT distinguish
+    /// between
+    ///
+    /// - signature bytes corrupted in transit,
+    /// - the device signed with a key other than the DAC's,
+    /// - the wrong `attestation_challenge` was supplied (e.g. a
+    ///   replay or session-state mismatch), or
+    /// - `attestation_elements` was tampered.
+    ///
+    /// A more granular surface here would let an attacker probe which
+    /// of these failed, narrowing their guess for the actual session
+    /// challenge.
+    #[error("AttestationResponse signature verification failed")]
+    BadResponseSignature,
 }
 
 /// Map a [`webpki::Error`] kind to our typed [`AttestationError`].
@@ -172,5 +193,22 @@ mod tests {
         // bucket.
         let err = map_webpki_error(webpki::Error::InvalidSignatureForPublicKey);
         assert!(matches!(err, AttestationError::InvalidChain(_)));
+    }
+
+    #[test]
+    fn bad_response_signature_variant_exists() {
+        // Construction smoke test: this variant must be a unit variant so
+        // it carries no information beyond "verification failed" — see
+        // M6.2 design §Error handling: the single coarse variant prevents
+        // the error channel from leaking which secret (key, challenge,
+        // elements, or signature) was off.
+        let err = AttestationError::BadResponseSignature;
+        assert!(matches!(err, AttestationError::BadResponseSignature));
+        // Display string covers what the operator will see; assert on its
+        // exact text so a future rename breaks a test, not a log.
+        assert_eq!(
+            format!("{err}"),
+            "AttestationResponse signature verification failed"
+        );
     }
 }
