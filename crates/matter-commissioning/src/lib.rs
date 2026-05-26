@@ -49,6 +49,6 @@ pub use setup::{
 };
 
 pub use attestation::{
-    verify_chain, AttestationError, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId,
-    VendorId,
+    verify_attestation_response, verify_chain, verify_dac_signed_elements, AttestationError,
+    AttestationResponse, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
 };
