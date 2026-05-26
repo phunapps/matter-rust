@@ -16,10 +16,16 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
 >   with `KeyUsage::client_auth()` plus a Matter VID/PID equality
 >   overlay. Six granular `AttestationError` variants with a
 >   documented `webpki::Error` mapping. 8-row negative-fixture matrix.
+> - **M6.2.3 (M6.2 feature-complete):** `verify_attestation_response`
+>   — pure ECDSA P-256/SHA-256 verification via `ring` over
+>   `attestation_elements || attestation_challenge`. Single coarse
+>   `BadResponseSignature` error variant; matter.js byte-parity for
+>   happy-path + four single-byte mutations.
 >
-> Remaining phases (M6.2.3 `AttestationResponse` + matter.js
-> byte-parity, M6.3 NOC issuance, M6.4 state machine, M6.5 network
-> commissioning, M6.6 wire-up) are in flight.
+> Remaining phases (M6.3 NOC issuance, M6.4 state machine, M6.5
+> network commissioning, M6.6 wire-up) are in flight. Note that
+> **Certification Declaration verification is a hard gate before
+> M6.6** — see `TODO-1.0.md`.
 
 ## Example: parse a QR code
 
@@ -83,6 +89,35 @@ Production callers build their own `PaaTrustStore` from CSA-published
 production roots (M8 deliverable). The bundled `with_csa_test_roots()`
 is for examples and integration tests only.
 
+## Example: verify an attestation response (M6.2.3)
+
+```rust,no_run
+use matter_commissioning::{
+    verify_attestation_response, AttestationResponse,
+};
+
+# fn run(
+#     attestation_elements: Vec<u8>,
+#     signature: [u8; 64],
+#     dac_public_key: &[u8],
+#     attestation_challenge: &[u8; 16],
+# ) -> Result<(), matter_commissioning::AttestationError> {
+let response = AttestationResponse {
+    attestation_elements,
+    signature,
+};
+verify_attestation_response(&response, attestation_challenge, dac_public_key)?;
+# Ok(())
+# }
+```
+
+The `dac_public_key` is exactly what `Dac::public_key()` returns
+(raw SEC1 uncompressed P-256, 65 bytes). The `attestation_challenge`
+is the 16-byte session value at `[32..48]` of the PASE/CASE session
+key blob (exposed as `CaseSessionKeys::attestation_challenge` or
+`PaseSessionKeys::attestation_key`). Any verification failure folds
+into the single coarse `AttestationError::BadResponseSignature`.
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from
@@ -90,3 +125,12 @@ matter.js by `cargo xtask capture-setup`. The integration test in
 `tests/setup_byte_parity.rs` asserts that `encode_qr` / `encode_manual_code`
 produce byte-identical output and that `parse_qr` / `parse_manual_code`
 recover the same `SetupPayload`.
+
+For attestation-response verification, `test-vectors/attestation/response/`
+is captured by `cargo xtask capture-attestation`. The integration test
+in `tests/attestation_response_byte_parity.rs` asserts that Rust and
+matter.js's `NodeJsStyleCrypto.verifyEcdsa` produce the same
+accept/reject verdict for a happy-path tuple plus four single-byte
+mutations. (Byte-parity is on verdicts, not raw bytes — ECDSA's `k`
+is randomized per signing call, so the captured signature varies
+across script runs while the test assertions remain stable.)

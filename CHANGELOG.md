@@ -7,7 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.1 attestation foundation, M6.2.2 chain validation
+### [Unreleased] — M6.1 setup payload codec, M6.2.1 attestation foundation, M6.2.2 chain validation, M6.2.3 attestation response
+
+#### Added (M6.2.3 — `AttestationResponse` + matter.js byte-parity)
+
+- `attestation::verify_attestation_response(&AttestationResponse, &[u8; 16],
+  &[u8]) -> Result<(), AttestationError>` — pure sans-I/O ECDSA P-256 /
+  SHA-256 verification via `ring` over `attestation_elements ||
+  attestation_challenge`. Closes the M6.2 device-attestation surface.
+- `attestation::AttestationResponse { attestation_elements: Vec<u8>,
+  signature: [u8; 64] }` value type. `signature` is raw IEEE P1363 r||s
+  per Matter §3.5.3 — not ASN.1 DER.
+- New `AttestationError::BadResponseSignature` variant. Deliberately
+  coarse: a single outcome covers signature corruption, wrong key,
+  wrong challenge, tampered elements, and malformed-key bytes, so the
+  error channel cannot leak which secret an attacker probed close to.
+- New `xtask capture-attestation` subcommand. Mints a P-256 keypair
+  via `@matter/general 0.16.11`'s `NodeJsStyleCrypto`, signs an opaque
+  `(elements, challenge)` blob, cross-verifies happy-path + four
+  single-byte mutations under matter.js's verifier, and emits
+  `test-vectors/attestation/response/happy-path.json` with a verdict
+  matrix.
+- New `crates/matter-commissioning/tests/attestation_response_byte_parity.rs`
+  integration test — asserts Rust and matter.js agree on accept/reject
+  for every tuple in the fixture (1 happy-path + 4 mutations).
+- New `crates/matter-commissioning/tests/attestation_response_proptest.rs`
+  property test — 4 properties: sign+verify round-trip with random
+  P-256 keypairs + single-bit-flip rejections on signature, challenge,
+  and elements.
+- `ring` added as a direct dep on `matter-commissioning`; `p256`
+  promoted to dev-dep for proptest keypair generation. Both already in
+  `[workspace.dependencies]` — no new third-party ingress.
+- `TODO-1.0.md` gains a new `matter-commissioning` section with the
+  **CD-before-M6.6 hard gate**: Certification Declaration verification
+  must land before M6.6 attempts a real-device commission. Without it,
+  a genuine DAC for product X could fraudulently claim to commission
+  product Y.
+- `attestation/mod.rs` rustdoc now lists M6.2 as **feature-complete**
+  with an explicit "What's deferred past M6.2" block.
+
+#### Notes on the byte-parity claim
+
+ECDSA signing uses a fresh random `k` per call, so the raw signature
+bytes differ across capture runs. Byte-parity is on the **verdict
+matrix** (one happy-path accept + four mutation rejects), not the raw
+bytes. Re-running `cargo xtask capture-attestation` rewrites the
+fixture file; the test assertions remain stable.
 
 #### Added (M6.2.2 — chain validation)
 
