@@ -23,19 +23,16 @@ Probably lives under `test-vectors/certs/connectedhomeip/`.
 
 ### CSA test PAA roots not bundled
 
-**Status:** open.
+**Status:** done in M6.2.1 (for `matter-commissioning`); open for
+`matter-cert` itself.
 
-**Why it matters:** the M2.1 spec called for them ("Tier 1 — bundled
-CSA test certificates"). What we shipped is matter.js-synthesised
-operational certs (NOC/ICAC/RCAC). Attestation chains (DAC → PAI →
-PAA) have different shape — VendorId/ProductId DN attributes, EKU =
-`id-kp-codeSigning`, possibly different criticality flags — and the
-parser may have untested code paths. M6 commissioning will need
-attestation chains anyway.
-
-**Concrete deliverable:** captured CSA test PAA roots in
-`test-vectors/certs/csa-paa/`, plus a parse/validate test that
-exercises the attestation-chain shape end-to-end.
+The CSA test PAA roots are now bundled at
+`crates/matter-commissioning/src/attestation/csa_test_roots/`
+and consumed by `verify_chain` happy-path tests (M6.2.2) plus the
+attestation-chain shape exercise the original item asked for. The
+`matter-cert` side of this item — bundling them for use inside
+`matter-cert` itself, e.g. for CSR parsing or future X.509 paths —
+stays open until a `matter-cert` consumer needs them.
 
 ### Public cert-construction API
 
@@ -234,3 +231,47 @@ in parallel and does not block development. This item is here so
 the requirement isn't lost — review must complete (and feedback be
 applied) before any cargo publish of a crate touching protocol-level
 crypto.
+
+## matter-commissioning
+
+### Certification Declaration verification — HARD GATE BEFORE M6.6
+
+**Status:** open. **Blocks M6.6 (first real-device commissioning).**
+
+**Why it matters:** M6.2 ships chain validation + device-signature
+verification. It does NOT parse or verify the Certification
+Declaration (CD) embedded inside `attestation_elements`. Without CD
+verification, a genuine DAC for product X can be re-purposed by an
+attacker to fraudulently commission as product Y — the device's
+signature over `attestation_elements || attestation_challenge`
+proves only that the DAC private key signed *something*, not that
+the device's claimed VID/PID match what the CSA actually certified.
+
+Matter Core Spec §6.3.1 mandates CD verification on the
+commissioner side: the CD is a CMS/PKCS#7 SignedData blob signed
+by the CSA's CD signing root, carrying VID/PID/category and
+product identity. The commissioner must parse the CD, verify its
+signature against the CSA CD signing root, and cross-check the
+declared VID/PID against the DAC's subject VID/PID.
+
+**Concrete deliverable:**
+
+1. New module `matter-commissioning::attestation::cd` exposing
+   `verify_certification_declaration(elements_tlv: &[u8],
+   expected_vid: VendorId, expected_pid: ProductId, trust_root:
+   &CdSigningRoot) -> Result<(), AttestationError>`.
+2. CMS/PKCS#7 SignedData parser (likely via `cms` crate or
+   hand-rolled if the surface is small enough — defer the
+   library-choice decision to the M6.4.x design).
+3. Bundled CSA CD signing root analogous to the bundled PAA test
+   roots in `crates/matter-commissioning/src/attestation/csa_test_roots/`.
+4. New `AttestationError` variants for CD-specific failures (at
+   minimum: `CertificationDeclarationInvalid`, possibly more).
+5. Update `verify_attestation_response` flow in the M6.4 state
+   machine to call `verify_certification_declaration` between
+   chain validation and proceeding to NOC issuance.
+
+**Until this lands, `matter-commissioning` MUST NOT be used to
+commission a real device.** The M6.4 state machine should refuse
+to advance past the AttestationRequest stage if `cd` module is
+absent.
