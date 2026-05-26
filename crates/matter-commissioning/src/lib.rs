@@ -52,3 +52,5 @@ pub use attestation::{
     verify_attestation_response, verify_chain, verify_dac_signed_elements, AttestationError,
     AttestationResponse, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
 };
+
+pub use noc::{FabricRecord, NocError, NocRng, SystemNocRng};
