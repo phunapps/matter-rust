@@ -60,8 +60,7 @@ enum Verdict {
     Reject,
 }
 
-const FIXTURE: &str =
-    include_str!("../../../test-vectors/attestation/response/happy-path.json");
+const FIXTURE: &str = include_str!("../../../test-vectors/attestation/response/happy-path.json");
 
 #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 #[allow(clippy::cast_possible_truncation)] // `to_digit(16)` is always 0..=15; truncation to u8 is safe.
@@ -93,7 +92,11 @@ fn rust_verifier_agrees_with_matter_js_on_happy_path_and_mutations() {
     let challenge_vec = hex_to_vec(&fx.inputs.attestation_challenge_hex);
     let signature_vec = hex_to_vec(&fx.inputs.signature_hex);
 
-    assert_eq!(pubkey.len(), 65, "DAC public key must be 65 bytes (SEC1 uncompressed)");
+    assert_eq!(
+        pubkey.len(),
+        65,
+        "DAC public key must be 65 bytes (SEC1 uncompressed)"
+    );
     assert_eq!(challenge_vec.len(), 16, "challenge must be 16 bytes");
     assert_eq!(signature_vec.len(), 64, "signature must be 64 bytes (r||s)");
 
@@ -142,8 +145,7 @@ fn rust_verifier_agrees_with_matter_js_on_happy_path_and_mutations() {
             attestation_elements: mut_elements,
             signature: mut_signature,
         };
-        let mut_result =
-            verify_attestation_response(&mut_response, &mut_challenge, &mut_pubkey);
+        let mut_result = verify_attestation_response(&mut_response, &mut_challenge, &mut_pubkey);
 
         match mutation.matter_js_verify {
             Verdict::Accept => mut_result.unwrap_or_else(|e| {

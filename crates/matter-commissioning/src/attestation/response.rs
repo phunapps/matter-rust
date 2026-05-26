@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(r.signature.len(), 64);
     }
 
-    use p256::ecdsa::{signature::Signer, SigningKey, Signature};
+    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 
     /// Mint a fresh P-256 keypair and return (raw SEC1 uncompressed
     /// pubkey, signature over `elements || challenge`).
@@ -129,11 +129,7 @@ mod tests {
     /// keypair — no shared global state, no per-test signing-key
     /// fixture file.
     #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
-    fn mint_signed(
-        elements: &[u8],
-        challenge: &[u8; 16],
-        seed: u8,
-    ) -> ([u8; 65], [u8; 64]) {
+    fn mint_signed(elements: &[u8], challenge: &[u8; 16], seed: u8) -> ([u8; 65], [u8; 64]) {
         // Deterministic 32-byte scalar so test failures repro byte-
         // identically. P-256 scalars are big-endian; placing `seed` at
         // index 0 (most-significant byte) yields a scalar around

@@ -27,8 +27,8 @@ use proptest::prelude::*;
 fn sign_with_seed(seed: u8, tbs: &[u8]) -> Result<([u8; 65], [u8; 64]), String> {
     let mut scalar = [0u8; 32];
     scalar[0] = seed.max(1); // avoid the zero scalar
-    let signing_key = SigningKey::from_slice(&scalar)
-        .map_err(|e| format!("scalar->SigningKey: {e}"))?;
+    let signing_key =
+        SigningKey::from_slice(&scalar).map_err(|e| format!("scalar->SigningKey: {e}"))?;
     let pk_point = signing_key.verifying_key().to_encoded_point(false);
     let pk_bytes = pk_point.as_bytes();
     let mut pk_arr = [0u8; 65];
