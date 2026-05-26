@@ -34,6 +34,7 @@
 mod tlv_tags;
 mod x509;
 
+pub mod builder;
 pub mod certificate;
 pub mod chain;
 pub mod error;
@@ -45,6 +46,7 @@ pub mod signature;
 pub mod test_support;
 pub mod time;
 
+pub use builder::{Builder, UnsignedCertificate};
 pub use certificate::MatterCertificate;
 pub use chain::{CertificateChain, TrustAnchor, TrustedRoots};
 pub use error::{Error, Result};

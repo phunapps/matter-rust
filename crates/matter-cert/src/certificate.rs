@@ -328,17 +328,15 @@ impl MatterCertificate {
 
     /// Construct a [`MatterCertificate`] directly from its field values.
     ///
-    /// `pub(crate)` because it is intended only for the `test_support`
-    /// module, which is gated behind the `test-support` Cargo feature.
-    /// Production callers should not need this — they consume Matter
-    /// certificates from device-presented byte streams via
-    /// [`Self::from_tlv`]. A public builder API will be introduced in
-    /// M6's commissioning work.
+    /// `pub(crate)` — production callers route through
+    /// [`MatterCertificate::builder()`] (M6.3) or [`Self::from_tlv`].
+    /// The `test_support` module uses this directly for synthetic-cert
+    /// scaffolding; the `builder` module uses it as the final assembly
+    /// step.
     ///
     /// Algorithm identifiers (`ecdsa-with-sha256`, `ec-public-key`,
     /// `prime256v1`) are not stored; [`Self::to_tlv`] always emits them
     /// at their single spec-allowed values.
-    #[cfg(feature = "test-support")]
     #[allow(clippy::too_many_arguments)] // Eight fields mirror the eight spec §6.5 cert fields.
     pub(crate) fn from_fields(
         serial: Vec<u8>,

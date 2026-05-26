@@ -51,6 +51,11 @@ pub enum Error {
     #[error("public-key bytes do not have the uncompressed-point prefix (0x04)")]
     BadPublicKeyPrefix,
 
+    /// A required field on `MatterCertificate::builder()` was not set before
+    /// `build_unsigned()` was called.
+    #[error("builder field `{0}` was not set")]
+    MissingBuilderField(&'static str),
+
     /// Signature bytes had wrong length.
     #[error("signature bytes have wrong length: expected 64, got {0}")]
     WrongSignatureLength(usize),
