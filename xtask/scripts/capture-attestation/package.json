@@ -1,0 +1,14 @@
+{
+  "name": "matter-rust-capture-attestation",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Drives matter.js's NodeJsStyleCrypto to capture AttestationResponse signing/verification fixtures for crates/matter-commissioning/tests/attestation_response_byte_parity.rs (M6.2.3).",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/general": "0.16.11"
+  }
+}
