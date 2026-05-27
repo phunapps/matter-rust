@@ -43,8 +43,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod csr;
 pub mod error;
 pub mod fabric;
+pub mod issuer;
 
+pub use csr::{
+    parse_and_verify_csr, parse_nocsr, verify_csr_response, NocsrElements, ParsedCsr, VerifiedCsr,
+};
 pub use error::{NocError, NocRng, SystemNocRng};
 pub use fabric::FabricRecord;
+pub use issuer::issue_noc;

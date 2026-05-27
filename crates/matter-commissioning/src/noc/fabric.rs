@@ -145,6 +145,31 @@ impl FabricRecord {
             identity_protection_key: ipk,
         })
     }
+
+    /// Issue a NOC under this fabric. Forwards to
+    /// [`crate::noc::issue_noc`].
+    ///
+    /// # Errors
+    ///
+    /// See [`NocError`] variants `DnAttributeOverflow`, `CertBuild`,
+    /// `SigningFailed`, and `Rng`.
+    pub fn issue_noc(
+        &self,
+        verified_csr: &crate::noc::csr::VerifiedCsr,
+        node_id: u64,
+        case_authenticated_tags: &[u32],
+        validity: (MatterTime, MatterTime),
+        rng: &dyn NocRng,
+    ) -> Result<MatterCertificate, NocError> {
+        crate::noc::issuer::issue_noc(
+            self,
+            verified_csr,
+            node_id,
+            case_authenticated_tags,
+            validity,
+            rng,
+        )
+    }
 }
 
 #[cfg(test)]

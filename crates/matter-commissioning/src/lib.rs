@@ -53,4 +53,7 @@ pub use attestation::{
     AttestationResponse, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
 };
 
-pub use noc::{FabricRecord, NocError, NocRng, SystemNocRng};
+pub use noc::{
+    issue_noc, parse_and_verify_csr, parse_nocsr, verify_csr_response, FabricRecord, NocError,
+    NocRng, NocsrElements, ParsedCsr, SystemNocRng, VerifiedCsr,
+};
