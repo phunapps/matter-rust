@@ -1,6 +1,6 @@
 [package]
 name = "matter-cert"
-version = "0.1.0-pre"
+version = "0.2.0-pre"
 description = "Matter protocol certificate parsing and chain validation."
 edition.workspace = true
 rust-version.workspace = true
@@ -35,4 +35,4 @@ proptest = { workspace = true }
 # Self-reference so test compilation enables the test-support feature,
 # making the test_support module visible to tests/* without exposing
 # it to downstream crates.
-matter-cert = { path = ".", version = "0.1.0-pre", features = ["test-support"] }
+matter-cert = { path = ".", version = "0.2.0-pre", features = ["test-support"] }

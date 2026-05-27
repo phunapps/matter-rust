@@ -35,6 +35,13 @@ pub mod test_support;
 pub use case::initiator::CaseInitiator;
 pub use case::responder::CaseResponder;
 pub use case::signer::{CaseSigner, RingSigner, SignerError};
+
+/// Canonical name for the ECDSA-P256-SHA256 signer trait outside CASE.
+///
+/// `CaseSigner` is the original name (introduced in M4.1). Outside the
+/// CASE handshake, callers should import this re-export — the trait
+/// itself is identical.
+pub use case::signer::CaseSigner as Signer;
 pub use case::{
     CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,
     ResumptionId, ResumptionRecord, Sigma1Outcome,

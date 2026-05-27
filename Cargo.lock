@@ -81,6 +81,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -541,7 +547,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "matter-cert"
-version = "0.1.0-pre"
+version = "0.2.0-pre"
 dependencies = [
  "bitflags",
  "der",
@@ -576,7 +582,9 @@ dependencies = [
 name = "matter-commissioning"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "bitflags",
+ "hex",
  "matter-cert",
  "matter-codec",
  "matter-crypto",

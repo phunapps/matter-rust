@@ -96,6 +96,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-noc") => match run_capture_noc() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-noc: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -121,7 +128,8 @@ fn print_help() {
              capture-framing Capture Matter secured-message framings from matter.js.\n  \
              capture-protocol-header Capture Matter application protocol header fixtures from matter.js.\n  \
              capture-setup            Capture Matter setup-payload fixtures from matter.js.\n  \
-             capture-attestation      Capture Matter AttestationResponse fixtures from matter.js.\n"
+             capture-attestation      Capture Matter AttestationResponse fixtures from matter.js.\n  \
+             capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n"
     );
 }
 
@@ -475,6 +483,35 @@ fn run_capture_attestation() -> Result<(), String> {
     if !script_dir.exists() {
         return Err(format!(
             "capture-attestation script directory not found: {}",
+            script_dir.display()
+        ));
+    }
+    if !script_dir.join("node_modules").exists() {
+        return Err(format!(
+            "node_modules not found in {}; run `npm install` there first",
+            script_dir.display()
+        ));
+    }
+
+    let status = Command::new("node")
+        .arg("index.js")
+        .current_dir(&script_dir)
+        .status()
+        .map_err(|err| format!("failed to spawn node: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("node index.js exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn run_capture_noc() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let script_dir = workspace_root.join("xtask/scripts/capture-noc");
+
+    if !script_dir.exists() {
+        return Err(format!(
+            "capture-noc script directory not found: {}",
             script_dir.display()
         ));
     }

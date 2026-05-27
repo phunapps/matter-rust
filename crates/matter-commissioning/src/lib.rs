@@ -49,6 +49,13 @@ pub use setup::{
 };
 
 pub use attestation::{
-    verify_chain, AttestationError, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId,
-    VendorId,
+    verify_attestation_response, verify_chain, verify_dac_signed_elements, AttestationError,
+    AttestationResponse, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
+};
+
+pub use noc::{
+    decode_csr_response, decode_noc_response, encode_add_noc, encode_add_trusted_root,
+    encode_csr_request, encode_update_noc, issue_noc, parse_and_verify_csr, parse_nocsr,
+    verify_csr_response, CsrResponse, FabricRecord, NocError, NocResponse, NocRng, NocsrElements,
+    ParsedCsr, SystemNocRng, VerifiedCsr,
 };

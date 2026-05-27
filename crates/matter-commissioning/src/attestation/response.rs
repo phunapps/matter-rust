@@ -53,10 +53,46 @@ pub struct AttestationResponse {
     pub signature: [u8; 64],
 }
 
-/// Verify that `response.signature` is the device's ECDSA P-256 /
-/// SHA-256 signature over `response.attestation_elements ||
-/// attestation_challenge`, produced by the private key matching
-/// `dac_public_key`.
+/// Verify a device's DAC signature over `elements || attestation_challenge`.
+///
+/// This is the primitive shared between `verify_attestation_response`
+/// (M6.2.3) and M6.3's `noc::csr::verify_csr_response` — both verify a
+/// device-private-key signature over a TLV-elements blob concatenated
+/// with the 16-byte session attestation challenge.
+///
+/// - `elements` is the device-supplied opaque TLV blob (attestation
+///   elements in M6.2, NOCSR elements in M6.3).
+/// - `attestation_challenge` is the 16-byte tail of the session-key
+///   derivation (`keys[32..48]`, per Matter Core Spec §3.5).
+/// - `dac_public_key` is the raw 65-byte SEC1 uncompressed P-256
+///   encoding (leading `0x04`, X, Y) that `ring` consumes directly.
+///
+/// # Errors
+///
+/// Returns [`AttestationError::BadResponseSignature`] on any failure —
+/// corrupt signature, wrong key, wrong challenge, tampered elements,
+/// or malformed key bytes. The variant is deliberately coarse; see
+/// its rustdoc.
+pub fn verify_dac_signed_elements(
+    elements: &[u8],
+    attestation_challenge: &[u8; 16],
+    dac_public_key: &[u8],
+    signature: &[u8; 64],
+) -> Result<(), AttestationError> {
+    // Compose the to-be-verified blob exactly as the device composed
+    // it before signing: elements concatenated with the raw challenge
+    // bytes. Length-prefixing or framing would diverge from matter.js
+    // and the C++ reference; do not add any.
+    let mut tbs = Vec::with_capacity(elements.len() + attestation_challenge.len());
+    tbs.extend_from_slice(elements);
+    tbs.extend_from_slice(attestation_challenge);
+
+    let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, dac_public_key);
+    key.verify(&tbs, signature)
+        .map_err(|_| AttestationError::BadResponseSignature)
+}
+
+/// Verify a device's `AttestationResponse` signature.
 ///
 /// This is a pure function — no clock reads, no network, no internal
 /// state. The caller is responsible for:
@@ -73,6 +109,9 @@ pub struct AttestationResponse {
 ///    [`crate::attestation::ChainVerification::dac_public_key`]
 ///    surfaces.
 ///
+/// Thin wrapper over [`verify_dac_signed_elements`]; preserved as a
+/// stable public surface for M6.2's existing callers.
+///
 /// # Errors
 ///
 /// Returns [`AttestationError::BadResponseSignature`] on any
@@ -84,25 +123,12 @@ pub fn verify_attestation_response(
     attestation_challenge: &[u8; 16],
     dac_public_key: &[u8],
 ) -> Result<(), AttestationError> {
-    // Compose the to-be-verified blob exactly as the device composed
-    // it before signing: attestation_elements concatenated with the
-    // raw challenge bytes. Length-prefixing or framing would diverge
-    // from matter.js and the C++ reference; do not add any.
-    let mut tbs =
-        Vec::with_capacity(response.attestation_elements.len() + attestation_challenge.len());
-    tbs.extend_from_slice(&response.attestation_elements);
-    tbs.extend_from_slice(attestation_challenge);
-
-    // `ring` consumes the public key as raw SEC1 uncompressed bytes
-    // for the `ECDSA_P256_SHA256_FIXED` algorithm; this matches what
-    // `Dac::public_key` (M6.2.1) returns. Any failure (bad key bytes,
-    // bad signature length, bad signature math) collapses into our
-    // single coarse variant — the design explicitly trades granularity
-    // for information-leakage hardening (see error.rs's
-    // BadResponseSignature rustdoc).
-    let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, dac_public_key);
-    key.verify(&tbs, &response.signature)
-        .map_err(|_| AttestationError::BadResponseSignature)
+    verify_dac_signed_elements(
+        &response.attestation_elements,
+        attestation_challenge,
+        dac_public_key,
+        &response.signature,
+    )
 }
 
 #[cfg(test)]

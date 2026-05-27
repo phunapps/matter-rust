@@ -1,0 +1,447 @@
+//! `OperationalCredentials` cluster (`0x003E`) command payload codecs —
+//! NOC-issuance subset.
+//!
+//! Spec §11.18. M6.3 covers only what's needed to walk a device from
+//! `CSRRequest` through `AddNOC`. The rest of the cluster
+//! (`AttestationRequest` / `AttestationResponse`,
+//! `CertificateChainRequest` / `CertificateChainResponse`,
+//! `RemoveFabric`, etc.) lives partly in M6.2 (attestation) and partly
+//! in M6.4 (state machine wire-up).
+
+#![forbid(unsafe_code)]
+
+use crate::noc::error::NocError;
+
+/// Decoded `CSRResponse` (spec §11.18.5.7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CsrResponse {
+    /// Opaque `NOCSRElements` TLV blob — pass to
+    /// [`crate::noc::verify_csr_response`].
+    pub nocsr_elements: Vec<u8>,
+    /// 64-byte raw ECDSA-P256-SHA256 signature by the device's DAC over
+    /// `nocsr_elements || attestation_challenge`.
+    pub attestation_signature: [u8; 64],
+}
+
+/// Decoded `NOCResponse` (spec §11.18.5.11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NocResponse {
+    /// `NodeOperationalCertStatusEnum` (spec §11.18.6.1).
+    pub status: u8,
+    /// `FabricIndex` assigned to the new fabric (present iff `status == 0`).
+    pub fabric_index: Option<u8>,
+    /// Optional debug text. Spec §11.18.5.11 caps at 128 chars.
+    pub debug_text: Option<String>,
+}
+
+/// Encode `CSRRequest` (spec §11.18.5.5).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_csr_request(nonce: &[u8; 32], is_for_update_noc: bool) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    // Spec §11.18.5.5 fields:
+    //   0: csr_nonce         (octet string, 32 bytes)
+    //   1: is_for_update_noc (bool, optional; default false)
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), nonce)
+        .expect("infallible: vec writer");
+    if is_for_update_noc {
+        w.put_bool(Tag::Context(1), true)
+            .expect("infallible: vec writer");
+    }
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Decode `CSRResponse` (spec §11.18.5.7).
+///
+/// # Errors
+///
+/// Returns [`NocError::ClusterCodec`] on malformed input.
+pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+    }
+
+    let mut nocsr: Option<Vec<u8>> = None;
+    let mut sig: Option<[u8; 64]> = None;
+
+    loop {
+        match reader.next()? {
+            None => {
+                return Err(NocError::ClusterCodec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Bytes(b),
+            }) => {
+                if nocsr.is_some() {
+                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                }
+                nocsr = Some(b);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Bytes(b),
+            }) => {
+                if sig.is_some() {
+                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                }
+                let arr: [u8; 64] = b
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                sig = Some(arr);
+            }
+            // Forward-compat: future-tag tolerance per the interaction-model rules.
+            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        }
+    }
+
+    Ok(CsrResponse {
+        nocsr_elements: nocsr.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        attestation_signature: sig
+            .ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+    })
+}
+
+/// Encode `AddTrustedRootCertificate` (spec §11.18.5.8).
+///
+/// `rcac_tlv` is the Matter-TLV-encoded RCAC certificate (the output of
+/// `fabric.root_cert.to_tlv()?`).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_add_trusted_root(rcac_tlv: &[u8]) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    // Spec §11.18.5.8: single field, id=0, root_certificate (octet string).
+    w.put_bytes(Tag::Context(0), rcac_tlv)
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode `AddNOC` (spec §11.18.5.9).
+///
+/// `icac_tlv` is `None` in M6.3 (RCAC→NOC, no intermediate).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_add_noc(
+    noc_tlv: &[u8],
+    icac_tlv: Option<&[u8]>,
+    ipk: &[u8; 16],
+    case_admin_subject: u64,
+    admin_vendor_id: u16,
+) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    // Spec §11.18.5.9:
+    //   0: NOCValue                (octet string)
+    //   1: ICACValue               (octet string, optional)
+    //   2: IPKValue                (octet string, 16 bytes)
+    //   3: CaseAdminSubject        (u64)
+    //   4: AdminVendorId           (u16)
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), noc_tlv)
+        .expect("infallible: vec writer");
+    if let Some(icac) = icac_tlv {
+        w.put_bytes(Tag::Context(1), icac)
+            .expect("infallible: vec writer");
+    }
+    w.put_bytes(Tag::Context(2), ipk)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(3), case_admin_subject)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(4), u64::from(admin_vendor_id))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode `UpdateNOC` (spec §11.18.5.10).
+///
+/// Used only on the re-commission path (multi-admin / NOC renewal).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_update_noc(noc_tlv: &[u8], icac_tlv: Option<&[u8]>) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    // Spec §11.18.5.10:
+    //   0: NOCValue   (octet string)
+    //   1: ICACValue  (octet string, optional)
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), noc_tlv)
+        .expect("infallible: vec writer");
+    if let Some(icac) = icac_tlv {
+        w.put_bytes(Tag::Context(1), icac)
+            .expect("infallible: vec writer");
+    }
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Decode `NOCResponse` (spec §11.18.5.11).
+///
+/// # Errors
+///
+/// Returns [`NocError::ClusterCodec`] on malformed input.
+pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+    }
+
+    let mut status: Option<u8> = None;
+    let mut fabric_index: Option<u8> = None;
+    let mut debug_text: Option<String> = None;
+
+    loop {
+        match reader.next()? {
+            None => {
+                return Err(NocError::ClusterCodec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(v),
+            }) => {
+                let n = u8::try_from(v)
+                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                status = Some(n);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(v),
+            }) => {
+                let n = u8::try_from(v)
+                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                fabric_index = Some(n);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Utf8(s),
+            }) => {
+                debug_text = Some(s);
+            }
+            // Forward-compat: ignore unknown future fields.
+            Some(_) => {}
+        }
+    }
+
+    Ok(NocResponse {
+        status: status.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        fabric_index,
+        debug_text,
+    })
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::items_after_statements
+)] // Test-code carve-out: see CLAUDE.md.
+mod tests {
+    use super::*;
+    use matter_codec::{Tag, TlvWriter};
+
+    fn write_csr_response(nocsr: &[u8], att_sig: &[u8; 64]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(0), nocsr).unwrap();
+        w.put_bytes(Tag::Context(1), att_sig).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[test]
+    fn decode_csr_response_roundtrips() {
+        let nocsr = b"opaque nocsr bytes".to_vec();
+        let sig = [0xAB; 64];
+        let tlv = write_csr_response(&nocsr, &sig);
+        let decoded = decode_csr_response(&tlv).unwrap();
+        assert_eq!(decoded.nocsr_elements, nocsr);
+        assert_eq!(decoded.attestation_signature, sig);
+    }
+
+    #[test]
+    fn decode_csr_response_rejects_missing_signature() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(0), b"some nocsr").unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            decode_csr_response(&buf),
+            Err(NocError::ClusterCodec(_))
+        ));
+    }
+
+    #[test]
+    fn decode_csr_response_rejects_wrong_sig_length() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(0), b"some nocsr").unwrap();
+        w.put_bytes(Tag::Context(1), &[0u8; 32]).unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            decode_csr_response(&buf),
+            Err(NocError::ClusterCodec(_))
+        ));
+    }
+
+    fn write_noc_response(
+        status: u8,
+        fabric_index: Option<u8>,
+        debug_text: Option<&str>,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(status)).unwrap();
+        if let Some(fi) = fabric_index {
+            w.put_uint(Tag::Context(1), u64::from(fi)).unwrap();
+        }
+        if let Some(text) = debug_text {
+            w.put_utf8(Tag::Context(2), text).unwrap();
+        }
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[test]
+    fn decode_noc_response_ok_status() {
+        let tlv = write_noc_response(0, Some(3), None);
+        let r = decode_noc_response(&tlv).unwrap();
+        assert_eq!(r.status, 0);
+        assert_eq!(r.fabric_index, Some(3));
+        assert_eq!(r.debug_text, None);
+    }
+
+    #[test]
+    fn decode_noc_response_with_debug_text() {
+        let tlv = write_noc_response(0, Some(1), Some("welcome to the fabric"));
+        let r = decode_noc_response(&tlv).unwrap();
+        assert_eq!(r.debug_text.as_deref(), Some("welcome to the fabric"));
+    }
+
+    #[test]
+    fn decode_noc_response_failure_status_no_index() {
+        let tlv = write_noc_response(9, None, Some("invalid NOC"));
+        let r = decode_noc_response(&tlv).unwrap();
+        assert_eq!(r.status, 9);
+        assert_eq!(r.fabric_index, None);
+        assert_eq!(r.debug_text.as_deref(), Some("invalid NOC"));
+    }
+
+    #[test]
+    fn decode_noc_response_rejects_missing_status() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.end_container().unwrap();
+        assert!(matches!(
+            decode_noc_response(&buf),
+            Err(NocError::ClusterCodec(_))
+        ));
+    }
+
+    #[test]
+    fn encode_csr_request_then_parse() {
+        let nonce = [0x11u8; 32];
+        let bytes = encode_csr_request(&nonce, false);
+        use matter_codec::{ContainerKind, Element, TlvReader, Value};
+        let mut r = TlvReader::new(&bytes);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Structure,
+            })
+        ));
+        match r.next().unwrap() {
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Bytes(b),
+            }) => assert_eq!(b, nonce.to_vec()),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(matches!(r.next().unwrap(), Some(Element::ContainerEnd)));
+    }
+
+    #[test]
+    fn encode_csr_request_with_update_flag_emits_field_1() {
+        let nonce = [0x11u8; 32];
+        let bytes = encode_csr_request(&nonce, true);
+        use matter_codec::{Element, TlvReader, Value};
+        let mut r = TlvReader::new(&bytes);
+        let _ = r.next();
+        let _ = r.next();
+        match r.next().unwrap() {
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Bool(true),
+            }) => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_add_noc_emits_required_fields() {
+        let noc = b"noc-bytes".to_vec();
+        let ipk = [0x77u8; 16];
+        let bytes = encode_add_noc(&noc, None, &ipk, 0xDEAD_BEEF, 0xFFF1);
+        use matter_codec::{ContainerKind, Element, TlvReader, Value};
+        let mut r = TlvReader::new(&bytes);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Structure,
+            })
+        ));
+        match r.next().unwrap() {
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Bytes(b),
+            }) => assert_eq!(b, noc),
+            other => panic!("unexpected: {other:?}"),
+        }
+        match r.next().unwrap() {
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Bytes(b),
+            }) => assert_eq!(b, ipk.to_vec()),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+}

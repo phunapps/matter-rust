@@ -22,7 +22,7 @@ test-support = []
 workspace = true
 
 [dependencies]
-matter-cert = { path = "../matter-cert", version = "0.1.0-pre" }
+matter-cert = { path = "../matter-cert", version = "0.2.0-pre" }
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
 aes = { workspace = true }
 ccm = { workspace = true }
@@ -43,4 +43,4 @@ matter-crypto = { path = ".", version = "0.1.0-pre", features = ["test-support"]
 # Enable test-support on matter-cert so that unit tests in this crate
 # can construct synthetic MatterCertificate values via
 # `matter_cert::test_support::build_unsigned`.
-matter-cert = { path = "../matter-cert", version = "0.1.0-pre", features = ["test-support"] }
+matter-cert = { path = "../matter-cert", version = "0.2.0-pre", features = ["test-support"] }

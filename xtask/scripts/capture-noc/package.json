@@ -1,0 +1,14 @@
+{
+  "name": "matter-rust-capture-noc",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Drives matter.js to capture NOC + OpCreds command payload fixtures for crates/matter-commissioning/tests/noc_byte_parity.rs (M6.3.3).",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/general": "0.16.11"
+  }
+}
