@@ -8,18 +8,24 @@
 //!
 //! # Phase status
 //!
-//! - **M6.3.1 (current):** [`FabricRecord`] (RCAC keypair + self-signed
-//!   root certificate, optional ICAC slots reserved), [`NocError`],
-//!   [`NocRng`] / [`SystemNocRng`]. Validates: RCAC self-signs and
-//!   re-verifies; `verify_attestation_response` from M6.2 still passes
-//!   every existing test bit-identical after the
-//!   `verify_dac_signed_elements` extraction.
-//! - **M6.3.2 (next):** [`csr`] — NOCSR TLV parsing, PKCS#10
-//!   embedded-CSR parsing + self-signature verification, full
-//!   `verify_csr_response` (the three-check atomic gate); [`issuer`] —
-//!   NOC construction + signing via `fabric.root_signer`.
-//! - **M6.3.3:** [`commands`] — OpCreds cluster (`0x003E`) NOC-issuance
-//!   subset codecs + matter.js byte-parity gate + fuzz target.
+//! - **M6.3.1:** [`FabricRecord`] (RCAC keypair + self-signed root,
+//!   optional ICAC slots), [`NocError`], [`NocRng`] / [`SystemNocRng`].
+//!   `verify_attestation_response` refactored through the shared
+//!   [`crate::attestation::verify_dac_signed_elements`] primitive;
+//!   M6.2 tests still pass bit-identical.
+//! - **M6.3.2:** [`csr`] — NOCSR TLV parsing + PKCS#10 self-sig
+//!   verification + the three-check `verify_csr_response` atomic gate.
+//!   [`issuer::issue_noc`] — NOC built via `matter-cert`'s public
+//!   Builder + signed via `fabric.root_signer`. 8 synthetic
+//!   negative-path fixtures + proptest + CertificateChain validation.
+//! - **M6.3.3 (current; M6.3 feature-complete):** [`commands`] —
+//!   OpCreds cluster `0x003E` codecs (CSRRequest, CSRResponse,
+//!   AddTrustedRootCertificate, AddNOC, UpdateNOC, NOCResponse).
+//!   `xtask capture-noc` scaffolds matter.js fixture capture; the
+//!   byte-parity test asserts our NOC + command payload bytes equal
+//!   matter.js's for identical inputs (skips when fixtures empty).
+//!   libfuzzer target on `parse_nocsr` + `parse_and_verify_csr`
+//!   (weekly CI).
 //!
 //! # What's deferred past M6.3
 //!
@@ -43,11 +49,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod commands;
 pub mod csr;
 pub mod error;
 pub mod fabric;
 pub mod issuer;
 
+pub use commands::{
+    decode_csr_response, decode_noc_response, encode_add_noc, encode_add_trusted_root,
+    encode_csr_request, encode_update_noc, CsrResponse, NocResponse,
+};
 pub use csr::{
     parse_and_verify_csr, parse_nocsr, verify_csr_response, NocsrElements, ParsedCsr, VerifiedCsr,
 };

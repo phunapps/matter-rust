@@ -36,3 +36,10 @@ path = "fuzz_targets/fuzz_dac_from_der.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "nocsr_parse"
+path = "fuzz_targets/nocsr_parse.rs"
+test = false
+doc = false
+bench = false

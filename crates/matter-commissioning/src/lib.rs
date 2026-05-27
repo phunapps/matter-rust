@@ -54,6 +54,8 @@ pub use attestation::{
 };
 
 pub use noc::{
-    issue_noc, parse_and_verify_csr, parse_nocsr, verify_csr_response, FabricRecord, NocError,
-    NocRng, NocsrElements, ParsedCsr, SystemNocRng, VerifiedCsr,
+    decode_csr_response, decode_noc_response, encode_add_noc, encode_add_trusted_root,
+    encode_csr_request, encode_update_noc, issue_noc, parse_and_verify_csr, parse_nocsr,
+    verify_csr_response, CsrResponse, FabricRecord, NocError, NocResponse, NocRng, NocsrElements,
+    ParsedCsr, SystemNocRng, VerifiedCsr,
 };

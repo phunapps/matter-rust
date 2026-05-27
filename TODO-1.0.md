@@ -275,3 +275,31 @@ declared VID/PID against the DAC's subject VID/PID.
 commission a real device.** The M6.4 state machine should refuse
 to advance past the AttestationRequest stage if `cd` module is
 absent.
+
+### ICAC issuance — deferred to M6.3.x or M8
+
+**Status:** open. Not a hard gate, but required for v1.0 production use.
+
+`FabricRecord` (M6.3.1) carries `icac_signer: Option<Arc<dyn Signer>>` +
+`icac_cert: Option<MatterCertificate>` slots, but only
+`FabricRecord::new_root_only` is implemented. Real production
+controllers (Apple Home, Google Home, SmartThings) all use ICAC for
+operational-key rotation without breaking the durable fabric root.
+Add `FabricRecord::new_with_icac(...)` plus the ICAC-issuance code
+path before v1.0 ships.
+
+The schema is already non-breaking — adding the issuer code does
+not change `FabricRecord`'s shape, only adds a new constructor +
+new code path inside `issue_noc` that emits the NOC under an ICAC
+issuer DN instead of the RCAC.
+
+### matter.js NOC byte-parity capture — operator wiring
+
+**Status:** scaffolding only. `xtask capture-noc` ships in M6.3.3
+with a placeholder `index.js`. The `@matter/protocol` NOC-mint API
+surface shifts between minor versions; wiring the capture against
+the current symbol path is an operator-touch step.
+
+The byte-parity test (`crates/matter-commissioning/tests/noc_byte_parity.rs`)
+skips with `eprintln!` when fixtures are absent or carry empty
+`expected_*_b64` fields, so CI stays green during the operator wiring.
