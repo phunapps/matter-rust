@@ -9,7 +9,14 @@
 //! the matter.js capture is being wired.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::redundant_closure_for_method_calls,
+    clippy::single_match_else,
+    clippy::doc_markdown
+)] // Test-code carve-out: see CLAUDE.md.
+#![allow(unreachable_pub)]
 
 use std::fs;
 use std::path::PathBuf;

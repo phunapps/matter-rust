@@ -1,7 +1,12 @@
 //! M6.3.2 end-to-end happy-path: synthetic CSR -> verify -> issue NOC.
 
 #![forbid(unsafe_code)]
-#![allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::cast_possible_truncation
+)] // Test-code carve-out: see CLAUDE.md.
+#![allow(unreachable_pub)]
 
 use std::sync::Arc;
 

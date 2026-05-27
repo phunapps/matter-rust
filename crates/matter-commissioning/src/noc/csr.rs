@@ -4,7 +4,7 @@
 //! `CSRRequest` with a `CSRResponse` containing two fields —
 //!
 //! - `nocsr_elements`: a TLV blob carrying the embedded PKCS#10 CSR
-//!   bytes, the commissioner-issued CSRNonce (echoed back), and three
+//!   bytes, the commissioner-issued `CSRNonce` (echoed back), and three
 //!   optional vendor-reserved byte strings.
 //! - `attestation_signature`: a 64-byte raw ECDSA-P256-SHA256 signature
 //!   produced by the device's DAC private key over
@@ -31,9 +31,9 @@ use crate::noc::error::NocError;
 /// Decoded `nocsr_elements` TLV (spec §11.18.5.6, table 113).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NocsrElements {
-    /// Embedded PKCS#10 CertificateSigningRequest, DER-encoded.
+    /// Embedded PKCS#10 `CertificateSigningRequest`, DER-encoded.
     pub csr_der: Vec<u8>,
-    /// 32-byte CSRNonce the commissioner sent in CSRRequest and the
+    /// 32-byte `CSRNonce` the commissioner sent in `CSRRequest` and the
     /// device echoes back.
     pub csr_nonce: [u8; 32],
     /// Optional vendor-reserved byte string (tag 3 in the NOCSR TLV).
@@ -194,10 +194,10 @@ pub fn parse_and_verify_csr(csr_der: &[u8]) -> Result<ParsedCsr, NocError> {
     Ok(ParsedCsr { public_key })
 }
 
-/// Full CSRResponse verification — atomic, three signature checks.
+/// Full `CSRResponse` verification — atomic, three signature checks.
 ///
 /// 1. PKCS#10 self-signature on the embedded CSR.
-/// 2. CSRNonce echo equals `expected_csr_nonce`.
+/// 2. `CSRNonce` echo equals `expected_csr_nonce`.
 /// 3. DAC attestation signature over `elements_tlv || attestation_challenge`.
 ///
 /// All three must pass.
@@ -252,7 +252,12 @@ fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    clippy::doc_markdown,
+    clippy::manual_assert
+)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
     use matter_codec::{Tag, TlvWriter};

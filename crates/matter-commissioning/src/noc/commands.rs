@@ -1,10 +1,11 @@
-//! OperationalCredentials cluster (`0x003E`) command payload codecs —
+//! `OperationalCredentials` cluster (`0x003E`) command payload codecs —
 //! NOC-issuance subset.
 //!
 //! Spec §11.18. M6.3 covers only what's needed to walk a device from
-//! CSRRequest through AddNOC. The rest of the cluster
-//! (AttestationRequest/Response, CertificateChainRequest/Response,
-//! RemoveFabric, etc.) lives partly in M6.2 (attestation) and partly
+//! `CSRRequest` through `AddNOC`. The rest of the cluster
+//! (`AttestationRequest` / `AttestationResponse`,
+//! `CertificateChainRequest` / `CertificateChainResponse`,
+//! `RemoveFabric`, etc.) lives partly in M6.2 (attestation) and partly
 //! in M6.4 (state machine wire-up).
 
 #![forbid(unsafe_code)]
@@ -35,7 +36,7 @@ pub struct NocResponse {
 
 /// Encode `CSRRequest` (spec §11.18.5.5).
 #[must_use]
-#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_csr_request(nonce: &[u8; 32], is_for_update_noc: bool) -> Vec<u8> {
     use matter_codec::{Tag, TlvWriter};
     let mut buf = Vec::new();
@@ -122,7 +123,7 @@ pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
 /// `rcac_tlv` is the Matter-TLV-encoded RCAC certificate (the output of
 /// `fabric.root_cert.to_tlv()?`).
 #[must_use]
-#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_add_trusted_root(rcac_tlv: &[u8]) -> Vec<u8> {
     use matter_codec::{Tag, TlvWriter};
     let mut buf = Vec::new();
@@ -140,7 +141,7 @@ pub fn encode_add_trusted_root(rcac_tlv: &[u8]) -> Vec<u8> {
 ///
 /// `icac_tlv` is `None` in M6.3 (RCAC→NOC, no intermediate).
 #[must_use]
-#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_add_noc(
     noc_tlv: &[u8],
     icac_tlv: Option<&[u8]>,
@@ -179,7 +180,7 @@ pub fn encode_add_noc(
 ///
 /// Used only on the re-commission path (multi-admin / NOC renewal).
 #[must_use]
-#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_update_noc(noc_tlv: &[u8], icac_tlv: Option<&[u8]>) -> Vec<u8> {
     use matter_codec::{Tag, TlvWriter};
     let mut buf = Vec::new();
@@ -262,7 +263,11 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::items_after_statements
+)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
     use matter_codec::{Tag, TlvWriter};
@@ -397,7 +402,7 @@ mod tests {
     fn encode_csr_request_with_update_flag_emits_field_1() {
         let nonce = [0x11u8; 32];
         let bytes = encode_csr_request(&nonce, true);
-        use matter_codec::{ContainerKind, Element, TlvReader, Value};
+        use matter_codec::{Element, TlvReader, Value};
         let mut r = TlvReader::new(&bytes);
         let _ = r.next();
         let _ = r.next();

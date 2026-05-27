@@ -184,7 +184,7 @@ impl MatterCertificate {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(clippy::unwrap_used, clippy::cast_possible_truncation)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
     use crate::extensions::{BasicConstraints, Extensions};

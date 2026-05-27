@@ -25,8 +25,8 @@ pub enum NocError {
     #[error("CSR self-signature verification failed")]
     BadCsrSelfSignature,
 
-    /// The CSRNonce echoed by the device did not match the value the
-    /// commissioner sent in CSRRequest.
+    /// The `CSRNonce` echoed by the device did not match the value the
+    /// commissioner sent in `CSRRequest`.
     #[error("CSRNonce did not match commissioner-issued value")]
     NonceMismatch,
 
@@ -56,7 +56,7 @@ pub enum NocError {
     #[error("RNG failure")]
     Rng,
 
-    /// An OpCreds cluster command codec failed.
+    /// An `OpCreds` cluster command codec failed.
     #[error("OpCreds cluster payload codec error")]
     ClusterCodec(#[source] matter_codec::Error),
 }
@@ -67,7 +67,7 @@ impl From<matter_codec::Error> for NocError {
     }
 }
 
-/// Pluggable random-byte source used by `noc` for CSRNonce, NOC serial,
+/// Pluggable random-byte source used by `noc` for `CSRNonce`, NOC serial,
 /// IPK, and any future secret-material draw. Caller-supplied so tests
 /// can pass deterministic stubs.
 pub trait NocRng: Send + Sync + std::fmt::Debug {

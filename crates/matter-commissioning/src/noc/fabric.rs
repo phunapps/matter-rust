@@ -16,7 +16,7 @@ use crate::noc::error::{NocError, NocRng};
 
 /// In-memory fabric record. Persistence is M8's concern; this struct is
 /// what an M6.3 caller threads through `issuer::issue_noc` and onto the
-/// AddNOC cluster command payload.
+/// `AddNOC` cluster command payload.
 #[derive(Clone)]
 pub struct FabricRecord {
     /// Matter fabric identifier (spec §6.2.1).
@@ -32,7 +32,7 @@ pub struct FabricRecord {
     pub icac_signer: Option<Arc<dyn Signer>>,
     /// Intermediate-CA certificate. `None` in M6.3.
     pub icac_cert: Option<MatterCertificate>,
-    /// 16-byte Identity Protection Key. Forms part of the AddNOC payload
+    /// 16-byte Identity Protection Key. Forms part of the `AddNOC` payload
     /// and seeds operational group-key derivation (spec §11.18.5.13).
     pub identity_protection_key: [u8; 16],
 }

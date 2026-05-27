@@ -37,7 +37,7 @@ fn load(name: &str) -> Fixture {
     p.push("noc");
     p.push("negative");
     p.push(format!("{name}.json"));
-    let bytes = fs::read(&p).unwrap_or_else(|e| panic!("missing fixture {p:?}: {e}"));
+    let bytes = fs::read(&p).unwrap_or_else(|e| panic!("missing fixture {}: {e}", p.display()));
     serde_json::from_slice(&bytes).unwrap()
 }
 

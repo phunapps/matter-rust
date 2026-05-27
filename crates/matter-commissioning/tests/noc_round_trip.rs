@@ -1,5 +1,5 @@
-//! M6.3.2: issued NOC round-trips through MatterCertificate::from_tlv
-//! and validates against the issuing RCAC via CertificateChain.
+//! M6.3.2: issued NOC round-trips through `MatterCertificate::from_tlv`
+//! and validates against the issuing RCAC via `CertificateChain`.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
