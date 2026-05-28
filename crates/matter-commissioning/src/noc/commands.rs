@@ -34,6 +34,81 @@ pub struct NocResponse {
     pub debug_text: Option<String>,
 }
 
+/// Argument to `CertificateChainRequest` (spec §11.18.5.4).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CertChainType {
+    /// PAI (Product Attestation Intermediate) certificate.
+    Pai = 0x01,
+    /// DAC (Device Attestation Certificate).
+    Dac = 0x02,
+}
+
+/// Decoded `CertificateChainResponse` (spec §11.18.5.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertificateChainResponse {
+    /// Raw DER bytes of the requested certificate.
+    pub certificate: Vec<u8>,
+}
+
+/// Encode `CertificateChainRequest` (spec §11.18.5.3).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_certificate_chain_request(cert_type: CertChainType) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(cert_type as u8))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Decode `CertificateChainResponse` (spec §11.18.5.4).
+///
+/// # Errors
+///
+/// Returns [`NocError::ClusterCodec`] on malformed input.
+pub fn decode_certificate_chain_response(tlv: &[u8]) -> Result<CertificateChainResponse, NocError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+    }
+    let mut cert: Option<Vec<u8>> = None;
+    loop {
+        match reader.next()? {
+            None => {
+                return Err(NocError::ClusterCodec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Bytes(b),
+            }) => {
+                if cert.is_some() {
+                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                }
+                cert = Some(b);
+            }
+            // Forward-compat: ignore unknown future fields.
+            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        }
+    }
+    Ok(CertificateChainResponse {
+        certificate: cert.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+    })
+}
+
 /// Encode `CSRRequest` (spec §11.18.5.5).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
@@ -413,6 +488,29 @@ mod tests {
             }) => {}
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cert_chain_request_pai_matches_spec_bytes() {
+        // Spec §11.18.5.3: anonymous struct with single field at context
+        // tag 0 carrying CertificateChainTypeEnum (u8). 0x01 = PAI.
+        let bytes = encode_certificate_chain_request(CertChainType::Pai);
+        assert_eq!(bytes, vec![0x15, 0x24, 0x00, 0x01, 0x18]);
+    }
+
+    #[test]
+    fn cert_chain_request_dac_matches_spec_bytes() {
+        // 0x02 = DAC.
+        let bytes = encode_certificate_chain_request(CertChainType::Dac);
+        assert_eq!(bytes, vec![0x15, 0x24, 0x00, 0x02, 0x18]);
+    }
+
+    #[test]
+    fn cert_chain_response_round_trips_der_payload() {
+        // { 0: octet_string([0xAA, 0xBB, 0xCC]) }
+        let tlv = vec![0x15, 0x30, 0x00, 0x03, 0xAA, 0xBB, 0xCC, 0x18];
+        let resp = decode_certificate_chain_response(&tlv).expect("decode happy path");
+        assert_eq!(resp.certificate, vec![0xAA, 0xBB, 0xCC]);
     }
 
     #[test]

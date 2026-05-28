@@ -59,10 +59,11 @@ pub use attestation::{
 };
 
 pub use noc::{
-    decode_csr_response, decode_noc_response, encode_add_noc, encode_add_trusted_root,
-    encode_csr_request, encode_update_noc, issue_noc, parse_and_verify_csr, parse_nocsr,
-    verify_csr_response, CsrResponse, FabricRecord, NocError, NocResponse, NocRng, NocsrElements,
-    ParsedCsr, SystemNocRng, VerifiedCsr,
+    decode_certificate_chain_response, decode_csr_response, decode_noc_response, encode_add_noc,
+    encode_add_trusted_root, encode_certificate_chain_request, encode_csr_request,
+    encode_update_noc, issue_noc, parse_and_verify_csr, parse_nocsr, verify_csr_response,
+    CertChainType, CertificateChainResponse, CsrResponse, FabricRecord, NocError, NocResponse,
+    NocRng, NocsrElements, ParsedCsr, SystemNocRng, VerifiedCsr,
 };
 
 pub use state_machine::{

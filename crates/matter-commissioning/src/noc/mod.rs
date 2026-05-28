@@ -57,8 +57,9 @@ pub mod fabric;
 pub mod issuer;
 
 pub use commands::{
-    decode_csr_response, decode_noc_response, encode_add_noc, encode_add_trusted_root,
-    encode_csr_request, encode_update_noc, CsrResponse, NocResponse,
+    decode_certificate_chain_response, decode_csr_response, decode_noc_response, encode_add_noc,
+    encode_add_trusted_root, encode_certificate_chain_request, encode_csr_request,
+    encode_update_noc, CertChainType, CertificateChainResponse, CsrResponse, NocResponse,
 };
 pub use csr::{
     parse_and_verify_csr, parse_nocsr, verify_csr_response, NocsrElements, ParsedCsr, VerifiedCsr,
