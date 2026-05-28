@@ -13,7 +13,11 @@
 //!   byte-parity capture.
 //! - **M6.2.4–M6.2.6:** see [`attestation`].
 //! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
-//! - **M6.4:** ten-stage commissioning state machine — see [`state_machine`].
+//! - **M6.4.1 (current):** ten-stage commissioning state machine — see
+//!   [`state_machine`]. M6.4.1 ships `SecurePairing` →
+//!   `ReadCommissioningInfo` → `ArmFailsafe` → `ConfigRegulatory`;
+//!   further stages short-circuit to `Failed { CdVerificationUnavailable }`
+//!   until M6.4.2 lands.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!
@@ -59,4 +63,9 @@ pub use noc::{
     encode_csr_request, encode_update_noc, issue_noc, parse_and_verify_csr, parse_nocsr,
     verify_csr_response, CsrResponse, FabricRecord, NocError, NocResponse, NocRng, NocsrElements,
     ParsedCsr, SystemNocRng, VerifiedCsr,
+};
+
+pub use state_machine::{
+    Action, CommissionedFabric, Commissioner, CommissionerConfig, CommissioningError, Expectation,
+    SessionContext, Stage,
 };
