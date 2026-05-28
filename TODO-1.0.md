@@ -236,7 +236,12 @@ crypto.
 
 ### Certification Declaration verification — HARD GATE BEFORE M6.6
 
-**Status:** open. **Blocks M6.6 (first real-device commissioning).**
+**Status:** **closed in M6.4.3** — see commits `10e3a81e` through
+`d227db5b` and `docs/superpowers/specs/2026-05-28-m6.4-commissioning-state-machine-design.md`.
+
+[original body retained for historical context]
+
+**Status (historical):** open. **Blocks M6.6 (first real-device commissioning).**
 
 **Why it matters:** M6.2 ships chain validation + device-signature
 verification. It does NOT parse or verify the Certification
