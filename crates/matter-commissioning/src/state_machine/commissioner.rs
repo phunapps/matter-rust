@@ -320,9 +320,22 @@ impl Commissioner {
                 })
             }
             Stage::AttestationVerification => {
-                self.run_attestation_verification()?;
-                self.advance(Stage::SendOpCertSigningRequest);
-                self.dispatch_stage()
+                match self.run_attestation_verification() {
+                    Ok(()) => {
+                        self.advance(Stage::SendOpCertSigningRequest);
+                        self.dispatch_stage()
+                    }
+                    Err(err) => {
+                        // Poll-time failure: align with the contract documented
+                        // on `poll()` — cursor advances to `Failed`, the next
+                        // `poll()` emits `Action::Abort` with a rendered reason.
+                        self.last_failure = Some(err.to_string());
+                        self.stage = Stage::Failed;
+                        self.awaiting = None;
+                        self.pending_action = None;
+                        Err(err)
+                    }
+                }
             }
             Stage::Failed => {
                 // Subsequent poll() after a failure surfaces the Abort.

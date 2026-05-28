@@ -190,6 +190,78 @@ fn unexpected_response_kind_after_arm_failsafe_poll() {
     assert_eq!(sm.stage(), Stage::ArmFailsafe);
 }
 
+#[test]
+fn tampered_pai_der_returns_attestation_error() {
+    use matter_codec::{Tag, TlvWriter};
+
+    fn wrap_octet_string_in_anonymous_struct(payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).expect("infallible");
+        w.put_bytes(Tag::Context(0), payload).expect("infallible");
+        w.end_container().expect("infallible");
+        buf
+    }
+
+    fn synthetic_attestation_response(elements: &[u8], sig: &[u8; 64]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).expect("infallible");
+        w.put_bytes(Tag::Context(0), elements).expect("infallible");
+        w.put_bytes(Tag::Context(1), sig).expect("infallible");
+        w.end_container().expect("infallible");
+        buf
+    }
+
+    let fabric = make_fabric();
+    let setup = make_setup();
+    let paa = PaaTrustStore::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa);
+
+    // Drive through ReadCommissioningInfo → ArmFailsafe → ConfigRegulatory.
+    let _ = sm.poll().unwrap();
+    sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+        .unwrap();
+    let _ = sm.poll().unwrap();
+    sm.on_response(
+        Expectation::ArmFailsafeResponse,
+        &[0x15, 0x24, 0x00, 0x00, 0x18],
+    )
+    .unwrap();
+    let _ = sm.poll().unwrap();
+    sm.on_response(
+        Expectation::SetRegulatoryConfigResponse,
+        &[0x15, 0x24, 0x00, 0x00, 0x18],
+    )
+    .unwrap();
+
+    // SendPaiCertRequest — feed bogus DER bytes (not a valid X.509 cert).
+    let _ = sm.poll().unwrap();
+    let bogus_chain_response = wrap_octet_string_in_anonymous_struct(&[0x00, 0x01, 0x02]);
+    sm.on_response(Expectation::PaiCertChainResponse, &bogus_chain_response)
+        .unwrap();
+
+    // SendDacCertRequest — feed the same bogus DER so we reach
+    // AttestationVerification.
+    let _ = sm.poll().unwrap();
+    sm.on_response(Expectation::DacCertChainResponse, &bogus_chain_response)
+        .unwrap();
+
+    // SendAttestationRequest — feed a synthetic AttestationResponse.
+    let _ = sm.poll().unwrap();
+    let synthetic = synthetic_attestation_response(&[0x15, 0x18], &[0u8; 64]);
+    sm.on_response(Expectation::AttestationResponse, &synthetic)
+        .unwrap();
+
+    // AttestationVerification — verifier rejects on bogus PAI/DAC.
+    let err = sm.poll().expect_err("verifier should reject bogus PAI DER");
+    assert!(
+        matches!(err, CommissioningError::Attestation(_)),
+        "expected Attestation(_), got {err:?}"
+    );
+    assert_eq!(sm.stage(), Stage::Failed);
+}
+
 use proptest::prelude::*;
 
 fn any_expectation() -> impl Strategy<Value = Expectation> {
