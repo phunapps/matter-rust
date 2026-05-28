@@ -189,3 +189,58 @@ fn unexpected_response_kind_after_arm_failsafe_poll() {
     // Wrong-kind does NOT transition to Failed.
     assert_eq!(sm.stage(), Stage::ArmFailsafe);
 }
+
+use proptest::prelude::*;
+
+fn any_expectation() -> impl Strategy<Value = Expectation> {
+    prop_oneof![
+        Just(Expectation::CommissioningInfo),
+        Just(Expectation::ArmFailsafeResponse),
+        Just(Expectation::SetRegulatoryConfigResponse),
+        Just(Expectation::PaiCertChainResponse),
+        Just(Expectation::DacCertChainResponse),
+        Just(Expectation::AttestationResponse),
+        Just(Expectation::CsrResponse),
+        Just(Expectation::AddTrustedRootResponse),
+        Just(Expectation::NocResponse),
+        Just(Expectation::CommissioningCompleteResponse),
+        Just(Expectation::CaseFailed),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 256, ..ProptestConfig::default() })]
+
+    /// Calling `on_response` with any random `Expectation` + payload at
+    /// any point in the state machine must never panic — it must always
+    /// return either `Ok` or a typed `CommissioningError`.
+    #[test]
+    fn on_response_never_panics(
+        exp in any_expectation(),
+        payload in prop::collection::vec(any::<u8>(), 0..32),
+    ) {
+        let fabric = make_fabric();
+        let setup = make_setup();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let mut sm = build_sm(&fabric, &setup, &paa);
+        // Poll once to put the state machine into a "waiting for response" position.
+        let _ = sm.poll();
+        let _ = sm.on_response(exp, &payload);
+    }
+
+    /// Calling `poll()` at any point — including after a random
+    /// `on_response` — must never panic.
+    #[test]
+    fn poll_never_panics(
+        exp in any_expectation(),
+        payload in prop::collection::vec(any::<u8>(), 0..32),
+    ) {
+        let fabric = make_fabric();
+        let setup = make_setup();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let mut sm = build_sm(&fabric, &setup, &paa);
+        let _ = sm.poll();
+        let _ = sm.on_response(exp, &payload);
+        let _ = sm.poll();
+    }
+}
