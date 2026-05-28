@@ -242,6 +242,48 @@ let _ = sm.poll()?;
 M6.4.4 will land the CSR / NOC issuance stages that consume the
 advanced cursor.
 
+## Example: verify a Certification Declaration standalone (M6.4.3)
+
+`verify_certification_declaration` can be called directly without
+involving the state machine — useful for offline analysis of captured
+CD blobs:
+
+```rust,no_run
+use matter_commissioning::{
+    verify_certification_declaration, AttestationError, CdSigningRoots,
+    ProductId, VendorId,
+};
+
+# fn run(cd_bytes: &[u8]) -> Result<(), AttestationError> {
+let trust = CdSigningRoots::with_csa_test_roots();
+verify_certification_declaration(
+    cd_bytes,
+    VendorId::new(0xFFF1),
+    ProductId::new(0x8001),
+    &trust,
+)?;
+# Ok(())
+# }
+```
+
+Production callers replace `with_csa_test_roots()` with
+`CdSigningRoots::from_pem(&[my_root_pem])` loading the CSA-published
+signing root(s) supplied by deployment.
+
+The verifier performs five checks in order:
+1. Parse the CMS/PKCS#7 SignedData via the `cms` crate.
+2. Validate the CMS envelope shape (single signer, attached content,
+   `ecdsa-with-SHA256`).
+3. Verify the ECDSA-P256/SHA-256 signature against each trusted root;
+   accept on first match.
+4. Decode the inner Matter-TLV CD body to extract `vendor_id` +
+   `product_id_array`.
+5. Cross-check the declared VID/PID against the `expected_vid` /
+   `expected_pid` arguments.
+
+Any failure surfaces as a specific
+`AttestationError::CertificationDeclaration*` variant.
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from
