@@ -18,9 +18,13 @@
 //!   fixtures (Milestone 6.1).
 //! - `capture-attestation` — drive matter.js to capture P-256
 //!   sign/verify `AttestationResponse` fixtures (Milestone 6.2.3).
+//! - `capture-cd`    — generate a synthetic CSA-test CD signing root +
+//!   matching Certification Declaration fixtures (Milestone 6.4.3).
 //! - `codegen`       — generate cluster definitions from the Matter spec
 //!   (Milestone 7).
 //! - `release`       — workspace release helper (post-Milestone 1).
+
+mod capture_cd;
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -103,6 +107,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-cd") => match capture_cd::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-cd: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -129,7 +140,8 @@ fn print_help() {
              capture-protocol-header Capture Matter application protocol header fixtures from matter.js.\n  \
              capture-setup            Capture Matter setup-payload fixtures from matter.js.\n  \
              capture-attestation      Capture Matter AttestationResponse fixtures from matter.js.\n  \
-             capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n"
+             capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n  \
+             capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n"
     );
 }
 

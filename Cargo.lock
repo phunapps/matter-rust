@@ -1736,6 +1736,17 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.0.0"
+dependencies = [
+ "base64",
+ "cms",
+ "const-oid",
+ "der",
+ "matter-codec",
+ "ring",
+ "serde_json",
+ "spki",
+ "x509-cert",
+]
 
 [[package]]
 name = "zerocopy"
