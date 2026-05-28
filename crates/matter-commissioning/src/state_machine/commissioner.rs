@@ -103,6 +103,14 @@ pub struct Commissioner {
     #[allow(dead_code)] // Used for nonce generation in M6.4.2 + M6.4.4.
     rng: Arc<dyn NocRng>,
 
+    // Attestation slots — populated by SendPaiCertRequest /
+    // SendDacCertRequest / SendAttestationRequest, consumed by
+    // AttestationVerification (M6.4.2 T18-T21).
+    pai_der: Option<Vec<u8>>,
+    dac_der: Option<Vec<u8>>,
+    attestation_nonce: Option<[u8; 32]>,
+    attestation_response: Option<crate::attestation::AttestationResponse>,
+
     /// The Expectation the state machine last emitted with `poll()`.
     /// `None` while not waiting for a response (terminal stages, or
     /// pre-poll).
@@ -162,6 +170,10 @@ impl Commissioner {
             admin_vendor_id: cfg.admin_vendor_id,
             now: cfg.now,
             rng: cfg.rng,
+            pai_der: None,
+            dac_der: None,
+            attestation_nonce: None,
+            attestation_response: None,
             awaiting: None,
             pending_action: None,
             last_failure: None,
@@ -202,6 +214,11 @@ impl Commissioner {
     /// first wire stage by self-recursion; stages past
     /// `Stage::ConfigRegulatory` short-circuit to `Stage::Failed` until
     /// M6.4.2+ tasks land.
+    // Lint carve-out: the per-stage arms each carry their own
+    // payload-shape comments, so collapsing them into smaller helpers
+    // would obscure the cluster-command mapping the function
+    // documents. Each new stage adds a small fixed arm.
+    #[allow(clippy::too_many_lines)]
     fn dispatch_stage(&mut self) -> Result<Action, CommissioningError> {
         use crate::clusters::general_commissioning as gc;
         use crate::state_machine::action::SessionContext;
@@ -257,6 +274,55 @@ impl Commissioner {
                     payload,
                     expect: Expectation::SetRegulatoryConfigResponse,
                 })
+            }
+            Stage::SendPaiCertRequest => {
+                use crate::noc::{encode_certificate_chain_request, CertChainType};
+                let payload = encode_certificate_chain_request(CertChainType::Pai);
+                self.awaiting = Some(Expectation::PaiCertChainResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: 0x003E,
+                    command: 0x02,
+                    payload,
+                    expect: Expectation::PaiCertChainResponse,
+                })
+            }
+            Stage::SendDacCertRequest => {
+                use crate::noc::{encode_certificate_chain_request, CertChainType};
+                let payload = encode_certificate_chain_request(CertChainType::Dac);
+                self.awaiting = Some(Expectation::DacCertChainResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: 0x003E,
+                    command: 0x02,
+                    payload,
+                    expect: Expectation::DacCertChainResponse,
+                })
+            }
+            Stage::SendAttestationRequest => {
+                use crate::noc::encode_attestation_request;
+                let mut nonce = [0u8; 32];
+                self.rng
+                    .fill(&mut nonce)
+                    .map_err(CommissioningError::from)?;
+                let payload = encode_attestation_request(&nonce);
+                self.attestation_nonce = Some(nonce);
+                self.awaiting = Some(Expectation::AttestationResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: 0x003E,
+                    command: 0x00,
+                    payload,
+                    expect: Expectation::AttestationResponse,
+                })
+            }
+            Stage::AttestationVerification => {
+                self.run_attestation_verification()?;
+                self.advance(Stage::SendOpCertSigningRequest);
+                self.dispatch_stage()
             }
             Stage::Failed => {
                 // Subsequent poll() after a failure surfaces the Abort.
@@ -369,6 +435,24 @@ impl Commissioner {
                 self.advance(Stage::SendPaiCertRequest);
                 Ok(())
             }
+            Expectation::PaiCertChainResponse => {
+                let resp = crate::noc::decode_certificate_chain_response(payload)?;
+                self.pai_der = Some(resp.certificate);
+                self.advance(Stage::SendDacCertRequest);
+                Ok(())
+            }
+            Expectation::DacCertChainResponse => {
+                let resp = crate::noc::decode_certificate_chain_response(payload)?;
+                self.dac_der = Some(resp.certificate);
+                self.advance(Stage::SendAttestationRequest);
+                Ok(())
+            }
+            Expectation::AttestationResponse => {
+                let resp = crate::noc::decode_attestation_response(payload)?;
+                self.attestation_response = Some(resp);
+                self.advance(Stage::AttestationVerification);
+                Ok(())
+            }
             // Other Expectations land in M6.4.2+ sub-phases.
             _ => Err(CommissioningError::OutOfOrderResponse(self.stage)),
         }
@@ -378,6 +462,70 @@ impl Commissioner {
         self.stage = next;
         self.awaiting = None;
         self.pending_action = None;
+    }
+
+    /// Off-wire attestation verification chain (M6.4.2 T21).
+    ///
+    /// Consumes the PAI/DAC DER + `AttestationResponse` + nonce captured
+    /// by [`Stage::SendPaiCertRequest`] / [`Stage::SendDacCertRequest`]
+    /// / [`Stage::SendAttestationRequest`] and runs M6.2's verifier
+    /// chain end-to-end:
+    ///
+    /// 1. Parse PAI/DAC DER.
+    /// 2. `verify_chain` — webpki path validation + Matter VID/PID
+    ///    overlay (M6.2.2).
+    /// 3. `verify_attestation_response` — ECDSA signature over
+    ///    `attestation_elements || attestation_challenge` (M6.2.3).
+    /// 4. `extract_attestation_elements_fields` — pull the
+    ///    `attestation_nonce` echo + CD bytes out of the TLV blob.
+    /// 5. Confirm the device echoed the nonce we sent.
+    /// 6. CD verification placeholder — M6.4.3 will fill this in. For
+    ///    M6.4.2 we surface the absence so the state machine refuses
+    ///    to advance past attestation without it.
+    fn run_attestation_verification(&mut self) -> Result<(), CommissioningError> {
+        use crate::attestation::{
+            extract_attestation_elements_fields, verify_attestation_response, verify_chain,
+            AttestationError, Dac, Pai,
+        };
+
+        let pai_der = self
+            .pai_der
+            .as_ref()
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+        let dac_der = self
+            .dac_der
+            .as_ref()
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+        let response = self
+            .attestation_response
+            .as_ref()
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+        let expected_nonce = self
+            .attestation_nonce
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+
+        // 1. Parse chain certs.
+        let pai = Pai::from_der(pai_der)?;
+        let dac = Dac::from_der(dac_der)?;
+
+        // 2. Chain validation (M6.2.2 — webpki path validation + VID/PID overlay).
+        let _chain = verify_chain(&dac, &pai, &self.paa_trust_store, self.now)?;
+
+        // 3. AttestationResponse signature (M6.2.3).
+        verify_attestation_response(response, &self.pase_attestation_challenge, dac.public_key())?;
+
+        // 4. Extract attestation_elements fields: CD bytes (M6.4.3 will verify),
+        //    nonce echo, timestamp.
+        let fields = extract_attestation_elements_fields(&response.attestation_elements)?;
+        if fields.attestation_nonce != expected_nonce {
+            return Err(CommissioningError::Attestation(
+                AttestationError::ResponseElementsMalformed,
+            ));
+        }
+
+        // 5. CD verification — M6.4.3 will fill this in. M6.4.2 surfaces the
+        //    absence so the state machine refuses to advance without it.
+        Err(CommissioningError::CdVerificationUnavailable)
     }
 
     fn assert_tlv_well_formed(stage: Stage, payload: &[u8]) -> Result<(), CommissioningError> {
@@ -611,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn full_happy_path_through_config_regulatory_emits_abort_at_pai_request() {
+    fn full_happy_path_through_config_regulatory_lands_on_send_pai_cert_request() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
@@ -644,23 +792,19 @@ mod tests {
         .expect("config regulatory ok");
         assert_eq!(sm.stage(), Stage::SendPaiCertRequest);
 
-        // Next poll() short-circuits to Failed with CdVerificationUnavailable.
-        let err = sm
-            .poll()
-            .expect_err("M6.4.1 short-circuits past ConfigRegulatory");
-        assert!(matches!(err, CommissioningError::CdVerificationUnavailable));
-        assert_eq!(sm.stage(), Stage::Failed);
-
-        // Subsequent poll emits Action::Abort with the rendered reason.
-        match sm.poll().expect("abort emission") {
-            Action::Abort {
-                send_disarm_failsafe,
-                reason,
+        // M6.4.2: SendPaiCertRequest now actually emits an Invoke.
+        match sm.poll().expect("poll #4") {
+            Action::Invoke {
+                cluster,
+                command,
+                expect,
+                ..
             } => {
-                assert!(send_disarm_failsafe);
-                assert!(reason.contains("M6.4.3"), "reason was {reason}");
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x02);
+                assert_eq!(expect, Expectation::PaiCertChainResponse);
             }
-            other => panic!("expected Abort, got {other:?}"),
+            other => panic!("expected Invoke, got {other:?}"),
         }
     }
 
@@ -750,5 +894,154 @@ mod tests {
         // Minimal well-formed anonymous struct. M6.4.1 doesn't parse
         // individual attributes yet.
         vec![0x15, 0x18]
+    }
+
+    // --- M6.4.2 T18-T21: attestation flow tests ---
+
+    fn drive_to_send_pai_cert_request(sm: &mut Commissioner) {
+        let _ = sm.poll().expect("poll info");
+        sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+            .expect("info ok");
+        let _ = sm.poll().expect("poll arm failsafe");
+        sm.on_response(
+            Expectation::ArmFailsafeResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18],
+        )
+        .expect("arm ok");
+        let _ = sm.poll().expect("poll config regulatory");
+        sm.on_response(
+            Expectation::SetRegulatoryConfigResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18],
+        )
+        .expect("regulatory ok");
+    }
+
+    fn synthetic_cert_chain_response(cert: &[u8]) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).expect("infallible");
+        w.put_bytes(Tag::Context(0), cert).expect("infallible");
+        w.end_container().expect("infallible");
+        buf
+    }
+
+    fn nonce_from_attestation_invoke(act: &Action) -> [u8; 32] {
+        match act {
+            Action::Invoke { payload, .. } => {
+                use matter_codec::{Element, Tag, TlvReader, Value};
+                let mut r = TlvReader::new(payload);
+                let _ = r.next().expect("reader").expect("anon-struct-start");
+                loop {
+                    match r.next().expect("reader") {
+                        Some(Element::Scalar {
+                            tag: Tag::Context(0),
+                            value: Value::Bytes(b),
+                        }) => {
+                            return b.as_slice().try_into().expect("32 bytes");
+                        }
+                        Some(_) => {}
+                        None => panic!("no nonce found"),
+                    }
+                }
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn poll_at_send_pai_emits_certificate_chain_request_pai() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        drive_to_send_pai_cert_request(&mut sm);
+        assert_eq!(sm.stage(), Stage::SendPaiCertRequest);
+        match sm.poll().expect("poll PAI") {
+            Action::Invoke {
+                cluster,
+                command,
+                expect,
+                payload,
+                ..
+            } => {
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x02);
+                assert_eq!(expect, Expectation::PaiCertChainResponse);
+                assert_eq!(payload, vec![0x15, 0x24, 0x00, 0x01, 0x18]);
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn poll_at_send_dac_emits_certificate_chain_request_dac() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        drive_to_send_pai_cert_request(&mut sm);
+        let _ = sm.poll().expect("poll PAI");
+        let pai_response = synthetic_cert_chain_response(&[0xAA, 0xBB, 0xCC]);
+        sm.on_response(Expectation::PaiCertChainResponse, &pai_response)
+            .expect("PAI accepted");
+        assert_eq!(sm.stage(), Stage::SendDacCertRequest);
+        match sm.poll().expect("poll DAC") {
+            Action::Invoke {
+                cluster,
+                command,
+                expect,
+                payload,
+                ..
+            } => {
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x02);
+                assert_eq!(expect, Expectation::DacCertChainResponse);
+                assert_eq!(payload, vec![0x15, 0x24, 0x00, 0x02, 0x18]);
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_attestation_request_uses_fresh_random_nonce_each_time() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+
+        let rng_a: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg_a = base_config(&fabric, &setup, &paa, rng_a);
+        let mut sm_a = Commissioner::new(cfg_a).expect("valid config");
+        drive_to_send_pai_cert_request(&mut sm_a);
+        let _ = sm_a.poll().expect("poll PAI a");
+        let pai_response = synthetic_cert_chain_response(&[0xAA]);
+        sm_a.on_response(Expectation::PaiCertChainResponse, &pai_response)
+            .expect("ok");
+        let _ = sm_a.poll().expect("poll DAC a");
+        let dac_response = synthetic_cert_chain_response(&[0xBB]);
+        sm_a.on_response(Expectation::DacCertChainResponse, &dac_response)
+            .expect("ok");
+        let nonce_a = nonce_from_attestation_invoke(&sm_a.poll().expect("poll att a"));
+
+        let rng_b: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg_b = base_config(&fabric, &setup, &paa, rng_b);
+        let mut sm_b = Commissioner::new(cfg_b).expect("valid config");
+        drive_to_send_pai_cert_request(&mut sm_b);
+        let _ = sm_b.poll().expect("poll PAI b");
+        sm_b.on_response(Expectation::PaiCertChainResponse, &pai_response)
+            .expect("ok");
+        let _ = sm_b.poll().expect("poll DAC b");
+        sm_b.on_response(Expectation::DacCertChainResponse, &dac_response)
+            .expect("ok");
+        let nonce_b = nonce_from_attestation_invoke(&sm_b.poll().expect("poll att b"));
+
+        assert_ne!(
+            nonce_a, nonce_b,
+            "two independent runs should use different random nonces"
+        );
     }
 }
