@@ -15,3 +15,6 @@ mod action;
 mod commissioner;
 mod error;
 mod stage;
+
+pub(crate) use stage::next_stage;
+pub use stage::Stage;
