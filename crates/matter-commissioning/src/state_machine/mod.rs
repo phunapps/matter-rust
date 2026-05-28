@@ -16,5 +16,7 @@ mod commissioner;
 mod error;
 mod stage;
 
+pub use action::{Action, CommissionedFabric, Expectation, SessionContext};
+pub use error::CommissioningError;
 pub(crate) use stage::next_stage;
 pub use stage::Stage;
