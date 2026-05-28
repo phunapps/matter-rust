@@ -124,6 +124,7 @@ into the single coarse `AttestationError::BadResponseSignature`.
 use std::sync::Arc;
 
 use matter_cert::time::MatterTime;
+use matter_commissioning::attestation::CdSigningRoots;
 use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
 use matter_commissioning::{
     Action, Commissioner, CommissionerConfig, Expectation, PaaTrustStore, SetupPayload,
@@ -147,12 +148,14 @@ let fabric = FabricRecord::new_root_only(
 )?;
 
 let paa = PaaTrustStore::with_csa_test_roots();
+let cd_signing_roots = CdSigningRoots::with_csa_test_roots();
 let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 let cfg = CommissionerConfig {
     pase_attestation_challenge,
     fabric: &fabric,
     setup_payload: setup,
     paa_trust_store: &paa,
+    cd_signing_roots: &cd_signing_roots,
     commissioner_node_id: 0x1,
     assigned_node_id: 0x2,
     ipk_epoch_key: [0x42_u8; 16],
@@ -187,18 +190,19 @@ loop {
 ```
 
 M6.4.1 only drives `SecurePairing` → `ReadCommissioningInfo` →
-`ArmFailsafe` → `ConfigRegulatory`. Stages past `ConfigRegulatory`
-short-circuit to `Action::Abort` with reason
-`CdVerificationUnavailable` until M6.4.2 lands the attestation flow
-and M6.4.3 lands CD verification.
+`ArmFailsafe` → `ConfigRegulatory`. M6.4.2 extends the flow through
+the attestation request/response stages, and M6.4.3 wires the
+CSA-signed Certification Declaration check into the off-wire
+`AttestationVerification` step so the cursor can advance past
+attestation into the (M6.4.4) CSR + NOC issuance stages.
 
-## Example: attestation flow up to the CD-verify gap (M6.4.2)
+## Example: attestation flow through CD verification (M6.4.3)
 
 The same driver loop from the M6.4.1 example works unchanged — after
 `ConfigRegulatory` the state machine emits four more `Action::Invoke`
 calls (PAI cert, DAC cert, AttestationRequest) and one off-wire
-`AttestationVerification` step. The verifier short-circuits at the
-CD-verify step:
+`AttestationVerification` step. M6.4.3 wires the CD-verify step in,
+so on a valid CD the cursor advances past attestation:
 
 ```rust,no_run
 use matter_commissioning::{
@@ -225,21 +229,18 @@ sm.on_response(Expectation::DacCertChainResponse, dac_response_tlv)?;
 let _ = sm.poll()?;
 sm.on_response(Expectation::AttestationResponse, attestation_response_tlv)?;
 
-// Stage 7: AttestationVerification (off-wire). Runs M6.2 verifier
-// chain + nonce-echo check, then returns CdVerificationUnavailable
-// until M6.4.3 lands the CD module.
-match sm.poll() {
-    Err(CommissioningError::CdVerificationUnavailable) => {
-        eprintln!("attestation chain + signature OK; CD verify pending M6.4.3");
-    }
-    Err(other) => return Err(other.into()),
-    Ok(action) => unreachable!("M6.4.2 always errors at AttestationVerification: {action:?}"),
-}
+// Stage 7: AttestationVerification (off-wire). Runs the M6.2/M6.4.3
+// verifier chain — chain validation, attestation signature, nonce
+// echo, then CD verification — and advances past attestation on
+// success. On failure, `poll()` returns a typed `CommissioningError`
+// and the cursor transitions to `Failed`.
+let _ = sm.poll()?;
 # Ok(())
 # }
 ```
 
-M6.4.3 will replace the `CdVerificationUnavailable` error path with a real CMS-based CD verifier, allowing the cursor to advance past attestation into the CSR + NOC issuance stages.
+M6.4.4 will land the CSR / NOC issuance stages that consume the
+advanced cursor.
 
 ## Byte parity
 
