@@ -79,6 +79,45 @@ pub enum AttestationError {
     #[error("attestation_elements malformed or missing required fields")]
     ResponseElementsMalformed,
 
+    /// Certification Declaration (CD) has invalid CMS structure: it
+    /// failed `ContentInfo` / `SignedData` DER parse, declared
+    /// multiple signers, lacked an attached eContent, used an
+    /// unexpected `contentType` / `signatureAlgorithm`, or otherwise
+    /// did not match the Matter Core Spec §6.3.1 shape expected by
+    /// [`crate::attestation::verify_certification_declaration`].
+    #[error("certification declaration has invalid CMS structure")]
+    CertificationDeclarationMalformed,
+
+    /// Certification Declaration signature did not verify against any
+    /// trusted root in the supplied
+    /// [`crate::attestation::CdSigningRoots`] store.
+    #[error("certification declaration signature does not verify against any trusted root")]
+    CertificationDeclarationSignatureInvalid,
+
+    /// Certification Declaration inner TLV (the signed eContent
+    /// payload) is malformed, truncated, or missing a required
+    /// context-tagged field per Matter Core Spec §6.3.1.
+    #[error("certification declaration inner TLV malformed")]
+    CertificationDeclarationTlvMalformed,
+
+    /// Vendor ID declared inside the verified Certification
+    /// Declaration does not equal the VID the caller expected (sourced
+    /// from the verified DAC subject in M6.4.x).
+    #[error(
+        "certification declaration VID mismatch: declared {declared:?}, expected {expected:?}"
+    )]
+    CertificationDeclarationVidMismatch {
+        /// Vendor ID declared inside the CD's inner TLV (tag 1).
+        declared: crate::attestation::VendorId,
+        /// Vendor ID the caller required (typically the DAC subject's VID).
+        expected: crate::attestation::VendorId,
+    },
+
+    /// Product ID list inside the verified Certification Declaration
+    /// does not contain the PID the caller expected.
+    #[error("certification declaration PID list does not contain expected {0:?}")]
+    CertificationDeclarationPidMismatch(crate::attestation::ProductId),
+
     /// ECDSA verification of the device's attestation-response signature
     /// over `attestation_elements || attestation_challenge` did not
     /// succeed against the DAC public key.

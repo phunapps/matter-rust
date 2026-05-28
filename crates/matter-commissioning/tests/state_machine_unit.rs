@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use matter_cert::time::MatterTime;
+use matter_commissioning::attestation::CdSigningRoots;
 use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
 use matter_commissioning::setup::{
     CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
@@ -48,13 +49,19 @@ fn make_setup() -> SetupPayload {
     }
 }
 
-fn build_sm(fabric: &FabricRecord, setup: &SetupPayload, paa: &PaaTrustStore) -> Commissioner {
+fn build_sm(
+    fabric: &FabricRecord,
+    setup: &SetupPayload,
+    paa: &PaaTrustStore,
+    cd: &CdSigningRoots,
+) -> Commissioner {
     let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
     let cfg = CommissionerConfig {
         pase_attestation_challenge: [0u8; 16],
         fabric,
         setup_payload: setup,
         paa_trust_store: paa,
+        cd_signing_roots: cd,
         commissioner_node_id: 0x1,
         assigned_node_id: 0x2,
         ipk_epoch_key: [0x42_u8; 16],
@@ -71,7 +78,8 @@ fn arm_failsafe_returns_busy() {
     let fabric = make_fabric();
     let setup = make_setup();
     let paa = PaaTrustStore::with_csa_test_roots();
-    let mut sm = build_sm(&fabric, &setup, &paa);
+    let cd = CdSigningRoots::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
         .unwrap();
@@ -97,7 +105,8 @@ fn arm_failsafe_response_is_malformed() {
     let fabric = make_fabric();
     let setup = make_setup();
     let paa = PaaTrustStore::with_csa_test_roots();
-    let mut sm = build_sm(&fabric, &setup, &paa);
+    let cd = CdSigningRoots::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
         .unwrap();
@@ -117,7 +126,8 @@ fn config_regulatory_returns_value_outside_range() {
     let fabric = make_fabric();
     let setup = make_setup();
     let paa = PaaTrustStore::with_csa_test_roots();
-    let mut sm = build_sm(&fabric, &setup, &paa);
+    let cd = CdSigningRoots::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
         .unwrap();
@@ -149,7 +159,8 @@ fn failed_stage_subsequent_poll_emits_abort() {
     let fabric = make_fabric();
     let setup = make_setup();
     let paa = PaaTrustStore::with_csa_test_roots();
-    let mut sm = build_sm(&fabric, &setup, &paa);
+    let cd = CdSigningRoots::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     let _ = sm
         .on_response(Expectation::CommissioningInfo, &[0xFF])
@@ -171,7 +182,8 @@ fn unexpected_response_kind_after_arm_failsafe_poll() {
     let fabric = make_fabric();
     let setup = make_setup();
     let paa = PaaTrustStore::with_csa_test_roots();
-    let mut sm = build_sm(&fabric, &setup, &paa);
+    let cd = CdSigningRoots::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
         .unwrap();
@@ -216,7 +228,8 @@ fn tampered_pai_der_returns_attestation_error() {
     let fabric = make_fabric();
     let setup = make_setup();
     let paa = PaaTrustStore::with_csa_test_roots();
-    let mut sm = build_sm(&fabric, &setup, &paa);
+    let cd = CdSigningRoots::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa, &cd);
 
     // Drive through ReadCommissioningInfo → ArmFailsafe → ConfigRegulatory.
     let _ = sm.poll().unwrap();
@@ -294,7 +307,8 @@ proptest! {
         let fabric = make_fabric();
         let setup = make_setup();
         let paa = PaaTrustStore::with_csa_test_roots();
-        let mut sm = build_sm(&fabric, &setup, &paa);
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let mut sm = build_sm(&fabric, &setup, &paa, &cd);
         // Poll once to put the state machine into a "waiting for response" position.
         let _ = sm.poll();
         let _ = sm.on_response(exp, &payload);
@@ -310,7 +324,8 @@ proptest! {
         let fabric = make_fabric();
         let setup = make_setup();
         let paa = PaaTrustStore::with_csa_test_roots();
-        let mut sm = build_sm(&fabric, &setup, &paa);
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let mut sm = build_sm(&fabric, &setup, &paa, &cd);
         let _ = sm.poll();
         let _ = sm.on_response(exp, &payload);
         let _ = sm.poll();

@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow, M6.4.3 Certification Declaration verification
+
+#### Added (M6.4.3 — Certification Declaration verification)
+
+- New `cms` dependency (RustCrypto 0.2.x) for CMS/PKCS#7 SignedData parsing.
+- `attestation::cd` module: `CdSigningRoots`, `verify_certification_declaration`.
+  Five-stage verifier: CMS parse → envelope shape → ECDSA-P256/SHA-256
+  signature → inner CD TLV decode → VID/PID cross-check.
+- Bundled CSA-test CD signing root at
+  `src/attestation/cd/csa_cd_signing_roots/csa-test-cd-signing-root.pem`
+  (for tests + examples only; production callers supply CSA-published
+  roots via `CdSigningRoots::from_pem`).
+- Five new `AttestationError` variants:
+  `CertificationDeclarationMalformed`,
+  `CertificationDeclarationSignatureInvalid`,
+  `CertificationDeclarationTlvMalformed`,
+  `CertificationDeclarationVidMismatch { declared, expected }`,
+  `CertificationDeclarationPidMismatch(ProductId)`.
+- State machine's `AttestationVerification` stage now calls CD verification —
+  the M6.4.2 `CdVerificationUnavailable` placeholder is removed; the cursor
+  advances past attestation on a valid CD. The hard gate for M6.6
+  documented in `TODO-1.0.md` is now closed.
+- `xtask capture-cd` subcommand generates synthetic CD fixtures
+  (happy + tampered + wrong-vid) for testing.
+- New integration test `tests/cd_verification.rs` (5 cases) exercising
+  the verifier against the synthetic fixtures.
 
 #### Added (M6.4.2 — Attestation on-wire flow + verifier glue, CD-incomplete)
 

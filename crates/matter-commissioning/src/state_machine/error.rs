@@ -61,12 +61,6 @@ pub enum CommissioningError {
     #[error("attestation verification failed: {0}")]
     Attestation(#[from] AttestationError),
 
-    /// CD verification module is required but absent. Emitted only by
-    /// M6.4.2 builds (after the attestation flow lands but before M6.4.3
-    /// wires CD verification in). Removed once M6.4.3 lands.
-    #[error("certification declaration verification unavailable — M6.4.3 required")]
-    CdVerificationUnavailable,
-
     /// CSR verification or NOC issuance failed.
     #[error("NOC issuance failed: {0}")]
     Noc(#[from] NocError),
@@ -117,11 +111,5 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("ArmFailsafe"), "{msg}");
         assert!(msg.contains("0x98"), "{msg}");
-    }
-
-    #[test]
-    fn cd_verification_unavailable_message_mentions_m6_4_3() {
-        let msg = CommissioningError::CdVerificationUnavailable.to_string();
-        assert!(msg.contains("M6.4.3"), "{msg}");
     }
 }

@@ -13,5 +13,16 @@ publish = false
 workspace = true
 
 [dependencies]
-# Intentionally empty. Add tools (codegen, test-vector capture, release helpers)
-# as the milestones that need them arrive.
+# Added by M6.4.3 capture-cd: generate synthetic CSA-test CD signing root
+# (ring), build the inner CD TLV (matter-codec), wrap the signed blob in
+# CMS SignedData using the cms crate's types, and serialise the JSON
+# fixtures (base64 + serde_json).
+matter-codec = { path = "../crates/matter-codec", version = "0.1.0" }
+base64 = { workspace = true }
+cms = { workspace = true }
+const-oid = "0.9"
+der = { workspace = true }
+ring = { workspace = true }
+serde_json = { workspace = true }
+spki = { version = "0.7", default-features = false, features = ["alloc"] }
+x509-cert = { version = "0.2", default-features = false }

@@ -13,14 +13,18 @@
 //!   byte-parity capture.
 //! - **M6.2.4–M6.2.6:** see [`attestation`].
 //! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
-//! - **M6.4.2 (current):** attestation on-wire flow + off-wire
+//! - **M6.4.2:** attestation on-wire flow + off-wire
 //!   `AttestationVerification`. State machine drives
 //!   `SendPaiCertRequest` → `SendDacCertRequest` →
 //!   `SendAttestationRequest` → `AttestationVerification`, chaining
-//!   M6.2's `verify_chain` + `verify_attestation_response` + the new
-//!   `extract_attestation_elements_fields` helper. The CD-verify step
-//!   is intentionally absent — the verifier returns
-//!   `CdVerificationUnavailable` until M6.4.3 lands.
+//!   M6.2's `verify_chain` + `verify_attestation_response` + the
+//!   `extract_attestation_elements_fields` helper.
+//! - **M6.4.3 (current):** CD verification wired into
+//!   `AttestationVerification`. The state machine now calls
+//!   `verify_certification_declaration` against
+//!   [`attestation::CdSigningRoots`] and advances past attestation on
+//!   a valid CD; `CommissionerConfig` gains a `cd_signing_roots`
+//!   reference.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!
@@ -57,8 +61,9 @@ pub use setup::{
 };
 
 pub use attestation::{
-    extract_attestation_elements_fields, verify_attestation_response, verify_chain,
-    verify_dac_signed_elements, AttestationElementsFields, AttestationError, AttestationResponse,
+    extract_attestation_elements_fields, verify_attestation_response,
+    verify_certification_declaration, verify_chain, verify_dac_signed_elements,
+    AttestationElementsFields, AttestationError, AttestationResponse, CdSigningRoots,
     ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
 };
 

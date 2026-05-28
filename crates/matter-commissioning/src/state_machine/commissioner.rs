@@ -39,6 +39,10 @@ pub struct CommissionerConfig<'a> {
     pub setup_payload: &'a SetupPayload,
     /// Trusted PAA roots for attestation chain validation (M6.2).
     pub paa_trust_store: &'a PaaTrustStore,
+    /// Trusted CSA Certification Declaration signing roots (M6.4.3).
+    /// Tests can use `CdSigningRoots::with_csa_test_roots()`; production
+    /// callers supply CSA-published roots via `CdSigningRoots::from_pem`.
+    pub cd_signing_roots: &'a crate::attestation::CdSigningRoots,
     /// The commissioner's own operational node ID on this fabric.
     /// Must be non-zero.
     pub commissioner_node_id: u64,
@@ -86,6 +90,7 @@ pub struct Commissioner {
     fabric: FabricRecord,
     #[allow(dead_code)] // Used by chain validation in M6.4.2.
     paa_trust_store: PaaTrustStore,
+    cd_signing_roots: crate::attestation::CdSigningRoots,
     #[allow(dead_code)] // Used by VID/PID cross-check in M6.4.2.
     setup_payload: SetupPayload,
     #[allow(dead_code)] // Used by NOC subject in M6.4.4.
@@ -162,6 +167,7 @@ impl Commissioner {
             pase_attestation_challenge: cfg.pase_attestation_challenge,
             fabric: cfg.fabric.clone(),
             paa_trust_store: cfg.paa_trust_store.clone(),
+            cd_signing_roots: cfg.cd_signing_roots.clone(),
             setup_payload: cfg.setup_payload.clone(),
             commissioner_node_id: cfg.commissioner_node_id,
             assigned_node_id: cfg.assigned_node_id,
@@ -344,22 +350,24 @@ impl Commissioner {
                 let reason = self
                     .last_failure
                     .clone()
-                    .unwrap_or_else(|| CommissioningError::CdVerificationUnavailable.to_string());
+                    .unwrap_or_else(|| "commissioning aborted".to_string());
                 Ok(Action::Abort {
                     send_disarm_failsafe: true,
                     reason,
                 })
             }
-            // Stages past ConfigRegulatory land in M6.4.2+ sub-phases.
-            // For M6.4.1, short-circuit to Failed so the state machine
-            // emits a self-consistent (if intentionally incomplete)
-            // Abort sequence.
-            _ => {
-                self.last_failure = Some(CommissioningError::CdVerificationUnavailable.to_string());
+            // Stages past AttestationVerification land in M6.4.4+ sub-phases.
+            // Short-circuit to Failed so the state machine emits a
+            // self-consistent (if intentionally incomplete) Abort sequence.
+            // Once M6.4.4+ fills the remaining stage handlers, the `_ =>`
+            // arm becomes unreachable and the explicit error becomes a
+            // compile-time exhaustiveness check.
+            unhandled => {
+                self.last_failure = Some("commissioning stage not yet implemented".to_string());
                 self.stage = Stage::Failed;
                 self.awaiting = None;
                 self.pending_action = None;
-                Err(CommissioningError::CdVerificationUnavailable)
+                Err(CommissioningError::OutOfOrderResponse(unhandled))
             }
         }
     }
@@ -492,9 +500,10 @@ impl Commissioner {
     /// 4. `extract_attestation_elements_fields` — pull the
     ///    `attestation_nonce` echo + CD bytes out of the TLV blob.
     /// 5. Confirm the device echoed the nonce we sent.
-    /// 6. CD verification placeholder — M6.4.3 will fill this in. For
-    ///    M6.4.2 we surface the absence so the state machine refuses
-    ///    to advance past attestation without it.
+    /// 6. `verify_certification_declaration` — verify the CSA-signed CD
+    ///    embedded in `attestation_elements` against
+    ///    [`crate::attestation::CdSigningRoots`] and confirm the
+    ///    declared VID/PID match what the DAC subject claimed.
     fn run_attestation_verification(&mut self) -> Result<(), CommissioningError> {
         use crate::attestation::{
             extract_attestation_elements_fields, verify_attestation_response, verify_chain,
@@ -522,7 +531,12 @@ impl Commissioner {
         let dac = Dac::from_der(dac_der)?;
 
         // 2. Chain validation (M6.2.2 — webpki path validation + VID/PID overlay).
-        let _chain = verify_chain(&dac, &pai, &self.paa_trust_store, self.now)?;
+        //    The returned `ChainVerification` carries the VID/PID that
+        //    both webpki and the Matter overlay agreed on; we re-use
+        //    those for the CD check below so a single source of truth
+        //    drives both the chain validation and the CD VID/PID
+        //    equality check.
+        let chain = verify_chain(&dac, &pai, &self.paa_trust_store, self.now)?;
 
         // 3. AttestationResponse signature (M6.2.3).
         verify_attestation_response(response, &self.pase_attestation_challenge, dac.public_key())?;
@@ -536,9 +550,16 @@ impl Commissioner {
             ));
         }
 
-        // 5. CD verification — M6.4.3 will fill this in. M6.4.2 surfaces the
-        //    absence so the state machine refuses to advance without it.
-        Err(CommissioningError::CdVerificationUnavailable)
+        // 5. CD verification — verify the device's declared VID/PID
+        //    against the CSA-signed Certification Declaration extracted
+        //    from `attestation_elements`.
+        crate::attestation::verify_certification_declaration(
+            &fields.certification_declaration,
+            chain.vendor_id,
+            chain.product_id,
+            &self.cd_signing_roots,
+        )?;
+        Ok(())
     }
 
     fn assert_tlv_well_formed(stage: Stage, payload: &[u8]) -> Result<(), CommissioningError> {
@@ -574,6 +595,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::attestation::CdSigningRoots;
     use crate::noc::{FabricRecord, NocRng, SystemNocRng};
     use crate::setup::{
         CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
@@ -614,6 +636,7 @@ mod tests {
         fabric: &'a FabricRecord,
         setup: &'a SetupPayload,
         paa: &'a PaaTrustStore,
+        cd: &'a crate::attestation::CdSigningRoots,
         rng: Arc<dyn NocRng>,
     ) -> CommissionerConfig<'a> {
         CommissionerConfig {
@@ -621,6 +644,7 @@ mod tests {
             fabric,
             setup_payload: setup,
             paa_trust_store: paa,
+            cd_signing_roots: cd,
             commissioner_node_id: 0x1,
             assigned_node_id: 0x2,
             ipk_epoch_key: [0x42_u8; 16],
@@ -636,8 +660,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let mut cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.commissioner_node_id = 0;
         // Cannot use `expect_err`: `Commissioner` does not impl Debug
         // because `FabricRecord` (a stored field) is not Debug.
@@ -655,8 +680,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let mut cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.assigned_node_id = 0;
         let Err(err) = Commissioner::new(cfg) else {
             panic!("zero assigned_node_id should fail");
@@ -672,8 +698,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let mut cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.commissioner_node_id = 0x42;
         cfg.assigned_node_id = 0x42;
         let Err(err) = Commissioner::new(cfg) else {
@@ -690,8 +717,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let mut cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.ipk_epoch_key = [0u8; 16];
         let Err(err) = Commissioner::new(cfg) else {
             panic!("zero IPK should fail");
@@ -707,8 +735,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let sm = Commissioner::new(cfg).expect("valid config should construct");
         assert_eq!(sm.stage(), Stage::SecurePairing);
     }
@@ -718,8 +747,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         let act = sm.poll().expect("poll succeeds");
         match act {
@@ -746,8 +776,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         let act1 = sm.poll().expect("first poll");
         let act2 = sm.poll().expect("second poll");
@@ -776,8 +807,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
 
         // SecurePairing → ReadCommissioningInfo
@@ -826,8 +858,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         let _ = sm.poll().expect("poll info");
         sm.on_response(
@@ -869,8 +902,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         // No poll called — state machine isn't waiting on anything.
         let err = sm
@@ -885,8 +919,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         let _ = sm.poll().expect("poll");
         let err = sm
@@ -967,8 +1002,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         drive_to_send_pai_cert_request(&mut sm);
         assert_eq!(sm.stage(), Stage::SendPaiCertRequest);
@@ -994,8 +1030,9 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
         drive_to_send_pai_cert_request(&mut sm);
         let _ = sm.poll().expect("poll PAI");
@@ -1025,9 +1062,10 @@ mod tests {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
         let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
 
         let rng_a: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg_a = base_config(&fabric, &setup, &paa, rng_a);
+        let cfg_a = base_config(&fabric, &setup, &paa, &cd, rng_a);
         let mut sm_a = Commissioner::new(cfg_a).expect("valid config");
         drive_to_send_pai_cert_request(&mut sm_a);
         let _ = sm_a.poll().expect("poll PAI a");
@@ -1041,7 +1079,7 @@ mod tests {
         let nonce_a = nonce_from_attestation_invoke(&sm_a.poll().expect("poll att a"));
 
         let rng_b: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
-        let cfg_b = base_config(&fabric, &setup, &paa, rng_b);
+        let cfg_b = base_config(&fabric, &setup, &paa, &cd, rng_b);
         let mut sm_b = Commissioner::new(cfg_b).expect("valid config");
         drive_to_send_pai_cert_request(&mut sm_b);
         let _ = sm_b.poll().expect("poll PAI b");
