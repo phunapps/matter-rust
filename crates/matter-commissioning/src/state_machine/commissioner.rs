@@ -9,6 +9,7 @@ use matter_cert::time::MatterTime;
 use crate::attestation::PaaTrustStore;
 use crate::noc::{FabricRecord, NocRng};
 use crate::setup::SetupPayload;
+use crate::state_machine::action::{Action, Expectation};
 use crate::state_machine::error::CommissioningError;
 use crate::state_machine::stage::Stage;
 
@@ -96,6 +97,15 @@ pub struct Commissioner {
     now: MatterTime,
     #[allow(dead_code)] // Used for nonce generation in M6.4.2 + M6.4.4.
     rng: Arc<dyn NocRng>,
+
+    /// The Expectation the state machine last emitted with `poll()`.
+    /// `None` while not waiting for a response (terminal stages, or
+    /// pre-poll).
+    awaiting: Option<Expectation>,
+
+    /// Cached pending Action so repeated `poll()` calls between
+    /// `on_response`s are idempotent. Cleared when the cursor advances.
+    pending_action: Option<Action>,
 }
 
 impl Commissioner {
@@ -141,6 +151,8 @@ impl Commissioner {
             admin_vendor_id: cfg.admin_vendor_id,
             now: cfg.now,
             rng: cfg.rng,
+            awaiting: None,
+            pending_action: None,
         })
     }
 
@@ -148,6 +160,112 @@ impl Commissioner {
     #[must_use]
     pub fn stage(&self) -> Stage {
         self.stage
+    }
+
+    /// Drive the state machine forward.
+    ///
+    /// Returns the next [`Action`] the caller must perform. Idempotent:
+    /// calling `poll` twice without an intervening `on_response` returns
+    /// the same `Action`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed error that caused a transition into
+    /// [`Stage::Failed`] — when this happens, the cursor advances to
+    /// `Failed` and the next `poll()` call emits an
+    /// [`Action::Abort`] with a rendered summary of the failure.
+    pub fn poll(&mut self) -> Result<Action, CommissioningError> {
+        if let Some(act) = self.pending_action.clone() {
+            return Ok(act);
+        }
+        let action = self.dispatch_stage()?;
+        self.pending_action = Some(action.clone());
+        Ok(action)
+    }
+
+    /// Compute the next [`Action`] for the current [`Stage`].
+    ///
+    /// Called by [`Self::poll`] only when there is no cached
+    /// `pending_action`. Walks `Stage::SecurePairing` forward to the
+    /// first wire stage by self-recursion; stages past
+    /// `Stage::ConfigRegulatory` short-circuit to `Stage::Failed` until
+    /// M6.4.2+ tasks land.
+    fn dispatch_stage(&mut self) -> Result<Action, CommissioningError> {
+        use crate::clusters::general_commissioning as gc;
+        use crate::state_machine::action::SessionContext;
+        match self.stage {
+            Stage::SecurePairing => {
+                // Entry → first wire stage. Advance and re-dispatch.
+                self.stage = Stage::ReadCommissioningInfo;
+                self.dispatch_stage()
+            }
+            Stage::ReadCommissioningInfo => {
+                self.awaiting = Some(Expectation::CommissioningInfo);
+                Ok(Action::ReadAttribute {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: gc::CLUSTER_ID,
+                    attributes: &[
+                        // Spec §11.10.7: BasicCommissioningInfo (failsafe_expiry_length_seconds, …)
+                        0x0000, // RegulatoryConfig
+                        0x0001, // LocationCapability
+                        0x0002, // SupportsConcurrentConnection
+                        0x0004,
+                    ],
+                    expect: Expectation::CommissioningInfo,
+                })
+            }
+            Stage::ArmFailsafe => {
+                // Failsafe expiry length is set conservatively to 60s.
+                // M6.4.1 hard-codes; future tasks may read the value
+                // from `ReadCommissioningInfo`'s response.
+                let payload = gc::encode_arm_fail_safe(60, 0);
+                self.awaiting = Some(Expectation::ArmFailsafeResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: gc::CLUSTER_ID,
+                    command: gc::command_id::ARM_FAIL_SAFE,
+                    payload,
+                    expect: Expectation::ArmFailsafeResponse,
+                })
+            }
+            Stage::ConfigRegulatory => {
+                let payload = gc::encode_set_regulatory_config(
+                    gc::RegulatoryLocation::IndoorOutdoor,
+                    "XX",
+                    0,
+                );
+                self.awaiting = Some(Expectation::SetRegulatoryConfigResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: gc::CLUSTER_ID,
+                    command: gc::command_id::SET_REGULATORY_CONFIG,
+                    payload,
+                    expect: Expectation::SetRegulatoryConfigResponse,
+                })
+            }
+            Stage::Failed => {
+                // Subsequent poll() after a failure surfaces the Abort.
+                // The state machine stays in Failed.
+                self.awaiting = None;
+                Ok(Action::Abort {
+                    send_disarm_failsafe: true,
+                    reason: CommissioningError::CdVerificationUnavailable.to_string(),
+                })
+            }
+            // Stages past ConfigRegulatory land in M6.4.2+ sub-phases.
+            // For M6.4.1, short-circuit to Failed so the state machine
+            // emits a self-consistent (if intentionally incomplete)
+            // Abort sequence.
+            _ => {
+                self.stage = Stage::Failed;
+                self.awaiting = None;
+                self.pending_action = None;
+                Err(CommissioningError::CdVerificationUnavailable)
+            }
+        }
     }
 }
 
@@ -161,6 +279,7 @@ mod tests {
     use crate::setup::{
         CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
     };
+    use crate::state_machine::{Action, Expectation};
     use crate::PaaTrustStore;
     use matter_cert::time::MatterTime;
     use matter_crypto::{RingSigner, Signer};
@@ -293,5 +412,63 @@ mod tests {
         let cfg = base_config(&fabric, &setup, &paa, rng);
         let sm = Commissioner::new(cfg).expect("valid config should construct");
         assert_eq!(sm.stage(), Stage::SecurePairing);
+    }
+
+    #[test]
+    fn poll_from_secure_pairing_emits_read_commissioning_info() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        let act = sm.poll().expect("poll succeeds");
+        match act {
+            Action::ReadAttribute {
+                session,
+                endpoint,
+                cluster,
+                attributes,
+                expect,
+            } => {
+                assert_eq!(session, crate::state_machine::SessionContext::Pase);
+                assert_eq!(endpoint, 0);
+                assert_eq!(cluster, 0x0030);
+                assert_eq!(expect, Expectation::CommissioningInfo);
+                assert!(!attributes.is_empty());
+            }
+            other => panic!("expected ReadAttribute, got {other:?}"),
+        }
+        assert_eq!(sm.stage(), Stage::ReadCommissioningInfo);
+    }
+
+    #[test]
+    fn poll_is_idempotent_between_responses() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        let act1 = sm.poll().expect("first poll");
+        let act2 = sm.poll().expect("second poll");
+        match (act1, act2) {
+            (
+                Action::ReadAttribute {
+                    cluster: c1,
+                    expect: e1,
+                    ..
+                },
+                Action::ReadAttribute {
+                    cluster: c2,
+                    expect: e2,
+                    ..
+                },
+            ) => {
+                assert_eq!(c1, c2);
+                assert_eq!(e1, e2);
+            }
+            other => panic!("idempotent poll returned different variants: {other:?}"),
+        }
     }
 }
