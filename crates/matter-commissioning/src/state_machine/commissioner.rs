@@ -18,7 +18,12 @@ use crate::state_machine::stage::Stage;
 /// All fields are by-reference where possible so the state machine
 /// can share long-lived caller-owned resources (the fabric record, the
 /// trust store, the setup payload) without copying.
-#[non_exhaustive]
+///
+/// **Not `#[non_exhaustive]`** — callers build this as a struct literal
+/// with all public fields populated. Adding a field is a breaking change,
+/// accepted for a pre-1.0 unpublished crate. `#[non_exhaustive]` stays on
+/// [`Action`], [`Expectation`], [`Stage`], and [`CommissioningError`] —
+/// those are read by callers, not constructed by them.
 pub struct CommissionerConfig<'a> {
     /// 16-byte attestation challenge derived from the active PASE
     /// session. Matter Core Spec §3.6.4: bytes `[32..48]` of the
