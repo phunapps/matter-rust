@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attestation;
+pub mod clusters;
 pub mod error;
 pub mod noc;
 pub mod setup;
