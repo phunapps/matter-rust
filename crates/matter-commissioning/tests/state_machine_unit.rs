@@ -1,0 +1,191 @@
+//! M6.4.1 — public-API integration tests for the commissioning state
+//! machine's negative-path matrix.
+//!
+//! Each test exercises a single failure mode and asserts the right
+//! `CommissioningError` variant + post-failure cursor position via the
+//! public re-exports in `matter_commissioning::state_machine`.
+
+// Test-code carve-out: see CLAUDE.md.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::sync::Arc;
+
+use matter_cert::time::MatterTime;
+use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
+use matter_commissioning::setup::{
+    CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
+};
+use matter_commissioning::state_machine::{
+    Action, Commissioner, CommissionerConfig, CommissioningError, Expectation, Stage,
+};
+use matter_commissioning::PaaTrustStore;
+use matter_crypto::{RingSigner, Signer};
+
+fn make_fabric() -> FabricRecord {
+    let (signer, _pkcs8) = RingSigner::generate().expect("ring keypair");
+    let signer: Arc<dyn Signer> = Arc::new(signer);
+    let rng = SystemNocRng;
+    FabricRecord::new_root_only(
+        0x0000_0000_0000_0001,
+        signer,
+        MatterTime::from_unix_secs(1_704_067_200),
+        MatterTime::from_unix_secs(1_735_689_600),
+        0xDEAD_BEEF_CAFE_F00D,
+        &rng,
+    )
+    .expect("valid root fabric")
+}
+
+fn make_setup() -> SetupPayload {
+    SetupPayload {
+        version: 0,
+        vendor_id: Some(0xFFF1),
+        product_id: Some(0x8000),
+        commissioning_flow: CommissioningFlow::Standard,
+        discovery_capabilities: DiscoveryCapabilities::ON_NETWORK,
+        discriminator: Discriminator::new(0x0F00).expect("valid discriminator"),
+        passcode: Passcode::new(20_202_021).expect("valid passcode"),
+    }
+}
+
+fn build_sm(fabric: &FabricRecord, setup: &SetupPayload, paa: &PaaTrustStore) -> Commissioner {
+    let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+    let cfg = CommissionerConfig {
+        pase_attestation_challenge: [0u8; 16],
+        fabric,
+        setup_payload: setup,
+        paa_trust_store: paa,
+        commissioner_node_id: 0x1,
+        assigned_node_id: 0x2,
+        ipk_epoch_key: [0x42_u8; 16],
+        case_admin_subject: 0x1,
+        admin_vendor_id: 0xFFF1,
+        now: MatterTime::from_unix_secs(1_704_067_200),
+        rng,
+    };
+    Commissioner::new(cfg).expect("valid config")
+}
+
+#[test]
+fn arm_failsafe_returns_busy() {
+    let fabric = make_fabric();
+    let setup = make_setup();
+    let paa = PaaTrustStore::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa);
+    let _ = sm.poll().unwrap();
+    sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+        .unwrap();
+    let _ = sm.poll().unwrap();
+    let err = sm
+        .on_response(
+            Expectation::ArmFailsafeResponse,
+            &[0x15, 0x24, 0x00, 0x04, 0x18], // error_code = 4 (busy)
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CommissioningError::DeviceImStatus {
+            stage: Stage::ArmFailsafe,
+            im_status: 4,
+        }
+    ));
+    assert_eq!(sm.stage(), Stage::Failed);
+}
+
+#[test]
+fn arm_failsafe_response_is_malformed() {
+    let fabric = make_fabric();
+    let setup = make_setup();
+    let paa = PaaTrustStore::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa);
+    let _ = sm.poll().unwrap();
+    sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+        .unwrap();
+    let _ = sm.poll().unwrap();
+    let err = sm
+        .on_response(Expectation::ArmFailsafeResponse, &[0xFF])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CommissioningError::MalformedResponse(Stage::ArmFailsafe)
+    ));
+    assert_eq!(sm.stage(), Stage::Failed);
+}
+
+#[test]
+fn config_regulatory_returns_value_outside_range() {
+    let fabric = make_fabric();
+    let setup = make_setup();
+    let paa = PaaTrustStore::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa);
+    let _ = sm.poll().unwrap();
+    sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+        .unwrap();
+    let _ = sm.poll().unwrap();
+    sm.on_response(
+        Expectation::ArmFailsafeResponse,
+        &[0x15, 0x24, 0x00, 0x00, 0x18],
+    )
+    .unwrap();
+    let _ = sm.poll().unwrap();
+    let err = sm
+        .on_response(
+            Expectation::SetRegulatoryConfigResponse,
+            &[0x15, 0x24, 0x00, 0x02, 0x18], // error_code = 2 (ValueOutsideRange)
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CommissioningError::DeviceImStatus {
+            stage: Stage::ConfigRegulatory,
+            im_status: 2,
+        }
+    ));
+    assert_eq!(sm.stage(), Stage::Failed);
+}
+
+#[test]
+fn failed_stage_subsequent_poll_emits_abort() {
+    let fabric = make_fabric();
+    let setup = make_setup();
+    let paa = PaaTrustStore::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa);
+    let _ = sm.poll().unwrap();
+    let _ = sm
+        .on_response(Expectation::CommissioningInfo, &[0xFF])
+        .unwrap_err();
+    assert_eq!(sm.stage(), Stage::Failed);
+    match sm.poll().unwrap() {
+        Action::Abort {
+            send_disarm_failsafe,
+            reason: _,
+        } => {
+            assert!(send_disarm_failsafe);
+        }
+        other => panic!("expected Abort, got {other:?}"),
+    }
+}
+
+#[test]
+fn unexpected_response_kind_after_arm_failsafe_poll() {
+    let fabric = make_fabric();
+    let setup = make_setup();
+    let paa = PaaTrustStore::with_csa_test_roots();
+    let mut sm = build_sm(&fabric, &setup, &paa);
+    let _ = sm.poll().unwrap();
+    sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+        .unwrap();
+    let _ = sm.poll().unwrap();
+    let err = sm
+        .on_response(Expectation::AttestationResponse, &[])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        CommissioningError::UnexpectedResponseKind {
+            expected: Expectation::ArmFailsafeResponse,
+            got: Expectation::AttestationResponse,
+        }
+    ));
+    // Wrong-kind does NOT transition to Failed.
+    assert_eq!(sm.stage(), Stage::ArmFailsafe);
+}
