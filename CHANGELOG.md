@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton
+
+#### Added (M6.4.1 — Commissioning state machine skeleton)
+
+- `state_machine` module: cursor-driven `Commissioner` modeled on
+  `connectedhomeip`'s `AutoCommissioner`. Public re-exports of
+  `Stage`, `Action`, `Expectation`, `SessionContext`,
+  `CommissioningError`, `CommissionedFabric`, `Commissioner`,
+  `CommissionerConfig`.
+- `clusters::general_commissioning` codecs for `ArmFailSafe`,
+  `SetRegulatoryConfig`, `CommissioningComplete`, and their responses.
+- M6.4.1 implements stages `SecurePairing` → `ReadCommissioningInfo` →
+  `ArmFailsafe` → `ConfigRegulatory`. Subsequent stages short-circuit
+  to `Failed` with `CdVerificationUnavailable` until M6.4.2 / M6.4.3
+  land.
+- Negative-path matrix (`tests/state_machine_unit.rs`) + proptest
+  totality coverage (256 cases each for `poll_never_panics` and
+  `on_response_never_panics`).
 
 #### Added (M6.3.3 — OpCreds command codecs + matter.js byte-parity)
 
