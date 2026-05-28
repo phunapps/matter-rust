@@ -66,6 +66,19 @@ pub enum AttestationError {
     #[error("PAI is not authorized for DAC's product")]
     PaiVidNotAuthorized,
 
+    /// `attestation_elements` TLV failed to decode or is missing
+    /// required fields (CD bytes, nonce, timestamp).
+    ///
+    /// Returned by
+    /// [`crate::attestation::extract_attestation_elements_fields`] when
+    /// the outer shape is not an anonymous structure, the structure is
+    /// truncated, a required context-tagged field (1 = CD bytes,
+    /// 2 = nonce, 3 = timestamp) is missing or has the wrong wire type,
+    /// the nonce is not exactly 32 bytes, or a required field appears
+    /// more than once.
+    #[error("attestation_elements malformed or missing required fields")]
+    ResponseElementsMalformed,
+
     /// ECDSA verification of the device's attestation-response signature
     /// over `attestation_elements || attestation_challenge` did not
     /// succeed against the DAC public key.

@@ -131,6 +131,112 @@ pub fn verify_attestation_response(
     )
 }
 
+/// Fields extracted from an `attestation_elements` TLV blob per Matter
+/// Core Spec §6.2.4.
+///
+/// Used by the M6.4 state machine to thread the CD bytes into the
+/// M6.4.3 `verify_certification_declaration` call and to confirm the
+/// device echoed back the commissioner's `attestation_nonce`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttestationElementsFields {
+    /// Certification Declaration — opaque CMS/PKCS#7 `SignedData` bytes.
+    /// M6.4.3's `verify_certification_declaration` consumes this.
+    pub certification_declaration: Vec<u8>,
+    /// 32-byte nonce echoed from `AttestationRequest`.
+    pub attestation_nonce: [u8; 32],
+    /// Device's claim of when it produced the response — seconds since
+    /// the Matter epoch (`2000-01-01T00:00:00Z`).
+    pub timestamp_epoch_seconds: u64,
+}
+
+/// Parse the M6.4-relevant fields out of an `attestation_elements`
+/// TLV blob (spec §6.2.4).
+///
+/// Field layout:
+/// - Tag 1: `certification_declaration` (octet string).
+/// - Tag 2: `attestation_nonce` (32-byte octet string).
+/// - Tag 3: `timestamp` (unsigned int, Matter-epoch seconds).
+/// - Tag 4: `firmware_information` (octet string, optional — ignored).
+/// - Tag 5: `vendor_specific` (octet string, optional — ignored).
+///
+/// Unknown tags (including future spec additions and the two optional
+/// fields above) are skipped so forward-compatible devices do not
+/// regress here.
+///
+/// # Errors
+///
+/// Returns [`AttestationError::ResponseElementsMalformed`] if any of
+/// the three required fields is missing, if the TLV outer shape isn't
+/// an anonymous structure, if the nonce isn't exactly 32 bytes, or if
+/// a required field appears more than once.
+pub fn extract_attestation_elements_fields(
+    tlv: &[u8],
+) -> Result<AttestationElementsFields, AttestationError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader
+        .next()
+        .map_err(|_| AttestationError::ResponseElementsMalformed)?
+    {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(AttestationError::ResponseElementsMalformed),
+    }
+    let mut cd: Option<Vec<u8>> = None;
+    let mut nonce: Option<[u8; 32]> = None;
+    let mut ts: Option<u64> = None;
+    loop {
+        match reader
+            .next()
+            .map_err(|_| AttestationError::ResponseElementsMalformed)?
+        {
+            None => return Err(AttestationError::ResponseElementsMalformed),
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Bytes(b),
+            }) => {
+                if cd.is_some() {
+                    return Err(AttestationError::ResponseElementsMalformed);
+                }
+                cd = Some(b);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Bytes(b),
+            }) => {
+                if nonce.is_some() {
+                    return Err(AttestationError::ResponseElementsMalformed);
+                }
+                let arr: [u8; 32] = b
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| AttestationError::ResponseElementsMalformed)?;
+                nonce = Some(arr);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(3),
+                value: Value::Uint(v),
+            }) => {
+                if ts.is_some() {
+                    return Err(AttestationError::ResponseElementsMalformed);
+                }
+                ts = Some(v);
+            }
+            // Forward-compat: ignore unknown fields (firmware_info,
+            // vendor_specific, future tags).
+            Some(_) => {}
+        }
+    }
+    Ok(AttestationElementsFields {
+        certification_declaration: cd.ok_or(AttestationError::ResponseElementsMalformed)?,
+        attestation_nonce: nonce.ok_or(AttestationError::ResponseElementsMalformed)?,
+        timestamp_epoch_seconds: ts.ok_or(AttestationError::ResponseElementsMalformed)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +396,53 @@ mod tests {
         let err = verify_attestation_response(&response, &challenge, &too_short)
             .expect_err("malformed pubkey must fail");
         assert!(matches!(err, AttestationError::BadResponseSignature));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn extract_attestation_elements_fields_happy_path() {
+        // Hand-build attestation_elements per spec §6.2.4:
+        //   { 1: octet_string(cd_bytes),
+        //     2: octet_string(nonce_32),
+        //     3: uint(timestamp_epoch_seconds) }
+        let nonce = [0xAB_u8; 32];
+        let mut tlv = vec![0x15];
+        // Tag 1 (context), octet-string-1byte-length, 3 bytes "CD"
+        tlv.extend_from_slice(&[0x30, 0x01, 0x03, 0xCD, 0xCD, 0xCD]);
+        // Tag 2 (context), octet-string-1byte-length, 32-byte nonce
+        tlv.extend_from_slice(&[0x30, 0x02, 0x20]);
+        tlv.extend_from_slice(&nonce);
+        // Tag 3 (context), u64, value 0x42 (le bytes)
+        tlv.extend_from_slice(&[0x27, 0x03]);
+        tlv.extend_from_slice(&0x42_u64.to_le_bytes());
+        tlv.push(0x18);
+
+        let fields = extract_attestation_elements_fields(&tlv).expect("happy path decodes");
+        assert_eq!(fields.certification_declaration, vec![0xCD, 0xCD, 0xCD]);
+        assert_eq!(fields.attestation_nonce, nonce);
+        assert_eq!(fields.timestamp_epoch_seconds, 0x42);
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn extract_attestation_elements_fields_rejects_malformed() {
+        let err = extract_attestation_elements_fields(&[0xFF]).expect_err("malformed");
+        assert!(matches!(err, AttestationError::ResponseElementsMalformed));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn extract_attestation_elements_fields_rejects_short_nonce() {
+        // Same shape as happy path but nonce is only 16 bytes — should fail.
+        let mut tlv = vec![0x15];
+        tlv.extend_from_slice(&[0x30, 0x01, 0x03, 0xCD, 0xCD, 0xCD]);
+        tlv.extend_from_slice(&[0x30, 0x02, 0x10]); // length=16
+        tlv.extend_from_slice(&[0u8; 16]);
+        tlv.extend_from_slice(&[0x27, 0x03]);
+        tlv.extend_from_slice(&0_u64.to_le_bytes());
+        tlv.push(0x18);
+
+        let err = extract_attestation_elements_fields(&tlv).expect_err("short nonce");
+        assert!(matches!(err, AttestationError::ResponseElementsMalformed));
     }
 }
