@@ -236,6 +236,7 @@ pub fn verify_certification_declaration(
 
 /// Decoded view of the inner Certification Declaration TLV — the
 /// subset the verifier cross-checks today. T30 fleshes out the parser.
+#[derive(Debug)]
 struct ParsedCd {
     /// Vendor ID (Matter Core Spec §6.3.1 tag 1).
     vendor_id: VendorId,
@@ -243,13 +244,95 @@ struct ParsedCd {
     product_ids: Vec<ProductId>,
 }
 
-/// **Placeholder — M6.4.3 T30 fills this in.**
-///
 /// Decode the inner CD TLV per Matter Core Spec §6.3.1: an anonymous
 /// outer structure with context-tagged fields including tag 1
 /// (`vendor_id`, u16) and tag 2 (`product_id_array`, array of u16).
-fn parse_inner_cd_tlv(_tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
-    Err(AttestationError::CertificationDeclarationTlvMalformed)
+///
+/// All other context-tagged fields (`format_version`, `device_type_id`,
+/// `certificate_id`, `security_level`, `security_information`,
+/// `version_number`, `certification_type`) and any future-extension
+/// fields are forward-compat ignored — the verifier only needs VID +
+/// PID for cross-checking against the DAC subject.
+fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+
+    let mut reader = TlvReader::new(tlv);
+    match reader
+        .next()
+        .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?
+    {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(AttestationError::CertificationDeclarationTlvMalformed),
+    }
+
+    let mut vid: Option<VendorId> = None;
+    let mut pids: Vec<ProductId> = Vec::new();
+
+    loop {
+        match reader
+            .next()
+            .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?
+        {
+            None => return Err(AttestationError::CertificationDeclarationTlvMalformed),
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(v),
+            }) => {
+                if vid.is_some() {
+                    return Err(AttestationError::CertificationDeclarationTlvMalformed);
+                }
+                let v16 = u16::try_from(v)
+                    .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?;
+                vid = Some(VendorId::new(v16));
+            }
+            Some(Element::ContainerStart {
+                tag: Tag::Context(2),
+                kind: ContainerKind::Array,
+            }) => {
+                if !pids.is_empty() {
+                    return Err(AttestationError::CertificationDeclarationTlvMalformed);
+                }
+                loop {
+                    match reader
+                        .next()
+                        .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?
+                    {
+                        None => return Err(AttestationError::CertificationDeclarationTlvMalformed),
+                        Some(Element::ContainerEnd) => break,
+                        Some(Element::Scalar {
+                            tag: Tag::Anonymous,
+                            value: Value::Uint(p),
+                        }) => {
+                            let p16 = u16::try_from(p).map_err(|_| {
+                                AttestationError::CertificationDeclarationTlvMalformed
+                            })?;
+                            pids.push(ProductId::new(p16));
+                        }
+                        // Inside the array, unknown shapes are a structural error
+                        // (the spec says product IDs are u16). But be lenient on
+                        // tagged-not-anonymous in case future M6.x extensions land.
+                        Some(_) => {}
+                    }
+                }
+            }
+            // Forward-compat: ignore other context-tagged scalars / containers.
+            Some(_) => {}
+        }
+    }
+
+    let vendor_id = vid.ok_or(AttestationError::CertificationDeclarationTlvMalformed)?;
+    if pids.is_empty() {
+        // product_id_array required to be non-empty per spec §6.3.1.
+        return Err(AttestationError::CertificationDeclarationTlvMalformed);
+    }
+    Ok(ParsedCd {
+        vendor_id,
+        product_ids: pids,
+    })
 }
 
 /// Parse a PEM-encoded `SubjectPublicKeyInfo` for a P-256 public key
@@ -371,5 +454,91 @@ mod tests {
         let trust = CdSigningRoots::from_pem(&[]).unwrap();
         assert!(trust.is_empty());
         assert_eq!(trust.len(), 0);
+    }
+
+    #[test]
+    fn parse_inner_cd_tlv_extracts_vendor_id_and_pid_list() {
+        // Test-code carve-out: see CLAUDE.md.
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap(); // format_version
+        w.put_uint(Tag::Context(1), 0xFFF1).unwrap(); // vendor_id
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8001).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8002).unwrap();
+        w.end_container().unwrap(); // close array
+        w.end_container().unwrap(); // close struct
+
+        let parsed = parse_inner_cd_tlv(&buf).expect("happy path decodes");
+        assert_eq!(parsed.vendor_id, VendorId::new(0xFFF1));
+        assert_eq!(
+            parsed.product_ids,
+            vec![ProductId::new(0x8001), ProductId::new(0x8002)]
+        );
+    }
+
+    #[test]
+    fn parse_inner_cd_tlv_ignores_forward_compat_fields() {
+        // Test-code carve-out: see CLAUDE.md.
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
+        use matter_codec::{Tag, TlvWriter};
+        // Hand-roll a CD with tag 0 (format_version), tag 1 (vid), tag 2 (pids),
+        // tag 3 (device_type_id), tag 4 (certificate_id utf8), tag 5..8 (security_*,
+        // version_number, certification_type), AND a fake tag 99 (future field).
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8001).unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(3), 0x0100).unwrap();
+        w.put_utf8(Tag::Context(4), "CSA-ID").unwrap();
+        w.put_uint(Tag::Context(5), 0).unwrap();
+        w.put_uint(Tag::Context(6), 0).unwrap();
+        w.put_uint(Tag::Context(7), 1).unwrap();
+        w.put_uint(Tag::Context(8), 0).unwrap();
+        w.put_uint(Tag::Context(99), 0xDEAD).unwrap(); // unknown future field
+        w.end_container().unwrap();
+
+        let parsed = parse_inner_cd_tlv(&buf).expect("forward-compat decode");
+        assert_eq!(parsed.vendor_id, VendorId::new(0xFFF1));
+        assert_eq!(parsed.product_ids, vec![ProductId::new(0x8001)]);
+    }
+
+    #[test]
+    fn parse_inner_cd_tlv_rejects_missing_vid() {
+        // Test-code carve-out: see CLAUDE.md.
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        // No tag 1 (vendor_id).
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8001).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        let err = parse_inner_cd_tlv(&buf).expect_err("missing vid rejected");
+        assert!(matches!(
+            err,
+            AttestationError::CertificationDeclarationTlvMalformed
+        ));
+    }
+
+    #[test]
+    fn parse_inner_cd_tlv_rejects_garbage() {
+        // Test-code carve-out: see CLAUDE.md.
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
+        let err = parse_inner_cd_tlv(&[0xFF]).expect_err("garbage rejected");
+        assert!(matches!(
+            err,
+            AttestationError::CertificationDeclarationTlvMalformed
+        ));
     }
 }
