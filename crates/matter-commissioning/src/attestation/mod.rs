@@ -63,6 +63,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cd;
 pub mod chain;
 pub mod error;
 pub mod extensions;
@@ -70,6 +71,7 @@ pub mod response;
 pub mod trust_store;
 pub mod x509;
 
+pub use cd::{verify_certification_declaration, CdSigningRoots};
 pub use chain::{verify_chain, ChainVerification};
 pub use error::AttestationError;
 pub use extensions::{ProductId, VendorId};
