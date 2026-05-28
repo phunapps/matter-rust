@@ -106,6 +106,12 @@ pub struct Commissioner {
     /// Cached pending Action so repeated `poll()` calls between
     /// `on_response`s are idempotent. Cleared when the cursor advances.
     pending_action: Option<Action>,
+
+    /// Rendered summary of why the state machine entered `Failed`,
+    /// stashed by `on_response`'s error path and read by the
+    /// `Stage::Failed` arm of `dispatch_stage` so `Action::Abort.reason`
+    /// surfaces the real failure (not a hard-coded placeholder).
+    last_failure: Option<String>,
 }
 
 impl Commissioner {
@@ -153,6 +159,7 @@ impl Commissioner {
             rng: cfg.rng,
             awaiting: None,
             pending_action: None,
+            last_failure: None,
         })
     }
 
@@ -250,9 +257,13 @@ impl Commissioner {
                 // Subsequent poll() after a failure surfaces the Abort.
                 // The state machine stays in Failed.
                 self.awaiting = None;
+                let reason = self
+                    .last_failure
+                    .clone()
+                    .unwrap_or_else(|| CommissioningError::CdVerificationUnavailable.to_string());
                 Ok(Action::Abort {
                     send_disarm_failsafe: true,
-                    reason: CommissioningError::CdVerificationUnavailable.to_string(),
+                    reason,
                 })
             }
             // Stages past ConfigRegulatory land in M6.4.2+ sub-phases.
@@ -260,10 +271,132 @@ impl Commissioner {
             // emits a self-consistent (if intentionally incomplete)
             // Abort sequence.
             _ => {
+                self.last_failure = Some(CommissioningError::CdVerificationUnavailable.to_string());
                 self.stage = Stage::Failed;
                 self.awaiting = None;
                 self.pending_action = None;
                 Err(CommissioningError::CdVerificationUnavailable)
+            }
+        }
+    }
+
+    /// Feed a response payload back into the state machine.
+    ///
+    /// `expect` MUST match the [`Expectation`] from the last `poll()`'s
+    /// emitted `Action`.
+    ///
+    /// # Errors
+    ///
+    /// - [`CommissioningError::OutOfOrderResponse`] if the state machine
+    ///   isn't currently waiting for a response.
+    /// - [`CommissioningError::UnexpectedResponseKind`] if `expect`
+    ///   doesn't match the last `Action`'s `Expectation`. The cursor
+    ///   does not advance.
+    /// - [`CommissioningError::MalformedResponse`] if `payload` fails
+    ///   to decode at the cluster-command level.
+    /// - [`CommissioningError::DeviceImStatus`] if the device returned a
+    ///   non-OK Interaction Model status.
+    ///
+    /// Any error other than `OutOfOrderResponse` and
+    /// `UnexpectedResponseKind` transitions the cursor to
+    /// [`Stage::Failed`]; the next `poll()` call emits
+    /// [`Action::Abort`] with a rendered summary.
+    pub fn on_response(
+        &mut self,
+        expect: Expectation,
+        payload: &[u8],
+    ) -> Result<(), CommissioningError> {
+        let Some(awaiting) = self.awaiting else {
+            return Err(CommissioningError::OutOfOrderResponse(self.stage));
+        };
+        if awaiting != expect {
+            return Err(CommissioningError::UnexpectedResponseKind {
+                expected: awaiting,
+                got: expect,
+            });
+        }
+        match self.handle_response(expect, payload) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.last_failure = Some(err.to_string());
+                self.stage = Stage::Failed;
+                self.awaiting = None;
+                self.pending_action = None;
+                Err(err)
+            }
+        }
+    }
+
+    fn handle_response(
+        &mut self,
+        expect: Expectation,
+        payload: &[u8],
+    ) -> Result<(), CommissioningError> {
+        use crate::clusters::general_commissioning as gc;
+        match expect {
+            Expectation::CommissioningInfo => {
+                // M6.4.1: accept any well-formed TLV. Future sub-phases
+                // may parse BasicCommissioningInfo to extract
+                // failsafe_expiry_length_seconds + regulatory caps.
+                Self::assert_tlv_well_formed(self.stage, payload)?;
+                self.advance(Stage::ArmFailsafe);
+                Ok(())
+            }
+            Expectation::ArmFailsafeResponse => {
+                let resp = gc::decode_arm_fail_safe_response(payload)?;
+                if resp.error_code != 0 {
+                    return Err(CommissioningError::DeviceImStatus {
+                        stage: Stage::ArmFailsafe,
+                        im_status: u16::from(resp.error_code),
+                    });
+                }
+                self.advance(Stage::ConfigRegulatory);
+                Ok(())
+            }
+            Expectation::SetRegulatoryConfigResponse => {
+                let resp = gc::decode_set_regulatory_config_response(payload)?;
+                if resp.error_code != 0 {
+                    return Err(CommissioningError::DeviceImStatus {
+                        stage: Stage::ConfigRegulatory,
+                        im_status: u16::from(resp.error_code),
+                    });
+                }
+                self.advance(Stage::SendPaiCertRequest);
+                Ok(())
+            }
+            // Other Expectations land in M6.4.2+ sub-phases.
+            _ => Err(CommissioningError::OutOfOrderResponse(self.stage)),
+        }
+    }
+
+    fn advance(&mut self, next: Stage) {
+        self.stage = next;
+        self.awaiting = None;
+        self.pending_action = None;
+    }
+
+    fn assert_tlv_well_formed(stage: Stage, payload: &[u8]) -> Result<(), CommissioningError> {
+        use matter_codec::{ContainerKind, Element, Tag, TlvReader};
+        let mut reader = TlvReader::new(payload);
+        match reader
+            .next()
+            .map_err(|_| CommissioningError::MalformedResponse(stage))?
+        {
+            Some(Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Structure,
+            }) => {}
+            _ => return Err(CommissioningError::MalformedResponse(stage)),
+        }
+        // Walk to ContainerEnd; ignore contents for M6.4.1.
+        loop {
+            match reader
+                .next()
+                .map_err(|_| CommissioningError::MalformedResponse(stage))?
+            {
+                None => return Err(CommissioningError::MalformedResponse(stage)),
+                Some(Element::ContainerEnd) => return Ok(()),
+                Some(_) => {}
             }
         }
     }
@@ -470,5 +603,147 @@ mod tests {
             }
             other => panic!("idempotent poll returned different variants: {other:?}"),
         }
+    }
+
+    #[test]
+    fn full_happy_path_through_config_regulatory_emits_abort_at_pai_request() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+
+        // SecurePairing → ReadCommissioningInfo
+        let _ = sm.poll().expect("poll #1");
+        let canned_info = encode_read_commissioning_info_response();
+        sm.on_response(Expectation::CommissioningInfo, &canned_info)
+            .expect("commissioning info accepted");
+        assert_eq!(sm.stage(), Stage::ArmFailsafe);
+
+        // ArmFailsafe
+        let _ = sm.poll().expect("poll #2");
+        sm.on_response(
+            Expectation::ArmFailsafeResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18],
+        )
+        .expect("arm failsafe ok");
+        assert_eq!(sm.stage(), Stage::ConfigRegulatory);
+
+        // ConfigRegulatory
+        let _ = sm.poll().expect("poll #3");
+        sm.on_response(
+            Expectation::SetRegulatoryConfigResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18],
+        )
+        .expect("config regulatory ok");
+        assert_eq!(sm.stage(), Stage::SendPaiCertRequest);
+
+        // Next poll() short-circuits to Failed with CdVerificationUnavailable.
+        let err = sm
+            .poll()
+            .expect_err("M6.4.1 short-circuits past ConfigRegulatory");
+        assert!(matches!(err, CommissioningError::CdVerificationUnavailable));
+        assert_eq!(sm.stage(), Stage::Failed);
+
+        // Subsequent poll emits Action::Abort with the rendered reason.
+        match sm.poll().expect("abort emission") {
+            Action::Abort {
+                send_disarm_failsafe,
+                reason,
+            } => {
+                assert!(send_disarm_failsafe);
+                assert!(reason.contains("M6.4.3"), "reason was {reason}");
+            }
+            other => panic!("expected Abort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn arm_failsafe_busy_response_aborts_with_device_im_status() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        let _ = sm.poll().expect("poll info");
+        sm.on_response(
+            Expectation::CommissioningInfo,
+            &encode_read_commissioning_info_response(),
+        )
+        .expect("commissioning info ok");
+        let _ = sm.poll().expect("poll arm failsafe");
+        // Device returns BusyWithOtherAdmin: error_code = 4 (spec §11.10.5.1).
+        let err = sm
+            .on_response(
+                Expectation::ArmFailsafeResponse,
+                &[0x15, 0x24, 0x00, 0x04, 0x18],
+            )
+            .expect_err("busy should fail");
+        assert!(matches!(
+            err,
+            CommissioningError::DeviceImStatus {
+                stage: Stage::ArmFailsafe,
+                im_status: 4,
+            }
+        ));
+        assert_eq!(sm.stage(), Stage::Failed);
+        match sm.poll().expect("abort emission") {
+            Action::Abort {
+                send_disarm_failsafe,
+                reason,
+            } => {
+                assert!(send_disarm_failsafe);
+                assert!(reason.contains("ArmFailsafe"), "reason was {reason}");
+                assert!(reason.contains("0x4"), "reason was {reason}");
+            }
+            other => panic!("expected Abort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_of_order_response_returns_error_without_advancing() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        // No poll called — state machine isn't waiting on anything.
+        let err = sm
+            .on_response(Expectation::ArmFailsafeResponse, &[])
+            .expect_err("should reject out-of-order");
+        assert!(matches!(err, CommissioningError::OutOfOrderResponse(_)));
+        assert_eq!(sm.stage(), Stage::SecurePairing);
+    }
+
+    #[test]
+    fn wrong_expectation_returns_unexpected_response_kind() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        let _ = sm.poll().expect("poll");
+        let err = sm
+            .on_response(Expectation::ArmFailsafeResponse, &[])
+            .expect_err("wrong kind should fail");
+        assert!(matches!(
+            err,
+            CommissioningError::UnexpectedResponseKind {
+                expected: Expectation::CommissioningInfo,
+                got: Expectation::ArmFailsafeResponse,
+            }
+        ));
+        // Wrong-kind does NOT advance the cursor.
+        assert_eq!(sm.stage(), Stage::ReadCommissioningInfo);
+    }
+
+    fn encode_read_commissioning_info_response() -> Vec<u8> {
+        // Minimal well-formed anonymous struct. M6.4.1 doesn't parse
+        // individual attributes yet.
+        vec![0x15, 0x18]
     }
 }
