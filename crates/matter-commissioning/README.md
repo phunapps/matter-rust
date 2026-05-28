@@ -118,6 +118,80 @@ key blob (exposed as `CaseSessionKeys::attestation_challenge` or
 `PaseSessionKeys::attestation_key`). Any verification failure folds
 into the single coarse `AttestationError::BadResponseSignature`.
 
+## Example: drive the early commissioning stages (M6.4.1)
+
+```rust,no_run
+use std::sync::Arc;
+
+use matter_cert::time::MatterTime;
+use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
+use matter_commissioning::{
+    Action, Commissioner, CommissionerConfig, Expectation, PaaTrustStore, SetupPayload,
+};
+use matter_crypto::{RingSigner, Signer};
+
+# fn run(
+#     pase_attestation_challenge: [u8; 16],
+#     setup: &SetupPayload,
+# ) -> Result<(), Box<dyn std::error::Error>> {
+let (signer, _pkcs8) = RingSigner::generate()?;
+let signer: Arc<dyn Signer> = Arc::new(signer);
+let rng_for_fabric = SystemNocRng;
+let fabric = FabricRecord::new_root_only(
+    /* fabric_id */ 0x0000_0000_0000_0001,
+    signer,
+    MatterTime::from_unix_secs(1_704_067_200),
+    MatterTime::from_unix_secs(1_735_689_600),
+    /* rcac_id */ 0xDEAD_BEEF_CAFE_F00D,
+    &rng_for_fabric,
+)?;
+
+let paa = PaaTrustStore::with_csa_test_roots();
+let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+let cfg = CommissionerConfig {
+    pase_attestation_challenge,
+    fabric: &fabric,
+    setup_payload: setup,
+    paa_trust_store: &paa,
+    commissioner_node_id: 0x1,
+    assigned_node_id: 0x2,
+    ipk_epoch_key: [0x42_u8; 16],
+    case_admin_subject: 0x1,
+    admin_vendor_id: 0xFFF1,
+    now: MatterTime::from_unix_secs(1_704_067_200),
+    rng,
+};
+let mut sm = Commissioner::new(cfg)?;
+loop {
+    match sm.poll()? {
+        Action::ReadAttribute { expect, .. } | Action::Invoke { expect, .. } => {
+            // The caller (M6.6 driver) frames the request into an
+            // Invoke/Read envelope, routes via matter-transport over
+            // the PASE session, and feeds the decoded response back:
+            let response_bytes: &[u8] = unimplemented!("driver supplies the bytes");
+            sm.on_response(expect, response_bytes)?;
+        }
+        Action::Abort { send_disarm_failsafe, reason } => {
+            eprintln!("commissioning aborted at {:?}: {reason}", sm.stage());
+            if send_disarm_failsafe {
+                // ... send DisarmFailsafe (ArmFailSafe with expiry=0) over PASE ...
+            }
+            break;
+        }
+        Action::Done(_) => break,
+        other => unreachable!("M6.4.1 doesn't emit {other:?} yet"),
+    }
+}
+# Ok(())
+# }
+```
+
+M6.4.1 only drives `SecurePairing` → `ReadCommissioningInfo` →
+`ArmFailsafe` → `ConfigRegulatory`. Stages past `ConfigRegulatory`
+short-circuit to `Action::Abort` with reason
+`CdVerificationUnavailable` until M6.4.2 lands the attestation flow
+and M6.4.3 lands CD verification.
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from
