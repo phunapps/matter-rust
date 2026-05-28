@@ -11,7 +11,7 @@ use crate::state_machine::stage::Stage;
 ///
 /// All variants are `#[non_exhaustive]` — future sub-phases or future
 /// milestones (M6.5 network commissioning, etc.) can add variants
-/// without breaking SemVer.
+/// without breaking `SemVer`.
 ///
 /// `CommissioningError` is intentionally **not** `Clone`. The summary
 /// emitted in [`super::Action::Abort`] is a pre-rendered `String`, so

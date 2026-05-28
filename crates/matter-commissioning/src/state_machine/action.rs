@@ -23,6 +23,10 @@ pub enum SessionContext {
 /// Returned by [`super::Commissioner::poll`]. The state machine is
 /// idempotent: calling `poll` twice without an intervening `on_response`
 /// returns the same `Action`.
+// `Done(CommissionedFabric)` is intentionally large (~130 B) but is emitted
+// exactly once per successful commission — boxing it would force an alloc on
+// the happy path with no real benefit.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum Action {
@@ -35,8 +39,8 @@ pub enum Action {
         session: SessionContext,
         /// Matter endpoint (always `0` for commissioning).
         endpoint: u16,
-        /// Cluster ID (`0x0030` GeneralCommissioning or `0x003E`
-        /// OperationalCredentials for all M6.4 stages).
+        /// Cluster ID (`0x0030` `GeneralCommissioning` or `0x003E`
+        /// `OperationalCredentials` for all M6.4 stages).
         cluster: u32,
         /// Cluster command ID.
         command: u32,
@@ -65,7 +69,7 @@ pub enum Action {
     ///
     /// **Reserved for M8 multi-fabric work; never emitted by M6.4's
     /// state machine.** Kept in the enum so M8 can wire eviction in
-    /// without a SemVer bump.
+    /// without a `SemVer` bump.
     EvictCase {
         /// Fabric ID to evict on.
         fabric_id: u64,
@@ -116,8 +120,8 @@ pub enum Action {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Expectation {
-    /// Response to `Action::ReadAttribute` for BasicCommissioningInfo +
-    /// RegulatoryConfig + CapabilityMinima.
+    /// Response to `Action::ReadAttribute` for `BasicCommissioningInfo` +
+    /// `RegulatoryConfig` + `CapabilityMinima`.
     CommissioningInfo,
     /// `GeneralCommissioning::ArmFailSafeResponse` (cluster `0x0030`,
     /// response `0x01`).
@@ -201,9 +205,8 @@ mod tests {
 
     #[test]
     fn expectation_is_copy() {
-        let e = Expectation::ArmFailsafeResponse;
-        let _e_copy = e;
-        let _e_copy_again = e;
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<Expectation>();
     }
 
     #[test]

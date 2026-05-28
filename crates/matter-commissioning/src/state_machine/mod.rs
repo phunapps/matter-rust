@@ -18,5 +18,7 @@ mod stage;
 
 pub use action::{Action, CommissionedFabric, Expectation, SessionContext};
 pub use error::CommissioningError;
+// Used by Commissioner::advance from M6.4.1 T6 onward.
+#[allow(unused_imports)]
 pub(crate) use stage::next_stage;
 pub use stage::Stage;

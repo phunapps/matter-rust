@@ -82,6 +82,9 @@ pub enum Stage {
 /// Used by [`super::Commissioner`] to advance the cursor after a stage
 /// completes successfully. Errors at any stage transition the cursor
 /// directly to [`Stage::Failed`] rather than calling this function.
+// Used by Commissioner::advance from M6.4.1 T6 onward.
+#[allow(dead_code)]
+#[allow(unreachable_pub)]
 #[must_use]
 pub fn next_stage(current: Stage) -> Option<Stage> {
     Some(match current {
