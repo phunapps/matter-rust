@@ -55,11 +55,11 @@ impl CdSigningRoots {
     /// commissioners supply CSA-published roots via
     /// [`Self::from_pem`].
     ///
-    /// While M6.4.3 T28 is the active milestone, `parse_pem_public_key`
-    /// is a placeholder that always errors, so this constructor
-    /// returns an empty trust store. M6.4.3 T29 replaces the
-    /// placeholder with a real PEM `SubjectPublicKeyInfo` parser, at
-    /// which point the store will load exactly one bundled root.
+    /// The bundled PEM is a compile-time constant, so parsing it should
+    /// never fail at runtime; if it ever does (e.g. someone replaces
+    /// the file with garbage), the store is returned empty rather than
+    /// panicking, and the verifier will reject every signature with
+    /// [`AttestationError::CertificationDeclarationSignatureInvalid`].
     #[must_use]
     pub fn with_csa_test_roots() -> Self {
         let pk = parse_pem_public_key(CSA_TEST_CD_SIGNING_ROOT_PEM).ok();
@@ -75,8 +75,7 @@ impl CdSigningRoots {
     /// # Errors
     ///
     /// Returns [`AttestationError::CertificationDeclarationMalformed`]
-    /// if any input fails to parse. While M6.4.3 T29 is unimplemented,
-    /// every non-empty input fails. An empty slice returns an empty
+    /// if any input fails to parse. An empty slice returns an empty
     /// trust store.
     pub fn from_pem(pems: &[&[u8]]) -> Result<Self, AttestationError> {
         let mut public_keys = Vec::with_capacity(pems.len());
@@ -253,14 +252,68 @@ fn parse_inner_cd_tlv(_tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
     Err(AttestationError::CertificationDeclarationTlvMalformed)
 }
 
-/// **Placeholder — M6.4.3 T29 fills this in.**
-///
 /// Parse a PEM-encoded `SubjectPublicKeyInfo` for a P-256 public key
 /// and return the SEC1 uncompressed point (65 bytes:
 /// `0x04 || X || Y`) suitable for `ring`'s
 /// `UnparsedPublicKey<ECDSA_P256_SHA256_FIXED>`.
-fn parse_pem_public_key(_pem: &[u8]) -> Result<Vec<u8>, AttestationError> {
-    Err(AttestationError::CertificationDeclarationMalformed)
+///
+/// Strips the `-----BEGIN PUBLIC KEY-----` / `-----END PUBLIC KEY-----`
+/// armor, base64-decodes the body, and slices the trailing 65 bytes of
+/// the DER (the SEC1 uncompressed point inside the SPKI's `BIT
+/// STRING`). The point's `0x04` marker byte is checked here; ring's
+/// `UnparsedPublicKey` rejects any malformed point at signature-verify
+/// time as a second line of defense.
+fn parse_pem_public_key(pem: &[u8]) -> Result<Vec<u8>, AttestationError> {
+    use base64::Engine;
+
+    const HEADER: &str = "-----BEGIN PUBLIC KEY-----";
+    const FOOTER: &str = "-----END PUBLIC KEY-----";
+
+    let pem_str = std::str::from_utf8(pem)
+        .map_err(|_| AttestationError::CertificationDeclarationMalformed)?;
+
+    let header_start = pem_str
+        .find(HEADER)
+        .ok_or(AttestationError::CertificationDeclarationMalformed)?;
+    let body_start = header_start + HEADER.len();
+    let footer_start = pem_str
+        .find(FOOTER)
+        .ok_or(AttestationError::CertificationDeclarationMalformed)?;
+    if footer_start <= body_start {
+        return Err(AttestationError::CertificationDeclarationMalformed);
+    }
+
+    // Strip all whitespace from the base64 body.
+    let body: String = pem_str[body_start..footer_start]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    let der = base64::engine::general_purpose::STANDARD
+        .decode(body.as_bytes())
+        .map_err(|_| AttestationError::CertificationDeclarationMalformed)?;
+
+    // Extract the SEC1 uncompressed point from the SubjectPublicKeyInfo.
+    // The structure for a P-256 SPKI is exactly 91 bytes:
+    //   30 59                        SEQUENCE (89)
+    //   30 13                          SEQUENCE (19)
+    //     06 07 2A 86 48 CE 3D 02 01   OID ecPublicKey
+    //     06 08 2A 86 48 CE 3D 03 01 07 OID prime256v1
+    //   03 42 00                       BIT STRING (66 bytes, 0 unused bits)
+    //   04 XX...XX                     SEC1 uncompressed point (65 bytes)
+    //                                  starting with 0x04
+    //
+    // The SEC1 point is the last 65 bytes. We validate the marker byte
+    // and let `ring::UnparsedPublicKey::new` reject malformed bytes
+    // later if the prefix is corrupt.
+    if der.len() < 65 {
+        return Err(AttestationError::CertificationDeclarationMalformed);
+    }
+    let point = &der[der.len() - 65..];
+    if point[0] != 0x04 {
+        return Err(AttestationError::CertificationDeclarationMalformed);
+    }
+    Ok(point.to_vec())
 }
 
 /// Verify an ECDSA-P256 / SHA-256 signature in fixed (raw r||s, 64
@@ -287,17 +340,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn with_csa_test_roots_constructs_at_t28_with_empty_store() {
-        // M6.4.3 T29 replaces parse_pem_public_key with a real PEM
-        // parser, at which point this assertion tightens to
-        // `assert_eq!(trust.len(), 1)`. For T28's placeholder shape,
-        // the constructor must not panic and must return a trust store
-        // (possibly empty).
+    fn with_csa_test_roots_loads_bundled_root() {
         let trust = CdSigningRoots::with_csa_test_roots();
-        assert!(
-            trust.len() <= 1,
-            "T28 placeholder yields 0 roots; T29 yields exactly 1"
-        );
+        assert_eq!(trust.len(), 1);
+        assert!(!trust.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_pem_public_key_extracts_65_byte_sec1_point() {
+        const PEM: &[u8] = include_bytes!("./csa_cd_signing_roots/csa-test-cd-signing-root.pem");
+        let key = parse_pem_public_key(PEM).expect("happy path parses");
+        assert_eq!(key.len(), 65, "SEC1 uncompressed P-256 point");
+        assert_eq!(key[0], 0x04, "uncompressed-point marker byte");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_pem_public_key_rejects_garbage() {
+        let err = parse_pem_public_key(b"not a PEM").expect_err("garbage rejected");
+        assert!(matches!(
+            err,
+            AttestationError::CertificationDeclarationMalformed
+        ));
     }
 
     #[test]
