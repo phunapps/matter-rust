@@ -34,6 +34,163 @@ pub struct NocResponse {
     pub debug_text: Option<String>,
 }
 
+/// Encode `AttestationRequest` (spec §11.18.5.1).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_attestation_request(nonce: &[u8; 32]) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), nonce)
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Decode `AttestationResponse` (spec §11.18.5.2).
+///
+/// Returns the existing `crate::attestation::AttestationResponse`
+/// struct — both fields (the opaque `attestation_elements` TLV blob
+/// and the 64-byte raw ECDSA signature) are populated from the wire
+/// payload's context-tagged fields 0 and 1.
+///
+/// # Errors
+///
+/// Returns [`NocError::ClusterCodec`] on malformed input — including a
+/// signature payload that is not exactly 64 bytes.
+pub fn decode_attestation_response(
+    tlv: &[u8],
+) -> Result<crate::attestation::AttestationResponse, NocError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+    }
+    let mut elements: Option<Vec<u8>> = None;
+    let mut sig: Option<[u8; 64]> = None;
+    loop {
+        match reader.next()? {
+            None => {
+                return Err(NocError::ClusterCodec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Bytes(b),
+            }) => {
+                if elements.is_some() {
+                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                }
+                elements = Some(b);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Bytes(b),
+            }) => {
+                if sig.is_some() {
+                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                }
+                let arr: [u8; 64] = b
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                sig = Some(arr);
+            }
+            // Forward-compat: ignore unknown future fields.
+            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        }
+    }
+    Ok(crate::attestation::AttestationResponse {
+        attestation_elements: elements
+            .ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        signature: sig.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+    })
+}
+
+/// Argument to `CertificateChainRequest` (spec §11.18.5.4).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CertChainType {
+    /// PAI (Product Attestation Intermediate) certificate.
+    Pai = 0x01,
+    /// DAC (Device Attestation Certificate).
+    Dac = 0x02,
+}
+
+/// Decoded `CertificateChainResponse` (spec §11.18.5.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertificateChainResponse {
+    /// Raw DER bytes of the requested certificate.
+    pub certificate: Vec<u8>,
+}
+
+/// Encode `CertificateChainRequest` (spec §11.18.5.3).
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_certificate_chain_request(cert_type: CertChainType) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(cert_type as u8))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Decode `CertificateChainResponse` (spec §11.18.5.4).
+///
+/// # Errors
+///
+/// Returns [`NocError::ClusterCodec`] on malformed input.
+pub fn decode_certificate_chain_response(tlv: &[u8]) -> Result<CertificateChainResponse, NocError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader.next()? {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+    }
+    let mut cert: Option<Vec<u8>> = None;
+    loop {
+        match reader.next()? {
+            None => {
+                return Err(NocError::ClusterCodec(
+                    matter_codec::Error::UnclosedContainer,
+                ))
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Bytes(b),
+            }) => {
+                if cert.is_some() {
+                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                }
+                cert = Some(b);
+            }
+            // Forward-compat: ignore unknown future fields.
+            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        }
+    }
+    Ok(CertificateChainResponse {
+        certificate: cert.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+    })
+}
+
 /// Encode `CSRRequest` (spec §11.18.5.5).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
@@ -413,6 +570,60 @@ mod tests {
             }) => {}
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn attestation_request_emits_anonymous_struct_with_32_byte_nonce() {
+        let nonce = [0xAB_u8; 32];
+        let bytes = encode_attestation_request(&nonce);
+        // Anonymous struct: 0x15 ... 0x18.
+        assert_eq!(bytes[0], 0x15);
+        assert_eq!(*bytes.last().expect("non-empty"), 0x18);
+        // Octet-string at context tag 0, 1-byte length, 32-byte payload.
+        // Control octet for "octet-string with 1-byte length" + context tag = 0x30.
+        assert_eq!(bytes[1], 0x30);
+        assert_eq!(bytes[2], 0x00);
+        assert_eq!(bytes[3], 0x20);
+        assert_eq!(&bytes[4..4 + 32], &nonce);
+    }
+
+    #[test]
+    fn attestation_response_round_trips() {
+        let elements = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let sig = [0x42_u8; 64];
+        // Hand-build: { 0: octet_string(elements), 1: octet_string(sig) }
+        let mut tlv = vec![0x15];
+        tlv.extend_from_slice(&[0x30, 0x00, 0x04]); // octet-string, ctx 0, len 4
+        tlv.extend_from_slice(&elements);
+        tlv.extend_from_slice(&[0x30, 0x01, 0x40]); // octet-string, ctx 1, len 64
+        tlv.extend_from_slice(&sig);
+        tlv.push(0x18);
+        let resp = decode_attestation_response(&tlv).expect("decode happy path");
+        assert_eq!(resp.attestation_elements, elements);
+        assert_eq!(resp.signature, sig);
+    }
+
+    #[test]
+    fn cert_chain_request_pai_matches_spec_bytes() {
+        // Spec §11.18.5.3: anonymous struct with single field at context
+        // tag 0 carrying CertificateChainTypeEnum (u8). 0x01 = PAI.
+        let bytes = encode_certificate_chain_request(CertChainType::Pai);
+        assert_eq!(bytes, vec![0x15, 0x24, 0x00, 0x01, 0x18]);
+    }
+
+    #[test]
+    fn cert_chain_request_dac_matches_spec_bytes() {
+        // 0x02 = DAC.
+        let bytes = encode_certificate_chain_request(CertChainType::Dac);
+        assert_eq!(bytes, vec![0x15, 0x24, 0x00, 0x02, 0x18]);
+    }
+
+    #[test]
+    fn cert_chain_response_round_trips_der_payload() {
+        // { 0: octet_string([0xAA, 0xBB, 0xCC]) }
+        let tlv = vec![0x15, 0x30, 0x00, 0x03, 0xAA, 0xBB, 0xCC, 0x18];
+        let resp = decode_certificate_chain_response(&tlv).expect("decode happy path");
+        assert_eq!(resp.certificate, vec![0xAA, 0xBB, 0xCC]);
     }
 
     #[test]

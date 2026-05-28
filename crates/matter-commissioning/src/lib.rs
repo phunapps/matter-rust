@@ -13,11 +13,14 @@
 //!   byte-parity capture.
 //! - **M6.2.4–M6.2.6:** see [`attestation`].
 //! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
-//! - **M6.4.1 (current):** ten-stage commissioning state machine — see
-//!   [`state_machine`]. M6.4.1 ships `SecurePairing` →
-//!   `ReadCommissioningInfo` → `ArmFailsafe` → `ConfigRegulatory`;
-//!   further stages short-circuit to `Failed { CdVerificationUnavailable }`
-//!   until M6.4.2 lands.
+//! - **M6.4.2 (current):** attestation on-wire flow + off-wire
+//!   `AttestationVerification`. State machine drives
+//!   `SendPaiCertRequest` → `SendDacCertRequest` →
+//!   `SendAttestationRequest` → `AttestationVerification`, chaining
+//!   M6.2's `verify_chain` + `verify_attestation_response` + the new
+//!   `extract_attestation_elements_fields` helper. The CD-verify step
+//!   is intentionally absent — the verifier returns
+//!   `CdVerificationUnavailable` until M6.4.3 lands.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!
@@ -54,15 +57,18 @@ pub use setup::{
 };
 
 pub use attestation::{
-    verify_attestation_response, verify_chain, verify_dac_signed_elements, AttestationError,
-    AttestationResponse, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
+    extract_attestation_elements_fields, verify_attestation_response, verify_chain,
+    verify_dac_signed_elements, AttestationElementsFields, AttestationError, AttestationResponse,
+    ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
 };
 
 pub use noc::{
-    decode_csr_response, decode_noc_response, encode_add_noc, encode_add_trusted_root,
-    encode_csr_request, encode_update_noc, issue_noc, parse_and_verify_csr, parse_nocsr,
-    verify_csr_response, CsrResponse, FabricRecord, NocError, NocResponse, NocRng, NocsrElements,
-    ParsedCsr, SystemNocRng, VerifiedCsr,
+    decode_attestation_response, decode_certificate_chain_response, decode_csr_response,
+    decode_noc_response, encode_add_noc, encode_add_trusted_root, encode_attestation_request,
+    encode_certificate_chain_request, encode_csr_request, encode_update_noc, issue_noc,
+    parse_and_verify_csr, parse_nocsr, verify_csr_response, CertChainType,
+    CertificateChainResponse, CsrResponse, FabricRecord, NocError, NocResponse, NocRng,
+    NocsrElements, ParsedCsr, SystemNocRng, VerifiedCsr,
 };
 
 pub use state_machine::{

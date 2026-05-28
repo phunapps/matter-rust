@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow
+
+#### Added (M6.4.2 — Attestation on-wire flow + verifier glue, CD-incomplete)
+
+- `noc::commands`: `CertChainType` enum + `encode_certificate_chain_request` /
+  `decode_certificate_chain_response` (OpCreds CertificateChainRequest);
+  `encode_attestation_request` / `decode_attestation_response`
+  (OpCreds AttestationRequest).
+- `attestation::extract_attestation_elements_fields` +
+  `AttestationElementsFields` — parses the device's `attestation_elements`
+  TLV blob into CD bytes + 32-byte nonce + timestamp; new
+  `AttestationError::ResponseElementsMalformed` variant.
+- State machine: four new stages (`SendPaiCertRequest`, `SendDacCertRequest`,
+  `SendAttestationRequest`, off-wire `AttestationVerification`) wired into
+  `Commissioner`. The off-wire stage chains M6.2's `verify_chain` +
+  `verify_attestation_response` + the nonce-echo check.
+- CD verification is intentionally absent — the off-wire stage returns
+  `CommissioningError::CdVerificationUnavailable` until M6.4.3 lands the
+  CMS-based CD verifier. The state machine refuses to advance past
+  attestation without CD verification.
+- Negative-path coverage for tampered PAI DER + the `#[ignore]`-d
+  integration test placeholder pending captured DAC/PAI/AttestationResponse
+  fixtures.
 
 #### Added (M6.4.1 — Commissioning state machine skeleton)
 
