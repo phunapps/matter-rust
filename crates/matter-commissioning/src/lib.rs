@@ -13,11 +13,14 @@
 //!   byte-parity capture.
 //! - **M6.2.4–M6.2.6:** see [`attestation`].
 //! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
-//! - **M6.4.1 (current):** ten-stage commissioning state machine — see
-//!   [`state_machine`]. M6.4.1 ships `SecurePairing` →
-//!   `ReadCommissioningInfo` → `ArmFailsafe` → `ConfigRegulatory`;
-//!   further stages short-circuit to `Failed { CdVerificationUnavailable }`
-//!   until M6.4.2 lands.
+//! - **M6.4.2 (current):** attestation on-wire flow + off-wire
+//!   `AttestationVerification`. State machine drives
+//!   `SendPaiCertRequest` → `SendDacCertRequest` →
+//!   `SendAttestationRequest` → `AttestationVerification`, chaining
+//!   M6.2's `verify_chain` + `verify_attestation_response` + the new
+//!   `extract_attestation_elements_fields` helper. The CD-verify step
+//!   is intentionally absent — the verifier returns
+//!   `CdVerificationUnavailable` until M6.4.3 lands.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!

@@ -192,6 +192,55 @@ short-circuit to `Action::Abort` with reason
 `CdVerificationUnavailable` until M6.4.2 lands the attestation flow
 and M6.4.3 lands CD verification.
 
+## Example: attestation flow up to the CD-verify gap (M6.4.2)
+
+The same driver loop from the M6.4.1 example works unchanged — after
+`ConfigRegulatory` the state machine emits four more `Action::Invoke`
+calls (PAI cert, DAC cert, AttestationRequest) and one off-wire
+`AttestationVerification` step. The verifier short-circuits at the
+CD-verify step:
+
+```rust,no_run
+use matter_commissioning::{
+    Action, Commissioner, CommissionerConfig, CommissioningError, Expectation,
+};
+
+# fn run(
+#     sm: &mut Commissioner,
+#     pai_response_tlv: &[u8],
+#     dac_response_tlv: &[u8],
+#     attestation_response_tlv: &[u8],
+# ) -> Result<(), Box<dyn std::error::Error>> {
+// After ConfigRegulatory, cursor reaches SendPaiCertRequest.
+
+// Stage 4: PAI cert request.
+let _ = sm.poll()?;
+sm.on_response(Expectation::PaiCertChainResponse, pai_response_tlv)?;
+
+// Stage 5: DAC cert request.
+let _ = sm.poll()?;
+sm.on_response(Expectation::DacCertChainResponse, dac_response_tlv)?;
+
+// Stage 6: AttestationRequest with fresh 32-byte random nonce.
+let _ = sm.poll()?;
+sm.on_response(Expectation::AttestationResponse, attestation_response_tlv)?;
+
+// Stage 7: AttestationVerification (off-wire). Runs M6.2 verifier
+// chain + nonce-echo check, then returns CdVerificationUnavailable
+// until M6.4.3 lands the CD module.
+match sm.poll() {
+    Err(CommissioningError::CdVerificationUnavailable) => {
+        eprintln!("attestation chain + signature OK; CD verify pending M6.4.3");
+    }
+    Err(other) => return Err(other.into()),
+    Ok(action) => unreachable!("M6.4.2 always errors at AttestationVerification: {action:?}"),
+}
+# Ok(())
+# }
+```
+
+M6.4.3 will replace the `CdVerificationUnavailable` error path with a real CMS-based CD verifier, allowing the cursor to advance past attestation into the CSR + NOC issuance stages.
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from
