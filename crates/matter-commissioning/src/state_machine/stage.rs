@@ -10,7 +10,7 @@
 /// Cursor position inside the commissioning sequence.
 ///
 /// Variants are ordered top-to-bottom in transition order. The transition
-/// function lives in [`next_stage`].
+/// function lives in `next_stage` (crate-internal).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Stage {

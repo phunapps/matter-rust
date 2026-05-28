@@ -78,8 +78,8 @@ pub enum Action {
     },
 
     /// Discover the device on its operational network and establish a
-    /// CASE session. Caller calls
-    /// [`super::Commissioner::on_case_established`] on success or
+    /// CASE session. Caller calls `Commissioner::on_case_established`
+    /// (added in M6.4.5) on success or
     /// `on_response(Expectation::CaseFailed, &[])` on failure.
     EstablishCase {
         /// Fabric ID to establish CASE on.
