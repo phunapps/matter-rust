@@ -69,6 +69,7 @@ fn build_sm(
         admin_vendor_id: 0xFFF1,
         now: MatterTime::from_unix_secs(1_704_067_200),
         rng,
+        wifi_credentials: None,
     };
     Commissioner::new(cfg).expect("valid config")
 }

@@ -95,6 +95,14 @@ pub struct CommissionerConfig<'a> {
     pub now: MatterTime,
     /// RNG for nonces (`CSRNonce`, `AttestationNonce`) and NOC serials.
     pub rng: Arc<dyn NocRng>,
+    /// Wi-Fi credentials for `AddOrUpdateWiFiNetwork`.
+    ///
+    /// `None` is valid for Ethernet-only devices — the state machine
+    /// detects Ethernet at `Stage::ReadNetworkCommissioningInfo` and
+    /// skips the Wi-Fi sub-cursor. For Wi-Fi devices, `None` produces
+    /// a typed [`CommissioningError::WifiCredentialsRequired`] at
+    /// `Stage::WiFiNetworkSetup`.
+    pub wifi_credentials: Option<WiFiCredentials>,
 }
 
 /// The commissioning state machine cursor.
@@ -155,6 +163,11 @@ pub struct Commissioner {
     issued_noc: Option<matter_cert::MatterCertificate>,
     issued_noc_public_key: Option<[u8; 65]>,
 
+    /// Wi-Fi credentials captured from config at construction; consumed
+    /// by `Stage::WiFiNetworkSetup`. `None` for Ethernet-only paths.
+    #[allow(dead_code)] // Consumed by Wi-Fi sub-cursor in M6.5.
+    wifi_credentials: Option<WiFiCredentials>,
+
     /// `true` after [`Stage::FindOperationalForComplete`] emits
     /// `Action::EstablishCase`; cleared by
     /// [`Commissioner::on_case_established`] (success) or by
@@ -207,6 +220,23 @@ impl Commissioner {
                 "ipk_epoch_key must not be all-zero",
             ));
         }
+        if let Some(creds) = cfg.wifi_credentials.as_ref() {
+            if creds.ssid.is_empty() {
+                return Err(CommissioningError::InvalidConfig(
+                    "wifi_credentials.ssid must not be empty",
+                ));
+            }
+            if creds.ssid.len() > 32 {
+                return Err(CommissioningError::InvalidConfig(
+                    "wifi_credentials.ssid must be ≤32 bytes",
+                ));
+            }
+            if creds.credentials.len() > 64 {
+                return Err(CommissioningError::InvalidConfig(
+                    "wifi_credentials.credentials must be ≤64 bytes",
+                ));
+            }
+        }
         Ok(Self {
             stage: Stage::SecurePairing,
             pase_attestation_challenge: cfg.pase_attestation_challenge,
@@ -230,6 +260,7 @@ impl Commissioner {
             verified_csr: None,
             issued_noc: None,
             issued_noc_public_key: None,
+            wifi_credentials: cfg.wifi_credentials,
             awaiting_case_session: false,
             awaiting: None,
             pending_action: None,
@@ -986,6 +1017,7 @@ mod tests {
             admin_vendor_id: 0xFFF1,
             now: MatterTime::from_unix_secs(1_704_067_200),
             rng,
+            wifi_credentials: None,
         }
     }
 
@@ -1886,6 +1918,95 @@ mod tests {
             .on_response(Expectation::CaseFailed, &[])
             .expect_err("CaseFailed without pending should error");
         assert!(matches!(err, CommissioningError::OutOfOrderResponse(_)));
+    }
+
+    /// Returns a fully-populated, valid [`CommissionerConfig`] for use in
+    /// unit tests that only need to mutate one field. All held references
+    /// are leaked so the config is `'static`; acceptable for test code.
+    fn sample_valid_config() -> CommissionerConfig<'static> {
+        use std::sync::OnceLock;
+        static FABRIC: OnceLock<FabricRecord> = OnceLock::new();
+        static SETUP: OnceLock<SetupPayload> = OnceLock::new();
+        static PAA: OnceLock<PaaTrustStore> = OnceLock::new();
+        static CD: OnceLock<crate::attestation::CdSigningRoots> = OnceLock::new();
+
+        let fabric = FABRIC.get_or_init(make_fabric_record);
+        let setup = SETUP.get_or_init(make_setup_payload);
+        let paa = PAA.get_or_init(PaaTrustStore::with_csa_test_roots);
+        let cd =
+            CD.get_or_init(crate::attestation::CdSigningRoots::with_csa_test_roots);
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+
+        CommissionerConfig {
+            pase_attestation_challenge: [0u8; 16],
+            fabric,
+            setup_payload: setup,
+            paa_trust_store: paa,
+            cd_signing_roots: cd,
+            commissioner_node_id: 0x1,
+            assigned_node_id: 0x2,
+            ipk_epoch_key: [0x42_u8; 16],
+            case_admin_subject: 0x1,
+            admin_vendor_id: 0xFFF1,
+            now: MatterTime::from_unix_secs(1_704_067_200),
+            rng,
+            wifi_credentials: None,
+        }
+    }
+
+    #[test]
+    fn empty_ssid_is_rejected() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = Some(WiFiCredentials {
+            ssid: vec![],
+            credentials: vec![],
+        });
+        let Err(err) = Commissioner::new(config) else {
+            panic!("empty ssid should fail");
+        };
+        assert!(
+            matches!(err, CommissioningError::InvalidConfig(m) if m.contains("ssid")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn oversize_ssid_is_rejected() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = Some(WiFiCredentials {
+            ssid: vec![b'a'; 33],
+            credentials: vec![],
+        });
+        let Err(err) = Commissioner::new(config) else {
+            panic!("33-byte ssid should fail");
+        };
+        assert!(
+            matches!(err, CommissioningError::InvalidConfig(m) if m.contains("≤32")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn oversize_credentials_is_rejected() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = Some(WiFiCredentials {
+            ssid: b"matter".to_vec(),
+            credentials: vec![0u8; 65],
+        });
+        let Err(err) = Commissioner::new(config) else {
+            panic!("65-byte credentials should fail");
+        };
+        assert!(
+            matches!(err, CommissioningError::InvalidConfig(m) if m.contains("≤64")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn wifi_credentials_none_is_accepted() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = None;
+        Commissioner::new(config).expect("None wifi_credentials should pass validation");
     }
 
     #[test]
