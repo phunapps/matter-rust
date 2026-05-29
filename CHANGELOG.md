@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow, M6.4.3 Certification Declaration verification, M6.4.4 CSR + NOC issuance flow
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow, M6.4.3 Certification Declaration verification, M6.4.4 CSR + NOC issuance flow, M6.4.5 PASE→CASE handoff + CommissioningComplete
+
+#### M6.4.5 — PASE→CASE handoff + CommissioningComplete
+
+- State machine: four new stages (`NetworkCommissioning` no-op,
+  `EvictPreviousCaseSessions` no-op for new-fabric flow,
+  `FindOperationalForComplete` emitting `Action::EstablishCase`,
+  `SendComplete` over `SessionContext::Case`, `Cleanup` emitting
+  `Action::Done(CommissionedFabric)`).
+- New public API: `Commissioner::on_case_established()` advances the
+  cursor when the caller (M6.6 driver) reports successful mDNS
+  find-operational + SIGMA handshake. `Expectation::CaseFailed` signal
+  surfaces CASE-establishment failure as
+  `CommissioningError::CaseEstablishmentFailed`.
+- Six new inline glass-box tests covering EstablishCase emission,
+  on_case_established happy + out-of-order paths, SendComplete invoke +
+  success transition, and the Cleanup → Done emission.
+- Two new glass-box tests for the `CaseFailed` path
+  (`case_failed_response_aborts_with_case_establishment_failed`,
+  `case_failed_when_not_awaiting_returns_out_of_order`).
+- `tests/state_machine_unit.rs` gains a `transitions_are_total`
+  proptest case alongside the existing two from M6.4.1 T10.
+- `tests/commissioning_e2e.rs` placeholder for the public-API
+  drive-through pending M6.4.6 fixtures.
+- With this sub-phase the state machine drives end-to-end from
+  `SecurePairing` through `Action::Done(CommissionedFabric)` on canned
+  responses plus a mock `on_case_established` callback. M6.4 substance
+  is feature-complete — M6.4.6 adds the matter.js byte-parity gate.
 
 #### M6.4.4 — CSR + NOC issuance flow
 

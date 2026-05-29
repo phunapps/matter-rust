@@ -25,13 +25,21 @@
 //!   [`attestation::CdSigningRoots`] and advances past attestation on
 //!   a valid CD; `CommissionerConfig` gains a `cd_signing_roots`
 //!   reference.
-//! - **M6.4.4 (current):** CSR + NOC issuance flow. State machine
+//! - **M6.4.4:** CSR + NOC issuance flow. State machine
 //!   drives `SendOpCertSigningRequest` → `ValidateCsr` →
 //!   `GenerateNocChain` → `SendTrustedRootCert` → `SendNoc`, then
 //!   advances to `Stage::NetworkCommissioning` (a no-op slot M6.4.5
 //!   expands into the Wi-Fi/Thread subgraph). Integrates M6.3's
 //!   `verify_csr_response` + `issue_noc` + the `OpCreds`
 //!   `AddTrustedRoot` / `AddNOC` encoders.
+//! - **M6.4.5 (current):** PASE→CASE handoff + `CommissioningComplete`.
+//!   The state machine drives end-to-end from `SecurePairing` through
+//!   `Action::Done(CommissionedFabric)` on canned responses plus a
+//!   mock `on_case_established()` callback. New public API
+//!   `Commissioner::on_case_established` for the M6.6 driver's CASE
+//!   handshake success signal; `Expectation::CaseFailed` for the
+//!   failure path. M6.4 substance is complete — M6.4.6 adds the
+//!   matter.js byte-parity gate.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!

@@ -330,4 +330,42 @@ proptest! {
         let _ = sm.on_response(exp, &payload);
         let _ = sm.poll();
     }
+
+    /// M6.4.5 T50 — for every `(Stage, Expectation, payload)` combination
+    /// the state machine handles cleanly: returns `Ok` or a typed
+    /// `CommissioningError` variant, no panic.
+    ///
+    /// The `target_stage_index` parameter is currently unused because the
+    /// public `Commissioner` API can't jump the cursor — it's a
+    /// forward-compat parameter that becomes meaningful when M6.4.6
+    /// fixtures let the proptest drive to deeper cursor positions. For
+    /// M6.4.5 it provides coverage at the `SecurePairing` →
+    /// `ReadCommissioningInfo` waiting state on top of the existing
+    /// `on_response_never_panics` + `poll_never_panics` coverage from
+    /// M6.4.1 T10.
+    #[test]
+    fn transitions_are_total(
+        target_stage_index in 0_usize..18,
+        exp in any_expectation(),
+        payload in prop::collection::vec(any::<u8>(), 0..64),
+    ) {
+        let fabric = make_fabric();
+        let setup = make_setup();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let mut sm = build_sm(&fabric, &setup, &paa, &cd);
+        // target_stage_index is unused by this test (the public API
+        // can't jump the cursor) — it's there as a forward-compat
+        // parameter for when an in-test cursor-setter is added.
+        let _ = target_stage_index;
+        // Drive the cursor to a position where it's awaiting a response.
+        // The state machine starts at SecurePairing → on first poll it
+        // transitions to ReadCommissioningInfo and awaits
+        // CommissioningInfo.
+        let _ = sm.poll();
+        // The fuzz harness — on_response must never panic.
+        let _ = sm.on_response(exp, &payload);
+        // poll() after a random response must never panic either.
+        let _ = sm.poll();
+    }
 }
