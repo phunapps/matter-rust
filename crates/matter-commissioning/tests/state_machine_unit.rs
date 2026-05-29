@@ -69,6 +69,7 @@ fn build_sm(
         admin_vendor_id: 0xFFF1,
         now: MatterTime::from_unix_secs(1_704_067_200),
         rng,
+        wifi_credentials: None,
     };
     Commissioner::new(cfg).expect("valid config")
 }
@@ -289,6 +290,9 @@ fn any_expectation() -> impl Strategy<Value = Expectation> {
         Just(Expectation::AddTrustedRootResponse),
         Just(Expectation::NocResponse),
         Just(Expectation::CommissioningCompleteResponse),
+        Just(Expectation::NetworkCommissioningInfo),
+        Just(Expectation::NetworkConfigResponse),
+        Just(Expectation::ConnectNetworkResponse),
         Just(Expectation::CaseFailed),
     ]
 }
@@ -342,10 +346,12 @@ proptest! {
     /// M6.4.5 it provides coverage at the `SecurePairing` →
     /// `ReadCommissioningInfo` waiting state on top of the existing
     /// `on_response_never_panics` + `poll_never_panics` coverage from
-    /// M6.4.1 T10.
+    /// M6.4.1 T10. Updated to 21 stages in M6.5.2 (adds
+    /// `ReadNetworkCommissioningInfo`, `WiFiNetworkSetup`,
+    /// `FailsafeBeforeWiFiEnable`, and `WiFiNetworkEnable`).
     #[test]
     fn transitions_are_total(
-        target_stage_index in 0_usize..18,
+        target_stage_index in 0_usize..21,
         exp in any_expectation(),
         payload in prop::collection::vec(any::<u8>(), 0..64),
     ) {

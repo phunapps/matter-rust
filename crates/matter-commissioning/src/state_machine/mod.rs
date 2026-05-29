@@ -17,8 +17,8 @@ mod error;
 mod stage;
 
 pub use action::{Action, CommissionedFabric, Expectation, SessionContext};
-pub use commissioner::{Commissioner, CommissionerConfig};
-pub use error::{CommissioningError, RemediationHint};
+pub use commissioner::{Commissioner, CommissionerConfig, WiFiCredentials};
+pub use error::{CommissioningError, NetworkKind, RemediationHint};
 // Used by Commissioner::advance from M6.4.1 T6 onward.
 #[allow(unused_imports)]
 pub(crate) use stage::next_stage;

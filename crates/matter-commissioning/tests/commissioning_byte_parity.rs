@@ -150,6 +150,7 @@ fn matter_js_happy_path_byte_parity() {
         admin_vendor_id: 0xFFF1,
         now: MatterTime::from_unix_secs(1_704_067_200),
         rng,
+        wifi_credentials: None,
     };
     let mut sm = Commissioner::new(cfg).expect("valid config");
 

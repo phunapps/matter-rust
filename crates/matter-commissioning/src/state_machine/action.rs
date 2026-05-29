@@ -142,6 +142,16 @@ pub enum Expectation {
     NocResponse,
     /// `GeneralCommissioning::CommissioningCompleteResponse` (response `0x05`).
     CommissioningCompleteResponse,
+    /// Response to `Action::ReadAttribute` for
+    /// `NetworkCommissioning::FeatureMap` (attribute `0xFFFC`). Caller
+    /// delivers the bare u32 attribute value's TLV bytes, not the
+    /// Interaction Model `AttributeReportIB` envelope.
+    NetworkCommissioningInfo,
+    /// `NetworkCommissioning::NetworkConfigResponse` (cluster `0x0031`
+    /// response `0x05`) — emitted by `AddOrUpdateWiFiNetwork`.
+    NetworkConfigResponse,
+    /// `NetworkCommissioning::ConnectNetworkResponse` (response `0x07`).
+    ConnectNetworkResponse,
     /// Caller-side signal that CASE establishment failed. Fed into
     /// `on_response(Expectation::CaseFailed, &[])` after
     /// [`Action::EstablishCase`].

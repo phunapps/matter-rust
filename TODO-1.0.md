@@ -298,6 +298,62 @@ not change `FabricRecord`'s shape, only adds a new constructor +
 new code path inside `issue_noc` that emits the NOC under an ICAC
 issuer DN instead of the RCAC.
 
+### NetworkCommissioning endpoint discovery — deferred to post-v1.0
+
+**Status:** open. M6.5.2 hardcodes endpoint 0 for the
+`NetworkCommissioning` cluster reads and invokes. Multi-network-endpoint
+devices (rare for Wi-Fi-only plugs, possible for hybrid Wi-Fi+Ethernet
+devices) will not commission correctly until full Descriptor-cluster
+endpoint discovery lands. Additive: a future PR plumbs `endpoint` through
+`CommissionerConfig` (or reads `Descriptor::PartsList` during
+`ReadCommissioningInfo`).
+
+### Non-concurrent-connection device handling — deferred to post-v1.0
+
+**Status:** open. Devices that tear down PASE at `ConnectNetwork` time
+(rare for modern Wi-Fi plugs) cause the M6.5 state machine to wait
+forever for a `ConnectNetworkResponse` it will never receive. The M6.6
+driver surfaces this as a transport-layer timeout. A future PR adds a
+`Commissioner::on_pase_torn(...)` callback (or an
+`Expectation::ConnectNetworkPaseTorn` variant) so the state machine can
+treat torn PASE as success and advance to `EvictPreviousCaseSessions`.
+
+### `WiFiCredentialsRef` for `no_std` consumers — deferred to post-v1.0
+
+**Status:** open. `WiFiCredentials` uses `Vec<u8>` which requires `alloc`.
+Embedded callers will eventually want a borrowing variant
+`WiFiCredentialsRef<'a> { ssid: &'a [u8], credentials: &'a [u8] }`.
+Additive — does not change the existing owned variant.
+
+### NetworkCommissioning `MaxNetworks` cap enforcement — deferred to post-v1.0
+
+**Status:** open. M6.5 does not enforce
+`BasicCommissioningInfo::max_cumulative_failsafe_seconds`. The device
+will reject `ArmFailSafe` with a non-OK status if the requested expiry
+exceeds the cap. A future PR caps `failsafe_expiry_seconds` against
+`max_cumulative_failsafe_seconds` so we never round-trip a
+guaranteed-fail value.
+
+### `test-helpers` feature naming + scope review — pre-v1.0
+
+**Status:** open. M6.5.2 ships a `test-helpers` Cargo feature exposing
+two shortcut constructors (`new_at_read_network_commissioning_info`,
+`new_at_evict_previous_case_sessions`) needed because the M6.4.6 real-
+fixture e2e driver is deferred. Before v1.0, consider:
+- Renaming to `_unstable-test-helpers` (underscore prefix) to signal
+  "not for production use" in dependency-graph audits.
+- Reviewing whether to consolidate the two shortcuts into a single
+  `position_at_stage_for_test(self, stage: Stage)` API.
+- Removing entirely once M6.4.6's real-fixture e2e driver lands.
+
+### `WiFiNetworkFeature` naming — open question
+
+**Status:** open from M6.5.1 PR review. The `WiFiNetworkFeature` bitflags
+struct carries WIFI, THREAD, and ETHERNET bits — the Wi-Fi-centric type
+name is technically misleading. The spec uses this name; rename to
+`NetworkInterfaceFeature` (or similar) is a cheap pre-v1.0 search-and-
+replace if desired.
+
 ### matter.js NOC byte-parity capture — operator wiring
 
 **Status:** scaffolding only. `xtask capture-noc` ships in M6.3.3

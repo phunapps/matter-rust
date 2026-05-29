@@ -69,6 +69,59 @@ pub enum CommissioningError {
     /// `on_response(Expectation::CaseFailed, &[])`).
     #[error("CASE session establishment failed")]
     CaseEstablishmentFailed,
+
+    /// `NetworkCommissioning::FeatureMap` declared a network type the
+    /// commissioner does not support in v1.0. Currently this means a
+    /// device that only supports Thread, or a device that returned a
+    /// `FeatureMap` with no recognised bits set.
+    #[error("device requires {needed:?} network type; not supported in v1.0")]
+    NetworkFeatureUnsupported {
+        /// Which network type the device requires.
+        needed: NetworkKind,
+    },
+
+    /// Device rejected `AddOrUpdateWiFiNetwork` or `ConnectNetwork`
+    /// with a non-OK `NetworkCommissioningStatusEnum` value
+    /// (spec §11.9.5.1).
+    #[error(
+        "network commissioning rejected at stage {stage:?}: \
+             networking_status {networking_status:#x}, \
+             debug_text={debug_text:?}, hint={remediation_hint:?}"
+    )]
+    NetworkRejected {
+        /// Which stage the device rejected.
+        stage: Stage,
+        /// Raw `NetworkCommissioningStatusEnum` value from the
+        /// response.
+        networking_status: u8,
+        /// Optional human-readable debug text echoed by the device.
+        debug_text: Option<String>,
+        /// Mapped remediation category for downstream UI rendering.
+        remediation_hint: RemediationHint,
+    },
+
+    /// `wifi_credentials` was `None` but `FeatureMap` declared Wi-Fi.
+    /// Distinct from `InvalidConfig` because it surfaces at a later
+    /// stage once the device's network shape is known.
+    #[error("device is Wi-Fi but no wifi_credentials supplied")]
+    WifiCredentialsRequired,
+}
+
+/// Which Matter network-commissioning type a device declared in its
+/// `NetworkCommissioning::FeatureMap`.
+///
+/// `#[non_exhaustive]` — future Matter-spec network interfaces
+/// (e.g. Thread Border Router relay) can be added without a breaking
+/// change.
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NetworkKind {
+    /// Wi-Fi network interface (`FeatureMap` bit 0).
+    WiFi,
+    /// Thread network interface (`FeatureMap` bit 1).
+    Thread,
+    /// Ethernet network interface (`FeatureMap` bit 2).
+    Ethernet,
 }
 
 /// Hint describing what a downstream UI could suggest to remediate a

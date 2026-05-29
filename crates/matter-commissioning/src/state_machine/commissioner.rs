@@ -13,6 +13,39 @@ use crate::state_machine::action::{Action, Expectation};
 use crate::state_machine::error::CommissioningError;
 use crate::state_machine::stage::Stage;
 
+#[cfg(feature = "tracing")]
+use tracing::instrument;
+
+/// Wi-Fi station credentials supplied to `AddOrUpdateWiFiNetwork`.
+///
+/// `ssid` must be 1–32 bytes (Matter Core Spec §11.9 constraints).
+/// `credentials` must be 0–64 bytes — empty means open network, ≤64
+/// bytes covers WPA2/WPA3 PSK lengths.
+///
+/// `Debug` is hand-written to redact `credentials` (renders only the
+/// length). `Clone` is derived. Validation runs in
+/// `Commissioner::new` (M6.5.2 Task 13).
+#[derive(Clone, PartialEq, Eq)]
+pub struct WiFiCredentials {
+    /// SSID bytes, 1–32 bytes.
+    pub ssid: Vec<u8>,
+    /// Pre-shared key / passphrase bytes, 0–64 bytes. Empty means
+    /// open network.
+    pub credentials: Vec<u8>,
+}
+
+impl core::fmt::Debug for WiFiCredentials {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WiFiCredentials")
+            .field("ssid", &format_args!("<{} bytes>", self.ssid.len()))
+            .field(
+                "credentials",
+                &format_args!("<redacted, {} bytes>", self.credentials.len()),
+            )
+            .finish()
+    }
+}
+
 /// Configuration passed to [`Commissioner::new`].
 ///
 /// All fields are by-reference where possible so the state machine
@@ -65,6 +98,14 @@ pub struct CommissionerConfig<'a> {
     pub now: MatterTime,
     /// RNG for nonces (`CSRNonce`, `AttestationNonce`) and NOC serials.
     pub rng: Arc<dyn NocRng>,
+    /// Wi-Fi credentials for `AddOrUpdateWiFiNetwork`.
+    ///
+    /// `None` is valid for Ethernet-only devices — the state machine
+    /// detects Ethernet at `Stage::ReadNetworkCommissioningInfo` and
+    /// skips the Wi-Fi sub-cursor. For Wi-Fi devices, `None` produces
+    /// a typed [`CommissioningError::WifiCredentialsRequired`] at
+    /// `Stage::WiFiNetworkSetup`.
+    pub wifi_credentials: Option<WiFiCredentials>,
 }
 
 /// The commissioning state machine cursor.
@@ -125,6 +166,24 @@ pub struct Commissioner {
     issued_noc: Option<matter_cert::MatterCertificate>,
     issued_noc_public_key: Option<[u8; 65]>,
 
+    /// Wi-Fi credentials captured from config at construction; consumed
+    /// by `Stage::WiFiNetworkSetup`. `None` for Ethernet-only paths.
+    wifi_credentials: Option<WiFiCredentials>,
+
+    /// Maximum failsafe expiry the device accepts, in seconds.
+    /// Initialised to 60 (the M6.4 fallback) and updated from
+    /// `BasicCommissioningInfo::failsafe_expiry_length_seconds` once
+    /// the `Expectation::CommissioningInfo` response arrives. Both
+    /// `ArmFailsafe` and `FailsafeBeforeWiFiEnable` consume this.
+    failsafe_expiry_seconds: u16,
+
+    /// Monotonically-increasing breadcrumb attached to every
+    /// breadcrumb-bearing cluster command. Matter Core Spec §11.10
+    /// uses breadcrumb so an interrupted commissioning can be resumed
+    /// from the last acknowledged step. Initialised to `1` in
+    /// `Commissioner::new`; incremented after every breadcrumb emit.
+    breadcrumb_counter: u64,
+
     /// `true` after [`Stage::FindOperationalForComplete`] emits
     /// `Action::EstablishCase`; cleared by
     /// [`Commissioner::on_case_established`] (success) or by
@@ -177,6 +236,23 @@ impl Commissioner {
                 "ipk_epoch_key must not be all-zero",
             ));
         }
+        if let Some(creds) = cfg.wifi_credentials.as_ref() {
+            if creds.ssid.is_empty() {
+                return Err(CommissioningError::InvalidConfig(
+                    "wifi_credentials.ssid must not be empty",
+                ));
+            }
+            if creds.ssid.len() > 32 {
+                return Err(CommissioningError::InvalidConfig(
+                    "wifi_credentials.ssid must be ≤32 bytes",
+                ));
+            }
+            if creds.credentials.len() > 64 {
+                return Err(CommissioningError::InvalidConfig(
+                    "wifi_credentials.credentials must be ≤64 bytes",
+                ));
+            }
+        }
         Ok(Self {
             stage: Stage::SecurePairing,
             pase_attestation_challenge: cfg.pase_attestation_challenge,
@@ -200,6 +276,9 @@ impl Commissioner {
             verified_csr: None,
             issued_noc: None,
             issued_noc_public_key: None,
+            wifi_credentials: cfg.wifi_credentials,
+            failsafe_expiry_seconds: 60,
+            breadcrumb_counter: 1,
             awaiting_case_session: false,
             awaiting: None,
             pending_action: None,
@@ -211,6 +290,63 @@ impl Commissioner {
     #[must_use]
     pub fn stage(&self) -> Stage {
         self.stage
+    }
+
+    /// Create a `Commissioner` whose cursor is pre-positioned at
+    /// [`Stage::ReadNetworkCommissioningInfo`], ready for the first
+    /// `poll()` call that emits `Action::ReadAttribute` for the
+    /// `NetworkCommissioning::FeatureMap`.
+    ///
+    /// All M6.4 attestation + NOC fields are left at their zero-value
+    /// defaults. This is intentional: the network sub-cursor does not
+    /// re-read those fields, so the values never matter during a
+    /// `ReadNetworkCommissioningInfo` → `WiFiNetworkSetup` /
+    /// `EvictPreviousCaseSessions` transition.
+    ///
+    /// **Only compiled with the `test-helpers` cargo feature.**
+    /// Must not be used in production flows — it skips M6.4 crypto
+    /// verification entirely. Enable via `Cargo.toml` `required-features`
+    /// on the specific test target that needs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`Commissioner::new`] —
+    /// i.e. invalid [`CommissionerConfig`] fields.
+    #[cfg(feature = "test-helpers")]
+    pub fn new_at_read_network_commissioning_info(
+        cfg: CommissionerConfig<'_>,
+    ) -> Result<Self, CommissioningError> {
+        let mut this = Self::new(cfg)?;
+        this.stage = Stage::ReadNetworkCommissioningInfo;
+        Ok(this)
+    }
+
+    /// Position the cursor at [`Stage::EvictPreviousCaseSessions`] with a
+    /// sentinel `issued_noc_public_key` so that
+    /// [`Stage::Cleanup`] can emit [`Action::Done`] without going through
+    /// the M6.4 NOC issuance path.
+    ///
+    /// This is used by the Ethernet-only end-to-end walk in
+    /// `tests/state_machine_network.rs` (M6.5.2 Task 20) to exercise the
+    /// full network → CASE → `CommissioningComplete` → Done path without
+    /// replaying attestation + NOC crypto.
+    ///
+    /// **Only compiled with the `test-helpers` cargo feature.**
+    /// Must not be used in production flows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`Commissioner::new`].
+    #[cfg(feature = "test-helpers")]
+    pub fn new_at_evict_previous_case_sessions(
+        cfg: CommissionerConfig<'_>,
+    ) -> Result<Self, CommissioningError> {
+        let mut this = Self::new(cfg)?;
+        this.stage = Stage::EvictPreviousCaseSessions;
+        // Sentinel NOC public key so Stage::Cleanup can emit Action::Done.
+        // The real key would be set by the NOC issuance path in M6.4.4.
+        this.issued_noc_public_key = Some([0xCC; 65]);
+        Ok(this)
     }
 
     /// Drive the state machine forward.
@@ -225,6 +361,7 @@ impl Commissioner {
     /// [`Stage::Failed`] — when this happens, the cursor advances to
     /// `Failed` and the next `poll()` call emits an
     /// [`Action::Abort`] with a rendered summary of the failure.
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(stage = ?self.stage)))]
     pub fn poll(&mut self) -> Result<Action, CommissioningError> {
         if let Some(act) = self.pending_action.clone() {
             return Ok(act);
@@ -232,6 +369,26 @@ impl Commissioner {
         let action = self.dispatch_stage()?;
         self.pending_action = Some(action.clone());
         Ok(action)
+    }
+
+    /// Helper: emit an `ArmFailsafe` action at the current stage.
+    ///
+    /// Used by both `ArmFailsafe` and `FailsafeBeforeWiFiEnable` stages,
+    /// which share identical payload and action logic.
+    fn arm_failsafe_action(&mut self) -> Action {
+        use crate::clusters::general_commissioning as gc;
+        use crate::state_machine::action::SessionContext;
+        let breadcrumb = self.next_breadcrumb();
+        let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
+        self.awaiting = Some(Expectation::ArmFailsafeResponse);
+        Action::Invoke {
+            session: SessionContext::Pase,
+            endpoint: 0,
+            cluster: gc::CLUSTER_ID,
+            command: gc::command_id::ARM_FAIL_SAFE,
+            payload,
+            expect: Expectation::ArmFailsafeResponse,
+        }
     }
 
     /// Compute the next [`Action`] for the current [`Stage`].
@@ -271,26 +428,13 @@ impl Commissioner {
                     expect: Expectation::CommissioningInfo,
                 })
             }
-            Stage::ArmFailsafe => {
-                // Failsafe expiry length is set conservatively to 60s.
-                // M6.4.1 hard-codes; future tasks may read the value
-                // from `ReadCommissioningInfo`'s response.
-                let payload = gc::encode_arm_fail_safe(60, 0);
-                self.awaiting = Some(Expectation::ArmFailsafeResponse);
-                Ok(Action::Invoke {
-                    session: SessionContext::Pase,
-                    endpoint: 0,
-                    cluster: gc::CLUSTER_ID,
-                    command: gc::command_id::ARM_FAIL_SAFE,
-                    payload,
-                    expect: Expectation::ArmFailsafeResponse,
-                })
-            }
+            Stage::ArmFailsafe | Stage::FailsafeBeforeWiFiEnable => Ok(self.arm_failsafe_action()),
             Stage::ConfigRegulatory => {
+                let breadcrumb = self.next_breadcrumb();
                 let payload = gc::encode_set_regulatory_config(
                     gc::RegulatoryLocation::IndoorOutdoor,
                     "XX",
-                    0,
+                    breadcrumb,
                 );
                 self.awaiting = Some(Expectation::SetRegulatoryConfigResponse);
                 Ok(Action::Invoke {
@@ -447,14 +591,57 @@ impl Commissioner {
                     expect: Expectation::NocResponse,
                 })
             }
-            Stage::NetworkCommissioning => {
-                // M6.4 ships network commissioning as a no-op slot.
-                // M6.5 expands into the Wi-Fi/Thread subgraph (six
-                // C++ AutoCommissioner stages: kScanNetworks,
-                // kWiFiNetworkSetup, kFailsafeBeforeWiFiEnable,
-                // kWiFiNetworkEnable, etc.).
-                self.advance(Stage::EvictPreviousCaseSessions);
-                self.dispatch_stage()
+            Stage::ReadNetworkCommissioningInfo => {
+                self.awaiting = Some(Expectation::NetworkCommissioningInfo);
+                Ok(Action::ReadAttribute {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: crate::clusters::network_commissioning::CLUSTER_ID,
+                    attributes: &[
+                        crate::clusters::network_commissioning::attribute_id::FEATURE_MAP,
+                    ],
+                    expect: Expectation::NetworkCommissioningInfo,
+                })
+            }
+            Stage::WiFiNetworkSetup => {
+                use crate::clusters::network_commissioning as nc;
+                let creds = self
+                    .wifi_credentials
+                    .as_ref()
+                    .ok_or(CommissioningError::WifiCredentialsRequired)?;
+                let ssid = creds.ssid.clone();
+                let credentials = creds.credentials.clone();
+                let breadcrumb = self.next_breadcrumb();
+                let payload =
+                    nc::encode_add_or_update_wifi_network(&ssid, &credentials, breadcrumb);
+                self.awaiting = Some(Expectation::NetworkConfigResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: nc::CLUSTER_ID,
+                    command: nc::command_id::ADD_OR_UPDATE_WIFI_NETWORK,
+                    payload,
+                    expect: Expectation::NetworkConfigResponse,
+                })
+            }
+            Stage::WiFiNetworkEnable => {
+                use crate::clusters::network_commissioning as nc;
+                let creds = self
+                    .wifi_credentials
+                    .as_ref()
+                    .ok_or(CommissioningError::WifiCredentialsRequired)?;
+                let ssid = creds.ssid.clone();
+                let breadcrumb = self.next_breadcrumb();
+                let payload = nc::encode_connect_network(&ssid, breadcrumb);
+                self.awaiting = Some(Expectation::ConnectNetworkResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: nc::CLUSTER_ID,
+                    command: nc::command_id::CONNECT_NETWORK,
+                    payload,
+                    expect: Expectation::ConnectNetworkResponse,
+                })
             }
             Stage::EvictPreviousCaseSessions => {
                 // New-fabric commissioning has no prior CASE session
@@ -532,6 +719,7 @@ impl Commissioner {
     /// `UnexpectedResponseKind` transitions the cursor to
     /// [`Stage::Failed`]; the next `poll()` call emits
     /// [`Action::Abort`] with a rendered summary.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, payload), fields(stage = ?self.stage, expectation = ?expect)))]
     pub fn on_response(
         &mut self,
         expect: Expectation,
@@ -584,6 +772,7 @@ impl Commissioner {
     /// machine isn't currently awaiting CASE establishment (i.e., the
     /// cursor is not at `FindOperationalForComplete` or the
     /// `EstablishCase` action hasn't been emitted yet).
+    #[cfg_attr(feature = "tracing", instrument(skip(self)))]
     pub fn on_case_established(&mut self) -> Result<(), CommissioningError> {
         if !self.awaiting_case_session {
             return Err(CommissioningError::OutOfOrderResponse(self.stage));
@@ -593,6 +782,7 @@ impl Commissioner {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_response(
         &mut self,
         expect: Expectation,
@@ -601,10 +791,15 @@ impl Commissioner {
         use crate::clusters::general_commissioning as gc;
         match expect {
             Expectation::CommissioningInfo => {
-                // M6.4.1: accept any well-formed TLV. Future sub-phases
-                // may parse BasicCommissioningInfo to extract
-                // failsafe_expiry_length_seconds + regulatory caps.
                 Self::assert_tlv_well_formed(self.stage, payload)?;
+                // Best-effort: scan the response for a BasicCommissioningInfo
+                // struct and update failsafe_expiry_seconds. Malformed or
+                // missing → keep the M6.4 fallback (60s) silently.
+                if let Some(info) = gc::decode_basic_commissioning_info(payload) {
+                    if info.failsafe_expiry_length_seconds > 0 {
+                        self.failsafe_expiry_seconds = info.failsafe_expiry_length_seconds;
+                    }
+                }
                 self.advance(Stage::ArmFailsafe);
                 Ok(())
             }
@@ -612,11 +807,18 @@ impl Commissioner {
                 let resp = gc::decode_arm_fail_safe_response(payload)?;
                 if resp.error_code != 0 {
                     return Err(CommissioningError::DeviceImStatus {
-                        stage: Stage::ArmFailsafe,
+                        stage: self.stage,
                         im_status: u16::from(resp.error_code),
                     });
                 }
-                self.advance(Stage::ConfigRegulatory);
+                let next = match self.stage {
+                    Stage::ArmFailsafe => Stage::ConfigRegulatory,
+                    Stage::FailsafeBeforeWiFiEnable => Stage::WiFiNetworkEnable,
+                    other => {
+                        return Err(CommissioningError::OutOfOrderResponse(other));
+                    }
+                };
+                self.advance(next);
                 Ok(())
             }
             Expectation::SetRegulatoryConfigResponse => {
@@ -676,7 +878,60 @@ impl Commissioner {
                         im_status: u16::from(resp.status),
                     });
                 }
-                self.advance(Stage::NetworkCommissioning);
+                self.advance(Stage::ReadNetworkCommissioningInfo);
+                Ok(())
+            }
+            Expectation::NetworkCommissioningInfo => {
+                use crate::clusters::network_commissioning as nc;
+                let features = nc::decode_feature_map(payload)?;
+                if features.contains(nc::WiFiNetworkFeature::WIFI) {
+                    if self.wifi_credentials.is_none() {
+                        return Err(CommissioningError::WifiCredentialsRequired);
+                    }
+                    self.advance(Stage::WiFiNetworkSetup);
+                } else if features.contains(nc::WiFiNetworkFeature::ETHERNET)
+                    && !features.contains(nc::WiFiNetworkFeature::THREAD)
+                {
+                    // Ethernet-only — skip the Wi-Fi sub-cursor entirely.
+                    self.advance(Stage::EvictPreviousCaseSessions);
+                } else if features.contains(nc::WiFiNetworkFeature::THREAD) {
+                    return Err(CommissioningError::NetworkFeatureUnsupported {
+                        needed: crate::state_machine::NetworkKind::Thread,
+                    });
+                } else {
+                    // No recognised bits set — treat as malformed.
+                    return Err(CommissioningError::MalformedResponse(
+                        Stage::ReadNetworkCommissioningInfo,
+                    ));
+                }
+                Ok(())
+            }
+            Expectation::NetworkConfigResponse => {
+                use crate::clusters::network_commissioning as nc;
+                let resp = nc::decode_network_config_response(Stage::WiFiNetworkSetup, payload)?;
+                if resp.networking_status != 0 {
+                    return Err(CommissioningError::NetworkRejected {
+                        stage: Stage::WiFiNetworkSetup,
+                        networking_status: resp.networking_status,
+                        debug_text: resp.debug_text,
+                        remediation_hint: nc::remediation_for(resp.networking_status),
+                    });
+                }
+                self.advance(Stage::FailsafeBeforeWiFiEnable);
+                Ok(())
+            }
+            Expectation::ConnectNetworkResponse => {
+                use crate::clusters::network_commissioning as nc;
+                let resp = nc::decode_connect_network_response(Stage::WiFiNetworkEnable, payload)?;
+                if resp.networking_status != 0 {
+                    return Err(CommissioningError::NetworkRejected {
+                        stage: Stage::WiFiNetworkEnable,
+                        networking_status: resp.networking_status,
+                        debug_text: resp.debug_text,
+                        remediation_hint: nc::remediation_for(resp.networking_status),
+                    });
+                }
+                self.advance(Stage::EvictPreviousCaseSessions);
                 Ok(())
             }
             Expectation::CommissioningCompleteResponse => {
@@ -695,6 +950,12 @@ impl Commissioner {
             // pre-awaiting fast path and never reaches handle_response.
             _ => Err(CommissioningError::OutOfOrderResponse(self.stage)),
         }
+    }
+
+    fn next_breadcrumb(&mut self) -> u64 {
+        let b = self.breadcrumb_counter;
+        self.breadcrumb_counter = b.saturating_add(1);
+        b
     }
 
     fn advance(&mut self, next: Stage) {
@@ -945,6 +1206,7 @@ mod tests {
             admin_vendor_id: 0xFFF1,
             now: MatterTime::from_unix_secs(1_704_067_200),
             rng,
+            wifi_credentials: None,
         }
     }
 
@@ -1474,7 +1736,7 @@ mod tests {
     /// `AddNOC` Invoke targeting cluster `0x003E` / command `0x06`.
     /// Then drive the synthetic `NOCResponse { status: 0 }` through
     /// `on_response` and assert the cursor lands on
-    /// `Stage::NetworkCommissioning`.
+    /// `Stage::ReadNetworkCommissioningInfo`.
     #[test]
     fn drive_through_send_noc_with_synthetic_noc_response() {
         use matter_cert::{
@@ -1550,7 +1812,7 @@ mod tests {
         }
         sm.on_response(Expectation::NocResponse, &noc_response)
             .expect("NocResponse accepted");
-        assert_eq!(sm.stage(), Stage::NetworkCommissioning);
+        assert_eq!(sm.stage(), Stage::ReadNetworkCommissioningInfo);
     }
 
     /// Glass-box test: a non-zero NOC status surfaces as
@@ -1845,5 +2107,230 @@ mod tests {
             .on_response(Expectation::CaseFailed, &[])
             .expect_err("CaseFailed without pending should error");
         assert!(matches!(err, CommissioningError::OutOfOrderResponse(_)));
+    }
+
+    /// Returns a fully-populated, valid [`CommissionerConfig`] for use in
+    /// unit tests that only need to mutate one field. All held references
+    /// are leaked so the config is `'static`; acceptable for test code.
+    fn sample_valid_config() -> CommissionerConfig<'static> {
+        use std::sync::OnceLock;
+        static FABRIC: OnceLock<FabricRecord> = OnceLock::new();
+        static SETUP: OnceLock<SetupPayload> = OnceLock::new();
+        static PAA: OnceLock<PaaTrustStore> = OnceLock::new();
+        static CD: OnceLock<crate::attestation::CdSigningRoots> = OnceLock::new();
+
+        let fabric = FABRIC.get_or_init(make_fabric_record);
+        let setup = SETUP.get_or_init(make_setup_payload);
+        let paa = PAA.get_or_init(PaaTrustStore::with_csa_test_roots);
+        let cd = CD.get_or_init(crate::attestation::CdSigningRoots::with_csa_test_roots);
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+
+        CommissionerConfig {
+            pase_attestation_challenge: [0u8; 16],
+            fabric,
+            setup_payload: setup,
+            paa_trust_store: paa,
+            cd_signing_roots: cd,
+            commissioner_node_id: 0x1,
+            assigned_node_id: 0x2,
+            ipk_epoch_key: [0x42_u8; 16],
+            case_admin_subject: 0x1,
+            admin_vendor_id: 0xFFF1,
+            now: MatterTime::from_unix_secs(1_704_067_200),
+            rng,
+            wifi_credentials: None,
+        }
+    }
+
+    #[test]
+    fn empty_ssid_is_rejected() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = Some(WiFiCredentials {
+            ssid: vec![],
+            credentials: vec![],
+        });
+        let Err(err) = Commissioner::new(config) else {
+            panic!("empty ssid should fail");
+        };
+        assert!(
+            matches!(err, CommissioningError::InvalidConfig(m) if m.contains("ssid")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn oversize_ssid_is_rejected() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = Some(WiFiCredentials {
+            ssid: vec![b'a'; 33],
+            credentials: vec![],
+        });
+        let Err(err) = Commissioner::new(config) else {
+            panic!("33-byte ssid should fail");
+        };
+        assert!(
+            matches!(err, CommissioningError::InvalidConfig(m) if m.contains("≤32")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn oversize_credentials_is_rejected() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = Some(WiFiCredentials {
+            ssid: b"matter".to_vec(),
+            credentials: vec![0u8; 65],
+        });
+        let Err(err) = Commissioner::new(config) else {
+            panic!("65-byte credentials should fail");
+        };
+        assert!(
+            matches!(err, CommissioningError::InvalidConfig(m) if m.contains("≤64")),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn wifi_credentials_none_is_accepted() {
+        let mut config = sample_valid_config();
+        config.wifi_credentials = None;
+        Commissioner::new(config).expect("None wifi_credentials should pass validation");
+    }
+
+    #[test]
+    fn wifi_credentials_debug_redacts_passphrase() {
+        let creds = WiFiCredentials {
+            ssid: b"matter".to_vec(),
+            credentials: b"hunter22".to_vec(),
+        };
+        let rendered = format!("{creds:?}");
+        assert!(
+            !rendered.contains("hunter22"),
+            "Debug must not contain credentials bytes: {rendered}",
+        );
+        assert!(rendered.contains("redacted"), "got {rendered}");
+        assert!(
+            rendered.contains('8'),
+            "credentials length should appear: {rendered}"
+        );
+        assert!(
+            rendered.contains('6'),
+            "ssid length should appear: {rendered}"
+        );
+    }
+
+    // --- M6.5.2 T14: failsafe expiry derivation from BasicCommissioningInfo ---
+
+    #[test]
+    fn failsafe_expiry_derives_from_basic_commissioning_info() {
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+        // Advance to ReadCommissioningInfo and feed a BasicCommissioningInfo with 120s.
+        let _initial = sm.poll().expect("initial poll");
+        let response = vec![
+            0x15, 0x25, 0x00, 0x78, 0x00, // u16 = 120
+            0x18,
+        ];
+        sm.on_response(Expectation::CommissioningInfo, &response)
+            .expect("commissioning info accepted");
+        // Now ArmFailsafe should emit with expiry=120.
+        let action = sm.poll().expect("arm-failsafe poll");
+        match action {
+            Action::Invoke {
+                payload,
+                cluster,
+                command,
+                ..
+            } => {
+                assert_eq!(cluster, 0x0030);
+                assert_eq!(command, 0x00);
+                // ArmFailSafe payload byte for expiry: TLV-encoded u8/u16 at context tag 0.
+                // For value 120 the smallest-width encoding is u8 = 0x24 0x00 0x78.
+                assert!(
+                    payload.windows(3).any(|w| w == [0x24, 0x00, 0x78]),
+                    "ArmFailSafe payload should carry expiry=120: {payload:02x?}",
+                );
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failsafe_expiry_falls_back_to_60_on_empty_basic_commissioning_info() {
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+        let _initial = sm.poll().expect("initial poll");
+        // Feed a well-formed empty struct — decode_basic_commissioning_info
+        // returns None when the failsafe field is missing, so the M6.4
+        // fallback of 60s applies.
+        sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+            .expect("empty struct accepted");
+        let action = sm.poll().expect("arm-failsafe poll");
+        if let Action::Invoke { payload, .. } = action {
+            // 60 = 0x3C, anonymous struct with context-tag-0 u8.
+            assert!(
+                payload.windows(3).any(|w| w == [0x24, 0x00, 0x3C]),
+                "ArmFailSafe payload should carry expiry=60 fallback: {payload:02x?}",
+            );
+        }
+    }
+
+    // --- M6.5.2 T15: breadcrumb monotonicity ---
+
+    #[test]
+    fn breadcrumb_increases_across_commands() {
+        fn extract_uint_at_tag(payload: &[u8], tag_num: u8) -> Option<u64> {
+            use matter_codec::{Element, Tag, TlvReader, Value};
+            let mut reader = TlvReader::new(payload);
+            while let Ok(Some(elem)) = reader.next() {
+                if let Element::Scalar {
+                    tag: Tag::Context(t),
+                    value: Value::Uint(v),
+                } = elem
+                {
+                    if t == tag_num {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        }
+
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+        let mut breadcrumbs: Vec<u64> = Vec::new();
+
+        // Poll #1: ReadCommissioningInfo (no breadcrumb).
+        let _ = sm.poll().expect("read commissioning info");
+        sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+            .expect("info accepted");
+
+        // Poll #2: ArmFailsafe — first breadcrumb-bearing command.
+        let action = sm.poll().expect("arm-failsafe");
+        if let Action::Invoke { payload, .. } = action {
+            if let Some(b) = extract_uint_at_tag(&payload, 1) {
+                breadcrumbs.push(b);
+            }
+        }
+        sm.on_response(
+            Expectation::ArmFailsafeResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18],
+        )
+        .expect("arm-failsafe ok");
+
+        // Poll #3: SetRegulatoryConfig — second breadcrumb-bearing command.
+        let action = sm.poll().expect("set-regulatory");
+        if let Action::Invoke { payload, .. } = action {
+            if let Some(b) = extract_uint_at_tag(&payload, 2) {
+                breadcrumbs.push(b);
+            }
+        }
+
+        assert_eq!(
+            breadcrumbs.len(),
+            2,
+            "should have extracted exactly two breadcrumbs, got {breadcrumbs:?}",
+        );
+        assert!(
+            breadcrumbs[0] < breadcrumbs[1],
+            "breadcrumbs should be strictly increasing: {breadcrumbs:?}",
+        );
     }
 }

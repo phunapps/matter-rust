@@ -12,6 +12,17 @@ keywords = ["matter", "commissioning", "iot", "smart-home"]
 categories = ["network-programming", "embedded"]
 readme = "README.md"
 
+[features]
+default = []
+## Expose cursor-jump helpers used exclusively by the crate's own
+## integration tests (tests/state_machine_network.rs and similar).
+## Never enable in production builds.
+test-helpers = []
+## Enable `tracing` instrumentation spans on `Commissioner`'s public
+## methods (`poll`, `on_response`, `on_case_established`).
+## Off by default; opt-in per Matter-rust's zero-cost-when-unused policy.
+tracing = ["dep:tracing"]
+
 [lints]
 workspace = true
 
@@ -29,6 +40,7 @@ ring = { workspace = true }
 base64 = { workspace = true }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
+tracing = { version = "0.1", optional = true, default-features = false, features = ["attributes"] }
 
 [dev-dependencies]
 hex = { workspace = true }
@@ -36,3 +48,7 @@ proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 p256 = { workspace = true }
+
+[[test]]
+name = "state_machine_network"
+required-features = ["test-helpers"]

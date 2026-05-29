@@ -28,8 +28,8 @@
 //! - **M6.4.4:** CSR + NOC issuance flow. State machine
 //!   drives `SendOpCertSigningRequest` → `ValidateCsr` →
 //!   `GenerateNocChain` → `SendTrustedRootCert` → `SendNoc`, then
-//!   advances to `Stage::NetworkCommissioning` (a no-op slot M6.4.5
-//!   expands into the Wi-Fi/Thread subgraph). Integrates M6.3's
+//!   advances to `Stage::ReadNetworkCommissioningInfo` (M6.5.2 expands
+//!   the network subgraph). Integrates M6.3's
 //!   `verify_csr_response` + `issue_noc` + the `OpCreds`
 //!   `AddTrustedRoot` / `AddNOC` encoders.
 //! - **M6.4.5:** PASE→CASE handoff + `CommissioningComplete`.
@@ -44,10 +44,16 @@
 //!   `Action::Done(CommissionedFabric)` on canned responses + a
 //!   mock CASE-established callback. matter.js byte-parity gate
 //!   infrastructure shipped — see [`state_machine`] for the API.
-//! - **M6.5 (next):** Wi-Fi network commissioning. Expands the
-//!   `NetworkCommissioning` no-op slot into the full Wi-Fi/Thread
-//!   subgraph (`ScanNetworks`, `WiFiNetworkSetup`,
-//!   `FailsafeBeforeWiFiEnable`, `WiFiNetworkEnable`, etc.).
+//! - **M6.5 (current):** Wi-Fi network commissioning. Expands the
+//!   `NetworkCommissioning` no-op slot into the real Wi-Fi sub-cursor
+//!   (`ReadNetworkCommissioningInfo` → `WiFiNetworkSetup` →
+//!   `FailsafeBeforeWiFiEnable` → `WiFiNetworkEnable`). Ethernet-only
+//!   devices skip the Wi-Fi sub-cursor entirely; Thread-only devices
+//!   fail fast with a typed `NetworkFeatureUnsupported` error. New
+//!   `RemediationHint` enum surfaces actionable categories for
+//!   `NetworkRejected`. Failsafe-expiry now derives from
+//!   `BasicCommissioningInfo` (was hardcoded 60s in M6.4). Optional
+//!   `tracing` feature instruments every dispatch arm.
 //! - **M6.6 (next-next):** Tokio driver + first real-device
 //!   commission. Wires the M6.4 state machine into `matter-transport`'s
 //!   session layer + drives `matter-crypto`'s SIGMA-I CASE handshake.
@@ -69,6 +75,15 @@
 //! Replace the QR string + manual code above with values captured for
 //! your own devices via `cargo xtask capture-setup` if you change the
 //! fixture set.
+//!
+//! ## Optional `tracing` feature
+//!
+//! Enable the `tracing` crate feature to get per-method spans on
+//! `Commissioner::poll`, `Commissioner::on_response`, and
+//! `Commissioner::on_case_established`. Span fields (`stage`,
+//! `expectation`) align best-effort with matter.js's log-event format
+//! so operators can grep across both implementations. Compatibility
+//! is not guaranteed across matter.js minor versions.
 
 #![forbid(unsafe_code)]
 
@@ -108,5 +123,5 @@ pub use clusters::network_commissioning::{
 
 pub use state_machine::{
     Action, CommissionedFabric, Commissioner, CommissionerConfig, CommissioningError, Expectation,
-    RemediationHint, SessionContext, Stage,
+    NetworkKind, RemediationHint, SessionContext, Stage, WiFiCredentials,
 };
