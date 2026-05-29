@@ -135,6 +135,183 @@ pub fn decode_feature_map(tlv: &[u8]) -> Result<WiFiNetworkFeature, Commissionin
     }
 }
 
+/// Decoded `NetworkConfigResponse` (spec §11.9.6.5). Emitted by
+/// `AddOrUpdateWiFiNetwork`, `RemoveNetwork`, `ReorderNetworks`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkConfigResponse {
+    /// `NetworkCommissioningStatusEnum` (spec §11.9.5.1). 0 = OK.
+    pub networking_status: u8,
+    /// Optional human-readable debug text (≤512 chars).
+    pub debug_text: Option<String>,
+    // `network_index` deliberately omitted — only meaningful on the
+    // scan path, which M6.5 does not ship.
+}
+
+/// Decoded `ConnectNetworkResponse` (spec §11.9.6.6.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectNetworkResponse {
+    /// `NetworkCommissioningStatusEnum`. 0 = OK.
+    pub networking_status: u8,
+    /// Optional human-readable debug text.
+    pub debug_text: Option<String>,
+    /// Platform-specific Wi-Fi error code (spec §11.9.6.6.3). Optional.
+    pub error_value: Option<i32>,
+}
+
+/// Decode `NetworkConfigResponse` (spec §11.9.6.5).
+///
+/// `stage` is plumbed through so any error includes the right cursor
+/// position in `CommissioningError::MalformedResponse(_)`. Callers
+/// pass `Stage::WiFiNetworkSetup` in production (added in M6.5.2);
+/// tests may pass `Stage::NetworkCommissioning` for now.
+///
+/// # Errors
+///
+/// Returns `CommissioningError::MalformedResponse(stage)` on garbled
+/// TLV. A `networking_status != 0` is a *successful* decode whose
+/// non-OK value is mapped to
+/// `CommissioningError::NetworkRejected { remediation_hint, .. }` by
+/// the state-machine dispatch layer (M6.5.2).
+pub fn decode_network_config_response(
+    stage: Stage,
+    tlv: &[u8],
+) -> Result<NetworkConfigResponse, CommissioningError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader
+        .next()
+        .map_err(|_| CommissioningError::MalformedResponse(stage))?
+    {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(CommissioningError::MalformedResponse(stage)),
+    }
+    let mut networking_status: Option<u8> = None;
+    let mut debug_text: Option<String> = None;
+    loop {
+        match reader
+            .next()
+            .map_err(|_| CommissioningError::MalformedResponse(stage))?
+        {
+            None => return Err(CommissioningError::MalformedResponse(stage)),
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(v),
+            }) => {
+                if networking_status.is_some() {
+                    return Err(CommissioningError::MalformedResponse(stage));
+                }
+                networking_status = Some(
+                    u8::try_from(v).map_err(|_| CommissioningError::MalformedResponse(stage))?,
+                );
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Utf8(s),
+            }) => {
+                if debug_text.is_some() {
+                    return Err(CommissioningError::MalformedResponse(stage));
+                }
+                debug_text = Some(s);
+            }
+            // Forward-compat: ignore tag 2 (network_index) on
+            // NetworkConfigResponse — only meaningful on the scan path.
+            Some(Element::Scalar { tag: Tag::Context(2), .. }) => {}
+            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
+        }
+    }
+    let networking_status =
+        networking_status.ok_or(CommissioningError::MalformedResponse(stage))?;
+    Ok(NetworkConfigResponse {
+        networking_status,
+        debug_text,
+    })
+}
+
+/// Decode `ConnectNetworkResponse` (spec §11.9.6.6.2).
+///
+/// # Errors
+///
+/// Returns `CommissioningError::MalformedResponse(stage)` on garbled
+/// TLV. A `networking_status != 0` is a *successful* decode whose
+/// non-OK value is mapped to
+/// `CommissioningError::NetworkRejected { remediation_hint, .. }` by
+/// the state-machine dispatch layer (M6.5.2).
+pub fn decode_connect_network_response(
+    stage: Stage,
+    tlv: &[u8],
+) -> Result<ConnectNetworkResponse, CommissioningError> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader
+        .next()
+        .map_err(|_| CommissioningError::MalformedResponse(stage))?
+    {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        _ => return Err(CommissioningError::MalformedResponse(stage)),
+    }
+    let mut networking_status: Option<u8> = None;
+    let mut debug_text: Option<String> = None;
+    let mut error_value: Option<i32> = None;
+    loop {
+        match reader
+            .next()
+            .map_err(|_| CommissioningError::MalformedResponse(stage))?
+        {
+            None => return Err(CommissioningError::MalformedResponse(stage)),
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(v),
+            }) => {
+                if networking_status.is_some() {
+                    return Err(CommissioningError::MalformedResponse(stage));
+                }
+                networking_status = Some(
+                    u8::try_from(v).map_err(|_| CommissioningError::MalformedResponse(stage))?,
+                );
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Utf8(s),
+            }) => {
+                if debug_text.is_some() {
+                    return Err(CommissioningError::MalformedResponse(stage));
+                }
+                debug_text = Some(s);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Int(v),
+            }) => {
+                if error_value.is_some() {
+                    return Err(CommissioningError::MalformedResponse(stage));
+                }
+                error_value = Some(
+                    i32::try_from(v).map_err(|_| CommissioningError::MalformedResponse(stage))?,
+                );
+            }
+            // Forward-compat: ignore unknown tags.
+            Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
+            Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
+        }
+    }
+    let networking_status =
+        networking_status.ok_or(CommissioningError::MalformedResponse(stage))?;
+    Ok(ConnectNetworkResponse {
+        networking_status,
+        debug_text,
+        error_value,
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -234,5 +411,69 @@ mod tests {
             decoded,
             WiFiNetworkFeature::WIFI | WiFiNetworkFeature::THREAD | WiFiNetworkFeature::ETHERNET,
         );
+    }
+
+    #[test]
+    fn network_config_response_ok_round_trips() {
+        // { 0: 0_u8 }
+        let tlv = vec![0x15, 0x24, 0x00, 0x00, 0x18];
+        let decoded = decode_network_config_response(Stage::NetworkCommissioning, &tlv)
+            .expect("happy path decodes");
+        assert_eq!(decoded.networking_status, 0);
+        assert_eq!(decoded.debug_text, None);
+    }
+
+    #[test]
+    fn network_config_response_auth_failure_with_debug_text() {
+        // { 0: 7_u8, 1: "wrong-pw" }
+        let tlv = vec![
+            0x15,
+            0x24, 0x00, 0x07,
+            0x2C, 0x01, 0x08, b'w', b'r', b'o', b'n', b'g', b'-', b'p', b'w',
+            0x18,
+        ];
+        let decoded = decode_network_config_response(Stage::NetworkCommissioning, &tlv)
+            .expect("happy path decodes");
+        assert_eq!(decoded.networking_status, 7);
+        assert_eq!(decoded.debug_text.as_deref(), Some("wrong-pw"));
+    }
+
+    #[test]
+    fn network_config_response_malformed_returns_error() {
+        let err = decode_network_config_response(Stage::NetworkCommissioning, &[0xFF])
+            .expect_err("should fail");
+        assert!(matches!(err, CommissioningError::MalformedResponse(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn connect_network_response_ok_round_trips() {
+        let tlv = vec![0x15, 0x24, 0x00, 0x00, 0x18];
+        let decoded = decode_connect_network_response(Stage::NetworkCommissioning, &tlv)
+            .expect("happy path decodes");
+        assert_eq!(decoded.networking_status, 0);
+        assert_eq!(decoded.debug_text, None);
+        assert_eq!(decoded.error_value, None);
+    }
+
+    #[test]
+    fn connect_network_response_carries_error_value() {
+        // { 0: 9_u8, 2: i32 +10 }  — signed-int control byte 0x20, 1-byte value
+        let tlv = vec![
+            0x15,
+            0x24, 0x00, 0x09,        // networking_status = 9
+            0x20, 0x02, 0x0A,        // signed-int 1B, value +10
+            0x18,
+        ];
+        let decoded = decode_connect_network_response(Stage::NetworkCommissioning, &tlv)
+            .expect("decodes");
+        assert_eq!(decoded.networking_status, 9);
+        assert_eq!(decoded.error_value, Some(10));
+    }
+
+    #[test]
+    fn connect_network_response_malformed_returns_error() {
+        let err = decode_connect_network_response(Stage::NetworkCommissioning, &[0xFF])
+            .expect_err("should fail");
+        assert!(matches!(err, CommissioningError::MalformedResponse(_)), "got {err:?}");
     }
 }
