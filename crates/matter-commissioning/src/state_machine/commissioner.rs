@@ -505,10 +505,9 @@ impl Commissioner {
                     send_disarm_failsafe: true,
                     reason,
                 })
-            }
-            // Every `Stage` variant has its own arm above. `Stage` is
-            // `#[non_exhaustive]` for cross-crate consumers, but within
-            // this crate the match is exhaustive — no `_ =>` arm needed.
+            } // Every `Stage` variant has its own arm above. `Stage` is
+              // `#[non_exhaustive]` for cross-crate consumers, but within
+              // this crate the match is exhaustive — no `_ =>` arm needed.
         }
     }
 
@@ -1789,5 +1788,62 @@ mod tests {
             }
             other => panic!("expected Done, got {other:?}"),
         }
+    }
+
+    // --- M6.4.5 T49: CaseFailed negative coverage ---
+
+    #[test]
+    fn case_failed_response_aborts_with_case_establishment_failed() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+
+        // Glass-box: jump to FindOperationalForComplete (skipping the
+        // attestation + CSR + NOC stages that need real fixtures).
+        sm.stage = Stage::FindOperationalForComplete;
+        let _ = sm.poll().expect("emit EstablishCase");
+        assert!(sm.awaiting_case_session);
+
+        // Caller signals CASE establishment failure.
+        let err = sm
+            .on_response(Expectation::CaseFailed, &[])
+            .expect_err("CaseFailed should error");
+        assert!(matches!(err, CommissioningError::CaseEstablishmentFailed));
+        assert_eq!(sm.stage(), Stage::Failed);
+        assert!(!sm.awaiting_case_session);
+
+        // Subsequent poll emits Action::Abort with send_disarm_failsafe=true.
+        match sm.poll().expect("emit abort") {
+            Action::Abort {
+                send_disarm_failsafe,
+                reason,
+            } => {
+                assert!(send_disarm_failsafe);
+                assert!(
+                    reason.contains("CASE"),
+                    "abort reason should mention CASE: {reason}"
+                );
+            }
+            other => panic!("expected Abort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn case_failed_when_not_awaiting_returns_out_of_order() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        let err = sm
+            .on_response(Expectation::CaseFailed, &[])
+            .expect_err("CaseFailed without pending should error");
+        assert!(matches!(err, CommissioningError::OutOfOrderResponse(_)));
     }
 }
