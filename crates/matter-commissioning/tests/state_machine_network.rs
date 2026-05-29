@@ -24,8 +24,8 @@ use matter_commissioning::setup::{
     CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
 };
 use matter_commissioning::{
-    Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkKind, PaaTrustStore,
-    RemediationHint, Stage, WiFiCredentials,
+    Action, Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkKind,
+    PaaTrustStore, RemediationHint, SessionContext, Stage, WiFiCredentials,
 };
 use matter_crypto::{RingSigner, Signer};
 
@@ -457,5 +457,69 @@ fn wifi_network_enable_unknown_status_maps_to_none() {
             assert_eq!(remediation_hint, RemediationHint::None);
         }
         other => panic!("got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M6.5.2 Task 20 — Ethernet-only end-to-end walk
+// ---------------------------------------------------------------------------
+
+/// Full end-to-end walk for an Ethernet-only device (no Wi-Fi or Thread):
+/// `EvictPreviousCaseSessions` (sentinel NOC key pre-set) →
+/// `FindOperationalForComplete` (EstablishCase) → `on_case_established` →
+/// `SendComplete` (CommissioningComplete) → `Cleanup` (Done).
+///
+/// The cursor is placed at `EvictPreviousCaseSessions` via the
+/// `new_at_evict_previous_case_sessions` test-helper so that
+/// `Stage::Cleanup` can emit `Action::Done` (which requires
+/// `issued_noc_public_key` set by NOC issuance in M6.4.4 — skipped here).
+/// The ReadNetworkCommissioningInfo → Ethernet FeatureMap → EvictPreviousCaseSessions
+/// transition is covered by `ethernet_only_feature_map_skips_to_evict_case`
+/// and the proptest totality suite.
+#[test]
+fn ethernet_only_e2e_reaches_done() {
+    let mut sm =
+        Commissioner::new_at_evict_previous_case_sessions(make_ethernet_config())
+            .expect("valid config");
+
+    // EvictPreviousCaseSessions is a no-op in M6.4/5 (advances internally);
+    // next poll routes through FindOperationalForComplete and emits EstablishCase.
+    let action = sm.poll().expect("emit EstablishCase");
+    match action {
+        Action::EstablishCase { fabric_id: _, peer_node_id: _ } => {}
+        other => panic!("expected EstablishCase, got {other:?}"),
+    }
+
+    // Driver-layer signal: CASE handshake succeeded.
+    sm.on_case_established().expect("CASE established");
+
+    // SendComplete — emit CommissioningComplete invoke.
+    let action = sm.poll().expect("emit CommissioningComplete");
+    match action {
+        Action::Invoke {
+            cluster,
+            command,
+            expect,
+            session,
+            ..
+        } => {
+            assert_eq!(cluster, 0x0030);
+            assert_eq!(command, 0x04);
+            assert_eq!(expect, Expectation::CommissioningCompleteResponse);
+            assert_eq!(session, SessionContext::Case);
+        }
+        other => panic!("expected Invoke, got {other:?}"),
+    }
+
+    // CommissioningComplete OK response.
+    let ok = vec![0x15, 0x24, 0x00, 0x00, 0x18]; // { 0: 0 }
+    sm.on_response(Expectation::CommissioningCompleteResponse, &ok)
+        .expect("ok CommissioningCompleteResponse");
+
+    // Cleanup — terminal Done.
+    let action = sm.poll().expect("emit Done");
+    match action {
+        Action::Done(_) => {}
+        other => panic!("expected Done, got {other:?}"),
     }
 }

@@ -318,6 +318,34 @@ impl Commissioner {
         Ok(this)
     }
 
+    /// Position the cursor at [`Stage::EvictPreviousCaseSessions`] with a
+    /// sentinel `issued_noc_public_key` so that
+    /// [`Stage::Cleanup`] can emit [`Action::Done`] without going through
+    /// the M6.4 NOC issuance path.
+    ///
+    /// This is used by the Ethernet-only end-to-end walk in
+    /// `tests/state_machine_network.rs` (M6.5.2 Task 20) to exercise the
+    /// full network → CASE → CommissioningComplete → Done path without
+    /// replaying attestation + NOC crypto.
+    ///
+    /// **Only compiled with the `test-helpers` cargo feature.**
+    /// Must not be used in production flows.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`Commissioner::new`].
+    #[cfg(feature = "test-helpers")]
+    pub fn new_at_evict_previous_case_sessions(
+        cfg: CommissionerConfig<'_>,
+    ) -> Result<Self, CommissioningError> {
+        let mut this = Self::new(cfg)?;
+        this.stage = Stage::EvictPreviousCaseSessions;
+        // Sentinel NOC public key so Stage::Cleanup can emit Action::Done.
+        // The real key would be set by the NOC issuance path in M6.4.4.
+        this.issued_noc_public_key = Some([0xCC; 65]);
+        Ok(this)
+    }
+
     /// Drive the state machine forward.
     ///
     /// Returns the next [`Action`] the caller must perform. Idempotent:
