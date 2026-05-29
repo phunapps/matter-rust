@@ -175,6 +175,13 @@ pub struct Commissioner {
     /// `ArmFailsafe` and `FailsafeBeforeWiFiEnable` consume this.
     failsafe_expiry_seconds: u16,
 
+    /// Monotonically-increasing breadcrumb attached to every
+    /// breadcrumb-bearing cluster command. Matter Core Spec §11.10
+    /// uses breadcrumb so an interrupted commissioning can be resumed
+    /// from the last acknowledged step. Initialised to `1` in
+    /// `Commissioner::new`; incremented after every breadcrumb emit.
+    breadcrumb_counter: u64,
+
     /// `true` after [`Stage::FindOperationalForComplete`] emits
     /// `Action::EstablishCase`; cleared by
     /// [`Commissioner::on_case_established`] (success) or by
@@ -269,6 +276,7 @@ impl Commissioner {
             issued_noc_public_key: None,
             wifi_credentials: cfg.wifi_credentials,
             failsafe_expiry_seconds: 60,
+            breadcrumb_counter: 1,
             awaiting_case_session: false,
             awaiting: None,
             pending_action: None,
@@ -341,7 +349,8 @@ impl Commissioner {
                 })
             }
             Stage::ArmFailsafe => {
-                let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, 0);
+                let breadcrumb = self.next_breadcrumb();
+                let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
                 self.awaiting = Some(Expectation::ArmFailsafeResponse);
                 Ok(Action::Invoke {
                     session: SessionContext::Pase,
@@ -353,10 +362,11 @@ impl Commissioner {
                 })
             }
             Stage::ConfigRegulatory => {
+                let breadcrumb = self.next_breadcrumb();
                 let payload = gc::encode_set_regulatory_config(
                     gc::RegulatoryLocation::IndoorOutdoor,
                     "XX",
-                    0,
+                    breadcrumb,
                 );
                 self.awaiting = Some(Expectation::SetRegulatoryConfigResponse);
                 Ok(Action::Invoke {
@@ -777,6 +787,12 @@ impl Commissioner {
             // pre-awaiting fast path and never reaches handle_response.
             _ => Err(CommissioningError::OutOfOrderResponse(self.stage)),
         }
+    }
+
+    fn next_breadcrumb(&mut self) -> u64 {
+        let b = self.breadcrumb_counter;
+        self.breadcrumb_counter = b.saturating_add(1);
+        b
     }
 
     fn advance(&mut self, next: Stage) {
@@ -2088,5 +2104,64 @@ mod tests {
                 "ArmFailSafe payload should carry expiry=60 fallback: {payload:02x?}",
             );
         }
+    }
+
+    // --- M6.5.2 T15: breadcrumb monotonicity ---
+
+    #[test]
+    fn breadcrumb_increases_across_commands() {
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+
+        fn extract_uint_at_tag(payload: &[u8], tag_num: u8) -> Option<u64> {
+            use matter_codec::{Element, Tag, TlvReader, Value};
+            let mut reader = TlvReader::new(payload);
+            while let Ok(Some(elem)) = reader.next() {
+                if let Element::Scalar {
+                    tag: Tag::Context(t),
+                    value: Value::Uint(v),
+                } = elem
+                {
+                    if t == tag_num {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        }
+
+        let mut breadcrumbs: Vec<u64> = Vec::new();
+
+        // Poll #1: ReadCommissioningInfo (no breadcrumb).
+        let _ = sm.poll().expect("read commissioning info");
+        sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+            .expect("info accepted");
+
+        // Poll #2: ArmFailsafe — first breadcrumb-bearing command.
+        let action = sm.poll().expect("arm-failsafe");
+        if let Action::Invoke { payload, .. } = action {
+            if let Some(b) = extract_uint_at_tag(&payload, 1) {
+                breadcrumbs.push(b);
+            }
+        }
+        sm.on_response(Expectation::ArmFailsafeResponse, &[0x15, 0x24, 0x00, 0x00, 0x18])
+            .expect("arm-failsafe ok");
+
+        // Poll #3: SetRegulatoryConfig — second breadcrumb-bearing command.
+        let action = sm.poll().expect("set-regulatory");
+        if let Action::Invoke { payload, .. } = action {
+            if let Some(b) = extract_uint_at_tag(&payload, 2) {
+                breadcrumbs.push(b);
+            }
+        }
+
+        assert_eq!(
+            breadcrumbs.len(),
+            2,
+            "should have extracted exactly two breadcrumbs, got {breadcrumbs:?}",
+        );
+        assert!(
+            breadcrumbs[0] < breadcrumbs[1],
+            "breadcrumbs should be strictly increasing: {breadcrumbs:?}",
+        );
     }
 }
