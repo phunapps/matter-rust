@@ -108,5 +108,5 @@ pub use clusters::network_commissioning::{
 
 pub use state_machine::{
     Action, CommissionedFabric, Commissioner, CommissionerConfig, CommissioningError, Expectation,
-    RemediationHint, SessionContext, Stage,
+    NetworkKind, RemediationHint, SessionContext, Stage, WiFiCredentials,
 };

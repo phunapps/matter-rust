@@ -12,6 +12,12 @@ keywords = ["matter", "commissioning", "iot", "smart-home"]
 categories = ["network-programming", "embedded"]
 readme = "README.md"
 
+[features]
+## Expose cursor-jump helpers used exclusively by the crate's own
+## integration tests (tests/state_machine_network.rs and similar).
+## Never enable in production builds.
+test-helpers = []
+
 [lints]
 workspace = true
 
@@ -36,3 +42,7 @@ proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 p256 = { workspace = true }
+
+[[test]]
+name = "state_machine_network"
+required-features = ["test-helpers"]

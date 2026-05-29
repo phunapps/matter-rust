@@ -290,6 +290,35 @@ impl Commissioner {
         self.stage
     }
 
+    /// Create a `Commissioner` whose cursor is pre-positioned at
+    /// [`Stage::ReadNetworkCommissioningInfo`], ready for the first
+    /// `poll()` call that emits `Action::ReadAttribute` for the
+    /// `NetworkCommissioning::FeatureMap`.
+    ///
+    /// All M6.4 attestation + NOC fields are left at their zero-value
+    /// defaults. This is intentional: the network sub-cursor does not
+    /// re-read those fields, so the values never matter during a
+    /// `ReadNetworkCommissioningInfo` → `WiFiNetworkSetup` /
+    /// `EvictPreviousCaseSessions` transition.
+    ///
+    /// **Only compiled with the `test-helpers` cargo feature.**
+    /// Must not be used in production flows — it skips M6.4 crypto
+    /// verification entirely. Enable via `Cargo.toml` `required-features`
+    /// on the specific test target that needs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation errors as [`Commissioner::new`] —
+    /// i.e. invalid [`CommissionerConfig`] fields.
+    #[cfg(feature = "test-helpers")]
+    pub fn new_at_read_network_commissioning_info(
+        cfg: CommissionerConfig<'_>,
+    ) -> Result<Self, CommissioningError> {
+        let mut this = Self::new(cfg)?;
+        this.stage = Stage::ReadNetworkCommissioningInfo;
+        Ok(this)
+    }
+
     /// Drive the state machine forward.
     ///
     /// Returns the next [`Action`] the caller must perform. Idempotent:
@@ -524,9 +553,16 @@ impl Commissioner {
                 })
             }
             Stage::ReadNetworkCommissioningInfo => {
-                // Real dispatch lands in Task 16.
-                self.advance(Stage::WiFiNetworkSetup);
-                self.dispatch_stage()
+                self.awaiting = Some(Expectation::NetworkCommissioningInfo);
+                Ok(Action::ReadAttribute {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: crate::clusters::network_commissioning::CLUSTER_ID,
+                    attributes: &[
+                        crate::clusters::network_commissioning::attribute_id::FEATURE_MAP,
+                    ],
+                    expect: Expectation::NetworkCommissioningInfo,
+                })
             }
             Stage::WiFiNetworkSetup => {
                 // Real dispatch lands in Task 17.
@@ -769,6 +805,31 @@ impl Commissioner {
                     });
                 }
                 self.advance(Stage::ReadNetworkCommissioningInfo);
+                Ok(())
+            }
+            Expectation::NetworkCommissioningInfo => {
+                use crate::clusters::network_commissioning as nc;
+                let features = nc::decode_feature_map(payload)?;
+                if features.contains(nc::WiFiNetworkFeature::WIFI) {
+                    if self.wifi_credentials.is_none() {
+                        return Err(CommissioningError::WifiCredentialsRequired);
+                    }
+                    self.advance(Stage::WiFiNetworkSetup);
+                } else if features.contains(nc::WiFiNetworkFeature::ETHERNET)
+                    && !features.contains(nc::WiFiNetworkFeature::THREAD)
+                {
+                    // Ethernet-only — skip the Wi-Fi sub-cursor entirely.
+                    self.advance(Stage::EvictPreviousCaseSessions);
+                } else if features.contains(nc::WiFiNetworkFeature::THREAD) {
+                    return Err(CommissioningError::NetworkFeatureUnsupported {
+                        needed: crate::state_machine::NetworkKind::Thread,
+                    });
+                } else {
+                    // No recognised bits set — treat as malformed.
+                    return Err(CommissioningError::MalformedResponse(
+                        Stage::ReadNetworkCommissioningInfo,
+                    ));
+                }
                 Ok(())
             }
             Expectation::CommissioningCompleteResponse => {
