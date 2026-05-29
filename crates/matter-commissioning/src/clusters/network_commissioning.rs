@@ -124,9 +124,8 @@ pub fn decode_feature_map(tlv: &[u8]) -> Result<WiFiNetworkFeature, Commissionin
             value: Value::Uint(raw),
             ..
         }) => {
-            let truncated = u32::try_from(raw).map_err(|_| {
-                CommissioningError::MalformedResponse(Stage::NetworkCommissioning)
-            })?;
+            let truncated = u32::try_from(raw)
+                .map_err(|_| CommissioningError::MalformedResponse(Stage::NetworkCommissioning))?;
             Ok(WiFiNetworkFeature::from_bits_truncate(truncated))
         }
         _ => Err(CommissioningError::MalformedResponse(
@@ -195,7 +194,6 @@ pub fn decode_network_config_response(
             .next()
             .map_err(|_| CommissioningError::MalformedResponse(stage))?
         {
-            None => return Err(CommissioningError::MalformedResponse(stage)),
             Some(Element::ContainerEnd) => break,
             Some(Element::Scalar {
                 tag: Tag::Context(0),
@@ -217,11 +215,10 @@ pub fn decode_network_config_response(
                 }
                 debug_text = Some(s);
             }
-            // Forward-compat: ignore tag 2 (network_index) on
-            // NetworkConfigResponse — only meaningful on the scan path.
-            Some(Element::Scalar { tag: Tag::Context(2), .. }) => {}
+            // Forward-compat: ignore tag 2 (network_index) on NetworkConfigResponse
+            // and all other unknown tags.
             Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
-            Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
+            None | Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
         }
     }
     let networking_status =
@@ -265,7 +262,6 @@ pub fn decode_connect_network_response(
             .next()
             .map_err(|_| CommissioningError::MalformedResponse(stage))?
         {
-            None => return Err(CommissioningError::MalformedResponse(stage)),
             Some(Element::ContainerEnd) => break,
             Some(Element::Scalar {
                 tag: Tag::Context(0),
@@ -300,7 +296,7 @@ pub fn decode_connect_network_response(
             }
             // Forward-compat: ignore unknown tags.
             Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
-            Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
+            None | Some(_) => return Err(CommissioningError::MalformedResponse(stage)),
         }
     }
     let networking_status =
@@ -355,14 +351,10 @@ mod tests {
         assert_eq!(
             bytes,
             vec![
-                0x15,
-                0x30, 0x00, 0x06, b'm', b'a', b't', b't', b'e', b'r',
-                0x30, 0x01, 0x00,
-                0x24, 0x02, 0x00,
-                0x18,
+                0x15, 0x30, 0x00, 0x06, b'm', b'a', b't', b't', b'e', b'r', 0x30, 0x01, 0x00, 0x24,
+                0x02, 0x00, 0x18,
             ],
-            "encoded bytes: {:02x?}",
-            bytes,
+            "encoded bytes: {bytes:02x?}",
         );
     }
 
@@ -385,13 +377,9 @@ mod tests {
         assert_eq!(
             bytes,
             vec![
-                0x15,
-                0x30, 0x00, 0x06, b'm', b'a', b't', b't', b'e', b'r',
-                0x24, 0x01, 0x00,
-                0x18,
+                0x15, 0x30, 0x00, 0x06, b'm', b'a', b't', b't', b'e', b'r', 0x24, 0x01, 0x00, 0x18,
             ],
-            "encoded bytes: {:02x?}",
-            bytes,
+            "encoded bytes: {bytes:02x?}",
         );
     }
 
@@ -403,8 +391,7 @@ mod tests {
         // For all 3-bit values (0..=7) we hit the uint-1B branch.
         for raw in 0u8..8 {
             let tlv = vec![0x04, raw];
-            let decoded =
-                decode_feature_map(&tlv).expect("happy path decodes");
+            let decoded = decode_feature_map(&tlv).expect("happy path decodes");
             assert_eq!(decoded.bits(), u32::from(raw));
         }
     }
@@ -447,10 +434,8 @@ mod tests {
     fn network_config_response_auth_failure_with_debug_text() {
         // { 0: 7_u8, 1: "wrong-pw" }
         let tlv = vec![
-            0x15,
-            0x24, 0x00, 0x07,
-            0x2C, 0x01, 0x08, b'w', b'r', b'o', b'n', b'g', b'-', b'p', b'w',
-            0x18,
+            0x15, 0x24, 0x00, 0x07, 0x2C, 0x01, 0x08, b'w', b'r', b'o', b'n', b'g', b'-', b'p',
+            b'w', 0x18,
         ];
         let decoded = decode_network_config_response(Stage::NetworkCommissioning, &tlv)
             .expect("happy path decodes");
@@ -462,7 +447,10 @@ mod tests {
     fn network_config_response_malformed_returns_error() {
         let err = decode_network_config_response(Stage::NetworkCommissioning, &[0xFF])
             .expect_err("should fail");
-        assert!(matches!(err, CommissioningError::MalformedResponse(_)), "got {err:?}");
+        assert!(
+            matches!(err, CommissioningError::MalformedResponse(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -479,13 +467,12 @@ mod tests {
     fn connect_network_response_carries_error_value() {
         // { 0: 9_u8, 2: i32 +10 }  — signed-int control byte 0x20, 1-byte value
         let tlv = vec![
-            0x15,
-            0x24, 0x00, 0x09,        // networking_status = 9
-            0x20, 0x02, 0x0A,        // signed-int 1B, value +10
+            0x15, 0x24, 0x00, 0x09, // networking_status = 9
+            0x20, 0x02, 0x0A, // signed-int 1B, value +10
             0x18,
         ];
-        let decoded = decode_connect_network_response(Stage::NetworkCommissioning, &tlv)
-            .expect("decodes");
+        let decoded =
+            decode_connect_network_response(Stage::NetworkCommissioning, &tlv).expect("decodes");
         assert_eq!(decoded.networking_status, 9);
         assert_eq!(decoded.error_value, Some(10));
     }
@@ -494,26 +481,29 @@ mod tests {
     fn connect_network_response_malformed_returns_error() {
         let err = decode_connect_network_response(Stage::NetworkCommissioning, &[0xFF])
             .expect_err("should fail");
-        assert!(matches!(err, CommissioningError::MalformedResponse(_)), "got {err:?}");
+        assert!(
+            matches!(err, CommissioningError::MalformedResponse(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
     fn remediation_for_table_matches_spec() {
         use RemediationHint::*;
         let table: &[(u8, RemediationHint)] = &[
-            (0,  None),                       // Success — non-error path, mapping is best-effort.
-            (1,  None),                       // OutOfRange
-            (2,  DeviceNetworkSlotsFull),     // BoundsExceeded
-            (3,  CheckSsid),                  // NetworkIDNotFound
-            (4,  None),                       // DuplicateNetworkID
-            (5,  CheckSsid),                  // NetworkNotFound
-            (6,  CheckRegulatoryRegion),      // RegulatoryError
-            (7,  CheckPassphrase),            // AuthFailure
-            (8,  UpgradeSecurityMode),        // UnsupportedSecurity
-            (9,  None),                       // OtherConnectionFailure
-            (10, DeviceIpStackFailure),       // IPV6Failed
-            (11, DeviceIpStackFailure),       // IPBindFailed
-            (12, None),                       // UnknownError
+            (0, None),                   // Success — non-error path, mapping is best-effort.
+            (1, None),                   // OutOfRange
+            (2, DeviceNetworkSlotsFull), // BoundsExceeded
+            (3, CheckSsid),              // NetworkIDNotFound
+            (4, None),                   // DuplicateNetworkID
+            (5, CheckSsid),              // NetworkNotFound
+            (6, CheckRegulatoryRegion),  // RegulatoryError
+            (7, CheckPassphrase),        // AuthFailure
+            (8, UpgradeSecurityMode),    // UnsupportedSecurity
+            (9, None),                   // OtherConnectionFailure
+            (10, DeviceIpStackFailure),  // IPV6Failed
+            (11, DeviceIpStackFailure),  // IPBindFailed
+            (12, None),                  // UnknownError
         ];
         for (code, expected) in table {
             assert_eq!(
