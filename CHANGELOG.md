@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 complete, M6.5.2-6 pending)
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete)
 
 #### M6.5.1 — NetworkCommissioning cluster codecs + RemediationHint
 
@@ -57,6 +57,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   e2e driver is deferred. **Never use these in production.**
 - `breadcrumb_counter` plumbed monotonically through every
   breadcrumb-bearing command.
+
+#### M6.5.3 — matter.js byte-parity gate covers M6.5 stages (closes M6.5)
+
+- Existing `commissioning_byte_parity.rs` data-driven schema already
+  accommodates the new M6.5 stages (`ReadNetworkCommissioningInfo`,
+  `WiFiNetworkSetup`, `FailsafeBeforeWiFiEnable`, `WiFiNetworkEnable`)
+  without Rust-side changes — the test replays whatever stage records
+  appear in `test-vectors/commissioning/e2e/happy-path.json`. The four
+  new stages are RNG-free; `rng_bearing` allowlist unchanged.
+- `xtask/scripts/capture-commissioning/index.js` updated with capture-
+  point comments for the four new M6.5 payloads. Operator-wiring still
+  pending (same posture as M6.4.6).
+- `crates/matter-commissioning/README.md` gains a Wi-Fi
+  `CommissionerConfig` example + optional `tracing` feature note.
+
+Closes M6.5.
 
 ### M6.4 — Commissioning state machine — COMPLETE
 
