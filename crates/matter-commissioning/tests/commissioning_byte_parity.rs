@@ -14,7 +14,7 @@
 //! (`ArmFailSafe`, `SetRegulatoryConfig`, `CertChainRequest`,
 //! `AddTrustedRootCertificate`). M6.5.3 extends scope to the new
 //! Wi-Fi sub-cursor: when the operator-captured fixture grows
-//! `ReadNetworkCommissioningInfo` (FeatureMap read),
+//! `ReadNetworkCommissioningInfo` (`FeatureMap` read),
 //! `WiFiNetworkSetup` (`AddOrUpdateWiFiNetwork`),
 //! `FailsafeBeforeWiFiEnable` (second `ArmFailSafe`), and
 //! `WiFiNetworkEnable` (`ConnectNetwork`) stage records, this test
