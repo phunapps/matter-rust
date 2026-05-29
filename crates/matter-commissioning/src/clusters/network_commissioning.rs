@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::state_machine::{CommissioningError, Stage};
+use crate::state_machine::{CommissioningError, RemediationHint, Stage};
 
 /// Cluster ID: `0x0031`.
 pub const CLUSTER_ID: u32 = 0x0031;
@@ -312,6 +312,26 @@ pub fn decode_connect_network_response(
     })
 }
 
+/// Map a Matter `NetworkCommissioningStatusEnum` value (spec §11.9.5.1)
+/// to its [`RemediationHint`] category. Used by the M6.5.2 dispatch
+/// layer when constructing
+/// `CommissioningError::NetworkRejected` (lands in M6.5.2).
+///
+/// Any unmapped value (including values outside the defined enum
+/// range) returns [`RemediationHint::None`].
+#[must_use]
+pub const fn remediation_for(networking_status: u8) -> RemediationHint {
+    match networking_status {
+        2 => RemediationHint::DeviceNetworkSlotsFull,
+        3 | 5 => RemediationHint::CheckSsid,
+        6 => RemediationHint::CheckRegulatoryRegion,
+        7 => RemediationHint::CheckPassphrase,
+        8 => RemediationHint::UpgradeSecurityMode,
+        10 | 11 => RemediationHint::DeviceIpStackFailure,
+        _ => RemediationHint::None,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -475,5 +495,35 @@ mod tests {
         let err = decode_connect_network_response(Stage::NetworkCommissioning, &[0xFF])
             .expect_err("should fail");
         assert!(matches!(err, CommissioningError::MalformedResponse(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn remediation_for_table_matches_spec() {
+        use RemediationHint::*;
+        let table: &[(u8, RemediationHint)] = &[
+            (0,  None),                       // Success — non-error path, mapping is best-effort.
+            (1,  None),                       // OutOfRange
+            (2,  DeviceNetworkSlotsFull),     // BoundsExceeded
+            (3,  CheckSsid),                  // NetworkIDNotFound
+            (4,  None),                       // DuplicateNetworkID
+            (5,  CheckSsid),                  // NetworkNotFound
+            (6,  CheckRegulatoryRegion),      // RegulatoryError
+            (7,  CheckPassphrase),            // AuthFailure
+            (8,  UpgradeSecurityMode),        // UnsupportedSecurity
+            (9,  None),                       // OtherConnectionFailure
+            (10, DeviceIpStackFailure),       // IPV6Failed
+            (11, DeviceIpStackFailure),       // IPBindFailed
+            (12, None),                       // UnknownError
+        ];
+        for (code, expected) in table {
+            assert_eq!(
+                remediation_for(*code),
+                *expected,
+                "remediation_for({code}) mismatch",
+            );
+        }
+        // Unknown values (above the defined enum range) fall through to None.
+        assert_eq!(remediation_for(99), RemediationHint::None);
+        assert_eq!(remediation_for(u8::MAX), RemediationHint::None);
     }
 }
