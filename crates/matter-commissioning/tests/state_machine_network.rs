@@ -340,3 +340,39 @@ fn wifi_network_setup_bounds_exceeded_maps_to_slots_full() {
         other => panic!("got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// M6.5.2 Task 18 — FailsafeBeforeWiFiEnable dispatch + second ArmFailSafe
+// ---------------------------------------------------------------------------
+
+fn drive_to_failsafe_before_wifi_enable() -> Commissioner {
+    let mut sm = drive_to_wifi_network_setup();
+    let _ = sm.poll().expect("AddOrUpdateWiFiNetwork");
+    let ok = vec![0x15, 0x24, 0x00, 0x00, 0x18];
+    sm.on_response(Expectation::NetworkConfigResponse, &ok)
+        .expect("ok accepted");
+    sm
+}
+
+#[test]
+fn failsafe_before_wifi_enable_emits_second_arm_failsafe() {
+    let mut sm = drive_to_failsafe_before_wifi_enable();
+    let action = sm.poll().expect("emit second ArmFailSafe");
+    match action {
+        matter_commissioning::Action::Invoke {
+            cluster,
+            command,
+            expect,
+            ..
+        } => {
+            assert_eq!(cluster, 0x0030);
+            assert_eq!(command, 0x00);
+            assert_eq!(expect, Expectation::ArmFailsafeResponse);
+        }
+        other => panic!("expected Invoke, got {other:?}"),
+    }
+    let ok = vec![0x15, 0x24, 0x00, 0x00, 0x18];
+    sm.on_response(Expectation::ArmFailsafeResponse, &ok)
+        .expect("ok accepted");
+    assert_eq!(sm.stage(), Stage::WiFiNetworkEnable);
+}

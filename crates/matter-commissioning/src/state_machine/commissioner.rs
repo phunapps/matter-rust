@@ -588,9 +588,17 @@ impl Commissioner {
                 })
             }
             Stage::FailsafeBeforeWiFiEnable => {
-                // Real dispatch lands in Task 18.
-                self.advance(Stage::WiFiNetworkEnable);
-                self.dispatch_stage()
+                let breadcrumb = self.next_breadcrumb();
+                let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
+                self.awaiting = Some(Expectation::ArmFailsafeResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: gc::CLUSTER_ID,
+                    command: gc::command_id::ARM_FAIL_SAFE,
+                    payload,
+                    expect: Expectation::ArmFailsafeResponse,
+                })
             }
             Stage::WiFiNetworkEnable => {
                 // Real dispatch lands in Task 19.
@@ -758,11 +766,18 @@ impl Commissioner {
                 let resp = gc::decode_arm_fail_safe_response(payload)?;
                 if resp.error_code != 0 {
                     return Err(CommissioningError::DeviceImStatus {
-                        stage: Stage::ArmFailsafe,
+                        stage: self.stage,
                         im_status: u16::from(resp.error_code),
                     });
                 }
-                self.advance(Stage::ConfigRegulatory);
+                let next = match self.stage {
+                    Stage::ArmFailsafe => Stage::ConfigRegulatory,
+                    Stage::FailsafeBeforeWiFiEnable => Stage::WiFiNetworkEnable,
+                    other => {
+                        return Err(CommissioningError::OutOfOrderResponse(other));
+                    }
+                };
+                self.advance(next);
                 Ok(())
             }
             Expectation::SetRegulatoryConfigResponse => {
