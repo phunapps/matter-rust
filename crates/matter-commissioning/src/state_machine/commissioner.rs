@@ -477,12 +477,23 @@ impl Commissioner {
                     expect: Expectation::NocResponse,
                 })
             }
-            Stage::NetworkCommissioning => {
-                // M6.4 ships network commissioning as a no-op slot.
-                // M6.5 expands into the Wi-Fi/Thread subgraph (six
-                // C++ AutoCommissioner stages: kScanNetworks,
-                // kWiFiNetworkSetup, kFailsafeBeforeWiFiEnable,
-                // kWiFiNetworkEnable, etc.).
+            Stage::ReadNetworkCommissioningInfo => {
+                // Real dispatch lands in Task 16.
+                self.advance(Stage::WiFiNetworkSetup);
+                self.dispatch_stage()
+            }
+            Stage::WiFiNetworkSetup => {
+                // Real dispatch lands in Task 17.
+                self.advance(Stage::FailsafeBeforeWiFiEnable);
+                self.dispatch_stage()
+            }
+            Stage::FailsafeBeforeWiFiEnable => {
+                // Real dispatch lands in Task 18.
+                self.advance(Stage::WiFiNetworkEnable);
+                self.dispatch_stage()
+            }
+            Stage::WiFiNetworkEnable => {
+                // Real dispatch lands in Task 19.
                 self.advance(Stage::EvictPreviousCaseSessions);
                 self.dispatch_stage()
             }
@@ -706,7 +717,7 @@ impl Commissioner {
                         im_status: u16::from(resp.status),
                     });
                 }
-                self.advance(Stage::NetworkCommissioning);
+                self.advance(Stage::ReadNetworkCommissioningInfo);
                 Ok(())
             }
             Expectation::CommissioningCompleteResponse => {
@@ -1504,7 +1515,7 @@ mod tests {
     /// `AddNOC` Invoke targeting cluster `0x003E` / command `0x06`.
     /// Then drive the synthetic `NOCResponse { status: 0 }` through
     /// `on_response` and assert the cursor lands on
-    /// `Stage::NetworkCommissioning`.
+    /// `Stage::ReadNetworkCommissioningInfo`.
     #[test]
     fn drive_through_send_noc_with_synthetic_noc_response() {
         use matter_cert::{
@@ -1580,7 +1591,7 @@ mod tests {
         }
         sm.on_response(Expectation::NocResponse, &noc_response)
             .expect("NocResponse accepted");
-        assert_eq!(sm.stage(), Stage::NetworkCommissioning);
+        assert_eq!(sm.stage(), Stage::ReadNetworkCommissioningInfo);
     }
 
     /// Glass-box test: a non-zero NOC status surfaces as

@@ -1,8 +1,8 @@
 //! `Stage` — every cursor position the state machine can occupy.
 //!
 //! Stages match `project-chip/connectedhomeip`'s `CommissioningStage`
-//! enum (translated to Rust style and trimmed to the M6.4 subset).
-//! Stages we defer past M6.4 are noted inline as `// deferred: kFoo`
+//! enum (translated to Rust style and trimmed to the M6.5 subset).
+//! Stages we defer past M6.5 are noted inline as `// deferred: kFoo`
 //! so future expansion is mechanical.
 
 #![forbid(unsafe_code)]
@@ -46,11 +46,27 @@ pub enum Stage {
     SendTrustedRootCert,
     /// `OperationalCredentials::AddNOC` (command `0x06`).
     SendNoc,
-    /// Network commissioning — M6.4 ships as a structural no-op. M6.5
-    /// expands into the full Wi-Fi/Thread subgraph (`kScanNetworks`,
-    /// `kWiFiNetworkSetup`, `kFailsafeBeforeWiFiEnable`,
-    /// `kWiFiNetworkEnable`, etc.).
-    NetworkCommissioning,
+    /// Read `NetworkCommissioning::FeatureMap` (attribute `0xFFFC`) on
+    /// endpoint 0. Determines whether the device supports Wi-Fi,
+    /// Ethernet, or Thread (or some combination). Branching at this
+    /// stage's response routes to `WiFiNetworkSetup` (Wi-Fi),
+    /// `EvictPreviousCaseSessions` (Ethernet-only), or `Failed`
+    /// (Thread-only / malformed).
+    ReadNetworkCommissioningInfo,
+    /// `NetworkCommissioning::AddOrUpdateWiFiNetwork` (cluster `0x0031`
+    /// command `0x02`). Skipped for Ethernet-only devices.
+    WiFiNetworkSetup,
+    /// Second `GeneralCommissioning::ArmFailSafe` (cluster `0x0030`
+    /// command `0x00`). Extends the failsafe window before
+    /// `ConnectNetwork` so the device has room to associate with the
+    /// operational network and re-discover the commissioner via mDNS.
+    /// Re-uses the existing `Expectation::ArmFailsafeResponse`.
+    FailsafeBeforeWiFiEnable,
+    /// `NetworkCommissioning::ConnectNetwork` (cluster `0x0031`
+    /// command `0x06`). The device associates with the operational
+    /// network and (typically) returns `ConnectNetworkResponse` over
+    /// PASE before switching networks.
+    WiFiNetworkEnable,
     /// Evict any prior CASE session for this fabric/peer pair. M6.4
     /// only supports new-fabric commissioning — no eviction needed —
     /// so the stage advances immediately. Slot reserved for M8
@@ -100,8 +116,11 @@ pub fn next_stage(current: Stage) -> Option<Stage> {
         Stage::ValidateCsr => Stage::GenerateNocChain,
         Stage::GenerateNocChain => Stage::SendTrustedRootCert,
         Stage::SendTrustedRootCert => Stage::SendNoc,
-        Stage::SendNoc => Stage::NetworkCommissioning,
-        Stage::NetworkCommissioning => Stage::EvictPreviousCaseSessions,
+        Stage::SendNoc => Stage::ReadNetworkCommissioningInfo,
+        Stage::ReadNetworkCommissioningInfo => Stage::WiFiNetworkSetup,
+        Stage::WiFiNetworkSetup => Stage::FailsafeBeforeWiFiEnable,
+        Stage::FailsafeBeforeWiFiEnable => Stage::WiFiNetworkEnable,
+        Stage::WiFiNetworkEnable => Stage::EvictPreviousCaseSessions,
         Stage::EvictPreviousCaseSessions => Stage::FindOperationalForComplete,
         Stage::FindOperationalForComplete => Stage::SendComplete,
         Stage::SendComplete => Stage::Cleanup,
@@ -131,7 +150,10 @@ mod tests {
             Stage::GenerateNocChain,
             Stage::SendTrustedRootCert,
             Stage::SendNoc,
-            Stage::NetworkCommissioning,
+            Stage::ReadNetworkCommissioningInfo,
+            Stage::WiFiNetworkSetup,
+            Stage::FailsafeBeforeWiFiEnable,
+            Stage::WiFiNetworkEnable,
             Stage::EvictPreviousCaseSessions,
             Stage::FindOperationalForComplete,
             Stage::SendComplete,

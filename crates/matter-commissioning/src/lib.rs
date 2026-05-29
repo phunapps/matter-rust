@@ -28,8 +28,8 @@
 //! - **M6.4.4:** CSR + NOC issuance flow. State machine
 //!   drives `SendOpCertSigningRequest` → `ValidateCsr` →
 //!   `GenerateNocChain` → `SendTrustedRootCert` → `SendNoc`, then
-//!   advances to `Stage::NetworkCommissioning` (a no-op slot M6.4.5
-//!   expands into the Wi-Fi/Thread subgraph). Integrates M6.3's
+//!   advances to `Stage::ReadNetworkCommissioningInfo` (M6.5.2 expands
+//!   the network subgraph). Integrates M6.3's
 //!   `verify_csr_response` + `issue_noc` + the `OpCreds`
 //!   `AddTrustedRoot` / `AddNOC` encoders.
 //! - **M6.4.5:** PASE→CASE handoff + `CommissioningComplete`.

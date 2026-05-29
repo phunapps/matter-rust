@@ -1,6 +1,6 @@
 //! M6.4.4 — state machine drives end-to-end through the CSR + NOC
-//! flow, reaching `Stage::NetworkCommissioning` on a fully-synthetic
-//! happy-path scenario.
+//! flow, reaching `Stage::ReadNetworkCommissioningInfo` on a
+//! fully-synthetic happy-path scenario.
 //!
 //! Currently `#[ignore]`'d because driving the public API end-to-end
 //! requires real (or synthetic-but-self-consistent) DAC + PAI +
@@ -16,7 +16,7 @@
 
 #[test]
 #[ignore = "needs synthetic CSR + attestation fixtures (M6.4.6 or xtask capture-attestation)"]
-fn happy_path_drives_through_csr_and_noc_to_network_commissioning() {
+fn happy_path_drives_through_csr_and_noc_to_read_network_commissioning_info() {
     // Placeholder — see module doc.
     // When fixtures land:
     // 1. Construct fabric + setup + PaaTrustStore::with_csa_test_roots()
@@ -27,7 +27,7 @@ fn happy_path_drives_through_csr_and_noc_to_network_commissioning() {
     //    commissioner-supplied CSR nonce.
     // 4. Verify ValidateCsr + GenerateNocChain pass off-wire.
     // 5. Feed AddTrustedRootResponse OK + NocResponse { status: 0 }.
-    // 6. Assert cursor reaches Stage::NetworkCommissioning.
+    // 6. Assert cursor reaches Stage::ReadNetworkCommissioningInfo.
     //
     // Until then the inline tests in commissioner.rs cover the dispatch
     // + response shapes — see send_op_cert_signing_request_*,
