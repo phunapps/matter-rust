@@ -13,6 +13,9 @@ use crate::state_machine::action::{Action, Expectation};
 use crate::state_machine::error::CommissioningError;
 use crate::state_machine::stage::Stage;
 
+#[cfg(feature = "tracing")]
+use tracing::instrument;
+
 /// Wi-Fi station credentials supplied to `AddOrUpdateWiFiNetwork`.
 ///
 /// `ssid` must be 1–32 bytes (Matter Core Spec §11.9 constraints).
@@ -358,6 +361,7 @@ impl Commissioner {
     /// [`Stage::Failed`] — when this happens, the cursor advances to
     /// `Failed` and the next `poll()` call emits an
     /// [`Action::Abort`] with a rendered summary of the failure.
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(stage = ?self.stage)))]
     pub fn poll(&mut self) -> Result<Action, CommissioningError> {
         if let Some(act) = self.pending_action.clone() {
             return Ok(act);
@@ -723,6 +727,7 @@ impl Commissioner {
     /// `UnexpectedResponseKind` transitions the cursor to
     /// [`Stage::Failed`]; the next `poll()` call emits
     /// [`Action::Abort`] with a rendered summary.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, payload), fields(stage = ?self.stage, expectation = ?expect)))]
     pub fn on_response(
         &mut self,
         expect: Expectation,
@@ -775,6 +780,7 @@ impl Commissioner {
     /// machine isn't currently awaiting CASE establishment (i.e., the
     /// cursor is not at `FindOperationalForComplete` or the
     /// `EstablishCase` action hasn't been emitted yet).
+    #[cfg_attr(feature = "tracing", instrument(skip(self)))]
     pub fn on_case_established(&mut self) -> Result<(), CommissioningError> {
         if !self.awaiting_case_session {
             return Err(CommissioningError::OutOfOrderResponse(self.stage));

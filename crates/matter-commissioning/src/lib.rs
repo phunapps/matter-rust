@@ -69,6 +69,15 @@
 //! Replace the QR string + manual code above with values captured for
 //! your own devices via `cargo xtask capture-setup` if you change the
 //! fixture set.
+//!
+//! ## Optional `tracing` feature
+//!
+//! Enable the `tracing` crate feature to get per-method spans on
+//! `Commissioner::poll`, `Commissioner::on_response`, and
+//! `Commissioner::on_case_established`. Span fields (`stage`,
+//! `expectation`) align best-effort with matter.js's log-event format
+//! so operators can grep across both implementations. Compatibility
+//! is not guaranteed across matter.js minor versions.
 
 #![forbid(unsafe_code)]
 
