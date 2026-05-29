@@ -13,6 +13,36 @@ use crate::state_machine::action::{Action, Expectation};
 use crate::state_machine::error::CommissioningError;
 use crate::state_machine::stage::Stage;
 
+/// Wi-Fi station credentials supplied to `AddOrUpdateWiFiNetwork`.
+///
+/// `ssid` must be 1–32 bytes (Matter Core Spec §11.9 constraints).
+/// `credentials` must be 0–64 bytes — empty means open network, ≤64
+/// bytes covers WPA2/WPA3 PSK lengths.
+///
+/// `Debug` is hand-written to redact `credentials` (renders only the
+/// length). `Clone` is derived. Validation runs in
+/// `Commissioner::new` (M6.5.2 Task 13).
+#[derive(Clone, PartialEq, Eq)]
+pub struct WiFiCredentials {
+    /// SSID bytes, 1–32 bytes.
+    pub ssid: Vec<u8>,
+    /// Pre-shared key / passphrase bytes, 0–64 bytes. Empty means
+    /// open network.
+    pub credentials: Vec<u8>,
+}
+
+impl core::fmt::Debug for WiFiCredentials {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WiFiCredentials")
+            .field("ssid", &format_args!("<{} bytes>", self.ssid.len()))
+            .field(
+                "credentials",
+                &format_args!("<redacted, {} bytes>", self.credentials.len()),
+            )
+            .finish()
+    }
+}
+
 /// Configuration passed to [`Commissioner::new`].
 ///
 /// All fields are by-reference where possible so the state machine
@@ -1845,5 +1875,21 @@ mod tests {
             .on_response(Expectation::CaseFailed, &[])
             .expect_err("CaseFailed without pending should error");
         assert!(matches!(err, CommissioningError::OutOfOrderResponse(_)));
+    }
+
+    #[test]
+    fn wifi_credentials_debug_redacts_passphrase() {
+        let creds = WiFiCredentials {
+            ssid: b"matter".to_vec(),
+            credentials: b"hunter22".to_vec(),
+        };
+        let rendered = format!("{creds:?}");
+        assert!(
+            !rendered.contains("hunter22"),
+            "Debug must not contain credentials bytes: {rendered}",
+        );
+        assert!(rendered.contains("redacted"), "got {rendered}");
+        assert!(rendered.contains("8"), "credentials length should appear: {rendered}");
+        assert!(rendered.contains("6"), "ssid length should appear: {rendered}");
     }
 }
