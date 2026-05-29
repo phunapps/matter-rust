@@ -284,6 +284,65 @@ The verifier performs five checks in order:
 Any failure surfaces as a specific
 `AttestationError::CertificationDeclaration*` variant.
 
+## Example: full commissioning driver loop reaching `Action::Done` (M6.4.5)
+
+The complete cursor walks from `SecurePairing` through
+`Action::Done(CommissionedFabric)`. The caller (M6.6's Tokio driver in
+the next major milestone) frames Invoke envelopes + routes via
+`matter-transport`, then performs mDNS find-operational + the SIGMA
+handshake when the state machine signals `Action::EstablishCase`:
+
+```rust,no_run
+use matter_commissioning::{
+    Action, CommissionedFabric, Commissioner, CommissionerConfig,
+    CommissioningError, Expectation,
+};
+
+# fn run(mut sm: Commissioner) -> Result<CommissionedFabric, CommissioningError> {
+loop {
+    match sm.poll()? {
+        Action::Invoke { expect, .. } | Action::ReadAttribute { expect, .. } => {
+            // Caller frames the request into Invoke/Read envelope and
+            // routes via matter-transport. The session is PASE for all
+            // pre-NOC stages and CASE after EstablishCase succeeds.
+            let response_bytes: &[u8] = unimplemented!("driver supplies the bytes");
+            sm.on_response(expect, response_bytes)?;
+        }
+        Action::EstablishCase { fabric_id, peer_node_id } => {
+            // M6.6 driver: mDNS find-operational for the operational
+            // service name keyed off (compressed_fabric_id, peer_node_id),
+            // then run the SIGMA-I handshake from matter-crypto.
+            // Pretend success here:
+            let _ = (fabric_id, peer_node_id);
+            sm.on_case_established()?;
+
+            // On failure instead:
+            //   sm.on_response(Expectation::CaseFailed, &[])?;
+        }
+        Action::EvictCase { .. } => {
+            // Reserved for M8 multi-fabric work; never emitted by
+            // M6.4's new-fabric flow.
+        }
+        Action::Done(commissioned_fabric) => {
+            return Ok(commissioned_fabric);
+        }
+        Action::Abort { send_disarm_failsafe, reason } => {
+            eprintln!("commissioning aborted: {reason}");
+            if send_disarm_failsafe {
+                // ... send ArmFailSafe(expiry=0) over PASE ...
+            }
+            return Err(CommissioningError::CaseEstablishmentFailed); // pick a representative error
+        }
+    }
+}
+# }
+```
+
+The returned `CommissionedFabric` carries the long-lived fabric record
+(RCAC + IPK + fabric ID), the peer's operational node ID, the device's
+NOC public key, and the terminal stage cursor (always
+`Stage::Cleanup`).
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from
