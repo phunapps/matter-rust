@@ -253,9 +253,8 @@ pub fn decode_basic_commissioning_info(tlv: &[u8]) -> Option<BasicCommissioningI
                 tag: Tag::Context(1),
                 value: Value::Uint(v),
             }) => {
-                match u16::try_from(v) {
-                    Ok(n) => max_cumulative = n,
-                    Err(_) => {}
+                if let Ok(n) = u16::try_from(v) {
+                    max_cumulative = n;
                 }
             }
             // Forward-compat: ignore unrecognised tags.
@@ -334,8 +333,7 @@ mod tests {
     fn basic_commissioning_info_120_decodes() {
         // { 0: 120_u16, 1: 900_u16 }
         let tlv = vec![
-            0x15,
-            0x25, 0x00, 0x78, 0x00, // u16 = 120
+            0x15, 0x25, 0x00, 0x78, 0x00, // u16 = 120
             0x25, 0x01, 0x84, 0x03, // u16 = 900
             0x18,
         ];

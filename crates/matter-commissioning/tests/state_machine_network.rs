@@ -121,7 +121,7 @@ fn make_ethernet_config() -> CommissionerConfig<'static> {
 // FeatureMap TLV encoder
 // ---------------------------------------------------------------------------
 
-/// Encode a bare `u32` FeatureMap value as the minimal-width TLV scalar
+/// Encode a bare `u32` `FeatureMap` value as the minimal-width TLV scalar
 /// that `decode_feature_map` expects.
 ///
 /// Matter attribute read responses return a bare TLV scalar (not wrapped
@@ -129,15 +129,12 @@ fn make_ethernet_config() -> CommissionerConfig<'static> {
 /// - `bits ≤ 0xFF`: 1-byte unsigned (TLV type byte `0x04`) followed by the
 ///   value byte.
 /// - `bits ≤ 0xFFFF`: 2-byte unsigned (type `0x05`) followed by LE bytes.
+#[allow(clippy::cast_possible_truncation)]
 fn feature_map_tlv(bits: u32) -> Vec<u8> {
     if bits <= 0xFF {
         vec![0x04, bits as u8]
     } else {
-        vec![
-            0x05,
-            (bits & 0xFF) as u8,
-            ((bits >> 8) & 0xFF) as u8,
-        ]
+        vec![0x05, (bits & 0xFF) as u8, ((bits >> 8) & 0xFF) as u8]
     }
 }
 
@@ -171,8 +168,11 @@ fn wifi_only_feature_map_advances_to_wifi_setup() {
         }
         other => panic!("expected ReadAttribute, got {other:?}"),
     }
-    sm.on_response(Expectation::NetworkCommissioningInfo, &feature_map_tlv(0b001))
-        .expect("WiFi-only FeatureMap accepted");
+    sm.on_response(
+        Expectation::NetworkCommissioningInfo,
+        &feature_map_tlv(0b001),
+    )
+    .expect("WiFi-only FeatureMap accepted");
     assert_eq!(sm.stage(), Stage::WiFiNetworkSetup);
 }
 
@@ -180,8 +180,11 @@ fn wifi_only_feature_map_advances_to_wifi_setup() {
 fn ethernet_only_feature_map_skips_to_evict_case() {
     let mut sm = drive_to_read_network_info(make_ethernet_config());
     let _ = sm.poll().expect("emit ReadAttribute");
-    sm.on_response(Expectation::NetworkCommissioningInfo, &feature_map_tlv(0b100))
-        .expect("Ethernet-only FeatureMap accepted");
+    sm.on_response(
+        Expectation::NetworkCommissioningInfo,
+        &feature_map_tlv(0b100),
+    )
+    .expect("Ethernet-only FeatureMap accepted");
     assert_eq!(sm.stage(), Stage::EvictPreviousCaseSessions);
 }
 
@@ -227,10 +230,8 @@ fn wifi_credentials_none_with_wifi_device_fails_with_typed_error() {
 fn empty_feature_map_is_malformed() {
     let mut sm = drive_to_read_network_info(make_wifi_config());
     let _ = sm.poll().expect("emit ReadAttribute");
-    let Err(err) = sm.on_response(
-        Expectation::NetworkCommissioningInfo,
-        &feature_map_tlv(0),
-    ) else {
+    let Err(err) = sm.on_response(Expectation::NetworkCommissioningInfo, &feature_map_tlv(0))
+    else {
         panic!("Empty FeatureMap should fail");
     };
     assert!(
@@ -255,8 +256,11 @@ fn empty_feature_map_is_malformed() {
 fn drive_to_wifi_network_setup() -> Commissioner {
     let mut sm = drive_to_read_network_info(make_wifi_config());
     let _ = sm.poll().expect("emit ReadAttribute");
-    sm.on_response(Expectation::NetworkCommissioningInfo, &feature_map_tlv(0b001))
-        .expect("WiFi FeatureMap accepted");
+    sm.on_response(
+        Expectation::NetworkCommissioningInfo,
+        &feature_map_tlv(0b001),
+    )
+    .expect("WiFi FeatureMap accepted");
     sm
 }
 
@@ -334,7 +338,9 @@ fn wifi_network_setup_bounds_exceeded_maps_to_slots_full() {
         panic!("BoundsExceeded should fail");
     };
     match err {
-        CommissioningError::NetworkRejected { remediation_hint, .. } => {
+        CommissioningError::NetworkRejected {
+            remediation_hint, ..
+        } => {
             assert_eq!(remediation_hint, RemediationHint::DeviceNetworkSlotsFull);
         }
         other => panic!("got {other:?}"),
@@ -453,7 +459,9 @@ fn wifi_network_enable_unknown_status_maps_to_none() {
         panic!("UnknownError should fail");
     };
     match err {
-        CommissioningError::NetworkRejected { remediation_hint, .. } => {
+        CommissioningError::NetworkRejected {
+            remediation_hint, ..
+        } => {
             assert_eq!(remediation_hint, RemediationHint::None);
         }
         other => panic!("got {other:?}"),
@@ -466,27 +474,29 @@ fn wifi_network_enable_unknown_status_maps_to_none() {
 
 /// Full end-to-end walk for an Ethernet-only device (no Wi-Fi or Thread):
 /// `EvictPreviousCaseSessions` (sentinel NOC key pre-set) →
-/// `FindOperationalForComplete` (EstablishCase) → `on_case_established` →
-/// `SendComplete` (CommissioningComplete) → `Cleanup` (Done).
+/// `FindOperationalForComplete` (`EstablishCase`) → `on_case_established` →
+/// `SendComplete` (`CommissioningComplete`) → `Cleanup` (Done).
 ///
 /// The cursor is placed at `EvictPreviousCaseSessions` via the
 /// `new_at_evict_previous_case_sessions` test-helper so that
 /// `Stage::Cleanup` can emit `Action::Done` (which requires
 /// `issued_noc_public_key` set by NOC issuance in M6.4.4 — skipped here).
-/// The ReadNetworkCommissioningInfo → Ethernet FeatureMap → EvictPreviousCaseSessions
+/// The `ReadNetworkCommissioningInfo` → Ethernet `FeatureMap` → `EvictPreviousCaseSessions`
 /// transition is covered by `ethernet_only_feature_map_skips_to_evict_case`
 /// and the proptest totality suite.
 #[test]
 fn ethernet_only_e2e_reaches_done() {
-    let mut sm =
-        Commissioner::new_at_evict_previous_case_sessions(make_ethernet_config())
-            .expect("valid config");
+    let mut sm = Commissioner::new_at_evict_previous_case_sessions(make_ethernet_config())
+        .expect("valid config");
 
     // EvictPreviousCaseSessions is a no-op in M6.4/5 (advances internally);
     // next poll routes through FindOperationalForComplete and emits EstablishCase.
     let action = sm.poll().expect("emit EstablishCase");
     match action {
-        Action::EstablishCase { fabric_id: _, peer_node_id: _ } => {}
+        Action::EstablishCase {
+            fabric_id: _,
+            peer_node_id: _,
+        } => {}
         other => panic!("expected EstablishCase, got {other:?}"),
     }
 

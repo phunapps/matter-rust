@@ -73,7 +73,7 @@ pub enum CommissioningError {
     /// `NetworkCommissioning::FeatureMap` declared a network type the
     /// commissioner does not support in v1.0. Currently this means a
     /// device that only supports Thread, or a device that returned a
-    /// FeatureMap with no recognised bits set.
+    /// `FeatureMap` with no recognised bits set.
     #[error("device requires {needed:?} network type; not supported in v1.0")]
     NetworkFeatureUnsupported {
         /// Which network type the device requires.
@@ -83,9 +83,11 @@ pub enum CommissioningError {
     /// Device rejected `AddOrUpdateWiFiNetwork` or `ConnectNetwork`
     /// with a non-OK `NetworkCommissioningStatusEnum` value
     /// (spec §11.9.5.1).
-    #[error("network commissioning rejected at stage {stage:?}: \
+    #[error(
+        "network commissioning rejected at stage {stage:?}: \
              networking_status {networking_status:#x}, \
-             debug_text={debug_text:?}, hint={remediation_hint:?}")]
+             debug_text={debug_text:?}, hint={remediation_hint:?}"
+    )]
     NetworkRejected {
         /// Which stage the device rejected.
         stage: Stage,
@@ -114,11 +116,11 @@ pub enum CommissioningError {
 #[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NetworkKind {
-    /// Wi-Fi network interface (FeatureMap bit 0).
+    /// Wi-Fi network interface (`FeatureMap` bit 0).
     WiFi,
-    /// Thread network interface (FeatureMap bit 1).
+    /// Thread network interface (`FeatureMap` bit 1).
     Thread,
-    /// Ethernet network interface (FeatureMap bit 2).
+    /// Ethernet network interface (`FeatureMap` bit 2).
     Ethernet,
 }
 

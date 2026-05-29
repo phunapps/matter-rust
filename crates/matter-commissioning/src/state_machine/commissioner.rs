@@ -328,7 +328,7 @@ impl Commissioner {
     ///
     /// This is used by the Ethernet-only end-to-end walk in
     /// `tests/state_machine_network.rs` (M6.5.2 Task 20) to exercise the
-    /// full network → CASE → CommissioningComplete → Done path without
+    /// full network → CASE → `CommissioningComplete` → Done path without
     /// replaying attestation + NOC crypto.
     ///
     /// **Only compiled with the `test-helpers` cargo feature.**
@@ -371,6 +371,26 @@ impl Commissioner {
         Ok(action)
     }
 
+    /// Helper: emit an `ArmFailsafe` action at the current stage.
+    ///
+    /// Used by both `ArmFailsafe` and `FailsafeBeforeWiFiEnable` stages,
+    /// which share identical payload and action logic.
+    fn arm_failsafe_action(&mut self) -> Action {
+        use crate::clusters::general_commissioning as gc;
+        use crate::state_machine::action::SessionContext;
+        let breadcrumb = self.next_breadcrumb();
+        let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
+        self.awaiting = Some(Expectation::ArmFailsafeResponse);
+        Action::Invoke {
+            session: SessionContext::Pase,
+            endpoint: 0,
+            cluster: gc::CLUSTER_ID,
+            command: gc::command_id::ARM_FAIL_SAFE,
+            payload,
+            expect: Expectation::ArmFailsafeResponse,
+        }
+    }
+
     /// Compute the next [`Action`] for the current [`Stage`].
     ///
     /// Called by [`Self::poll`] only when there is no cached
@@ -408,19 +428,7 @@ impl Commissioner {
                     expect: Expectation::CommissioningInfo,
                 })
             }
-            Stage::ArmFailsafe => {
-                let breadcrumb = self.next_breadcrumb();
-                let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
-                self.awaiting = Some(Expectation::ArmFailsafeResponse);
-                Ok(Action::Invoke {
-                    session: SessionContext::Pase,
-                    endpoint: 0,
-                    cluster: gc::CLUSTER_ID,
-                    command: gc::command_id::ARM_FAIL_SAFE,
-                    payload,
-                    expect: Expectation::ArmFailsafeResponse,
-                })
-            }
+            Stage::ArmFailsafe | Stage::FailsafeBeforeWiFiEnable => Ok(self.arm_failsafe_action()),
             Stage::ConfigRegulatory => {
                 let breadcrumb = self.next_breadcrumb();
                 let payload = gc::encode_set_regulatory_config(
@@ -604,11 +612,8 @@ impl Commissioner {
                 let ssid = creds.ssid.clone();
                 let credentials = creds.credentials.clone();
                 let breadcrumb = self.next_breadcrumb();
-                let payload = nc::encode_add_or_update_wifi_network(
-                    &ssid,
-                    &credentials,
-                    breadcrumb,
-                );
+                let payload =
+                    nc::encode_add_or_update_wifi_network(&ssid, &credentials, breadcrumb);
                 self.awaiting = Some(Expectation::NetworkConfigResponse);
                 Ok(Action::Invoke {
                     session: SessionContext::Pase,
@@ -617,19 +622,6 @@ impl Commissioner {
                     command: nc::command_id::ADD_OR_UPDATE_WIFI_NETWORK,
                     payload,
                     expect: Expectation::NetworkConfigResponse,
-                })
-            }
-            Stage::FailsafeBeforeWiFiEnable => {
-                let breadcrumb = self.next_breadcrumb();
-                let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
-                self.awaiting = Some(Expectation::ArmFailsafeResponse);
-                Ok(Action::Invoke {
-                    session: SessionContext::Pase,
-                    endpoint: 0,
-                    cluster: gc::CLUSTER_ID,
-                    command: gc::command_id::ARM_FAIL_SAFE,
-                    payload,
-                    expect: Expectation::ArmFailsafeResponse,
                 })
             }
             Stage::WiFiNetworkEnable => {
@@ -790,6 +782,7 @@ impl Commissioner {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handle_response(
         &mut self,
         expect: Expectation,
@@ -915,8 +908,7 @@ impl Commissioner {
             }
             Expectation::NetworkConfigResponse => {
                 use crate::clusters::network_commissioning as nc;
-                let resp =
-                    nc::decode_network_config_response(Stage::WiFiNetworkSetup, payload)?;
+                let resp = nc::decode_network_config_response(Stage::WiFiNetworkSetup, payload)?;
                 if resp.networking_status != 0 {
                     return Err(CommissioningError::NetworkRejected {
                         stage: Stage::WiFiNetworkSetup,
@@ -930,8 +922,7 @@ impl Commissioner {
             }
             Expectation::ConnectNetworkResponse => {
                 use crate::clusters::network_commissioning as nc;
-                let resp =
-                    nc::decode_connect_network_response(Stage::WiFiNetworkEnable, payload)?;
+                let resp = nc::decode_connect_network_response(Stage::WiFiNetworkEnable, payload)?;
                 if resp.networking_status != 0 {
                     return Err(CommissioningError::NetworkRejected {
                         stage: Stage::WiFiNetworkEnable,
@@ -2131,8 +2122,7 @@ mod tests {
         let fabric = FABRIC.get_or_init(make_fabric_record);
         let setup = SETUP.get_or_init(make_setup_payload);
         let paa = PAA.get_or_init(PaaTrustStore::with_csa_test_roots);
-        let cd =
-            CD.get_or_init(crate::attestation::CdSigningRoots::with_csa_test_roots);
+        let cd = CD.get_or_init(crate::attestation::CdSigningRoots::with_csa_test_roots);
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 
         CommissionerConfig {
@@ -2219,8 +2209,14 @@ mod tests {
             "Debug must not contain credentials bytes: {rendered}",
         );
         assert!(rendered.contains("redacted"), "got {rendered}");
-        assert!(rendered.contains("8"), "credentials length should appear: {rendered}");
-        assert!(rendered.contains("6"), "ssid length should appear: {rendered}");
+        assert!(
+            rendered.contains('8'),
+            "credentials length should appear: {rendered}"
+        );
+        assert!(
+            rendered.contains('6'),
+            "ssid length should appear: {rendered}"
+        );
     }
 
     // --- M6.5.2 T14: failsafe expiry derivation from BasicCommissioningInfo ---
@@ -2231,8 +2227,7 @@ mod tests {
         // Advance to ReadCommissioningInfo and feed a BasicCommissioningInfo with 120s.
         let _initial = sm.poll().expect("initial poll");
         let response = vec![
-            0x15,
-            0x25, 0x00, 0x78, 0x00, // u16 = 120
+            0x15, 0x25, 0x00, 0x78, 0x00, // u16 = 120
             0x18,
         ];
         sm.on_response(Expectation::CommissioningInfo, &response)
@@ -2282,8 +2277,6 @@ mod tests {
 
     #[test]
     fn breadcrumb_increases_across_commands() {
-        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
-
         fn extract_uint_at_tag(payload: &[u8], tag_num: u8) -> Option<u64> {
             use matter_codec::{Element, Tag, TlvReader, Value};
             let mut reader = TlvReader::new(payload);
@@ -2301,6 +2294,7 @@ mod tests {
             None
         }
 
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
         let mut breadcrumbs: Vec<u64> = Vec::new();
 
         // Poll #1: ReadCommissioningInfo (no breadcrumb).
@@ -2315,8 +2309,11 @@ mod tests {
                 breadcrumbs.push(b);
             }
         }
-        sm.on_response(Expectation::ArmFailsafeResponse, &[0x15, 0x24, 0x00, 0x00, 0x18])
-            .expect("arm-failsafe ok");
+        sm.on_response(
+            Expectation::ArmFailsafeResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18],
+        )
+        .expect("arm-failsafe ok");
 
         // Poll #3: SetRegulatoryConfig — second breadcrumb-bearing command.
         let action = sm.poll().expect("set-regulatory");
