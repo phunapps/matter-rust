@@ -168,6 +168,13 @@ pub struct Commissioner {
     #[allow(dead_code)] // Consumed by Wi-Fi sub-cursor in M6.5.
     wifi_credentials: Option<WiFiCredentials>,
 
+    /// Maximum failsafe expiry the device accepts, in seconds.
+    /// Initialised to 60 (the M6.4 fallback) and updated from
+    /// `BasicCommissioningInfo::failsafe_expiry_length_seconds` once
+    /// the `Expectation::CommissioningInfo` response arrives. Both
+    /// `ArmFailsafe` and `FailsafeBeforeWiFiEnable` consume this.
+    failsafe_expiry_seconds: u16,
+
     /// `true` after [`Stage::FindOperationalForComplete`] emits
     /// `Action::EstablishCase`; cleared by
     /// [`Commissioner::on_case_established`] (success) or by
@@ -261,6 +268,7 @@ impl Commissioner {
             issued_noc: None,
             issued_noc_public_key: None,
             wifi_credentials: cfg.wifi_credentials,
+            failsafe_expiry_seconds: 60,
             awaiting_case_session: false,
             awaiting: None,
             pending_action: None,
@@ -333,10 +341,7 @@ impl Commissioner {
                 })
             }
             Stage::ArmFailsafe => {
-                // Failsafe expiry length is set conservatively to 60s.
-                // M6.4.1 hard-codes; future tasks may read the value
-                // from `ReadCommissioningInfo`'s response.
-                let payload = gc::encode_arm_fail_safe(60, 0);
+                let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, 0);
                 self.awaiting = Some(Expectation::ArmFailsafeResponse);
                 Ok(Action::Invoke {
                     session: SessionContext::Pase,
@@ -673,10 +678,15 @@ impl Commissioner {
         use crate::clusters::general_commissioning as gc;
         match expect {
             Expectation::CommissioningInfo => {
-                // M6.4.1: accept any well-formed TLV. Future sub-phases
-                // may parse BasicCommissioningInfo to extract
-                // failsafe_expiry_length_seconds + regulatory caps.
                 Self::assert_tlv_well_formed(self.stage, payload)?;
+                // Best-effort: scan the response for a BasicCommissioningInfo
+                // struct and update failsafe_expiry_seconds. Malformed or
+                // missing → keep the M6.4 fallback (60s) silently.
+                if let Some(info) = gc::decode_basic_commissioning_info(payload) {
+                    if info.failsafe_expiry_length_seconds > 0 {
+                        self.failsafe_expiry_seconds = info.failsafe_expiry_length_seconds;
+                    }
+                }
                 self.advance(Stage::ArmFailsafe);
                 Ok(())
             }
@@ -2023,5 +2033,60 @@ mod tests {
         assert!(rendered.contains("redacted"), "got {rendered}");
         assert!(rendered.contains("8"), "credentials length should appear: {rendered}");
         assert!(rendered.contains("6"), "ssid length should appear: {rendered}");
+    }
+
+    // --- M6.5.2 T14: failsafe expiry derivation from BasicCommissioningInfo ---
+
+    #[test]
+    fn failsafe_expiry_derives_from_basic_commissioning_info() {
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+        // Advance to ReadCommissioningInfo and feed a BasicCommissioningInfo with 120s.
+        let _initial = sm.poll().expect("initial poll");
+        let response = vec![
+            0x15,
+            0x25, 0x00, 0x78, 0x00, // u16 = 120
+            0x18,
+        ];
+        sm.on_response(Expectation::CommissioningInfo, &response)
+            .expect("commissioning info accepted");
+        // Now ArmFailsafe should emit with expiry=120.
+        let action = sm.poll().expect("arm-failsafe poll");
+        match action {
+            Action::Invoke {
+                payload,
+                cluster,
+                command,
+                ..
+            } => {
+                assert_eq!(cluster, 0x0030);
+                assert_eq!(command, 0x00);
+                // ArmFailSafe payload byte for expiry: TLV-encoded u8/u16 at context tag 0.
+                // For value 120 the smallest-width encoding is u8 = 0x24 0x00 0x78.
+                assert!(
+                    payload.windows(3).any(|w| w == [0x24, 0x00, 0x78]),
+                    "ArmFailSafe payload should carry expiry=120: {payload:02x?}",
+                );
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failsafe_expiry_falls_back_to_60_on_empty_basic_commissioning_info() {
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+        let _initial = sm.poll().expect("initial poll");
+        // Feed a well-formed empty struct — decode_basic_commissioning_info
+        // returns None when the failsafe field is missing, so the M6.4
+        // fallback of 60s applies.
+        sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
+            .expect("empty struct accepted");
+        let action = sm.poll().expect("arm-failsafe poll");
+        if let Action::Invoke { payload, .. } = action {
+            // 60 = 0x3C, anonymous struct with context-tag-0 u8.
+            assert!(
+                payload.windows(3).any(|w| w == [0x24, 0x00, 0x3C]),
+                "ArmFailSafe payload should carry expiry=60 fallback: {payload:02x?}",
+            );
+        }
     }
 }

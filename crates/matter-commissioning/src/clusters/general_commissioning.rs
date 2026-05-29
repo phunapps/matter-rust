@@ -204,6 +204,70 @@ pub fn decode_set_regulatory_config_response(
     })
 }
 
+/// Decoded `BasicCommissioningInfo` struct (spec §11.10.5.5).
+///
+/// Only `failsafe_expiry_length_seconds` is consumed by the
+/// commissioner today. `max_cumulative_failsafe_seconds` is exposed
+/// for callers that want to display caps; the commissioner does NOT
+/// enforce the cap (the device will reject `ArmFailSafe` if violated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BasicCommissioningInfo {
+    /// Maximum failsafe expiry the device will honour, in seconds.
+    /// Context tag 0 inside the `BasicCommissioningInfo` struct.
+    pub failsafe_expiry_length_seconds: u16,
+    /// Spec §11.10.5.5 — context tag 1. Optional in the spec; if
+    /// absent in the wire payload this field is `0`.
+    pub max_cumulative_failsafe_seconds: u16,
+}
+
+/// Best-effort decode of a `BasicCommissioningInfo` struct from its
+/// TLV bytes.
+///
+/// Returns `None` on any parse failure — the state machine treats a
+/// missing value as "use the M6.4 fallback of 60 seconds." This keeps
+/// the state machine moving even against malformed devices.
+#[must_use]
+pub fn decode_basic_commissioning_info(tlv: &[u8]) -> Option<BasicCommissioningInfo> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader.next().ok().flatten()? {
+        Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        } => {}
+        _ => return None,
+    }
+    let mut failsafe: Option<u16> = None;
+    let mut max_cumulative: u16 = 0;
+    loop {
+        match reader.next().ok().flatten() {
+            None => return None,
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(v),
+            }) => {
+                failsafe = u16::try_from(v).ok();
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(v),
+            }) => {
+                match u16::try_from(v) {
+                    Ok(n) => max_cumulative = n,
+                    Err(_) => {}
+                }
+            }
+            // Forward-compat: ignore unrecognised tags.
+            Some(_) => {}
+        }
+    }
+    failsafe.map(|fs| BasicCommissioningInfo {
+        failsafe_expiry_length_seconds: fs,
+        max_cumulative_failsafe_seconds: max_cumulative,
+    })
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -264,5 +328,25 @@ mod tests {
             ),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn basic_commissioning_info_120_decodes() {
+        // { 0: 120_u16, 1: 900_u16 }
+        let tlv = vec![
+            0x15,
+            0x25, 0x00, 0x78, 0x00, // u16 = 120
+            0x25, 0x01, 0x84, 0x03, // u16 = 900
+            0x18,
+        ];
+        let info = decode_basic_commissioning_info(&tlv).expect("decodes");
+        assert_eq!(info.failsafe_expiry_length_seconds, 120);
+        assert_eq!(info.max_cumulative_failsafe_seconds, 900);
+    }
+
+    #[test]
+    fn basic_commissioning_info_malformed_returns_none() {
+        assert!(decode_basic_commissioning_info(&[0xFF]).is_none());
+        assert!(decode_basic_commissioning_info(&[]).is_none());
     }
 }
