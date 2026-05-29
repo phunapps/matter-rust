@@ -376,3 +376,86 @@ fn failsafe_before_wifi_enable_emits_second_arm_failsafe() {
         .expect("ok accepted");
     assert_eq!(sm.stage(), Stage::WiFiNetworkEnable);
 }
+
+// ---------------------------------------------------------------------------
+// M6.5.2 Task 19 — WiFiNetworkEnable dispatch + ConnectNetworkResponse handler
+// ---------------------------------------------------------------------------
+
+fn drive_to_wifi_network_enable() -> Commissioner {
+    let mut sm = drive_to_failsafe_before_wifi_enable();
+    let _ = sm.poll().expect("emit second ArmFailSafe");
+    let ok = vec![0x15, 0x24, 0x00, 0x00, 0x18];
+    sm.on_response(Expectation::ArmFailsafeResponse, &ok)
+        .expect("ok accepted");
+    sm
+}
+
+#[test]
+fn wifi_network_enable_happy_path_emits_connect_network() {
+    let mut sm = drive_to_wifi_network_enable();
+    let action = sm.poll().expect("emit ConnectNetwork");
+    match action {
+        matter_commissioning::Action::Invoke {
+            cluster,
+            command,
+            payload,
+            expect,
+            ..
+        } => {
+            assert_eq!(cluster, 0x0031);
+            assert_eq!(command, 0x06);
+            assert_eq!(expect, Expectation::ConnectNetworkResponse);
+            assert!(payload.windows(6).any(|w| w == b"matter"));
+        }
+        other => panic!("expected Invoke, got {other:?}"),
+    }
+}
+
+#[test]
+fn wifi_network_enable_ok_response_advances_to_evict_case() {
+    let mut sm = drive_to_wifi_network_enable();
+    let _ = sm.poll().expect("emit Invoke");
+    let response = vec![0x15, 0x24, 0x00, 0x00, 0x18]; // { 0: 0 } OK
+    sm.on_response(Expectation::ConnectNetworkResponse, &response)
+        .expect("ok accepted");
+    assert_eq!(sm.stage(), Stage::EvictPreviousCaseSessions);
+}
+
+#[test]
+fn wifi_network_enable_network_not_found_maps_to_check_ssid() {
+    let mut sm = drive_to_wifi_network_enable();
+    let _ = sm.poll().expect("emit Invoke");
+    let response = vec![0x15, 0x24, 0x00, 0x05, 0x18]; // NetworkNotFound
+    let Err(err) = sm.on_response(Expectation::ConnectNetworkResponse, &response) else {
+        panic!("NetworkNotFound should fail");
+    };
+    match err {
+        CommissioningError::NetworkRejected {
+            stage,
+            networking_status,
+            remediation_hint,
+            ..
+        } => {
+            assert_eq!(stage, Stage::WiFiNetworkEnable);
+            assert_eq!(networking_status, 5);
+            assert_eq!(remediation_hint, RemediationHint::CheckSsid);
+        }
+        other => panic!("got {other:?}"),
+    }
+}
+
+#[test]
+fn wifi_network_enable_unknown_status_maps_to_none() {
+    let mut sm = drive_to_wifi_network_enable();
+    let _ = sm.poll().expect("emit Invoke");
+    let response = vec![0x15, 0x24, 0x00, 0x0C, 0x18]; // UnknownError
+    let Err(err) = sm.on_response(Expectation::ConnectNetworkResponse, &response) else {
+        panic!("UnknownError should fail");
+    };
+    match err {
+        CommissioningError::NetworkRejected { remediation_hint, .. } => {
+            assert_eq!(remediation_hint, RemediationHint::None);
+        }
+        other => panic!("got {other:?}"),
+    }
+}

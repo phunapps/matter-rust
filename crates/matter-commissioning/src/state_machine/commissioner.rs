@@ -601,9 +601,23 @@ impl Commissioner {
                 })
             }
             Stage::WiFiNetworkEnable => {
-                // Real dispatch lands in Task 19.
-                self.advance(Stage::EvictPreviousCaseSessions);
-                self.dispatch_stage()
+                use crate::clusters::network_commissioning as nc;
+                let creds = self
+                    .wifi_credentials
+                    .as_ref()
+                    .ok_or(CommissioningError::WifiCredentialsRequired)?;
+                let ssid = creds.ssid.clone();
+                let breadcrumb = self.next_breadcrumb();
+                let payload = nc::encode_connect_network(&ssid, breadcrumb);
+                self.awaiting = Some(Expectation::ConnectNetworkResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: nc::CLUSTER_ID,
+                    command: nc::command_id::CONNECT_NETWORK,
+                    payload,
+                    expect: Expectation::ConnectNetworkResponse,
+                })
             }
             Stage::EvictPreviousCaseSessions => {
                 // New-fabric commissioning has no prior CASE session
@@ -878,6 +892,21 @@ impl Commissioner {
                     });
                 }
                 self.advance(Stage::FailsafeBeforeWiFiEnable);
+                Ok(())
+            }
+            Expectation::ConnectNetworkResponse => {
+                use crate::clusters::network_commissioning as nc;
+                let resp =
+                    nc::decode_connect_network_response(Stage::WiFiNetworkEnable, payload)?;
+                if resp.networking_status != 0 {
+                    return Err(CommissioningError::NetworkRejected {
+                        stage: Stage::WiFiNetworkEnable,
+                        networking_status: resp.networking_status,
+                        debug_text: resp.debug_text,
+                        remediation_hint: nc::remediation_for(resp.networking_status),
+                    });
+                }
+                self.advance(Stage::EvictPreviousCaseSessions);
                 Ok(())
             }
             Expectation::CommissioningCompleteResponse => {
