@@ -355,6 +355,52 @@ The returned `CommissionedFabric` carries the long-lived fabric record
 NOC public key, and the terminal stage cursor (always
 `Stage::Cleanup`).
 
+## Wi-Fi commissioning configuration (M6.5+)
+
+```rust
+use matter_commissioning::{CommissionerConfig, WiFiCredentials};
+
+let config = CommissionerConfig {
+    pase_attestation_challenge,
+    fabric: &fabric,
+    setup_payload: &setup,
+    paa_trust_store: &paa,
+    cd_signing_roots: &cd_signing_roots,
+    commissioner_node_id: 0x1,
+    assigned_node_id: 0x2,
+    ipk_epoch_key: [0x42_u8; 16],
+    case_admin_subject: 0x1,
+    admin_vendor_id: 0xFFF1,
+    now: MatterTime::from_unix_secs(1_704_067_200),
+    rng,
+    wifi_credentials: Some(WiFiCredentials {
+        ssid: b"matter".to_vec(),
+        credentials: b"hunter22".to_vec(),
+    }),
+};
+let mut sm = Commissioner::new(config)?;
+```
+
+For Ethernet-only devices, set `wifi_credentials: None` — the state
+machine detects Ethernet at `Stage::ReadNetworkCommissioningInfo` and
+skips the Wi-Fi sub-cursor.
+
+Thread-only devices currently fail commissioning with
+`CommissioningError::NetworkFeatureUnsupported { needed: NetworkKind::Thread }`.
+Thread support is deferred post-v1.0.
+
+### Optional `tracing` feature
+
+Enable per-method spans for observability:
+
+```toml
+matter-commissioning = { version = "...", features = ["tracing"] }
+```
+
+Span field names (`stage`, `expectation`) align best-effort with
+matter.js's log-event format so operators can grep across both
+implementations.
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from

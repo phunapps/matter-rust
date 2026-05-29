@@ -1,21 +1,31 @@
-//! M6.4.6 — matter.js byte-parity gate.
+//! M6.4.6 / M6.5.3 — matter.js byte-parity gate.
 //!
 //! Replays a captured matter.js commissioning trace through the
 //! [`Commissioner`] state machine and asserts every emitted Invoke +
-//! `ReadAttribute` payload matches matter.js byte-for-byte for the same
-//! inputs.
+//! `ReadAttribute` payload matches matter.js byte-for-byte for the
+//! same inputs.
 //!
 //! Skips with `eprintln!` when the fixture file is absent or empty —
-//! CI stays green during T56's operator-touch wiring of
+//! CI stays green during the operator-touch wiring of
 //! `cargo xtask capture-commissioning` against the current
 //! `@matter/protocol` API.
 //!
-//! M6.4.6 ships RNG-free byte-parity (`ArmFailSafe`,
-//! `SetRegulatoryConfig`, `CertChainRequest`,
-//! `AddTrustedRootCertificate`). RNG-bearing payloads
-//! (`SendAttestationRequest` nonce, `SendOpCertSigningRequest` nonce,
-//! `SendNoc` IPK) are walked but not byte-asserted — T56 upgrades
-//! by injecting a deterministic RNG pinned to matter.js's capture-time
+//! M6.4.6 shipped RNG-free byte-parity for the M6.4 stages
+//! (`ArmFailSafe`, `SetRegulatoryConfig`, `CertChainRequest`,
+//! `AddTrustedRootCertificate`). M6.5.3 extends scope to the new
+//! Wi-Fi sub-cursor: when the operator-captured fixture grows
+//! `ReadNetworkCommissioningInfo` (`FeatureMap` read),
+//! `WiFiNetworkSetup` (`AddOrUpdateWiFiNetwork`),
+//! `FailsafeBeforeWiFiEnable` (second `ArmFailSafe`), and
+//! `WiFiNetworkEnable` (`ConnectNetwork`) stage records, this test
+//! will replay them via the existing data-driven match arms — no
+//! Rust-side schema change required. All four new stages are
+//! RNG-free; they are NOT added to the `rng_bearing` allowlist.
+//!
+//! RNG-bearing payloads (`SendAttestationRequest` nonce,
+//! `SendOpCertSigningRequest` nonce, `SendNoc` IPK) are walked but
+//! not byte-asserted — a future operator-touch step upgrades by
+//! injecting a deterministic RNG pinned to matter.js's capture-time
 //! RNG state.
 
 // Test-code carve-out: see CLAUDE.md.
