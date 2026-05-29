@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow, M6.4.3 Certification Declaration verification
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4.1 state-machine skeleton, M6.4.2 attestation flow, M6.4.3 Certification Declaration verification, M6.4.4 CSR + NOC issuance flow
+
+#### M6.4.4 — CSR + NOC issuance flow
+
+- State machine: five new stages (`SendOpCertSigningRequest`,
+  `ValidateCsr`, `GenerateNocChain`, `SendTrustedRootCert`, `SendNoc`)
+  wired into `Commissioner`.
+- Integrates M6.3's `verify_csr_response` + `issue_noc` + the OpCreds
+  `AddTrustedRootCertificate` and `AddNOC` encoders.
+- `Commissioner` gains five storage slots (`csr_nonce`, `csr_response`,
+  `verified_csr`, `issued_noc`, `issued_noc_public_key`).
+- `NocResponse.status != 0` and the AddTrustedRootCertificate
+  status-only ack both surface as `CommissioningError::DeviceImStatus`.
+- On success the cursor advances to `Stage::NetworkCommissioning`
+  (M6.4.5 implements that no-op slot + the PASE→CASE handoff).
+- Four new inline glass-box tests covering CSR-nonce randomness,
+  drive-through to SendNoc, SendNoc failure status, and
+  SendTrustedRootCert dispatch + ack.
+- `tests/state_machine_noc.rs` placeholder integration test pending
+  M6.4.6's synthetic-CSR fixtures.
 
 #### Added (M6.4.3 — Certification Declaration verification)
 
