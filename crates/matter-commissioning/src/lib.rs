@@ -19,12 +19,19 @@
 //!   `SendAttestationRequest` → `AttestationVerification`, chaining
 //!   M6.2's `verify_chain` + `verify_attestation_response` + the
 //!   `extract_attestation_elements_fields` helper.
-//! - **M6.4.3 (current):** CD verification wired into
+//! - **M6.4.3:** CD verification wired into
 //!   `AttestationVerification`. The state machine now calls
 //!   `verify_certification_declaration` against
 //!   [`attestation::CdSigningRoots`] and advances past attestation on
 //!   a valid CD; `CommissionerConfig` gains a `cd_signing_roots`
 //!   reference.
+//! - **M6.4.4 (current):** CSR + NOC issuance flow. State machine
+//!   drives `SendOpCertSigningRequest` → `ValidateCsr` →
+//!   `GenerateNocChain` → `SendTrustedRootCert` → `SendNoc`, then
+//!   advances to `Stage::NetworkCommissioning` (a no-op slot M6.4.5
+//!   expands into the Wi-Fi/Thread subgraph). Integrates M6.3's
+//!   `verify_csr_response` + `issue_noc` + the OpCreds AddTrustedRoot /
+//!   AddNOC encoders.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!
