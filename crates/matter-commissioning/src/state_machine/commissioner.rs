@@ -116,6 +116,15 @@ pub struct Commissioner {
     attestation_nonce: Option<[u8; 32]>,
     attestation_response: Option<crate::attestation::AttestationResponse>,
 
+    // CSR + NOC slots — populated by SendOpCertSigningRequest /
+    // ValidateCsr / GenerateNocChain, consumed by SendTrustedRootCert
+    // and SendNoc (M6.4.4 T35-T40).
+    csr_nonce: Option<[u8; 32]>,
+    csr_response: Option<crate::noc::CsrResponse>,
+    verified_csr: Option<crate::noc::VerifiedCsr>,
+    issued_noc: Option<matter_cert::MatterCertificate>,
+    issued_noc_public_key: Option<[u8; 65]>,
+
     /// The Expectation the state machine last emitted with `poll()`.
     /// `None` while not waiting for a response (terminal stages, or
     /// pre-poll).
@@ -180,6 +189,11 @@ impl Commissioner {
             dac_der: None,
             attestation_nonce: None,
             attestation_response: None,
+            csr_nonce: None,
+            csr_response: None,
+            verified_csr: None,
+            issued_noc: None,
+            issued_noc_public_key: None,
             awaiting: None,
             pending_action: None,
             last_failure: None,
@@ -343,6 +357,89 @@ impl Commissioner {
                     }
                 }
             }
+            Stage::SendOpCertSigningRequest => {
+                use crate::noc::encode_csr_request;
+                let mut nonce = [0u8; 32];
+                self.rng
+                    .fill(&mut nonce)
+                    .map_err(CommissioningError::from)?;
+                // Spec §11.18.5.5 `CSRRequest`. `is_for_update_noc` is
+                // hard-coded false: M6.4 only commissions new fabrics.
+                let payload = encode_csr_request(&nonce, false);
+                self.csr_nonce = Some(nonce);
+                self.awaiting = Some(Expectation::CsrResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: 0x003E,
+                    command: 0x04,
+                    payload,
+                    expect: Expectation::CsrResponse,
+                })
+            }
+            Stage::ValidateCsr => {
+                // Off-wire: M6.3's three-check verify_csr_response gate.
+                self.run_validate_csr()?;
+                self.advance(Stage::GenerateNocChain);
+                self.dispatch_stage()
+            }
+            Stage::GenerateNocChain => {
+                // Off-wire: build + sign the NOC under the fabric's RCAC.
+                self.run_generate_noc_chain()?;
+                self.advance(Stage::SendTrustedRootCert);
+                self.dispatch_stage()
+            }
+            Stage::SendTrustedRootCert => {
+                use crate::noc::encode_add_trusted_root;
+                // RCAC is already TLV-serialisable via matter-cert's
+                // `to_tlv`. Surfaces as NocError::CertBuild on the rare
+                // re-serialisation failure path (codec / extension shape
+                // regression). Sanity: `FabricRecord::new_root_only` round-
+                // tripped the cert through `verify_signed_by` at
+                // construction, so the bytes are well-formed by here.
+                let rcac_tlv =
+                    self.fabric.root_cert.to_tlv().map_err(|e| {
+                        CommissioningError::from(crate::noc::NocError::CertBuild(e))
+                    })?;
+                let payload = encode_add_trusted_root(&rcac_tlv);
+                self.awaiting = Some(Expectation::AddTrustedRootResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: 0x003E,
+                    command: 0x0B,
+                    payload,
+                    expect: Expectation::AddTrustedRootResponse,
+                })
+            }
+            Stage::SendNoc => {
+                use crate::noc::encode_add_noc;
+                let noc = self
+                    .issued_noc
+                    .as_ref()
+                    .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+                let noc_tlv = noc
+                    .to_tlv()
+                    .map_err(|e| CommissioningError::from(crate::noc::NocError::CertBuild(e)))?;
+                // ICAC slot is `None` in M6.4: only RCAC -> NOC chains
+                // are issued. ICAC support is M6.3.x / M8 work.
+                let payload = encode_add_noc(
+                    &noc_tlv,
+                    None,
+                    &self.ipk_epoch_key,
+                    self.case_admin_subject,
+                    self.admin_vendor_id,
+                );
+                self.awaiting = Some(Expectation::NocResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: 0x003E,
+                    command: 0x06,
+                    payload,
+                    expect: Expectation::NocResponse,
+                })
+            }
             Stage::Failed => {
                 // Subsequent poll() after a failure surfaces the Abort.
                 // The state machine stays in Failed.
@@ -474,7 +571,38 @@ impl Commissioner {
                 self.advance(Stage::AttestationVerification);
                 Ok(())
             }
-            // Other Expectations land in M6.4.2+ sub-phases.
+            Expectation::CsrResponse => {
+                let resp = crate::noc::decode_csr_response(payload)?;
+                self.csr_response = Some(resp);
+                self.advance(Stage::ValidateCsr);
+                Ok(())
+            }
+            Expectation::AddTrustedRootResponse => {
+                // `AddTrustedRootCertificate` has no typed response —
+                // success is a status-only ack at the Interaction Model
+                // layer. The caller surfaces the IM status as a 1-byte
+                // payload: `0x00` = success, anything else = error.
+                if payload.first() != Some(&0u8) {
+                    return Err(CommissioningError::DeviceImStatus {
+                        stage: Stage::SendTrustedRootCert,
+                        im_status: u16::from(payload.first().copied().unwrap_or(0xFF)),
+                    });
+                }
+                self.advance(Stage::SendNoc);
+                Ok(())
+            }
+            Expectation::NocResponse => {
+                let resp = crate::noc::decode_noc_response(payload)?;
+                if resp.status != 0 {
+                    return Err(CommissioningError::DeviceImStatus {
+                        stage: Stage::SendNoc,
+                        im_status: u16::from(resp.status),
+                    });
+                }
+                self.advance(Stage::NetworkCommissioning);
+                Ok(())
+            }
+            // Other Expectations land in M6.4.5+ sub-phases.
             _ => Err(CommissioningError::OutOfOrderResponse(self.stage)),
         }
     }
@@ -559,6 +687,81 @@ impl Commissioner {
             chain.product_id,
             &self.cd_signing_roots,
         )?;
+        Ok(())
+    }
+
+    /// Off-wire CSR verification (M6.4.4 `Stage::ValidateCsr`).
+    ///
+    /// Consumes the `CsrResponse` captured by `Stage::SendOpCertSigningRequest`
+    /// plus the DAC DER captured earlier by `Stage::SendDacCertRequest`,
+    /// and runs M6.3's `verify_csr_response` three-check atomic gate:
+    ///
+    /// 1. PKCS#10 self-signature on the embedded CSR.
+    /// 2. The device's `CSRNonce` echo equals the commissioner-issued nonce.
+    /// 3. The DAC's attestation signature over
+    ///    `nocsr_elements || attestation_challenge`.
+    fn run_validate_csr(&mut self) -> Result<(), CommissioningError> {
+        use crate::attestation::Dac;
+        use crate::noc::verify_csr_response;
+
+        let resp = self
+            .csr_response
+            .as_ref()
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+        let dac_der = self
+            .dac_der
+            .as_ref()
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+        let csr_nonce = self
+            .csr_nonce
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+
+        let dac = Dac::from_der(dac_der)?;
+        let verified = verify_csr_response(
+            &resp.nocsr_elements,
+            &resp.attestation_signature,
+            &csr_nonce,
+            &self.pase_attestation_challenge,
+            dac.public_key(),
+        )?;
+        self.verified_csr = Some(verified);
+        Ok(())
+    }
+
+    /// Off-wire NOC issuance (M6.4.4 `Stage::GenerateNocChain`).
+    ///
+    /// Consumes the [`crate::noc::VerifiedCsr`] populated by
+    /// [`Self::run_validate_csr`] and mints a NOC signed by the fabric's
+    /// RCAC via M6.3's `issue_noc`.
+    ///
+    /// Validity window: M6.4 uses `(self.now, MatterTime::NO_EXPIRY)` —
+    /// the same convention `issue_noc`'s own unit test uses. M8 may
+    /// tighten this to a bounded operational-cert lifetime per Matter
+    /// Core Spec §6.4 once persistence + rotation policy lands.
+    ///
+    /// CATs (CASE Authenticated Tags) are empty in M6.4; tag-based
+    /// access control comes later.
+    fn run_generate_noc_chain(&mut self) -> Result<(), CommissioningError> {
+        use crate::noc::issue_noc;
+
+        let verified = self
+            .verified_csr
+            .as_ref()
+            .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+        let noc = issue_noc(
+            &self.fabric,
+            verified,
+            self.assigned_node_id,
+            &[],
+            (self.now, MatterTime::NO_EXPIRY),
+            self.rng.as_ref(),
+        )?;
+        // Cache the NOC public key (the same bytes the verified CSR
+        // committed to) for later use — currently only consumed by
+        // M6.4.5's PASE -> CASE handoff in `CommissionedFabric`. Stored
+        // here so the SendNoc stage doesn't have to re-derive it.
+        self.issued_noc_public_key = Some(*verified.public_key.as_bytes());
+        self.issued_noc = Some(noc);
         Ok(())
     }
 
@@ -1094,5 +1297,281 @@ mod tests {
             nonce_a, nonce_b,
             "two independent runs should use different random nonces"
         );
+    }
+
+    // --- M6.4.4 T35-T40: CSR + NOC issuance flow tests ---
+
+    /// Extract the 32-byte `CSRNonce` from a `CSRRequest` Invoke payload.
+    /// Mirrors `nonce_from_attestation_invoke` — same TLV shape, both
+    /// pull the bytes at context tag 0 inside the anonymous outer struct.
+    fn nonce_from_csr_invoke(act: &Action) -> [u8; 32] {
+        match act {
+            Action::Invoke { payload, .. } => {
+                use matter_codec::{Element, Tag, TlvReader, Value};
+                let mut r = TlvReader::new(payload);
+                let _ = r.next().expect("reader").expect("anon-struct-start");
+                loop {
+                    match r.next().expect("reader") {
+                        Some(Element::Scalar {
+                            tag: Tag::Context(0),
+                            value: Value::Bytes(b),
+                        }) => {
+                            return b.as_slice().try_into().expect("32 bytes");
+                        }
+                        Some(_) => {}
+                        None => panic!("no nonce found"),
+                    }
+                }
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    /// Glass-box test: jumps the cursor straight to
+    /// `Stage::SendOpCertSigningRequest` (bypassing PAI/DAC/Att, which
+    /// would otherwise demand real fixtures M6.4.2's verifier accepts)
+    /// and checks the emitted `CSRRequest` Invoke's nonce randomness
+    /// across two independent commissioner instances. The full
+    /// integration drive ships in T41 with real matter.js fixtures.
+    #[test]
+    fn send_op_cert_signing_request_emits_csr_with_random_nonce() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
+
+        let rng_a: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg_a = base_config(&fabric, &setup, &paa, &cd, rng_a);
+        let mut sm_a = Commissioner::new(cfg_a).expect("valid config");
+        // Jump the cursor + plant the prerequisite DAC slot. Glass-box
+        // crate-private access is fine inside the in-module `tests`
+        // submodule.
+        sm_a.stage = Stage::SendOpCertSigningRequest;
+        sm_a.dac_der = Some(vec![0xAA, 0xBB]);
+        let act_a = sm_a.poll().expect("poll csr a");
+        let nonce_a = nonce_from_csr_invoke(&act_a);
+
+        let rng_b: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg_b = base_config(&fabric, &setup, &paa, &cd, rng_b);
+        let mut sm_b = Commissioner::new(cfg_b).expect("valid config");
+        sm_b.stage = Stage::SendOpCertSigningRequest;
+        sm_b.dac_der = Some(vec![0xAA, 0xBB]);
+        let act_b = sm_b.poll().expect("poll csr b");
+        let nonce_b = nonce_from_csr_invoke(&act_b);
+
+        assert_ne!(
+            nonce_a, nonce_b,
+            "two independent runs should use different CSR nonces"
+        );
+
+        match act_a {
+            Action::Invoke {
+                cluster,
+                command,
+                expect,
+                ..
+            } => {
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x04);
+                assert_eq!(expect, Expectation::CsrResponse);
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    /// Glass-box test: with the CSR + NOC artefacts pre-populated and
+    /// the cursor placed at `Stage::SendNoc`, `poll()` must emit an
+    /// `AddNOC` Invoke targeting cluster `0x003E` / command `0x06`.
+    /// Then drive the synthetic `NOCResponse { status: 0 }` through
+    /// `on_response` and assert the cursor lands on
+    /// `Stage::NetworkCommissioning`.
+    #[test]
+    fn drive_through_send_noc_with_synthetic_noc_response() {
+        use matter_cert::{
+            BasicConstraints, DistinguishedName, DnAttribute, Extensions, MatterCertificate,
+            PublicKey,
+        };
+
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+
+        // Skip past attestation/CSR machinery — we want to test the
+        // SendNoc dispatch arm + the NOC response handler in isolation.
+        // Plant a structurally-valid synthetic NOC the AddNOC encoder
+        // can re-serialise. (The device side wouldn't accept it, but
+        // we're not talking to a device — we feed a canned response.)
+        let mut key_bytes = [0u8; 65];
+        key_bytes[0] = 0x04;
+        let synthetic_noc = MatterCertificate::builder()
+            .serial(vec![1, 2, 3])
+            .issuer(fabric.root_cert.subject().clone())
+            .subject(DistinguishedName::new(vec![
+                DnAttribute::FabricId(fabric.fabric_id),
+                DnAttribute::NodeId(0x2),
+            ]))
+            .validity(
+                MatterTime::from_unix_secs(1_704_067_200),
+                MatterTime::NO_EXPIRY,
+            )
+            .public_key(PublicKey::new(key_bytes).expect("valid sec1 prefix"))
+            .extensions(Extensions {
+                basic_constraints: Some(BasicConstraints {
+                    is_ca: false,
+                    path_len_constraint: None,
+                }),
+                ..Default::default()
+            })
+            .build_unsigned()
+            .expect("builder")
+            .assemble([0u8; 64]);
+
+        sm.stage = Stage::SendNoc;
+        sm.issued_noc = Some(synthetic_noc);
+        sm.issued_noc_public_key = Some(key_bytes);
+
+        match sm.poll().expect("poll SendNoc") {
+            Action::Invoke {
+                cluster,
+                command,
+                expect,
+                ..
+            } => {
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x06);
+                assert_eq!(expect, Expectation::NocResponse);
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+
+        // Synthetic NOCResponse: anonymous struct with status=0 + fabric_index=1.
+        let mut noc_response = Vec::new();
+        {
+            use matter_codec::{Tag, TlvWriter};
+            let mut w = TlvWriter::new(&mut noc_response);
+            w.start_structure(Tag::Anonymous).expect("infallible");
+            w.put_uint(Tag::Context(0), 0).expect("infallible"); // status = OK
+            w.put_uint(Tag::Context(1), 1).expect("infallible"); // fabric_index = 1
+            w.end_container().expect("infallible");
+        }
+        sm.on_response(Expectation::NocResponse, &noc_response)
+            .expect("NocResponse accepted");
+        assert_eq!(sm.stage(), Stage::NetworkCommissioning);
+    }
+
+    /// Glass-box test: a non-zero NOC status surfaces as
+    /// `CommissioningError::DeviceImStatus { stage: SendNoc, ... }`
+    /// and transitions the cursor to `Failed`.
+    #[test]
+    fn send_noc_failure_status_aborts_with_device_im_status() {
+        use matter_cert::{
+            BasicConstraints, DistinguishedName, DnAttribute, Extensions, MatterCertificate,
+            PublicKey,
+        };
+
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+
+        let mut key_bytes = [0u8; 65];
+        key_bytes[0] = 0x04;
+        let synthetic_noc = MatterCertificate::builder()
+            .serial(vec![9])
+            .issuer(fabric.root_cert.subject().clone())
+            .subject(DistinguishedName::new(vec![
+                DnAttribute::FabricId(fabric.fabric_id),
+                DnAttribute::NodeId(0x2),
+            ]))
+            .validity(
+                MatterTime::from_unix_secs(1_704_067_200),
+                MatterTime::NO_EXPIRY,
+            )
+            .public_key(PublicKey::new(key_bytes).expect("valid sec1 prefix"))
+            .extensions(Extensions {
+                basic_constraints: Some(BasicConstraints {
+                    is_ca: false,
+                    path_len_constraint: None,
+                }),
+                ..Default::default()
+            })
+            .build_unsigned()
+            .expect("builder")
+            .assemble([0u8; 64]);
+
+        sm.stage = Stage::SendNoc;
+        sm.issued_noc = Some(synthetic_noc);
+        sm.issued_noc_public_key = Some(key_bytes);
+
+        let _ = sm.poll().expect("poll SendNoc");
+
+        // status = 9 (InvalidNOC, spec §11.18.6.1).
+        let mut bad_response = Vec::new();
+        {
+            use matter_codec::{Tag, TlvWriter};
+            let mut w = TlvWriter::new(&mut bad_response);
+            w.start_structure(Tag::Anonymous).expect("infallible");
+            w.put_uint(Tag::Context(0), 9).expect("infallible");
+            w.end_container().expect("infallible");
+        }
+        let err = sm
+            .on_response(Expectation::NocResponse, &bad_response)
+            .expect_err("non-zero NOC status should fail");
+        assert!(matches!(
+            err,
+            CommissioningError::DeviceImStatus {
+                stage: Stage::SendNoc,
+                im_status: 9,
+            }
+        ));
+        assert_eq!(sm.stage(), Stage::Failed);
+    }
+
+    /// Glass-box test: `SendTrustedRootCert` emits an `AddTrustedRootCertificate`
+    /// Invoke whose payload TLV starts with anonymous-struct + context-0
+    /// octet-string carrying the RCAC TLV bytes. A subsequent `[0x00]`
+    /// status-ack advances the cursor to `Stage::SendNoc`.
+    #[test]
+    fn send_trusted_root_cert_emits_invoke_and_status_ack_advances() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+
+        sm.stage = Stage::SendTrustedRootCert;
+
+        match sm.poll().expect("poll SendTrustedRootCert") {
+            Action::Invoke {
+                cluster,
+                command,
+                expect,
+                payload,
+                ..
+            } => {
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x0B);
+                assert_eq!(expect, Expectation::AddTrustedRootResponse);
+                // Sanity: payload is at least the anonymous-struct
+                // wrapper + a non-trivial octet-string of RCAC TLV.
+                assert!(payload.len() > 16, "RCAC TLV too short: {}", payload.len());
+                assert_eq!(payload[0], 0x15); // anonymous struct start
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+
+        // Status-ack of 0x00 (success) advances to SendNoc.
+        sm.on_response(Expectation::AddTrustedRootResponse, &[0x00])
+            .expect("status-ack accepted");
+        assert_eq!(sm.stage(), Stage::SendNoc);
     }
 }
