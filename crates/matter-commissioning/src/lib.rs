@@ -30,8 +30,8 @@
 //!   `GenerateNocChain` → `SendTrustedRootCert` → `SendNoc`, then
 //!   advances to `Stage::NetworkCommissioning` (a no-op slot M6.4.5
 //!   expands into the Wi-Fi/Thread subgraph). Integrates M6.3's
-//!   `verify_csr_response` + `issue_noc` + the OpCreds AddTrustedRoot /
-//!   AddNOC encoders.
+//!   `verify_csr_response` + `issue_noc` + the `OpCreds`
+//!   `AddTrustedRoot` / `AddNOC` encoders.
 //! - **M6.5:** Wi-Fi network commissioning.
 //! - **M6.6:** Tokio driver + first real-device commission.
 //!
