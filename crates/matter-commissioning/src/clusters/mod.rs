@@ -8,3 +8,4 @@
 #![forbid(unsafe_code)]
 
 pub mod general_commissioning;
+pub mod network_commissioning;
