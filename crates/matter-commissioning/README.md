@@ -7,6 +7,13 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
 
 > Status: **pre-release (`0.0.0`)**.
 >
+> **Milestone 6.4 (Commissioning State Machine): complete** — the
+> state machine drives end-to-end from `SecurePairing` through
+> `Action::Done(CommissionedFabric)` on canned responses + a mock
+> `on_case_established` callback. matter.js byte-parity gate
+> infrastructure shipped (operator-touch wiring deferred —
+> see `TODO-1.0.md`).
+>
 > Phases available:
 > - **M6.1:** the setup-payload codec (QR + manual pairing code).
 > - **M6.2.1:** typed attestation cert wrappers (`Dac` / `Pai` /
@@ -21,11 +28,16 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
 >   `attestation_elements || attestation_challenge`. Single coarse
 >   `BadResponseSignature` error variant; matter.js byte-parity for
 >   happy-path + four single-byte mutations.
+> - **M6.3 (feature-complete):** NOC issuance — `FabricRecord`,
+>   `verify_csr_response`, `issue_noc`, OpCreds command codecs with
+>   matter.js byte-parity.
+> - **M6.4 (complete):** commissioning state machine — all six
+>   sub-phases (M6.4.1 skeleton → M6.4.6 byte-parity gate
+>   infrastructure) shipped.
 >
-> Remaining phases (M6.3 NOC issuance, M6.4 state machine, M6.5
-> network commissioning, M6.6 wire-up) are in flight. Note that
-> **Certification Declaration verification is a hard gate before
-> M6.6** — see `TODO-1.0.md`.
+> Next: **M6.5** (Wi-Fi network commissioning subgraph) and **M6.6**
+> (Tokio driver + first real-device commission). With M6.6 lands the
+> first public demo of the library commissioning a real Matter device.
 
 ## Example: parse a QR code
 

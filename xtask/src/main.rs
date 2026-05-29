@@ -20,11 +20,15 @@
 //!   sign/verify `AttestationResponse` fixtures (Milestone 6.2.3).
 //! - `capture-cd`    — generate a synthetic CSA-test CD signing root +
 //!   matching Certification Declaration fixtures (Milestone 6.4.3).
+//! - `capture-commissioning` — drive matter.js through a full
+//!   commissioning and capture per-stage Invoke / `ReadAttribute`
+//!   payloads for byte-parity (Milestone 6.4.6).
 //! - `codegen`       — generate cluster definitions from the Matter spec
 //!   (Milestone 7).
 //! - `release`       — workspace release helper (post-Milestone 1).
 
 mod capture_cd;
+mod capture_commissioning;
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
@@ -114,6 +118,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-commissioning") => match capture_commissioning::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-commissioning: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -141,7 +152,8 @@ fn print_help() {
              capture-setup            Capture Matter setup-payload fixtures from matter.js.\n  \
              capture-attestation      Capture Matter AttestationResponse fixtures from matter.js.\n  \
              capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n  \
-             capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n"
+             capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n  \
+             capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n"
     );
 }
 

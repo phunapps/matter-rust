@@ -1,0 +1,15 @@
+{
+  "name": "matter-rust-capture-commissioning",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Drives matter.js through a full commissioning and records per-stage Invoke + ReadAttribute payloads for crates/matter-commissioning/tests/commissioning_byte_parity.rs (M6.4.6).",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/general": "0.16.11",
+    "@matter/protocol": "0.16.11"
+  }
+}

@@ -32,16 +32,25 @@
 //!   expands into the Wi-Fi/Thread subgraph). Integrates M6.3's
 //!   `verify_csr_response` + `issue_noc` + the `OpCreds`
 //!   `AddTrustedRoot` / `AddNOC` encoders.
-//! - **M6.4.5 (current):** PASE→CASE handoff + `CommissioningComplete`.
+//! - **M6.4.5:** PASE→CASE handoff + `CommissioningComplete`.
 //!   The state machine drives end-to-end from `SecurePairing` through
 //!   `Action::Done(CommissionedFabric)` on canned responses plus a
 //!   mock `on_case_established()` callback. New public API
 //!   `Commissioner::on_case_established` for the M6.6 driver's CASE
 //!   handshake success signal; `Expectation::CaseFailed` for the
-//!   failure path. M6.4 substance is complete — M6.4.6 adds the
-//!   matter.js byte-parity gate.
-//! - **M6.5:** Wi-Fi network commissioning.
-//! - **M6.6:** Tokio driver + first real-device commission.
+//!   failure path.
+//! - **M6.4 (complete):** commissioning state machine. End-to-end
+//!   cursor from `SecurePairing` through
+//!   `Action::Done(CommissionedFabric)` on canned responses + a
+//!   mock CASE-established callback. matter.js byte-parity gate
+//!   infrastructure shipped — see [`state_machine`] for the API.
+//! - **M6.5 (next):** Wi-Fi network commissioning. Expands the
+//!   `NetworkCommissioning` no-op slot into the full Wi-Fi/Thread
+//!   subgraph (`ScanNetworks`, `WiFiNetworkSetup`,
+//!   `FailsafeBeforeWiFiEnable`, `WiFiNetworkEnable`, etc.).
+//! - **M6.6 (next-next):** Tokio driver + first real-device
+//!   commission. Wires the M6.4 state machine into `matter-transport`'s
+//!   session layer + drives `matter-crypto`'s SIGMA-I CASE handshake.
 //!
 //! ## Quick-start (M6.1 only)
 //!
