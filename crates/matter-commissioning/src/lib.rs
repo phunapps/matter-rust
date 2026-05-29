@@ -46,8 +46,8 @@
 //!   infrastructure shipped — see [`state_machine`] for the API.
 //! - **M6.5 (next):** Wi-Fi network commissioning. Expands the
 //!   `NetworkCommissioning` no-op slot into the full Wi-Fi/Thread
-//!   subgraph (ScanNetworks, WiFiNetworkSetup, FailsafeBeforeWiFiEnable,
-//!   WiFiNetworkEnable, etc.).
+//!   subgraph (`ScanNetworks`, `WiFiNetworkSetup`,
+//!   `FailsafeBeforeWiFiEnable`, `WiFiNetworkEnable`, etc.).
 //! - **M6.6 (next-next):** Tokio driver + first real-device
 //!   commission. Wires the M6.4 state machine into `matter-transport`'s
 //!   session layer + drives `matter-crypto`'s SIGMA-I CASE handshake.
