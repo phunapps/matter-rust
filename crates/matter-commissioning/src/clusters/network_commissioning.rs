@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+use crate::state_machine::{CommissioningError, Stage};
+
 /// Cluster ID: `0x0031`.
 pub const CLUSTER_ID: u32 = 0x0031;
 
@@ -99,6 +101,40 @@ pub fn encode_connect_network(network_id: &[u8], breadcrumb: u64) -> Vec<u8> {
     buf
 }
 
+/// Decode the `NetworkCommissioning::FeatureMap` attribute value.
+///
+/// Expects the bare TLV encoding of the u32 attribute value (no
+/// `AttributeReportIB` envelope). The state machine's M6.6 driver
+/// unwraps the Interaction Model envelope and delivers just the value
+/// TLV to `Commissioner::on_response`.
+///
+/// # Errors
+///
+/// Returns `CommissioningError::MalformedResponse(Stage::NetworkCommissioning)`
+/// if the bytes are not a well-formed unsigned-integer TLV element. (The
+/// stage name changes to `Stage::ReadNetworkCommissioningInfo` in M6.5.2.)
+pub fn decode_feature_map(tlv: &[u8]) -> Result<WiFiNetworkFeature, CommissioningError> {
+    use matter_codec::{Element, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader
+        .next()
+        .map_err(|_| CommissioningError::MalformedResponse(Stage::NetworkCommissioning))?
+    {
+        Some(Element::Scalar {
+            value: Value::Uint(raw),
+            ..
+        }) => {
+            let truncated = u32::try_from(raw).map_err(|_| {
+                CommissioningError::MalformedResponse(Stage::NetworkCommissioning)
+            })?;
+            Ok(WiFiNetworkFeature::from_bits_truncate(truncated))
+        }
+        _ => Err(CommissioningError::MalformedResponse(
+            Stage::NetworkCommissioning,
+        )),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -159,6 +195,44 @@ mod tests {
             ],
             "encoded bytes: {:02x?}",
             bytes,
+        );
+    }
+
+    #[test]
+    fn decode_feature_map_round_trips_all_8_combinations() {
+        // TLV encoding for u32 value `v` (anonymous tag, minimum width):
+        // - 0 ..= 0xFF        → 0x04 0xVV               (uint-1B)
+        // - 0x100 ..= 0xFFFF  → 0x05 0xLO 0xHI          (uint-2B)
+        // For all 3-bit values (0..=7) we hit the uint-1B branch.
+        for raw in 0u8..8 {
+            let tlv = vec![0x04, raw];
+            let decoded =
+                decode_feature_map(&tlv).expect("happy path decodes");
+            assert_eq!(decoded.bits(), u32::from(raw));
+        }
+    }
+
+    #[test]
+    fn decode_feature_map_rejects_non_uint_tlv() {
+        // Octet-string TLV — wrong element type.
+        let tlv = vec![0x10, 0x00];
+        let err = decode_feature_map(&tlv).expect_err("should fail");
+        assert!(
+            matches!(err, CommissioningError::MalformedResponse(_)),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
+    fn decode_feature_map_truncates_high_bits_safely() {
+        // Reserved bits ignored — only WIFI|THREAD|ETHERNET (bits 0-2) recognised.
+        // raw value 0x0F = WIFI|THREAD|ETHERNET + bit 3 (reserved). Bit 3 dropped
+        // by from_bits_truncate.
+        let tlv = vec![0x04, 0x0F];
+        let decoded = decode_feature_map(&tlv).expect("decodes");
+        assert_eq!(
+            decoded,
+            WiFiNetworkFeature::WIFI | WiFiNetworkFeature::THREAD | WiFiNetworkFeature::ETHERNET,
         );
     }
 }
