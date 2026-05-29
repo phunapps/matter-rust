@@ -36,6 +36,25 @@
 // Until this is wired the `commissioning_byte_parity.rs` integration test
 // skips with `eprintln!` (the fixture file is missing/empty).
 
+// M6.5 capture points (operator wiring required):
+//   1. NetworkCommissioning::FeatureMap attribute read on endpoint 0.
+//      Hook into matter.js's `commissioner.readAttribute({ endpointId: 0,
+//      clusterId: 0x0031, attributeId: 0xFFFC })` call and record the
+//      outbound request bytes.
+//   2. AddOrUpdateWiFiNetwork invoke. Hook into the
+//      `NetworkCommissioning.commands.addOrUpdateWiFiNetwork({ssid,
+//      credentials, breadcrumb})` call; record the encoded payload bytes.
+//   3. Second ArmFailSafe invoke (re-arm before ConnectNetwork). Identical
+//      shape to the first ArmFailSafe — caller distinguishes by stage.
+//   4. ConnectNetwork invoke. Hook into
+//      `NetworkCommissioning.commands.connectNetwork({networkId,
+//      breadcrumb})`; record the encoded payload bytes.
+//
+// Write the captured bytes into the corresponding `expected_payload_b64`
+// fields in `test-vectors/commissioning/e2e/happy-path.json` (or its
+// successor schema). The byte-parity test stops skipping when those
+// fields are non-empty.
+
 console.error(
   "capture-commissioning placeholder: wire against current @matter/protocol API",
 );
