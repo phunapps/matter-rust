@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete)
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 complete, M6.5.2-6 pending)
+
+#### M6.5.1 — NetworkCommissioning cluster codecs + RemediationHint
+
+- New `clusters::network_commissioning` module: `encode_add_or_update_wifi_network`,
+  `encode_connect_network`, `decode_feature_map`, `decode_network_config_response`,
+  `decode_connect_network_response`, `WiFiNetworkFeature` bitflags,
+  `NetworkConfigResponse` + `ConnectNetworkResponse` structs.
+- New `RemediationHint` enum (spec'd as `#[non_exhaustive]` with a documented
+  stability promise) + `remediation_for(status_code)` mapping table.
+- Re-exports added to crate root for ergonomic access.
+- No state-machine wiring yet (M6.5.2 lands the dispatch arms + the new `Stage`
+  variants that consume these codecs).
 
 ### M6.4 — Commissioning state machine — COMPLETE
 

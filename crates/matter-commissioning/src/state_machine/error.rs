@@ -71,6 +71,43 @@ pub enum CommissioningError {
     CaseEstablishmentFailed,
 }
 
+/// Hint describing what a downstream UI could suggest to remediate a
+/// `CommissioningError::NetworkRejected` (lands in M6.5.2).
+///
+/// Maps from a Matter `NetworkCommissioningStatusEnum` value (spec
+/// §11.9.5.1) into a category callers can render meaningfully without
+/// parsing the raw status code. The mapping table lives in
+/// `crate::clusters::network_commissioning::remediation_for`.
+///
+/// # Stability
+///
+/// `#[non_exhaustive]` from inception. New variants may be added in any
+/// release. Existing variants will never be renamed or reordered.
+/// Changes to the `status_code` → variant mapping are documented in the
+/// CHANGELOG as semi-public behavioural changes.
+#[non_exhaustive]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RemediationHint {
+    /// Password/passphrase likely wrong. From `AuthFailure` (7).
+    CheckPassphrase,
+    /// SSID not found. From `NetworkNotFound` (5), `NetworkIDNotFound` (3).
+    CheckSsid,
+    /// Country code / regulatory location mismatch. From
+    /// `RegulatoryError` (6).
+    CheckRegulatoryRegion,
+    /// Wi-Fi security cipher unsupported (e.g. WEP-only device). From
+    /// `UnsupportedSecurity` (8).
+    UpgradeSecurityMode,
+    /// Device reached its `MaxNetworks` limit. From `BoundsExceeded` (2).
+    DeviceNetworkSlotsFull,
+    /// IP-stack-layer failure on the device side. From `IPV6Failed` (10),
+    /// `IPBindFailed` (11).
+    DeviceIpStackFailure,
+    /// No specific guidance available. From `OtherConnectionFailure` (9),
+    /// `UnknownError` (12), or any status code not yet mapped.
+    None,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +148,13 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("ArmFailsafe"), "{msg}");
         assert!(msg.contains("0x98"), "{msg}");
+    }
+
+    #[test]
+    fn remediation_hint_is_copy_eq_hash() {
+        fn assert_copy<T: Copy + Eq + std::hash::Hash>() {}
+        assert_copy::<RemediationHint>();
+        assert_eq!(RemediationHint::None, RemediationHint::None);
+        assert_ne!(RemediationHint::None, RemediationHint::CheckPassphrase);
     }
 }
