@@ -44,10 +44,16 @@
 //!   `Action::Done(CommissionedFabric)` on canned responses + a
 //!   mock CASE-established callback. matter.js byte-parity gate
 //!   infrastructure shipped — see [`state_machine`] for the API.
-//! - **M6.5 (next):** Wi-Fi network commissioning. Expands the
-//!   `NetworkCommissioning` no-op slot into the full Wi-Fi/Thread
-//!   subgraph (`ScanNetworks`, `WiFiNetworkSetup`,
-//!   `FailsafeBeforeWiFiEnable`, `WiFiNetworkEnable`, etc.).
+//! - **M6.5 (current):** Wi-Fi network commissioning. Expands the
+//!   `NetworkCommissioning` no-op slot into the real Wi-Fi sub-cursor
+//!   (`ReadNetworkCommissioningInfo` → `WiFiNetworkSetup` →
+//!   `FailsafeBeforeWiFiEnable` → `WiFiNetworkEnable`). Ethernet-only
+//!   devices skip the Wi-Fi sub-cursor entirely; Thread-only devices
+//!   fail fast with a typed `NetworkFeatureUnsupported` error. New
+//!   `RemediationHint` enum surfaces actionable categories for
+//!   `NetworkRejected`. Failsafe-expiry now derives from
+//!   `BasicCommissioningInfo` (was hardcoded 60s in M6.4). Optional
+//!   `tracing` feature instruments every dispatch arm.
 //! - **M6.6 (next-next):** Tokio driver + first real-device
 //!   commission. Wires the M6.4 state machine into `matter-transport`'s
 //!   session layer + drives `matter-crypto`'s SIGMA-I CASE handshake.
