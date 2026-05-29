@@ -21,6 +21,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No state-machine wiring yet (M6.5.2 lands the dispatch arms + the new `Stage`
   variants that consume these codecs).
 
+#### M6.5.2 — Wi-Fi network commissioning state machine
+
+- Four new `Stage` variants: `ReadNetworkCommissioningInfo`,
+  `WiFiNetworkSetup`, `FailsafeBeforeWiFiEnable`, `WiFiNetworkEnable`.
+  The M6.4 placeholder `Stage::NetworkCommissioning` is removed.
+- Three new `Expectation` variants: `NetworkCommissioningInfo`,
+  `NetworkConfigResponse`, `ConnectNetworkResponse`.
+- Three new `CommissioningError` variants: `NetworkFeatureUnsupported`,
+  `NetworkRejected`, `WifiCredentialsRequired`.
+- `WiFiCredentials` struct (with hand-written `Debug` that redacts the
+  passphrase) and `CommissionerConfig::wifi_credentials: Option<WiFiCredentials>`
+  field. `None` is valid for Ethernet-only devices.
+- Ethernet-only devices auto-skip the Wi-Fi sub-cursor via FeatureMap
+  branching. Thread-only devices fail fast with
+  `NetworkFeatureUnsupported { needed: Thread }`.
+- **Behavioural change:** failsafe-expiry now derives from
+  `BasicCommissioningInfo::failsafe_expiry_length_seconds` (was hardcoded
+  60s in M6.4). Both `ArmFailSafe` invocations use the device-declared
+  value. M6.4 fallback of 60s preserved for malformed
+  `BasicCommissioningInfo`.
+- **Behavioural change:** `CommissioningError::NetworkRejected` carries a
+  `RemediationHint` for downstream UI rendering. `OtherConnectionFailure`
+  and `UnknownError` map to `RemediationHint::None`; see
+  `clusters::network_commissioning::remediation_for` for the full
+  mapping table.
+- **New feature flag:** `tracing` (optional, default off). Adds
+  `#[instrument]` spans on `Commissioner::poll`,
+  `Commissioner::on_response`, and `Commissioner::on_case_established`.
+  Field names align best-effort with matter.js's log-event format.
+- **New feature flag:** `test-helpers` (optional, default off). Exposes
+  test-only shortcut constructors `Commissioner::new_at_read_network_commissioning_info`
+  and `Commissioner::new_at_evict_previous_case_sessions` that bypass the
+  M6.4 attestation/NOC stages — needed because the M6.4.6 real-fixture
+  e2e driver is deferred. **Never use these in production.**
+- `breadcrumb_counter` plumbed monotonically through every
+  breadcrumb-bearing command.
+
 ### M6.4 — Commissioning state machine — COMPLETE
 
 All six sub-phases shipped (M6.4.1 → M6.4.6). The state machine drives
