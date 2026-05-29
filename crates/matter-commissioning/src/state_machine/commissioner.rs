@@ -125,6 +125,12 @@ pub struct Commissioner {
     issued_noc: Option<matter_cert::MatterCertificate>,
     issued_noc_public_key: Option<[u8; 65]>,
 
+    /// `true` after [`Stage::FindOperationalForComplete`] emits
+    /// `Action::EstablishCase`; cleared by
+    /// [`Commissioner::on_case_established`] (success) or by
+    /// `on_response(Expectation::CaseFailed, _)` (failure).
+    awaiting_case_session: bool,
+
     /// The Expectation the state machine last emitted with `poll()`.
     /// `None` while not waiting for a response (terminal stages, or
     /// pre-poll).
@@ -194,6 +200,7 @@ impl Commissioner {
             verified_csr: None,
             issued_noc: None,
             issued_noc_public_key: None,
+            awaiting_case_session: false,
             awaiting: None,
             pending_action: None,
             last_failure: None,
@@ -440,6 +447,52 @@ impl Commissioner {
                     expect: Expectation::NocResponse,
                 })
             }
+            Stage::NetworkCommissioning => {
+                // M6.4 ships network commissioning as a no-op slot.
+                // M6.5 expands into the Wi-Fi/Thread subgraph (six
+                // C++ AutoCommissioner stages: kScanNetworks,
+                // kWiFiNetworkSetup, kFailsafeBeforeWiFiEnable,
+                // kWiFiNetworkEnable, etc.).
+                self.advance(Stage::EvictPreviousCaseSessions);
+                self.dispatch_stage()
+            }
+            Stage::EvictPreviousCaseSessions => {
+                // New-fabric commissioning has no prior CASE session
+                // to evict. M8 multi-fabric work will emit
+                // Action::EvictCase here.
+                self.advance(Stage::FindOperationalForComplete);
+                self.dispatch_stage()
+            }
+            Stage::FindOperationalForComplete => {
+                self.awaiting_case_session = true;
+                Ok(Action::EstablishCase {
+                    fabric_id: self.fabric.fabric_id,
+                    peer_node_id: self.assigned_node_id,
+                })
+            }
+            Stage::SendComplete => {
+                let payload = gc::encode_commissioning_complete();
+                self.awaiting = Some(Expectation::CommissioningCompleteResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Case,
+                    endpoint: 0,
+                    cluster: gc::CLUSTER_ID,
+                    command: gc::command_id::COMMISSIONING_COMPLETE,
+                    payload,
+                    expect: Expectation::CommissioningCompleteResponse,
+                })
+            }
+            Stage::Cleanup => {
+                let public_key = self
+                    .issued_noc_public_key
+                    .ok_or(CommissioningError::OutOfOrderResponse(self.stage))?;
+                Ok(Action::Done(crate::state_machine::CommissionedFabric {
+                    fabric: self.fabric.clone(),
+                    peer_node_id: self.assigned_node_id,
+                    peer_root_public_key: public_key,
+                    terminated_at: Stage::Cleanup,
+                }))
+            }
             Stage::Failed => {
                 // Subsequent poll() after a failure surfaces the Abort.
                 // The state machine stays in Failed.
@@ -453,19 +506,9 @@ impl Commissioner {
                     reason,
                 })
             }
-            // Stages past AttestationVerification land in M6.4.4+ sub-phases.
-            // Short-circuit to Failed so the state machine emits a
-            // self-consistent (if intentionally incomplete) Abort sequence.
-            // Once M6.4.4+ fills the remaining stage handlers, the `_ =>`
-            // arm becomes unreachable and the explicit error becomes a
-            // compile-time exhaustiveness check.
-            unhandled => {
-                self.last_failure = Some("commissioning stage not yet implemented".to_string());
-                self.stage = Stage::Failed;
-                self.awaiting = None;
-                self.pending_action = None;
-                Err(CommissioningError::OutOfOrderResponse(unhandled))
-            }
+            // Every `Stage` variant has its own arm above. `Stage` is
+            // `#[non_exhaustive]` for cross-crate consumers, but within
+            // this crate the match is exhaustive — no `_ =>` arm needed.
         }
     }
 
@@ -495,6 +538,21 @@ impl Commissioner {
         expect: Expectation,
         payload: &[u8],
     ) -> Result<(), CommissioningError> {
+        if expect == Expectation::CaseFailed {
+            // CaseFailed bypasses the awaiting check — the caller
+            // signals failure of the EstablishCase action explicitly,
+            // and EstablishCase tracks readiness via
+            // `awaiting_case_session`, not `awaiting`.
+            if !self.awaiting_case_session {
+                return Err(CommissioningError::OutOfOrderResponse(self.stage));
+            }
+            self.awaiting_case_session = false;
+            self.stage = Stage::Failed;
+            self.awaiting = None;
+            self.pending_action = None;
+            self.last_failure = Some(CommissioningError::CaseEstablishmentFailed.to_string());
+            return Err(CommissioningError::CaseEstablishmentFailed);
+        }
         let Some(awaiting) = self.awaiting else {
             return Err(CommissioningError::OutOfOrderResponse(self.stage));
         };
@@ -514,6 +572,26 @@ impl Commissioner {
                 Err(err)
             }
         }
+    }
+
+    /// Signal that CASE establishment (mDNS find-operational + the
+    /// SIGMA-I handshake — both M6.6 mechanics, owned by the driver)
+    /// has succeeded. The state machine advances from
+    /// [`Stage::FindOperationalForComplete`] to [`Stage::SendComplete`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommissioningError::OutOfOrderResponse`] if the state
+    /// machine isn't currently awaiting CASE establishment (i.e., the
+    /// cursor is not at `FindOperationalForComplete` or the
+    /// `EstablishCase` action hasn't been emitted yet).
+    pub fn on_case_established(&mut self) -> Result<(), CommissioningError> {
+        if !self.awaiting_case_session {
+            return Err(CommissioningError::OutOfOrderResponse(self.stage));
+        }
+        self.awaiting_case_session = false;
+        self.advance(Stage::SendComplete);
+        Ok(())
     }
 
     fn handle_response(
@@ -602,7 +680,20 @@ impl Commissioner {
                 self.advance(Stage::NetworkCommissioning);
                 Ok(())
             }
-            // Other Expectations land in M6.4.5+ sub-phases.
+            Expectation::CommissioningCompleteResponse => {
+                let (error_code, _debug) =
+                    gc::decode_commissioning_error_response(Stage::SendComplete, payload)?;
+                if error_code != 0 {
+                    return Err(CommissioningError::DeviceImStatus {
+                        stage: Stage::SendComplete,
+                        im_status: u16::from(error_code),
+                    });
+                }
+                self.advance(Stage::Cleanup);
+                Ok(())
+            }
+            // `Expectation::CaseFailed` is handled by `on_response`'s
+            // pre-awaiting fast path and never reaches handle_response.
             _ => Err(CommissioningError::OutOfOrderResponse(self.stage)),
         }
     }
@@ -1573,5 +1664,130 @@ mod tests {
         sm.on_response(Expectation::AddTrustedRootResponse, &[0x00])
             .expect("status-ack accepted");
         assert_eq!(sm.stage(), Stage::SendNoc);
+    }
+
+    // --- M6.4.5 T44-T47: PASE -> CASE handoff + CommissioningComplete tests ---
+
+    #[test]
+    fn find_operational_for_complete_emits_establish_case() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        sm.stage = Stage::FindOperationalForComplete;
+        match sm.poll().expect("poll establish case") {
+            Action::EstablishCase {
+                fabric_id,
+                peer_node_id,
+            } => {
+                assert_eq!(fabric_id, fabric.fabric_id);
+                assert_eq!(peer_node_id, 0x2); // matches base_config's assigned_node_id
+            }
+            other => panic!("expected EstablishCase, got {other:?}"),
+        }
+        assert!(sm.awaiting_case_session);
+    }
+
+    #[test]
+    fn on_case_established_advances_to_send_complete() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        sm.stage = Stage::FindOperationalForComplete;
+        let _ = sm.poll().expect("emit EstablishCase");
+        sm.on_case_established().expect("case established");
+        assert_eq!(sm.stage(), Stage::SendComplete);
+        assert!(!sm.awaiting_case_session);
+    }
+
+    #[test]
+    fn on_case_established_without_pending_emits_out_of_order() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        let err = sm.on_case_established().expect_err("no pending establish");
+        assert!(matches!(err, CommissioningError::OutOfOrderResponse(_)));
+    }
+
+    #[test]
+    fn send_complete_emits_invoke_over_case_session() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        sm.stage = Stage::SendComplete;
+        match sm.poll().expect("poll send complete") {
+            Action::Invoke {
+                session,
+                cluster,
+                command,
+                expect,
+                payload,
+                ..
+            } => {
+                assert_eq!(session, crate::state_machine::SessionContext::Case);
+                assert_eq!(cluster, 0x0030);
+                assert_eq!(command, 0x04); // CommissioningComplete
+                assert_eq!(expect, Expectation::CommissioningCompleteResponse);
+                // CommissioningComplete carries no payload fields — empty struct.
+                assert_eq!(payload, vec![0x15, 0x18]);
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_complete_success_advances_to_cleanup() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        sm.stage = Stage::SendComplete;
+        let _ = sm.poll().expect("emit invoke");
+        sm.on_response(
+            Expectation::CommissioningCompleteResponse,
+            &[0x15, 0x24, 0x00, 0x00, 0x18], // error_code = 0
+        )
+        .expect("complete ok");
+        assert_eq!(sm.stage(), Stage::Cleanup);
+    }
+
+    #[test]
+    fn cleanup_emits_done_with_noc_public_key() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_csa_test_roots();
+        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
+        let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
+        let mut sm = Commissioner::new(cfg).expect("valid config");
+        sm.stage = Stage::Cleanup;
+        sm.issued_noc_public_key = Some([0xCA; 65]);
+        match sm.poll().expect("poll cleanup") {
+            Action::Done(cf) => {
+                assert_eq!(cf.peer_node_id, 0x2);
+                assert_eq!(cf.peer_root_public_key, [0xCA; 65]);
+                assert_eq!(cf.terminated_at, Stage::Cleanup);
+                assert_eq!(cf.fabric.fabric_id, fabric.fabric_id);
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
     }
 }
