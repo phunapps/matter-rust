@@ -77,6 +77,28 @@ pub fn encode_add_or_update_wifi_network(
     buf
 }
 
+/// Encode `ConnectNetwork` (spec §11.9.6.6).
+///
+/// `network_id` is the SSID bytes for Wi-Fi networks (re-uses the
+/// `ssid` field as the network identity per spec §11.9.5.2). For
+/// Wi-Fi commissioning the value is identical to the SSID supplied
+/// to `encode_add_or_update_wifi_network`.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_connect_network(network_id: &[u8], breadcrumb: u64) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), network_id)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(1), breadcrumb)
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -121,6 +143,22 @@ mod tests {
         assert!(
             bytes.windows(window.len()).any(|w| w == window),
             "credentials should appear in the payload literal",
+        );
+    }
+
+    #[test]
+    fn connect_network_matter_matches_spec_bytes() {
+        let bytes = encode_connect_network(b"matter", 0);
+        assert_eq!(
+            bytes,
+            vec![
+                0x15,
+                0x30, 0x00, 0x06, b'm', b'a', b't', b't', b'e', b'r',
+                0x24, 0x01, 0x00,
+                0x18,
+            ],
+            "encoded bytes: {:02x?}",
+            bytes,
         );
     }
 }
