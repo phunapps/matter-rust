@@ -308,3 +308,62 @@ the current symbol path is an operator-touch step.
 The byte-parity test (`crates/matter-commissioning/tests/noc_byte_parity.rs`)
 skips with `eprintln!` when fixtures are absent or carry empty
 `expected_*_b64` fields, so CI stays green during the operator wiring.
+
+### `xtask capture-commissioning` — matter.js operator wiring
+
+**Status:** open. Operator-touch wiring deferred from M6.4.6.
+
+The M6.4.6 byte-parity gate's infrastructure (xtask dispatcher,
+placeholder JS script, integration test that skips on empty fixture)
+is in place — see commits introducing
+`xtask/scripts/capture-commissioning/` and
+`crates/matter-commissioning/tests/commissioning_byte_parity.rs`.
+Activation requires:
+
+1. Pin a known-good `@matter/protocol` version in
+   `xtask/scripts/capture-commissioning/package.json`. The
+   `@matter/protocol` commissioner / controller API has shifted
+   meaningfully between minor versions, so pinning matters.
+2. Run `npm install` in `xtask/scripts/capture-commissioning/`.
+3. Replace the placeholder `index.js` with real capture logic:
+   - Construct a `CommissionerNode` (or the current top-level
+     commissioner symbol) pointing at matter.js's `device-simulator`
+     (or a real device's IP + setup code).
+   - Monkey-patch the device-network layer to capture every outgoing
+     Invoke + ReadAttribute payload + the corresponding device
+     responses.
+   - Write `test-vectors/commissioning/e2e/happy-path.json` matching
+     the schema documented in
+     `crates/matter-commissioning/tests/commissioning_byte_parity.rs`
+     (top-level keys: `fabric_id`, `commissioner_node_id`,
+     `assigned_node_id`, `ipk_epoch_key_b64`,
+     `pase_attestation_challenge_b64`, `stages[]`).
+4. Run `cargo xtask capture-commissioning` to drive the script.
+5. Run `cargo test -p matter-commissioning --test commissioning_byte_parity`
+   — the test stops skipping and asserts byte-parity on emitted
+   RNG-free Invoke + ReadAttribute payloads.
+
+**RNG-bearing payloads** (SendAttestationRequest nonce,
+SendOpCertSigningRequest nonce, SendNoc IPK) are walked but NOT
+byte-asserted in the current test — see the `rng_bearing` allow-list
+inside the test. Promoting them to strict byte-parity requires
+injecting a deterministic RNG into `Commissioner` that mirrors
+matter.js's capture-time RNG state. A follow-up commit can add a
+`test-support` feature on `matter-commissioning` exposing a
+`SeededTestRng: NocRng` and a `Commissioner::new_with_rng(...)` or
+similar constructor accepting an `Arc<dyn NocRng>` derived from
+fixture-side metadata (the capture script writes the seed bytes
+alongside the trace).
+
+**Negative byte-parity** (the M6.4.6 T57 tampered-DAC verdict-parity
+check) is also deferred until the happy-path wiring lands — the
+operator extends `index.js` with a `--tamper=dac` mode that flips one
+byte in the DAC DER + writes a sibling `tampered-dac.json` fixture
+that the byte-parity test consumes as a `verdict_only_reject` case.
+
+Once both happy-path + tampered-DAC fixtures land, drop the
+`#[ignore]`-d placeholders in
+`tests/commissioning_e2e.rs`,
+`tests/state_machine_noc.rs`, and
+`tests/state_machine_attestation.rs` — they'll exercise the captured
+fixtures via the public API.
