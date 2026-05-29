@@ -50,6 +50,33 @@ bitflags::bitflags! {
     }
 }
 
+/// Encode `AddOrUpdateWiFiNetwork` (spec §11.9.6.3).
+///
+/// `ssid` must be 1–32 bytes; `credentials` 0–64 bytes. The encoder
+/// does NOT validate lengths — callers (state machine `Commissioner`)
+/// validate at config-load time.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_add_or_update_wifi_network(
+    ssid: &[u8],
+    credentials: &[u8],
+    breadcrumb: u64,
+) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), ssid)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(1), credentials)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(2), breadcrumb)
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -65,5 +92,35 @@ mod tests {
     #[test]
     fn cluster_id_is_0x0031() {
         assert_eq!(CLUSTER_ID, 0x0031);
+    }
+
+    #[test]
+    fn add_or_update_wifi_network_matter_no_creds_matches_spec_bytes() {
+        let bytes = encode_add_or_update_wifi_network(b"matter", b"", 0);
+        assert_eq!(
+            bytes,
+            vec![
+                0x15,
+                0x30, 0x00, 0x06, b'm', b'a', b't', b't', b'e', b'r',
+                0x30, 0x01, 0x00,
+                0x24, 0x02, 0x00,
+                0x18,
+            ],
+            "encoded bytes: {:02x?}",
+            bytes,
+        );
+    }
+
+    #[test]
+    fn add_or_update_wifi_network_with_creds_includes_passphrase_bytes() {
+        let bytes = encode_add_or_update_wifi_network(b"matter", b"hunter22", 1);
+        // Check structural invariants without hand-computing the full byte string.
+        assert_eq!(bytes.first(), Some(&0x15));
+        assert_eq!(bytes.last(), Some(&0x18));
+        let window = b"hunter22";
+        assert!(
+            bytes.windows(window.len()).any(|w| w == window),
+            "credentials should appear in the payload literal",
+        );
     }
 }
