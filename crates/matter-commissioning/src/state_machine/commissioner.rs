@@ -165,7 +165,6 @@ pub struct Commissioner {
 
     /// Wi-Fi credentials captured from config at construction; consumed
     /// by `Stage::WiFiNetworkSetup`. `None` for Ethernet-only paths.
-    #[allow(dead_code)] // Consumed by Wi-Fi sub-cursor in M6.5.
     wifi_credentials: Option<WiFiCredentials>,
 
     /// Maximum failsafe expiry the device accepts, in seconds.
@@ -565,9 +564,28 @@ impl Commissioner {
                 })
             }
             Stage::WiFiNetworkSetup => {
-                // Real dispatch lands in Task 17.
-                self.advance(Stage::FailsafeBeforeWiFiEnable);
-                self.dispatch_stage()
+                use crate::clusters::network_commissioning as nc;
+                let creds = self
+                    .wifi_credentials
+                    .as_ref()
+                    .ok_or(CommissioningError::WifiCredentialsRequired)?;
+                let ssid = creds.ssid.clone();
+                let credentials = creds.credentials.clone();
+                let breadcrumb = self.next_breadcrumb();
+                let payload = nc::encode_add_or_update_wifi_network(
+                    &ssid,
+                    &credentials,
+                    breadcrumb,
+                );
+                self.awaiting = Some(Expectation::NetworkConfigResponse);
+                Ok(Action::Invoke {
+                    session: SessionContext::Pase,
+                    endpoint: 0,
+                    cluster: nc::CLUSTER_ID,
+                    command: nc::command_id::ADD_OR_UPDATE_WIFI_NETWORK,
+                    payload,
+                    expect: Expectation::NetworkConfigResponse,
+                })
             }
             Stage::FailsafeBeforeWiFiEnable => {
                 // Real dispatch lands in Task 18.
@@ -830,6 +848,21 @@ impl Commissioner {
                         Stage::ReadNetworkCommissioningInfo,
                     ));
                 }
+                Ok(())
+            }
+            Expectation::NetworkConfigResponse => {
+                use crate::clusters::network_commissioning as nc;
+                let resp =
+                    nc::decode_network_config_response(Stage::WiFiNetworkSetup, payload)?;
+                if resp.networking_status != 0 {
+                    return Err(CommissioningError::NetworkRejected {
+                        stage: Stage::WiFiNetworkSetup,
+                        networking_status: resp.networking_status,
+                        debug_text: resp.debug_text,
+                        remediation_hint: nc::remediation_for(resp.networking_status),
+                    });
+                }
+                self.advance(Stage::FailsafeBeforeWiFiEnable);
                 Ok(())
             }
             Expectation::CommissioningCompleteResponse => {

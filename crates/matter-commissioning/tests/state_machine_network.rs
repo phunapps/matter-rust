@@ -25,7 +25,7 @@ use matter_commissioning::setup::{
 };
 use matter_commissioning::{
     Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkKind, PaaTrustStore,
-    Stage, WiFiCredentials,
+    RemediationHint, Stage, WiFiCredentials,
 };
 use matter_crypto::{RingSigner, Signer};
 
@@ -240,4 +240,103 @@ fn empty_feature_map_is_malformed() {
         ),
         "got {err:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// WiFiNetworkSetup cursor helper
+// ---------------------------------------------------------------------------
+
+/// Drive the state machine from `ReadNetworkCommissioningInfo` all the
+/// way to `Stage::WiFiNetworkSetup` using Task 16's composition pattern.
+///
+/// Avoids adding a new `new_at_wifi_network_setup` shortcut constructor:
+/// the `test-helpers` surface stays minimal and the full flow through
+/// `Expectation::NetworkCommissioningInfo` is exercised as a by-product.
+fn drive_to_wifi_network_setup() -> Commissioner {
+    let mut sm = drive_to_read_network_info(make_wifi_config());
+    let _ = sm.poll().expect("emit ReadAttribute");
+    sm.on_response(Expectation::NetworkCommissioningInfo, &feature_map_tlv(0b001))
+        .expect("WiFi FeatureMap accepted");
+    sm
+}
+
+// ---------------------------------------------------------------------------
+// M6.5.2 Task 17 — WiFiNetworkSetup dispatch + NetworkConfigResponse handler
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wifi_network_setup_happy_path_emits_add_or_update() {
+    let mut sm = drive_to_wifi_network_setup();
+    let action = sm.poll().expect("poll");
+    match action {
+        matter_commissioning::Action::Invoke {
+            session,
+            cluster,
+            command,
+            payload,
+            expect,
+            ..
+        } => {
+            assert_eq!(session, matter_commissioning::SessionContext::Pase);
+            assert_eq!(cluster, 0x0031);
+            assert_eq!(command, 0x02);
+            assert_eq!(expect, Expectation::NetworkConfigResponse);
+            // Payload should contain the SSID "matter" literal.
+            assert!(
+                payload.windows(6).any(|w| w == b"matter"),
+                "payload should contain SSID bytes: {payload:02x?}",
+            );
+        }
+        other => panic!("expected Invoke, got {other:?}"),
+    }
+}
+
+#[test]
+fn wifi_network_setup_ok_response_advances_to_failsafe_before_wifi_enable() {
+    let mut sm = drive_to_wifi_network_setup();
+    let _ = sm.poll().expect("emit Invoke");
+    let response = vec![0x15, 0x24, 0x00, 0x00, 0x18]; // { 0: 0_u8 } — OK
+    sm.on_response(Expectation::NetworkConfigResponse, &response)
+        .expect("ok response accepted");
+    assert_eq!(sm.stage(), Stage::FailsafeBeforeWiFiEnable);
+}
+
+#[test]
+fn wifi_network_setup_auth_failure_carries_remediation_hint() {
+    let mut sm = drive_to_wifi_network_setup();
+    let _ = sm.poll().expect("emit Invoke");
+    // { 0: 7_u8 } = AuthFailure → CheckPassphrase
+    let response = vec![0x15, 0x24, 0x00, 0x07, 0x18];
+    let Err(err) = sm.on_response(Expectation::NetworkConfigResponse, &response) else {
+        panic!("AuthFailure should fail");
+    };
+    match err {
+        CommissioningError::NetworkRejected {
+            stage,
+            networking_status,
+            remediation_hint,
+            ..
+        } => {
+            assert_eq!(stage, Stage::WiFiNetworkSetup);
+            assert_eq!(networking_status, 7);
+            assert_eq!(remediation_hint, RemediationHint::CheckPassphrase);
+        }
+        other => panic!("expected NetworkRejected, got {other:?}"),
+    }
+}
+
+#[test]
+fn wifi_network_setup_bounds_exceeded_maps_to_slots_full() {
+    let mut sm = drive_to_wifi_network_setup();
+    let _ = sm.poll().expect("emit Invoke");
+    let response = vec![0x15, 0x24, 0x00, 0x02, 0x18]; // BoundsExceeded
+    let Err(err) = sm.on_response(Expectation::NetworkConfigResponse, &response) else {
+        panic!("BoundsExceeded should fail");
+    };
+    match err {
+        CommissioningError::NetworkRejected { remediation_hint, .. } => {
+            assert_eq!(remediation_hint, RemediationHint::DeviceNetworkSlotsFull);
+        }
+        other => panic!("got {other:?}"),
+    }
 }
