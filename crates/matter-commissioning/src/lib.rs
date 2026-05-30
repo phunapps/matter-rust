@@ -90,6 +90,7 @@
 pub mod attestation;
 pub mod clusters;
 pub mod error;
+pub mod im;
 pub mod noc;
 pub mod setup;
 pub mod state_machine;
