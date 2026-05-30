@@ -128,7 +128,7 @@ pub use clusters::network_commissioning::{
 
 pub use im::{
     build_invoke_request, build_read_request, parse_invoke_response, parse_report_data,
-    AttributePath, CommandPath, ImError, ImStatus, InvokeResponse, ReportData,
+    AttributePath, CommandPath, ImError, ImStatus, InvokeResponse, ReportData, IM_REVISION,
 };
 
 #[cfg(feature = "__test_shortcuts")]

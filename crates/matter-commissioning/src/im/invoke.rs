@@ -585,4 +585,25 @@ mod tests {
             InvokeResponse::Status(ImStatus::Failure(0x01))
         ));
     }
+
+    #[test]
+    fn invoke_response_ib_with_no_command_or_status_errors() {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap();
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB with no Command/Status
+        w.put_uint(Tag::Context(7), 0).unwrap(); // unrelated field
+        w.end_container().unwrap();
+        w.end_container().unwrap(); // array
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+
+        assert!(matches!(
+            parse_invoke_response(&buf),
+            Err(ImError::EmptyInvokeResponse)
+        ));
+    }
 }

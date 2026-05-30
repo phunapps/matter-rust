@@ -17,7 +17,7 @@
 #![allow(unreachable_pub)]
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-// Full submodule paths: flat mod.rs re-exports are added in a later task.
+// Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
 use matter_commissioning::im::invoke::build_invoke_request;
 use matter_commissioning::im::read::{build_read_request, AttributePath};
 use matter_commissioning::im::CommandPath;

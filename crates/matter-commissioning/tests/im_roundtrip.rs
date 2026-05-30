@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// Full submodule paths: the flat mod.rs re-exports are added in a later task.
+// Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
 use matter_codec::{Tag, TlvWriter};
 use matter_commissioning::im::invoke::{
     build_invoke_request, parse_invoke_response, InvokeResponse,
