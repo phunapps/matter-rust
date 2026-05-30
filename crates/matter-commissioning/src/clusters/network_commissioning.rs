@@ -415,7 +415,9 @@ mod tests {
         let decoded = decode_feature_map(&tlv).expect("decodes");
         assert_eq!(
             decoded,
-            NetworkCommissioningFeature::WIFI | NetworkCommissioningFeature::THREAD | NetworkCommissioningFeature::ETHERNET,
+            NetworkCommissioningFeature::WIFI
+                | NetworkCommissioningFeature::THREAD
+                | NetworkCommissioningFeature::ETHERNET,
         );
     }
 

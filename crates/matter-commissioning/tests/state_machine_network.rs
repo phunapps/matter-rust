@@ -151,7 +151,10 @@ fn feature_map_tlv(bits: u32) -> Vec<u8> {
 fn drive_to_read_network_info(config: CommissionerConfig<'static>) -> Commissioner {
     Commissioner::new(config)
         .expect("valid config must produce a Commissioner")
-        .position_at_stage_for_test(Stage::ReadNetworkCommissioningInfo, TestStateSeeds::default())
+        .position_at_stage_for_test(
+            Stage::ReadNetworkCommissioningInfo,
+            TestStateSeeds::default(),
+        )
 }
 
 // ---------------------------------------------------------------------------
