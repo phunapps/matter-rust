@@ -201,6 +201,36 @@ impl<'a> TlvWriter<'a> {
         )
     }
 
+    /// Splice an already-encoded TLV element into the stream under a new
+    /// `tag`, replacing the element's own tag control.
+    ///
+    /// `element` MUST be a single complete TLV element encoded with an
+    /// **anonymous** tag (one control octet, no tag bytes), e.g. the output
+    /// of another `TlvWriter` that began with `start_structure(Tag::Anonymous)`.
+    /// Used to embed pre-encoded command-fields / payloads under a context
+    /// tag without re-parsing them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedEof`] if `element` is empty,
+    /// [`Error::InvalidTagControl`] if `element` does not begin with an
+    /// anonymous-tagged control octet, or [`Error::InvalidElementType`] if
+    /// the element is a bare end-of-container marker (`0x18`), which is a
+    /// delimiter, not a complete element.
+    pub fn put_preencoded(&mut self, tag: Tag, element: &[u8]) -> Result<()> {
+        let (&control, rest) = element.split_first().ok_or(Error::UnexpectedEof)?;
+        if control & tc::TAG_CONTROL_MASK != tc::ANONYMOUS {
+            return Err(Error::InvalidTagControl(control & tc::TAG_CONTROL_MASK));
+        }
+        let element_type = control & et::ELEMENT_TYPE_MASK;
+        if element_type == et::END_OF_CONTAINER {
+            return Err(Error::InvalidElementType(element_type));
+        }
+        self.write_tag(tag, element_type);
+        self.out.extend_from_slice(rest);
+        Ok(())
+    }
+
     fn put_string_payload(
         &mut self,
         tag: Tag,
@@ -828,6 +858,57 @@ mod tests {
         w.write_value(Tag::Anonymous, &Value::List(Vec::new()))
             .unwrap();
         assert_eq!(buf, [0x17, 0x18]);
+    }
+
+    // --- put_preencoded ---
+
+    #[test]
+    fn put_preencoded_retags_anonymous_struct_to_context_1() {
+        // An empty anonymous struct: 0x15 (anon-struct-start) 0x18 (end-container).
+        let anonymous_struct = vec![0x15u8, 0x18];
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_preencoded(Tag::Context(1), &anonymous_struct)
+            .unwrap();
+        // Expected: context-tag struct at tag 1, then the body (0x18 end).
+        // Control octet: tc::CONTEXT | et::STRUCTURE = 0x20 | 0x15 = 0x35
+        // Tag byte: 0x01
+        // Body: 0x18
+        assert_eq!(buf, [0x35, 0x01, 0x18]);
+    }
+
+    #[test]
+    fn put_preencoded_rejects_empty_input() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        assert!(matches!(
+            w.put_preencoded(Tag::Context(0), &[]),
+            Err(Error::UnexpectedEof)
+        ));
+    }
+
+    #[test]
+    fn put_preencoded_rejects_non_anonymous_input() {
+        // A context-tagged bool (tc::CONTEXT | et::BOOL_FALSE = 0x20 | 0x08 = 0x28).
+        let non_anonymous = vec![0x28u8, 0x00];
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        assert!(matches!(
+            w.put_preencoded(Tag::Context(0), &non_anonymous),
+            Err(Error::InvalidTagControl(_))
+        ));
+    }
+
+    #[test]
+    fn put_preencoded_rejects_bare_end_of_container() {
+        // 0x18 is END_OF_CONTAINER — anonymous tag bits (0b000) are valid, but
+        // the element type is the delimiter, not a complete element.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        assert!(matches!(
+            w.put_preencoded(Tag::Context(1), &[0x18]),
+            Err(Error::InvalidElementType(_))
+        ));
     }
 
     #[test]
