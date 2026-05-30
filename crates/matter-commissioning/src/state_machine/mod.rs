@@ -18,6 +18,8 @@ mod stage;
 
 pub use action::{Action, CommissionedFabric, Expectation, SessionContext};
 pub use commissioner::{Commissioner, CommissionerConfig, WiFiCredentials};
+#[cfg(feature = "__test_shortcuts")]
+pub use commissioner::TestStateSeeds;
 pub use error::{CommissioningError, NetworkKind, RemediationHint};
 // Used by Commissioner::advance from M6.4.1 T6 onward.
 #[allow(unused_imports)]

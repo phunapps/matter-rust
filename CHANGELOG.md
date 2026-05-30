@@ -74,6 +74,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Closes M6.5.
 
+#### Pre-M6.6 naming cleanup
+
+- **Renamed:** `WiFiNetworkFeature` → `NetworkCommissioningFeature` to
+  mirror the spec exactly (the bitflag is the `NetworkCommissioning`
+  cluster's `FeatureMap`, covering WIFI/THREAD/ETHERNET bits — the
+  Wi-Fi-centric name was misleading). Variant constants (`WIFI`,
+  `THREAD`, `ETHERNET`) unchanged.
+- **Renamed:** Cargo feature `test-helpers` → `__test_shortcuts`
+  (double-underscore prefix follows the Tokio / Serde convention for
+  "internal, do not depend on").
+- **Consolidated:** the two M6.5.2 shortcut constructors
+  (`Commissioner::new_at_read_network_commissioning_info`,
+  `Commissioner::new_at_evict_previous_case_sessions`) into a single
+  `Commissioner::position_at_stage_for_test(self, stage, seeds)` that
+  consumes `self` and applies opt-in synthetic-state seeds via a new
+  `TestStateSeeds` struct. Caller now explicitly opts into the
+  synthetic NOC public key seeding.
+
+Pre-1.0 / pre-publish change. Behind the `__test_shortcuts` feature
+flag, which itself signals "do not enable in production."
+
 ### M6.4 — Commissioning state machine — COMPLETE
 
 All six sub-phases shipped (M6.4.1 → M6.4.6). The state machine drives

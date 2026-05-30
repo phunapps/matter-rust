@@ -42,7 +42,7 @@ bitflags::bitflags! {
     /// Bit 0 = `WiFiNetworkInterface`, bit 1 = `ThreadNetworkInterface`,
     /// bit 2 = `EthernetNetworkInterface`. Higher bits reserved.
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-    pub struct WiFiNetworkFeature: u32 {
+    pub struct NetworkCommissioningFeature: u32 {
         /// Device exposes a Wi-Fi network interface.
         const WIFI     = 1 << 0;
         /// Device exposes a Thread network interface.
@@ -112,7 +112,7 @@ pub fn encode_connect_network(network_id: &[u8], breadcrumb: u64) -> Vec<u8> {
 ///
 /// Returns `CommissioningError::MalformedResponse(Stage::ReadNetworkCommissioningInfo)`
 /// if the bytes are not a well-formed unsigned-integer TLV element.
-pub fn decode_feature_map(tlv: &[u8]) -> Result<WiFiNetworkFeature, CommissioningError> {
+pub fn decode_feature_map(tlv: &[u8]) -> Result<NetworkCommissioningFeature, CommissioningError> {
     use matter_codec::{Element, TlvReader, Value};
     let mut reader = TlvReader::new(tlv);
     match reader
@@ -126,7 +126,7 @@ pub fn decode_feature_map(tlv: &[u8]) -> Result<WiFiNetworkFeature, Commissionin
             let truncated = u32::try_from(raw).map_err(|_| {
                 CommissioningError::MalformedResponse(Stage::ReadNetworkCommissioningInfo)
             })?;
-            Ok(WiFiNetworkFeature::from_bits_truncate(truncated))
+            Ok(NetworkCommissioningFeature::from_bits_truncate(truncated))
         }
         _ => Err(CommissioningError::MalformedResponse(
             Stage::ReadNetworkCommissioningInfo,
@@ -334,9 +334,9 @@ mod tests {
 
     #[test]
     fn feature_bits_disjoint() {
-        assert_eq!(WiFiNetworkFeature::WIFI.bits(), 0b001);
-        assert_eq!(WiFiNetworkFeature::THREAD.bits(), 0b010);
-        assert_eq!(WiFiNetworkFeature::ETHERNET.bits(), 0b100);
+        assert_eq!(NetworkCommissioningFeature::WIFI.bits(), 0b001);
+        assert_eq!(NetworkCommissioningFeature::THREAD.bits(), 0b010);
+        assert_eq!(NetworkCommissioningFeature::ETHERNET.bits(), 0b100);
     }
 
     #[test]
@@ -415,7 +415,7 @@ mod tests {
         let decoded = decode_feature_map(&tlv).expect("decodes");
         assert_eq!(
             decoded,
-            WiFiNetworkFeature::WIFI | WiFiNetworkFeature::THREAD | WiFiNetworkFeature::ETHERNET,
+            NetworkCommissioningFeature::WIFI | NetworkCommissioningFeature::THREAD | NetworkCommissioningFeature::ETHERNET,
         );
     }
 
