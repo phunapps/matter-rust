@@ -54,6 +54,10 @@
 //!   `NetworkRejected`. Failsafe-expiry now derives from
 //!   `BasicCommissioningInfo` (was hardcoded 60s in M6.4). Optional
 //!   `tracing` feature instruments every dispatch arm.
+//! - **M6.6.1 (current):** Interaction Model framing — see [`im`].
+//!   `build_invoke_request` / `parse_invoke_response`,
+//!   `build_read_request` / `parse_report_data`. Pure codec over
+//!   `matter-codec`; the wire-I/O driver follows in M6.6.2+.
 //! - **M6.6 (next-next):** Tokio driver + first real-device
 //!   commission. Wires the M6.4 state machine into `matter-transport`'s
 //!   session layer + drives `matter-crypto`'s SIGMA-I CASE handshake.
@@ -120,6 +124,11 @@ pub use clusters::network_commissioning::{
     decode_connect_network_response, decode_feature_map, decode_network_config_response,
     encode_add_or_update_wifi_network, encode_connect_network, remediation_for,
     ConnectNetworkResponse, NetworkCommissioningFeature, NetworkConfigResponse,
+};
+
+pub use im::{
+    build_invoke_request, build_read_request, parse_invoke_response, parse_report_data,
+    AttributePath, CommandPath, ImError, ImStatus, InvokeResponse, ReportData,
 };
 
 #[cfg(feature = "__test_shortcuts")]

@@ -22,6 +22,9 @@ pub mod read;
 pub mod status;
 
 pub use error::ImError;
+pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
+pub use read::{build_read_request, parse_report_data, AttributePath, ReportData};
+pub use status::ImStatus;
 
 /// Interaction Model protocol revision emitted at context tag `0xFF` in
 /// every top-level IM message. Confirmed against the matter.js byte-parity

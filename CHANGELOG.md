@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete)
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing
+
+#### M6.6.1 — Interaction Model framing
+
+##### Added
+
+- `matter-commissioning`: `im` module — Interaction Model `InvokeRequestMessage` /
+  `ReadRequestMessage` builders and `InvokeResponseMessage` / `ReportDataMessage`
+  parsers (the subset commissioning needs). Dependency-isolated for a future
+  `matter-interaction` extraction. (M6.6.1)
+- `matter-codec`: `TlvWriter::put_preencoded` — splice a pre-encoded
+  anonymous-tagged element under a new tag.
 
 #### M6.5.1 — NetworkCommissioning cluster codecs + RemediationHint
 
