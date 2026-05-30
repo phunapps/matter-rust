@@ -16,8 +16,9 @@ readme = "README.md"
 default = []
 ## Expose cursor-jump helpers used exclusively by the crate's own
 ## integration tests (tests/state_machine_network.rs and similar).
-## Never enable in production builds.
-test-helpers = []
+## Double-underscore prefix follows the Tokio/Serde convention: "internal,
+## do not depend on". Never enable in production builds.
+__test_shortcuts = []
 ## Enable `tracing` instrumentation spans on `Commissioner`'s public
 ## methods (`poll`, `on_response`, `on_case_established`).
 ## Off by default; opt-in per Matter-rust's zero-cost-when-unused policy.
@@ -51,4 +52,4 @@ p256 = { workspace = true }
 
 [[test]]
 name = "state_machine_network"
-required-features = ["test-helpers"]
+required-features = ["__test_shortcuts"]

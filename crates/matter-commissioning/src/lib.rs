@@ -118,9 +118,11 @@ pub use noc::{
 pub use clusters::network_commissioning::{
     decode_connect_network_response, decode_feature_map, decode_network_config_response,
     encode_add_or_update_wifi_network, encode_connect_network, remediation_for,
-    ConnectNetworkResponse, NetworkConfigResponse, WiFiNetworkFeature,
+    ConnectNetworkResponse, NetworkCommissioningFeature, NetworkConfigResponse,
 };
 
+#[cfg(feature = "__test_shortcuts")]
+pub use state_machine::TestStateSeeds;
 pub use state_machine::{
     Action, CommissionedFabric, Commissioner, CommissionerConfig, CommissioningError, Expectation,
     NetworkKind, RemediationHint, SessionContext, Stage, WiFiCredentials,

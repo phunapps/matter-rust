@@ -292,61 +292,24 @@ impl Commissioner {
         self.stage
     }
 
-    /// Create a `Commissioner` whose cursor is pre-positioned at
-    /// [`Stage::ReadNetworkCommissioningInfo`], ready for the first
-    /// `poll()` call that emits `Action::ReadAttribute` for the
-    /// `NetworkCommissioning::FeatureMap`.
+    /// **Test-only.** Jumps the cursor to `stage` and applies any opt-in
+    /// seeds in `seeds`. Consumes `self` and returns the repositioned
+    /// `Commissioner`.
     ///
-    /// All M6.4 attestation + NOC fields are left at their zero-value
-    /// defaults. This is intentional: the network sub-cursor does not
-    /// re-read those fields, so the values never matter during a
-    /// `ReadNetworkCommissioningInfo` → `WiFiNetworkSetup` /
-    /// `EvictPreviousCaseSessions` transition.
+    /// Use this in integration tests when a real M6.4 attestation +
+    /// NOC-issuance flow is not yet available (the M6.4.6 real-fixture
+    /// e2e driver is still operator-touch deferred — see
+    /// `TODO-1.0.md`). Never use in production code.
     ///
-    /// **Only compiled with the `test-helpers` cargo feature.**
-    /// Must not be used in production flows — it skips M6.4 crypto
-    /// verification entirely. Enable via `Cargo.toml` `required-features`
-    /// on the specific test target that needs it.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same validation errors as [`Commissioner::new`] —
-    /// i.e. invalid [`CommissionerConfig`] fields.
-    #[cfg(feature = "test-helpers")]
-    pub fn new_at_read_network_commissioning_info(
-        cfg: CommissionerConfig<'_>,
-    ) -> Result<Self, CommissioningError> {
-        let mut this = Self::new(cfg)?;
-        this.stage = Stage::ReadNetworkCommissioningInfo;
-        Ok(this)
-    }
-
-    /// Position the cursor at [`Stage::EvictPreviousCaseSessions`] with a
-    /// sentinel `issued_noc_public_key` so that
-    /// [`Stage::Cleanup`] can emit [`Action::Done`] without going through
-    /// the M6.4 NOC issuance path.
-    ///
-    /// This is used by the Ethernet-only end-to-end walk in
-    /// `tests/state_machine_network.rs` (M6.5.2 Task 20) to exercise the
-    /// full network → CASE → `CommissioningComplete` → Done path without
-    /// replaying attestation + NOC crypto.
-    ///
-    /// **Only compiled with the `test-helpers` cargo feature.**
-    /// Must not be used in production flows.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same validation errors as [`Commissioner::new`].
-    #[cfg(feature = "test-helpers")]
-    pub fn new_at_evict_previous_case_sessions(
-        cfg: CommissionerConfig<'_>,
-    ) -> Result<Self, CommissioningError> {
-        let mut this = Self::new(cfg)?;
-        this.stage = Stage::EvictPreviousCaseSessions;
-        // Sentinel NOC public key so Stage::Cleanup can emit Action::Done.
-        // The real key would be set by the NOC issuance path in M6.4.4.
-        this.issued_noc_public_key = Some([0xCC; 65]);
-        Ok(this)
+    /// Behind the `__test_shortcuts` feature flag.
+    #[cfg(feature = "__test_shortcuts")]
+    #[must_use]
+    pub fn position_at_stage_for_test(mut self, stage: Stage, seeds: TestStateSeeds) -> Self {
+        self.stage = stage;
+        if let Some(pk) = seeds.synthetic_noc_pubkey {
+            self.issued_noc_public_key = Some(pk);
+        }
+        self
     }
 
     /// Drive the state machine forward.
@@ -884,17 +847,17 @@ impl Commissioner {
             Expectation::NetworkCommissioningInfo => {
                 use crate::clusters::network_commissioning as nc;
                 let features = nc::decode_feature_map(payload)?;
-                if features.contains(nc::WiFiNetworkFeature::WIFI) {
+                if features.contains(nc::NetworkCommissioningFeature::WIFI) {
                     if self.wifi_credentials.is_none() {
                         return Err(CommissioningError::WifiCredentialsRequired);
                     }
                     self.advance(Stage::WiFiNetworkSetup);
-                } else if features.contains(nc::WiFiNetworkFeature::ETHERNET)
-                    && !features.contains(nc::WiFiNetworkFeature::THREAD)
+                } else if features.contains(nc::NetworkCommissioningFeature::ETHERNET)
+                    && !features.contains(nc::NetworkCommissioningFeature::THREAD)
                 {
                     // Ethernet-only — skip the Wi-Fi sub-cursor entirely.
                     self.advance(Stage::EvictPreviousCaseSessions);
-                } else if features.contains(nc::WiFiNetworkFeature::THREAD) {
+                } else if features.contains(nc::NetworkCommissioningFeature::THREAD) {
                     return Err(CommissioningError::NetworkFeatureUnsupported {
                         needed: crate::state_machine::NetworkKind::Thread,
                     });
@@ -1141,6 +1104,20 @@ impl Commissioner {
             }
         }
     }
+}
+
+/// Test-only state seeds for [`Commissioner::position_at_stage_for_test`].
+///
+/// Each field is `None` by default — the caller opts in to each seed
+/// explicitly. **Never use in production.**
+#[cfg(feature = "__test_shortcuts")]
+#[derive(Default, Debug, Clone, Copy)]
+pub struct TestStateSeeds {
+    /// Override `issued_noc_public_key` (normally populated when the
+    /// state machine actually issues a NOC). Set to a synthetic SEC1-
+    /// uncompressed P-256 byte pattern (e.g. `[0xCC; 65]`) when
+    /// fast-forwarding past the NOC-issuance stages.
+    pub synthetic_noc_pubkey: Option<[u8; 65]>,
 }
 
 #[cfg(test)]

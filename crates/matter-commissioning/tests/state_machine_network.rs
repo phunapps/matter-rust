@@ -4,9 +4,9 @@
 //! the `Expectation::NetworkCommissioningInfo` response handler's
 //! Wi-Fi / Ethernet / Thread / malformed branching logic.
 //!
-//! Requires the `test-helpers` cargo feature (see `Cargo.toml`
+//! Requires the `__test_shortcuts` cargo feature (see `Cargo.toml`
 //! `[[test]]` section). The feature gates
-//! `Commissioner::new_at_read_network_commissioning_info`, which jumps
+//! `Commissioner::position_at_stage_for_test`, which jumps
 //! the cursor past M6.4 attestation + NOC crypto that cannot be driven
 //! with synthetic data. This is intentional test isolation: the real
 //! crypto path is exercised in the in-source glass-box tests in
@@ -25,7 +25,7 @@ use matter_commissioning::setup::{
 };
 use matter_commissioning::{
     Action, Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkKind,
-    PaaTrustStore, RemediationHint, SessionContext, Stage, WiFiCredentials,
+    PaaTrustStore, RemediationHint, SessionContext, Stage, TestStateSeeds, WiFiCredentials,
 };
 use matter_crypto::{RingSigner, Signer};
 
@@ -143,14 +143,18 @@ fn feature_map_tlv(bits: u32) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// Create a `Commissioner` positioned at `Stage::ReadNetworkCommissioningInfo`
-/// using `Commissioner::new_at_read_network_commissioning_info` (gated by the
-/// `test-helpers` cargo feature).
+/// using `Commissioner::position_at_stage_for_test` (gated by the
+/// `__test_shortcuts` cargo feature).
 ///
 /// This skips M6.4 attestation + NOC crypto; the full crypto path is covered
 /// by the in-source glass-box tests in `commissioner.rs::tests`.
 fn drive_to_read_network_info(config: CommissionerConfig<'static>) -> Commissioner {
-    Commissioner::new_at_read_network_commissioning_info(config)
+    Commissioner::new(config)
         .expect("valid config must produce a Commissioner")
+        .position_at_stage_for_test(
+            Stage::ReadNetworkCommissioningInfo,
+            TestStateSeeds::default(),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +254,8 @@ fn empty_feature_map_is_malformed() {
 /// Drive the state machine from `ReadNetworkCommissioningInfo` all the
 /// way to `Stage::WiFiNetworkSetup` using Task 16's composition pattern.
 ///
-/// Avoids adding a new `new_at_wifi_network_setup` shortcut constructor:
-/// the `test-helpers` surface stays minimal and the full flow through
+/// Avoids adding a new `position_at_stage_for_test(Stage::WiFiNetworkSetup, …)` call:
+/// the `__test_shortcuts` surface stays minimal and the full flow through
 /// `Expectation::NetworkCommissioningInfo` is exercised as a by-product.
 fn drive_to_wifi_network_setup() -> Commissioner {
     let mut sm = drive_to_read_network_info(make_wifi_config());
@@ -477,8 +481,8 @@ fn wifi_network_enable_unknown_status_maps_to_none() {
 /// `FindOperationalForComplete` (`EstablishCase`) → `on_case_established` →
 /// `SendComplete` (`CommissioningComplete`) → `Cleanup` (Done).
 ///
-/// The cursor is placed at `EvictPreviousCaseSessions` via the
-/// `new_at_evict_previous_case_sessions` test-helper so that
+/// The cursor is placed at `EvictPreviousCaseSessions` via
+/// `position_at_stage_for_test` with a synthetic NOC public key so that
 /// `Stage::Cleanup` can emit `Action::Done` (which requires
 /// `issued_noc_public_key` set by NOC issuance in M6.4.4 — skipped here).
 /// The `ReadNetworkCommissioningInfo` → Ethernet `FeatureMap` → `EvictPreviousCaseSessions`
@@ -486,8 +490,14 @@ fn wifi_network_enable_unknown_status_maps_to_none() {
 /// and the proptest totality suite.
 #[test]
 fn ethernet_only_e2e_reaches_done() {
-    let mut sm = Commissioner::new_at_evict_previous_case_sessions(make_ethernet_config())
-        .expect("valid config");
+    let mut sm = Commissioner::new(make_ethernet_config())
+        .expect("valid config")
+        .position_at_stage_for_test(
+            Stage::EvictPreviousCaseSessions,
+            TestStateSeeds {
+                synthetic_noc_pubkey: Some([0xCC; 65]),
+            },
+        );
 
     // EvictPreviousCaseSessions is a no-op in M6.4/5 (advances internally);
     // next poll routes through FindOperationalForComplete and emits EstablishCase.
