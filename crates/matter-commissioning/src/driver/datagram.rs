@@ -13,6 +13,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::sync::{mpsc, Mutex};
 
+/// UDP receive buffer size. The Matter UDP payload is bounded by the IPv6
+/// minimum MTU (1280 bytes) minus IP+UDP headers, comfortably under this; the
+/// Ethernet-MTU value leaves headroom and matches `matter-transport`'s socket
+/// buffer. UDP truncates anything larger to the buffer length.
+const RECV_BUF_SIZE: usize = 1500;
+
 /// An async, unreliable, message-oriented datagram transport.
 ///
 /// Native async-fn-in-trait is used (MSRV 1.88). The driver runs all IO on a
@@ -46,8 +52,7 @@ impl AsyncDatagram for matter_transport::TokioUdpTransport {
     }
 
     async fn recv_from(&self) -> io::Result<(Vec<u8>, SocketAddr)> {
-        // 1500 covers the IPv6 minimum-MTU Matter payload plus headers.
-        let mut buf = vec![0u8; 1500];
+        let mut buf = vec![0u8; RECV_BUF_SIZE];
         let (n, from) = self.socket().recv_from(&mut buf).await?;
         buf.truncate(n);
         Ok((buf, from))
@@ -106,16 +111,45 @@ impl InMemoryDatagram {
 }
 
 impl AsyncDatagram for InMemoryDatagram {
+    /// Deliver `buf` to the peer endpoint, or silently drop it.
+    ///
+    /// Returns `Ok(())` even when the datagram is dropped (injected fault) or
+    /// the peer endpoint has been closed — an unreliable transport reports no
+    /// delivery failure. A test whose peer endpoint is dropped early will see
+    /// `Ok(())` here and then block in `recv_from`; keep both endpoints alive
+    /// for the test's duration.
     async fn send_to(&self, buf: &[u8], _peer: SocketAddr) -> io::Result<()> {
-        if self.drops_remaining.load(Ordering::SeqCst) > 0 {
-            self.drops_remaining.fetch_sub(1, Ordering::SeqCst);
+        // Atomic decrement-if-nonzero: consumes exactly one drop credit even
+        // under concurrent sends.
+        let consumed_drop = self
+            .drops_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                if v > 0 {
+                    Some(v - 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok();
+        if consumed_drop {
             return Ok(());
         }
-        // Peer hangup is not an error for an unreliable datagram transport.
+        // Stamp our own address as the source, so the peer's recv_from sees a
+        // realistic `from` (mirrors how the OS fills in the UDP source).
         let _ = self.tx.send((buf.to_vec(), self.addr));
         Ok(())
     }
 
+    /// Await the next inbound datagram for this endpoint.
+    ///
+    /// # Concurrency
+    ///
+    /// Must not be called concurrently on the same endpoint: the receiver is
+    /// behind a `Mutex` held across the await, so a second concurrent
+    /// `recv_from` on the same endpoint will deadlock. The driver drives each
+    /// endpoint from a single task (and `tokio::select!` drops and recreates
+    /// the future each iteration rather than polling two at once), so this is
+    /// never violated in practice.
     async fn recv_from(&self) -> io::Result<(Vec<u8>, SocketAddr)> {
         let mut rx = self.rx.lock().await;
         rx.recv()
@@ -151,5 +185,11 @@ mod tests {
         a.send_to(b"delivered", b.local_addr()).await.unwrap(); // delivered
         let (got, _) = b.recv_from().await.unwrap();
         assert_eq!(got, b"delivered");
+
+        // Exactly one credit was consumed: the next send (no drops left) must
+        // arrive, proving the drop counter returned to zero.
+        a.send_to(b"after", b.local_addr()).await.unwrap();
+        let (after, _) = b.recv_from().await.unwrap();
+        assert_eq!(after, b"after");
     }
 }
