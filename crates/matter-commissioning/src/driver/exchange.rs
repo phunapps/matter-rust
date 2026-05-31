@@ -34,9 +34,19 @@ const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 /// `peer`, then drive MRP until the matching application response arrives.
 ///
 /// `AckOnly` and `DuplicateReliableAckResent` outcomes are absorbed; retransmit
-/// timers are honoured. The buffered piggyback-ack for the *received* response
-/// is left pending for the next exchange to carry (or an explicit flush at loop
-/// end — wired in M6.6.4).
+/// timers are honoured. `peer` is used only as the send destination — inbound
+/// datagrams are matched by session id and exchange id (the source address is
+/// not filtered), consistent with the single-peer commissioning flow.
+///
+/// The buffered piggyback-ack for the *received* response is left pending when
+/// this returns. M6.6.4 (the `commission()` orchestrator) MUST account for it:
+/// the next exchange uses a fresh exchange id, so MRP will not piggyback the
+/// ack onto it; instead the 200 ms standalone-ack deadline fires inside the
+/// *next* `secured_round_trip`'s timer arm and emits a `SendStandaloneAck`.
+/// That is spec-correct (the peer still gets its ack), but it means a stray
+/// standalone-ack send can preempt the start of the next exchange. If that
+/// ordering ever matters, M6.6.4 should flush the ack explicitly before
+/// starting the next exchange.
 ///
 /// # Errors
 ///
@@ -75,6 +85,8 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
         tokio::select! {
             biased;
             recv = transport.recv_from() => {
+                // Single-peer flow: the source address is not trust-checked here;
+                // `decode_inbound` authenticates by session id + AES-CCM tag.
                 let (packet, _from) = recv?;
                 match sessions.decode_inbound(&packet, Instant::now())? {
                     DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
