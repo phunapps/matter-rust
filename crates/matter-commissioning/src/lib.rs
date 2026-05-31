@@ -93,6 +93,8 @@
 
 pub mod attestation;
 pub mod clusters;
+#[cfg(feature = "driver")]
+pub mod driver;
 pub mod error;
 pub mod im;
 pub mod noc;

@@ -42,8 +42,8 @@ pub mod mdns_sd_discovery;
 
 pub use error::{Error, Result};
 pub use framing::{
-    decode_secured, encode_secured, DestNodeId, MessageCounter, NodeId, ReplayWindow,
-    SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
+    decode_header, decode_secured, encode_header, encode_secured, DestNodeId, MessageCounter,
+    NodeId, ReplayWindow, SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 pub use mrp::{
     InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent, PreparedOutbound,

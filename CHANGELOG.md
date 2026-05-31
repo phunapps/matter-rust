@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton
+
+#### M6.6.2 — Tokio commissioning driver (skeleton)
+
+##### Added
+
+- New `driver` cargo feature (Tokio; off by default) carrying the commissioning
+  driver's IO foundation. The sans-IO state machine, codecs, and `im` module
+  remain fully usable without it.
+- `driver::AsyncDatagram` — a datagram-only async transport seam (`send_to` /
+  `recv_from`), with a real `TokioUdpTransport` implementation and an in-memory
+  `InMemoryDatagram` test double (with drop injection for retransmit tests).
+- `driver::secured_round_trip` — a secured-exchange round-trip over
+  `matter-transport`'s `SessionManager`, owning the MRP retransmit/ack timer
+  loop so the policy layer never sees MRP mechanics.
+- `driver::{encode_unsecured, decode_unsecured, UnsecuredMessage,
+  UnsecuredExchange}` — unsecured (session-id 0) PASE framing plus a
+  stop-and-wait reliable sender, since `matter-transport` has no unsecured path
+  and the PASE handshake runs unsecured. The exact unsecured-PASE header
+  conventions are flagged for byte-parity confirmation against matter.js when
+  PASE flows (M6.6.3 / real device).
+- `driver::DriverError` — the IO-layer error type bridging transport, crypto,
+  IM-framing, and state-machine errors.
+- Validated by hardware-free tests: in-memory datagram delivery + drop, a
+  real-socket UDP loopback, an encrypted `secured_round_trip` with MRP
+  retransmit, and unsecured encode/decode + stop-and-wait round-trips.
 
 #### M6.6.1 — Interaction Model framing
 
@@ -509,6 +534,12 @@ fixture file; the test assertions remain stable.
 ## matter-transport
 
 ### [0.1.0-pre] — 2026-05-22 (not yet published)
+
+#### Changed (M6.6.2 — driver support)
+
+- Re-exported `encode_header` / `decode_header` from the crate root (needed by
+  `matter-commissioning`'s unsecured PASE framing layer; previously only
+  `encode_secured` / `decode_secured` were re-exported).
 
 #### Added (M5.1 — framing + session manager skeleton)
 
