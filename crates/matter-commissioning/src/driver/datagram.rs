@@ -192,4 +192,22 @@ mod tests {
         let (after, _) = b.recv_from().await.unwrap();
         assert_eq!(after, b"after");
     }
+
+    #[tokio::test]
+    async fn tokio_udp_transport_send_recv_loopback() {
+        use matter_transport::Transport;
+        use matter_transport::TokioUdpTransport;
+
+        let a = TokioUdpTransport::bind_addr("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let b = TokioUdpTransport::bind_addr("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        let b_addr = b.local_address();
+
+        AsyncDatagram::send_to(&a, b"ping", b_addr).await.unwrap();
+        let (got, _from) = AsyncDatagram::recv_from(&b).await.unwrap();
+        assert_eq!(got, b"ping");
+    }
 }
