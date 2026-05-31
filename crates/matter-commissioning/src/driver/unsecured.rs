@@ -17,12 +17,16 @@
 //! by byte-parity against matter.js when PASE actually flows (M6.6.3 wiring /
 //! M6.6.5 real device). M6.6.2 proves only encode/decode inverse-ness.
 
+use std::net::SocketAddr;
+use std::time::Duration;
+
 use matter_transport::{
     decode_header, decode_protocol_header, encode_header, encode_protocol_header, ExchangeFlags,
     MessageCounter, ProtocolHeader, ProtocolId, SecuredMessageFlags, SecuredMessageHeader,
     SecurityFlags, SessionId,
 };
 
+use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
 
 /// A decoded unsecured message.
@@ -115,10 +119,99 @@ pub fn decode_unsecured(bytes: &[u8]) -> Result<UnsecuredMessage, DriverError> {
     })
 }
 
+/// Minimal stop-and-wait reliable sender for the unsecured PASE handshake.
+///
+/// Owns the unsecured message counter and the handshake's exchange id. Each
+/// `send_and_recv` transmits one message (initiator, reliable) and awaits the
+/// next inbound unsecured message, retransmitting on timeout up to
+/// `max_attempts`. This is intentionally simpler than full MRP — the 5 PASE
+/// messages are strictly ordered request→response, so stop-and-wait suffices;
+/// hardening to MRP-over-unsecured can follow.
+pub struct UnsecuredExchange {
+    counter: u32,
+    exchange_id: u16,
+    retransmit: Duration,
+    max_attempts: u8,
+}
+
+impl UnsecuredExchange {
+    /// Create an exchange with the given initial message counter and exchange
+    /// id.
+    ///
+    /// FLAGGED TO MAINTAINER: Matter Core Spec §4.5.1.1 wants the unsecured
+    /// message counter seeded randomly. M6.6.2 takes it as a parameter so the
+    /// caller (M6.6.3) can supply a CSPRNG-seeded value; tests pass a fixed
+    /// one for determinism. Defaults: 300 ms retransmit, 5 attempts (matching
+    /// MRP's `initial_active` / `max_attempts`).
+    #[must_use]
+    pub fn new(initial_counter: u32, exchange_id: u16) -> Self {
+        Self {
+            counter: initial_counter,
+            exchange_id,
+            retransmit: Duration::from_millis(300),
+            max_attempts: 5,
+        }
+    }
+
+    /// Send one unsecured message (initiator, reliable) and await the next
+    /// inbound unsecured message, retransmitting on timeout. `ack` piggybacks
+    /// the previous message's counter when the caller has one to acknowledge.
+    ///
+    /// # Errors
+    ///
+    /// - [`DriverError::Io`] if a datagram send/recv fails.
+    /// - [`DriverError::Transport`] / [`DriverError::UnexpectedSecuredMessage`]
+    ///   if the reply does not decode as an unsecured message.
+    /// - [`DriverError::Timeout`] if no reply arrives within `max_attempts`.
+    pub async fn send_and_recv<T: AsyncDatagram>(
+        &mut self,
+        transport: &T,
+        peer: SocketAddr,
+        opcode: u8,
+        app_payload: &[u8],
+        ack: Option<u32>,
+    ) -> Result<UnsecuredMessage, DriverError> {
+        let counter = self.counter;
+        self.counter = self.counter.wrapping_add(1);
+        let wire = encode_unsecured(
+            counter,
+            self.exchange_id,
+            opcode,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            ack,
+            app_payload,
+        );
+
+        let mut attempts: u8 = 0;
+        loop {
+            transport.send_to(&wire, peer).await?;
+            match tokio::time::timeout(self.retransmit, transport.recv_from()).await {
+                Ok(recv) => {
+                    let (packet, _from) = recv?;
+                    return decode_unsecured(&packet);
+                }
+                Err(_elapsed) => {
+                    attempts += 1;
+                    if attempts >= self.max_attempts {
+                        return Err(DriverError::Timeout {
+                            exchange_id: self.exchange_id,
+                        });
+                    }
+                    // loop → retransmit the same bytes.
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use matter_transport::ProtocolId;
+
+    use crate::driver::datagram::{AsyncDatagram, InMemoryDatagram};
 
     use super::*;
 
@@ -165,5 +258,71 @@ mod tests {
         wire.extend_from_slice(&[0u8; 6]); // minimal protocol-header bytes
         let err = decode_unsecured(&wire).unwrap_err();
         assert!(matches!(err, DriverError::UnexpectedSecuredMessage(5)));
+    }
+
+    #[tokio::test]
+    async fn unsecured_send_and_recv_roundtrips() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7);
+
+        let controller =
+            exch.send_and_recv(&ctrl_io, dev_addr, 0x20 /* PBKDFParamRequest */, b"req", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = decode_unsecured(&pkt).unwrap();
+            assert_eq!(msg.opcode, 0x20);
+            assert_eq!(msg.payload, b"req");
+            // Reply PBKDFParamResponse (0x21), acking the request's counter.
+            let reply = encode_unsecured(
+                100,
+                msg.exchange_id,
+                0x21,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(msg.message_counter),
+                b"resp",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        let got = got.unwrap();
+        assert_eq!(got.opcode, 0x21);
+        assert_eq!(got.payload, b"resp");
+    }
+
+    #[tokio::test]
+    async fn unsecured_send_and_recv_retransmits_dropped_send() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7);
+
+        ctrl_io.set_drops(1); // drop the first send; the retransmit must land
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, b"req", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap(); // sees the retransmit
+            let msg = decode_unsecured(&pkt).unwrap();
+            let reply = encode_unsecured(
+                100,
+                msg.exchange_id,
+                0x21,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(msg.message_counter),
+                b"resp",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().opcode, 0x21);
     }
 }
