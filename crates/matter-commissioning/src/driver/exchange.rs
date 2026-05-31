@@ -153,6 +153,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn secured_round_trip_retransmits_dropped_request() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        // Drop the controller's FIRST outbound datagram (the original request).
+        // MRP's ~300 ms active retransmit then re-sends it; the resend lands.
+        ctrl_io.set_drops(1);
+
+        let request = b"req".as_slice();
+        let response = b"resp".as_slice();
+
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            request,
+        );
+
+        let device = async {
+            // The device's single recv sees the retransmit (original was dropped).
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, payload, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected an application message");
+            };
+            assert_eq!(payload, request);
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    response,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, response);
+    }
+
+    #[tokio::test]
     async fn secured_round_trip_returns_response_payload() {
         let (mut ctrl, mut dev) = paired_pase_sessions();
         let session = matter_transport::SessionId(1);
