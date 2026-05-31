@@ -94,11 +94,13 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                     {
                         return Ok(SecuredResponse { exchange_id, payload });
                     }
-                    // App message for some other exchange — not expected in the
-                    // strictly sequential commissioning flow; ignore and wait.
-                    DecodeInboundOutput::AppMessage { .. } => {}
-                    // Our request was acked; keep waiting for the response.
-                    DecodeInboundOutput::AckOnly { .. } => {}
+                    // Two outcomes we simply wait through (identical handling):
+                    //  - an app message for a *different* exchange — not expected
+                    //    in the strictly sequential commissioning flow; and
+                    //  - an `AckOnly` for our request — the response is still
+                    //    pending.
+                    DecodeInboundOutput::AppMessage { .. }
+                    | DecodeInboundOutput::AckOnly { .. } => {}
                     // Peer re-sent a reliable frame; bounce its standalone ack.
                     DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
                         transport.send_to(&ack_packet, peer).await?;
@@ -228,24 +230,24 @@ mod tests {
         let device = async {
             loop {
                 let (pkt, _) = dev_io.recv_from().await.unwrap();
-                match dev.decode_inbound(&pkt, Instant::now()).unwrap() {
-                    DecodeInboundOutput::AppMessage { exchange_id, payload, .. } => {
-                        assert_eq!(payload, request);
-                        let out = dev
-                            .encode_outbound(
-                                session,
-                                Some(exchange_id),
-                                0x09, // InvokeResponse opcode
-                                ProtocolId::INTERACTION_MODEL,
-                                response,
-                                MrpFlags { reliable: true },
-                                Instant::now(),
-                            )
-                            .unwrap();
-                        dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
-                        break;
-                    }
-                    _ => continue,
+                // Wait for the request; ignore any ack-only / other frames.
+                if let DecodeInboundOutput::AppMessage { exchange_id, payload, .. } =
+                    dev.decode_inbound(&pkt, Instant::now()).unwrap()
+                {
+                    assert_eq!(payload, request);
+                    let out = dev
+                        .encode_outbound(
+                            session,
+                            Some(exchange_id),
+                            0x09, // InvokeResponse opcode
+                            ProtocolId::INTERACTION_MODEL,
+                            response,
+                            MrpFlags { reliable: true },
+                            Instant::now(),
+                        )
+                        .unwrap();
+                    dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+                    break;
                 }
             }
         };
