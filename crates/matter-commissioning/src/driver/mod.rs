@@ -12,8 +12,7 @@ mod error;
 mod exchange;
 mod unsecured;
 
-pub use error::DriverError;
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
-// TODO(M6.6.2): re-enable as each submodule lands in its own task.
+pub use error::DriverError;
 pub use exchange::{secured_round_trip, SecuredResponse};
 pub use unsecured::{decode_unsecured, encode_unsecured, UnsecuredExchange, UnsecuredMessage};

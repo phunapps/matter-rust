@@ -36,7 +36,11 @@ const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 /// `AckOnly` and `DuplicateReliableAckResent` outcomes are absorbed; retransmit
 /// timers are honoured. `peer` is used only as the send destination — inbound
 /// datagrams are matched by session id and exchange id (the source address is
-/// not filtered), consistent with the single-peer commissioning flow.
+/// not filtered), consistent with the single-peer commissioning flow. A frame
+/// that fails to decode (bad tag, replayed counter, malformed header) is
+/// propagated as an error and aborts the round-trip rather than being skipped;
+/// that is acceptable under the single-peer assumption but is a place to harden
+/// if this is ever used where unrelated traffic can reach the socket.
 ///
 /// The buffered piggyback-ack for the *received* response is left pending when
 /// this returns. M6.6.4 (the `commission()` orchestrator) MUST account for it:
