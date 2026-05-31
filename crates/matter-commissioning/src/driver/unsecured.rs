@@ -103,7 +103,9 @@ pub fn encode_unsecured(
 pub fn decode_unsecured(bytes: &[u8]) -> Result<UnsecuredMessage, DriverError> {
     let (msg_header, rest) = decode_header(bytes)?;
     if msg_header.session_id.0 != 0 {
-        return Err(DriverError::UnexpectedSecuredMessage(msg_header.session_id.0));
+        return Err(DriverError::UnexpectedSecuredMessage(
+            msg_header.session_id.0,
+        ));
     }
     let (protocol_header, app) = decode_protocol_header(rest)?;
     Ok(UnsecuredMessage {
@@ -267,8 +269,10 @@ mod tests {
         let ctrl_addr = ctrl_io.local_addr();
         let mut exch = UnsecuredExchange::new(1, 7);
 
-        let controller =
-            exch.send_and_recv(&ctrl_io, dev_addr, 0x20 /* PBKDFParamRequest */, b"req", None);
+        let controller = exch.send_and_recv(
+            &ctrl_io, dev_addr, 0x20, /* PBKDFParamRequest */
+            b"req", None,
+        );
 
         let device = async {
             let (pkt, _) = dev_io.recv_from().await.unwrap();

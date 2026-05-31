@@ -195,8 +195,8 @@ mod tests {
 
     #[tokio::test]
     async fn tokio_udp_transport_send_recv_loopback() {
-        use matter_transport::Transport;
         use matter_transport::TokioUdpTransport;
+        use matter_transport::Transport;
 
         let a = TokioUdpTransport::bind_addr("127.0.0.1:0".parse().unwrap())
             .await

@@ -82,9 +82,9 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
     // 2. recv-or-timer loop.
     loop {
         let now = Instant::now();
-        let sleep_for = sessions
-            .poll_timeout()
-            .map_or(IDLE_SLEEP, |deadline| deadline.saturating_duration_since(now));
+        let sleep_for = sessions.poll_timeout().map_or(IDLE_SLEEP, |deadline| {
+            deadline.saturating_duration_since(now)
+        });
 
         tokio::select! {
             biased;
@@ -153,7 +153,8 @@ mod tests {
         };
         let mut ctrl = SessionManager::new();
         let mut dev = SessionManager::new();
-        let _ctrl_sid = ctrl.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        let _ctrl_sid =
+            ctrl.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
         let _dev_sid = dev.register_pase(keys, SessionRole::Responder, 1, PeerHint::default());
         (ctrl, dev)
     }
@@ -186,8 +187,11 @@ mod tests {
         let device = async {
             // The device's single recv sees the retransmit (original was dropped).
             let (pkt, _) = dev_io.recv_from().await.unwrap();
-            let DecodeInboundOutput::AppMessage { exchange_id, payload, .. } =
-                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            let DecodeInboundOutput::AppMessage {
+                exchange_id,
+                payload,
+                ..
+            } = dev.decode_inbound(&pkt, Instant::now()).unwrap()
             else {
                 panic!("expected an application message");
             };
@@ -235,8 +239,11 @@ mod tests {
             loop {
                 let (pkt, _) = dev_io.recv_from().await.unwrap();
                 // Wait for the request; ignore any ack-only / other frames.
-                if let DecodeInboundOutput::AppMessage { exchange_id, payload, .. } =
-                    dev.decode_inbound(&pkt, Instant::now()).unwrap()
+                if let DecodeInboundOutput::AppMessage {
+                    exchange_id,
+                    payload,
+                    ..
+                } = dev.decode_inbound(&pkt, Instant::now()).unwrap()
                 {
                     assert_eq!(payload, request);
                     let out = dev
