@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges
+
+#### M6.6.3b — PASE/CASE driver bridges + operational discovery
+
+##### Added
+
+- `driver::run_pase` — drives the sans-IO `PaseProver` over the unsecured
+  (session-id 0) datagram path and registers the resulting secured PASE session
+  under the id it advertised (via M6.6.3a `allocate_session_id` +
+  `register_pase_with_local_id`). Validated by an in-process loopback against a
+  real `PaseVerifier` (byte-for-byte key agreement + peer-id threading).
+- `driver::run_case` — drives the sans-IO `CaseInitiator` (fresh SIGMA-I, also
+  unsecured) and registers the operational session via `register_case`.
+  Validated by an in-process loopback against a real `CaseResponder` with a
+  test fabric / NOC chain.
+- `driver::operational_instance_name` + `driver::resolve_operational` — build
+  the `<compressed-fabric-id>-<node-id>` operational mDNS instance name (from
+  `matter_crypto::derive_compressed_fabric_id`) and resolve it via the
+  `Discovery` trait. Tested with an in-memory `Discovery` double.
+- `UnsecuredExchange::send` — fire-once terminal-message send (Pake3/Sigma3).
+- `DriverError::Handshake` variant.
+
+##### Flagged (deferred)
+
+- SecureChannel `StatusReport` is not parsed: the terminal handshake message is
+  sent fire-once and `finish()` is called; a *rejecting* device's StatusReport
+  is not yet detected (M6.6.4/M6.6.5). Link-local `fe80::` operational addresses
+  cannot be dialed (no scope id in `MatterService`) — M6.6.5. Unsecured counter
+  seeding stays fixed (production randomness later). `commission()` orchestration
+  is M6.6.4.
 
 #### M6.6.2 — Tokio commissioning driver (skeleton)
 
