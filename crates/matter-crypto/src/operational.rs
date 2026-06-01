@@ -38,9 +38,11 @@ impl hkdf::KeyType for Len8 {
 /// - **Info**: the ASCII literal `"CompressedFabric"`.
 /// - **Output length**: 8 bytes.
 ///
-/// VERIFY against matter.js byte-parity before the first real-device CASE
-/// session (M6.6.5); the in-tree test pins the Matter Core Spec §4.3.2.2
-/// worked example.
+/// Byte-parity confirmed against the Matter Core Spec §4.3.2.2 worked example
+/// (via connectedhomeip `TestCompressedFabricIdentifier`); see the in-tree test
+/// and `test-vectors/operational/compressed_fabric_id.json`. The *operational
+/// mDNS instance-name* format that consumes this value is validated separately
+/// in M6.6.3b.
 ///
 /// # Errors
 ///
@@ -48,10 +50,7 @@ impl hkdf::KeyType for Len8 {
 /// `fill` call fails.  For the fixed 8-byte output length this should never
 /// occur in practice; the error path exists to satisfy the `Result` contract
 /// rather than using `unwrap`.
-pub fn derive_compressed_fabric_id(
-    root_public_key: &[u8; 65],
-    fabric_id: u64,
-) -> Result<[u8; 8]> {
+pub fn derive_compressed_fabric_id(root_public_key: &[u8; 65], fabric_id: u64) -> Result<[u8; 8]> {
     // Salt = fabric_id as 8-byte big-endian (Matter Core Spec §4.3.2.2).
     let salt_bytes = fabric_id.to_be_bytes();
 
@@ -75,39 +74,21 @@ pub fn derive_compressed_fabric_id(
 mod tests {
     use super::*;
 
-    /// Smoke test: the algorithm round-trips and produces a stable output.
-    ///
-    /// # NOTE — spec vector mismatch (needs resolution before M6.6.5)
-    ///
-    /// The task spec for M6.6.3a provided:
-    ///   `root_public_key_hex` = 134 hex chars (67 bytes) — **invalid for P-256**
-    ///                           (uncompressed P-256 keys are always 65 bytes).
-    ///   `expected` = `87e1b004e235a130`
-    ///
-    /// No 65-byte subset of that key produces `87e1b004e235a130` via
-    /// `HKDF-SHA256(salt=fabric_id_BE, ikm=pub[1..], info="CompressedFabric")`.
-    /// The algorithm is correct (matches connectedhomeip `GenerateCompressedFabricId`
-    /// and matter.js `Fabric`); the test vector has an internal inconsistency.
-    ///
-    /// This test uses the first 65 bytes of the task-provided key and pins our
-    /// actual output (`324bf4e044797f0e`) so CI stays green and the smoke test
-    /// catches regressions.  Replace the key and expected value with the correct
-    /// Matter Core Spec §4.3.2.2 worked-example bytes before M6.6.5 real-device
-    /// CASE sessions.
+    /// Byte-parity against the Matter Core Spec §4.3.2.2 (Compressed Fabric
+    /// Identifier) worked example, as encoded in connectedhomeip
+    /// `TestChipCryptoPAL.cpp::TestCompressedFabricIdentifier`
+    /// (`kRootPublicKey` / `kFabricId` / `kExpectedCompressedFabricIdentifier`).
+    /// Vector also stored at `test-vectors/operational/compressed_fabric_id.json`.
     #[test]
-    fn compressed_fabric_id_smoke_test() {
-        // The task-provided root_public_key_hex was 67 bytes (invalid P-256).
-        // We use the first 65 bytes here and pin the actual HKDF output.
-        // TODO(M6.6.5): replace with the correct spec §4.3.2.2 worked-example vector.
+    fn compressed_fabric_id_matches_spec_vector() {
         let mut root_pub = [0u8; 65];
-        let hex = "044a9f42b1ca4840d37292bbc7f6a7e11e22200c976f8464e9674dfd9be36d1b5f6bc254f03ad6f5edc3e639cd55965e8d5df36f219e8a7ade8b679fdb9653e721";
+        let hex = "044a9f42b1ca4840d37292bbc7f6a7e11e22200c976fc900dbc98a7a383a641cb8254a2e56d4e295a847943b4e3897c4a773e930277b4d9fbede8a052686bfacfa";
         for (i, byte) in root_pub.iter_mut().enumerate() {
             *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
         }
         let fabric_id: u64 = 0x2906_C908_D115_D362;
         let got = derive_compressed_fabric_id(&root_pub, fabric_id).unwrap();
         let got_hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
-        // Pinned output for regression detection; not the spec's worked example.
-        assert_eq!(got_hex, "324bf4e044797f0e");
+        assert_eq!(got_hex, "87e1b004e235a130");
     }
 }

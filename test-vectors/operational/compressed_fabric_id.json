@@ -1,8 +1,6 @@
 {
-  "_source": "Matter Core Specification §4.3.2.2 (Compressed Fabric Identifier) worked example.",
-  "_status": "NEEDS_REVIEW: the root_public_key_hex below is 67 bytes (134 hex chars) which is INVALID for a P-256 uncompressed public key (must be 65 bytes / 130 hex chars). No 65-byte subset of this key produces the claimed expected_compressed_fabric_id_hex via HKDF-SHA256(salt=fabric_id_BE, ikm=pub[1..], info='CompressedFabric'). Resolve against the current spec revision and matter.js before M6.6.5 real-device CASE sessions.",
-  "root_public_key_hex": "044a9f42b1ca4840d37292bbc7f6a7e11e22200c976f8464e9674dfd9be36d1b5f6bc254f03ad6f5edc3e639cd55965e8d5df36f219e8a7ade8b679fdb9653e721648d",
+  "_source": "Matter Core Specification §4.3.2.2 (Compressed Fabric Identifier) worked example, as encoded in connectedhomeip src/crypto/tests/TestChipCryptoPAL.cpp::TestCompressedFabricIdentifier (kRootPublicKey / kFabricId / kExpectedCompressedFabricIdentifier).",
+  "root_public_key_hex": "044a9f42b1ca4840d37292bbc7f6a7e11e22200c976fc900dbc98a7a383a641cb8254a2e56d4e295a847943b4e3897c4a773e930277b4d9fbede8a052686bfacfa",
   "fabric_id": "0x2906C908D115D362",
-  "expected_compressed_fabric_id_hex": "87e1b004e235a130",
-  "_note": "The in-tree smoke test uses the first 65 bytes of root_public_key_hex and pins the actual HKDF output (324bf4e044797f0e) until this vector is corrected."
+  "expected_compressed_fabric_id_hex": "87e1b004e235a130"
 }
