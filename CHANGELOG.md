@@ -535,6 +535,14 @@ fixture file; the test assertions remain stable.
 
 ### [0.1.0-pre] — 2026-05-22 (not yet published)
 
+#### Changed (M6.6.3a — session-id foundation)
+
+- `SessionManager` gains `allocate_session_id()` (reserve a local id without
+  registering) and `register_pase_with_local_id(...)` (register a PASE session
+  under a caller-chosen local id). `register_case` now registers under
+  `output.local.session_id` (the id advertised in Sigma1) instead of
+  auto-allocating, so the peer's secured packets demux to the right session.
+
 #### Changed (M6.6.2 — driver support)
 
 - Re-exported `encode_header` / `decode_header` from the crate root (needed by
@@ -615,6 +623,25 @@ fixture file; the test assertions remain stable.
 ## matter-crypto
 
 ### [0.1.0-pre] — 2026-05-20 (not yet published)
+
+#### M6.6.3a — session-id plumbing + operational identity (foundation)
+
+- `PaseProver::new_with_negotiation` / `new_with_known_params` now take an
+  `initiator_session_id` (the non-zero secured-session id advertised to the
+  peer; previously hardcoded 0). `PaseProver::responder_session_id()` exposes
+  the peer's id captured from `PBKDFParamResponse`.
+- `PaseVerifier::new` / `new_from_pin` take a `responder_session_id`.
+- `CaseInitiator::new` takes an `initiator_session_id`; `CaseResponder::new`
+  takes a `responder_session_id` (threaded through the resumption-path states
+  too). `CaseSessionOutput.local/.peer.session_id` already recorded both.
+- New `operational` module: `derive_compressed_fabric_id` (Matter Core Spec
+  §4.3.2.2; HKDF-SHA256 via `ring`, IKM = root pubkey X‖Y, salt = fabric-id
+  big-endian, info `"CompressedFabric"`, 8-byte output). Byte-parity confirmed
+  against the spec worked example (connectedhomeip `TestCompressedFabricIdentifier`);
+  vector at `test-vectors/operational/compressed_fabric_id.json`.
+- New `Error::KeyDerivationFailed` variant for the operational HKDF path.
+- No cryptographic *math* changed — these expose existing wire fields and add
+  an identity derivation; no new external-review gate.
 
 #### Added (M4 — CASE / SIGMA-I)
 

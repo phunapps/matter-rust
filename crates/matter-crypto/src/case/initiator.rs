@@ -287,6 +287,10 @@ impl CaseInitiator {
     /// Pre-samples the ephemeral keypair and 32-byte initiator random so that
     /// [`start`][Self::start] cannot fail due to randomness.
     ///
+    /// `initiator_session_id` is the non-zero secured-session id this initiator
+    /// advertises in Sigma1 (tag 2) for the peer to address us by; it is recorded
+    /// as `CaseSessionOutput.local.session_id` once the handshake completes.
+    ///
     /// For the resumption path, use [`new_with_resumption`][Self::new_with_resumption].
     ///
     /// # Errors
@@ -298,6 +302,7 @@ impl CaseInitiator {
         trusted_roots: TrustedRoots,
         peer_node_id: u64,
         peer_fabric_id: u64,
+        initiator_session_id: u16,
     ) -> Result<Self> {
         let rng = SystemRandom::new();
         Self::new_inner(
@@ -305,6 +310,7 @@ impl CaseInitiator {
             trusted_roots,
             peer_node_id,
             peer_fabric_id,
+            initiator_session_id,
             None,
             &rng,
         )
@@ -331,6 +337,7 @@ impl CaseInitiator {
             trusted_roots,
             peer_node_id,
             peer_fabric_id,
+            0,
             None,
             rng,
         )
@@ -388,6 +395,7 @@ impl CaseInitiator {
             trusted_roots,
             peer_node_id,
             peer_fabric_id,
+            0,
             Some(record),
             rng,
         )
@@ -491,6 +499,7 @@ impl CaseInitiator {
         trusted_roots: TrustedRoots,
         peer_node_id: u64,
         peer_fabric_id: u64,
+        initiator_session_id: u16,
         resumption_record: Option<ResumptionRecord>,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
@@ -507,7 +516,7 @@ impl CaseInitiator {
                 eph_secret,
                 eph_pub,
                 initiator_random,
-                initiator_session_id: 0, // M6 commissioning assigns a real value.
+                initiator_session_id,
                 resumption_record,
             },
         })
@@ -1206,7 +1215,7 @@ mod tests {
     #[test]
     fn new_succeeds_with_valid_credentials() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let _initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let _initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
     }
 
     // ─── start() ──────────────────────────────────────────────────────────
@@ -1216,7 +1225,8 @@ mod tests {
     #[test]
     fn start_returns_sigma1_bytes() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let bytes = initiator.start().unwrap();
         assert!(!bytes.is_empty(), "Sigma1 bytes must be non-empty");
         assert_eq!(bytes[0], 0x15, "anonymous structure must start with 0x15");
@@ -1226,7 +1236,8 @@ mod tests {
     #[test]
     fn expected_inbound_after_start_is_sigma2() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let _ = initiator.start().unwrap();
         assert_eq!(initiator.expected_inbound(), Some(CaseMessageKind::Sigma2));
     }
@@ -1236,7 +1247,8 @@ mod tests {
     fn start_produces_valid_sigma1() {
         use crate::case::messages::Sigma1;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let bytes = initiator.start().unwrap();
         // Must decode without error.
         let decoded = Sigma1::decode(&bytes).unwrap();
@@ -1255,7 +1267,7 @@ mod tests {
     #[test]
     fn finish_before_complete_returns_handshake_incomplete() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         assert!(matches!(
             initiator.finish(),
             Err(Error::HandshakeIncomplete)
@@ -1266,7 +1278,7 @@ mod tests {
     #[test]
     fn finish_after_start_returns_handshake_incomplete() {
         let creds2 = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let fresh = CaseInitiator::new(creds2, empty_roots(), 0x1234, 0x5678).unwrap();
+        let fresh = CaseInitiator::new(creds2, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         // The initiator is in AwaitingStart — finish() must fail.
         assert!(matches!(fresh.finish(), Err(Error::HandshakeIncomplete)));
     }
@@ -1279,7 +1291,8 @@ mod tests {
     fn handle_sigma2_before_start_is_rejected() {
         use crate::case::messages::Sigma2;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let dummy_sigma2 = Sigma2 {
             responder_random: [0u8; 32],
             responder_session_id: 1,
@@ -1299,7 +1312,8 @@ mod tests {
     #[test]
     fn next_message_before_handle_sigma2_is_rejected() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let _ = initiator.start().unwrap();
         // Still in AwaitingSigma2; next_message is not valid here.
         assert!(matches!(
@@ -1312,7 +1326,8 @@ mod tests {
     #[test]
     fn double_start_is_rejected() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let _ = initiator.start().unwrap();
         assert!(matches!(
             initiator.start(),
@@ -1326,7 +1341,7 @@ mod tests {
     #[test]
     fn expected_inbound_before_start_is_none() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         assert_eq!(initiator.expected_inbound(), None);
     }
 
@@ -1419,7 +1434,8 @@ mod tests {
     fn start_without_resumption_omits_sigma1_resume_fields() {
         use crate::case::messages::Sigma1;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let bytes = initiator.start().unwrap();
         let decoded = Sigma1::decode(&bytes).unwrap();
         assert!(
@@ -1563,7 +1579,8 @@ mod tests {
         use crate::case::messages::Sigma2Resume;
 
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678).unwrap();
+        let mut initiator =
+            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
         let _ = initiator.start().unwrap();
 
         // Build any syntactically valid Sigma2_Resume.

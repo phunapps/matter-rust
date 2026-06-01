@@ -217,6 +217,8 @@ impl PaseVerifier {
     /// - `w0`: 32-byte big-endian P-256 scalar derived from the PIN.
     /// - `l`: 65-byte uncompressed P-256 point `L = w1·P`.
     /// - `params`: PBKDF2 parameters used when `w0`/`L` were derived.
+    /// - `responder_session_id`: the non-zero secured-session id this device
+    ///   advertises (in `PBKDFParamResponse`) for the peer to address it by.
     ///
     /// # Errors
     ///
@@ -225,10 +227,15 @@ impl PaseVerifier {
     /// - [`Error::InvalidScalar`] if the CSPRNG is broken and a non-zero
     ///   scalar cannot be sampled after 16 attempts (practically impossible).
     /// - [`Error::PinDerivationFailed`] if the nonce fill fails.
-    pub fn new(w0: [u8; 32], l: [u8; 65], params: PasePbkdfParams) -> Result<Self> {
+    pub fn new(
+        w0: [u8; 32],
+        l: [u8; 65],
+        params: PasePbkdfParams,
+        responder_session_id: u16,
+    ) -> Result<Self> {
         validate_params(params.iterations, &params.salt)?;
         let rng = SystemRandom::new();
-        Self::new_using_rng(w0, l, params, &rng)
+        Self::new_using_rng(w0, l, params, responder_session_id, &rng)
     }
 
     /// Deterministic constructor for testing — accepts an injectable RNG.
@@ -238,6 +245,7 @@ impl PaseVerifier {
         w0_bytes: [u8; 32],
         l: [u8; 65],
         params: PasePbkdfParams,
+        responder_session_id: u16,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         validate_params(params.iterations, &params.salt)?;
@@ -267,7 +275,7 @@ impl PaseVerifier {
                 params,
                 y_scalar,
                 responder_random,
-                responder_session_id: 0,
+                responder_session_id,
             },
         })
     }
@@ -278,15 +286,24 @@ impl PaseVerifier {
     /// it stores `w0` and `L` instead. This constructor is provided for
     /// tests and development use where deriving from a PIN is convenient.
     ///
+    /// # Parameters
+    ///
+    /// - `responder_session_id`: the non-zero secured-session id this device
+    ///   advertises (in `PBKDFParamResponse`) for the peer to address it by.
+    ///
     /// # Errors
     ///
     /// - [`Error::PbkdfIterationsTooLow`] / [`Error::PbkdfSaltLengthInvalid`]
     ///   if `params` are out of spec.
     /// - [`Error::PinDerivationFailed`] if PBKDF2 fails.
     /// - [`Error::InvalidScalar`] if the CSPRNG is broken.
-    pub fn new_from_pin(pin: u32, params: PasePbkdfParams) -> Result<Self> {
+    pub fn new_from_pin(
+        pin: u32,
+        params: PasePbkdfParams,
+        responder_session_id: u16,
+    ) -> Result<Self> {
         let rng = SystemRandom::new();
-        Self::new_from_pin_using_rng(pin, params, &rng)
+        Self::new_from_pin_using_rng(pin, params, responder_session_id, &rng)
     }
 
     /// Deterministic constructor for testing — derives `w0`/`L` from the PIN
@@ -296,6 +313,7 @@ impl PaseVerifier {
     pub(crate) fn new_from_pin_using_rng(
         pin: u32,
         params: PasePbkdfParams,
+        responder_session_id: u16,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         let (w0_scalar, w1_scalar) = derive_w0_w1(pin, &params.salt, params.iterations)?;
@@ -305,7 +323,7 @@ impl PaseVerifier {
         let w0_be: p256::FieldBytes = w0_scalar.to_bytes();
         let mut w0_arr = [0u8; 32];
         w0_arr.copy_from_slice(&w0_be);
-        Self::new_using_rng(w0_arr, l, params, rng)
+        Self::new_using_rng(w0_arr, l, params, responder_session_id, rng)
     }
 
     /// Deterministic constructor for testing — injects a fixed `y` scalar
@@ -842,7 +860,7 @@ mod tests {
 
     #[test]
     fn new_from_pin_accepts_valid_params() {
-        let _ = PaseVerifier::new_from_pin(TEST_PIN, test_params()).unwrap();
+        let _ = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
     }
 
     #[test]
@@ -852,7 +870,7 @@ mod tests {
             salt: vec![0u8; 16],
         };
         assert!(matches!(
-            PaseVerifier::new_from_pin(TEST_PIN, params),
+            PaseVerifier::new_from_pin(TEST_PIN, params, 0x0033),
             Err(Error::PbkdfIterationsTooLow(999))
         ));
     }
@@ -864,7 +882,7 @@ mod tests {
             salt: vec![0u8; 15],
         };
         assert!(matches!(
-            PaseVerifier::new_from_pin(TEST_PIN, params),
+            PaseVerifier::new_from_pin(TEST_PIN, params, 0x0033),
             Err(Error::PbkdfSaltLengthInvalid(15))
         ));
     }
@@ -876,7 +894,7 @@ mod tests {
         let l = [0x04u8; 65];
         let params = test_params();
         assert!(matches!(
-            PaseVerifier::new(w0_zero, l, params),
+            PaseVerifier::new(w0_zero, l, params, 0x0033),
             Err(Error::InvalidScalar)
         ));
     }
@@ -885,7 +903,7 @@ mod tests {
 
     #[test]
     fn expected_inbound_after_construction_is_pbkdf_request() {
-        let v = PaseVerifier::new_from_pin(TEST_PIN, test_params()).unwrap();
+        let v = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
         assert_eq!(
             v.expected_inbound(),
             Some(PaseMessageKind::PbkdfParamRequest)
@@ -896,7 +914,7 @@ mod tests {
 
     #[test]
     fn handle_pbkdf_request_advances_state() {
-        let mut v = PaseVerifier::new_from_pin(TEST_PIN, test_params()).unwrap();
+        let mut v = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
 
         // Build a minimal valid PbkdfParamRequest.
         let req = PbkdfParamRequest {
@@ -915,7 +933,7 @@ mod tests {
 
     #[test]
     fn next_message_after_pbkdf_request_emits_response() {
-        let mut v = PaseVerifier::new_from_pin(TEST_PIN, test_params()).unwrap();
+        let mut v = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
 
         let req = PbkdfParamRequest {
             initiator_random: [0x11u8; 32],
@@ -947,7 +965,7 @@ mod tests {
     #[test]
     fn out_of_order_handle_pake3_returns_unexpected_message() {
         // Verifier is AwaitingFirstMessage; Pake3 is wrong here.
-        let mut v = PaseVerifier::new_from_pin(TEST_PIN, test_params()).unwrap();
+        let mut v = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
         let dummy_pake3 = Pake3 {
             verifier: [0x00u8; 32],
         };
@@ -960,7 +978,7 @@ mod tests {
 
     #[test]
     fn finish_before_complete_returns_handshake_incomplete() {
-        let v = PaseVerifier::new_from_pin(TEST_PIN, test_params()).unwrap();
+        let v = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
         assert!(matches!(v.finish(), Err(Error::HandshakeIncomplete)));
     }
 
@@ -976,7 +994,7 @@ mod tests {
         let params = test_params();
 
         // Verifier side.
-        let mut v = PaseVerifier::new_from_pin(TEST_PIN, params.clone()).unwrap();
+        let mut v = PaseVerifier::new_from_pin(TEST_PIN, params.clone(), 0x0033).unwrap();
 
         // Derive prover-side values to build a plausible Pake1.
         let (w0_scalar, _w1_scalar) =
@@ -1000,6 +1018,22 @@ mod tests {
         ));
     }
 
+    // ─── responder_session_id propagation ────────────────────────────────
+
+    #[test]
+    fn verifier_advertises_responder_session_id() {
+        let params = test_params();
+        let mut verifier = PaseVerifier::new_from_pin(TEST_PIN, params, 0x0033).unwrap();
+        // Drive a PBKDFParamRequest in so next_message() emits the response.
+        let mut prover =
+            crate::pase::prover::PaseProver::new_with_negotiation(TEST_PIN, 0x0001).unwrap();
+        let req = prover.start().unwrap();
+        verifier.handle_pbkdf_request(&req).unwrap();
+        let resp = verifier.next_message().unwrap();
+        let decoded = crate::pase::messages::PbkdfParamResponse::decode(&resp).unwrap();
+        assert_eq!(decoded.responder_session_id, 0x0033);
+    }
+
     // ─── Known-params path (Pake1 as first message) ───────────────────────
 
     #[test]
@@ -1010,7 +1044,7 @@ mod tests {
 
         let rng = SystemRandom::new();
         let params = test_params();
-        let mut v = PaseVerifier::new_from_pin(TEST_PIN, params.clone()).unwrap();
+        let mut v = PaseVerifier::new_from_pin(TEST_PIN, params.clone(), 0x0033).unwrap();
 
         let (w0_scalar, _) = derive_w0_w1(TEST_PIN, &params.salt, params.iterations).unwrap();
         let x_scalar = sample_scalar(&rng).unwrap();

@@ -137,6 +137,7 @@ enum State {
         eph_secret: SecretKey,
         eph_pub: [u8; 65],
         responder_random: [u8; 32],
+        responder_session_id: u16,
     },
 
     /// `handle_sigma1()` succeeded; the Sigma2 bytes are pre-built.
@@ -187,6 +188,7 @@ enum State {
         eph_secret: SecretKey,
         eph_pub: [u8; 65],
         responder_random: [u8; 32],
+        responder_session_id: u16,
         /// Preserved for the new-session fallback path.
         initiator_random: [u8; 32],
         /// Preserved for the new-session fallback path (Sigma2 transcript).
@@ -271,13 +273,22 @@ impl CaseResponder {
     /// Pre-samples the ephemeral keypair and 32-byte responder random so that
     /// [`handle_sigma1`][Self::handle_sigma1] cannot fail due to randomness.
     ///
+    /// `responder_session_id` is the non-zero secured-session id this responder
+    /// advertises in Sigma2 (tag 2) for the peer to address us by; it is
+    /// recorded as `CaseSessionOutput.local.session_id` once the handshake
+    /// completes.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if the OS RNG fails
     /// (extremely unlikely in practice).
-    pub fn new(credentials: CaseCredentials, trusted_roots: TrustedRoots) -> Result<Self> {
+    pub fn new(
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        responder_session_id: u16,
+    ) -> Result<Self> {
         let rng = SystemRandom::new();
-        Self::new_using_rng(credentials, trusted_roots, &rng)
+        Self::new_using_rng(credentials, trusted_roots, responder_session_id, &rng)
     }
 
     /// Deterministic constructor for testing — accepts an injectable RNG.
@@ -290,6 +301,7 @@ impl CaseResponder {
     pub(crate) fn new_using_rng(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
+        responder_session_id: u16,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         let (eph_secret, eph_pub) = generate_ephemeral_keypair(rng)?;
@@ -303,6 +315,7 @@ impl CaseResponder {
                 eph_secret,
                 eph_pub,
                 responder_random,
+                responder_session_id,
             },
         })
     }
@@ -341,6 +354,7 @@ impl CaseResponder {
                 eph_secret,
                 eph_pub,
                 responder_random,
+                responder_session_id: 0,
             },
         })
     }
@@ -397,6 +411,7 @@ impl CaseResponder {
                 eph_secret,
                 eph_pub,
                 responder_random,
+                responder_session_id,
             } => {
                 // Decode Sigma1.
                 let sigma1 = match Sigma1::decode(bytes) {
@@ -409,6 +424,7 @@ impl CaseResponder {
                             eph_secret,
                             eph_pub,
                             responder_random,
+                            responder_session_id,
                         };
                         return Err(e);
                     }
@@ -429,6 +445,7 @@ impl CaseResponder {
                         eph_secret,
                         eph_pub,
                         responder_random,
+                        responder_session_id,
                     };
                     return Err(Error::InvalidParameter);
                 }
@@ -450,6 +467,7 @@ impl CaseResponder {
                         eph_secret,
                         eph_pub,
                         responder_random,
+                        responder_session_id,
                         initiator_random,
                         initiator_eph_pub,
                         initiator_session_id,
@@ -470,6 +488,7 @@ impl CaseResponder {
                     &eph_secret,
                     &eph_pub,
                     &responder_random,
+                    responder_session_id,
                 ) {
                     Ok(v) => v,
                     Err(e) => {
@@ -479,6 +498,7 @@ impl CaseResponder {
                             eph_secret,
                             eph_pub,
                             responder_random,
+                            responder_session_id,
                         };
                         return Err(e);
                     }
@@ -495,7 +515,7 @@ impl CaseResponder {
                     initiator_eph_pub,
                     eph_pub,
                     initiator_session_id,
-                    responder_session_id: 0, // M6 commissioning assigns a real value.
+                    responder_session_id,
                 };
 
                 Ok(Sigma1Outcome::NewSession)
@@ -555,6 +575,7 @@ impl CaseResponder {
                 eph_secret: _,       // not needed on the resumption path
                 eph_pub: _,          // not needed on the resumption path
                 responder_random: _, // not used in sigma2_resume_mic (confirmed from matter.js)
+                responder_session_id,
                 initiator_random,
                 initiator_eph_pub: _,
                 initiator_session_id,
@@ -623,7 +644,6 @@ impl CaseResponder {
                 };
 
                 // Step 6: Build the Sigma2_Resume wire message.
-                let responder_session_id: u16 = 0; // M6 commissioning assigns a real value.
                 let sigma2_resume = Sigma2Resume {
                     resumption_id: new_resumption_id,
                     resume_mic: sigma2_mic,
@@ -699,6 +719,7 @@ impl CaseResponder {
                 eph_secret,
                 eph_pub,
                 responder_random,
+                responder_session_id,
                 initiator_random,
                 initiator_eph_pub,
                 initiator_session_id,
@@ -718,6 +739,7 @@ impl CaseResponder {
                     &eph_secret,
                     &eph_pub,
                     &responder_random,
+                    responder_session_id,
                 )?;
 
                 // Transition to the standard new-session state, identical to
@@ -733,7 +755,7 @@ impl CaseResponder {
                     initiator_eph_pub,
                     eph_pub,
                     initiator_session_id,
-                    responder_session_id: 0, // M6 commissioning assigns a real value.
+                    responder_session_id,
                 };
                 Ok(())
             }
@@ -971,6 +993,7 @@ fn build_sigma2(
     eph_secret: &SecretKey,
     eph_pub: &[u8; 65],
     responder_random: &[u8; 32],
+    responder_session_id: u16,
 ) -> Result<(Vec<u8>, [u8; 32])> {
     // Step 1: ECDH shared secret from our eph secret + initiator's eph pub.
     let shared_secret = ecdh_shared_secret(eph_secret, &sigma1.initiator_eph_pub)?;
@@ -1025,7 +1048,7 @@ fn build_sigma2(
     // Step 5: Encode Sigma2 wire message.
     let sigma2 = Sigma2 {
         responder_random: *responder_random,
-        responder_session_id: 0, // M6 commissioning assigns a real value.
+        responder_session_id,
         responder_eph_pub: *eph_pub,
         encrypted: encrypted2,
         responder_session_params: None,
@@ -1277,7 +1300,7 @@ mod tests {
     #[test]
     fn new_succeeds_with_valid_credentials() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let _responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let _responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
     }
 
     // ─── expected_inbound() states ────────────────────────────────────────
@@ -1286,7 +1309,7 @@ mod tests {
     #[test]
     fn expected_inbound_initially_is_sigma1() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
         assert_eq!(responder.expected_inbound(), Some(CaseMessageKind::Sigma1));
     }
 
@@ -1299,7 +1322,7 @@ mod tests {
         rcac_pub[0] = 0x04;
 
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         // Compute the correct dest_id for this responder.
         let initiator_random = [0x42u8; 32];
@@ -1337,7 +1360,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         // Build a Sigma1 with a garbage dest_id — it won't match our identity.
         let sigma1 = Sigma1 {
@@ -1401,7 +1424,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let initiator_random = [0x42u8; 32];
         let resumption_id = [0xCC; 16];
@@ -1434,7 +1457,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let initiator_random = [0x42u8; 32];
         let sigma1_bytes = build_sigma1_for_responder(
@@ -1457,7 +1480,7 @@ mod tests {
     #[test]
     fn next_message_before_handle_sigma1_is_rejected() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
         assert!(matches!(
             responder.next_message(),
             Err(Error::UnexpectedCaseMessage { .. })
@@ -1469,7 +1492,7 @@ mod tests {
     fn handle_sigma3_before_sigma1_is_rejected() {
         use crate::case::messages::Sigma3;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let dummy_sigma3 = Sigma3 {
             encrypted: vec![0xAA; 80],
@@ -1487,7 +1510,7 @@ mod tests {
     #[test]
     fn finish_before_complete_returns_handshake_incomplete() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
         assert!(matches!(
             responder.finish(),
             Err(Error::HandshakeIncomplete)
@@ -1563,7 +1586,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let (sigma1_bytes, mut record, _) =
             build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
@@ -1585,7 +1608,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let (sigma1_bytes, mut record, _) =
             build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
@@ -1610,7 +1633,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let (sigma1_bytes, _record, _) =
             build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);
@@ -1642,7 +1665,7 @@ mod tests {
         let ipk = [0xAB; 16];
         let rcac_pub = dummy_rcac_pub();
         let creds = make_test_credentials(0x1234, 0x5678, ipk, rcac_pub);
-        let mut responder = CaseResponder::new(creds, empty_roots()).unwrap();
+        let mut responder = CaseResponder::new(creds, empty_roots(), 0x0002).unwrap();
 
         let (sigma1_bytes, record, _) =
             build_valid_resumption_setup(&ipk, &rcac_pub, 0x1234, 0x5678);

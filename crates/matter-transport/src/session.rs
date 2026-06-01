@@ -213,19 +213,58 @@ impl SessionManager {
 
     /// Register a session whose keys came from a completed CASE handshake.
     ///
-    /// Pulls the peer's Node ID, Fabric ID, and session ID out of the CASE
-    /// output so the caller does not need to repeat them.
+    /// The session is inserted under `output.local.session_id` — the id this
+    /// node advertised in Sigma1 — so inbound secured packets from the peer
+    /// demux correctly. The peer's Node ID, Fabric ID, and session ID are
+    /// pulled from `output` automatically.
     pub fn register_case(&mut self, output: &CaseSessionOutput, role: SessionRole) -> SessionId {
+        let local_id = SessionId(output.local.session_id);
         let peer = PeerHint {
             node_id: Some(NodeId(output.peer.node_id)),
             fabric_id: Some(output.peer.fabric_id),
         };
-        self.register(
+        self.insert_session(
+            local_id,
             SessionKeys::from_case_output(output),
             role,
             output.peer.session_id,
             peer,
-        )
+        );
+        local_id
+    }
+
+    /// Reserve and return the next free local session id WITHOUT creating a
+    /// session. The commissioning driver allocates this first, advertises it
+    /// in the handshake, then registers the finished session under the same
+    /// id via [`Self::register_pase_with_local_id`] or
+    /// [`Self::register_case`].
+    pub fn allocate_session_id(&mut self) -> SessionId {
+        self.allocate_id()
+    }
+
+    /// Register a completed PASE session under a caller-chosen local id (the
+    /// id previously advertised to the peer via
+    /// [`Self::allocate_session_id`]).
+    ///
+    /// Use this when the commissioning driver has already embedded the local
+    /// session id in the handshake message (e.g. the `PBKDFParamRequest`
+    /// `initiator_session_id` field) and must register the completed session
+    /// under that same id so the peer's secured replies demux correctly.
+    pub fn register_pase_with_local_id(
+        &mut self,
+        local_id: SessionId,
+        keys: PaseSessionKeys,
+        role: SessionRole,
+        peer_session_id: u16,
+        peer: PeerHint,
+    ) {
+        self.insert_session(
+            local_id,
+            SessionKeys::from(keys),
+            role,
+            peer_session_id,
+            peer,
+        );
     }
 
     fn register(
@@ -236,6 +275,33 @@ impl SessionManager {
         peer: PeerHint,
     ) -> SessionId {
         let local_id = self.allocate_id();
+        self.insert_session(local_id, keys, role, peer_session_id, peer);
+        local_id
+    }
+
+    /// Build and insert a [`Session`] under the given `local_id`.
+    ///
+    /// Any pre-existing session stored at `local_id` is silently replaced
+    /// (the caller is responsible for ensuring uniqueness, e.g. by calling
+    /// [`Self::allocate_session_id`] first).
+    fn insert_session(
+        &mut self,
+        local_id: SessionId,
+        keys: SessionKeys,
+        role: SessionRole,
+        peer_session_id: u16,
+        peer: PeerHint,
+    ) {
+        // Session id 0 is reserved for the unsecured session (spec §4.4.4).
+        // `allocate_id` never returns it, and a completed handshake must have
+        // advertised a non-zero id; registering a secured session under 0 would
+        // shadow the unsecured path. Guard the invariant (the CASE *resumption*
+        // initiator still stubs its session id to 0 — that path must supply a
+        // real id before it registers via `register_case`).
+        debug_assert_ne!(
+            local_id.0, 0,
+            "secured session registered under reserved id 0"
+        );
         let session = Session {
             local_id,
             peer_id: SessionId(peer_session_id),
@@ -247,7 +313,6 @@ impl SessionManager {
             mrp: MrpState::new(MrpConfig::default()),
         };
         self.sessions.insert(local_id, session);
-        local_id
     }
 
     fn allocate_id(&mut self) -> SessionId {

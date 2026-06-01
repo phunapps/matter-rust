@@ -27,6 +27,7 @@
 pub mod aead;
 pub mod case;
 pub mod error;
+pub mod operational;
 pub mod pase;
 
 #[cfg(feature = "test-support")]
@@ -47,4 +48,5 @@ pub use case::{
     ResumptionId, ResumptionRecord, Sigma1Outcome,
 };
 pub use error::{Error, Result};
+pub use operational::derive_compressed_fabric_id;
 pub use pase::{PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys, PaseVerifier};
