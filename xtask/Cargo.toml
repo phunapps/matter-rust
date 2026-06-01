@@ -20,7 +20,7 @@ workspace = true
 matter-codec = { path = "../crates/matter-codec", version = "0.1.0" }
 base64 = { workspace = true }
 cms = { workspace = true }
-const-oid = "0.9"
+const-oid = "0.10"
 der = { workspace = true }
 ring = { workspace = true }
 serde_json = { workspace = true }
