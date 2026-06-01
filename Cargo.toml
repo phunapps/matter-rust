@@ -49,7 +49,7 @@ missing_const_for_fn = "allow"
 # Common dependency versions, so every member crate pulls the same release.
 # Add to this table — do not bump per-crate without discussion.
 [workspace.dependencies]
-aes = { version = "0.8", default-features = false }
+aes = { version = "0.9", default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 bitflags = "2"
 ccm = { version = "0.5", default-features = false, features = ["alloc"] }
