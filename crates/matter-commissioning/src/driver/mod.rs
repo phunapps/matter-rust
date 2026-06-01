@@ -14,7 +14,7 @@ mod exchange;
 mod pase;
 mod unsecured;
 
-pub use case::{operational_instance_name, resolve_operational};
+pub use case::{operational_instance_name, resolve_operational, run_case};
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
 pub use exchange::{secured_round_trip, SecuredResponse};
