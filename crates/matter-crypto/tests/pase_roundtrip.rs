@@ -28,8 +28,8 @@ fn pase_roundtrip_with_negotiation_default_params() {
     let pin = 20_202_021_u32;
     let params = default_params();
 
-    let mut prover = PaseProver::new_with_negotiation(pin).unwrap();
-    let mut verifier = PaseVerifier::new_from_pin(pin, params).unwrap();
+    let mut prover = PaseProver::new_with_negotiation(pin, 0x0001).unwrap();
+    let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x0002).unwrap();
 
     let m = prover.start().expect("start produces PBKDFParamRequest");
     verifier
@@ -73,8 +73,8 @@ fn pase_roundtrip_with_known_params_skips_pbkdf_negotiation() {
     let pin = 20_202_021_u32;
     let params = default_params();
 
-    let mut prover = PaseProver::new_with_known_params(pin, params.clone()).unwrap();
-    let mut verifier = PaseVerifier::new_from_pin(pin, params).unwrap();
+    let mut prover = PaseProver::new_with_known_params(pin, params.clone(), 0x0001).unwrap();
+    let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x0002).unwrap();
 
     let m = prover.start().expect("start produces Pake1");
     verifier
@@ -102,8 +102,8 @@ fn pase_roundtrip_with_max_iterations() {
         salt: vec![0xABu8; 32],
     };
 
-    let mut prover = PaseProver::new_with_negotiation(pin).unwrap();
-    let mut verifier = PaseVerifier::new_from_pin(pin, params).unwrap();
+    let mut prover = PaseProver::new_with_negotiation(pin, 0x0001).unwrap();
+    let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x0002).unwrap();
 
     let m = prover.start().unwrap();
     verifier.handle_pbkdf_request(&m).unwrap();
@@ -125,8 +125,8 @@ fn pase_roundtrip_with_wrong_pin_returns_tag_mismatch() {
     // Pake2's cB must not verify on the prover side.
     let params = default_params();
 
-    let mut prover = PaseProver::new_with_known_params(99_999_999, params.clone()).unwrap();
-    let mut verifier = PaseVerifier::new_from_pin(20_202_021, params).unwrap();
+    let mut prover = PaseProver::new_with_known_params(99_999_999, params.clone(), 0x0001).unwrap();
+    let mut verifier = PaseVerifier::new_from_pin(20_202_021, params, 0x0002).unwrap();
 
     let m = prover.start().unwrap();
     verifier.handle_pake1(&m).unwrap();
@@ -144,7 +144,7 @@ fn pase_roundtrip_out_of_order_call_returns_unexpected_message() {
     let pin = 20_202_021_u32;
     let params = default_params();
 
-    let mut prover = PaseProver::new_with_known_params(pin, params).unwrap();
+    let mut prover = PaseProver::new_with_known_params(pin, params, 0x0001).unwrap();
     // Skip start; try to feed Pake2 directly — must error.
     let dummy_pake2 = vec![0u8; 100]; // any bytes; the state check fires first
     let err = prover.handle_pake2(&dummy_pake2).unwrap_err();
@@ -177,9 +177,9 @@ proptest! {
             iterations: 1_000,
             salt: vec![0x42u8; 16],
         };
-        let mut prover = PaseProver::new_with_known_params(pin, params.clone())
+        let mut prover = PaseProver::new_with_known_params(pin, params.clone(), 0x0001)
             .expect("prover construction");
-        let mut verifier = PaseVerifier::new_from_pin(pin, params)
+        let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x0002)
             .expect("verifier construction");
 
         let pake1 = prover.start().expect("prover.start");
@@ -210,9 +210,9 @@ proptest! {
             iterations: 1_000,
             salt: vec![0x42u8; 16],
         };
-        let mut prover = PaseProver::new_with_known_params(pin, params.clone())
+        let mut prover = PaseProver::new_with_known_params(pin, params.clone(), 0x0001)
             .expect("prover construction");
-        let mut verifier = PaseVerifier::new_from_pin(pin, params)
+        let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x0002)
             .expect("verifier construction");
 
         let pake1 = prover.start().expect("prover.start");
@@ -230,4 +230,33 @@ proptest! {
         // a lucky flip) or returns an Err — it must never panic.
         let _ = prover.handle_pake2(&pake2);
     }
+}
+
+#[test]
+fn pase_roundtrip_threads_session_ids_end_to_end() {
+    let pin = 20_202_021;
+    let params = PasePbkdfParams { iterations: 1000, salt: vec![0x42; 16] };
+
+    let mut prover = PaseProver::new_with_negotiation(pin, 0x00AA).unwrap();
+    let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x00BB).unwrap();
+
+    let req = prover.start().unwrap();
+    verifier.handle_pbkdf_request(&req).unwrap();
+    let resp = verifier.next_message().unwrap();
+    prover.handle_pbkdf_response(&resp).unwrap();
+
+    // The prover learned the responder's id; it is what the device advertised.
+    assert_eq!(prover.responder_session_id(), Some(0x00BB));
+
+    let pake1 = prover.next_message().unwrap();
+    verifier.handle_pake1(&pake1).unwrap();
+    let pake2 = verifier.next_message().unwrap();
+    prover.handle_pake2(&pake2).unwrap();
+    let pake3 = prover.next_message().unwrap();
+    verifier.handle_pake3(&pake3).unwrap();
+
+    let prover_keys = prover.finish().unwrap();
+    let verifier_keys = verifier.finish().unwrap();
+    assert_eq!(prover_keys.i2r_key, verifier_keys.i2r_key);
+    assert_eq!(prover_keys.r2i_key, verifier_keys.r2i_key);
 }
