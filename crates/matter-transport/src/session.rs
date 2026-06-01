@@ -258,7 +258,13 @@ impl SessionManager {
         peer_session_id: u16,
         peer: PeerHint,
     ) {
-        self.insert_session(local_id, SessionKeys::from(keys), role, peer_session_id, peer);
+        self.insert_session(
+            local_id,
+            SessionKeys::from(keys),
+            role,
+            peer_session_id,
+            peer,
+        );
     }
 
     fn register(

@@ -380,7 +380,8 @@ fn drive_new_session_handshake() -> (
         0x0001,
     )
     .expect("initiator");
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
+    let mut responder =
+        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -490,7 +491,8 @@ fn case_resumption_roundtrip_accepted() {
         record_for_initiator,
     )
     .expect("initiator2 with resumption");
-    let mut responder2 = CaseResponder::new(responder_creds2, trusted_roots2, 0x0002).expect("responder2");
+    let mut responder2 =
+        CaseResponder::new(responder_creds2, trusted_roots2, 0x0002).expect("responder2");
 
     // Step 4: Drive the 2-message resumption handshake.
     let sigma1_r = initiator2.start().expect("sigma1 (resumption)");
@@ -626,7 +628,8 @@ fn case_resumption_declined_falls_back_to_new_session() {
         bogus_record,
     )
     .expect("initiator with resumption");
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
+    let mut responder =
+        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -736,7 +739,8 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
         initiator_record,
     )
     .expect("initiator with resumption");
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
+    let mut responder =
+        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -813,10 +817,22 @@ fn case_roundtrip_threads_session_ids() {
     let init_out = initiator.finish().unwrap();
     let resp_out = responder.finish().unwrap();
 
-    assert_eq!(init_out.local.session_id, 0x00C1, "initiator local session_id");
-    assert_eq!(init_out.peer.session_id, 0x00D2, "initiator peer session_id");
-    assert_eq!(resp_out.local.session_id, 0x00D2, "responder local session_id");
-    assert_eq!(resp_out.peer.session_id, 0x00C1, "responder peer session_id");
+    assert_eq!(
+        init_out.local.session_id, 0x00C1,
+        "initiator local session_id"
+    );
+    assert_eq!(
+        init_out.peer.session_id, 0x00D2,
+        "initiator peer session_id"
+    );
+    assert_eq!(
+        resp_out.local.session_id, 0x00D2,
+        "responder local session_id"
+    );
+    assert_eq!(
+        resp_out.peer.session_id, 0x00C1,
+        "responder peer session_id"
+    );
 }
 
 // ---------------------------------------------------------------------------

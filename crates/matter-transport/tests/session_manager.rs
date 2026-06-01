@@ -420,9 +420,15 @@ fn allocate_then_register_pase_under_chosen_local_id() {
         r2i_key: [2u8; 16],
         attestation_key: [3u8; 16],
     };
-    mgr.register_pase_with_local_id(local, keys, SessionRole::Initiator, 0x00BB, PeerHint::default());
+    mgr.register_pase_with_local_id(
+        local,
+        keys,
+        SessionRole::Initiator,
+        0x00BB,
+        PeerHint::default(),
+    );
 
-    let s = mgr.get(local).expect("session present under chosen local id");
+    let s = mgr.get(local).unwrap();
     assert_eq!(s.local_id, local);
     assert_eq!(s.peer_id, SessionId(0x00BB));
 }

@@ -297,7 +297,11 @@ impl PaseVerifier {
     ///   if `params` are out of spec.
     /// - [`Error::PinDerivationFailed`] if PBKDF2 fails.
     /// - [`Error::InvalidScalar`] if the CSPRNG is broken.
-    pub fn new_from_pin(pin: u32, params: PasePbkdfParams, responder_session_id: u16) -> Result<Self> {
+    pub fn new_from_pin(
+        pin: u32,
+        params: PasePbkdfParams,
+        responder_session_id: u16,
+    ) -> Result<Self> {
         let rng = SystemRandom::new();
         Self::new_from_pin_using_rng(pin, params, responder_session_id, &rng)
     }

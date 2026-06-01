@@ -88,7 +88,6 @@ mod tests {
         }
         let fabric_id: u64 = 0x2906_C908_D115_D362;
         let got = derive_compressed_fabric_id(&root_pub, fabric_id).unwrap();
-        let got_hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(got_hex, "87e1b004e235a130");
+        assert_eq!(got, [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30]);
     }
 }

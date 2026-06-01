@@ -235,7 +235,10 @@ proptest! {
 #[test]
 fn pase_roundtrip_threads_session_ids_end_to_end() {
     let pin = 20_202_021;
-    let params = PasePbkdfParams { iterations: 1000, salt: vec![0x42; 16] };
+    let params = PasePbkdfParams {
+        iterations: 1000,
+        salt: vec![0x42; 16],
+    };
 
     let mut prover = PaseProver::new_with_negotiation(pin, 0x00AA).unwrap();
     let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x00BB).unwrap();
