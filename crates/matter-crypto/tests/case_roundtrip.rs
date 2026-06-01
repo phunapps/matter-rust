@@ -189,10 +189,11 @@ fn case_roundtrip_new_session() {
         trusted_roots.clone(),
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
+        0x0001,
     )
     .expect("initiator construction");
     let mut responder =
-        CaseResponder::new(responder_creds, trusted_roots).expect("responder construction");
+        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder construction");
 
     // --- Sigma1 ---
     let sigma1 = initiator.start().expect("sigma1");
@@ -311,9 +312,10 @@ fn case_roundtrip_wrong_fabric_returns_fabric_mismatch() {
         trusted_roots.clone(),
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
+        0x0001,
     )
     .unwrap();
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots).unwrap();
+    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).unwrap();
 
     // Sigma1: computed dest_id is HMAC(IPK, random || rcacPub || initiatorFabricId || responderNodeId).
     // The responder recomputes using WRONG_FABRIC — so dest_id will mismatch immediately.
@@ -375,9 +377,10 @@ fn drive_new_session_handshake() -> (
         trusted_roots.clone(),
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
+        0x0001,
     )
     .expect("initiator");
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots).expect("responder");
+    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -487,7 +490,7 @@ fn case_resumption_roundtrip_accepted() {
         record_for_initiator,
     )
     .expect("initiator2 with resumption");
-    let mut responder2 = CaseResponder::new(responder_creds2, trusted_roots2).expect("responder2");
+    let mut responder2 = CaseResponder::new(responder_creds2, trusted_roots2, 0x0002).expect("responder2");
 
     // Step 4: Drive the 2-message resumption handshake.
     let sigma1_r = initiator2.start().expect("sigma1 (resumption)");
@@ -623,7 +626,7 @@ fn case_resumption_declined_falls_back_to_new_session() {
         bogus_record,
     )
     .expect("initiator with resumption");
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots).expect("responder");
+    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -733,7 +736,7 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
         initiator_record,
     )
     .expect("initiator with resumption");
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots).expect("responder");
+    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -750,6 +753,70 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
         matches!(err, matter_crypto::Error::InvalidParameter),
         "expected InvalidParameter, got {err:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Test: session IDs thread through both sides
+// ---------------------------------------------------------------------------
+
+/// Verify that `CaseInitiator::new` and `CaseResponder::new` accept a session
+/// ID and that `CaseSessionOutput.local.session_id` and `.peer.session_id`
+/// reflect the values threaded through the wire messages.
+#[test]
+fn case_roundtrip_threads_session_ids() {
+    let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+    let (initiator_noc, initiator_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (responder_noc, responder_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+
+    let initiator_creds = CaseCredentials {
+        noc: initiator_noc,
+        icac: None,
+        signer: Box::new(initiator_signer),
+        fabric_id: TEST_FABRIC_ID,
+        node_id: INITIATOR_NODE_ID,
+        ipk: IPK,
+        rcac_public_key: rcac_pub,
+    };
+    let responder_creds = CaseCredentials {
+        noc: responder_noc,
+        icac: None,
+        signer: Box::new(responder_signer),
+        fabric_id: TEST_FABRIC_ID,
+        node_id: RESPONDER_NODE_ID,
+        ipk: IPK,
+        rcac_public_key: rcac_pub,
+    };
+
+    let mut initiator = CaseInitiator::new(
+        initiator_creds,
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        0x00C1,
+    )
+    .unwrap();
+    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x00D2).unwrap();
+
+    let sigma1 = initiator.start().unwrap();
+    let outcome = responder.handle_sigma1(&sigma1).unwrap();
+    assert!(
+        matches!(outcome, Sigma1Outcome::NewSession),
+        "expected NewSession"
+    );
+    let sigma2 = responder.next_message().unwrap();
+    initiator.handle_sigma2(&sigma2).unwrap();
+    let sigma3 = initiator.next_message().unwrap();
+    responder.handle_sigma3(&sigma3).unwrap();
+
+    let init_out = initiator.finish().unwrap();
+    let resp_out = responder.finish().unwrap();
+
+    assert_eq!(init_out.local.session_id, 0x00C1, "initiator local session_id");
+    assert_eq!(init_out.peer.session_id, 0x00D2, "initiator peer session_id");
+    assert_eq!(resp_out.local.session_id, 0x00D2, "responder local session_id");
+    assert_eq!(resp_out.peer.session_id, 0x00C1, "responder peer session_id");
 }
 
 // ---------------------------------------------------------------------------
@@ -807,9 +874,10 @@ proptest! {
             trusted_roots.clone(),
             responder_node_id,
             TEST_FABRIC_ID,
+            0x0001,
         )
         .unwrap();
-        let mut responder = CaseResponder::new(responder_creds, trusted_roots).unwrap();
+        let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).unwrap();
 
         let sigma1 = initiator.start().unwrap();
         responder.handle_sigma1(&sigma1).unwrap();
@@ -865,9 +933,10 @@ proptest! {
             trusted_roots.clone(),
             RESPONDER_NODE_ID,
             TEST_FABRIC_ID,
+            0x0001,
         )
         .unwrap();
-        let mut responder = CaseResponder::new(responder_creds, trusted_roots).unwrap();
+        let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).unwrap();
 
         let sigma1 = initiator.start().unwrap();
         responder.handle_sigma1(&sigma1).unwrap();

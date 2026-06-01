@@ -97,9 +97,9 @@ let initiator_creds = CaseCredentials {
 // --- Drive the 3-message Sigma1/2/3 handshake ---
 // (caller pipes bytes across the network in a real deployment)
 let mut initiator = CaseInitiator::new(
-    initiator_creds, trusted_roots, responder_node_id, fabric_id,
+    initiator_creds, trusted_roots, responder_node_id, fabric_id, initiator_session_id,
 )?;
-let mut responder = CaseResponder::new(responder_creds, trusted_roots)?;
+let mut responder = CaseResponder::new(responder_creds, trusted_roots, responder_session_id)?;
 
 let sigma1 = initiator.start()?;
 let outcome = responder.handle_sigma1(&sigma1)?;
