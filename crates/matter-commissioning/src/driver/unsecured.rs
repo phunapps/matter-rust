@@ -341,7 +341,9 @@ mod tests {
         let (a, b) = InMemoryDatagram::pair();
         let b_addr = b.local_addr();
         let mut exch = UnsecuredExchange::new(5, 9);
-        exch.send(&a, b_addr, 0x24, b"pake3", Some(7)).await.unwrap();
+        exch.send(&a, b_addr, 0x24, b"pake3", Some(7))
+            .await
+            .unwrap();
         let (pkt, _) = b.recv_from().await.unwrap();
         let msg = decode_unsecured(&pkt).unwrap();
         assert_eq!(msg.opcode, 0x24);

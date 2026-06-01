@@ -53,18 +53,30 @@ pub async fn run_pase<T: AsyncDatagram>(
 
     let pake1 = prover.next_message()?;
     let pake2 = exch
-        .send_and_recv(transport, peer, OP_PASE_PAKE1, &pake1, Some(resp.message_counter))
+        .send_and_recv(
+            transport,
+            peer,
+            OP_PASE_PAKE1,
+            &pake1,
+            Some(resp.message_counter),
+        )
         .await?;
     prover.handle_pake2(&pake2.payload)?;
 
     let pake3 = prover.next_message()?;
-    exch.send(transport, peer, OP_PASE_PAKE3, &pake3, Some(pake2.message_counter))
-        .await?;
+    exch.send(
+        transport,
+        peer,
+        OP_PASE_PAKE3,
+        &pake3,
+        Some(pake2.message_counter),
+    )
+    .await?;
 
     // Capture the responder session id before `finish` consumes `prover`.
-    let peer_session_id = prover
-        .responder_session_id()
-        .ok_or(DriverError::Handshake("PASE negotiation produced no responder session id"))?;
+    let peer_session_id = prover.responder_session_id().ok_or(DriverError::Handshake(
+        "PASE negotiation produced no responder session id",
+    ))?;
     let keys = prover.finish()?;
     sessions.register_pase_with_local_id(
         local,
@@ -92,7 +104,10 @@ mod tests {
     #[tokio::test]
     async fn run_pase_establishes_matching_session() {
         let pin = 20_202_021;
-        let params = PasePbkdfParams { iterations: 1000, salt: vec![0x55; 16] };
+        let params = PasePbkdfParams {
+            iterations: 1000,
+            salt: vec![0x55; 16],
+        };
 
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
         let dev_addr = dev_io.local_addr();
@@ -106,9 +121,16 @@ mod tests {
             let m = decode_unsecured(&p).unwrap();
             verifier.handle_pbkdf_request(&m.payload).unwrap();
             let resp = verifier.next_message().unwrap();
-            let wire = encode_unsecured(ctr, m.exchange_id, OP_PBKDF_RESP,
-                matter_transport::ProtocolId::SECURE_CHANNEL, false, true,
-                Some(m.message_counter), &resp);
+            let wire = encode_unsecured(
+                ctr,
+                m.exchange_id,
+                OP_PBKDF_RESP,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                &resp,
+            );
             ctr += 1;
             dev_io.send_to(&wire, ctrl_addr).await.unwrap();
 
@@ -116,9 +138,16 @@ mod tests {
             let m = decode_unsecured(&p).unwrap();
             verifier.handle_pake1(&m.payload).unwrap();
             let pake2 = verifier.next_message().unwrap();
-            let wire = encode_unsecured(ctr, m.exchange_id, OP_PAKE2,
-                matter_transport::ProtocolId::SECURE_CHANNEL, false, true,
-                Some(m.message_counter), &pake2);
+            let wire = encode_unsecured(
+                ctr,
+                m.exchange_id,
+                OP_PAKE2,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                &pake2,
+            );
             dev_io.send_to(&wire, ctrl_addr).await.unwrap();
 
             let (p, _) = dev_io.recv_from().await.unwrap();

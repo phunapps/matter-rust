@@ -11,8 +11,8 @@ use matter_cert::TrustedRoots;
 use matter_crypto::{CaseCredentials, CaseInitiator};
 use matter_transport::{Discovery, ServiceKind, SessionId, SessionManager, SessionRole};
 
-use crate::driver::error::DriverError;
 use crate::driver::datagram::AsyncDatagram;
+use crate::driver::error::DriverError;
 use crate::driver::unsecured::UnsecuredExchange;
 
 /// Build the operational mDNS instance name `<compressed-fabric-id>-<node-id>`,
@@ -101,8 +101,13 @@ pub async fn run_case<T: AsyncDatagram>(
     peer_fabric_id: u64,
 ) -> Result<SessionId, DriverError> {
     let local = sessions.allocate_session_id();
-    let mut initiator =
-        CaseInitiator::new(credentials, trusted_roots, peer_node_id, peer_fabric_id, local.0)?;
+    let mut initiator = CaseInitiator::new(
+        credentials,
+        trusted_roots,
+        peer_node_id,
+        peer_fabric_id,
+        local.0,
+    )?;
     let mut exch = UnsecuredExchange::new(CASE_INITIAL_COUNTER, CASE_EXCHANGE_ID);
 
     let sigma1 = initiator.start()?;
@@ -112,8 +117,14 @@ pub async fn run_case<T: AsyncDatagram>(
     initiator.handle_sigma2(&sigma2.payload)?;
 
     let sigma3 = initiator.next_message()?;
-    exch.send(transport, peer, OP_SIGMA3, &sigma3, Some(sigma2.message_counter))
-        .await?;
+    exch.send(
+        transport,
+        peer,
+        OP_SIGMA3,
+        &sigma3,
+        Some(sigma2.message_counter),
+    )
+    .await?;
 
     let output = initiator.finish()?;
     let sid = sessions.register_case(&output, SessionRole::Initiator);
@@ -129,7 +140,10 @@ mod tests {
     fn operational_instance_name_formats_16_16_uppercase_hex() {
         let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
         let node_id: u64 = 0x0000_0000_0000_0001;
-        assert_eq!(operational_instance_name(cfid, node_id), "87E1B004E235A130-0000000000000001");
+        assert_eq!(
+            operational_instance_name(cfid, node_id),
+            "87E1B004E235A130-0000000000000001"
+        );
     }
 
     use std::collections::HashMap;
@@ -142,11 +156,19 @@ mod tests {
     }
 
     impl Discovery for FakeDiscovery {
-        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> { Ok(()) }
-        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> { Ok(()) }
-        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> { Ok(QueryHandle(1)) }
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(1))
+        }
         fn stop_query(&mut self, _h: QueryHandle) {}
-        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> { vec![self.service.clone()] }
+        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+            vec![self.service.clone()]
+        }
     }
 
     #[tokio::test]
@@ -164,7 +186,10 @@ mod tests {
             },
         };
         let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
-        assert_eq!(addr, std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7)), 5540));
+        assert_eq!(
+            addr,
+            std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7)), 5540)
+        );
     }
 
     // -----------------------------------------------------------------------
