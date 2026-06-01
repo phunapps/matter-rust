@@ -155,6 +155,43 @@ impl UnsecuredExchange {
         }
     }
 
+    /// Send one unsecured message (initiator, reliable) WITHOUT awaiting a
+    /// reply, advancing the message counter. Used for the *terminal* handshake
+    /// message (PASE `Pake3` / CASE `Sigma3`): the sans-IO cursor's `finish()`
+    /// needs no further inbound message, so the bridge sends and finishes.
+    ///
+    /// The peer's `SecureChannel` `StatusReport` (which signals success/failure)
+    /// is NOT consumed here — parsing it (to detect a rejecting device) and
+    /// retransmitting the terminal message reliably are deferred to
+    /// M6.6.4/M6.6.5.
+    ///
+    /// # Errors
+    ///
+    /// - [`DriverError::Io`] if the datagram send fails.
+    pub async fn send<T: AsyncDatagram>(
+        &mut self,
+        transport: &T,
+        peer: SocketAddr,
+        opcode: u8,
+        app_payload: &[u8],
+        ack: Option<u32>,
+    ) -> Result<(), DriverError> {
+        let counter = self.counter;
+        self.counter = self.counter.wrapping_add(1);
+        let wire = encode_unsecured(
+            counter,
+            self.exchange_id,
+            opcode,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            ack,
+            app_payload,
+        );
+        transport.send_to(&wire, peer).await?;
+        Ok(())
+    }
+
     /// Send one unsecured message (initiator, reliable) and await the next
     /// inbound unsecured message, retransmitting on timeout. `ack` piggybacks
     /// the previous message's counter when the caller has one to acknowledge.
@@ -297,6 +334,21 @@ mod tests {
         let got = got.unwrap();
         assert_eq!(got.opcode, 0x21);
         assert_eq!(got.payload, b"resp");
+    }
+
+    #[tokio::test]
+    async fn unsecured_send_is_fire_once_and_decodes() {
+        let (a, b) = InMemoryDatagram::pair();
+        let b_addr = b.local_addr();
+        let mut exch = UnsecuredExchange::new(5, 9);
+        exch.send(&a, b_addr, 0x24, b"pake3", Some(7)).await.unwrap();
+        let (pkt, _) = b.recv_from().await.unwrap();
+        let msg = decode_unsecured(&pkt).unwrap();
+        assert_eq!(msg.opcode, 0x24);
+        assert_eq!(msg.payload, b"pake3");
+        assert_eq!(msg.message_counter, 5);
+        assert_eq!(msg.ack_counter, Some(7));
+        assert!(msg.is_initiator);
     }
 
     #[tokio::test]
