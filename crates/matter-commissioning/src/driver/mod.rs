@@ -10,9 +10,11 @@
 mod datagram;
 mod error;
 mod exchange;
+mod pase;
 mod unsecured;
 
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
 pub use exchange::{secured_round_trip, SecuredResponse};
+pub use pase::run_pase;
 pub use unsecured::{decode_unsecured, encode_unsecured, UnsecuredExchange, UnsecuredMessage};
