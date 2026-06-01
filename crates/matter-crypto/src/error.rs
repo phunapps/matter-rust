@@ -60,6 +60,14 @@ pub enum Error {
     #[error("PIN derivation failed")]
     PinDerivationFailed,
 
+    /// Generic HKDF/KDF operation failed (e.g., ring returned an error for an
+    /// output-length or expand call that should succeed for all valid inputs).
+    ///
+    /// Used by operational identity derivations such as
+    /// [`crate::derive_compressed_fabric_id`].
+    #[error("key derivation failed")]
+    KeyDerivationFailed,
+
     /// PBKDF iteration count below the Matter spec minimum (1000).
     #[error("PBKDF iteration count {0} below spec minimum 1000")]
     PbkdfIterationsTooLow(u32),
