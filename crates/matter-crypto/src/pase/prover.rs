@@ -80,9 +80,9 @@ enum State {
         pin: u32,
         x_scalar: p256::Scalar,
         initiator_random: [u8; 32],
-        /// Session ID to include in the `PBKDFParamRequest`. Set to 0 by the
-        /// production constructors; overrideable for testing via
-        /// [`new_with_negotiation_with_scalar`].
+        /// Session ID to include in the `PBKDFParamRequest`. Caller-supplied,
+        /// passed through from `new_with_negotiation` (or a fixture value via
+        /// the test-only `new_with_negotiation_with_scalar_and_session_id`).
         initiator_session_id: u16,
     },
 
@@ -294,13 +294,13 @@ impl PaseProver {
     ///
     /// Validates `params` against Matter spec §3.10.3 bounds before accepting.
     ///
-    /// `initiator_session_id` is the non-zero secured-session id this
-    /// commissioner advertises for the peer to address us by. It is included
-    /// in the `PBKDFParamRequest` wire message and hashed into the SPAKE2+
-    /// transcript, so it must be fixed before [`start`][Self::start] is called.
-    /// On this path no `PBKDFParamResponse` is received, so
+    /// `initiator_session_id` is accepted for API symmetry with
+    /// [`new_with_negotiation`][Self::new_with_negotiation] but is **unused** on
+    /// this path: the known-params flow sends no `PBKDFParamRequest`, so the id
+    /// never reaches the wire or the transcript, and
     /// [`responder_session_id`][Self::responder_session_id] will always be
-    /// `None`.
+    /// `None`. (Secured-session-id negotiation requires the negotiation path,
+    /// which the commissioning driver uses.)
     ///
     /// # Errors
     ///
@@ -316,7 +316,6 @@ impl PaseProver {
         let rng = SystemRandom::new();
         Self::new_with_known_params_using_rng(pin, params, initiator_session_id, &rng)
     }
-
 
     /// Deterministic constructor for testing — accepts an injectable RNG.
     ///
@@ -429,8 +428,8 @@ impl PaseProver {
             } => {
                 // §3.10.5 step 1: commissioner sends PBKDFParamRequest.
                 // passcode_id=0 per spec defaults for the negotiation path.
-                // The actual session ID assignment happens at M5; for now we use
-                // whatever was stored in the state (0 for production, fixture value for tests).
+                // initiator_session_id is the caller-supplied value (the
+                // secured-session id we advertise for the peer to address us by).
                 let req = PbkdfParamRequest {
                     initiator_random,
                     initiator_session_id,
