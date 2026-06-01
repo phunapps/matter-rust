@@ -292,6 +292,16 @@ impl SessionManager {
         peer_session_id: u16,
         peer: PeerHint,
     ) {
+        // Session id 0 is reserved for the unsecured session (spec §4.4.4).
+        // `allocate_id` never returns it, and a completed handshake must have
+        // advertised a non-zero id; registering a secured session under 0 would
+        // shadow the unsecured path. Guard the invariant (the CASE *resumption*
+        // initiator still stubs its session id to 0 — that path must supply a
+        // real id before it registers via `register_case`).
+        debug_assert_ne!(
+            local_id.0, 0,
+            "secured session registered under reserved id 0"
+        );
         let session = Session {
             local_id,
             peer_id: SessionId(peer_session_id),
