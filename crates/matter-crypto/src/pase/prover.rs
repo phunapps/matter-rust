@@ -174,6 +174,11 @@ enum State {
 /// which message type the machine is currently waiting for.
 pub struct PaseProver {
     state: State,
+    /// The responder's advertised session id, captured from
+    /// `PBKDFParamResponse`. `None` until [`Self::handle_pbkdf_response`]
+    /// is called (and always `None` on the known-params path, which
+    /// exchanges no PBKDF messages).
+    responder_session_id: Option<u16>,
 }
 
 impl PaseProver {
@@ -181,6 +186,11 @@ impl PaseProver {
 
     /// Construct a prover that negotiates PBKDF parameters (sends
     /// `PBKDFParamRequest` first).
+    ///
+    /// `initiator_session_id` is the non-zero secured-session id this
+    /// commissioner advertises for the peer to address us by. It is included
+    /// in the `PBKDFParamRequest` wire message and hashed into the SPAKE2+
+    /// transcript, so it must be fixed before [`start`][Self::start] is called.
     ///
     /// Pre-samples the SPAKE2+ `x` scalar and the 32-byte initiator nonce
     /// so that [`start`][Self::start] cannot fail due to randomness.
@@ -190,15 +200,19 @@ impl PaseProver {
     /// - [`Error::InvalidScalar`] if the CSPRNG is broken and a non-zero
     ///   scalar cannot be sampled after 16 attempts (practically impossible).
     /// - [`Error::PinDerivationFailed`] if the nonce fill fails.
-    pub fn new_with_negotiation(pin: u32) -> Result<Self> {
+    pub fn new_with_negotiation(pin: u32, initiator_session_id: u16) -> Result<Self> {
         let rng = SystemRandom::new();
-        Self::new_with_negotiation_using_rng(pin, &rng)
+        Self::new_with_negotiation_using_rng(pin, initiator_session_id, &rng)
     }
 
     /// Deterministic constructor for testing — accepts an injectable RNG.
     ///
     /// Production code should always use [`new_with_negotiation`][Self::new_with_negotiation].
-    pub(crate) fn new_with_negotiation_using_rng(pin: u32, rng: &dyn SecureRandom) -> Result<Self> {
+    pub(crate) fn new_with_negotiation_using_rng(
+        pin: u32,
+        initiator_session_id: u16,
+        rng: &dyn SecureRandom,
+    ) -> Result<Self> {
         let x_scalar = sample_scalar(rng)?;
         let mut initiator_random = [0u8; 32];
         rng.fill(&mut initiator_random)
@@ -208,8 +222,9 @@ impl PaseProver {
                 pin,
                 x_scalar,
                 initiator_random,
-                initiator_session_id: 0,
+                initiator_session_id,
             },
+            responder_session_id: None,
         })
     }
 
@@ -270,6 +285,7 @@ impl PaseProver {
                 initiator_random,
                 initiator_session_id,
             },
+            responder_session_id: None,
         })
     }
 
@@ -278,16 +294,29 @@ impl PaseProver {
     ///
     /// Validates `params` against Matter spec §3.10.3 bounds before accepting.
     ///
+    /// `initiator_session_id` is the non-zero secured-session id this
+    /// commissioner advertises for the peer to address us by. It is included
+    /// in the `PBKDFParamRequest` wire message and hashed into the SPAKE2+
+    /// transcript, so it must be fixed before [`start`][Self::start] is called.
+    /// On this path no `PBKDFParamResponse` is received, so
+    /// [`responder_session_id`][Self::responder_session_id] will always be
+    /// `None`.
+    ///
     /// # Errors
     ///
     /// - [`Error::PbkdfIterationsTooLow`] if `params.iterations < 1000`.
     /// - [`Error::PbkdfSaltLengthInvalid`] if `params.salt.len()` ∉ \[16, 32\].
     /// - [`Error::InvalidScalar`] if the CSPRNG is broken.
-    pub fn new_with_known_params(pin: u32, params: PasePbkdfParams) -> Result<Self> {
+    pub fn new_with_known_params(
+        pin: u32,
+        params: PasePbkdfParams,
+        initiator_session_id: u16,
+    ) -> Result<Self> {
         validate_params(params.iterations, &params.salt)?;
         let rng = SystemRandom::new();
-        Self::new_with_known_params_using_rng(pin, params, &rng)
+        Self::new_with_known_params_using_rng(pin, params, initiator_session_id, &rng)
     }
+
 
     /// Deterministic constructor for testing — accepts an injectable RNG.
     ///
@@ -296,16 +325,20 @@ impl PaseProver {
     pub(crate) fn new_with_known_params_using_rng(
         pin: u32,
         params: PasePbkdfParams,
+        _initiator_session_id: u16,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         validate_params(params.iterations, &params.salt)?;
         let x_scalar = sample_scalar(rng)?;
+        // _initiator_session_id is not used on the known-params path (no
+        // PBKDFParamRequest is sent), but we accept it for API symmetry.
         Ok(Self {
             state: State::AwaitingStartKnownParams {
                 pin,
                 params,
                 x_scalar,
             },
+            responder_session_id: None,
         })
     }
 
@@ -344,6 +377,7 @@ impl PaseProver {
                 params,
                 x_scalar,
             },
+            responder_session_id: None,
         })
     }
 
@@ -358,6 +392,14 @@ impl PaseProver {
             State::AwaitingPake2 { .. } => Some(PaseMessageKind::Pake2),
             _ => None,
         }
+    }
+
+    /// The responder's advertised secured-session id, captured from
+    /// `PBKDFParamResponse`. `None` before [`Self::handle_pbkdf_response`]
+    /// (and on the known-params path, which exchanges no PBKDF messages).
+    #[must_use]
+    pub fn responder_session_id(&self) -> Option<u16> {
+        self.responder_session_id
     }
 
     // ─── Handshake methods ────────────────────────────────────────────────
@@ -461,6 +503,10 @@ impl PaseProver {
             } => {
                 // §3.10.5 step 2: decode and validate the response.
                 let resp = PbkdfParamResponse::decode(bytes)?;
+
+                // Capture the responder's advertised session id so callers can
+                // retrieve it via `responder_session_id()`.
+                self.responder_session_id = Some(resp.responder_session_id);
 
                 // The responder MUST include pbkdf_parameters when we set
                 // has_pbkdf_parameters=false (§3.10.5). If absent, abort.
@@ -703,9 +749,9 @@ mod tests {
 
     #[test]
     fn new_with_negotiation_accepts_any_pin() {
-        let _ = PaseProver::new_with_negotiation(20_202_021).unwrap();
-        let _ = PaseProver::new_with_negotiation(0).unwrap();
-        let _ = PaseProver::new_with_negotiation(u32::MAX).unwrap();
+        let _ = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
+        let _ = PaseProver::new_with_negotiation(0, 0x0001).unwrap();
+        let _ = PaseProver::new_with_negotiation(u32::MAX, 0x0001).unwrap();
     }
 
     #[test]
@@ -715,7 +761,7 @@ mod tests {
             salt: vec![0u8; 16],
         };
         assert!(matches!(
-            PaseProver::new_with_known_params(20_202_021, params),
+            PaseProver::new_with_known_params(20_202_021, params, 0x0001),
             Err(Error::PbkdfIterationsTooLow(999))
         ));
     }
@@ -727,7 +773,7 @@ mod tests {
             salt: vec![0u8; 15],
         };
         assert!(matches!(
-            PaseProver::new_with_known_params(20_202_021, params),
+            PaseProver::new_with_known_params(20_202_021, params, 0x0001),
             Err(Error::PbkdfSaltLengthInvalid(15))
         ));
     }
@@ -738,14 +784,14 @@ mod tests {
             iterations: 1_000,
             salt: vec![0x42u8; 16],
         };
-        let _ = PaseProver::new_with_known_params(20_202_021, params).unwrap();
+        let _ = PaseProver::new_with_known_params(20_202_021, params, 0x0001).unwrap();
     }
 
     // ─── Negotiation path state transitions ───────────────────────────────
 
     #[test]
     fn start_negotiation_emits_tlv_structure() {
-        let mut prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         let bytes = prover.start().unwrap();
         // An anonymous TLV structure starts with 0x15 (type=Structure, tag=Anonymous).
         assert_eq!(
@@ -757,7 +803,7 @@ mod tests {
 
     #[test]
     fn expected_inbound_after_start_negotiation_is_pbkdf_response() {
-        let mut prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         let _ = prover.start().unwrap();
         assert_eq!(
             prover.expected_inbound(),
@@ -767,7 +813,7 @@ mod tests {
 
     #[test]
     fn handle_pbkdf_response_advances_to_ready_to_send_pake1() {
-        let mut prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         let _req_bytes = prover.start().unwrap();
 
         // Build a minimal valid PBKDFParamResponse with pbkdf_parameters.
@@ -791,7 +837,7 @@ mod tests {
 
     #[test]
     fn handle_pbkdf_response_rejects_missing_pbkdf_params() {
-        let mut prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         let _ = prover.start().unwrap();
 
         // Response without pbkdf_parameters should fail.
@@ -811,7 +857,7 @@ mod tests {
 
     #[test]
     fn next_message_after_pbkdf_response_emits_pake1() {
-        let mut prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         let _ = prover.start().unwrap();
 
         let resp = PbkdfParamResponse {
@@ -839,14 +885,14 @@ mod tests {
 
     #[test]
     fn finish_before_complete_returns_handshake_incomplete() {
-        let prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         assert!(matches!(prover.finish(), Err(Error::HandshakeIncomplete)));
     }
 
     #[test]
     fn out_of_order_handle_pake2_returns_unexpected_message() {
         // The prover is in AwaitingStartNegotiation — handle_pake2 is wrong here.
-        let mut prover = PaseProver::new_with_negotiation(20_202_021).unwrap();
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
         // Build plausible Pake2 bytes (will be rejected at state check, not decoding).
         let dummy_pake2 = Pake2 {
             y: [0x04u8; 65],
@@ -865,4 +911,18 @@ mod tests {
     // the function itself moved there. We reference it through the import at
     // the top of this file (`use crate::pase::spake2plus::hash_context`) only
     // in the production call sites; tests live with the implementation.
+
+    // ─── Session ID plumbing ──────────────────────────────────────────────
+
+    #[test]
+    fn prover_advertises_initiator_session_id_and_starts_unknowing_responder_id() {
+        let mut prover = PaseProver::new_with_negotiation(20_202_021, 0x0011).unwrap();
+        assert_eq!(prover.responder_session_id(), None);
+
+        let req = prover.start().unwrap();
+        let decoded_req = crate::pase::messages::PbkdfParamRequest::decode(&req).unwrap();
+        assert_eq!(decoded_req.initiator_session_id, 0x0011);
+
+        assert_eq!(prover.responder_session_id(), None);
+    }
 }
