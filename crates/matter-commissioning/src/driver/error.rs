@@ -45,6 +45,11 @@ pub enum DriverError {
         exchange_id: u16,
     },
 
+    /// A handshake invariant was violated while driving PASE/CASE (e.g. PASE
+    /// negotiation produced no responder session id).
+    #[error("handshake protocol error: {0}")]
+    Handshake(&'static str),
+
     /// A frame arrived on a secured session (non-zero session id) where the
     /// unsecured PASE path expected session id 0.
     #[error("expected unsecured (session-id 0) message, got session id {0}")]
