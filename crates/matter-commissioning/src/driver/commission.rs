@@ -39,8 +39,6 @@ mod attr_id {
 ///
 /// Either the device replied with a response-command payload (`Command`), or
 /// it returned a bare IM status with no payload (`Status`).
-// wired into the poll loop in Task 6
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InvokeOutcome {
     /// Device returned a response command; `Vec<u8>` is the re-anonymised
@@ -64,8 +62,6 @@ pub(crate) enum InvokeOutcome {
 ///   propagated from [`secured_round_trip`].
 /// - [`DriverError::Im`] if the response cannot be parsed as a valid
 ///   `InvokeResponseMessage`.
-// wired into the poll loop in Task 6
-#[allow(dead_code)]
 pub(crate) async fn dispatch_invoke<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -126,10 +122,8 @@ pub(crate) async fn dispatch_invoke<T: AsyncDatagram>(
 ///   expected attribute is absent from the report.
 /// - [`DriverError::Im`] wrapping [`crate::im::ImError::UnexpectedValue`] if
 ///   `expect` is not a read-expectation (i.e. not `CommissioningInfo` or
-///   `NetworkCommissioningInfo`). Task 6's poll loop will never call this with
+///   `NetworkCommissioningInfo`). The poll loop will never call this with
 ///   a non-read expectation, but the helper is defensive.
-// wired into the poll loop in Task 6
-#[allow(dead_code)]
 pub(crate) fn extract_read_payload(
     expect: crate::Expectation,
     report: &crate::im::ReportData,
@@ -212,8 +206,6 @@ pub(crate) fn extract_read_payload(
 ///   propagated from [`secured_round_trip`].
 /// - [`DriverError::Im`] if the response cannot be parsed as a valid
 ///   `ReportDataMessage`.
-// wired into the poll loop in Task 6
-#[allow(dead_code)]
 pub(crate) async fn dispatch_read<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -317,8 +309,6 @@ pub async fn resolve_commissionable<D: Discovery>(
 /// # Errors
 ///
 /// This function is infallible; it always returns `()`.
-// Wired into the poll loop in Task 6.
-#[allow(dead_code)]
 pub(crate) async fn rollback<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -358,8 +348,7 @@ pub(crate) async fn rollback<T: AsyncDatagram>(
 ///   within the poll budget.
 /// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
 ///   / [`DriverError::Crypto`] propagated from [`run_case`].
-// Wired into the poll loop in Task 6.
-#[allow(dead_code, clippy::too_many_arguments)] // 8 params reflect the CASE setup split; Task 6 bundles them into a config struct.
+#[allow(clippy::too_many_arguments)] // 8 params reflect the CASE setup split; the caller (commission()) bundles them from a config struct.
 pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -388,24 +377,266 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 
 /// Commission a device end to end, returning the resulting [`CommissionedFabric`].
 ///
+/// Drives the full commissioning protocol from start to finish:
+///
+/// 1. **Discovery.** Resolves the commissionable device address via mDNS if
+///    `config.commissionable_addr` is `None`, or uses the pre-resolved address
+///    directly for testing.
+/// 2. **PASE.** Runs the SPAKE2+ handshake using `config.passcode`, producing
+///    a secured PASE session.
+/// 3. **Issue controller NOC.** Mints the commissioner's own Node Operational
+///    Certificate under the fabric's RCAC so CASE credentials are available
+///    when the state machine later emits `Action::EstablishCase`.
+/// 4. **Command loop.** Polls the [`crate::Commissioner`] cursor until it emits
+///    `Action::Done` or `Action::Abort`, dispatching each action over the
+///    correct session (PASE or CASE):
+///    - `Invoke` → [`dispatch_invoke`], map outcome to `on_response` payload.
+///    - `ReadAttribute` → [`dispatch_read`] + [`extract_read_payload`], feed
+///      result via `on_response`.
+///    - `EstablishCase` → [`establish_case_session`], advance cursor via
+///      `on_case_established` or `on_response(CaseFailed, &[])`.
+///    - `Done(fabric)` → return `Ok(fabric)`.
+///    - `Abort` → optionally send `ArmFailSafe(0)` rollback, return
+///      [`DriverError::Aborted`].
+///    - `EvictCase` → unreachable in M6; returns
+///      [`DriverError::Handshake`].
+///
+/// ## CASE credential sourcing
+///
+/// During commissioning the controller issues a NOC for the *device*
+/// (`assigned_node_id`). The **controller's own** operational identity for CASE
+/// is a separate NOC minted here under the same RCAC, keyed by a freshly
+/// generated P-256 keypair. The `FabricRecord` only carries the RCAC signer
+/// (used to sign both NOCs) plus the root cert and IPK — it does not carry a
+/// pre-existing controller NOC. Generating one inline follows the same pattern
+/// matter.js uses: the admin self-issues at fabric construction time.
+///
 /// # Errors
 ///
-/// Any [`DriverError`] from discovery, PASE, the command loop, CASE, or a
-/// commissioning-state-machine `Abort`.
+/// - [`DriverError::Discovery`] if the commissionable device cannot be found via
+///   mDNS within the poll budget.
+/// - [`DriverError::Crypto`] / [`DriverError::Io`] / [`DriverError::Transport`]
+///   / [`DriverError::Timeout`] from the PASE/CASE handshake or any secured
+///   round-trip.
+/// - [`DriverError::Im`] if an Interaction Model response cannot be parsed.
+/// - [`DriverError::Commissioning`] if the state machine returns an error from
+///   `poll()` or `on_response()`.
+/// - [`DriverError::Aborted`] if the state machine emits `Action::Abort` (device
+///   returned a non-OK commissioning result, attestation failure, etc.).
+/// - [`DriverError::Handshake`] if `Action::EvictCase` is unexpectedly emitted.
+// The poll loop has one arm per Action variant; each arm is short but the
+// total length exceeds the default lint threshold.  Extracting each arm into
+// a sub-function would require passing the entire mutable state through
+// parameter lists, obscuring the control flow.  The function is
+// intentionally kept as a single readable loop.
+#[allow(clippy::too_many_lines)]
 pub async fn commission<T, D>(
-    _transport: &T,
-    _discovery: &mut D,
-    _config: DriverConfig<'_>,
+    transport: &T,
+    discovery: &mut D,
+    config: DriverConfig<'_>,
 ) -> Result<CommissionedFabric, DriverError>
 where
     T: AsyncDatagram,
     D: matter_transport::Discovery,
 {
-    // Filled in across Tasks 2-6.
-    let _ = SessionManager::new();
-    Err(DriverError::Discovery(
-        "commission() not yet implemented".into(),
-    ))
+    use crate::noc::{issue_noc, SystemNocRng, VerifiedCsr};
+    use crate::{Action, SessionContext};
+    use matter_cert::{TrustAnchor, TrustedRoots};
+    use matter_crypto::{CaseSigner as _, RingSigner};
+
+    // 1. Resolve the commissionable address.
+    let peer = if let Some(addr) = config.commissionable_addr {
+        addr
+    } else {
+        let disc = config.commissioner.setup_payload.discriminator.as_u16();
+        resolve_commissionable(discovery, disc).await?
+    };
+
+    // 2. Run PASE.
+    let mut sessions = SessionManager::new();
+    let pase_sid =
+        crate::driver::pase::run_pase(transport, &mut sessions, peer, config.passcode).await?;
+
+    // 3. Issue the commissioner's own NOC so we have CASE credentials ready
+    //    when Action::EstablishCase arrives.
+    //
+    //    The FabricRecord holds the RCAC signer but not the commissioner's own
+    //    operational keypair. We generate a fresh keypair here and mint a NOC
+    //    for commissioner_node_id under the fabric's RCAC — the same RCAC that
+    //    the device receives via AddTrustedRootCertificate, so the device
+    //    validates this NOC during CASE. This is correct for a single
+    //    commissioning run.
+    //
+    //    FLAG (M6.6.4 simplification — deferred to M8): the commissioner's
+    //    operational keypair is minted fresh on every commission() call, so the
+    //    controller has NO stable/persistent operational identity. Commissioning
+    //    two devices would present two different commissioner operational keys.
+    //    A real Matter controller self-issues ONE admin NOC at fabric-creation
+    //    time and persists it (devices store that identity in their ACL/fabric
+    //    table). M8 (matter-controller: fabric create/persist/restore) must model
+    //    the commissioner's persistent operational identity on the fabric and
+    //    feed it here instead of minting per-call.
+    //
+    //    commissioner_signer is stored as Option<RingSigner> so we can `take()`
+    //    it into the CaseCredentials exactly once when EstablishCase arrives.
+    //    EstablishCase fires at most once per commissioning run.
+    let fabric = config.commissioner.fabric;
+    let (commissioner_signer_value, _pkcs8) =
+        RingSigner::generate().map_err(DriverError::Crypto)?;
+    let commissioner_pub = commissioner_signer_value.public_key().clone();
+    let commissioner_verified_csr = VerifiedCsr {
+        public_key: commissioner_pub,
+    };
+    let commissioner_node_id = config.commissioner.commissioner_node_id;
+    let commissioner_noc = issue_noc(
+        fabric,
+        &commissioner_verified_csr,
+        commissioner_node_id,
+        &[],
+        (config.commissioner.now, matter_cert::MatterTime::NO_EXPIRY),
+        &SystemNocRng,
+    )
+    .map_err(|e| DriverError::Commissioning(crate::CommissioningError::from(e)))?;
+
+    // Wrap in Option so we can move it into CaseCredentials exactly once.
+    let mut commissioner_signer: Option<RingSigner> = Some(commissioner_signer_value);
+
+    let mut case_sid: Option<SessionId> = None;
+
+    // 4. Build the state machine cursor.
+    let mut sm = crate::Commissioner::new(config.commissioner)?;
+
+    // 5. Poll loop.
+    loop {
+        let action = sm.poll()?;
+        match action {
+            Action::Invoke {
+                session,
+                endpoint,
+                cluster,
+                command,
+                payload,
+                expect,
+            } => {
+                let sid = match session {
+                    SessionContext::Pase => pase_sid,
+                    SessionContext::Case => case_sid.ok_or(DriverError::Handshake(
+                        "CASE session required but not yet established",
+                    ))?,
+                };
+                let path = crate::im::CommandPath {
+                    endpoint,
+                    cluster,
+                    command,
+                };
+                let outcome =
+                    dispatch_invoke(transport, &mut sessions, sid, peer, path, &payload).await?;
+                // Map InvokeOutcome → the byte slice on_response expects:
+                //   Command(fields) → the response-command TLV bytes verbatim.
+                //   Status(Success) → [0x00] (single byte; state machine checks first byte).
+                //   Status(Failure(code)) → [code].
+                let response_payload: Vec<u8> = match outcome {
+                    InvokeOutcome::Command(fields) => fields,
+                    InvokeOutcome::Status(crate::im::ImStatus::Success) => vec![0x00],
+                    InvokeOutcome::Status(crate::im::ImStatus::Failure(code)) => vec![code],
+                };
+                sm.on_response(expect, &response_payload)?;
+            }
+
+            Action::ReadAttribute {
+                session,
+                endpoint,
+                cluster,
+                attributes,
+                expect,
+            } => {
+                let sid = match session {
+                    SessionContext::Pase => pase_sid,
+                    SessionContext::Case => case_sid.ok_or(DriverError::Handshake(
+                        "CASE session required but not yet established for ReadAttribute",
+                    ))?,
+                };
+                // Build one AttributePath per attribute id in the slice.
+                let paths: Vec<crate::im::AttributePath> = attributes
+                    .iter()
+                    .map(|&attr| crate::im::AttributePath {
+                        endpoint,
+                        cluster,
+                        attribute: attr,
+                    })
+                    .collect();
+                let report = dispatch_read(transport, &mut sessions, sid, peer, &paths).await?;
+                let read_payload = extract_read_payload(expect, &report)?;
+                sm.on_response(expect, &read_payload)?;
+            }
+
+            Action::EstablishCase {
+                fabric_id,
+                peer_node_id,
+            } => {
+                // Build CASE credentials for the commissioner's own identity.
+                // commissioner_signer is moved out of the Option here — it can
+                // only be taken once; a second EstablishCase would return an
+                // error.
+                let signer = commissioner_signer.take().ok_or(DriverError::Handshake(
+                    "EstablishCase emitted more than once per commission() run",
+                ))?;
+                let credentials = CaseCredentials {
+                    noc: commissioner_noc.clone(),
+                    icac: fabric.icac_cert.clone(),
+                    signer: Box::new(signer),
+                    fabric_id,
+                    node_id: commissioner_node_id,
+                    ipk: fabric.identity_protection_key,
+                    rcac_public_key: *fabric.root_public_key.as_bytes(),
+                };
+                // Build TrustedRoots from this fabric's RCAC.
+                let mut trusted_roots = TrustedRoots::new();
+                trusted_roots.add(TrustAnchor::from_root_cert(&fabric.root_cert));
+
+                match establish_case_session(
+                    transport,
+                    &mut sessions,
+                    discovery,
+                    fabric.root_public_key.as_bytes(),
+                    fabric_id,
+                    credentials,
+                    trusted_roots,
+                    peer_node_id,
+                )
+                .await
+                {
+                    Ok(sid) => {
+                        case_sid = Some(sid);
+                        sm.on_case_established()?;
+                    }
+                    Err(_) => {
+                        sm.on_response(crate::Expectation::CaseFailed, &[])?;
+                    }
+                }
+            }
+
+            Action::Done(commissioned_fabric) => {
+                return Ok(commissioned_fabric);
+            }
+
+            Action::Abort {
+                send_disarm_failsafe,
+                reason,
+            } => {
+                if send_disarm_failsafe {
+                    rollback(transport, &mut sessions, pase_sid, peer).await;
+                }
+                return Err(DriverError::Aborted(reason));
+            }
+
+            Action::EvictCase { .. } => {
+                return Err(DriverError::Handshake(
+                    "unexpected Action::EvictCase in M6 commission() loop (multi-fabric not implemented)",
+                ));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -54,4 +54,11 @@ pub enum DriverError {
     /// unsecured PASE path expected session id 0.
     #[error("expected unsecured (session-id 0) message, got session id {0}")]
     UnexpectedSecuredMessage(u16),
+
+    /// The commissioning state machine emitted [`crate::Action::Abort`]:
+    /// the device returned an error (attestation failure, bad NOC, device
+    /// policy rejection, etc.) and the run was halted. `reason` is the
+    /// human-readable summary surfaced by the state machine.
+    #[error("commissioning aborted: {0}")]
+    Aborted(String),
 }
