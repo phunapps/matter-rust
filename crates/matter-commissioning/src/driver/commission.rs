@@ -431,6 +431,190 @@ mod tests {
 
     use crate::driver::datagram::InMemoryDatagram;
 
+    // -----------------------------------------------------------------------
+    // Device-side helpers — test-only, NOT part of the controller public API.
+    //
+    // A Matter controller never parses InvokeRequests (the device does) or
+    // decodes ArmFailSafe request fields (the device does). These helpers live
+    // here so the in-process loopback device simulator in the Task 5 tests can
+    // assert/reply without leaking device-codec into production.
+    // -----------------------------------------------------------------------
+
+    /// Decoded single-command `InvokeRequestMessage`.
+    /// Used by the device-side task in the `rollback` test to assert path+fields.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct InvokeRequest {
+        path: crate::im::CommandPath,
+        fields_tlv: Vec<u8>,
+    }
+
+    /// Parse a single-command `InvokeRequestMessage` (device-side, test-only).
+    fn parse_invoke_request(bytes: &[u8]) -> Result<InvokeRequest, crate::im::ImError> {
+        use crate::im::{
+            error::ImError, expect_message_struct, read_container_members, read_container_value,
+            skip_container, CommandPath,
+        };
+        use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+
+        let mut r = TlvReader::new(bytes);
+        expect_message_struct(&mut r)?;
+
+        // Scan for Context(2) = InvokeRequests array.
+        loop {
+            match r.next()? {
+                None | Some(Element::ContainerEnd) => {
+                    return Err(ImError::MissingField("InvokeRequests"))
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(2),
+                    kind: ContainerKind::Array,
+                }) => break,
+                Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
+                Some(_) => {}
+            }
+        }
+
+        // Expect the first CommandDataIB (anonymous struct).
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => return Err(ImError::MissingField("CommandDataIB")),
+        }
+
+        // Parse CommandDataIB body: scan for CommandPathIB (ctx 0) and CommandFields (ctx 1).
+        let mut path: Option<CommandPath> = None;
+        let mut fields_tlv: Vec<u8> = Vec::new();
+        loop {
+            match r.next()? {
+                None => return Err(ImError::MissingField("CommandDataIB.body")),
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::List,
+                }) => {
+                    let members = read_container_members(&mut r)?;
+                    let mut endpoint = None;
+                    let mut cluster = None;
+                    let mut command = None;
+                    for (tag, v) in &members {
+                        match (tag, v) {
+                            (Tag::Context(0), Value::Uint(n)) => {
+                                endpoint = Some(u16::try_from(*n).map_err(|_| {
+                                    ImError::UnexpectedValue("CommandPath.endpoint exceeds u16")
+                                })?);
+                            }
+                            (Tag::Context(1), Value::Uint(n)) => {
+                                cluster = Some(u32::try_from(*n).map_err(|_| {
+                                    ImError::UnexpectedValue("CommandPath.cluster exceeds u32")
+                                })?);
+                            }
+                            (Tag::Context(2), Value::Uint(n)) => {
+                                command = Some(u32::try_from(*n).map_err(|_| {
+                                    ImError::UnexpectedValue("CommandPath.command exceeds u32")
+                                })?);
+                            }
+                            _ => {}
+                        }
+                    }
+                    path = Some(CommandPath {
+                        endpoint: endpoint.ok_or(ImError::MissingField("CommandPath.endpoint"))?,
+                        cluster: cluster.ok_or(ImError::MissingField("CommandPath.cluster"))?,
+                        command: command.ok_or(ImError::MissingField("CommandPath.command"))?,
+                    });
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind,
+                }) => {
+                    let v = read_container_value(&mut r, kind)?;
+                    // Re-encode as anonymous-tagged struct so callers get a self-contained TLV blob.
+                    let mut buf = Vec::new();
+                    let mut w = matter_codec::TlvWriter::new(&mut buf);
+                    w.write_value(Tag::Anonymous, &v).unwrap();
+                    fields_tlv = buf;
+                }
+                Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
+                Some(_) => {}
+            }
+        }
+
+        // If no CommandFields were present, canonicalize to an anonymous empty struct.
+        if fields_tlv.is_empty() {
+            let mut buf = Vec::new();
+            let mut w = matter_codec::TlvWriter::new(&mut buf);
+            w.write_value(Tag::Anonymous, &Value::Structure(Vec::new()))
+                .unwrap();
+            fields_tlv = buf;
+        }
+
+        Ok(InvokeRequest {
+            path: path.ok_or(ImError::MissingField("CommandDataIB.CommandPath"))?,
+            fields_tlv,
+        })
+    }
+
+    /// Decoded `ArmFailSafe` request fields (device-side, test-only).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ArmFailSafeFields {
+        expiry_length_seconds: u16,
+        breadcrumb: u64,
+    }
+
+    /// Decode `ArmFailSafe` request fields from a TLV anonymous struct (device-side, test-only).
+    fn decode_arm_fail_safe_fields(tlv: &[u8]) -> ArmFailSafeFields {
+        use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+        let mut r = TlvReader::new(tlv);
+        if !matches!(
+            r.next().ok().flatten(),
+            Some(Element::ContainerStart {
+                tag: Tag::Anonymous,
+                kind: ContainerKind::Structure,
+            })
+        ) {
+            return ArmFailSafeFields {
+                expiry_length_seconds: 0,
+                breadcrumb: 0,
+            };
+        }
+        let mut expiry: u16 = 0;
+        let mut breadcrumb: u64 = 0;
+        loop {
+            match r.next().ok().flatten() {
+                None | Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    expiry = u16::try_from(v).unwrap_or(0);
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    breadcrumb = v;
+                }
+                Some(_) => {}
+            }
+        }
+        ArmFailSafeFields {
+            expiry_length_seconds: expiry,
+            breadcrumb,
+        }
+    }
+
+    /// Encode an `ArmFailSafeResponse` with the given error code (device-side, test-only).
+    fn encode_arm_fail_safe_response(error_code: u8) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(error_code)).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
     struct FakeDiscovery {
         service: MatterService,
     }
@@ -880,7 +1064,7 @@ mod tests {
             };
 
             // Decode the InvokeRequest and assert path + expiry=0.
-            let invoke = crate::im::parse_invoke_request(&payload).unwrap();
+            let invoke = parse_invoke_request(&payload).unwrap();
             assert_eq!(
                 invoke.path,
                 CommandPath {
@@ -890,15 +1074,12 @@ mod tests {
                 }
             );
             // The fields TLV is an anonymous struct: { ctx(0): 0u16, ctx(1): 0u64 }.
-            let arm = crate::clusters::general_commissioning::decode_arm_fail_safe_fields(
-                &invoke.fields_tlv,
-            );
+            let arm = decode_arm_fail_safe_fields(&invoke.fields_tlv);
             assert_eq!(arm.expiry_length_seconds, 0, "expiry must be 0 for disarm");
             assert_eq!(arm.breadcrumb, 0);
 
             // Send a canned OK response so rollback's dispatch_invoke can complete.
-            let ok_fields =
-                crate::clusters::general_commissioning::encode_arm_fail_safe_response(0);
+            let ok_fields = encode_arm_fail_safe_response(0);
             let resp = build_canned_invoke_response(invoke.path, &ok_fields);
             let out = dev
                 .encode_outbound(

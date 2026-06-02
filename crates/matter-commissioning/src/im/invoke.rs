@@ -131,61 +131,6 @@ fn command_path_from_value(members: &[(Tag, Value)]) -> Result<CommandPath, ImEr
     })
 }
 
-/// Decoded single-command `InvokeRequestMessage`.
-///
-/// Holds the command path and re-anonymised command-fields TLV extracted from
-/// the first `CommandDataIB`. Used in test-side device simulators to assert
-/// that the controller sent the expected command path + fields.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InvokeRequest {
-    /// Path of the invoked command.
-    pub path: CommandPath,
-    /// The command-fields struct, re-encoded with an anonymous tag.
-    pub fields_tlv: Vec<u8>,
-}
-
-/// Parse a single-command `InvokeRequestMessage`.
-///
-/// Reads the first `CommandDataIB` in the `InvokeRequests` array and returns
-/// its path + re-anonymised command-fields TLV. Used by in-process device
-/// simulators in tests.
-///
-/// # Errors
-///
-/// Returns [`ImError`] if the message is not a struct, lacks the
-/// `InvokeRequests` array, or the first IB is malformed.
-pub fn parse_invoke_request(bytes: &[u8]) -> Result<InvokeRequest, ImError> {
-    let mut r = TlvReader::new(bytes);
-    expect_message_struct(&mut r)?;
-
-    // Scan for Context(2) = InvokeRequests array.
-    loop {
-        match r.next()? {
-            None | Some(Element::ContainerEnd) => {
-                return Err(ImError::MissingField("InvokeRequests"))
-            }
-            Some(Element::ContainerStart {
-                tag: Tag::Context(2),
-                kind: ContainerKind::Array,
-            }) => break,
-            Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
-            Some(_) => {}
-        }
-    }
-
-    // Expect the first CommandDataIB (anonymous struct).
-    match r.next()? {
-        Some(Element::ContainerStart {
-            kind: ContainerKind::Structure,
-            ..
-        }) => {}
-        _ => return Err(ImError::MissingField("CommandDataIB")),
-    }
-
-    let (path, fields_tlv) = parse_command_data(&mut r)?;
-    Ok(InvokeRequest { path, fields_tlv })
-}
-
 /// Parse a single-command `InvokeResponseMessage`.
 ///
 /// Reads the first `InvokeResponseIB` in the `InvokeResponses` array and

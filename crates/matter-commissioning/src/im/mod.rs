@@ -22,10 +22,7 @@ pub mod read;
 pub mod status;
 
 pub use error::ImError;
-pub use invoke::{
-    build_invoke_request, parse_invoke_request, parse_invoke_response, InvokeRequest,
-    InvokeResponse,
-};
+pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 pub use read::{build_read_request, parse_report_data, AttributePath, ReportData};
 pub use status::ImStatus;
 
