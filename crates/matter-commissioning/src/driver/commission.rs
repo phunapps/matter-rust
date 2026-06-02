@@ -3,8 +3,11 @@
 
 use std::net::SocketAddr;
 
+use matter_cert::TrustedRoots;
+use matter_crypto::{derive_compressed_fabric_id, CaseCredentials};
 use matter_transport::{Discovery, ProtocolId, ServiceKind, SessionId, SessionManager};
 
+use crate::driver::case::{resolve_operational, run_case};
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
 use crate::driver::exchange::secured_round_trip;
@@ -302,6 +305,87 @@ pub async fn resolve_commissionable<D: Discovery>(
     )))
 }
 
+/// Best-effort disarm of the device's failsafe by sending `ArmFailSafe(expiry=0)`
+/// over the PASE session. Called by the `Action::Abort` branch of the poll loop
+/// (Task 6) when `send_disarm_failsafe` is `true`.
+///
+/// Errors from [`dispatch_invoke`] are intentionally swallowed: this is a
+/// best-effort cleanup step. If the device is unreachable or the session has
+/// already expired the rollback is silently skipped — the device's built-in
+/// failsafe timer will expire on its own.
+///
+/// # Errors
+///
+/// This function is infallible; it always returns `()`.
+// Wired into the poll loop in Task 6.
+#[allow(dead_code)]
+pub(crate) async fn rollback<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    pase_session_id: SessionId,
+    peer: SocketAddr,
+) {
+    let path = CommandPath {
+        endpoint: 0,
+        cluster: crate::clusters::general_commissioning::CLUSTER_ID,
+        command: crate::clusters::general_commissioning::command_id::ARM_FAIL_SAFE,
+    };
+    let fields = crate::clusters::general_commissioning::encode_arm_fail_safe(0, 0);
+    let _ = dispatch_invoke(transport, sessions, pase_session_id, peer, path, &fields).await;
+}
+
+/// Resolve the device's operational address via mDNS and complete a CASE
+/// handshake, returning the new [`SessionId`].
+///
+/// Steps:
+/// 1. Derive the 8-byte compressed fabric id from `root_public_key` +
+///    `fabric_id` via [`derive_compressed_fabric_id`].
+/// 2. Call [`resolve_operational`] to discover the device's operational
+///    address.
+/// 3. Call [`run_case`] to complete the SIGMA-I handshake and register the
+///    resulting session.
+///
+/// The mapping of a `DriverError` result to
+/// `on_response(Expectation::CaseFailed, &[])` is the **caller's** job
+/// (Task 6's poll loop) — this function simply returns the `Result` so the
+/// caller can choose how to handle it.
+///
+/// # Errors
+///
+/// - [`DriverError::Crypto`] if [`derive_compressed_fabric_id`] fails
+///   (extremely unlikely — ring HKDF over fixed-length inputs).
+/// - [`DriverError::Discovery`] if no matching operational mDNS record appears
+///   within the poll budget.
+/// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
+///   / [`DriverError::Crypto`] propagated from [`run_case`].
+// Wired into the poll loop in Task 6.
+#[allow(dead_code, clippy::too_many_arguments)] // 8 params reflect the CASE setup split; Task 6 bundles them into a config struct.
+pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    discovery: &mut D,
+    root_public_key: &[u8; 65],
+    fabric_id: u64,
+    credentials: CaseCredentials,
+    trusted_roots: TrustedRoots,
+    peer_node_id: u64,
+) -> Result<SessionId, DriverError> {
+    let compressed =
+        derive_compressed_fabric_id(root_public_key, fabric_id).map_err(DriverError::Crypto)?;
+    let peer_addr = resolve_operational(discovery, compressed, peer_node_id).await?;
+    let peer_fabric_id = credentials.fabric_id;
+    run_case(
+        transport,
+        sessions,
+        peer_addr,
+        credentials,
+        trusted_roots,
+        peer_node_id,
+        peer_fabric_id,
+    )
+    .await
+}
+
 /// Commission a device end to end, returning the resulting [`CommissionedFabric`].
 ///
 /// # Errors
@@ -325,7 +409,12 @@ where
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::items_after_statements, // nested struct/impl in test body
+    clippy::too_many_lines          // CASE integration tests are inherently verbose
+)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
 
@@ -753,6 +842,301 @@ mod tests {
             .expect("decode_feature_map should accept the extracted payload");
         assert!(features
             .contains(crate::clusters::network_commissioning::NetworkCommissioningFeature::WIFI),);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 5 failing tests — rollback + establish_case_session
+    // -----------------------------------------------------------------------
+
+    /// `rollback` sends `ArmFailSafe(expiry_length=0, breadcrumb=0)` over the
+    /// PASE session and swallows any error. The device side asserts it received
+    /// cluster 0x0030 / command 0x00 and that the decoded `expiry_length_seconds`
+    /// field is 0.
+    #[tokio::test]
+    async fn rollback_sends_arm_fail_safe_zero_over_pase() {
+        use crate::im::CommandPath;
+        use matter_transport::{DecodeInboundOutput, MrpFlags, ProtocolId};
+
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let pase_session = SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        // Drive rollback (controller side) and a minimal device receiver concurrently.
+        let controller = rollback(&ctrl_io, &mut ctrl, pase_session, dev_addr);
+
+        let device = async {
+            // Receive the InvokeRequest that rollback sends.
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = dev.decode_inbound(&pkt, Instant::now()).unwrap();
+            let (exchange_id, payload) = match msg {
+                DecodeInboundOutput::AppMessage {
+                    exchange_id,
+                    payload,
+                    ..
+                } => (exchange_id, payload),
+                other => panic!("expected AppMessage, got {other:?}"),
+            };
+
+            // Decode the InvokeRequest and assert path + expiry=0.
+            let invoke = crate::im::parse_invoke_request(&payload).unwrap();
+            assert_eq!(
+                invoke.path,
+                CommandPath {
+                    endpoint: 0,
+                    cluster: crate::clusters::general_commissioning::CLUSTER_ID,
+                    command: crate::clusters::general_commissioning::command_id::ARM_FAIL_SAFE,
+                }
+            );
+            // The fields TLV is an anonymous struct: { ctx(0): 0u16, ctx(1): 0u64 }.
+            let arm = crate::clusters::general_commissioning::decode_arm_fail_safe_fields(
+                &invoke.fields_tlv,
+            );
+            assert_eq!(arm.expiry_length_seconds, 0, "expiry must be 0 for disarm");
+            assert_eq!(arm.breadcrumb, 0);
+
+            // Send a canned OK response so rollback's dispatch_invoke can complete.
+            let ok_fields =
+                crate::clusters::general_commissioning::encode_arm_fail_safe_response(0);
+            let resp = build_canned_invoke_response(invoke.path, &ok_fields);
+            let out = dev
+                .encode_outbound(
+                    pase_session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    &resp,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+
+        tokio::join!(controller, device);
+    }
+
+    /// `establish_case_session` drives `resolve_operational` + `run_case` and
+    /// returns a [`SessionId`]. Mirrors the `run_case_establishes_matching_session`
+    /// test in `case.rs` but calls through the higher-level helper.
+    #[tokio::test]
+    async fn establish_case_session_returns_session_id() {
+        use std::collections::HashMap;
+
+        use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields};
+        use matter_cert::{
+            BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyIdentifier, KeyUsage,
+            MatterCertificate, MatterTime, PublicKey, Signature, TrustAnchor, TrustedRoots,
+        };
+        use matter_crypto::{
+            CaseCredentials, CaseResponder, CaseSigner, RingSigner, Sigma1Outcome,
+        };
+        use matter_transport::{
+            MatterService, QueryHandle, ServiceKind, SessionKeys, SessionManager,
+        };
+
+        use crate::driver::case::operational_instance_name;
+        use crate::driver::datagram::InMemoryDatagram;
+        use crate::driver::unsecured::{decode_unsecured, encode_unsecured};
+
+        // --- credential constants (mirror case.rs T_* constants) ---
+        const T_FABRIC_ID: u64 = 0x4242_4242_4242_4242;
+        const T_INITIATOR_NODE: u64 = 0xDEAD_BEEF_CAFE_F00D;
+        const T_RESPONDER_NODE: u64 = 0xBABE_FEED_1234_5678;
+        const T_IPK: [u8; 16] = [0x77; 16];
+        const T_RCAC_SKI: [u8; 20] = [0x01; 20];
+        const T_NOC_SKI: [u8; 20] = [0x02; 20];
+
+        fn build_test_rcac() -> (MatterCertificate, RingSigner, [u8; 65]) {
+            let (rcac_signer, _) = RingSigner::generate().unwrap();
+            let rcac_pub = *rcac_signer.public_key().as_bytes();
+            let rcac_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
+            let ext = Extensions {
+                basic_constraints: Some(BasicConstraints {
+                    is_ca: true,
+                    path_len_constraint: Some(1),
+                }),
+                key_usage: Some(KeyUsage::KEY_CERT_SIGN),
+                extended_key_usage: None,
+                subject_key_identifier: Some(KeyIdentifier(T_RCAC_SKI)),
+                authority_key_identifier: Some(KeyIdentifier(T_RCAC_SKI)),
+            };
+            let fields = TestCertFields {
+                serial: vec![0x01],
+                issuer: rcac_dn.clone(),
+                not_before: MatterTime::from_unix_secs(1_700_000_000),
+                not_after: MatterTime::from_unix_secs(2_500_000_000),
+                subject: rcac_dn,
+                public_key: PublicKey::new(rcac_pub).unwrap(),
+                extensions: ext,
+                signature: Signature::new([0u8; 64]),
+            };
+            let unsigned = build_unsigned(fields);
+            let tbs = unsigned.to_x509_tbs_der().unwrap();
+            let sig = rcac_signer.sign_p256_sha256(&tbs).unwrap();
+            (
+                with_signature(&unsigned, Signature::new(sig)),
+                rcac_signer,
+                rcac_pub,
+            )
+        }
+
+        fn build_test_noc(
+            rcac_signer: &RingSigner,
+            node_id: u64,
+        ) -> (MatterCertificate, RingSigner) {
+            let (noc_signer, _) = RingSigner::generate().unwrap();
+            let noc_pub = *noc_signer.public_key().as_bytes();
+            let subj = DistinguishedName::new(vec![
+                DnAttribute::FabricId(T_FABRIC_ID),
+                DnAttribute::NodeId(node_id),
+            ]);
+            let issuer = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
+            let ext = Extensions {
+                basic_constraints: Some(BasicConstraints {
+                    is_ca: false,
+                    path_len_constraint: None,
+                }),
+                key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
+                extended_key_usage: None,
+                subject_key_identifier: Some(KeyIdentifier(T_NOC_SKI)),
+                authority_key_identifier: Some(KeyIdentifier(T_RCAC_SKI)),
+            };
+            let fields = TestCertFields {
+                serial: vec![0x02],
+                issuer,
+                not_before: MatterTime::from_unix_secs(1_700_000_000),
+                not_after: MatterTime::from_unix_secs(2_500_000_000),
+                subject: subj,
+                public_key: PublicKey::new(noc_pub).unwrap(),
+                extensions: ext,
+                signature: Signature::new([0u8; 64]),
+            };
+            let unsigned = build_unsigned(fields);
+            let tbs = unsigned.to_x509_tbs_der().unwrap();
+            let sig = rcac_signer.sign_p256_sha256(&tbs).unwrap();
+            (with_signature(&unsigned, Signature::new(sig)), noc_signer)
+        }
+
+        fn make_creds(
+            noc: MatterCertificate,
+            signer: RingSigner,
+            node_id: u64,
+            rcac_pub: [u8; 65],
+        ) -> CaseCredentials {
+            CaseCredentials {
+                noc,
+                icac: None,
+                signer: Box::new(signer),
+                fabric_id: T_FABRIC_ID,
+                node_id,
+                ipk: T_IPK,
+                rcac_public_key: rcac_pub,
+            }
+        }
+
+        // Build credentials.
+        let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
+        let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
+        let (resp_noc, resp_signer) = build_test_noc(&rcac_signer, T_RESPONDER_NODE);
+        let init_creds = make_creds(init_noc, init_signer, T_INITIATOR_NODE, rcac_pub);
+        let resp_creds = make_creds(resp_noc, resp_signer, T_RESPONDER_NODE, rcac_pub);
+        let ctrl_roots = {
+            let mut r = TrustedRoots::new();
+            r.add(TrustAnchor::from_root_cert(&rcac));
+            r
+        };
+        let resp_roots = {
+            let mut r = TrustedRoots::new();
+            r.add(TrustAnchor::from_root_cert(&rcac));
+            r
+        };
+
+        // Transport pair.
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut sessions = SessionManager::new();
+
+        // FakeDiscovery: always returns dev_addr for the operational query.
+        let compressed =
+            matter_crypto::derive_compressed_fabric_id(&rcac_pub, T_FABRIC_ID).unwrap();
+        let instance = operational_instance_name(compressed, T_RESPONDER_NODE);
+
+        struct FakeOpDiscovery {
+            service: MatterService,
+        }
+        impl matter_transport::Discovery for FakeOpDiscovery {
+            fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+                Ok(())
+            }
+            fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+                Ok(())
+            }
+            fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+                Ok(QueryHandle(1))
+            }
+            fn stop_query(&mut self, _h: QueryHandle) {}
+            fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+                vec![self.service.clone()]
+            }
+        }
+
+        let mut discovery = FakeOpDiscovery {
+            service: MatterService {
+                instance_name: instance,
+                kind: ServiceKind::Operational,
+                addresses: vec![dev_addr.ip()],
+                port: dev_addr.port(),
+                txt_records: HashMap::new(),
+            },
+        };
+
+        // Device side: CaseResponder.
+        const OP_SIGMA2: u8 = 0x31;
+        let device = async {
+            let mut responder = CaseResponder::new(resp_creds, resp_roots, 0x00D2).unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            assert!(matches!(
+                responder.handle_sigma1(&m.payload).unwrap(),
+                Sigma1Outcome::NewSession
+            ));
+            let sigma2 = responder.next_message().unwrap();
+            let wire = encode_unsecured(
+                200,
+                m.exchange_id,
+                OP_SIGMA2,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                &sigma2,
+            );
+            dev_io.send_to(&wire, ctrl_addr).await.unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            responder.handle_sigma3(&m.payload).unwrap();
+            responder.finish().unwrap()
+        };
+
+        // Controller side: establish_case_session.
+        let controller = establish_case_session(
+            &ctrl_io,
+            &mut sessions,
+            &mut discovery,
+            &rcac_pub,
+            T_FABRIC_ID,
+            init_creds,
+            ctrl_roots,
+            T_RESPONDER_NODE,
+        );
+
+        let (ctrl_result, dev_out) = tokio::join!(controller, device);
+        let sid = ctrl_result.unwrap();
+        let registered = sessions.get(sid).unwrap();
+        assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
     }
 
     /// `dispatch_read` for `CommissioningInfo`: canned `ReportData` carries a

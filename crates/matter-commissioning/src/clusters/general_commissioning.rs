@@ -21,6 +21,82 @@ pub mod command_id {
     pub const COMMISSIONING_COMPLETE: u32 = 0x04;
 }
 
+/// Decoded `ArmFailSafe` request fields (spec §11.10.6.1).
+///
+/// Extracted for test-side assertion in the `rollback` test. Context tag 0 =
+/// `ExpiryLengthSeconds` (u16), context tag 1 = `Breadcrumb` (u64).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArmFailSafeFields {
+    /// Duration in seconds for which the failsafe is armed; 0 = disarm.
+    pub expiry_length_seconds: u16,
+    /// Breadcrumb counter forwarded by the commissioner.
+    pub breadcrumb: u64,
+}
+
+/// Decode `ArmFailSafe` request fields from a TLV anonymous struct.
+///
+/// Returns a zeroed `ArmFailSafeFields` on any parse failure (best-effort
+/// for test assertions; production code goes through the state machine).
+#[must_use]
+pub fn decode_arm_fail_safe_fields(tlv: &[u8]) -> ArmFailSafeFields {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    let mut r = TlvReader::new(tlv);
+    if !matches!(
+        r.next().ok().flatten(),
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        })
+    ) {
+        return ArmFailSafeFields {
+            expiry_length_seconds: 0,
+            breadcrumb: 0,
+        };
+    }
+    let mut expiry: u16 = 0;
+    let mut breadcrumb: u64 = 0;
+    loop {
+        match r.next().ok().flatten() {
+            None | Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(v),
+            }) => {
+                expiry = u16::try_from(v).unwrap_or(0);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(v),
+            }) => {
+                breadcrumb = v;
+            }
+            Some(_) => {}
+        }
+    }
+    ArmFailSafeFields {
+        expiry_length_seconds: expiry,
+        breadcrumb,
+    }
+}
+
+/// Encode an `ArmFailSafeResponse` with the given error code (spec §11.10.6.2).
+///
+/// Produces `{ ctx(0): error_code, }` as an anonymous-tagged struct.
+/// `error_code == 0` means success. Used in tests to build the device-side reply.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_arm_fail_safe_response(error_code: u8) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(error_code))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
 /// Decoded `ArmFailSafeResponse` (spec §11.10.6.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArmFailSafeResponse {
