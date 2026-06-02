@@ -3,12 +3,73 @@
 
 use std::net::SocketAddr;
 
-use matter_transport::{Discovery, ServiceKind, SessionManager};
+use matter_transport::{Discovery, ProtocolId, ServiceKind, SessionId, SessionManager};
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
+use crate::driver::exchange::secured_round_trip;
+use crate::im::{CommandPath, ImStatus};
 use crate::CommissionedFabric;
 use crate::CommissionerConfig;
+
+/// Outcome of a single `dispatch_invoke` round-trip.
+///
+/// Either the device replied with a response-command payload (`Command`), or
+/// it returned a bare IM status with no payload (`Status`).
+// wired into the poll loop in Task 6
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InvokeOutcome {
+    /// Device returned a response command; `Vec<u8>` is the re-anonymised
+    /// `CommandFields` TLV blob (anonymous-tagged struct, ready for the state
+    /// machine's `on_response`).
+    Command(Vec<u8>),
+    /// Device returned a bare IM status (no response-command payload).
+    Status(ImStatus),
+}
+
+/// Send a single `InvokeRequest` over an already-established secured session
+/// and await the `InvokeResponse`.
+///
+/// Builds the `InvokeRequestMessage` from `path` and `fields_tlv`, sends it
+/// via [`secured_round_trip`], then parses the `InvokeResponseMessage` and
+/// returns the outcome.
+///
+/// # Errors
+///
+/// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
+///   propagated from [`secured_round_trip`].
+/// - [`DriverError::Im`] if the response cannot be parsed as a valid
+///   `InvokeResponseMessage`.
+// wired into the poll loop in Task 6
+#[allow(dead_code)]
+pub(crate) async fn dispatch_invoke<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    session_id: SessionId,
+    peer: SocketAddr,
+    path: CommandPath,
+    fields_tlv: &[u8],
+) -> Result<InvokeOutcome, DriverError> {
+    const OP_INVOKE_REQUEST: u8 = 0x08;
+    let msg = crate::im::build_invoke_request(path, fields_tlv);
+    let resp = secured_round_trip(
+        transport,
+        sessions,
+        session_id,
+        peer,
+        OP_INVOKE_REQUEST,
+        ProtocolId::INTERACTION_MODEL,
+        &msg,
+    )
+    .await?;
+    match crate::im::parse_invoke_response(&resp.payload)? {
+        crate::im::InvokeResponse::Command { fields_tlv, .. } => {
+            Ok(InvokeOutcome::Command(fields_tlv))
+        }
+        crate::im::InvokeResponse::Status(s) => Ok(InvokeOutcome::Status(s)),
+    }
+}
 
 /// How many times to poll discovery before giving up, and the gap between
 /// polls (~5 s total) — bounded so the driver doesn't hang forever.
@@ -107,8 +168,16 @@ mod tests {
 
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Instant;
 
-    use matter_transport::{MatterService, QueryHandle};
+    use matter_codec::{Tag, TlvWriter};
+    use matter_crypto::pase::PaseSessionKeys;
+    use matter_transport::{
+        DecodeInboundOutput, MatterService, MrpFlags, PeerHint, ProtocolId, QueryHandle,
+        SessionRole,
+    };
+
+    use crate::driver::datagram::InMemoryDatagram;
 
     struct FakeDiscovery {
         service: MatterService,
@@ -151,5 +220,120 @@ mod tests {
             addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42)), 5540)
         );
+    }
+
+    /// Build two `SessionManager`s sharing one PASE key set, cross-registered
+    /// as Initiator (controller) / Responder (device). Mirrors the harness in
+    /// `exchange.rs::tests::paired_pase_sessions`.
+    fn paired_pase_sessions() -> (SessionManager, SessionManager) {
+        let keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [1u8; 16],
+            r2i_key: [2u8; 16],
+            attestation_key: [3u8; 16],
+        };
+        let mut ctrl = SessionManager::new();
+        let mut dev = SessionManager::new();
+        ctrl.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        dev.register_pase(keys, SessionRole::Responder, 1, PeerHint::default());
+        (ctrl, dev)
+    }
+
+    /// Build a minimal valid `InvokeResponseMessage` that carries a single
+    /// `CommandDataIB` with the given `path` and `fields_tlv`, ready to be
+    /// parsed by `crate::im::parse_invoke_response`.
+    ///
+    /// Hand-rolls the TLV because the `im` module only exports a request
+    /// builder, not a response builder. Structure mirrors the
+    /// `parses_command_response_payload` test in `im/invoke.rs`.
+    fn build_canned_invoke_response(path: crate::im::CommandPath, fields_tlv: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseMessage
+        w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+        {
+            w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+            w.start_structure(Tag::Context(0)).unwrap(); // Command = CommandDataIB
+                                                         // CommandPathIB list
+            w.start_list(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(0), u64::from(path.endpoint))
+                .unwrap();
+            w.put_uint(Tag::Context(1), u64::from(path.cluster))
+                .unwrap();
+            w.put_uint(Tag::Context(2), u64::from(path.command))
+                .unwrap();
+            w.end_container().unwrap(); // CommandPathIB
+                                        // CommandFields: embed fields_tlv as context-1 struct.
+                                        // `put_preencoded` re-tags the anonymous-struct byte to context-1.
+            w.put_preencoded(Tag::Context(1), fields_tlv).unwrap();
+            w.end_container().unwrap(); // CommandDataIB
+            w.end_container().unwrap(); // InvokeResponseIB
+        }
+        w.end_container().unwrap(); // InvokeResponses
+        w.put_uint(Tag::Context(0xFF), u64::from(crate::im::IM_REVISION))
+            .unwrap();
+        w.end_container().unwrap(); // InvokeResponseMessage
+        buf
+    }
+
+    /// `dispatch_invoke` sends an `InvokeRequest` via `secured_round_trip`,
+    /// and the device side replies with a canned `InvokeResponse`. The test
+    /// asserts the returned `InvokeOutcome::Command(fields_tlv)` matches the
+    /// bytes we put into the canned response.
+    #[tokio::test]
+    async fn dispatch_invoke_returns_command_fields() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        // The command fields we expect the device to echo back.
+        // An anonymous empty struct: 0x15 0x18 (start-structure anonymous + end-container).
+        let canned_fields: Vec<u8> = vec![0x15, 0x18];
+
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0030, // General Commissioning
+            command: 0x00,   // ArmFailSafe
+        };
+
+        // Build the canned InvokeResponse the device will send back.
+        let canned_response = build_canned_invoke_response(path, &canned_fields);
+
+        // Controller side: call dispatch_invoke and collect the outcome.
+        let controller =
+            dispatch_invoke(&ctrl_io, &mut ctrl, session, dev_addr, path, &canned_fields);
+
+        // Device side: receive the InvokeRequest and reply with the canned InvokeResponse.
+        let device = async {
+            loop {
+                let (pkt, _) = dev_io.recv_from().await.unwrap();
+                if let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                    dev.decode_inbound(&pkt, Instant::now()).unwrap()
+                {
+                    // Reply on the SAME exchange_id (opcode 0x09 = InvokeResponse).
+                    let out = dev
+                        .encode_outbound(
+                            session,
+                            Some(exchange_id),
+                            0x09,
+                            ProtocolId::INTERACTION_MODEL,
+                            &canned_response,
+                            MrpFlags { reliable: true },
+                            Instant::now(),
+                        )
+                        .unwrap();
+                    dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+                    break;
+                }
+            }
+        };
+
+        let (outcome, ()) = tokio::join!(controller, device);
+        // The parse_invoke_response re-anonymises the CommandFields: an empty
+        // anonymous struct re-encodes as [0x15, 0x18].
+        assert_eq!(outcome.unwrap(), InvokeOutcome::Command(canned_fields));
     }
 }
