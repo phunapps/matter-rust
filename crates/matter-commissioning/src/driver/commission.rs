@@ -12,6 +12,26 @@ use crate::im::{CommandPath, ImStatus};
 use crate::CommissionedFabric;
 use crate::CommissionerConfig;
 
+/// Attribute IDs used by the commissioning read path.
+///
+/// These are the concrete attribute IDs extracted from the cluster specs and
+/// from the attribute list emitted by `Stage::ReadCommissioningInfo` and
+/// `Stage::ReadNetworkCommissioningInfo`.
+mod attr_id {
+    /// `GeneralCommissioning::BasicCommissioningInfo` — attribute 0x0004.
+    ///
+    /// Spec §11.10.7.4: the struct carrying `failsafe_expiry_length_seconds`.
+    /// Matches the list in commissioner.rs `Stage::ReadCommissioningInfo`.
+    pub(super) const BASIC_COMMISSIONING_INFO: u32 = 0x0004;
+
+    /// `NetworkCommissioning::FeatureMap` — attribute 0xFFFC.
+    ///
+    /// Universal Matter meta-attribute (Spec §7.13). Matches
+    /// `crate::clusters::network_commissioning::attribute_id::FEATURE_MAP`.
+    pub(super) const FEATURE_MAP: u32 =
+        crate::clusters::network_commissioning::attribute_id::FEATURE_MAP;
+}
+
 /// Outcome of a single `dispatch_invoke` round-trip.
 ///
 /// Either the device replied with a response-command payload (`Command`), or
@@ -69,6 +89,149 @@ pub(crate) async fn dispatch_invoke<T: AsyncDatagram>(
         }
         crate::im::InvokeResponse::Status(s) => Ok(InvokeOutcome::Status(s)),
     }
+}
+
+/// Extract the `on_response` payload bytes for a given [`Expectation`] from a
+/// parsed [`crate::im::ReportData`].
+///
+/// This is the trickiest glue in the read path: a single `ReportDataMessage`
+/// may carry multiple `(AttributePath, Value)` entries, but the sans-IO state
+/// machine's `on_response` expects a *single* per-`Expectation` byte slice in
+/// a specific format. This helper scans the report for the relevant attribute
+/// and re-encodes just that value into the format `on_response` decodes.
+///
+/// # Payload formats (what `on_response` parses)
+///
+/// | `Expectation`              | Cluster  | Attr ID | Re-encoded format                        |
+/// |----------------------------|----------|---------|------------------------------------------|
+/// | `NetworkCommissioningInfo` | `0x0031` | `0xFFFC`| Anonymous-tagged unsigned integer TLV.   |
+/// |                            |          |         | `decode_feature_map` expects this exact  |
+/// |                            |          |         | shape: a bare `Element::Scalar { value:  |
+/// |                            |          |         | Value::Uint, .. }`.                      |
+/// | `CommissioningInfo`        | `0x0030` | `0x0004`| Anonymous-tagged struct TLV. The struct  |
+/// |                            |          |         | carries ctx-tag-0 = failsafe seconds     |
+/// |                            |          |         | (u16/u32) and optionally ctx-tag-1 =     |
+/// |                            |          |         | max-cumulative seconds. An empty struct  |
+/// |                            |          |         | `[0x15, 0x18]` is also accepted by       |
+/// |                            |          |         | `decode_basic_commissioning_info` (which |
+/// |                            |          |         | is best-effort: it returns `None` on any |
+/// |                            |          |         | parse failure).                          |
+///
+/// # Errors
+///
+/// - [`DriverError::Im`] wrapping [`crate::im::ImError::MissingField`] if the
+///   expected attribute is absent from the report.
+/// - [`DriverError::Im`] wrapping [`crate::im::ImError::UnexpectedValue`] if
+///   `expect` is not a read-expectation (i.e. not `CommissioningInfo` or
+///   `NetworkCommissioningInfo`). Task 6's poll loop will never call this with
+///   a non-read expectation, but the helper is defensive.
+// wired into the poll loop in Task 6
+#[allow(dead_code)]
+pub(crate) fn extract_read_payload(
+    expect: crate::Expectation,
+    report: &crate::im::ReportData,
+) -> Result<Vec<u8>, DriverError> {
+    use crate::im::ImError;
+    use crate::Expectation;
+    use matter_codec::{Tag, TlvWriter, Value};
+
+    match expect {
+        Expectation::NetworkCommissioningInfo => {
+            // Scan for FeatureMap (cluster 0x0031, attribute 0xFFFC).
+            let feat_val = report
+                .attributes
+                .iter()
+                .find(|(p, _)| {
+                    p.cluster == crate::clusters::network_commissioning::CLUSTER_ID
+                        && p.attribute == attr_id::FEATURE_MAP
+                })
+                .map(|(_, v)| v)
+                .ok_or_else(|| {
+                    DriverError::Im(ImError::MissingField(
+                        "FeatureMap attribute absent from NetworkCommissioning ReportData",
+                    ))
+                })?;
+            // Re-encode as anonymous-tagged unsigned int (what decode_feature_map parses).
+            let raw = match feat_val {
+                Value::Uint(n) => *n,
+                _ => {
+                    return Err(DriverError::Im(ImError::UnexpectedValue(
+                        "FeatureMap value is not a Uint",
+                    )))
+                }
+            };
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            // Vec-backed TlvWriter is infallible; map the error anyway to satisfy
+            // the Result return type (the error branch is unreachable in practice).
+            w.put_uint(Tag::Anonymous, raw)
+                .map_err(|e| DriverError::Im(ImError::Codec(e)))?;
+            Ok(buf)
+        }
+        Expectation::CommissioningInfo => {
+            // Scan for BasicCommissioningInfo (cluster 0x0030, attribute 0x0004).
+            let struct_val = report
+                .attributes
+                .iter()
+                .find(|(p, _)| {
+                    p.cluster == crate::clusters::general_commissioning::CLUSTER_ID
+                        && p.attribute == attr_id::BASIC_COMMISSIONING_INFO
+                })
+                .map(|(_, v)| v)
+                .ok_or_else(|| {
+                    DriverError::Im(ImError::MissingField(
+                        "BasicCommissioningInfo attribute absent from GeneralCommissioning ReportData",
+                    ))
+                })?;
+            // Re-encode as anonymous-tagged struct TLV (what decode_basic_commissioning_info parses).
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.write_value(Tag::Anonymous, struct_val)
+                .map_err(|e| DriverError::Im(ImError::Codec(e)))?;
+            Ok(buf)
+        }
+        _ => Err(DriverError::Im(ImError::UnexpectedValue(
+            "extract_read_payload called with a non-read Expectation",
+        ))),
+    }
+}
+
+/// Send a single `ReadRequest` over an already-established secured session
+/// and await the `ReportData`.
+///
+/// Builds the `ReadRequestMessage` from `paths`, sends it via
+/// [`secured_round_trip`], then parses the `ReportDataMessage` and returns
+/// the result.
+///
+/// # Errors
+///
+/// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
+///   propagated from [`secured_round_trip`].
+/// - [`DriverError::Im`] if the response cannot be parsed as a valid
+///   `ReportDataMessage`.
+// wired into the poll loop in Task 6
+#[allow(dead_code)]
+pub(crate) async fn dispatch_read<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    session_id: SessionId,
+    peer: SocketAddr,
+    paths: &[crate::im::AttributePath],
+) -> Result<crate::im::ReportData, DriverError> {
+    const OP_READ_REQUEST: u8 = 0x02;
+    let msg = crate::im::build_read_request(paths);
+    let resp = secured_round_trip(
+        transport,
+        sessions,
+        session_id,
+        peer,
+        OP_READ_REQUEST,
+        ProtocolId::INTERACTION_MODEL,
+        &msg,
+    )
+    .await?;
+    let report = crate::im::parse_report_data(&resp.payload)?;
+    Ok(report)
 }
 
 /// How many times to poll discovery before giving up, and the gap between
@@ -335,5 +498,335 @@ mod tests {
         // The parse_invoke_response re-anonymises the CommandFields: an empty
         // anonymous struct re-encodes as [0x15, 0x18].
         assert_eq!(outcome.unwrap(), InvokeOutcome::Command(canned_fields));
+    }
+
+    /// Build a minimal `ReportDataMessage` carrying the supplied `(path, value)` pairs.
+    ///
+    /// Hand-rolls the TLV because the `im` module only exports a request builder,
+    /// not a response builder. The layout matches what `parse_report_data` expects:
+    ///
+    /// ```text
+    /// ReportDataMessage (anon struct)
+    ///   AttributeReports [1] (array)
+    ///     AttributeReportIB (anon struct)
+    ///       AttributeData [1] (struct)
+    ///         AttributePathIB [1] (list)
+    ///           endpoint [2], cluster [3], attribute [4]
+    ///         Data [2] = <value>
+    ///   InteractionModelRevision [0xFF]
+    /// ```
+    fn build_canned_report_data(
+        entries: &[(crate::im::AttributePath, matter_codec::Value)],
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // ReportDataMessage
+        w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
+        for (path, value) in entries {
+            w.start_structure(Tag::Anonymous).unwrap(); // AttributeReportIB
+            w.start_structure(Tag::Context(1)).unwrap(); // AttributeData
+                                                         // AttributePathIB list at [1]
+            w.start_list(Tag::Context(1)).unwrap();
+            w.put_uint(Tag::Context(2), u64::from(path.endpoint))
+                .unwrap();
+            w.put_uint(Tag::Context(3), u64::from(path.cluster))
+                .unwrap();
+            w.put_uint(Tag::Context(4), u64::from(path.attribute))
+                .unwrap();
+            w.end_container().unwrap(); // AttributePathIB
+                                        // Data at [2] — write the value as context-tag-2
+            w.write_value(Tag::Context(2), value).unwrap();
+            w.end_container().unwrap(); // AttributeData
+            w.end_container().unwrap(); // AttributeReportIB
+        }
+        w.end_container().unwrap(); // AttributeReports
+        w.put_uint(Tag::Context(0xFF), u64::from(crate::im::IM_REVISION))
+            .unwrap();
+        w.end_container().unwrap(); // ReportDataMessage
+        buf
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_read_payload unit tests (Step 1 — failing first, then pass)
+    // -----------------------------------------------------------------------
+
+    /// A `ReportData` carrying a bare `FeatureMap` u32 is mapped to the bare
+    /// anonymous-tagged uint TLV that `decode_feature_map` expects.
+    #[test]
+    fn extract_read_payload_network_commissioning_info_bare_uint() {
+        use crate::im::AttributePath;
+        use crate::Expectation;
+        use matter_codec::Value;
+
+        // FeatureMap = 0x01 (WIFI bit set)
+        let feat_val: u64 = 0x01;
+        let report = crate::im::ReportData {
+            attributes: vec![(
+                AttributePath {
+                    endpoint: 0,
+                    cluster: crate::clusters::network_commissioning::CLUSTER_ID, // 0x0031
+                    attribute: crate::clusters::network_commissioning::attribute_id::FEATURE_MAP, // 0xFFFC
+                },
+                Value::Uint(feat_val),
+            )],
+        };
+
+        let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report).unwrap();
+
+        // decode_feature_map expects: anonymous uint TLV.
+        // For value 0x01 (fits in u8): [0x04, 0x01]
+        let mut expected = Vec::new();
+        let mut w = matter_codec::TlvWriter::new(&mut expected);
+        w.put_uint(matter_codec::Tag::Anonymous, feat_val).unwrap();
+        assert_eq!(
+            payload, expected,
+            "NetworkCommissioningInfo payload mismatch: got {payload:02x?}, expected {expected:02x?}",
+        );
+
+        // Also verify the produced bytes round-trip through decode_feature_map.
+        let features = crate::clusters::network_commissioning::decode_feature_map(&payload)
+            .expect("decode_feature_map should accept the re-encoded payload");
+        assert!(
+            features.contains(
+                crate::clusters::network_commissioning::NetworkCommissioningFeature::WIFI
+            ),
+            "WIFI bit must be set after round-trip",
+        );
+    }
+
+    /// A `ReportData` carrying a `BasicCommissioningInfo` struct is re-encoded as
+    /// an anonymous-tagged struct that `decode_basic_commissioning_info` accepts.
+    #[test]
+    fn extract_read_payload_commissioning_info_struct() {
+        use crate::im::AttributePath;
+        use crate::Expectation;
+        use matter_codec::{Tag, Value};
+
+        // BasicCommissioningInfo struct: { ctx(0): 120u16, ctx(1): 900u16 }
+        let struct_value = Value::Structure(vec![
+            (Tag::Context(0), Value::Uint(120)),
+            (Tag::Context(1), Value::Uint(900)),
+        ]);
+        let report = crate::im::ReportData {
+            attributes: vec![(
+                AttributePath {
+                    endpoint: 0,
+                    cluster: crate::clusters::general_commissioning::CLUSTER_ID, // 0x0030
+                    attribute: attr_id::BASIC_COMMISSIONING_INFO,                // 0x0004
+                },
+                struct_value.clone(),
+            )],
+        };
+
+        let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
+
+        // decode_basic_commissioning_info expects an anonymous-tagged struct.
+        // The payload must start with 0x15 (anon-struct-start) and end with 0x18.
+        assert_eq!(
+            payload.first(),
+            Some(&0x15u8),
+            "should start with anon-struct byte"
+        );
+        assert_eq!(
+            payload.last(),
+            Some(&0x18u8),
+            "should end with end-container"
+        );
+
+        // Round-trip: decode_basic_commissioning_info must extract failsafe = 120.
+        let info =
+            crate::clusters::general_commissioning::decode_basic_commissioning_info(&payload)
+                .expect("decode_basic_commissioning_info should accept the re-encoded payload");
+        assert_eq!(info.failsafe_expiry_length_seconds, 120);
+        assert_eq!(info.max_cumulative_failsafe_seconds, 900);
+    }
+
+    /// Missing `FeatureMap` attribute → `DriverError::Im` (`MissingField`).
+    #[test]
+    fn extract_read_payload_missing_feature_map_returns_error() {
+        use crate::Expectation;
+
+        let report = crate::im::ReportData { attributes: vec![] };
+        let err = extract_read_payload(Expectation::NetworkCommissioningInfo, &report)
+            .expect_err("missing attribute should fail");
+        assert!(
+            matches!(err, DriverError::Im(_)),
+            "expected DriverError::Im, got {err:?}",
+        );
+    }
+
+    /// Non-read `Expectation` → `DriverError::Im` (`UnexpectedValue`).
+    #[test]
+    fn extract_read_payload_non_read_expectation_returns_error() {
+        use crate::Expectation;
+
+        let report = crate::im::ReportData { attributes: vec![] };
+        let err = extract_read_payload(Expectation::ArmFailsafeResponse, &report)
+            .expect_err("non-read expectation should fail");
+        assert!(
+            matches!(err, DriverError::Im(_)),
+            "expected DriverError::Im, got {err:?}",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // dispatch_read integration tests (Step 2)
+    // -----------------------------------------------------------------------
+
+    /// `dispatch_read` sends a `ReadRequest`, the device replies with a canned
+    /// `ReportData`, and the function returns the parsed report. Then
+    /// `extract_read_payload` produces the right bytes per `Expectation`.
+    #[tokio::test]
+    async fn dispatch_read_and_extract_network_commissioning_info() {
+        use crate::im::AttributePath;
+        use crate::Expectation;
+        use matter_codec::Value;
+
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let feat_val: u64 = 0x01; // WIFI bit set
+
+        // Build the canned ReportData the device will send back.
+        let entries = vec![(
+            AttributePath {
+                endpoint: 0,
+                cluster: crate::clusters::network_commissioning::CLUSTER_ID,
+                attribute: crate::clusters::network_commissioning::attribute_id::FEATURE_MAP,
+            },
+            Value::Uint(feat_val),
+        )];
+        let canned_report = build_canned_report_data(&entries);
+
+        let paths = vec![AttributePath {
+            endpoint: 0,
+            cluster: crate::clusters::network_commissioning::CLUSTER_ID,
+            attribute: crate::clusters::network_commissioning::attribute_id::FEATURE_MAP,
+        }];
+
+        // Controller side: send ReadRequest and collect the ReportData.
+        let controller = dispatch_read(&ctrl_io, &mut ctrl, session, dev_addr, &paths);
+
+        // Device side: receive the ReadRequest and reply with the canned ReportData.
+        let device = async {
+            loop {
+                let (pkt, _) = dev_io.recv_from().await.unwrap();
+                if let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                    dev.decode_inbound(&pkt, Instant::now()).unwrap()
+                {
+                    // Reply on the SAME exchange_id (opcode 0x05 = ReportData).
+                    let out = dev
+                        .encode_outbound(
+                            session,
+                            Some(exchange_id),
+                            0x05,
+                            ProtocolId::INTERACTION_MODEL,
+                            &canned_report,
+                            MrpFlags { reliable: true },
+                            Instant::now(),
+                        )
+                        .unwrap();
+                    dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+                    break;
+                }
+            }
+        };
+
+        let (report_result, ()) = tokio::join!(controller, device);
+        let report = report_result.unwrap();
+
+        // Verify the report parsed correctly.
+        assert_eq!(report.attributes.len(), 1);
+        assert_eq!(
+            report.attributes[0].0.cluster,
+            crate::clusters::network_commissioning::CLUSTER_ID
+        );
+        assert_eq!(report.attributes[0].1, Value::Uint(feat_val));
+
+        // Verify extract_read_payload produces bytes that decode_feature_map accepts.
+        let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report).unwrap();
+        let features = crate::clusters::network_commissioning::decode_feature_map(&payload)
+            .expect("decode_feature_map should accept the extracted payload");
+        assert!(features
+            .contains(crate::clusters::network_commissioning::NetworkCommissioningFeature::WIFI),);
+    }
+
+    /// `dispatch_read` for `CommissioningInfo`: canned `ReportData` carries a
+    /// `BasicCommissioningInfo` struct; `extract_read_payload` produces bytes
+    /// that `decode_basic_commissioning_info` decodes correctly.
+    #[tokio::test]
+    async fn dispatch_read_and_extract_commissioning_info() {
+        use crate::im::AttributePath;
+        use crate::Expectation;
+        use matter_codec::{Tag, Value};
+
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        // BasicCommissioningInfo: failsafe=120s, max_cumulative=900s
+        let struct_value = Value::Structure(vec![
+            (Tag::Context(0), Value::Uint(120)),
+            (Tag::Context(1), Value::Uint(900)),
+        ]);
+
+        let entries = vec![(
+            AttributePath {
+                endpoint: 0,
+                cluster: crate::clusters::general_commissioning::CLUSTER_ID,
+                attribute: attr_id::BASIC_COMMISSIONING_INFO,
+            },
+            struct_value,
+        )];
+        let canned_report = build_canned_report_data(&entries);
+
+        let paths = vec![AttributePath {
+            endpoint: 0,
+            cluster: crate::clusters::general_commissioning::CLUSTER_ID,
+            attribute: attr_id::BASIC_COMMISSIONING_INFO,
+        }];
+
+        let controller = dispatch_read(&ctrl_io, &mut ctrl, session, dev_addr, &paths);
+
+        let device = async {
+            loop {
+                let (pkt, _) = dev_io.recv_from().await.unwrap();
+                if let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                    dev.decode_inbound(&pkt, Instant::now()).unwrap()
+                {
+                    let out = dev
+                        .encode_outbound(
+                            session,
+                            Some(exchange_id),
+                            0x05,
+                            ProtocolId::INTERACTION_MODEL,
+                            &canned_report,
+                            MrpFlags { reliable: true },
+                            Instant::now(),
+                        )
+                        .unwrap();
+                    dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+                    break;
+                }
+            }
+        };
+
+        let (report_result, ()) = tokio::join!(controller, device);
+        let report = report_result.unwrap();
+
+        assert_eq!(report.attributes.len(), 1);
+
+        let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
+        let info =
+            crate::clusters::general_commissioning::decode_basic_commissioning_info(&payload)
+                .expect("decode_basic_commissioning_info should accept the extracted payload");
+        assert_eq!(info.failsafe_expiry_length_seconds, 120);
+        assert_eq!(info.max_cumulative_failsafe_seconds, 900);
     }
 }
