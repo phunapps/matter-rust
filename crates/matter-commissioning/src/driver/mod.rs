@@ -8,6 +8,7 @@
 //! (M6.6.4) build on top of these in later slices.
 
 mod case;
+mod commission;
 mod datagram;
 mod error;
 mod exchange;
@@ -15,6 +16,7 @@ mod pase;
 mod unsecured;
 
 pub use case::{operational_instance_name, resolve_operational, run_case};
+pub use commission::{commission, DriverConfig};
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
 pub use exchange::{secured_round_trip, SecuredResponse};
