@@ -579,7 +579,7 @@ fn tlv_skip_container(r: &mut matter_codec::TlvReader<'_>) {
 fn tlv_read_members(
     r: &mut matter_codec::TlvReader<'_>,
 ) -> Vec<(matter_codec::Tag, matter_codec::Value)> {
-    use matter_codec::{ContainerKind, Element};
+    use matter_codec::Element;
     let mut out = Vec::new();
     loop {
         match r.next().expect("tlv_read_members: unexpected EOF") {
@@ -1053,6 +1053,805 @@ pub fn build_report_data(reports: &[(matter_commissioning::im::AttributePath, &[
     buf
 }
 
+// ── Task 10: mock-device per-stage response table (Ethernet path) ─────────────
+
+/// Reply from the mock device for one IM round-trip.
+///
+/// `Command(fields_tlv)` carries the anonymous-tagged command-fields TLV blob
+/// that Task 11's responder loop passes to [`build_invoke_response`]. The
+/// blob is what the Commissioner's per-`Expectation` decoder in
+/// `handle_response` reads (e.g. `decode_arm_fail_safe_response`,
+/// `decode_noc_response`, etc.).
+///
+/// `Status(status_code)` signals that the device should reply with a bare
+/// `CommandStatusIB` (no payload). Task 11 calls [`build_invoke_status_response`]
+/// for this variant. `AddTrustedRootCertificate` (0x003E/0x0B) uses this because
+/// the Commissioner's `Expectation::AddTrustedRootResponse` handler checks
+/// `payload.first() == Some(&0u8)` — a single 0-byte "signal", not a TLV struct.
+///
+/// `StatusSignal(byte)` is reserved for the AddTrustedRoot fast path where
+/// `on_response(Expectation::AddTrustedRootResponse, &[0x00])` is called
+/// directly with a 1-byte sentinel rather than a full IM message. See Task 11
+/// for the dispatch.
+pub enum DeviceReply {
+    /// Anonymous-tagged command-fields TLV. Wrap with [`build_invoke_response`].
+    Command(Vec<u8>),
+    /// Bare IM status code (0 = Success). Wrap with [`build_invoke_status_response`].
+    Status(u8),
+}
+
+/// Map a single incoming `InvokeRequest` to the mock device's Ethernet-path reply.
+///
+/// The returned [`DeviceReply`] is what Task 11's responder loop uses to build
+/// the outgoing `InvokeResponseMessage`.
+///
+/// # Cluster / command coverage (Ethernet happy path)
+///
+/// | Cluster | Command | Description                               | Reply variant        |
+/// |---------|---------|-------------------------------------------|----------------------|
+/// | 0x0030  | 0x00    | ArmFailSafe                               | `Command({0:0, 1:""})` |
+/// | 0x0030  | 0x02    | SetRegulatoryConfig                       | `Command({0:0, 1:""})` |
+/// | 0x0030  | 0x04    | CommissioningComplete                     | `Command({0:0, 1:""})` |
+/// | 0x003E  | 0x00    | AttestationRequest                        | `Command({0:elements, 1:sig})` |
+/// | 0x003E  | 0x02    | CertificateChainRequest (DAC=1 / PAI=2)   | `Command({0:cert_der})` |
+/// | 0x003E  | 0x04    | CSRRequest                                | `Command({0:nocsr, 1:sig})` |
+/// | 0x003E  | 0x06    | AddNOC                                    | `Command({0:0, 1:1})` |
+/// | 0x003E  | 0x0B    | AddTrustedRootCertificate                 | `Status(0)` |
+///
+/// The `challenge` is the PASE attestation challenge (16 bytes). `pki` gives
+/// access to `dac_signer`, `dac_der`, and `pai_der`.
+///
+/// # Panics
+///
+/// Panics on unrecognised `(cluster, command)` pairs — acceptable in test
+/// support code where the input is always commissioner-generated.
+// The function is long by necessity: one arm per commissioning command, each with
+// its own nonce-parsing and TLV-building logic. Collapsing into sub-functions
+// would obscure the cluster/command mapping. Suppress the too-many-lines lint.
+#[allow(clippy::too_many_lines)]
+// The three GeneralCommissioning response arms (ArmFailSafe / SetRegulatoryConfig /
+// CommissioningComplete) all call ok_commissioning_response() and are intentionally
+// identical — they are distinct commands that happen to share the same response shape.
+#[allow(clippy::match_same_arms)]
+pub fn respond(
+    path: matter_commissioning::im::CommandPath,
+    fields_tlv: &[u8],
+    challenge: [u8; 16],
+    pki: &MockDevicePki,
+) -> DeviceReply {
+    use matter_codec::{Tag, TlvWriter};
+
+    // Helper: encode the shared {ctx(0): error_code=0, ctx(1): debug_text=""} shape
+    // used by ArmFailSafeResponse, SetRegulatoryConfigResponse, and
+    // CommissioningCompleteResponse. Matches decode_commissioning_error_response:
+    //   ctx(0) = CommissioningErrorEnum (u8), ctx(1) = DebugText (utf8).
+    let ok_commissioning_response = || -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // anonymous struct (command-fields)
+        w.put_uint(Tag::Context(0), 0_u64).unwrap(); // ctx(0): ErrorCode = 0 (OK)
+        w.put_utf8(Tag::Context(1), "").unwrap(); // ctx(1): DebugText = ""
+        w.end_container().unwrap();
+        buf
+    };
+
+    match (path.cluster, path.command) {
+        // ── GeneralCommissioning cluster (0x0030) ─────────────────────────────
+
+        // ArmFailSafe (0x0030/0x00) → ArmFailSafeResponse (0x0030/0x01)
+        // Commissioner decoder: decode_arm_fail_safe_response → decode_commissioning_error_response
+        //   expects: anonymous struct { ctx(0): ErrorCode u8, ctx(1): DebugText utf8? }
+        (0x0030, 0x00) => DeviceReply::Command(ok_commissioning_response()),
+
+        // SetRegulatoryConfig (0x0030/0x02) → SetRegulatoryConfigResponse (0x0030/0x03)
+        // Commissioner decoder: decode_set_regulatory_config_response → decode_commissioning_error_response
+        //   expects: same {ctx(0): ErrorCode, ctx(1): DebugText} shape
+        (0x0030, 0x02) => DeviceReply::Command(ok_commissioning_response()),
+
+        // CommissioningComplete (0x0030/0x04) → CommissioningCompleteResponse (0x0030/0x05)
+        // Commissioner decoder: decode_commissioning_error_response(Stage::SendComplete, ...)
+        //   expects: same {ctx(0): ErrorCode, ctx(1): DebugText} shape
+        (0x0030, 0x04) => DeviceReply::Command(ok_commissioning_response()),
+
+        // ── OperationalCredentials cluster (0x003E) ───────────────────────────
+
+        // AttestationRequest (0x003E/0x00) → AttestationResponse (0x003E/0x01)
+        // Commissioner decoder: decode_attestation_response
+        //   expects: anonymous struct { ctx(0): AttestationElements bytes, ctx(1): Signature bytes[64] }
+        //
+        // Parse the AttestationNonce from the incoming fields (ctx(0): 32-byte nonce).
+        (0x003E, 0x00) => {
+            use matter_codec::{Element, Tag as CTag, TlvReader, Value};
+            // Parse the 32-byte AttestationNonce from request fields (ctx tag 0).
+            let mut reader = TlvReader::new(fields_tlv);
+            // Skip anonymous struct start.
+            let _ = reader.next().expect("AttestationRequest: struct start");
+            let mut att_nonce: Option<[u8; 32]> = None;
+            loop {
+                match reader.next().expect("AttestationRequest: field scan") {
+                    Some(Element::ContainerEnd) | None => break,
+                    Some(Element::Scalar {
+                        tag: CTag::Context(0),
+                        value: Value::Bytes(b),
+                    }) => {
+                        let arr: [u8; 32] = b.as_slice().try_into().expect("32-byte nonce");
+                        att_nonce = Some(arr);
+                    }
+                    Some(_) => {}
+                }
+            }
+            let nonce = att_nonce.expect("AttestationRequest: nonce at ctx(0)");
+            let cd = load_cd_fixture();
+            let att_resp = build_attestation_response(&cd, nonce, challenge, &pki.dac_signer);
+            // Encode as command-fields: { ctx(0): elements bytes, ctx(1): signature bytes }
+            // Matches decode_attestation_response field map exactly.
+            let mut buf = Vec::new();
+            {
+                let mut w = TlvWriter::new(&mut buf);
+                w.start_structure(Tag::Anonymous).unwrap();
+                w.put_bytes(Tag::Context(0), &att_resp.attestation_elements)
+                    .unwrap(); // ctx(0): AttestationElements
+                w.put_bytes(Tag::Context(1), &att_resp.signature).unwrap(); // ctx(1): Signature (64 bytes)
+                w.end_container().unwrap();
+            }
+            DeviceReply::Command(buf)
+        }
+
+        // CertificateChainRequest (0x003E/0x02) → CertificateChainResponse (0x003E/0x03)
+        // Commissioner decoder: decode_certificate_chain_response
+        //   expects: anonymous struct { ctx(0): Certificate bytes }
+        //
+        // Request carries ctx(0): CertificateChainTypeEnum — 0x01 = PAI, 0x02 = DAC.
+        // Confirmed from CertChainType { Pai = 0x01, Dac = 0x02 } and from the wire
+        // payloads: encode_certificate_chain_request(Pai) = [0x15, 0x24, 0x00, 0x01, 0x18]
+        //                                               (Dac) = [0x15, 0x24, 0x00, 0x02, 0x18].
+        (0x003E, 0x02) => {
+            use matter_codec::{Element, Tag as CTag, TlvReader, Value};
+            let mut reader = TlvReader::new(fields_tlv);
+            let _ = reader.next().expect("CertChainRequest: struct start");
+            let mut cert_type: Option<u8> = None;
+            loop {
+                match reader.next().expect("CertChainRequest: field scan") {
+                    Some(Element::ContainerEnd) | None => break,
+                    Some(Element::Scalar {
+                        tag: CTag::Context(0),
+                        value: Value::Uint(n),
+                    }) => {
+                        cert_type = Some(u8::try_from(n).expect("CertChainType fits u8"));
+                    }
+                    Some(_) => {}
+                }
+            }
+            let cert_der = match cert_type.expect("CertificateChainRequest: type at ctx(0)") {
+                0x01 => pki.pai_der.clone(), // PAI = 0x01
+                0x02 => pki.dac_der.clone(), // DAC = 0x02
+                other => panic!(
+                    "CertificateChainRequest: unknown CertChainType 0x{other:02X} (expected 0x01=PAI or 0x02=DAC)"
+                ),
+            };
+            // Encode as { ctx(0): cert_der bytes }.
+            let mut buf = Vec::new();
+            {
+                let mut w = TlvWriter::new(&mut buf);
+                w.start_structure(Tag::Anonymous).unwrap();
+                w.put_bytes(Tag::Context(0), &cert_der).unwrap(); // ctx(0): Certificate
+                w.end_container().unwrap();
+            }
+            DeviceReply::Command(buf)
+        }
+
+        // CSRRequest (0x003E/0x04) → CSRResponse (0x003E/0x05)
+        // Commissioner decoder: decode_csr_response
+        //   expects: anonymous struct { ctx(0): NOCSRElements bytes, ctx(1): Signature bytes[64] }
+        //
+        // Parse the 32-byte CSRNonce from request fields (ctx tag 0).
+        (0x003E, 0x04) => {
+            use matter_codec::{Element, Tag as CTag, TlvReader, Value};
+            let mut reader = TlvReader::new(fields_tlv);
+            let _ = reader.next().expect("CSRRequest: struct start");
+            let mut csr_nonce: Option<[u8; 32]> = None;
+            loop {
+                match reader.next().expect("CSRRequest: field scan") {
+                    Some(Element::ContainerEnd) | None => break,
+                    Some(Element::Scalar {
+                        tag: CTag::Context(0),
+                        value: Value::Bytes(b),
+                    }) => {
+                        let arr: [u8; 32] = b.as_slice().try_into().expect("32-byte CSRNonce");
+                        csr_nonce = Some(arr);
+                    }
+                    Some(_) => {}
+                }
+            }
+            let nonce = csr_nonce.expect("CSRRequest: nonce at ctx(0)");
+            let csr_resp = build_csr_response(nonce, challenge, &pki.dac_signer);
+            // Encode as { ctx(0): nocsr_elements bytes, ctx(1): attestation_signature bytes }.
+            // Matches decode_csr_response field map exactly.
+            let mut buf = Vec::new();
+            {
+                let mut w = TlvWriter::new(&mut buf);
+                w.start_structure(Tag::Anonymous).unwrap();
+                w.put_bytes(Tag::Context(0), &csr_resp.nocsr_elements)
+                    .unwrap(); // ctx(0): NOCSRElements
+                w.put_bytes(Tag::Context(1), &csr_resp.attestation_signature)
+                    .unwrap(); // ctx(1): AttestationSignature (64 bytes)
+                w.end_container().unwrap();
+            }
+            DeviceReply::Command(buf)
+        }
+
+        // AddNOC (0x003E/0x06) → NOCResponse (0x003E/0x08)
+        // Commissioner decoder: decode_noc_response
+        //   expects: anonymous struct { ctx(0): StatusCode u8, ctx(1): FabricIndex u8, ctx(2)?: DebugText utf8 }
+        //   On success: status=0, fabric_index=1.
+        (0x003E, 0x06) => {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 0_u64).unwrap(); // ctx(0): StatusCode = 0 (OK)
+            w.put_uint(Tag::Context(1), 1_u64).unwrap(); // ctx(1): FabricIndex = 1
+            w.end_container().unwrap();
+            DeviceReply::Command(buf)
+        }
+
+        // AddTrustedRootCertificate (0x003E/0x0B) → bare IM status (no response command)
+        // Commissioner handler (Expectation::AddTrustedRootResponse):
+        //   checks: payload.first() == Some(&0u8)  — the driver passes &[0x00] for success.
+        //   Task 11 sees Status(0) and calls build_invoke_status_response + then signals
+        //   on_response(AddTrustedRootResponse, &[0x00]).
+        (0x003E, 0x0B) => DeviceReply::Status(0),
+
+        (c, cmd) => panic!(
+            "respond: unrecognised (cluster=0x{c:04X}, command=0x{cmd:02X}) — not in Ethernet happy path"
+        ),
+    }
+}
+
+/// Map a single incoming `ReadRequest` attribute path to the mock device's
+/// Ethernet-path attribute value TLV.
+///
+/// The returned `Vec<u8>` is an **anonymous-tagged** TLV element (scalar or
+/// struct) that Task 11 passes to [`build_report_data`] as the `value_tlv`
+/// entry.  The driver's `extract_read_payload` re-encodes the value into the
+/// format `Commissioner::on_response` expects for each `Expectation`.
+///
+/// # Attribute coverage
+///
+/// | Cluster | Attr ID | Description                   | Value TLV                           |
+/// |---------|---------|-------------------------------|-------------------------------------|
+/// | 0x0030  | 0x0000  | RegulatoryConfig              | anonymous uint 0 (IndoorOutdoor)    |
+/// | 0x0030  | 0x0001  | LocationCapability            | anonymous uint 2 (IndoorOutdoor)    |
+/// | 0x0030  | 0x0002  | SupportsConcurrentConnection  | anonymous bool true                 |
+/// | 0x0030  | 0x0004  | BasicCommissioningInfo        | anonymous struct {ctx(0):60, ctx(1):900} |
+/// | 0x0031  | 0xFFFC  | FeatureMap (NetworkComm.)     | anonymous uint 4 (ETHERNET only)   |
+///
+/// The `CommissioningInfo` struct (attr 0x0004) is what the driver scans for
+/// and re-encodes via `write_value(Tag::Anonymous, struct_val)`. The anonymous
+/// struct here carries `ctx(0)=failsafe_expiry_length_seconds=60` and
+/// `ctx(1)=max_cumulative_failsafe_seconds=900`, matching `BasicCommissioningInfo`.
+///
+/// The `NetworkCommissioningInfo` value (`0x0031/0xFFFC`) is an anonymous uint
+/// with **only** `NetworkCommissioningFeature::ETHERNET` set (bit 2, value 4).
+/// This causes the Commissioner to skip the Wi-Fi path and go straight to
+/// `Stage::EvictPreviousCaseSessions`.
+///
+/// # Panics
+///
+/// Panics on unrecognised `(cluster, attribute)` pairs — acceptable in test
+/// support code where the input is always commissioner-generated.
+pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+
+    match (attr_path.cluster, attr_path.attribute) {
+        // ── GeneralCommissioning cluster (0x0030) ─────────────────────────────
+
+        // RegulatoryConfig (0x0030/0x0000): current regulatory location.
+        // Type: u8 enum RegulatoryLocationTypeEnum. 2 = IndoorOutdoor.
+        (0x0030, 0x0000) => {
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_uint(Tag::Anonymous, 2)
+                .unwrap(); // IndoorOutdoor
+            buf
+        }
+
+        // LocationCapability (0x0030/0x0001): device's supported regulatory
+        // location types. 2 = IndoorOutdoor.
+        (0x0030, 0x0001) => {
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_uint(Tag::Anonymous, 2)
+                .unwrap();
+            buf
+        }
+
+        // SupportsConcurrentConnection (0x0030/0x0002): whether the device
+        // supports concurrent commissioning connections. true for Ethernet.
+        (0x0030, 0x0002) => {
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_bool(Tag::Anonymous, true)
+                .unwrap();
+            buf
+        }
+
+        // BasicCommissioningInfo (0x0030/0x0004): the struct the driver scans for.
+        // Wire shape after extract_read_payload re-encoding:
+        //   anonymous struct { ctx(0): failsafe_expiry_length_seconds u16,
+        //                      ctx(1): max_cumulative_failsafe_seconds u16 }
+        // decode_basic_commissioning_info reads ctx(0) and ctx(1) from an anonymous struct.
+        // The driver's extract_read_payload re-encodes the Value::Structure via
+        //   w.write_value(Tag::Anonymous, struct_val).
+        // So we emit an anonymous struct here that round-trips through the
+        //   build_report_data → parse_report_data → extract_read_payload pipeline.
+        (0x0030, 0x0004) => {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 60_u64).unwrap(); // failsafe_expiry_length_seconds = 60 s
+            w.put_uint(Tag::Context(1), 900_u64).unwrap(); // max_cumulative_failsafe_seconds = 900 s
+            w.end_container().unwrap();
+            buf
+        }
+
+        // ── NetworkCommissioning cluster (0x0031) ─────────────────────────────
+
+        // FeatureMap (0x0031/0xFFFC): which network interfaces the device exposes.
+        // Wire shape after extract_read_payload re-encoding:
+        //   anonymous uint (what decode_feature_map expects).
+        // ETHERNET only = bit 2 = value 4. No WIFI (bit 0) or THREAD (bit 1) bits.
+        // With only ETHERNET set, the Commissioner skips Stage::WiFiNetworkSetup.
+        (0x0031, 0xFFFC) => {
+            let ethernet_feature: u32 =
+                matter_commissioning::clusters::network_commissioning::NetworkCommissioningFeature::ETHERNET
+                    .bits();
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_uint(Tag::Anonymous, u64::from(ethernet_feature))
+                .unwrap();
+            buf
+        }
+
+        (c, a) => {
+            panic!("respond_read_attribute: unrecognised (cluster=0x{c:04X}, attribute=0x{a:04X})")
+        }
+    }
+}
+
+// ── Task 10: Step 2 tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod mock_device_response_table {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::items_after_statements
+    )]
+
+    use matter_cert::time::MatterTime;
+    use matter_codec::{Tag, TlvWriter};
+    use matter_commissioning::clusters::network_commissioning::NetworkCommissioningFeature;
+    use matter_commissioning::im::{AttributePath, CommandPath};
+    use matter_commissioning::noc::{
+        decode_attestation_response, decode_certificate_chain_response,
+    };
+    use matter_commissioning::state_machine::Expectation;
+
+    use super::{build_mock_device_pki, respond, respond_read_attribute, DeviceReply};
+
+    fn now() -> MatterTime {
+        MatterTime::from_unix_secs(1_800_000_000)
+    }
+
+    /// Helper: build a `CommissioningErrorEnum`-shaped request fields TLV (ArmFailSafe
+    /// has ctx(0)=expiry, ctx(1)=breadcrumb — we build the minimal form and call respond).
+    fn arm_fail_safe_fields() -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 60_u64).unwrap(); // ExpiryLengthSeconds
+        w.put_uint(Tag::Context(1), 1_u64).unwrap(); // Breadcrumb
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// Helper: build a CertificateChainRequest fields TLV with the given type byte.
+    fn cert_chain_request_fields(cert_type: u8) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(cert_type)).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// Helper: build an AttestationRequest fields TLV with a fixed nonce.
+    fn attestation_request_fields(nonce: [u8; 32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(0), &nonce).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// Helper: build a CSRRequest fields TLV with a fixed nonce.
+    fn csr_request_fields(nonce: [u8; 32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(0), &nonce).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    // ── ArmFailSafe ───────────────────────────────────────────────────────────
+
+    /// respond(0x0030/0x00) produces command-fields the Commissioner's
+    /// `decode_arm_fail_safe_response` decodes as `error_code=0, debug_text=Some("")`.
+    #[test]
+    fn arm_fail_safe_returns_ok_response_accepted_by_commissioner_decoder() {
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0030,
+            command: 0x00,
+        };
+        let fields = arm_fail_safe_fields();
+        let challenge = [0u8; 16];
+
+        let reply = respond(path, &fields, challenge, &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        // Feed the fields_tlv directly to the Commissioner's decoder.
+        use matter_commissioning::clusters::general_commissioning::decode_arm_fail_safe_response;
+        let decoded =
+            decode_arm_fail_safe_response(&fields_tlv).expect("ArmFailSafeResponse decodes");
+        assert_eq!(decoded.error_code, 0, "error_code must be 0 (OK)");
+        // debug_text is allowed to be Some("") or None; both are success.
+        let text = decoded.debug_text.as_deref().unwrap_or("");
+        assert_eq!(text, "", "debug_text must be empty on success");
+    }
+
+    /// The same fields_tlv round-trips through the Commissioner's full
+    /// `on_response(Expectation::ArmFailsafeResponse, …)` without error.
+    #[test]
+    fn arm_fail_safe_fields_accepted_by_on_response() {
+        use std::sync::Arc;
+
+        use matter_cert::time::MatterTime;
+        use matter_commissioning::attestation::CdSigningRoots;
+        use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
+        use matter_commissioning::setup::{
+            CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
+        };
+        use matter_commissioning::state_machine::CommissionerConfig;
+        use matter_crypto::{RingSigner, Signer};
+
+        let pki = build_mock_device_pki(now());
+
+        // Build a minimal Commissioner (same pattern as commissioner.rs unit tests).
+        let (signer, _) = RingSigner::generate().unwrap();
+        let signer: Arc<dyn Signer> = Arc::new(signer);
+        let fabric = FabricRecord::new_root_only(
+            0x0000_0000_0000_0001,
+            signer,
+            MatterTime::from_unix_secs(1_704_067_200),
+            MatterTime::from_unix_secs(1_735_689_600),
+            42,
+            &SystemNocRng,
+        )
+        .unwrap();
+
+        let setup = SetupPayload {
+            version: 0,
+            vendor_id: Some(super::VID),
+            product_id: Some(super::PID),
+            commissioning_flow: CommissioningFlow::Standard,
+            discovery_capabilities: DiscoveryCapabilities::ON_NETWORK,
+            discriminator: Discriminator::new(0x0F00).unwrap(),
+            passcode: Passcode::new(20_202_021).unwrap(),
+        };
+        let paa = pki.paa_trust_store.clone();
+        let cd = CdSigningRoots::with_csa_test_roots();
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+
+        let mut sm = matter_commissioning::state_machine::Commissioner::new(CommissionerConfig {
+            pase_attestation_challenge: [0u8; 16],
+            fabric: &fabric,
+            setup_payload: &setup,
+            paa_trust_store: &paa,
+            cd_signing_roots: &cd,
+            commissioner_node_id: 0x1,
+            assigned_node_id: 0x2,
+            ipk_epoch_key: [0x42_u8; 16],
+            case_admin_subject: 0x1,
+            admin_vendor_id: 0xFFF1,
+            now: MatterTime::from_unix_secs(1_800_000_000),
+            rng,
+            wifi_credentials: None,
+        })
+        .unwrap();
+
+        // Drive to ArmFailsafe: poll (ReadCommissioningInfo) → respond CommissioningInfo
+        // → poll (ArmFailSafe) → feed our mock device's ArmFailSafeResponse.
+        let _ = sm.poll().unwrap(); // ReadCommissioningInfo
+
+        // Provide a minimal well-formed CommissioningInfo response.
+        let commissioning_info_tlv = respond_read_attribute(AttributePath {
+            endpoint: 0,
+            cluster: 0x0030,
+            attribute: 0x0004,
+        });
+        // The driver re-encodes the struct value; simulate by building a
+        // well-formed anonymous struct directly (the state machine's CommissioningInfo
+        // handler calls decode_basic_commissioning_info which is best-effort).
+        sm.on_response(Expectation::CommissioningInfo, &commissioning_info_tlv)
+            .expect("CommissioningInfo accepted");
+
+        let _ = sm.poll().unwrap(); // ArmFailSafe
+
+        // Now feed the mock device's ArmFailSafeResponse.
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0030,
+            command: 0x00,
+        };
+        let fields = arm_fail_safe_fields();
+        let reply = respond(path, &fields, [0u8; 16], &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        sm.on_response(Expectation::ArmFailsafeResponse, &fields_tlv)
+            .expect("Commissioner accepts ArmFailSafeResponse from mock device");
+        assert_eq!(
+            sm.stage(),
+            matter_commissioning::state_machine::Stage::ConfigRegulatory,
+            "state machine advanced past ArmFailsafe"
+        );
+    }
+
+    // ── AttestationRequest ────────────────────────────────────────────────────
+
+    /// respond(0x003E/0x00) produces command-fields the Commissioner's
+    /// `decode_attestation_response` decodes correctly (elements present, sig 64 bytes).
+    #[test]
+    fn attestation_request_returns_fields_accepted_by_noc_decoder() {
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x00,
+        };
+        let nonce = [0xAB_u8; 32];
+        let challenge = [0x01_u8; 16];
+        let fields = attestation_request_fields(nonce);
+
+        let reply = respond(path, &fields, challenge, &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        // Feed to the Commissioner's decoder (noc::decode_attestation_response).
+        let decoded =
+            decode_attestation_response(&fields_tlv).expect("AttestationResponse decodes");
+        assert_eq!(
+            decoded.signature.len(),
+            64,
+            "ECDSA signature must be 64 bytes (IEEE P1363)"
+        );
+        assert!(
+            !decoded.attestation_elements.is_empty(),
+            "attestation_elements must be non-empty"
+        );
+    }
+
+    /// respond(0x003E/0x00) nonce echo: the emitted AttestationElements
+    /// contain the nonce we sent (verified via extract_attestation_elements_fields).
+    #[test]
+    fn attestation_response_elements_echo_the_nonce() {
+        use matter_commissioning::attestation::extract_attestation_elements_fields;
+
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x00,
+        };
+        let nonce = [0xCC_u8; 32];
+        let challenge = [0x02_u8; 16];
+        let fields = attestation_request_fields(nonce);
+
+        let reply = respond(path, &fields, challenge, &pki);
+        let DeviceReply::Command(fields_tlv) = reply else {
+            panic!("expected Command");
+        };
+
+        let att_resp = decode_attestation_response(&fields_tlv).unwrap();
+        let att_fields = extract_attestation_elements_fields(&att_resp.attestation_elements)
+            .expect("elements parse");
+        assert_eq!(
+            att_fields.attestation_nonce, nonce,
+            "nonce must be echoed back"
+        );
+    }
+
+    // ── CertificateChainRequest ────────────────────────────────────────────────
+
+    /// respond(0x003E/0x02) with type=PAI (0x01) returns pai_der.
+    #[test]
+    fn cert_chain_request_pai_returns_pai_der() {
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x02,
+        };
+        let fields = cert_chain_request_fields(0x01); // PAI
+        let reply = respond(path, &fields, [0u8; 16], &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        let decoded =
+            decode_certificate_chain_response(&fields_tlv).expect("CertChainResponse decodes");
+        assert_eq!(decoded.certificate, pki.pai_der, "PAI DER mismatch");
+    }
+
+    /// respond(0x003E/0x02) with type=DAC (0x02) returns dac_der.
+    #[test]
+    fn cert_chain_request_dac_returns_dac_der() {
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x02,
+        };
+        let fields = cert_chain_request_fields(0x02); // DAC
+        let reply = respond(path, &fields, [0u8; 16], &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        let decoded =
+            decode_certificate_chain_response(&fields_tlv).expect("CertChainResponse decodes");
+        assert_eq!(decoded.certificate, pki.dac_der, "DAC DER mismatch");
+    }
+
+    // ── AddTrustedRoot ─────────────────────────────────────────────────────────
+
+    /// respond(0x003E/0x0B) emits Status(0) so Task 11 uses build_invoke_status_response.
+    #[test]
+    fn add_trusted_root_emits_status_zero() {
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x0B,
+        };
+        let fields = vec![0x15u8, 0x18]; // empty anonymous struct
+        let reply = respond(path, &fields, [0u8; 16], &pki);
+        match reply {
+            DeviceReply::Status(0) => {}
+            DeviceReply::Status(s) => panic!("expected Status(0), got Status({s})"),
+            DeviceReply::Command(_) => panic!("expected Status, got Command"),
+        }
+    }
+
+    // ── NetworkCommissioning FeatureMap read ──────────────────────────────────
+
+    /// respond_read_attribute(0x0031/0xFFFC) returns ETHERNET-only FeatureMap (value=4).
+    /// This causes the Commissioner to skip the Wi-Fi path (Stage::EvictPreviousCaseSessions).
+    #[test]
+    fn feature_map_is_ethernet_only() {
+        use matter_commissioning::clusters::network_commissioning::decode_feature_map;
+
+        let value_tlv = respond_read_attribute(AttributePath {
+            endpoint: 0,
+            cluster: 0x0031,
+            attribute: 0xFFFC,
+        });
+        let features = decode_feature_map(&value_tlv).expect("FeatureMap decodes");
+        assert!(
+            features.contains(NetworkCommissioningFeature::ETHERNET),
+            "ETHERNET bit must be set"
+        );
+        assert!(
+            !features.contains(NetworkCommissioningFeature::WIFI),
+            "WIFI bit must NOT be set (Ethernet path)"
+        );
+        assert!(
+            !features.contains(NetworkCommissioningFeature::THREAD),
+            "THREAD bit must NOT be set (Ethernet path)"
+        );
+    }
+
+    // ── BasicCommissioningInfo read ────────────────────────────────────────────
+
+    /// respond_read_attribute(0x0030/0x0004) returns an anonymous struct that
+    /// decode_basic_commissioning_info parses as failsafe=60, max_cumulative=900.
+    #[test]
+    fn basic_commissioning_info_decodes_correctly() {
+        use matter_commissioning::clusters::general_commissioning::decode_basic_commissioning_info;
+
+        let value_tlv = respond_read_attribute(AttributePath {
+            endpoint: 0,
+            cluster: 0x0030,
+            attribute: 0x0004,
+        });
+        let info =
+            decode_basic_commissioning_info(&value_tlv).expect("BasicCommissioningInfo decodes");
+        assert_eq!(
+            info.failsafe_expiry_length_seconds, 60,
+            "failsafe_expiry_length_seconds must be 60"
+        );
+        assert_eq!(
+            info.max_cumulative_failsafe_seconds, 900,
+            "max_cumulative_failsafe_seconds must be 900"
+        );
+    }
+
+    // ── CSRRequest ────────────────────────────────────────────────────────────
+
+    /// respond(0x003E/0x04) produces command-fields the Commissioner's
+    /// `decode_csr_response` decodes correctly (nocsr_elements present, sig 64 bytes).
+    #[test]
+    fn csr_request_returns_fields_accepted_by_noc_decoder() {
+        use matter_commissioning::noc::decode_csr_response;
+
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x04,
+        };
+        let nonce = [0xDD_u8; 32];
+        let fields = csr_request_fields(nonce);
+        let reply = respond(path, &fields, [0u8; 16], &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        let decoded = decode_csr_response(&fields_tlv).expect("CSRResponse decodes");
+        assert_eq!(decoded.attestation_signature.len(), 64);
+        assert!(!decoded.nocsr_elements.is_empty());
+    }
+
+    // ── NOCResponse ───────────────────────────────────────────────────────────
+
+    /// respond(0x003E/0x06) produces fields decode_noc_response parses as status=0, fabric_index=1.
+    #[test]
+    fn add_noc_returns_success_noc_response() {
+        use matter_commissioning::noc::decode_noc_response;
+
+        let pki = build_mock_device_pki(now());
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x06,
+        };
+        let fields = vec![0x15u8, 0x18]; // AddNOC payload is opaque to mock device
+        let reply = respond(path, &fields, [0u8; 16], &pki);
+        let fields_tlv = match reply {
+            DeviceReply::Command(v) => v,
+            DeviceReply::Status(s) => panic!("expected Command, got Status({s})"),
+        };
+
+        let decoded = decode_noc_response(&fields_tlv).expect("NOCResponse decodes");
+        assert_eq!(decoded.status, 0, "status must be 0 (OK)");
+        assert_eq!(decoded.fabric_index, Some(1), "fabric_index must be 1");
+    }
+}
+
 // ── Task 9: roundtrip tests ───────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1094,8 +1893,8 @@ mod device_im_roundtrip {
         assert_eq!(decoded.path, path);
         assert_eq!(
             decoded.fields_tlv, fields_buf,
-            "fields_tlv mismatch: got {:02X?}, expected {:02X?}",
-            decoded.fields_tlv, fields_buf
+            "fields_tlv mismatch: got {:02X?}, expected {fields_buf:02X?}",
+            decoded.fields_tlv
         );
     }
 
@@ -1127,8 +1926,7 @@ mod device_im_roundtrip {
                 assert_eq!(p, path);
                 assert_eq!(
                     fields_tlv, fields_buf,
-                    "fields_tlv mismatch: got {:02X?}, expected {:02X?}",
-                    fields_tlv, fields_buf,
+                    "fields_tlv mismatch: got {fields_tlv:02X?}, expected {fields_buf:02X?}",
                 );
             }
             InvokeResponse::Status(s) => panic!("expected Command, got Status({s:?})"),
@@ -1156,7 +1954,7 @@ mod device_im_roundtrip {
             // ImStatus::Success maps from 0x00; confirm it does not carry a failure code.
             let status_name = format!("{status:?}");
             assert!(
-                status_name.contains("Success") || status_name.contains("0"),
+                status_name.contains("Success") || status_name.contains('0'),
                 "expected Success status, got {status_name}"
             );
         }
