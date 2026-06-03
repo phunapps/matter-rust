@@ -35,6 +35,11 @@
 //!   during `EstablishCase`; `FakeDiscovery` returns `dev_addr` for the matching
 //!   operational instance name (compressed-fabric-id + assigned node id).
 
+// This integration test drives the `driver`-gated `commission()` orchestrator
+// and the `support` module (which uses driver types), so it only compiles when
+// the `driver` feature is on. Without it the file is empty (CI runs
+// `--all-features`; plain `cargo test` then skips it cleanly).
+#![cfg(feature = "driver")]
 // Test-code carve-out: see CLAUDE.md.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // Domain acronyms (VID, PID, PASE, CASE, NOC, RCAC, PBKDF, mDNS) are prose, not

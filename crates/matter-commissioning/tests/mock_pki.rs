@@ -14,6 +14,9 @@
 //! NOT `verify_chain` — weakening the verifier defeats the point of
 //! attestation.
 
+// `support` uses driver types, so this only compiles with the `driver` feature
+// (CI runs `--all-features`; plain `cargo test` skips it cleanly).
+#![cfg(feature = "driver")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // Domain acronyms in comments are prose, not code items.
 #![allow(clippy::doc_markdown)]

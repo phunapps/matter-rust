@@ -390,10 +390,10 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 /// 4. **Command loop.** Polls the [`crate::Commissioner`] cursor until it emits
 ///    `Action::Done` or `Action::Abort`, dispatching each action over the
 ///    correct session (PASE or CASE):
-///    - `Invoke` → [`dispatch_invoke`], map outcome to `on_response` payload.
-///    - `ReadAttribute` → [`dispatch_read`] + [`extract_read_payload`], feed
+///    - `Invoke` → `dispatch_invoke`, map outcome to `on_response` payload.
+///    - `ReadAttribute` → `dispatch_read` + `extract_read_payload`, feed
 ///      result via `on_response`.
-///    - `EstablishCase` → [`establish_case_session`], advance cursor via
+///    - `EstablishCase` → `establish_case_session`, advance cursor via
 ///      `on_case_established` or `on_response(CaseFailed, &[])`.
 ///    - `Done(fabric)` → return `Ok(fabric)`.
 ///    - `Abort` → optionally send `ArmFailSafe(0)` rollback, return
@@ -408,8 +408,13 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 /// is a separate NOC minted here under the same RCAC, keyed by a freshly
 /// generated P-256 keypair. The `FabricRecord` only carries the RCAC signer
 /// (used to sign both NOCs) plus the root cert and IPK — it does not carry a
-/// pre-existing controller NOC. Generating one inline follows the same pattern
-/// matter.js uses: the admin self-issues at fabric construction time.
+/// pre-existing controller NOC.
+///
+/// **M6.6.4 simplification (deferred to M8):** minting the controller NOC inline
+/// means the controller has no *stable* operational identity — a fresh keypair
+/// is generated per `commission()` call. This is correct for a single
+/// commissioning run; persisting one admin identity across runs is M8
+/// (fabric create/persist/restore) work. See the `FLAG` at the minting site.
 ///
 /// # Errors
 ///

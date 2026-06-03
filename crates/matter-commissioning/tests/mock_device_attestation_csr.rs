@@ -6,6 +6,9 @@
 //! `verify_csr_response`).  If either assertion fails, fix the builder in
 //! `tests/support/mod.rs`, NOT the verifier.
 
+// `support` uses driver types, so this only compiles with the `driver` feature
+// (CI runs `--all-features`; plain `cargo test` skips it cleanly).
+#![cfg(feature = "driver")]
 // Test-code carve-out: see CLAUDE.md.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 // Domain acronyms are prose, not code items.
