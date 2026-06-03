@@ -457,6 +457,26 @@ where
     let pase_sid =
         crate::driver::pase::run_pase(transport, &mut sessions, peer, config.passcode).await?;
 
+    // 2a. Source the attestation challenge from the LIVE PASE-derived session.
+    //
+    //     The attestation challenge that the device signs AttestationResponse /
+    //     CSRResponse over is the SPAKE2+-derived `attestation_key`, NOT a static
+    //     config input. Both sides derive it from the same PASE handshake, so the
+    //     device's signature and the Commissioner's verification only agree if the
+    //     Commissioner uses THIS live value. We take ownership of the caller's
+    //     `CommissionerConfig` and overwrite `pase_attestation_challenge` with the
+    //     session's `attestation_key` before constructing the state machine. Any
+    //     value the caller put there is intentionally discarded.
+    let pase_attestation_challenge = sessions
+        .get(pase_sid)
+        .ok_or(DriverError::Handshake(
+            "PASE session missing after run_pase",
+        ))?
+        .keys
+        .attestation_key;
+    let mut commissioner_cfg = config.commissioner;
+    commissioner_cfg.pase_attestation_challenge = pase_attestation_challenge;
+
     // 3. Issue the commissioner's own NOC so we have CASE credentials ready
     //    when Action::EstablishCase arrives.
     //
@@ -480,20 +500,20 @@ where
     //    commissioner_signer is stored as Option<RingSigner> so we can `take()`
     //    it into the CaseCredentials exactly once when EstablishCase arrives.
     //    EstablishCase fires at most once per commissioning run.
-    let fabric = config.commissioner.fabric;
+    let fabric = commissioner_cfg.fabric;
     let (commissioner_signer_value, _pkcs8) =
         RingSigner::generate().map_err(DriverError::Crypto)?;
     let commissioner_pub = commissioner_signer_value.public_key().clone();
     let commissioner_verified_csr = VerifiedCsr {
         public_key: commissioner_pub,
     };
-    let commissioner_node_id = config.commissioner.commissioner_node_id;
+    let commissioner_node_id = commissioner_cfg.commissioner_node_id;
     let commissioner_noc = issue_noc(
         fabric,
         &commissioner_verified_csr,
         commissioner_node_id,
         &[],
-        (config.commissioner.now, matter_cert::MatterTime::NO_EXPIRY),
+        (commissioner_cfg.now, matter_cert::MatterTime::NO_EXPIRY),
         &SystemNocRng,
     )
     .map_err(|e| DriverError::Commissioning(crate::CommissioningError::from(e)))?;
@@ -504,7 +524,7 @@ where
     let mut case_sid: Option<SessionId> = None;
 
     // 4. Build the state machine cursor.
-    let mut sm = crate::Commissioner::new(config.commissioner)?;
+    let mut sm = crate::Commissioner::new(commissioner_cfg)?;
 
     // 5. Poll loop.
     loop {
