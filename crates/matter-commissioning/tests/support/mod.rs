@@ -43,10 +43,18 @@ use base64::Engine;
 use matter_cert::test_support::{build_x509_der, TestCertFields};
 use matter_cert::{
     BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyUsage, MatterTime, Signature,
+    TrustedRoots,
 };
 use matter_commissioning::attestation::{AttestationResponse, Paa, PaaTrustStore};
+use matter_commissioning::driver::{
+    decode_unsecured, encode_unsecured, AsyncDatagram, DriverError, InMemoryDatagram,
+};
 use matter_commissioning::CsrResponse;
-use matter_crypto::{CaseSigner as _, RingSigner};
+use matter_crypto::pase::{PasePbkdfParams, PaseVerifier};
+use matter_crypto::{CaseCredentials, CaseResponder, CaseSigner as _, RingSigner, Sigma1Outcome};
+use matter_transport::{
+    DecodeInboundOutput, MrpFlags, PeerHint, ProtocolId, SessionId, SessionManager, SessionRole,
+};
 use serde::Deserialize;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -2054,5 +2062,452 @@ mod device_im_roundtrip {
             }
             InvokeResponse::Status(s) => panic!("expected Command, got {s:?}"),
         }
+    }
+}
+
+// ── Task 11: mock-device responder loop (PASE → secured IM → CASE → IM) ───────
+//
+// `run_mock_device` is the device twin of the controller's `commission()`
+// (src/driver/commission.rs). Where `commission()` runs the *initiator* side of
+// PASE, drives the IM command/read loop over the PASE session, then switches to
+// the CASE *initiator* and finishes commissioning, `run_mock_device` runs the
+// matching *responder* side: PASE `PaseVerifier`, the IM `respond`/`build_*`
+// reply path, then the CASE `CaseResponder`, then resumes the IM loop on the
+// CASE session until `CommissioningComplete`.
+//
+// Both halves run under one `tokio::join!` in Task 12's loopback gate, over a
+// single `InMemoryDatagram` pair. The device listens on its end for every
+// phase; `commission()` reuses the same transport for PASE, the secured IM
+// round-trips, and CASE (operational discovery is stubbed so the resolved
+// operational address is the same loopback endpoint).
+//
+// Wire/opcode map (mirrors the M6.6.3b loopback device tasks and the Task 3/4/5
+// device-reply tasks in commission.rs):
+//   - PASE (unsecured, SecureChannel): in 0x20 PBKDFParamRequest / 0x22 Pake1 /
+//     0x24 Pake3; out 0x21 PBKDFParamResponse / 0x23 Pake2.
+//   - Secured IM (INTERACTION_MODEL): in 0x08 InvokeRequest / 0x02 ReadRequest;
+//     out 0x09 InvokeResponse (Command or bare Status) / 0x05 ReportData.
+//   - CASE (unsecured, SecureChannel): in 0x30 Sigma1 / 0x32 Sigma3;
+//     out 0x31 Sigma2.
+
+/// Device-side handshake opcodes (Matter Core Spec §4.14.1). Inbound opcodes
+/// the controller sends; outbound opcodes the device replies with.
+mod op {
+    // SecureChannel — PASE.
+    pub const PBKDF_PARAM_REQUEST: u8 = 0x20;
+    pub const PBKDF_PARAM_RESPONSE: u8 = 0x21;
+    pub const PASE_PAKE1: u8 = 0x22;
+    pub const PASE_PAKE2: u8 = 0x23;
+    pub const PASE_PAKE3: u8 = 0x24;
+    // SecureChannel — CASE.
+    pub const CASE_SIGMA1: u8 = 0x30;
+    pub const CASE_SIGMA2: u8 = 0x31;
+    pub const CASE_SIGMA3: u8 = 0x32;
+    // Interaction Model.
+    pub const IM_INVOKE_REQUEST: u8 = 0x08;
+    pub const IM_INVOKE_RESPONSE: u8 = 0x09;
+    pub const IM_READ_REQUEST: u8 = 0x02;
+    pub const IM_REPORT_DATA: u8 = 0x05;
+}
+
+/// GeneralCommissioning `CommissioningComplete` command id (cluster 0x0030,
+/// command 0x04). When the device services this on the CASE session, the
+/// commissioning flow is done and the loop returns.
+const CMD_COMMISSIONING_COMPLETE: u32 = 0x04;
+
+/// Inputs the mock device needs to play the device side of one commissioning run.
+///
+/// Built by Task 12 from the *same* fabric the controller commissions under, so
+/// the device's CASE `CaseResponder` validates against the controller's
+/// `TrustedRoots` and vice versa (the device's NOC and the controller's NOC are
+/// both issued under the fabric RCAC). See `commission()`'s "CASE credential
+/// sourcing" note: the controller mints its own operational NOC under the
+/// fabric RCAC; Task 12 mints the *device's* operational NOC under the same
+/// RCAC and hands the resulting [`CaseCredentials`] + [`TrustedRoots`] here.
+pub struct MockDeviceCaseSetup {
+    /// The device's operational identity for the CASE responder — a NOC issued
+    /// under the fabric RCAC for the device's assigned node id, on the
+    /// commissioner's fabric id, carrying the fabric IPK.
+    pub credentials: CaseCredentials,
+    /// Trusted roots (the fabric RCAC) the responder validates the controller's
+    /// NOC against.
+    pub trusted_roots: TrustedRoots,
+    /// The non-zero secured-session id the device advertises in Sigma2 for the
+    /// controller to address the operational session by. Mirrors the `0x00D2`
+    /// the `run_case` loopback uses.
+    pub responder_session_id: u16,
+}
+
+/// Run the full device side of one commissioning run against `commission()`.
+///
+/// Sequence (each step is the responder counterpart of the matching
+/// `commission()` step):
+///
+/// 1. **PASE.** Drive a [`PaseVerifier`] over the unsecured (session-id 0)
+///    `SecureChannel` path: recv PBKDFParamRequest → send PBKDFParamResponse →
+///    recv Pake1 → send Pake2 → recv Pake3 → `finish()`. Register the derived
+///    keys via [`SessionManager::register_pase`] as
+///    `SessionRole::Responder`. The PASE-derived `attestation_key` (see
+///    [`matter_crypto::pase::PaseSessionKeys`]) is the 16-byte attestation
+///    challenge: both sides derive it from the same SPAKE2+ secret, so it
+///    equals the controller's `CommissionerConfig::pase_attestation_challenge`.
+///    It is fed straight into [`respond`].
+/// 2. **Secured IM loop (PASE session).** Loop: receive a secured packet,
+///    `decode_inbound`, then branch on the decrypted payload shape — an
+///    InvokeRequest goes to [`parse_invoke_request`] + [`respond`]; a
+///    ReadRequest goes to [`parse_read_request`] + [`respond_read_attribute`].
+///    Build the reply via [`build_invoke_response`] /
+///    [`build_invoke_status_response`] / [`build_report_data`], then
+///    `encode_outbound` on the SAME exchange id with the IM reply opcode. The
+///    loop exits this phase when an *unsecured* (session-id 0) packet arrives —
+///    that is the controller's CASE Sigma1, signalling the PASE→CASE transition.
+/// 3. **CASE.** Drive a [`CaseResponder`] over the unsecured path: handle
+///    Sigma1 (the already-received packet) → send Sigma2 → recv Sigma3 →
+///    `finish()`. Register via [`SessionManager::register_case`] as
+///    [`SessionRole::Responder`].
+/// 4. **Secured IM loop (CASE session).** Same IM loop, now decoding on the
+///    CASE session, until the device services `CommissioningComplete`
+///    (GeneralCommissioning 0x0030 / 0x04). After replying to that, return
+///    `Ok(())` so the `tokio::join!` in Task 12 completes.
+///
+/// `peer` is the address replies are sent to; with [`InMemoryDatagram`] the
+/// peer arg is ignored (the channel is point-to-point) and the controller's
+/// source address is also learned from the first inbound packet — `peer` is
+/// kept for signature symmetry with the controller helpers.
+///
+/// # PASE→CASE transition detection
+///
+/// `decode_inbound` only handles *secured* (non-zero session-id) packets. CASE
+/// Sigma1 arrives *unsecured* (session-id 0). The loop therefore peeks the
+/// 2-byte little-endian session id at offset 1 of the secured message header
+/// (`framing::encode_header` layout): id 0 → unsecured CASE Sigma1 (transition);
+/// id != 0 → secured IM message routed through `decode_inbound`.
+///
+/// # Errors
+///
+/// - [`DriverError::Io`] if a datagram recv/send fails or the channel closes.
+/// - [`DriverError::Crypto`] / [`DriverError::Transport`] if a PASE/CASE step or
+///   secured framing fails.
+///
+/// # Panics
+///
+/// Panics (via the test-support `respond`/`build_*` helpers and `.unwrap()`) on
+/// any malformed controller message or unrecognised command — acceptable in
+/// test support code where the input is always `commission()`-generated.
+// One async block covering PASE + two IM loops + CASE; splitting would scatter
+// the shared SessionManager/transport state. The nested `service_secured_im`
+// helper is defined after the PASE statements so it closes over nothing and
+// stays next to its only call sites.
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+pub async fn run_mock_device(
+    dev_io: &InMemoryDatagram,
+    peer: std::net::SocketAddr,
+    pki: &MockDevicePki,
+    pase_pin: u32,
+    pase_params: PasePbkdfParams,
+    pase_responder_session_id: u16,
+    case_setup: MockDeviceCaseSetup,
+) -> Result<(), DriverError> {
+    use std::time::Instant;
+
+    // The controller registers PASE first against a fresh SessionManager whose
+    // allocator starts at 1, so its local (initiator) session id is 1. The
+    // device registers its PASE/CASE sessions with that as `peer_session_id` so
+    // the controller's secured replies demux. (PASE's PBKDFParamRequest carries
+    // the controller's `initiator_session_id`, but `messages` is pub(crate) and
+    // not reachable from the integration-test crate; the loopback's
+    // deterministic allocation makes 1 correct — mirrors `paired_pase_sessions`
+    // in exchange.rs/commission.rs.)
+    const CTRL_PASE_SESSION_ID: u16 = 1;
+
+    let mut sessions = SessionManager::new();
+
+    // ── 1. PASE (device = verifier, unsecured path) ──────────────────────────
+    let mut verifier = PaseVerifier::new_from_pin(pase_pin, pase_params, pase_responder_session_id)
+        .map_err(DriverError::Crypto)?;
+    let mut unsecured_ctr: u32 = 100;
+
+    // PBKDFParamRequest → PBKDFParamResponse.
+    let (p, _) = dev_io.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PBKDF_PARAM_REQUEST);
+    verifier
+        .handle_pbkdf_request(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let resp = verifier.next_message().map_err(DriverError::Crypto)?;
+    let wire = encode_unsecured(
+        unsecured_ctr,
+        m.exchange_id,
+        op::PBKDF_PARAM_RESPONSE,
+        ProtocolId::SECURE_CHANNEL,
+        false,
+        true,
+        Some(m.message_counter),
+        &resp,
+    );
+    unsecured_ctr += 1;
+    dev_io.send_to(&wire, peer).await?;
+
+    // Pake1 → Pake2.
+    let (p, _) = dev_io.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PASE_PAKE1);
+    verifier
+        .handle_pake1(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let pake2 = verifier.next_message().map_err(DriverError::Crypto)?;
+    let wire = encode_unsecured(
+        unsecured_ctr,
+        m.exchange_id,
+        op::PASE_PAKE2,
+        ProtocolId::SECURE_CHANNEL,
+        false,
+        true,
+        Some(m.message_counter),
+        &pake2,
+    );
+    dev_io.send_to(&wire, peer).await?;
+
+    // Pake3 (terminal; no reply) → finish.
+    let (p, _) = dev_io.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PASE_PAKE3);
+    verifier
+        .handle_pake3(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let pase_keys = verifier.finish().map_err(DriverError::Crypto)?;
+
+    // The attestation challenge is the PASE-derived attestation_key — identical
+    // on both sides (same SPAKE2+ secret), so it matches the controller's
+    // `CommissionerConfig::pase_attestation_challenge`.
+    let attestation_challenge: [u8; 16] = pase_keys.attestation_key;
+
+    // Register under the device's OWN advertised id (`pase_responder_session_id`)
+    // as the local id — the controller addresses its secured PASE-session
+    // messages TO that id (it captured it from `prover.responder_session_id()`),
+    // so `decode_inbound` must find the session keyed under it. The peer
+    // (controller) session id is `CTRL_PASE_SESSION_ID` (its fresh-allocator
+    // local id 1). This mirrors the controller's own
+    // `register_pase_with_local_id(local, …, peer_session_id)` in pase.rs.
+    let pase_sid = SessionId(pase_responder_session_id);
+    sessions.register_pase_with_local_id(
+        pase_sid,
+        pase_keys,
+        SessionRole::Responder,
+        CTRL_PASE_SESSION_ID,
+        PeerHint::default(),
+    );
+
+    // ── 2./4. Secured IM service handler, shared by the PASE and CASE loops ──
+    //
+    // Handle one inbound secured IM packet: decode, build the reply, send it on
+    // the same exchange id. Returns the (cluster, command) of a serviced Invoke
+    // (None for reads / acks) so the CASE-phase loop can detect
+    // CommissioningComplete and stop.
+    //
+    // NOTE on opcode: the IM protocol opcode (0x08 InvokeRequest / 0x02
+    // ReadRequest) lives in the *encrypted* protocol header, which
+    // `decode_inbound` consumes internally — it is NOT in the cleartext packet,
+    // and `DecodeInboundOutput` does not surface it. We therefore discriminate
+    // on the decrypted IM payload's top-level TLV shape (see `is_read_request`):
+    // a ReadRequestMessage exposes its AttributeRequests array at context tag 0,
+    // whereas an InvokeRequestMessage exposes its InvokeRequests array at
+    // context tag 2 (tag 0 there is the SuppressResponse bool). Unambiguous for
+    // the two message kinds the commissioning flow sends over a secured session.
+    async fn service_secured_im(
+        dev_io: &InMemoryDatagram,
+        peer: std::net::SocketAddr,
+        sessions: &mut SessionManager,
+        session_id: SessionId,
+        packet: &[u8],
+        challenge: [u8; 16],
+        pki: &MockDevicePki,
+    ) -> Result<Option<(u32, u32)>, DriverError> {
+        let decoded = sessions.decode_inbound(packet, Instant::now())?;
+        let (exchange_id, payload) = match decoded {
+            DecodeInboundOutput::AppMessage {
+                exchange_id,
+                payload,
+                ..
+            } => (exchange_id, payload),
+            // Acks / duplicate resends carry no app payload — nothing to reply to.
+            DecodeInboundOutput::AckOnly { .. } => return Ok(None),
+            DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
+                dev_io.send_to(&ack_packet, peer).await?;
+                return Ok(None);
+            }
+        };
+
+        if is_read_request(&payload) {
+            let paths = parse_read_request(&payload);
+            let values: Vec<Vec<u8>> = paths.iter().map(|p| respond_read_attribute(*p)).collect();
+            let pairs: Vec<(matter_commissioning::im::AttributePath, &[u8])> = paths
+                .iter()
+                .zip(values.iter())
+                .map(|(p, v)| (*p, v.as_slice()))
+                .collect();
+            let reply_bytes = build_report_data(&pairs);
+            let out = sessions.encode_outbound(
+                session_id,
+                Some(exchange_id),
+                op::IM_REPORT_DATA,
+                ProtocolId::INTERACTION_MODEL,
+                &reply_bytes,
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )?;
+            dev_io.send_to(&out.wire_bytes, peer).await?;
+            Ok(None)
+        } else {
+            let decoded_req = parse_invoke_request(&payload);
+            let path = decoded_req.path;
+            let serviced = (path.cluster, path.command);
+            let reply_bytes = match respond(path, &decoded_req.fields_tlv, challenge, pki) {
+                DeviceReply::Command(fields_tlv) => build_invoke_response(path, &fields_tlv),
+                DeviceReply::Status(code) => build_invoke_status_response(path, code),
+            };
+            let out = sessions.encode_outbound(
+                session_id,
+                Some(exchange_id),
+                op::IM_INVOKE_RESPONSE,
+                ProtocolId::INTERACTION_MODEL,
+                &reply_bytes,
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )?;
+            dev_io.send_to(&out.wire_bytes, peer).await?;
+            Ok(Some(serviced))
+        }
+    }
+
+    // PASE-phase IM loop: run until an *unsecured* packet (CASE Sigma1) arrives.
+    // That first CASE packet is captured and handed to the CASE responder below.
+    let sigma1_packet: Vec<u8> = loop {
+        let (packet, _from) = dev_io.recv_from().await?;
+        // Peek the 2-byte LE session id at header offset 1 (framing::encode_header
+        // layout). Session id 0 ⇒ unsecured ⇒ the controller's CASE Sigma1, i.e.
+        // the PASE→CASE transition. Non-zero ⇒ secured IM over the PASE session.
+        let session_id_field = u16::from_le_bytes([packet[1], packet[2]]);
+        if session_id_field == 0 {
+            break packet;
+        }
+        service_secured_im(
+            dev_io,
+            peer,
+            &mut sessions,
+            pase_sid,
+            &packet,
+            attestation_challenge,
+            pki,
+        )
+        .await?;
+    };
+
+    // ── 3. CASE (device = responder, unsecured path) ─────────────────────────
+    let MockDeviceCaseSetup {
+        credentials,
+        trusted_roots,
+        responder_session_id,
+    } = case_setup;
+
+    let mut responder = CaseResponder::new(credentials, trusted_roots, responder_session_id)
+        .map_err(DriverError::Crypto)?;
+    let m = decode_unsecured(&sigma1_packet)?;
+    debug_assert_eq!(m.opcode, op::CASE_SIGMA1);
+    match responder
+        .handle_sigma1(&m.payload)
+        .map_err(DriverError::Crypto)?
+    {
+        Sigma1Outcome::NewSession => {}
+        // Resumption is not exercised in the M6 loopback.
+        Sigma1Outcome::ResumptionRequested { .. } => {
+            return Err(DriverError::Handshake(
+                "mock device CASE Sigma1 was not a fresh session",
+            ));
+        }
+    }
+    let sigma2 = responder.next_message().map_err(DriverError::Crypto)?;
+    let wire = encode_unsecured(
+        unsecured_ctr,
+        m.exchange_id,
+        op::CASE_SIGMA2,
+        ProtocolId::SECURE_CHANNEL,
+        false,
+        true,
+        Some(m.message_counter),
+        &sigma2,
+    );
+    dev_io.send_to(&wire, peer).await?;
+
+    let (p, _) = dev_io.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::CASE_SIGMA3);
+    responder
+        .handle_sigma3(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let case_output = responder.finish().map_err(DriverError::Crypto)?;
+    let case_sid = sessions.register_case(&case_output, SessionRole::Responder);
+
+    // ── 4. Secured IM loop on the CASE session until CommissioningComplete ───
+    loop {
+        let (packet, _from) = dev_io.recv_from().await?;
+        let serviced = service_secured_im(
+            dev_io,
+            peer,
+            &mut sessions,
+            case_sid,
+            &packet,
+            attestation_challenge,
+            pki,
+        )
+        .await?;
+        if let Some((cluster, command)) = serviced {
+            if cluster == matter_commissioning::clusters::general_commissioning::CLUSTER_ID
+                && command == CMD_COMMISSIONING_COMPLETE
+            {
+                // Serviced CommissioningComplete on CASE — the controller's
+                // commission() will return Action::Done next; we're finished.
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Discriminate a decrypted IM message payload: `true` for a
+/// `ReadRequestMessage`, `false` for an `InvokeRequestMessage`.
+///
+/// Both are top-level anonymous structs. A `ReadRequestMessage` carries its
+/// `AttributeRequests` **array at context tag 0** (`im::build_read_request`); an
+/// `InvokeRequestMessage` carries `SuppressResponse` (a bool) at context tag 0
+/// and its `InvokeRequests` array at context tag 2 (`im::build_invoke_request`).
+/// We scan the top-level struct members: if context tag 0 is an array, it is a
+/// read; otherwise an invoke. This is unambiguous for the two message kinds the
+/// commissioning flow ever sends over a secured session — the opcode itself is
+/// inside the encrypted protocol header and not otherwise recoverable here.
+///
+/// # Panics
+///
+/// Panics if `payload` is not a valid top-level TLV struct — acceptable in test
+/// support code where the input is always `commission()`-generated.
+fn is_read_request(payload: &[u8]) -> bool {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader};
+
+    let mut r = TlvReader::new(payload);
+    match r.next().expect("IM payload: first element") {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        other => panic!("IM payload: expected top-level anon struct, got {other:?}"),
+    }
+    // Inspect the immediate member at context tag 0.
+    match r.next().expect("IM payload: first member") {
+        // ReadRequestMessage: AttributeRequests array at ctx(0).
+        Some(Element::ContainerStart {
+            tag: Tag::Context(0),
+            kind: ContainerKind::Array,
+        }) => true,
+        // InvokeRequestMessage: SuppressResponse bool at ctx(0) (or any non-array).
+        _ => false,
     }
 }
