@@ -533,3 +533,728 @@ pub fn build_csr_response(
         attestation_signature,
     }
 }
+
+// ── Task 9: device-side Interaction Model codec ───────────────────────────────
+//
+// The mock device's responder loop (Task 11) needs to:
+//   1. Receive the controller's IM request bytes.
+//   2. `parse_invoke_request` / `parse_read_request` — device decodes what
+//      the controller sent.
+//   3. Compute a response.
+//   4. `build_invoke_response` / `build_report_data` — device encodes the reply.
+//
+// These four functions are the **exact inverse** of the controller-side `im`
+// codec in `crates/matter-commissioning/src/im/`. Tag layouts are derived
+// directly from `im/invoke.rs` and `im/read.rs` — see the cross-references in
+// each function's doc comment.
+
+// ── Private TLV helpers ───────────────────────────────────────────────────────
+//
+// The production `im` module exports `expect_message_struct`, `read_container_members`,
+// `read_container_value`, and `skip_container` as `pub(crate)`, which is not
+// accessible from integration tests. We re-implement minimal equivalents here.
+
+/// Skip a container that has already been opened (reader positioned just
+/// after the `ContainerStart`). Panics on malformed input.
+fn tlv_skip_container(r: &mut matter_codec::TlvReader<'_>) {
+    use matter_codec::Element;
+    let mut depth = 1usize;
+    loop {
+        match r.next().expect("tlv_skip_container: unexpected EOF") {
+            Some(Element::ContainerEnd) => {
+                depth -= 1;
+                if depth == 0 {
+                    return;
+                }
+            }
+            Some(Element::ContainerStart { .. }) => depth += 1,
+            None => panic!("tlv_skip_container: stream ended before container closed"),
+            Some(_) => {}
+        }
+    }
+}
+
+/// Collect all members of an already-opened container (reader positioned just
+/// after the `ContainerStart`) as `(Tag, Value)` pairs. Panics on malformed input.
+fn tlv_read_members(
+    r: &mut matter_codec::TlvReader<'_>,
+) -> Vec<(matter_codec::Tag, matter_codec::Value)> {
+    use matter_codec::{ContainerKind, Element};
+    let mut out = Vec::new();
+    loop {
+        match r.next().expect("tlv_read_members: unexpected EOF") {
+            Some(Element::ContainerEnd) => return out,
+            None => panic!("tlv_read_members: stream ended before container closed"),
+            Some(Element::Scalar { tag, value }) => out.push((tag, value)),
+            Some(Element::ContainerStart { tag, kind }) => {
+                let v = tlv_read_container_value(r, kind);
+                out.push((tag, v));
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// Read the body of an already-opened container of `kind` into a [`matter_codec::Value`].
+fn tlv_read_container_value(
+    r: &mut matter_codec::TlvReader<'_>,
+    kind: matter_codec::ContainerKind,
+) -> matter_codec::Value {
+    let members = tlv_read_members(r);
+    match kind {
+        matter_codec::ContainerKind::Structure => matter_codec::Value::Structure(members),
+        matter_codec::ContainerKind::Array => {
+            matter_codec::Value::Array(members.into_iter().map(|(_, v)| v).collect())
+        }
+        _ => matter_codec::Value::List(members),
+    }
+}
+
+/// Parsed single-command `InvokeRequestMessage` (device perspective).
+///
+/// `fields_tlv` is the `CommandFields` struct re-encoded with an **anonymous**
+/// tag, matching the convention used by the production `im::parse_invoke_response`.
+pub struct InvokeRequestDecoded {
+    /// Path of the incoming command.
+    pub path: matter_commissioning::im::CommandPath,
+    /// The command-fields struct, re-encoded with an anonymous tag.
+    pub fields_tlv: Vec<u8>,
+}
+
+/// Parse a single-command `InvokeRequestMessage` produced by
+/// [`matter_commissioning::im::build_invoke_request`] (device side).
+///
+/// Wire layout consumed (derived from `im/invoke.rs::build_invoke_request`):
+/// ```text
+/// anon struct {
+///   ctx(0): bool  SuppressResponse
+///   ctx(1): bool  TimedRequest
+///   ctx(2): array InvokeRequests [
+///     anon struct CommandDataIB {
+///       ctx(0): list  CommandPathIB { ctx(0): endpoint, ctx(1): cluster, ctx(2): command }
+///       ctx(1): struct CommandFields  (pre-encoded anonymous struct)
+///     }
+///   ]
+///   ctx(0xFF): uint InteractionModelRevision
+/// }
+/// ```
+///
+/// Returns `(path, anonymous-tagged CommandFields bytes)`.
+///
+/// # Panics
+///
+/// Panics if `bytes` is not a valid `InvokeRequestMessage`. Acceptable in test
+/// support code where the input is always controller-generated.
+pub fn parse_invoke_request(bytes: &[u8]) -> InvokeRequestDecoded {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    use matter_commissioning::im::CommandPath;
+
+    let mut r = TlvReader::new(bytes);
+
+    // Consume top-level anonymous struct start.
+    match r.next().expect("InvokeRequest: first element") {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        other => panic!("InvokeRequest: expected anon struct, got {other:?}"),
+    }
+
+    // Scan forward to ctx(2) = InvokeRequests array.
+    loop {
+        match r.next().expect("InvokeRequest: scan for InvokeRequests") {
+            Some(Element::ContainerStart {
+                tag: Tag::Context(2),
+                kind: ContainerKind::Array,
+            }) => break,
+            Some(Element::ContainerEnd) | None => {
+                panic!("InvokeRequest: missing InvokeRequests array")
+            }
+            Some(Element::ContainerStart { .. }) => {
+                // Skip any unknown container (e.g. SuppressResponse is a scalar, but be safe).
+                tlv_skip_container(&mut r);
+            }
+            Some(_) => {}
+        }
+    }
+
+    // Expect the first CommandDataIB (anonymous struct).
+    match r.next().expect("InvokeRequest: first CommandDataIB") {
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Structure,
+            ..
+        }) => {}
+        _ => panic!("InvokeRequest: missing CommandDataIB struct"),
+    }
+
+    // Parse CommandDataIB body: scan for CommandPathIB (ctx 0) and CommandFields (ctx 1).
+    let mut path: Option<CommandPath> = None;
+    let mut fields_tlv: Vec<u8> = Vec::new();
+    loop {
+        match r.next().expect("InvokeRequest: scan CommandDataIB members") {
+            None => panic!("InvokeRequest: CommandDataIB body ended without end-of-container"),
+            Some(Element::ContainerEnd) => break,
+            // CommandPathIB list at context tag 0 (matches build_invoke_request → write_command_path).
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::List,
+            }) => {
+                let members = tlv_read_members(&mut r);
+                let mut endpoint = None;
+                let mut cluster = None;
+                let mut command = None;
+                for (tag, v) in members {
+                    match (tag, v) {
+                        (Tag::Context(0), Value::Uint(n)) => {
+                            endpoint = Some(u16::try_from(n).expect("endpoint fits u16"));
+                        }
+                        (Tag::Context(1), Value::Uint(n)) => {
+                            cluster = Some(u32::try_from(n).expect("cluster fits u32"));
+                        }
+                        (Tag::Context(2), Value::Uint(n)) => {
+                            command = Some(u32::try_from(n).expect("command fits u32"));
+                        }
+                        _ => {}
+                    }
+                }
+                path = Some(CommandPath {
+                    endpoint: endpoint.expect("CommandPath.endpoint present"),
+                    cluster: cluster.expect("CommandPath.cluster present"),
+                    command: command.expect("CommandPath.command present"),
+                });
+            }
+            // CommandFields struct at context tag 1 — re-encode as anonymous-tagged blob.
+            Some(Element::ContainerStart {
+                tag: Tag::Context(1),
+                kind,
+            }) => {
+                let v = tlv_read_container_value(&mut r, kind);
+                let mut buf = Vec::new();
+                let mut w = matter_codec::TlvWriter::new(&mut buf);
+                w.write_value(Tag::Anonymous, &v)
+                    .expect("InvokeRequest: re-encode CommandFields");
+                fields_tlv = buf;
+            }
+            Some(Element::ContainerStart { .. }) => tlv_skip_container(&mut r),
+            Some(_) => {}
+        }
+    }
+
+    // No CommandFields → canonicalize to an anonymous empty struct (matches
+    // the same convention in `im/invoke.rs::parse_command_data`).
+    if fields_tlv.is_empty() {
+        let mut buf = Vec::new();
+        let mut w = matter_codec::TlvWriter::new(&mut buf);
+        w.write_value(Tag::Anonymous, &Value::Structure(Vec::new()))
+            .expect("encode empty struct");
+        fields_tlv = buf;
+    }
+
+    InvokeRequestDecoded {
+        path: path.expect("CommandDataIB.CommandPath present"),
+        fields_tlv,
+    }
+}
+
+/// Build an `InvokeResponseMessage` carrying a single `CommandDataIB`.
+///
+/// Produces bytes that [`matter_commissioning::im::parse_invoke_response`]
+/// decodes to `InvokeResponse::Command { path, fields_tlv }`.
+///
+/// Wire layout produced (derived from `im/invoke.rs::parse_invoke_response`
+/// and the proven `build_canned_invoke_response` template in
+/// `src/driver/commission.rs`):
+/// ```text
+/// anon struct {
+///   ctx(0): bool  SuppressResponse  (false)
+///   ctx(1): array InvokeResponses [
+///     anon struct InvokeResponseIB {
+///       ctx(0): struct CommandDataIB {
+///         ctx(0): list  CommandPathIB { ctx(0): ep, ctx(1): cluster, ctx(2): cmd }
+///         ctx(1): struct CommandFields  (re-tagged from anonymous via put_preencoded)
+///       }
+///     }
+///   ]
+///   ctx(0xFF): uint InteractionModelRevision
+/// }
+/// ```
+///
+/// `fields_tlv` must be an anonymous-tagged TLV struct (e.g. `[0x15, 0x18]`
+/// for an empty struct). `put_preencoded` re-tags it to context tag 1.
+///
+/// # Panics
+///
+/// Panics if `fields_tlv` is not a valid anonymous-tagged TLV struct. Acceptable
+/// in test support code where the input is always codec-generated.
+pub fn build_invoke_response(
+    path: matter_commissioning::im::CommandPath,
+    fields_tlv: &[u8],
+) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseMessage
+    w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+    w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+    {
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+        w.start_structure(Tag::Context(0)).unwrap(); // Command = CommandDataIB
+                                                     // CommandPathIB list at ctx(0).
+        w.start_list(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(path.endpoint))
+            .unwrap();
+        w.put_uint(Tag::Context(1), u64::from(path.cluster))
+            .unwrap();
+        w.put_uint(Tag::Context(2), u64::from(path.command))
+            .unwrap();
+        w.end_container().unwrap(); // CommandPathIB
+                                    // CommandFields at ctx(1): splice the anonymous struct blob under context tag 1.
+        w.put_preencoded(Tag::Context(1), fields_tlv).unwrap();
+        w.end_container().unwrap(); // CommandDataIB
+        w.end_container().unwrap(); // InvokeResponseIB
+    }
+    w.end_container().unwrap(); // InvokeResponses
+    w.put_uint(
+        Tag::Context(0xFF),
+        u64::from(matter_commissioning::im::IM_REVISION),
+    )
+    .unwrap();
+    w.end_container().unwrap(); // InvokeResponseMessage
+    buf
+}
+
+/// Build an `InvokeResponseMessage` carrying a bare `CommandStatusIB` (status only,
+/// no command data). Produces bytes that
+/// [`matter_commissioning::im::parse_invoke_response`] decodes to
+/// `InvokeResponse::Status(status)`.
+///
+/// Wire layout produced (derived from `im/invoke.rs::parse_command_status` and the
+/// `parses_status_response` test in `im/invoke.rs`):
+/// ```text
+/// anon struct {
+///   ctx(0): bool  SuppressResponse  (false)
+///   ctx(1): array InvokeResponses [
+///     anon struct InvokeResponseIB {
+///       ctx(1): struct CommandStatusIB {           ← Status variant (not Command)
+///         ctx(0): list  CommandPathIB { ctx(0): ep, ctx(1): cluster, ctx(2): cmd }
+///         ctx(1): struct StatusIB { ctx(0): Status u8 }
+///       }
+///     }
+///   ]
+///   ctx(0xFF): uint InteractionModelRevision
+/// }
+/// ```
+///
+/// `status_code` is the raw `ImStatus` byte (0x00 = Success).
+/// The `path` parameter is required by the `CommandStatusIB` wire format even for
+/// success responses.
+///
+/// # Panics
+///
+/// Vec-backed `TlvWriter` is infallible; panics indicate a logic error.
+pub fn build_invoke_status_response(
+    path: matter_commissioning::im::CommandPath,
+    status_code: u8,
+) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseMessage
+    w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+    w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+    {
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+        w.start_structure(Tag::Context(1)).unwrap(); // Status = CommandStatusIB
+                                                     // CommandPathIB list at ctx(0).
+        w.start_list(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(path.endpoint))
+            .unwrap();
+        w.put_uint(Tag::Context(1), u64::from(path.cluster))
+            .unwrap();
+        w.put_uint(Tag::Context(2), u64::from(path.command))
+            .unwrap();
+        w.end_container().unwrap(); // CommandPathIB
+                                    // StatusIB struct at ctx(1): { ctx(0): Status u8 }
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        w.put_uint(Tag::Context(0), u64::from(status_code)).unwrap(); // Status
+        w.end_container().unwrap(); // StatusIB
+        w.end_container().unwrap(); // CommandStatusIB
+        w.end_container().unwrap(); // InvokeResponseIB
+    }
+    w.end_container().unwrap(); // InvokeResponses
+    w.put_uint(
+        Tag::Context(0xFF),
+        u64::from(matter_commissioning::im::IM_REVISION),
+    )
+    .unwrap();
+    w.end_container().unwrap(); // InvokeResponseMessage
+    buf
+}
+
+/// Parse a `ReadRequestMessage` produced by
+/// [`matter_commissioning::im::build_read_request`] (device side).
+///
+/// Wire layout consumed (derived from `im/read.rs::build_read_request`):
+/// ```text
+/// anon struct {
+///   ctx(0): array AttributeRequests [
+///     anon list AttributePathIB { ctx(2): endpoint, ctx(3): cluster, ctx(4): attribute }
+///   ]
+///   ctx(3): bool  FabricFiltered  (false)
+///   ctx(0xFF): uint InteractionModelRevision
+/// }
+/// ```
+///
+/// Returns a `Vec<AttributePath>` with one entry per `AttributePathIB` in
+/// the request.
+///
+/// # Panics
+///
+/// Panics if `bytes` is not a valid `ReadRequestMessage`. Acceptable in test
+/// support code where the input is always controller-generated.
+pub fn parse_read_request(bytes: &[u8]) -> Vec<matter_commissioning::im::AttributePath> {
+    use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
+    use matter_commissioning::im::AttributePath;
+
+    let mut r = TlvReader::new(bytes);
+
+    // Consume top-level anonymous struct start.
+    match r.next().expect("ReadRequest: first element") {
+        Some(Element::ContainerStart {
+            tag: Tag::Anonymous,
+            kind: ContainerKind::Structure,
+        }) => {}
+        other => panic!("ReadRequest: expected anon struct, got {other:?}"),
+    }
+
+    // Scan forward to ctx(0) = AttributeRequests array.
+    loop {
+        match r.next().expect("ReadRequest: scan for AttributeRequests") {
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::Array,
+            }) => break,
+            Some(Element::ContainerEnd) | None => {
+                panic!("ReadRequest: missing AttributeRequests array")
+            }
+            Some(Element::ContainerStart { .. }) => tlv_skip_container(&mut r),
+            Some(_) => {}
+        }
+    }
+
+    // Iterate over AttributePathIB list entries in the array.
+    let mut paths = Vec::new();
+    loop {
+        match r.next().expect("ReadRequest: iterate AttributeRequests") {
+            Some(Element::ContainerEnd) => break, // end of AttributeRequests array
+            None => panic!("ReadRequest: AttributeRequests array not closed"),
+            // Each entry is an anonymous list (AttributePathIB).
+            Some(Element::ContainerStart {
+                kind: ContainerKind::List,
+                ..
+            }) => {
+                let members = tlv_read_members(&mut r);
+                let mut endpoint = None;
+                let mut cluster = None;
+                let mut attribute = None;
+                for (tag, v) in members {
+                    match (tag, v) {
+                        // ctx(2) = endpoint (matches build_read_request / attribute_path_from_value)
+                        (Tag::Context(2), Value::Uint(n)) => {
+                            endpoint = Some(u16::try_from(n).expect("endpoint fits u16"));
+                        }
+                        // ctx(3) = cluster
+                        (Tag::Context(3), Value::Uint(n)) => {
+                            cluster = Some(u32::try_from(n).expect("cluster fits u32"));
+                        }
+                        // ctx(4) = attribute
+                        (Tag::Context(4), Value::Uint(n)) => {
+                            attribute = Some(u32::try_from(n).expect("attribute fits u32"));
+                        }
+                        _ => {}
+                    }
+                }
+                paths.push(AttributePath {
+                    endpoint: endpoint.expect("AttributePath.endpoint present"),
+                    cluster: cluster.expect("AttributePath.cluster present"),
+                    attribute: attribute.expect("AttributePath.attribute present"),
+                });
+            }
+            Some(Element::ContainerStart { .. }) => tlv_skip_container(&mut r),
+            Some(_) => {}
+        }
+    }
+
+    paths
+}
+
+/// Build a `ReportDataMessage` carrying one or more `(AttributePath, value_tlv)` pairs.
+///
+/// Produces bytes that [`matter_commissioning::im::parse_report_data`] decodes
+/// to `ReportData { attributes }`.
+///
+/// `value_tlv` for each entry must be an anonymous-tagged TLV element (scalar
+/// or container). `put_preencoded` re-tags it to context tag 2 inside
+/// `AttributeData`.
+///
+/// Wire layout produced (derived from `im/read.rs::parse_report_data` and the
+/// proven `build_canned_report_data` template in `src/driver/commission.rs`):
+/// ```text
+/// anon struct {
+///   ctx(1): array AttributeReports [
+///     anon struct AttributeReportIB {
+///       ctx(1): struct AttributeData {
+///         ctx(1): list  AttributePathIB { ctx(2): ep, ctx(3): cluster, ctx(4): attr }
+///         ctx(2): <value>   (pre-encoded anonymous element re-tagged to ctx(2))
+///       }
+///     }
+///   ]
+///   ctx(0xFF): uint InteractionModelRevision
+/// }
+/// ```
+///
+/// # Panics
+///
+/// Panics if any `value_tlv` entry is not a valid anonymous-tagged TLV element.
+/// Acceptable in test support code where values are always codec-generated.
+pub fn build_report_data(reports: &[(matter_commissioning::im::AttributePath, &[u8])]) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).unwrap(); // ReportDataMessage
+    w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
+    for (path, value_tlv) in reports {
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeReportIB
+        w.start_structure(Tag::Context(1)).unwrap(); // AttributeData
+                                                     // AttributePathIB list at ctx(1) inside AttributeData.
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), u64::from(path.endpoint))
+            .unwrap();
+        w.put_uint(Tag::Context(3), u64::from(path.cluster))
+            .unwrap();
+        w.put_uint(Tag::Context(4), u64::from(path.attribute))
+            .unwrap();
+        w.end_container().unwrap(); // AttributePathIB
+                                    // Data at ctx(2): splice the anonymous TLV element under context tag 2.
+        w.put_preencoded(Tag::Context(2), value_tlv).unwrap();
+        w.end_container().unwrap(); // AttributeData
+        w.end_container().unwrap(); // AttributeReportIB
+    }
+    w.end_container().unwrap(); // AttributeReports
+    w.put_uint(
+        Tag::Context(0xFF),
+        u64::from(matter_commissioning::im::IM_REVISION),
+    )
+    .unwrap();
+    w.end_container().unwrap(); // ReportDataMessage
+    buf
+}
+
+// ── Task 9: roundtrip tests ───────────────────────────────────────────────────
+
+#[cfg(test)]
+mod device_im_roundtrip {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use matter_codec::{Tag, TlvWriter, Value};
+    use matter_commissioning::im::{
+        build_invoke_request, build_read_request, parse_invoke_response, parse_report_data,
+        AttributePath, CommandPath, InvokeResponse,
+    };
+
+    use super::{
+        build_invoke_response, build_invoke_status_response, build_report_data,
+        parse_invoke_request, parse_read_request,
+    };
+
+    /// (a) Controller builds InvokeRequest → device parses it back.
+    #[test]
+    fn parse_invoke_request_is_inverse_of_build_invoke_request() {
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0030,
+            command: 0x00,
+        };
+        // ArmFailSafe fields: { ctx(0): 60u16, ctx(1): 1u64 }
+        let mut fields_buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut fields_buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 60).unwrap(); // ExpiryLengthSeconds
+            w.put_uint(Tag::Context(1), 1).unwrap(); // Breadcrumb
+            w.end_container().unwrap();
+        }
+
+        let request_bytes = build_invoke_request(path, &fields_buf);
+        let decoded = parse_invoke_request(&request_bytes);
+
+        assert_eq!(decoded.path, path);
+        assert_eq!(
+            decoded.fields_tlv, fields_buf,
+            "fields_tlv mismatch: got {:02X?}, expected {:02X?}",
+            decoded.fields_tlv, fields_buf
+        );
+    }
+
+    /// (b) Device builds InvokeResponse → controller's im::parse_invoke_response recovers it.
+    #[test]
+    fn parse_invoke_response_accepts_build_invoke_response() {
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0030,
+            command: 0x01, // ArmFailSafeResponse
+        };
+        // ArmFailSafeResponse fields: { ctx(0): 0u8 (errorCode = OK) }
+        let mut fields_buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut fields_buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 0).unwrap(); // errorCode = OK
+            w.end_container().unwrap();
+        }
+
+        let response_bytes = build_invoke_response(path, &fields_buf);
+        let parsed = parse_invoke_response(&response_bytes).unwrap();
+
+        match parsed {
+            InvokeResponse::Command {
+                path: p,
+                fields_tlv,
+            } => {
+                assert_eq!(p, path);
+                assert_eq!(
+                    fields_tlv, fields_buf,
+                    "fields_tlv mismatch: got {:02X?}, expected {:02X?}",
+                    fields_tlv, fields_buf,
+                );
+            }
+            InvokeResponse::Status(s) => panic!("expected Command, got Status({s:?})"),
+        }
+    }
+
+    /// (b-status) Device builds InvokeStatusResponse → controller's
+    /// im::parse_invoke_response decodes it as InvokeResponse::Status.
+    #[test]
+    fn parse_invoke_response_accepts_build_invoke_status_response() {
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E, // OperationalCredentials
+            command: 0x0B,   // AddTrustedRootCertificate (no command response, only status)
+        };
+
+        let response_bytes = build_invoke_status_response(path, 0x00); // 0x00 = Success
+        let parsed = parse_invoke_response(&response_bytes).unwrap();
+
+        assert!(
+            matches!(parsed, InvokeResponse::Status(_)),
+            "expected Status, got {parsed:?}"
+        );
+        if let InvokeResponse::Status(status) = parsed {
+            // ImStatus::Success maps from 0x00; confirm it does not carry a failure code.
+            let status_name = format!("{status:?}");
+            assert!(
+                status_name.contains("Success") || status_name.contains("0"),
+                "expected Success status, got {status_name}"
+            );
+        }
+    }
+
+    /// (c) Controller builds ReadRequest → device parses it back.
+    #[test]
+    fn parse_read_request_is_inverse_of_build_read_request() {
+        let paths = vec![
+            AttributePath {
+                endpoint: 0,
+                cluster: 0x0030,
+                attribute: 0x0004, // BasicCommissioningInfo
+            },
+            AttributePath {
+                endpoint: 0,
+                cluster: 0x0031,
+                attribute: 0xFFFC, // FeatureMap
+            },
+        ];
+
+        let request_bytes = build_read_request(&paths);
+        let decoded = parse_read_request(&request_bytes);
+
+        assert_eq!(decoded.len(), paths.len());
+        assert_eq!(decoded, paths);
+    }
+
+    /// (d) Device builds ReportData → controller's im::parse_report_data recovers it.
+    #[test]
+    fn parse_report_data_accepts_build_report_data() {
+        let path1 = AttributePath {
+            endpoint: 0,
+            cluster: 0x0030,
+            attribute: 0x0004,
+        };
+        // Value: a u64 scalar (FeatureMap style).
+        let mut val1_buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut val1_buf);
+            w.put_uint(Tag::Anonymous, 0x01).unwrap();
+        }
+
+        let path2 = AttributePath {
+            endpoint: 0,
+            cluster: 0x0031,
+            attribute: 0xFFFC,
+        };
+        // Value: a u64 scalar = 3 (WIFI | THREAD).
+        let mut val2_buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut val2_buf);
+            w.put_uint(Tag::Anonymous, 3).unwrap();
+        }
+
+        let report_bytes =
+            build_report_data(&[(path1, val1_buf.as_slice()), (path2, val2_buf.as_slice())]);
+        let parsed = parse_report_data(&report_bytes).unwrap();
+
+        assert_eq!(parsed.attributes.len(), 2);
+
+        let (p0, v0) = &parsed.attributes[0];
+        assert_eq!(*p0, path1);
+        assert_eq!(*v0, Value::Uint(0x01));
+
+        let (p1, v1) = &parsed.attributes[1];
+        assert_eq!(*p1, path2);
+        assert_eq!(*v1, Value::Uint(3));
+    }
+
+    /// Edge case: roundtrip with an empty anonymous struct as CommandFields.
+    #[test]
+    fn roundtrip_empty_command_fields() {
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x003E,
+            command: 0x0B, // AddTrustedRootCertificate (fields is just an empty struct)
+        };
+        // Empty anonymous struct: [0x15, 0x18]
+        let empty_fields = vec![0x15u8, 0x18];
+
+        // (a) build→parse direction.
+        let req = build_invoke_request(path, &empty_fields);
+        let decoded = parse_invoke_request(&req);
+        assert_eq!(decoded.path, path);
+        assert_eq!(decoded.fields_tlv, empty_fields);
+
+        // (b) build-response→parse direction.
+        let resp = build_invoke_response(path, &empty_fields);
+        match parse_invoke_response(&resp).unwrap() {
+            InvokeResponse::Command {
+                path: p,
+                fields_tlv,
+            } => {
+                assert_eq!(p, path);
+                assert_eq!(fields_tlv, empty_fields);
+            }
+            InvokeResponse::Status(s) => panic!("expected Command, got {s:?}"),
+        }
+    }
+}
