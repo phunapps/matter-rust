@@ -61,6 +61,26 @@ pub enum DnAttribute {
     /// Matter CASE Authenticated Tag (NOC-CAT), spec §6.5.6 tag 22.
     CaseAuthenticatedTag(u32),
 
+    /// Matter Vendor Identifier (attestation certificates), CSA OID
+    /// `1.3.6.1.4.1.37244.2.1`.
+    ///
+    /// Used in DAC/PAI/PAA X.509 attestation certificate DNs (Matter
+    /// §6.5.6.1), where the value is a 4-character UPPERCASE-hex
+    /// `PrintableString` (e.g. `0xFFF1` → `"FFF1"`). This is an X.509-only
+    /// attribute: it has no Matter operational-TLV cert encoding (those
+    /// certs use the node/fabric/icac/rcac/case-tag identifiers above).
+    VendorId(u16),
+
+    /// Matter Product Identifier (attestation certificates), CSA OID
+    /// `1.3.6.1.4.1.37244.2.2`.
+    ///
+    /// Used in DAC/PAI X.509 attestation certificate DNs (Matter
+    /// §6.5.6.1), where the value is a 4-character UPPERCASE-hex
+    /// `PrintableString` (e.g. `0x8001` → `"8001"`). Like
+    /// [`DnAttribute::VendorId`], this is an X.509-only attribute with no
+    /// Matter operational-TLV cert encoding.
+    ProductId(u16),
+
     /// Forward-compatibility fallback for spec-defined attributes
     /// the typed variants above don't enumerate yet (e.g., tag 18
     /// matter-firmware-signing-id, tags 23-26 vid/pid variants).
@@ -314,6 +334,11 @@ fn encode_attribute(writer: &mut TlvWriter<'_>, attr: &DnAttribute) -> Result<()
         A::CaseAuthenticatedTag(v) => {
             writer.put_uint(Tag::Context(tags::DN_MATTER_NOC_CAT), u64::from(*v))?;
         }
+        // VID/PID are X.509-attestation-only DN attributes (DAC/PAI/PAA
+        // subject DNs). They have no Matter operational-TLV cert encoding,
+        // so refuse rather than invent a context tag.
+        A::VendorId(_) => return Err(Error::DnAttributeNotTlvEncodable("VendorId")),
+        A::ProductId(_) => return Err(Error::DnAttributeNotTlvEncodable("ProductId")),
         A::Other { tag, value } => match value {
             DnAttributeValue::Utf8(s) => writer.put_utf8(Tag::Context(*tag), s)?,
             DnAttributeValue::Uint(v) => writer.put_uint(Tag::Context(*tag), *v)?,

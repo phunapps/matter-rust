@@ -80,6 +80,17 @@ pub enum Error {
     #[error("Matter DN attribute (tag {0}) has no defined X.509 OID mapping")]
     DnAttributeHasNoX509Oid(u8),
 
+    /// A DN attribute belongs only to X.509 attestation certificates and
+    /// has no Matter operational-TLV cert encoding.
+    ///
+    /// Produced if [`crate::DnAttribute::VendorId`] or
+    /// [`crate::DnAttribute::ProductId`] is routed through the Matter TLV
+    /// writer. VID/PID identifiers live in DAC/PAI/PAA X.509 attestation
+    /// cert DNs (Matter §6.5.6.1), not in operational NOC/ICAC/RCAC TLV
+    /// certs, so there is no spec-defined TLV context tag for them.
+    #[error("DN attribute (tag {0}) is X.509-attestation-only and has no Matter TLV encoding")]
+    DnAttributeNotTlvEncodable(&'static str),
+
     /// A DN attribute's value cannot be encoded in its X.509 ASN.1
     /// string type.
     ///
@@ -98,6 +109,15 @@ pub enum Error {
     /// Reserved for M2.2; not produced by phase 1.
     #[error("signature verification failed")]
     SignatureVerificationFailed,
+
+    /// Test-support X.509 cert signing failed.
+    ///
+    /// Produced only by `test_support::build_x509_der` (behind the
+    /// `test-support` feature) when the supplied issuer PKCS#8 key is
+    /// malformed or `ring` rejects the signing request. Never produced by
+    /// production code paths.
+    #[error("test-support X.509 signing failed: {0}")]
+    TestX509SigningFailed(&'static str),
 
     /// A certificate's `not_before` is in the future.
     #[error("certificate is not yet valid (cert_index={cert_index}, not_before={not_before:?}, at={at:?})")]

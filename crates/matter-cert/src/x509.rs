@@ -74,17 +74,13 @@ const OID_MATTER_VVS_ID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.
 
 /// Attestation-certificate attribute: Matter vendor-id.
 ///
-/// Forward-looking: consumed when `DnAttribute` adds a `VendorId` variant
-/// for attestation certificate (DAC/PAI) support.
-#[allow(dead_code)]
+/// Carried in DAC/PAI/PAA subject DNs via [`DnAttribute::VendorId`].
 const OID_MATTER_VENDOR_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.2.1");
 
 /// Attestation-certificate attribute: Matter product-id.
 ///
-/// Forward-looking: consumed when `DnAttribute` adds a `ProductId` variant
-/// for attestation certificate (DAC/PAI) support.
-#[allow(dead_code)]
+/// Carried in DAC/PAI subject DNs via [`DnAttribute::ProductId`].
 const OID_MATTER_PRODUCT_ID: ObjectIdentifier =
     ObjectIdentifier::new_unwrap("1.3.6.1.4.1.37244.2.2");
 
@@ -276,7 +272,7 @@ fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
 ///
 /// Per RFC 5758 §3.2, this OID has no parameters — the SEQUENCE
 /// contains only the OID itself.
-fn encode_algorithm_identifier_ecdsa_sha256() -> Vec<u8> {
+pub(crate) fn encode_algorithm_identifier_ecdsa_sha256() -> Vec<u8> {
     let oid = encode_oid(&OID_ECDSA_WITH_SHA256);
     wrap_sequence(&oid)
 }
@@ -335,6 +331,9 @@ const TAG_IA5_STRING: u8 = 0x16;
 
 /// Encode a single `DnAttribute` as an X.509 `AttributeTypeAndValue`:
 /// `SEQUENCE { type OID, value DirectoryString }`.
+// One match arm per DN attribute kind; kept as a single table for
+// auditability against the spec's attribute list (§6.5.6).
+#[allow(clippy::too_many_lines)]
 fn encode_dn_attribute(attr: &DnAttribute) -> Result<Vec<u8>> {
     let (oid, string_tag, value_bytes) = match attr {
         // Matter-specific attributes: UTF8String of uppercase zero-padded hex.
@@ -363,6 +362,22 @@ fn encode_dn_attribute(attr: &DnAttribute) -> Result<Vec<u8>> {
             &OID_MATTER_NOC_CAT,
             TAG_UTF8_STRING,
             format!("{v:08X}").into_bytes(),
+        ),
+        // Attestation-cert VID/PID: 4-char UPPERCASE-hex PrintableString
+        // (Matter §6.5.6.1). PrintableString matches the C++/Python
+        // reference encoding and is what `extract_vid`/`extract_pid` parse
+        // back (they require exactly 4 UPPERCASE hex chars). The 0–9A–F
+        // alphabet is a strict subset of PrintableString, so no
+        // verify_printable check is needed.
+        DnAttribute::VendorId(v) => (
+            &OID_MATTER_VENDOR_ID,
+            TAG_PRINTABLE_STRING,
+            format!("{v:04X}").into_bytes(),
+        ),
+        DnAttribute::ProductId(v) => (
+            &OID_MATTER_PRODUCT_ID,
+            TAG_PRINTABLE_STRING,
+            format!("{v:04X}").into_bytes(),
         ),
 
         // Standard X.509 attributes.
@@ -517,7 +532,7 @@ fn wrap_set(content: &[u8]) -> Vec<u8> {
 }
 
 /// Wrap content bytes in a DER SEQUENCE.
-fn wrap_sequence(content: &[u8]) -> Vec<u8> {
+pub(crate) fn wrap_sequence(content: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(content.len() + 4);
     out.push(0x30);
     encode_definite_length(&mut out, content.len());
@@ -526,7 +541,7 @@ fn wrap_sequence(content: &[u8]) -> Vec<u8> {
 }
 
 /// Encode a DER definite-length prefix (short form ≤ 127, long form otherwise).
-fn encode_definite_length(out: &mut Vec<u8>, len: usize) {
+pub(crate) fn encode_definite_length(out: &mut Vec<u8>, len: usize) {
     if len < 0x80 {
         // len < 128, fits in u8.
         #[allow(clippy::cast_possible_truncation)]
