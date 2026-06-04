@@ -13,13 +13,30 @@
 //! ```
 
 use std::fs;
+use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use clap::Parser;
 
+use matter_cert::MatterTime;
 use matter_commissioning::attestation::{CdSigningRoots, Paa, PaaTrustStore};
+use matter_commissioning::driver::{commission, DriverConfig};
+use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
 use matter_commissioning::setup::{parse_manual_code, parse_qr, SetupPayload};
+use matter_commissioning::state_machine::{CommissionedFabric, CommissionerConfig};
+use matter_crypto::{derive_compressed_fabric_id, RingSigner, Signer};
+use matter_transport::{MdnsSdDiscovery, TokioUdpTransport};
+
+// Fixed identity for this single commissioning run. A real controller (M8)
+// persists these; the example mints a fresh fabric per run.
+const FABRIC_ID: u64 = 1;
+const RCAC_ID: u64 = 1;
+const COMMISSIONER_NODE_ID: u64 = 0x1234_5678_9ABC_DEF0;
+const ASSIGNED_NODE_ID: u64 = 0x0000_0000_0000_0002;
+const ADMIN_VENDOR_ID: u16 = 0xFFF1; // CSA test VID
+const IPK_EPOCH_KEY: [u8; 16] = [0x42; 16];
 
 /// Commission an IP-reachable Matter device that is in commissioning mode.
 #[derive(Debug, Parser)]
@@ -57,8 +74,6 @@ struct Cli {
 }
 
 /// The attestation trust anchors the commissioner validates against.
-// Fields `paa` and `cd` are consumed by the commission() call added in Task 4.
-#[allow(dead_code)]
 struct TrustRoots {
     paa: PaaTrustStore,
     cd: CdSigningRoots,
@@ -127,7 +142,33 @@ fn parse_setup_payload(cli: &Cli) -> anyhow::Result<SetupPayload> {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+/// Current wall-clock time as `MatterTime`. A binary may read the system clock.
+fn current_matter_time() -> anyhow::Result<MatterTime> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock before unix epoch")?
+        .as_secs();
+    Ok(MatterTime::from_unix_secs(secs))
+}
+
+/// Print a human-readable summary of the commissioned fabric.
+fn print_summary(fabric: &CommissionedFabric) -> anyhow::Result<()> {
+    let compressed = derive_compressed_fabric_id(
+        fabric.fabric.root_public_key.as_bytes(),
+        fabric.fabric.fabric_id,
+    )
+    .context("deriving compressed fabric id")?;
+    println!("✅ commissioned");
+    println!("   fabric_id            = {}", fabric.fabric.fabric_id);
+    println!("   compressed_fabric_id = {}", hex::encode(compressed));
+    println!("   peer_node_id         = {:#018x}", fabric.peer_node_id);
+    println!("   peer_public_key      = {}", hex::encode(fabric.peer_root_public_key));
+    println!("   terminated_at        = {:?}", fabric.terminated_at);
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let payload = parse_setup_payload(&cli)?;
     println!(
@@ -142,6 +183,62 @@ fn main() -> anyhow::Result<()> {
             "\u{26A0}  TEST ATTESTATION ROOTS IN USE — this run trusts CSA *test* PAA/CD roots.\n   NOT valid for production trust decisions. Pass --paa-dir and --cd-root for real devices."
         );
     }
+
+    // Self-generate an ephemeral fabric RCAC for this run.
+    // FLAG: per-run identity only — M8 owns a stable persistent commissioner identity.
+    let (root_signer, _pkcs8) = RingSigner::generate().context("generating fabric root key")?;
+    let root_signer: Arc<dyn Signer> = Arc::new(root_signer);
+    let now = current_matter_time()?;
+    let fabric = FabricRecord::new_root_only(
+        FABRIC_ID,
+        root_signer,
+        now,
+        MatterTime::NO_EXPIRY,
+        RCAC_ID,
+        &SystemNocRng,
+    )
+    .context("building fabric RCAC")?;
+
+    let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+    let commissioner = CommissionerConfig {
+        // commission() overwrites this with the live PASE-derived attestation key.
+        pase_attestation_challenge: [0u8; 16],
+        fabric: &fabric,
+        setup_payload: &payload,
+        paa_trust_store: &roots.paa,
+        cd_signing_roots: &roots.cd,
+        commissioner_node_id: COMMISSIONER_NODE_ID,
+        assigned_node_id: ASSIGNED_NODE_ID,
+        ipk_epoch_key: IPK_EPOCH_KEY,
+        case_admin_subject: COMMISSIONER_NODE_ID,
+        admin_vendor_id: ADMIN_VENDOR_ID,
+        now,
+        rng,
+        wifi_credentials: None, // ECM/Ethernet path; see runbook.
+    };
+
+    // Optional direct-dial address (skips the mDNS commissionable browse).
+    let commissionable_addr = match &cli.addr {
+        Some(s) => Some(s.parse::<SocketAddr>().context("parsing --addr")?),
+        None => None,
+    };
+
+    let config = DriverConfig {
+        commissioner,
+        commissionable_addr,
+        passcode: payload.passcode.as_u32(),
+    };
+
+    // Real IO: dual-stack [::]:0 UDP socket + mDNS discovery.
+    let transport = TokioUdpTransport::bind(0).await.context("binding UDP socket")?;
+    let mut discovery = MdnsSdDiscovery::new().context("starting mDNS discovery")?;
+
+    println!("commissioning… (this performs PASE → attestation → NOC → CASE)");
+    let fabric = commission(&transport, &mut discovery, config)
+        .await
+        .context("commission() failed")?;
+
+    print_summary(&fabric)?;
     Ok(())
 }
 
