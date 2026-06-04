@@ -201,9 +201,34 @@ fn print_summary(fabric: &CommissionedFabric) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Initialize a tracing subscriber driven by `-v/-vv`, writing spans/events to
+/// stderr so they don't pollute the stdout summary. Library spans are gated
+/// behind the crate's `tracing` feature, so this is a no-op unless the example
+/// is built with `--features driver,tracing`.
+fn init_tracing(verbose: u8) {
+    #[cfg(feature = "tracing")]
+    {
+        let level = match verbose {
+            0 => "warn",
+            1 => "info",
+            _ => "debug",
+        };
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(level))
+            .with_writer(std::io::stderr)
+            .init();
+    }
+    #[cfg(not(feature = "tracing"))]
+    {
+        // `-v/-vv` only takes effect when built with the `tracing` feature.
+        let _ = verbose;
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    init_tracing(cli.verbose);
     let payload = parse_setup_payload(&cli)?;
     println!(
         "setup payload: vid={:?} pid={:?} discriminator={} passcode=<redacted>",
