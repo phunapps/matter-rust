@@ -95,15 +95,18 @@ fn build_trust_roots(cli: &Cli) -> anyhow::Result<TrustRoots> {
     };
 
     let cd = if let Some(path) = &cli.cd_root {
-        let pem = fs::read(path)
-            .with_context(|| format!("reading CD root {}", path.display()))?;
+        let pem = fs::read(path).with_context(|| format!("reading CD root {}", path.display()))?;
         CdSigningRoots::from_pem(&[pem.as_slice()]).context("parsing --cd-root PEM")?
     } else {
         using_test_roots = true;
         CdSigningRoots::with_csa_test_roots()
     };
 
-    Ok(TrustRoots { paa, cd, using_test_roots })
+    Ok(TrustRoots {
+        paa,
+        cd,
+        using_test_roots,
+    })
 }
 
 /// Load every `*.der` file in `dir` into a PAA trust store. The connectedhomeip
@@ -118,8 +121,7 @@ fn load_production_paa(dir: &std::path::Path) -> anyhow::Result<PaaTrustStore> {
             continue;
         }
         let der = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let paa = Paa::from_der(&der)
-            .with_context(|| format!("parsing PAA {}", path.display()))?;
+        let paa = Paa::from_der(&der).with_context(|| format!("parsing PAA {}", path.display()))?;
         store.add(paa);
         count += 1;
     }
@@ -133,9 +135,7 @@ fn load_production_paa(dir: &std::path::Path) -> anyhow::Result<PaaTrustStore> {
 fn parse_setup_payload(cli: &Cli) -> anyhow::Result<SetupPayload> {
     match (&cli.qr, &cli.manual) {
         (Some(qr), None) => parse_qr(qr).context("parsing --qr setup payload"),
-        (None, Some(manual)) => {
-            parse_manual_code(manual).context("parsing --manual pairing code")
-        }
+        (None, Some(manual)) => parse_manual_code(manual).context("parsing --manual pairing code"),
         (None, None) => bail!("one of --qr or --manual is required"),
         // clap's `conflicts_with` prevents both, but guard anyway.
         (Some(_), Some(_)) => bail!("--qr and --manual are mutually exclusive"),
@@ -193,7 +193,10 @@ fn print_summary(fabric: &CommissionedFabric) -> anyhow::Result<()> {
     println!("   fabric_id            = {}", fabric.fabric.fabric_id);
     println!("   compressed_fabric_id = {}", hex::encode(compressed));
     println!("   peer_node_id         = {:#018x}", fabric.peer_node_id);
-    println!("   peer_public_key      = {}", hex::encode(fabric.peer_root_public_key));
+    println!(
+        "   peer_public_key      = {}",
+        hex::encode(fabric.peer_root_public_key)
+    );
     println!("   terminated_at        = {:?}", fabric.terminated_at);
     Ok(())
 }
@@ -261,7 +264,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Real IO: dual-stack [::]:0 UDP socket + mDNS discovery.
-    let transport = TokioUdpTransport::bind(0).await.context("binding UDP socket")?;
+    let transport = TokioUdpTransport::bind(0)
+        .await
+        .context("binding UDP socket")?;
     let mut discovery = MdnsSdDiscovery::new().context("starting mDNS discovery")?;
 
     println!("commissioning… (this performs PASE → attestation → NOC → CASE)");
