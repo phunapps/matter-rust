@@ -14,7 +14,10 @@
 
 use std::path::PathBuf;
 
+use anyhow::{bail, Context};
 use clap::Parser;
+
+use matter_commissioning::setup::{parse_manual_code, parse_qr, SetupPayload};
 
 /// Commission an IP-reachable Matter device that is in commissioning mode.
 #[derive(Debug, Parser)]
@@ -51,10 +54,28 @@ struct Cli {
     verbose: u8,
 }
 
+/// Resolve the setup payload from exactly one of `--qr` / `--manual`.
+fn parse_setup_payload(cli: &Cli) -> anyhow::Result<SetupPayload> {
+    match (&cli.qr, &cli.manual) {
+        (Some(qr), None) => parse_qr(qr).context("parsing --qr setup payload"),
+        (None, Some(manual)) => {
+            parse_manual_code(manual).context("parsing --manual pairing code")
+        }
+        (None, None) => bail!("one of --qr or --manual is required"),
+        // clap's `conflicts_with` prevents both, but guard anyway.
+        (Some(_), Some(_)) => bail!("--qr and --manual are mutually exclusive"),
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    // Commissioning logic is added in later tasks.
-    println!("parsed CLI: {cli:?}");
+    let payload = parse_setup_payload(&cli)?;
+    println!(
+        "setup payload: vid={:?} pid={:?} discriminator={} passcode=<redacted>",
+        payload.vendor_id,
+        payload.product_id,
+        payload.discriminator.as_u16(),
+    );
     Ok(())
 }
 
