@@ -18,6 +18,24 @@ updates:
       - "cargo"
     commit-message:
       prefix: "deps(cargo)"
+    # Ecosystem-locked transitive bumps that cannot compile against our current
+    # pinned RustCrypto generation. These are NOT actionable until the listed
+    # upstream crates migrate; Dependabot otherwise reopens them every week.
+    # We still accept patch/minor updates within the lines we're on.
+    ignore:
+      # aes 0.9 moved to the new RustCrypto `cipher` trait generation. Our
+      # AES-128-CCM provider (`ccm`, used by matter-crypto's aead.rs) still
+      # requires aes 0.8. Re-enable when `ccm` ships a release built on aes 0.9.
+      - dependency-name: "aes"
+        versions: [">=0.9"]
+      # const-oid 0.10 + spki 0.8 are the `der 0.8` generation. We're pinned to
+      # the der 0.7 ecosystem (cms 0.2, der 0.7, p256 0.13 / elliptic-curve 0.13),
+      # which requires const-oid 0.9 / spki 0.7; the bump duplicates the crate and
+      # fails to compile. Re-enable when cms/der/p256 move to der 0.8.
+      - dependency-name: "const-oid"
+        versions: [">=0.10"]
+      - dependency-name: "spki"
+        versions: [">=0.8"]
 
   # GitHub Actions used by .github/workflows/*. Keeps action versions current
   # so we don't drift onto deprecated runtimes.
