@@ -151,6 +151,37 @@ fn current_matter_time() -> anyhow::Result<MatterTime> {
     Ok(MatterTime::from_unix_secs(secs))
 }
 
+/// JSON-serializable summary of a commissioning result.
+///
+/// NOTE: the fabric's RCAC *private key* is intentionally NOT persisted — this
+/// example mints an ephemeral per-run identity. Durable fabric persistence
+/// (including the operational signing key) is M8 `matter-controller`'s job.
+#[derive(serde::Serialize)]
+struct FabricSummary {
+    fabric_id: u64,
+    compressed_fabric_id: String,
+    peer_node_id: u64,
+    peer_public_key: String,
+    terminated_at: String,
+}
+
+impl FabricSummary {
+    fn from_fabric(fabric: &CommissionedFabric) -> anyhow::Result<Self> {
+        let compressed = derive_compressed_fabric_id(
+            fabric.fabric.root_public_key.as_bytes(),
+            fabric.fabric.fabric_id,
+        )
+        .context("deriving compressed fabric id")?;
+        Ok(Self {
+            fabric_id: fabric.fabric.fabric_id,
+            compressed_fabric_id: hex::encode(compressed),
+            peer_node_id: fabric.peer_node_id,
+            peer_public_key: hex::encode(fabric.peer_root_public_key),
+            terminated_at: format!("{:?}", fabric.terminated_at),
+        })
+    }
+}
+
 /// Print a human-readable summary of the commissioned fabric.
 fn print_summary(fabric: &CommissionedFabric) -> anyhow::Result<()> {
     let compressed = derive_compressed_fabric_id(
@@ -239,6 +270,14 @@ async fn main() -> anyhow::Result<()> {
         .context("commission() failed")?;
 
     print_summary(&fabric)?;
+
+    if let Some(out) = &cli.out {
+        let summary = FabricSummary::from_fabric(&fabric)?;
+        let json = serde_json::to_string_pretty(&summary).context("serializing summary")?;
+        std::fs::write(out, json).with_context(|| format!("writing {}", out.display()))?;
+        println!("   wrote summary -> {}", out.display());
+    }
+
     Ok(())
 }
 
@@ -257,5 +296,19 @@ mod tests {
     fn qr_and_manual_conflict() {
         let err = Cli::try_parse_from(["commission_ip", "--qr", "MT:X", "--manual", "123"]);
         assert!(err.is_err(), "--qr and --manual must be mutually exclusive");
+    }
+
+    #[test]
+    fn fabric_summary_serializes() {
+        let summary = FabricSummary {
+            fabric_id: 1,
+            compressed_fabric_id: "aabb".into(),
+            peer_node_id: 2,
+            peer_public_key: "04ff".into(),
+            terminated_at: "Cleanup".into(),
+        };
+        let json = serde_json::to_string(&summary).expect("serialize");
+        assert!(json.contains("\"fabric_id\":1"));
+        assert!(json.contains("\"peer_node_id\":2"));
     }
 }
