@@ -1,0 +1,77 @@
+//! `commission_ip` — operator binary that commissions an IP-reachable Matter
+//! device end to end using the M6.6 [`commission`] orchestrator.
+//!
+//! Full walkthrough: `docs/runbooks/m6.6-first-commission.md`.
+//!
+//! Built behind the `driver` feature:
+//! ```text
+//! cargo run --example commission_ip --features driver -- --help
+//! ```
+//! For per-step tracing spans, also enable `tracing`:
+//! ```text
+//! cargo run --example commission_ip --features driver,tracing -- --manual <code> -vv
+//! ```
+
+use std::path::PathBuf;
+
+use clap::Parser;
+
+/// Commission an IP-reachable Matter device that is in commissioning mode.
+#[derive(Debug, Parser)]
+#[command(name = "commission_ip", about, long_about = None)]
+struct Cli {
+    /// Setup payload from a QR code (e.g. "MT:..."). Mutually exclusive with --manual.
+    #[arg(long, conflicts_with = "manual")]
+    qr: Option<String>,
+
+    /// Setup payload from an 11- or 21-digit manual pairing code.
+    #[arg(long)]
+    manual: Option<String>,
+
+    /// Dial this address directly (e.g. "[fd11::2]:5540"), skipping the mDNS browse.
+    #[arg(long)]
+    addr: Option<String>,
+
+    /// Directory of PRODUCTION PAA root certs (loads every *.der file).
+    /// When set, the bundled CSA test PAA roots are not used.
+    #[arg(long)]
+    paa_dir: Option<PathBuf>,
+
+    /// PRODUCTION CD signing cert (PEM). When set, the bundled CSA test CD roots
+    /// are not used.
+    #[arg(long)]
+    cd_root: Option<PathBuf>,
+
+    /// Write the resulting fabric summary to this path as JSON.
+    #[arg(long)]
+    out: Option<PathBuf>,
+
+    /// Increase log verbosity (-v = info spans, -vv = debug).
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    // Commissioning logic is added in later tasks.
+    println!("parsed CLI: {cli:?}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        // clap's own consistency checker: catches conflicting/duplicate args.
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn qr_and_manual_conflict() {
+        let err = Cli::try_parse_from(["commission_ip", "--qr", "MT:X", "--manual", "123"]);
+        assert!(err.is_err(), "--qr and --manual must be mutually exclusive");
+    }
+}
