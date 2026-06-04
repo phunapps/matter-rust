@@ -7,7 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate
+
+#### M6.6.4 — `commission()` orchestrator + in-process loopback E2E gate
+
+The headline "first commission, no hardware" slice: the real `commission()`
+driver walks a device through the full Ethernet-path commissioning sequence
+(discover → PASE → attestation/CSR/AddNOC command loop → CASE →
+`CommissioningComplete`) against a self-contained in-process mock device, with
+every Commissioner verifier (`verify_chain`, `verify_attestation_response`,
+NOC/CSR, CASE) running unmodified.
+
+##### Added
+
+- `driver::commission` + `driver::DriverConfig` — the async orchestrator that
+  drives the sans-IO `Commissioner` cursor over the M6.6.2/M6.6.3 driver:
+  resolve → `run_pase` → poll loop mapping each `Action` to IO
+  (`Invoke`/`ReadAttribute` → `im` framing over `secured_round_trip`;
+  `EstablishCase` → operational discovery + `run_case`; `Abort` → best-effort
+  `ArmFailSafe(0)` rollback; `Done` → `CommissionedFabric`).
+- `driver::resolve_commissionable` — mDNS resolution of a commissionable device
+  by long discriminator (the `D` TXT record), mirroring `resolve_operational`.
+- `DriverError::Aborted` variant (state-machine `Abort` with a reason).
+- The in-process loopback E2E gate (`tests/commission_loopback.rs`): the real
+  `commission()` commissions a self-contained mock device built from a
+  self-generated PAA→PAI→DAC PKI, the bundled CSA CD fixture, and real
+  `PaseVerifier`/`CaseResponder`s — hardware-free, over an `InMemoryDatagram`
+  pair. (Supported by a new reusable X.509 DER cert builder in `matter-cert`
+  test-support — see that crate's changelog.)
+
+##### Fixed
+
+- `commission()` now sources the PASE attestation challenge from the **live**
+  established session (`SessionManager` `attestation_key`), not a static config
+  input — the device signs attestation/CSR over the SPAKE2+-derived value, so
+  the Commissioner must verify against the same live value.
+
+##### Flagged (deferred)
+
+- **Commissioner operational identity (→ M8):** `commission()` mints the
+  controller's own NOC inline with a fresh keypair on every call, so the
+  controller has no *stable/persistent* operational identity. Correct for a
+  single commissioning run; persisting one admin identity across runs is M8
+  (fabric create/persist/restore) work.
+- **→ M6.6.5:** the Wi-Fi-path loopback (the gate pins the mock to the Ethernet
+  feature so the Commissioner skips Wi-Fi network config), SecureChannel
+  `StatusReport` parsing (a *rejecting* device is not yet detected), link-local
+  `fe80::` operational scope-id dialing, and the real-device example + runbook.
+- The loopback pins the mock to **VID 0xFFF1 / PID 0x8001** to match the bundled
+  CSA Certification Declaration fixture (the DAC/PAI VID/PID and setup-payload
+  VID/PID must agree with the CD cross-check).
 
 #### M6.6.3b — PASE/CASE driver bridges + operational discovery
 
@@ -747,6 +796,8 @@ fixture file; the test assertions remain stable.
 - `MatterCertificate::verify_signed_by(&issuer_key)` — full single-cert signature verification against an issuer's public key. [M2.3]
 - `CertificateChain::validate(&roots, at)` + `TrustedRoots` + `TrustAnchor` — end-to-end chain walk with time, CA-bit, path-length, DN linkage, and signature checks. [M2.4]
 - `test-support` Cargo feature gating a `test_support` module for cert construction in test code (not part of the stable API).
+- [M6.6.4] `test_support::build_x509_der` — builds a fully-signed X.509 DER certificate (TBS via `to_x509_tbs_der`, signed with the issuer's P-256 key via `ring`, wrapped as the outer `Certificate`). Used to synthesise webpki-valid PAA→PAI→DAC attestation chains for hardware-free commissioning tests.
+- [M6.6.4] `DnAttribute::VendorId`/`ProductId` now encode to X.509 RDNs (4-char uppercase-hex `PrintableString` under the Matter VID/PID OIDs) in `to_x509_tbs_der`, matching `matter-commissioning`'s `extract_vid`/`extract_pid`. Additive to the `#[non_exhaustive]` enum.
 
 #### Test infrastructure
 
