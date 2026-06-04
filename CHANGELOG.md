@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete)
+
+#### M6.6.5 — `commission_ip` example + first-commission runbook (M6.6 / M6 complete)
+
+The operator-facing close-out of M6.6 and Milestone 6.
+
+##### Added
+
+- `examples/commission_ip.rs` (behind the `driver` feature) — an operator binary
+  that commissions an IP-reachable device end to end: parses a `--qr`/`--manual`
+  setup payload, builds attestation trust roots (bundled CSA **test** roots by
+  default with a loud banner, or production roots via `--paa-dir`/`--cd-root`),
+  self-generates an ephemeral fabric, and drives `commission()` over a real
+  `TokioUdpTransport` + `MdnsSdDiscovery`. `--addr` dials directly (skips mDNS);
+  `--out` writes a JSON fabric summary; `-v/-vv` enables tracing spans.
+- `docs/runbooks/m6.6-first-commission.md` — manual real-device runbook (real LAN
+  device via open commissioning window; rs-matter test device; matter.js
+  cross-verification; troubleshooting; BLE/Tuya deferral).
+- `docs/tested-devices.md` — the "devices we've tested against" list.
+
+##### Notes
+
+- No library protocol changes — this slice is the example binary + docs only.
+- The example mints an **ephemeral** per-run commissioner identity; durable fabric
+  persistence (including a stable operational signing key) is M8.
 
 #### M6.6.4 — `commission()` orchestrator + in-process loopback E2E gate
 
