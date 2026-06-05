@@ -365,6 +365,23 @@ The byte-parity test (`crates/matter-commissioning/tests/noc_byte_parity.rs`)
 skips with `eprintln!` when fixtures are absent or carry empty
 `expected_*_b64` fields, so CI stays green during the operator wiring.
 
+### BLE commissioning transport
+
+**Status:** open (deferred post-v1.0 per CLAUDE.md).
+
+Factory-fresh Wi-Fi devices are BLE-only until they receive network credentials.
+Until BLE lands, `commission_ip` requires an IP-reachable device (already on the
+network, in an open commissioning window). The Tuya-plug-over-BLE validation is
+blocked on this.
+
+### Live DCL client
+
+**Status:** open (optional per CLAUDE.md M6).
+
+Production PAA roots currently come from a cached connectedhomeip snapshot passed via
+`--paa-dir`. A snapshot can miss recently-approved vendor PAAs. A live Distributed
+Compliance Ledger client (or scheduled snapshot refresh) removes that staleness window.
+
 ### `xtask capture-commissioning` — matter.js operator wiring
 
 **Status:** open. Operator-touch wiring deferred from M6.4.6.
