@@ -59,8 +59,9 @@ struct Cli {
     #[arg(long)]
     paa_dir: Option<PathBuf>,
 
-    /// PRODUCTION CD signing cert (PEM). When set, the bundled CSA test CD roots
-    /// are not used.
+    /// PRODUCTION CD signing roots: a directory of CSA CD signing certs
+    /// (loads every *.der, e.g. connectedhomeip credentials/production/cd-certs),
+    /// or a single *.der cert. When set, the bundled CSA test CD roots are not used.
     #[arg(long)]
     cd_root: Option<PathBuf>,
 
@@ -95,8 +96,8 @@ fn build_trust_roots(cli: &Cli) -> anyhow::Result<TrustRoots> {
     };
 
     let cd = if let Some(path) = &cli.cd_root {
-        let pem = fs::read(path).with_context(|| format!("reading CD root {}", path.display()))?;
-        CdSigningRoots::from_pem(&[pem.as_slice()]).context("parsing --cd-root PEM")?
+        load_production_cd(path)
+            .with_context(|| format!("loading CD signing roots from {}", path.display()))?
     } else {
         using_test_roots = true;
         CdSigningRoots::with_csa_test_roots()
@@ -129,6 +130,35 @@ fn load_production_paa(dir: &std::path::Path) -> anyhow::Result<PaaTrustStore> {
         bail!("no *.der PAA certs found in {}", dir.display());
     }
     Ok(store)
+}
+
+/// Load CSA CD signing roots from `path`: a directory of `*.der` CD signing
+/// certificates (e.g. connectedhomeip `credentials/production/cd-certs/`, which
+/// ships several distinct CSA keys), or a single `*.der` certificate.
+///
+/// Real-world CD signing roots are X.509 certificates, so this uses
+/// [`CdSigningRoots::from_cert_der`] (not the `from_pem` `SubjectPublicKeyInfo`
+/// path the bundled test root uses).
+fn load_production_cd(path: &std::path::Path) -> anyhow::Result<CdSigningRoots> {
+    let mut ders: Vec<Vec<u8>> = Vec::new();
+    if path.is_dir() {
+        for entry in
+            fs::read_dir(path).with_context(|| format!("reading dir {}", path.display()))?
+        {
+            let p = entry?.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("der") {
+                continue;
+            }
+            ders.push(fs::read(&p).with_context(|| format!("reading {}", p.display()))?);
+        }
+        if ders.is_empty() {
+            bail!("no *.der CD signing certs found in {}", path.display());
+        }
+    } else {
+        ders.push(fs::read(path).with_context(|| format!("reading {}", path.display()))?);
+    }
+    let refs: Vec<&[u8]> = ders.iter().map(Vec::as_slice).collect();
+    CdSigningRoots::from_cert_der(&refs).context("parsing CD signing certificates")
 }
 
 /// Resolve the setup payload from exactly one of `--qr` / `--manual`.

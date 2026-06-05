@@ -32,7 +32,9 @@ const CSA_TEST_CD_SIGNING_ROOT_PEM: &[u8] =
 
 /// Trusted CSA Certification Declaration signing roots.
 ///
-/// Built from production roots via [`Self::from_pem`] or seeded with
+/// Built from production roots via [`Self::from_cert_der`] (X.509 CD
+/// signing certificates, as published by the CSA DCL) or
+/// [`Self::from_pem`] (bare `SubjectPublicKeyInfo` PEMs), or seeded with
 /// the bundled synthetic CSA-test root via
 /// [`Self::with_csa_test_roots`].
 ///
@@ -81,6 +83,45 @@ impl CdSigningRoots {
         let mut public_keys = Vec::with_capacity(pems.len());
         for raw in pems {
             let pk = parse_pem_public_key(raw)?;
+            public_keys.push(pk);
+        }
+        Ok(Self { public_keys })
+    }
+
+    /// Build a trust store from X.509 **certificate** DER blobs (one per
+    /// trusted CSA CD signing root), extracting each certificate's P-256
+    /// subject public key.
+    ///
+    /// This is the ingestion path for real-world CD signing roots: the CSA
+    /// Distributed Compliance Ledger — and the `connectedhomeip`
+    /// `credentials/production/cd-certs/` mirror of it — publish the roots as
+    /// X.509 certificates, not as the bare `SubjectPublicKeyInfo` PEMs that
+    /// [`Self::from_pem`] consumes. There are several distinct CSA CD signing
+    /// keys, so a real commissioner typically loads the whole directory.
+    ///
+    /// The certificate is treated purely as a trust anchor: only its subject
+    /// public key is extracted. No signature, validity-window, or chain checks
+    /// are performed — the operator vouches for the roots by supplying them
+    /// (exactly as [`Self::from_pem`] trusts the keys it is given).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AttestationError::CertificationDeclarationMalformed`] if any
+    /// input fails to parse as an X.509 certificate, or does not carry a
+    /// 65-byte SEC1-uncompressed P-256 public key.
+    pub fn from_cert_der(certs: &[&[u8]]) -> Result<Self, AttestationError> {
+        use x509_parser::prelude::{FromDer, X509Certificate};
+
+        let mut public_keys = Vec::with_capacity(certs.len());
+        for der in certs {
+            let (_, cert) = X509Certificate::from_der(der)
+                .map_err(|_| AttestationError::CertificationDeclarationMalformed)?;
+            let pk = cert.public_key().subject_public_key.data.as_ref().to_vec();
+            // CD signatures are ECDSA-P256; the trust root must carry a
+            // SEC1-uncompressed P-256 point (`0x04` || X || Y, 65 bytes).
+            if pk.len() != 65 || pk[0] != 0x04 {
+                return Err(AttestationError::CertificationDeclarationMalformed);
+            }
             public_keys.push(pk);
         }
         Ok(Self { public_keys })
@@ -454,6 +495,65 @@ mod tests {
         let trust = CdSigningRoots::from_pem(&[]).unwrap();
         assert!(trust.is_empty());
         assert_eq!(trust.len(), 0);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn from_cert_der_extracts_p256_pubkey_from_x509_cert() {
+        // Real-world CD signing roots (CSA DCL / connectedhomeip
+        // `credentials/production/cd-certs/`) are X.509 certificates, not bare
+        // SubjectPublicKeyInfo PEMs. `from_cert_der` must extract the cert's
+        // P-256 subject public key. We synthesise a self-signed P-256 cert with
+        // a known key and assert the extracted SEC1 point matches it byte-for-byte.
+        use matter_cert::test_support::{build_x509_der, TestCertFields};
+        use matter_cert::{
+            DistinguishedName, DnAttribute, Extensions, MatterTime, PublicKey, Signature,
+        };
+        use ring::rand::SystemRandom;
+        use ring::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
+
+        let rng = SystemRandom::new();
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
+        let kp = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref(), &rng)
+            .unwrap();
+        let expected = kp.public_key().as_ref().to_vec(); // 65-byte SEC1 uncompressed
+        let pk = PublicKey::from_slice(&expected).unwrap();
+
+        let dn = DistinguishedName::new(vec![DnAttribute::CommonName(
+            "Test CD Signing Key (synthetic)".into(),
+        )]);
+        let der = build_x509_der(
+            TestCertFields {
+                serial: vec![0x01],
+                issuer: dn.clone(),
+                not_before: MatterTime::from_unix_secs(1_700_000_000),
+                not_after: MatterTime::NO_EXPIRY,
+                subject: dn,
+                public_key: pk,
+                extensions: Extensions::default(),
+                signature: Signature::new([0u8; 64]),
+            },
+            pkcs8.as_ref(), // self-signed
+        )
+        .expect("synthetic CD signing cert builds");
+
+        let trust = CdSigningRoots::from_cert_der(&[&der]).expect("cert parses");
+        assert_eq!(trust.len(), 1);
+        assert_eq!(
+            trust.public_keys[0], expected,
+            "extracted SEC1 public key must match the cert's subject key"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn from_cert_der_rejects_non_certificate_bytes() {
+        let err = CdSigningRoots::from_cert_der(&[b"not a certificate"])
+            .expect_err("garbage DER rejected");
+        assert!(matches!(
+            err,
+            AttestationError::CertificationDeclarationMalformed
+        ));
     }
 
     #[test]
