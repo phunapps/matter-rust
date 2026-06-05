@@ -56,19 +56,32 @@ ends with a `cargo publish` to crates.io.
 
 | Milestone | Crate                  | Goal                                                | Target |
 | --------- | ---------------------- | --------------------------------------------------- | ------ |
-| M0        | —                      | Repo, workspace, CI, roadmap                        | now    |
-| M1        | `matter-codec`         | Matter TLV encode/decode                            | mo 2-3 |
-| M2        | `matter-cert`          | Matter certificate parsing and chain validation     | mo 4-5 |
-| M3        | `matter-crypto` v0.1   | PASE / SPAKE2+ (commissioning session establishment)| mo 6-7 |
-| M4        | `matter-crypto` v0.2   | CASE / SIGMA (operational session establishment)    | mo 8-9 |
-| M5        | `matter-transport`     | IPv6 UDP, mDNS discovery, message framing, MRP      | mo 10-11 |
-| M6        | `matter-commissioning` | End-to-end commissioning of a real Matter device    | mo 12-14 |
+| M0        | —                      | Repo, workspace, CI, roadmap                        | ✓ done |
+| M1        | `matter-codec`         | Matter TLV encode/decode                            | ✓ done |
+| M2        | `matter-cert`          | Matter certificate parsing and chain validation     | ✓ done |
+| M3        | `matter-crypto` v0.1   | PASE / SPAKE2+ (commissioning session establishment)| ✓ done |
+| M4        | `matter-crypto` v0.2   | CASE / SIGMA (operational session establishment)    | ✓ done |
+| M5        | `matter-transport`     | IPv6 UDP, mDNS discovery, message framing, MRP      | ✓ done |
+| M6        | `matter-commissioning` | End-to-end commissioning of a real Matter device    | ✓ done |
 | M7        | `matter-clusters`      | Generated cluster definitions (OnOff, Level, …)     | mo 15-16 |
 | M8        | `matter-controller`    | High-level controller API. **v1.0.**                | mo 17-18 |
 
 Features deferred past v1.0: Thread network commissioning, BLE commissioning
 transport, OTA (BDX), multi-admin, groups, Scenes, Thermostat, advanced ACL,
 `no_std`, and clusters beyond the initial set. These ship in 1.x.
+
+## Commissioning a real device (M6.6)
+
+`matter-commissioning` can commission an IP-reachable Matter device end to end in
+pure Rust. See the operator runbook: [`docs/runbooks/m6.6-first-commission.md`](docs/runbooks/m6.6-first-commission.md).
+
+```bash
+cargo run --example commission_ip --features driver -- --help
+```
+
+The in-process loopback E2E test (`commission_loopback.rs`) proves the full
+orchestration with no hardware; the runbook performs the real-device run and
+cross-verifies the trace against matter.js.
 
 ## How we verify correctness
 
