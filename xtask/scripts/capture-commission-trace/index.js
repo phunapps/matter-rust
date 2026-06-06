@@ -13,23 +13,31 @@
  * everything, including MRP acks; the Rust differ filters those itself.
  *
  * Usage:
- *   node index.js --manual 12345678901 --out ../../../runs/matterjs-p110m.jsonl
- *   node index.js --qr "MT:..."        --out ../../../runs/matterjs-p110m.jsonl
+ *   node index.js --manual 12345678901 [--out <path>]
+ *   node index.js --qr "MT:..."        [--out <path>]
+ *
+ * --out defaults to trace.jsonl in the current directory. The output
+ * directory is created automatically (including missing parents), so
+ * you can pass a path like ../../../runs/matterjs-p110m.jsonl without
+ * pre-creating the runs/ directory.
  *
  * Notes for the operator:
  *   - Storage is IN-MEMORY: every run is factory-fresh, nothing persists
  *     between runs. There is no controller state on disk to clean up.
  *   - On success the script REMOVES ITS OWN FABRIC from the device
- *     (removeNode with tryDecommissioning) before exiting, so the device's
- *     fabric slot is freed and it can be re-commissioned next run.
+ *     (removeNode with tryDecommissioning=true) before exiting, so the
+ *     device's fabric slot is freed and it can be re-commissioned next run.
  *   - Progress is logged to STDERR. STDOUT is kept clean.
  *   - The trace file is written synchronously line-by-line, so a crash
  *     mid-run still leaves the partial trace on disk for inspection.
  *   - Decrypted traces contain DAC chains, NOCs and fabric ids — keep the
  *     output under /runs/ (gitignored). Do not commit captured traces.
+ *   - Bad pairing codes (wrong checksum, wrong format) are reported to
+ *     STDERR and the script exits 2 — no network activity is started.
  */
 
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 // Side-effect import: registers the Node.js platform services (Crypto,
 // Network, mDNS) on Environment.default. Without this the controller throws
@@ -53,7 +61,8 @@ function usage() {
       "  node index.js --qr <MT:...>            [--out <path>]",
       "",
       "Exactly one of --manual / --qr is required.",
-      "--out defaults to trace.jsonl",
+      "--out defaults to trace.jsonl (current directory).",
+      "The output directory is created automatically if it does not exist.",
       "",
     ].join("\n"),
   );
@@ -129,6 +138,8 @@ function toHex(bytes) {
  * we mask to the low 16 bits.
  */
 function installCapture(outPath) {
+  // Ensure the output directory exists (creates all missing parents).
+  mkdirSync(dirname(outPath), { recursive: true });
   // Truncate/create the output file up front.
   writeFileSync(outPath, "");
 
@@ -150,14 +161,25 @@ function installCapture(outPath) {
   const origEncode = MessageCodec.encodePayload.bind(MessageCodec);
   const origDecode = MessageCodec.decodePayload.bind(MessageCodec);
 
+  // TX record is optimistic — captured before encode; if encode throws, the
+  // trace carries a final TX entry for a message that was never actually sent.
   MessageCodec.encodePayload = (message) => {
-    record("tx", message);
+    try {
+      record("tx", message);
+    } catch (e) {
+      process.stderr.write(`warn: trace record failed (tx): ${e?.message}\n`);
+    }
     return origEncode(message);
   };
 
   MessageCodec.decodePayload = (decodedPacket) => {
+    // origDecode throwing is a real codec failure — let it propagate.
     const decoded = origDecode(decodedPacket);
-    record("rx", decoded);
+    try {
+      record("rx", decoded);
+    } catch (e) {
+      process.stderr.write(`warn: trace record failed (rx): ${e?.message}\n`);
+    }
     return decoded;
   };
 }
@@ -173,11 +195,21 @@ async function main() {
 
   // Route matter.js's own logging to STDERR so STDOUT stays clean (STDOUT is
   // reserved for nothing here, but a clean stdout makes this safe to pipe).
-  Logger.destinations.default.write = (text) => process.stderr.write(text + "\n");
+  if (Logger.destinations.default != null) {
+    Logger.destinations.default.write = (text) => process.stderr.write(text + "\n");
+  }
 
   // Parse the pairing code first — fail fast on a bad code before touching
   // the network or installing patches.
-  const { passcode, identifierData } = parsePairing(args);
+  let passcode, identifierData;
+  try {
+    ({ passcode, identifierData } = parsePairing(args));
+  } catch (e) {
+    process.stderr.write(
+      `error: could not parse pairing code (bad checksum or wrong format): ${e?.message}\n`,
+    );
+    process.exit(2);
+  }
   process.stderr.write(
     `parsed pairing: passcode set, identifier=${JSON.stringify(identifierData)}\n`,
   );
@@ -234,7 +266,7 @@ async function main() {
   // Success: remove our own fabric from the device so its slot is freed.
   try {
     process.stderr.write("removing node (decommissioning our fabric)...\n");
-    await controller.removeNode(nodeId, true);
+    await controller.removeNode(nodeId, /* tryDecommissioning */ true);
     process.stderr.write("node removed\n");
   } catch (err) {
     // Non-fatal: the trace is captured. Surface the error but still exit 0.
