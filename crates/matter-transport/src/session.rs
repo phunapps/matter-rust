@@ -162,6 +162,10 @@ pub enum DecodeInboundOutput {
         exchange_id: u16,
         /// Whether the peer is the initiator (i.e. we are the responder).
         is_initiator: bool,
+        /// Protocol id from the decoded protocol header.
+        protocol_id: ProtocolId,
+        /// Protocol opcode from the decoded protocol header.
+        opcode: u8,
         /// Decrypted application payload (post-header).
         payload: Vec<u8>,
     },
@@ -503,11 +507,15 @@ impl SessionManager {
                     InboundOutcome::AppMessage {
                         exchange_id,
                         is_initiator,
+                        protocol_id,
+                        opcode,
                         payload,
                     } => DecodeInboundOutput::AppMessage {
                         session_id: local_id,
                         exchange_id,
                         is_initiator,
+                        protocol_id,
+                        opcode,
                         payload,
                     },
                     InboundOutcome::AckOnly {
@@ -684,5 +692,63 @@ impl SessionManager {
         )?;
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
         Ok(packet)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+mod tests {
+    use std::time::Instant;
+
+    use matter_crypto::pase::PaseSessionKeys;
+
+    use super::*;
+    use crate::mrp::MrpFlags;
+    use crate::protocol_header::ProtocolId;
+
+    /// Two `SessionManager`s sharing one symmetric key set, cross-registered as
+    /// Initiator/Responder. Both allocate local id 1 (allocator starts at 1),
+    /// so each side's `peer_session_id` is 1.
+    fn paired_sessions() -> (SessionManager, SessionManager) {
+        let keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [1u8; 16],
+            r2i_key: [2u8; 16],
+            attestation_key: [3u8; 16],
+        };
+        let mut a = SessionManager::new();
+        let mut b = SessionManager::new();
+        a.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        b.register_pase(keys, SessionRole::Responder, 1, PeerHint::default());
+        (a, b)
+    }
+
+    #[test]
+    fn decode_inbound_surfaces_protocol_and_opcode() {
+        let (mut a, mut b) = paired_sessions();
+        let session = SessionId(1);
+        let out = a
+            .encode_outbound(
+                session,
+                None,
+                0x08, // InvokeRequest
+                ProtocolId::INTERACTION_MODEL,
+                b"payload",
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        let DecodeInboundOutput::AppMessage {
+            protocol_id,
+            opcode,
+            payload,
+            ..
+        } = b.decode_inbound(&out.wire_bytes, Instant::now()).unwrap()
+        else {
+            panic!("expected AppMessage");
+        };
+        assert_eq!(protocol_id, ProtocolId::INTERACTION_MODEL);
+        assert_eq!(opcode, 0x08);
+        assert_eq!(payload, b"payload");
     }
 }
