@@ -116,6 +116,8 @@ pub mod im;
 pub mod noc;
 pub mod setup;
 pub mod state_machine;
+#[cfg(feature = "wiretrace")]
+pub mod wiretrace;
 
 pub use setup::{
     encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow,
