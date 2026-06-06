@@ -100,11 +100,12 @@ pub struct CommissionerConfig<'a> {
     pub rng: Arc<dyn NocRng>,
     /// Wi-Fi credentials for `AddOrUpdateWiFiNetwork`.
     ///
-    /// `None` is valid for Ethernet-only devices — the state machine
-    /// detects Ethernet at `Stage::ReadNetworkCommissioningInfo` and
-    /// skips the Wi-Fi sub-cursor. For Wi-Fi devices, `None` produces
-    /// a typed [`CommissioningError::WifiCredentialsRequired`] at
-    /// `Stage::WiFiNetworkSetup`.
+    /// `None` skips the Wi-Fi sub-cursor entirely, mirroring chip's
+    /// AutoCommissioner: network provisioning runs ONLY when credentials
+    /// are supplied. `None` is correct both for Ethernet-only devices and
+    /// for Wi-Fi devices that are already on the network (the usual case
+    /// for IP commissioning, e.g. a second-fabric commission). Supplying
+    /// credentials forces provisioning via `Stage::WiFiNetworkSetup`.
     pub wifi_credentials: Option<WiFiCredentials>,
 }
 
@@ -382,11 +383,12 @@ impl Commissioner {
                     endpoint: 0,
                     cluster: gc::CLUSTER_ID,
                     attributes: &[
-                        // Spec §11.10.7: BasicCommissioningInfo (failsafe_expiry_length_seconds, …)
-                        0x0000, // RegulatoryConfig
-                        0x0001, // LocationCapability
-                        0x0002, // SupportsConcurrentConnection
-                        0x0004,
+                        // GeneralCommissioning attribute ids per spec §11.10.6
+                        // (confirmed against a real device's report).
+                        0x0000, // Breadcrumb
+                        0x0001, // BasicCommissioningInfo (failsafe_expiry_length_seconds, …)
+                        0x0002, // RegulatoryConfig
+                        0x0004, // SupportsConcurrentConnection
                     ],
                     expect: Expectation::CommissioningInfo,
                 })
@@ -515,6 +517,11 @@ impl Commissioner {
                     self.fabric.root_cert.to_tlv().map_err(|e| {
                         CommissioningError::from(crate::noc::NocError::CertBuild(e))
                     })?;
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    rcac_tlv = %rcac_tlv.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                    "sending AddTrustedRootCertificate"
+                );
                 let payload = encode_add_trusted_root(&rcac_tlv);
                 self.awaiting = Some(Expectation::AddTrustedRootResponse);
                 Ok(Action::Invoke {
@@ -849,7 +856,15 @@ impl Commissioner {
                 let features = nc::decode_feature_map(payload)?;
                 if features.contains(nc::NetworkCommissioningFeature::WIFI) {
                     if self.wifi_credentials.is_none() {
-                        return Err(CommissioningError::WifiCredentialsRequired);
+                        // No credentials supplied: the device is already on
+                        // the network (IP commissioning reached it there —
+                        // e.g. a second-fabric commission). Mirror chip's
+                        // AutoCommissioner: provision Wi-Fi ONLY when
+                        // credentials are supplied; otherwise skip the
+                        // Wi-Fi sub-cursor (observed necessary on a real
+                        // device: Tapo P110M, M6.6.5 validation).
+                        self.advance(Stage::EvictPreviousCaseSessions);
+                        return Ok(());
                     }
                     self.advance(Stage::WiFiNetworkSetup);
                 } else if features.contains(nc::NetworkCommissioningFeature::ETHERNET)
@@ -971,6 +986,12 @@ impl Commissioner {
         // 1. Parse chain certs.
         let pai = Pai::from_der(pai_der)?;
         let dac = Dac::from_der(dac_der)?;
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            dac_der = %dac_der.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            pai_der = %pai_der.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            "verifying attestation chain"
+        );
 
         // 2. Chain validation (M6.2.2 — webpki path validation + VID/PID overlay).
         //    The returned `ChainVerification` carries the VID/PID that
@@ -995,6 +1016,15 @@ impl Commissioner {
         // 5. CD verification — verify the device's declared VID/PID
         //    against the CSA-signed Certification Declaration extracted
         //    from `attestation_elements`.
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            cd_cms = %fields
+                .certification_declaration
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>(),
+            "verifying certification declaration"
+        );
         crate::attestation::verify_certification_declaration(
             &fields.certification_declaration,
             chain.vendor_id,
@@ -1551,7 +1581,8 @@ mod tests {
                 assert_eq!(cluster, 0x003E);
                 assert_eq!(command, 0x02);
                 assert_eq!(expect, Expectation::PaiCertChainResponse);
-                assert_eq!(payload, vec![0x15, 0x24, 0x00, 0x01, 0x18]);
+                // CertificateChainTypeEnum (spec §11.18.5.2): 2 = PAI.
+                assert_eq!(payload, vec![0x15, 0x24, 0x00, 0x02, 0x18]);
             }
             other => panic!("expected Invoke, got {other:?}"),
         }
@@ -1583,7 +1614,8 @@ mod tests {
                 assert_eq!(cluster, 0x003E);
                 assert_eq!(command, 0x02);
                 assert_eq!(expect, Expectation::DacCertChainResponse);
-                assert_eq!(payload, vec![0x15, 0x24, 0x00, 0x02, 0x18]);
+                // CertificateChainTypeEnum (spec §11.18.5.2): 1 = DAC.
+                assert_eq!(payload, vec![0x15, 0x24, 0x00, 0x01, 0x18]);
             }
             other => panic!("expected Invoke, got {other:?}"),
         }

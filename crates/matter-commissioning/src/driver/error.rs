@@ -55,6 +55,21 @@ pub enum DriverError {
     #[error("expected unsecured (session-id 0) message, got session id {0}")]
     UnexpectedSecuredMessage(u16),
 
+    /// The peer rejected PASE/CASE session establishment with a
+    /// `SecureChannel` `StatusReport` (spec §4.10.1.1) — e.g. wrong passcode
+    /// or too many failed attempts.
+    #[error(
+        "session establishment rejected: general code {general_code}, \
+         protocol code {protocol_code:#06x}"
+    )]
+    SessionEstablishmentFailed {
+        /// `StatusReport` general code (0 = SUCCESS; 1 = FAILURE, …).
+        general_code: u16,
+        /// `SecureChannel` protocol-specific code (e.g. `0x0002`
+        /// `InvalidParameter`).
+        protocol_code: u16,
+    },
+
     /// The commissioning state machine emitted [`crate::Action::Abort`]:
     /// the device returned an error (attestation failure, bad NOC, device
     /// policy rejection, etc.) and the run was halted. `reason` is the

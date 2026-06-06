@@ -92,6 +92,12 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                 // Single-peer flow: the source address is not trust-checked here;
                 // `decode_inbound` authenticates by session id + AES-CCM tag.
                 let (packet, _from) = recv?;
+                // Unsecured stragglers (session id 0 — e.g. a PASE/CASE
+                // StatusReport retransmit whose standalone ack was lost) are
+                // not addressed to any secured session; skip, don't abort.
+                if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
+                    continue;
+                }
                 match sessions.decode_inbound(&packet, Instant::now())? {
                     DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
                         if exchange_id == our_exchange =>
@@ -196,6 +202,70 @@ mod tests {
                 panic!("expected an application message");
             };
             assert_eq!(payload, request);
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    response,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, response);
+    }
+
+    #[tokio::test]
+    async fn secured_round_trip_skips_unsecured_frames() {
+        // A PASE/CASE StatusReport retransmit (session id 0) can straggle into
+        // the secured IM phase if the device missed our standalone ack
+        // (observed: Tapo P110M, M6.6.5 validation). It is not addressed to
+        // any secured session — skip it rather than abort the round-trip.
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let request = b"req".as_slice();
+        let response = b"resp".as_slice();
+
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            request,
+        );
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected an application message");
+            };
+            // Straggler: an unsecured (session-id 0) StatusReport retransmit.
+            let stray = crate::driver::unsecured::encode_unsecured(
+                7,
+                1,
+                0x40,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                None,
+                None,
+                &[0u8; 8],
+            );
+            dev_io.send_to(&stray, ctrl_addr).await.unwrap();
+            // Then the real secured response.
             let out = dev
                 .encode_outbound(
                     session,

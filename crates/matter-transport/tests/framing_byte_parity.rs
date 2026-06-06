@@ -114,7 +114,14 @@ fn run(scenario: &str) {
     let (keys, role, header, payload) = assemble(&fx);
 
     // Encode side: our wire bytes must match matter.js's byte-for-byte.
-    let ours = encode_secured(&header, &payload, &keys, role).unwrap();
+    let ours = encode_secured(
+        &header,
+        &payload,
+        &keys,
+        role,
+        header.source_node_id.map_or(0, |n| n.0),
+    )
+    .unwrap();
     assert_eq!(
         hex::encode(&ours),
         fx.expected.wire_hex,
@@ -130,7 +137,14 @@ fn run(scenario: &str) {
     };
     let wire = hex::decode(&fx.expected.wire_hex).unwrap();
     let mut window = ReplayWindow::new();
-    let (header_back, payload_back) = decode_secured(&wire, &keys, peer_role, &mut window).unwrap();
+    let (header_back, payload_back) = decode_secured(
+        &wire,
+        &keys,
+        peer_role,
+        &mut window,
+        header.source_node_id.map_or(0, |n| n.0),
+    )
+    .unwrap();
     assert_eq!(header_back, header);
     assert_eq!(payload_back, payload);
 }

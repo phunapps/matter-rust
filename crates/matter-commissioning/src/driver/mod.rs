@@ -21,4 +21,7 @@ pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
 pub use exchange::{secured_round_trip, SecuredResponse};
 pub use pase::run_pase;
-pub use unsecured::{decode_unsecured, encode_unsecured, UnsecuredExchange, UnsecuredMessage};
+pub use unsecured::{
+    decode_unsecured, encode_unsecured, parse_status_report, require_handshake_opcode,
+    SecureChannelStatus, UnsecuredExchange, UnsecuredMessage,
+};

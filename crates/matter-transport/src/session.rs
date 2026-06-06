@@ -109,6 +109,14 @@ pub struct Session {
     pub replay_window: ReplayWindow,
     /// Peer identity hint (CASE) or default (PASE).
     pub peer: PeerHint,
+    /// OUR node id mixed into the AES-CCM nonce of outbound frames (spec
+    /// §4.8.2): the local *operational* node id on CASE sessions, `0` on
+    /// PASE sessions. Decoupled from the wire header, which omits the
+    /// source node id on secured unicast messages.
+    pub local_nonce_node_id: u64,
+    /// The PEER's node id mixed into the nonce when decrypting inbound
+    /// frames: the peer's operational node id on CASE sessions, `0` on PASE.
+    pub peer_nonce_node_id: u64,
     /// Per-session MRP state. Holds the exchange table, pending retransmits,
     /// pending piggyback-ack slot, and recent-reliable cache.
     pub mrp: MrpState,
@@ -230,6 +238,13 @@ impl SessionManager {
             output.peer.session_id,
             peer,
         );
+        // CASE sessions mix each side's OPERATIONAL node id into the AES-CCM
+        // nonce (spec §4.8.2) — devices silently drop frames built with the
+        // PASE-style zero nonce node id (observed: Tapo P110M, M6.6.5).
+        if let Some(session) = self.sessions.get_mut(&local_id) {
+            session.local_nonce_node_id = output.local.node_id;
+            session.peer_nonce_node_id = output.peer.node_id;
+        }
         local_id
     }
 
@@ -310,6 +325,10 @@ impl SessionManager {
             outbound_counter: 1,
             replay_window: ReplayWindow::new(),
             peer,
+            // PASE default: zero nonce node ids (spec §4.8.2). `register_case`
+            // overwrites both with the operational node ids.
+            local_nonce_node_id: 0,
+            peer_nonce_node_id: 0,
             mrp: MrpState::new(MrpConfig::default()),
         };
         self.sessions.insert(local_id, session);
@@ -411,6 +430,7 @@ impl SessionManager {
             &prepared.wire_payload,
             &session.keys,
             session.role,
+            session.local_nonce_node_id,
         )?;
         let counter = MessageCounter(session.outbound_counter);
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
@@ -475,6 +495,7 @@ impl SessionManager {
             &session.keys,
             session.role,
             &mut session.replay_window,
+            session.peer_nonce_node_id,
         ) {
             Ok((_, decrypted)) => {
                 let outcome = session.mrp.process_inbound(decrypted, peer_counter, now)?;
@@ -654,7 +675,13 @@ impl SessionManager {
             source_node_id: None,
             destination_node_id: None,
         };
-        let packet = encode_secured(&secured_header, &payload, &session.keys, session.role)?;
+        let packet = encode_secured(
+            &secured_header,
+            &payload,
+            &session.keys,
+            session.role,
+            session.local_nonce_node_id,
+        )?;
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
         Ok(packet)
     }

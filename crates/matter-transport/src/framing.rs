@@ -300,6 +300,12 @@ const MAX_PAYLOAD_LEN: usize = 1024;
 /// The output layout is `header bytes || AES-CCM(payload) || 16-byte tag`,
 /// matching matter.js's `MessageCodec.encodePayload(...)` byte-for-byte.
 ///
+/// `nonce_source_node_id` is the SENDER's node id mixed into the AES-CCM
+/// nonce (spec §4.8.2): the sender's *operational* node id on CASE sessions
+/// — even though the wire header omits it — and `0` on PASE sessions.
+/// Real devices silently drop CASE frames encrypted with the wrong nonce
+/// node id (observed: Tapo P110M, M6.6.5 validation).
+///
 /// # Errors
 ///
 /// - [`Error::PayloadTooLarge`] if `payload.len() > MAX_PAYLOAD_LEN`.
@@ -310,6 +316,7 @@ pub fn encode_secured(
     payload: &[u8],
     keys: &crate::session::SessionKeys,
     role: crate::session::SessionRole,
+    nonce_source_node_id: u64,
 ) -> Result<Vec<u8>> {
     if payload.len() > MAX_PAYLOAD_LEN {
         return Err(Error::PayloadTooLarge {
@@ -319,7 +326,7 @@ pub fn encode_secured(
     }
 
     let aad = encode_header(header);
-    let nonce = build_nonce(header);
+    let nonce = build_nonce(header, nonce_source_node_id);
     let key = match role {
         crate::session::SessionRole::Initiator => &keys.i2r_key,
         crate::session::SessionRole::Responder => &keys.r2i_key,
@@ -345,17 +352,21 @@ pub fn encode_secured(
 /// - [`Error::ReplayedCounter`] / [`Error::CounterTooOld`] per
 ///   [`ReplayWindow::check_and_record`].
 /// - [`Error::DecryptionFailed`] if the AES-CCM tag does not verify.
+///
+/// `nonce_source_node_id` mirrors [`encode_secured`]: the SENDER'S (here:
+/// the peer's) operational node id on CASE sessions, `0` on PASE sessions.
 pub fn decode_secured(
     bytes: &[u8],
     keys: &crate::session::SessionKeys,
     role: crate::session::SessionRole,
     replay_window: &mut ReplayWindow,
+    nonce_source_node_id: u64,
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
     let (header, rest) = decode_header(bytes)?;
     replay_window.check_and_record(header.message_counter.0)?;
 
     let aad = encode_header(&header);
-    let nonce = build_nonce(&header);
+    let nonce = build_nonce(&header, nonce_source_node_id);
     // We're decoding inbound from the peer; the peer's outbound key is
     // the opposite of ours.
     let key = match role {
@@ -368,22 +379,29 @@ pub fn decode_secured(
     Ok((header, plaintext))
 }
 
-/// Compose the AES-CCM nonce per Matter Core Spec §4.5:
+/// Compose the AES-CCM nonce per Matter Core Spec §4.8.2:
 /// `nonce = SecurityFlags(1) || MessageCounter(4 LE) || SourceNodeId(8 LE)`.
 ///
-/// When the header has no source node ID (S=0), the `SourceNodeId` portion
-/// is zero. Higher-level callers that know the operational Node ID (e.g.
-/// matter-controller in M8) may pre-fill `header.source_node_id` even
-/// though `S` is not set in the on-the-wire flags — but in M5.1 we always
-/// derive nonce `SourceNodeId` from `header.source_node_id` directly, so
-/// the two are coupled. Revisit if M6 needs the split.
-fn build_nonce(header: &SecuredMessageHeader) -> [u8; matter_crypto::aead::AEAD_NONCE_LEN] {
+/// `nonce_source_node_id` is supplied by the caller because the nonce node
+/// id is decoupled from the wire header: secured-session headers omit the
+/// source node id (S=0), yet CASE sessions still mix the sender's
+/// *operational* node id into the nonce (chip `CryptoContext::BuildNonce`).
+/// PASE sessions and the historical header-coupled paths pass `0` or the
+/// header's value respectively. When the header DOES carry a source node id
+/// (group messages), the header value takes precedence — they must agree on
+/// the wire anyway.
+fn build_nonce(
+    header: &SecuredMessageHeader,
+    nonce_source_node_id: u64,
+) -> [u8; matter_crypto::aead::AEAD_NONCE_LEN] {
     let mut nonce = [0u8; matter_crypto::aead::AEAD_NONCE_LEN];
     nonce[0] = header.security_flags.bits();
     nonce[1..5].copy_from_slice(&header.message_counter.0.to_le_bytes());
-    if let Some(NodeId(n)) = header.source_node_id {
-        nonce[5..13].copy_from_slice(&n.to_le_bytes());
-    }
+    let node_id = match header.source_node_id {
+        Some(NodeId(n)) => n,
+        None => nonce_source_node_id,
+    };
+    nonce[5..13].copy_from_slice(&node_id.to_le_bytes());
     nonce
 }
 

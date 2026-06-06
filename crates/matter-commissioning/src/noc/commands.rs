@@ -116,14 +116,16 @@ pub fn decode_attestation_response(
     })
 }
 
-/// Argument to `CertificateChainRequest` (spec §11.18.5.4).
+/// Argument to `CertificateChainRequest` — `CertificateChainTypeEnum`
+/// (spec §11.18.5.2): 1 = DAC, 2 = PAI. Confirmed against a real device
+/// (Tapo P110M, M6.6.5 validation).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CertChainType {
+    /// DAC (Device Attestation Certificate) — the leaf.
+    Dac = 0x01,
     /// PAI (Product Attestation Intermediate) certificate.
-    Pai = 0x01,
-    /// DAC (Device Attestation Certificate).
-    Dac = 0x02,
+    Pai = 0x02,
 }
 
 /// Decoded `CertificateChainResponse` (spec §11.18.5.4).
@@ -604,17 +606,18 @@ mod tests {
     }
 
     #[test]
-    fn cert_chain_request_pai_matches_spec_bytes() {
-        // Spec §11.18.5.3: anonymous struct with single field at context
-        // tag 0 carrying CertificateChainTypeEnum (u8). 0x01 = PAI.
-        let bytes = encode_certificate_chain_request(CertChainType::Pai);
+    fn cert_chain_request_dac_matches_spec_bytes() {
+        // Spec §11.18.5.2 CertificateChainTypeEnum: 1 = DACCertificate.
+        // Confirmed against a real device (Tapo P110M, M6.6.5): requesting
+        // type 1 returns the DAC (leaf), type 2 the PAI (CA).
+        let bytes = encode_certificate_chain_request(CertChainType::Dac);
         assert_eq!(bytes, vec![0x15, 0x24, 0x00, 0x01, 0x18]);
     }
 
     #[test]
-    fn cert_chain_request_dac_matches_spec_bytes() {
-        // 0x02 = DAC.
-        let bytes = encode_certificate_chain_request(CertChainType::Dac);
+    fn cert_chain_request_pai_matches_spec_bytes() {
+        // Spec §11.18.5.2 CertificateChainTypeEnum: 2 = PAICertificate.
+        let bytes = encode_certificate_chain_request(CertChainType::Pai);
         assert_eq!(bytes, vec![0x15, 0x24, 0x00, 0x02, 0x18]);
     }
 

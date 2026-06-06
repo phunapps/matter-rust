@@ -13,7 +13,7 @@
 //! ```
 
 use std::fs;
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -172,6 +172,25 @@ fn parse_setup_payload(cli: &Cli) -> anyhow::Result<SetupPayload> {
     }
 }
 
+/// Parse a `--addr` value, supporting an IPv6 zone (scope) id for link-local
+/// targets: `[fe80::1%11]:5540` (numeric interface index). Matter devices in a
+/// commissioning window are typically reachable on their `fe80::` link-local
+/// address, which requires a scope id that `SocketAddr`'s own parser rejects.
+fn parse_dial_addr(s: &str) -> anyhow::Result<SocketAddr> {
+    if let Some(pct) = s.find('%') {
+        let close = s
+            .find(']')
+            .context("--addr with a zone id must be bracketed: [fe80::1%11]:5540")?;
+        let ip: Ipv6Addr = s[1..pct].parse().context("--addr IPv6 address")?;
+        let scope: u32 = s[pct + 1..close]
+            .parse()
+            .context("--addr zone id must be a numeric interface index, e.g. %11")?;
+        let port: u16 = s[close + 2..].parse().context("--addr port")?;
+        return Ok(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)));
+    }
+    s.parse::<SocketAddr>().context("parsing --addr")
+}
+
 /// Current wall-clock time as `MatterTime`. A binary may read the system clock.
 fn current_matter_time() -> anyhow::Result<MatterTime> {
     let secs = std::time::SystemTime::now()
@@ -308,9 +327,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Optional direct-dial address (skips the mDNS commissionable browse).
     let commissionable_addr = match &cli.addr {
-        Some(s) => Some(s.parse::<SocketAddr>().context("parsing --addr")?),
+        Some(s) => Some(parse_dial_addr(s)?),
         None => None,
     };
+
+    // Match the local socket's family to a direct-dial IPv4 target (the default
+    // bind(0) is IPv6 dual-stack, which cannot route to a plain IPv4 peer).
+    let dial_ipv4 = commissionable_addr.is_some_and(|a| a.is_ipv4());
 
     let config = DriverConfig {
         commissioner,
@@ -318,10 +341,16 @@ async fn main() -> anyhow::Result<()> {
         passcode: payload.passcode.as_u32(),
     };
 
-    // Real IO: dual-stack [::]:0 UDP socket + mDNS discovery.
-    let transport = TokioUdpTransport::bind(0)
-        .await
-        .context("binding UDP socket")?;
+    // Real IO: UDP socket (IPv6 dual-stack by default; IPv4 for a v4 --addr) + mDNS.
+    let transport = if dial_ipv4 {
+        TokioUdpTransport::bind_addr(SocketAddr::from(([0u8, 0, 0, 0], 0)))
+            .await
+            .context("binding IPv4 UDP socket")?
+    } else {
+        TokioUdpTransport::bind(0)
+            .await
+            .context("binding UDP socket")?
+    };
     let mut discovery = MdnsSdDiscovery::new().context("starting mDNS discovery")?;
 
     println!("commissioning… (this performs PASE → attestation → NOC → CASE)");
