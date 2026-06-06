@@ -137,7 +137,7 @@ impl Discovery for FakeDiscovery {
 /// same `fabric` the controller commissions under (RCAC -> NOC, no ICAC), for
 /// `ASSIGNED_NODE_ID`. The responder validates the controller's NOC against the
 /// fabric RCAC and vice versa.
-fn build_device_case_setup(fabric: &FabricRecord) -> MockDeviceCaseSetup {
+fn build_device_case_setup(fabric: &FabricRecord, ipk_epoch_key: [u8; 16]) -> MockDeviceCaseSetup {
     let (device_op_signer, _pkcs8) = RingSigner::generate().expect("device op key");
     let device_op_pub = device_op_signer.public_key().clone();
     let verified_csr = VerifiedCsr {
@@ -153,13 +153,25 @@ fn build_device_case_setup(fabric: &FabricRecord) -> MockDeviceCaseSetup {
     )
     .expect("device NOC issuance under fabric RCAC");
 
+    // Like a real device, derive the *operational* IPK from the epoch key
+    // AddNOC distributed (spec §4.15.2) — `CaseCredentials.ipk` is the
+    // operational key the Sigma1 destination id is checked against.
+    let compressed_fabric_id = matter_crypto::derive_compressed_fabric_id(
+        fabric.root_public_key.as_bytes(),
+        fabric.fabric_id,
+    )
+    .expect("compressed fabric id");
+    let operational_ipk =
+        matter_crypto::derive_operational_ipk(&ipk_epoch_key, &compressed_fabric_id)
+            .expect("operational IPK derivation");
+
     let credentials = CaseCredentials {
         noc: device_noc,
         icac: fabric.icac_cert.clone(),
         signer: Box::new(device_op_signer),
         fabric_id: fabric.fabric_id,
         node_id: ASSIGNED_NODE_ID,
-        ipk: fabric.identity_protection_key,
+        ipk: operational_ipk,
         rcac_public_key: *fabric.root_public_key.as_bytes(),
     };
 
@@ -252,8 +264,9 @@ async fn commission_reaches_done_against_mock_device() {
         passcode: PASSCODE,
     };
 
-    // ── 6. Device CASE setup (NOC under the SAME fabric RCAC). ────────────────
-    let case_setup = build_device_case_setup(&fabric);
+    // ── 6. Device CASE setup (NOC under the SAME fabric RCAC; operational IPK
+    //       derived from the SAME epoch key the config distributes). ──────────
+    let case_setup = build_device_case_setup(&fabric, [0x42_u8; 16]);
 
     // ── 7. Run BOTH halves concurrently: the real commission() driver against
     //       the mock device. ────────────────────────────────────────────────

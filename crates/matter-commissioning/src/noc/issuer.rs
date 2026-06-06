@@ -83,6 +83,9 @@ pub fn issue_noc(
     // byte-parity).
     let mut serial = vec![0u8; 19];
     rng.fill(&mut serial)?;
+    // Top bit cleared — see fabric.rs `new_root_only` for the chip-vs-
+    // matter.js INTEGER-normalization divergence this avoids.
+    serial[0] &= 0x7F;
 
     let unsigned = MatterCertificate::builder()
         .serial(serial)
@@ -129,6 +132,42 @@ mod tests {
             &SystemNocRng,
         )
         .unwrap()
+    }
+
+    /// RNG stub returning all-0xFF — forces the serial's would-be MSB high.
+    #[derive(Debug)]
+    struct AllOnesRng;
+    impl crate::noc::NocRng for AllOnesRng {
+        fn fill(&self, dest: &mut [u8]) -> Result<(), crate::noc::NocError> {
+            dest.fill(0xFF);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn noc_serial_top_bit_is_clear() {
+        // Same rule as the RCAC (see fabric.rs::rcac_serial_top_bit_is_clear):
+        // an MSB-set serial is reconstructed differently by chip (verbatim)
+        // vs matter.js/us (0x00-prepended), breaking the signature on-device.
+        let fabric = sample_fabric();
+        let verified = sample_verified_csr();
+        let noc = issue_noc(
+            &fabric,
+            &verified,
+            0xDEAD_BEEF_CAFE_BABE,
+            &[],
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &AllOnesRng,
+        )
+        .unwrap();
+        assert_eq!(
+            noc.serial()[0] & 0x80,
+            0,
+            "generated NOC serial must have the top bit clear"
+        );
     }
 
     #[test]

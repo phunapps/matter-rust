@@ -13,7 +13,7 @@ use matter_transport::{Discovery, ServiceKind, SessionId, SessionManager, Sessio
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
-use crate::driver::unsecured::UnsecuredExchange;
+use crate::driver::unsecured::{parse_status_report, require_handshake_opcode, UnsecuredExchange};
 
 /// Build the operational mDNS instance name `<compressed-fabric-id>-<node-id>`,
 /// each as fixed-width uppercase hex (16 + 1 + 16 chars), per the Matter
@@ -29,16 +29,37 @@ pub fn operational_instance_name(compressed_fabric_id: [u8; 8], node_id: u64) ->
 }
 
 /// How many times to poll discovery before giving up, and the gap between
-/// polls (~5 s total) — bounded so the driver doesn't hang forever.
-const RESOLVE_POLL_ATTEMPTS: usize = 50;
+/// polls (~30 s total) — bounded so the driver doesn't hang forever. The
+/// operational record only appears after `AddNOC`, so mDNS propagation can
+/// take several seconds on a real LAN (observed during M6.6.5 validation);
+/// chip's session-establishment discovery budget is of the same order.
+const RESOLVE_POLL_ATTEMPTS: usize = 300;
 const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Pick the most routable address from an mDNS record: IPv4 first, then any
+/// non-link-local IPv6, then whatever is left. A `fe80::` IPv6 needs an
+/// interface scope id that [`MatterService`](matter_transport::MatterService)
+/// does not carry, so a dial-out socket cannot route to it — devices often
+/// list it FIRST, ahead of perfectly routable addresses (M6.6.5: closes the
+/// previously FLAGGED `.first()` pick).
+fn preferred_address(addresses: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
+    let is_v6_link_local = |a: &std::net::IpAddr| match a {
+        std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+        std::net::IpAddr::V4(_) => false,
+    };
+    addresses
+        .iter()
+        .find(|a| a.is_ipv4())
+        .or_else(|| addresses.iter().find(|a| !is_v6_link_local(a)))
+        .or_else(|| addresses.first())
+        .copied()
+}
 
 /// Browse `_matter._tcp` operational records and return the socket address of
 /// the node whose instance name matches `(compressed_fabric_id, node_id)`.
 ///
-/// FLAGGED: takes the first advertised address. Link-local `fe80::` operational
-/// addresses need an interface scope id that [`MatterService`](matter_transport::MatterService)
-/// does not carry — dialing those is deferred to M6.6.5.
+/// The advertised address list is filtered for routability
+/// (IPv4 → non-link-local IPv6 → fallback) — see `preferred_address`.
 ///
 /// # Errors
 ///
@@ -58,9 +79,9 @@ pub async fn resolve_operational<D: Discovery>(
     for _ in 0..RESOLVE_POLL_ATTEMPTS {
         for svc in discovery.poll_results(handle) {
             if svc.instance_name.eq_ignore_ascii_case(&target) {
-                if let Some(addr) = svc.addresses.first() {
+                if let Some(addr) = preferred_address(&svc.addresses) {
                     discovery.stop_query(handle);
-                    return Ok(SocketAddr::new(*addr, svc.port));
+                    return Ok(SocketAddr::new(addr, svc.port));
                 }
             }
         }
@@ -74,9 +95,9 @@ pub async fn resolve_operational<D: Discovery>(
 
 // SecureChannel opcodes for the CASE handshake (Matter Core Spec §4.14.1).
 const OP_SIGMA1: u8 = 0x30;
+const OP_SIGMA2: u8 = 0x31;
 const OP_SIGMA3: u8 = 0x32;
 
-const CASE_INITIAL_COUNTER: u32 = 1;
 const CASE_EXCHANGE_ID: u16 = 1;
 
 /// Drive a fresh CASE (SIGMA-I) handshake against an already-resolved
@@ -108,23 +129,51 @@ pub async fn run_case<T: AsyncDatagram>(
         peer_fabric_id,
         local.0,
     )?;
-    let mut exch = UnsecuredExchange::new(CASE_INITIAL_COUNTER, CASE_EXCHANGE_ID);
+    // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
+    // §4.13.2.1) — same unsecured-header requirements as PASE apply to SIGMA.
+    let mut exch = UnsecuredExchange::new_ephemeral(CASE_EXCHANGE_ID)?;
 
     let sigma1 = initiator.start()?;
     let sigma2 = exch
         .send_and_recv(transport, peer, OP_SIGMA1, &sigma1, None)
         .await?;
+    if let Err(e) = require_handshake_opcode(&sigma2, OP_SIGMA2) {
+        // Best-effort ack so a rejecting device stops retransmitting its
+        // (reliable) StatusReport before we abort.
+        let _ = exch
+            .send_standalone_ack(transport, peer, sigma2.message_counter)
+            .await;
+        return Err(e);
+    }
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        sigma2 = %crate::hexdump::hex(&sigma2.payload),
+        "received Sigma2"
+    );
     initiator.handle_sigma2(&sigma2.payload)?;
 
+    // Sigma3 is sent reliably and the device closes the handshake with a
+    // SecureChannel StatusReport (success or failure) — consumed and acked
+    // here, exactly as in `run_pase` (see that bridge for rationale).
     let sigma3 = initiator.next_message()?;
-    exch.send(
-        transport,
-        peer,
-        OP_SIGMA3,
-        &sigma3,
-        Some(sigma2.message_counter),
-    )
-    .await?;
+    let report = exch
+        .send_and_recv(
+            transport,
+            peer,
+            OP_SIGMA3,
+            &sigma3,
+            Some(sigma2.message_counter),
+        )
+        .await?;
+    let status = parse_status_report(&report)?;
+    exch.send_standalone_ack(transport, peer, report.message_counter)
+        .await?;
+    if !status.is_session_establishment_success() {
+        return Err(DriverError::SessionEstablishmentFailed {
+            general_code: status.general_code,
+            protocol_code: status.protocol_code,
+        });
+    }
 
     let output = initiator.finish()?;
     let sid = sessions.register_case(&output, SessionRole::Initiator);
@@ -190,6 +239,47 @@ mod tests {
             addr,
             std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7)), 5540)
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_operational_prefers_routable_addresses() {
+        // mDNS records list link-local IPv6 first on many devices, but a
+        // `fe80::` address without a scope id is unroutable from a dial-out
+        // socket. Prefer IPv4, then non-link-local IPv6, and fall back to
+        // whatever is left (M6.6.5: closes the FLAGGED `.first()` pick).
+        use std::net::Ipv6Addr;
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let name = operational_instance_name(cfid, node_id);
+        let link_local = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x1d42));
+        let ula = IpAddr::V6(Ipv6Addr::new(0xfdfc, 0x20da, 0x4273, 0x126f, 0, 0, 0, 1));
+        let v4 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248));
+
+        // Link-local listed first, IPv4 buried last — IPv4 must win.
+        let mut disc = FakeDiscovery {
+            service: MatterService {
+                instance_name: name.clone(),
+                kind: ServiceKind::Operational,
+                addresses: vec![link_local, ula, v4],
+                port: 5540,
+                txt_records: HashMap::new(),
+            },
+        };
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(addr, std::net::SocketAddr::new(v4, 5540));
+
+        // No IPv4: the non-link-local IPv6 must win over fe80.
+        let mut disc = FakeDiscovery {
+            service: MatterService {
+                instance_name: name,
+                kind: ServiceKind::Operational,
+                addresses: vec![link_local, ula],
+                port: 5540,
+                txt_records: HashMap::new(),
+            },
+        };
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(addr, std::net::SocketAddr::new(ula, 5540));
     }
 
     // -----------------------------------------------------------------------
@@ -309,6 +399,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_case_surfaces_sigma1_status_report_rejection() {
+        // A device that cannot match Sigma1's destination id (e.g. IPK or
+        // fabric mismatch) answers with a StatusReport (NoSharedTrustRoots,
+        // protocol code 0x0001) instead of Sigma2. run_case must surface the
+        // device's codes, not feed the report into the Sigma2 parser
+        // (observed: Tapo P110M, M6.6.5 — misparsed as "invalid parameter").
+        let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
+        let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
+        let init_creds = creds(init_noc, init_signer, T_INITIATOR_NODE, rcac_pub);
+        let ctrl_roots = roots_for(&rcac);
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut sessions = SessionManager::new();
+
+        let device = async {
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            // StatusReport: FAILURE / SecureChannel NoSharedTrustRoots.
+            let mut body = Vec::new();
+            body.extend_from_slice(&1u16.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&0x0001u16.to_le_bytes());
+            let report = encode_unsecured(
+                200,
+                m.exchange_id,
+                0x40,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &body,
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+        };
+
+        let controller = run_case(
+            &ctrl_io,
+            &mut sessions,
+            dev_addr,
+            init_creds,
+            ctrl_roots,
+            T_RESPONDER_NODE,
+            T_FABRIC_ID,
+        );
+
+        let (ctrl_result, ()) = tokio::join!(controller, device);
+        let err = ctrl_result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DriverError::SessionEstablishmentFailed {
+                    general_code: 1,
+                    protocol_code: 0x0001,
+                }
+            ),
+            "expected SessionEstablishmentFailed, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn run_case_establishes_matching_session() {
         let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
         let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
@@ -340,12 +493,40 @@ mod tests {
                 false,
                 true,
                 Some(m.message_counter),
+                None,
                 &sigma2,
             );
             dev_io.send_to(&wire, ctrl_addr).await.unwrap();
             let (p, _) = dev_io.recv_from().await.unwrap();
             let m = decode_unsecured(&p).unwrap();
             responder.handle_sigma3(&m.payload).unwrap();
+
+            // Close the handshake with a success StatusReport (real-device
+            // behaviour) and expect the controller's standalone ack.
+            let mut body = Vec::new();
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            let report = encode_unsecured(
+                201,
+                m.exchange_id,
+                0x40,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &body,
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+            let ack = tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                .await
+                .expect("controller must ack the StatusReport")
+                .unwrap();
+            let ack = decode_unsecured(&ack.0).unwrap();
+            assert_eq!(ack.opcode, 0x10);
+            assert_eq!(ack.ack_counter, Some(201));
+
             responder.finish().unwrap()
         };
 

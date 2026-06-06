@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete)
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete), M6.6.5a production CD-root ingestion
+
+#### M6.6.5a — production CD signing-root ingestion (`CdSigningRoots::from_cert_der`)
+
+Surfaced by real-device M6 validation: production CD signing roots (the CSA
+Distributed Compliance Ledger, mirrored at connectedhomeip
+`credentials/production/cd-certs/`) are X.509 **certificates**, but the only
+ingestion path was `CdSigningRoots::from_pem`, which expects bare
+`SubjectPublicKeyInfo` PEMs — so `commission_ip` could not consume real CD roots.
+
+##### Added
+
+- `CdSigningRoots::from_cert_der` — builds the CD-signing trust store from one or
+  more X.509 CD signing **certificate** DERs, extracting each cert's SEC1
+  uncompressed P-256 subject public key (no signature/validity/chain checks — the
+  operator vouches for the supplied roots). Additive; `from_pem` is unchanged.
+
+##### Changed
+
+- `examples/commission_ip.rs`: `--cd-root` now accepts a **directory** of `*.der`
+  CD signing certs (or a single `*.der` cert), loading them all via
+  `from_cert_der` — so a device's CD verifies regardless of which CSA CD signing
+  key signed it. Validated against the real 40 production PAA roots + 5 CSA CD
+  signing certs.
 
 #### M6.6.5 — `commission_ip` example + first-commission runbook (M6.6 / M6 complete)
 

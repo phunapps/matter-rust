@@ -214,20 +214,21 @@ fn thread_only_feature_map_fails_fast() {
 }
 
 #[test]
-fn wifi_credentials_none_with_wifi_device_fails_with_typed_error() {
-    // Ethernet config (no wifi_credentials) fed a Wi-Fi FeatureMap.
+fn wifi_device_without_credentials_skips_network_setup() {
+    // A Wi-Fi FeatureMap with NO wifi_credentials configured: the device is
+    // already on the network (IP commissioning reached it there — e.g. a
+    // second-fabric commission of an already-provisioned device; observed:
+    // Tapo P110M, M6.6.5 validation). Mirror chip's AutoCommissioner: include
+    // the network-setup stages ONLY when credentials are supplied; otherwise
+    // skip straight past the Wi-Fi sub-cursor.
     let mut sm = drive_to_read_network_info(make_ethernet_config());
     let _ = sm.poll().expect("emit ReadAttribute");
-    let Err(err) = sm.on_response(
+    sm.on_response(
         Expectation::NetworkCommissioningInfo,
         &feature_map_tlv(0b001),
-    ) else {
-        panic!("WiFi FeatureMap with no creds should fail");
-    };
-    assert!(
-        matches!(err, CommissioningError::WifiCredentialsRequired),
-        "got {err:?}",
-    );
+    )
+    .expect("WiFi FeatureMap with no creds must skip network setup");
+    assert_eq!(sm.stage(), Stage::EvictPreviousCaseSessions);
 }
 
 #[test]

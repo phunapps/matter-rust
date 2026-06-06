@@ -95,6 +95,14 @@ impl FabricRecord {
         // diverges, change the constant here in one place.
         let mut serial = vec![0u8; 19];
         rng.fill(&mut serial)?;
+        // Clear the top bit: chip's TLV→X.509 conversion copies the serial
+        // VERBATIM as the INTEGER value octets, while matter.js/our encoder
+        // prepend 0x00 for MSB-set values — an MSB-set serial therefore
+        // yields two different TBS encodings and real devices reject the
+        // signature (observed: Tapo P110M, M6.6.5, IM status 0x85 on
+        // AddTrustedRootCertificate). chip masks generated serials the
+        // same way.
+        serial[0] &= 0x7F;
 
         let rcac_subject = DistinguishedName::new(vec![DnAttribute::RcacId(rcac_id)]);
         let rcac_extensions = Extensions {
@@ -105,9 +113,13 @@ impl FabricRecord {
             key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
             extended_key_usage: None,
             subject_key_identifier: Some(ski_id),
-            // Self-signed root: AKI is omitted (RFC 5280 4.2.1.1 allows
-            // omission when issuer == subject and there is no parent CA).
-            authority_key_identifier: None,
+            // Self-signed root: AKI = SKI. RFC 5280 §4.2.1.1 would allow
+            // omission, but Matter (spec §6.5.11.3) makes the extension
+            // MANDATORY on every Matter cert — matter.js's
+            // TlvRootCertificate rejects an RCAC without it, and real
+            // devices answer AddTrustedRootCertificate with IM status 0x85
+            // INVALID_COMMAND (observed: Tapo P110M, M6.6.5 validation).
+            authority_key_identifier: Some(ski_id),
         };
 
         let unsigned = MatterCertificate::builder()
@@ -178,6 +190,75 @@ mod tests {
     use super::*;
     use crate::noc::error::SystemNocRng;
     use matter_crypto::RingSigner;
+
+    /// RNG stub returning all-0xFF — forces the serial's would-be MSB high.
+    #[derive(Debug)]
+    struct AllOnesRng;
+    impl crate::noc::NocRng for AllOnesRng {
+        fn fill(&self, dest: &mut [u8]) -> Result<(), crate::noc::NocError> {
+            dest.fill(0xFF);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn rcac_serial_top_bit_is_clear() {
+        // chip's TLV→X.509 conversion copies the serial VERBATIM as the
+        // INTEGER value octets, while matter.js (and our encoder) prepend
+        // 0x00 when the first byte's MSB is set. An MSB-set serial therefore
+        // produces two different TBS encodings and the device rejects the
+        // self-signature (observed: Tapo P110M, M6.6.5 — IM status 0x85 on
+        // AddTrustedRootCertificate). chip sidesteps this by never generating
+        // MSB-set serials; we must do the same.
+        let (signer, _pkcs8) = RingSigner::generate().unwrap();
+        let signer: Arc<dyn Signer> = Arc::new(signer);
+        let fabric = FabricRecord::new_root_only(
+            0xFEDC_BA98_7654_3210,
+            signer,
+            MatterTime::from_unix_secs(1_700_000_000),
+            MatterTime::NO_EXPIRY,
+            42,
+            &AllOnesRng,
+        )
+        .unwrap();
+        let serial = fabric.root_cert.serial();
+        assert_eq!(
+            serial[0] & 0x80,
+            0,
+            "generated RCAC serial must have the top bit clear"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn rcac_carries_mandatory_authority_key_identifier() {
+        // Matter (spec §6.5.11.3) makes authority-key-id MANDATORY on every
+        // Matter cert, including the self-signed RCAC (AKI = SKI) — stricter
+        // than RFC 5280's omission allowance. matter.js's TlvRootCertificate
+        // rejects an RCAC without it, and real devices reject
+        // AddTrustedRootCertificate with IM status 0x85 INVALID_COMMAND
+        // (observed: Tapo P110M, M6.6.5 validation).
+        let (signer, _pkcs8) = RingSigner::generate().unwrap();
+        let signer: Arc<dyn Signer> = Arc::new(signer);
+        let fabric = FabricRecord::new_root_only(
+            0xFEDC_BA98_7654_3210,
+            signer,
+            MatterTime::from_unix_secs(1_700_000_000),
+            MatterTime::NO_EXPIRY,
+            42,
+            &SystemNocRng,
+        )
+        .unwrap();
+        let exts = fabric.root_cert.extensions();
+        let aki = exts
+            .authority_key_identifier
+            .expect("RCAC must carry authority-key-id");
+        assert_eq!(
+            Some(aki),
+            exts.subject_key_identifier,
+            "self-signed root: AKI must equal SKI"
+        );
+    }
 
     #[test]
     fn new_root_only_produces_self_verifying_rcac() {

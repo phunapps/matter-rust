@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use matter_cert::TrustedRoots;
 use matter_crypto::{derive_compressed_fabric_id, CaseCredentials};
-use matter_transport::{Discovery, ProtocolId, ServiceKind, SessionId, SessionManager};
+use matter_transport::{Discovery, MrpEvent, ProtocolId, ServiceKind, SessionId, SessionManager};
 
 use crate::driver::case::{resolve_operational, run_case};
 use crate::driver::datagram::AsyncDatagram;
@@ -21,11 +21,13 @@ use crate::CommissionerConfig;
 /// from the attribute list emitted by `Stage::ReadCommissioningInfo` and
 /// `Stage::ReadNetworkCommissioningInfo`.
 mod attr_id {
-    /// `GeneralCommissioning::BasicCommissioningInfo` — attribute 0x0004.
+    /// `GeneralCommissioning::BasicCommissioningInfo` — attribute **0x0001**
+    /// (spec §11.10.6; confirmed against a real device's report — 0x0004 is
+    /// `SupportsConcurrentConnection`, a bool).
     ///
-    /// Spec §11.10.7.4: the struct carrying `failsafe_expiry_length_seconds`.
+    /// The struct carrying `failsafe_expiry_length_seconds`.
     /// Matches the list in commissioner.rs `Stage::ReadCommissioningInfo`.
-    pub(super) const BASIC_COMMISSIONING_INFO: u32 = 0x0004;
+    pub(super) const BASIC_COMMISSIONING_INFO: u32 = 0x0001;
 
     /// `NetworkCommissioning::FeatureMap` — attribute 0xFFFC.
     ///
@@ -107,7 +109,7 @@ pub(crate) async fn dispatch_invoke<T: AsyncDatagram>(
 /// |                            |          |         | `decode_feature_map` expects this exact  |
 /// |                            |          |         | shape: a bare `Element::Scalar { value:  |
 /// |                            |          |         | Value::Uint, .. }`.                      |
-/// | `CommissioningInfo`        | `0x0030` | `0x0004`| Anonymous-tagged struct TLV. The struct  |
+/// | `CommissioningInfo`        | `0x0030` | `0x0001`| Anonymous-tagged struct TLV. The struct  |
 /// |                            |          |         | carries ctx-tag-0 = failsafe seconds     |
 /// |                            |          |         | (u16/u32) and optionally ctx-tag-1 =     |
 /// |                            |          |         | max-cumulative seconds. An empty struct  |
@@ -166,7 +168,7 @@ pub(crate) fn extract_read_payload(
             Ok(buf)
         }
         Expectation::CommissioningInfo => {
-            // Scan for BasicCommissioningInfo (cluster 0x0030, attribute 0x0004).
+            // Scan for BasicCommissioningInfo (cluster 0x0030, attribute 0x0001).
             let struct_val = report
                 .attributes
                 .iter()
@@ -191,6 +193,43 @@ pub(crate) fn extract_read_payload(
             "extract_read_payload called with a non-read Expectation",
         ))),
     }
+}
+
+/// Drive any *imminent* pending MRP deadlines (within ~500 ms — in practice
+/// the 200 ms standalone-ack timer buffered for the most recent secured
+/// response, see `secured_round_trip`'s pending-ack note) and send the
+/// resulting packets, so no ack is left owed to the device before a
+/// non-secured exchange (CASE) starts.
+///
+/// # Errors
+///
+/// - [`DriverError::Io`] if a flushed packet fails to send.
+async fn flush_pending_acks<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    peer: SocketAddr,
+) -> Result<(), DriverError> {
+    use std::time::{Duration, Instant};
+    const FLUSH_HORIZON: Duration = Duration::from_millis(500);
+    while let Some(deadline) = sessions.poll_timeout() {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if wait > FLUSH_HORIZON {
+            // Far-future deadline (e.g. an idle retransmit timer) — not the
+            // ack we are after; leave it to the normal exchange loops.
+            break;
+        }
+        tokio::time::sleep(wait).await;
+        for event in sessions.handle_timeout(Instant::now()) {
+            match event {
+                MrpEvent::Retransmit { packet, .. }
+                | MrpEvent::SendStandaloneAck { packet, .. } => {
+                    transport.send_to(&packet, peer).await?;
+                }
+                MrpEvent::Expired { .. } => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Send a single `ReadRequest` over an already-established secured session
@@ -225,6 +264,11 @@ pub(crate) async fn dispatch_read<T: AsyncDatagram>(
         &msg,
     )
     .await?;
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        report_data_tlv = %crate::hexdump::hex(&resp.payload),
+        "ReportData received"
+    );
     let report = crate::im::parse_report_data(&resp.payload)?;
     Ok(report)
 }
@@ -513,6 +557,10 @@ where
         public_key: commissioner_pub,
     };
     let commissioner_node_id = commissioner_cfg.commissioner_node_id;
+    // The IPK epoch key AddNOC distributes — CASE later derives the
+    // *operational* IPK from it (spec §4.15.2); they MUST come from the same
+    // epoch key or the device rejects Sigma1 with NoSharedTrustRoots.
+    let ipk_epoch_key = commissioner_cfg.ipk_epoch_key;
     let commissioner_noc = issue_noc(
         fabric,
         &commissioner_verified_csr,
@@ -599,6 +647,13 @@ where
                 fabric_id,
                 peer_node_id,
             } => {
+                // Flush the standalone ack still owed for the last secured
+                // (PASE-session) response before switching to the unsecured
+                // CASE exchange — otherwise the device retransmits that
+                // response into the Sigma handshake (exchange.rs documents
+                // the deferred ack; observed on a real device: Tapo P110M,
+                // M6.6.5 validation).
+                flush_pending_acks(transport, &mut sessions, peer).await?;
                 // Build CASE credentials for the commissioner's own identity.
                 // commissioner_signer is moved out of the Option here — it can
                 // only be taken once; a second EstablishCase would return an
@@ -606,13 +661,29 @@ where
                 let signer = commissioner_signer.take().ok_or(DriverError::Handshake(
                     "EstablishCase emitted more than once per commission() run",
                 ))?;
+                // `CaseCredentials.ipk` is the *operational* IPK (what the
+                // Sigma1 destination id is HMAC'd with) — derived from the
+                // SAME epoch key AddNOC sent, salted with the compressed
+                // fabric id (spec §4.15.2). Passing the raw epoch key makes
+                // real devices reject Sigma1 with NoSharedTrustRoots
+                // (observed: Tapo P110M, M6.6.5 validation).
+                let compressed_fabric_id = matter_crypto::derive_compressed_fabric_id(
+                    fabric.root_public_key.as_bytes(),
+                    fabric_id,
+                )
+                .map_err(DriverError::Crypto)?;
+                let operational_ipk = matter_crypto::operational::derive_operational_ipk(
+                    &ipk_epoch_key,
+                    &compressed_fabric_id,
+                )
+                .map_err(DriverError::Crypto)?;
                 let credentials = CaseCredentials {
                     noc: commissioner_noc.clone(),
                     icac: fabric.icac_cert.clone(),
                     signer: Box::new(signer),
                     fabric_id,
                     node_id: commissioner_node_id,
-                    ipk: fabric.identity_protection_key,
+                    ipk: operational_ipk,
                     rcac_public_key: *fabric.root_public_key.as_bytes(),
                 };
                 // Build TrustedRoots from this fabric's RCAC.
@@ -635,7 +706,11 @@ where
                         case_sid = Some(sid);
                         sm.on_case_established()?;
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(error = %e, "CASE establishment failed");
+                        #[cfg(not(feature = "tracing"))]
+                        let _ = &e;
                         sm.on_response(crate::Expectation::CaseFailed, &[])?;
                     }
                 }
@@ -1124,6 +1199,50 @@ mod tests {
         );
     }
 
+    /// Replay of a real device's `GeneralCommissioning` report (Tapo P110M,
+    /// M6.6.5 validation): all four requested attributes come back, and
+    /// `BasicCommissioningInfo` is attribute **0x0001** (spec §11.10.6) — NOT
+    /// 0x0004, which is `SupportsConcurrentConnection`, a bool. The extractor
+    /// must pick the struct at 0x0001.
+    #[test]
+    fn extract_read_payload_picks_basic_commissioning_info_at_0x0001() {
+        use crate::im::AttributePath;
+        use crate::Expectation;
+        use matter_codec::{Tag, Value};
+
+        let gc = crate::clusters::general_commissioning::CLUSTER_ID;
+        let path = |attribute: u32| AttributePath {
+            endpoint: 0,
+            cluster: gc,
+            attribute,
+        };
+        // Order and values as the Tapo returned them.
+        let report = crate::im::ReportData {
+            attributes: vec![
+                (path(0x0004), Value::Bool(true)), // SupportsConcurrentConnection
+                (path(0x0002), Value::Uint(0)),    // RegulatoryConfig
+                (
+                    path(0x0001), // BasicCommissioningInfo
+                    Value::Structure(vec![
+                        (Tag::Context(0), Value::Uint(60)),
+                        (Tag::Context(1), Value::Uint(900)),
+                    ]),
+                ),
+                (path(0x0000), Value::Uint(0)), // Breadcrumb
+            ],
+        };
+
+        let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
+        // Must be the anonymous-tagged STRUCT (0x15 … 0x18), not the bool.
+        assert_eq!(
+            payload.first(),
+            Some(&0x15u8),
+            "extractor must return the BasicCommissioningInfo struct, \
+             not another attribute's value"
+        );
+        assert_eq!(payload.last(), Some(&0x18u8));
+    }
+
     /// A `ReportData` carrying a `BasicCommissioningInfo` struct is re-encoded as
     /// an anonymous-tagged struct that `decode_basic_commissioning_info` accepts.
     #[test]
@@ -1142,7 +1261,7 @@ mod tests {
                 AttributePath {
                     endpoint: 0,
                     cluster: crate::clusters::general_commissioning::CLUSTER_ID, // 0x0030
-                    attribute: attr_id::BASIC_COMMISSIONING_INFO,                // 0x0004
+                    attribute: attr_id::BASIC_COMMISSIONING_INFO,                // 0x0001
                 },
                 struct_value.clone(),
             )],
@@ -1549,12 +1668,39 @@ mod tests {
                 false,
                 true,
                 Some(m.message_counter),
+                None,
                 &sigma2,
             );
             dev_io.send_to(&wire, ctrl_addr).await.unwrap();
             let (p, _) = dev_io.recv_from().await.unwrap();
             let m = decode_unsecured(&p).unwrap();
             responder.handle_sigma3(&m.payload).unwrap();
+
+            // Close with a success StatusReport and expect the standalone ack
+            // (real-device behaviour).
+            let mut body = Vec::new();
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            let report = encode_unsecured(
+                201,
+                m.exchange_id,
+                0x40,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &body,
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+            let ack = tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                .await
+                .expect("controller must ack the StatusReport")
+                .unwrap();
+            let ack = decode_unsecured(&ack.0).unwrap();
+            assert_eq!(ack.opcode, 0x10);
+
             responder.finish().unwrap()
         };
 
@@ -1574,6 +1720,76 @@ mod tests {
         let sid = ctrl_result.unwrap();
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
+    }
+
+    /// After a secured round-trip, the piggyback ack for the received
+    /// response is left buffered (see `secured_round_trip`). `flush_pending_acks`
+    /// must emit it so the device stops retransmitting before the unsecured
+    /// CASE exchange starts (observed straggler: Tapo P110M, M6.6.5).
+    #[tokio::test]
+    async fn flush_pending_acks_delivers_buffered_standalone_ack() {
+        use std::time::Instant;
+
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = async {
+            let resp = secured_round_trip(
+                &ctrl_io,
+                &mut ctrl,
+                session,
+                dev_addr,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"req",
+            )
+            .await
+            .unwrap();
+            assert_eq!(resp.payload, b"resp");
+            // The ack for the device's reliable response is now pending.
+            flush_pending_acks(&ctrl_io, &mut ctrl, dev_addr)
+                .await
+                .unwrap();
+        };
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected request");
+            };
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"resp",
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            // The flushed standalone ack must arrive and decode as AckOnly.
+            let (ack_pkt, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                    .await
+                    .expect("flush must deliver the standalone ack")
+                    .unwrap();
+            assert!(
+                matches!(
+                    dev.decode_inbound(&ack_pkt, Instant::now()).unwrap(),
+                    DecodeInboundOutput::AckOnly { .. }
+                ),
+                "flushed packet must be a standalone ack"
+            );
+        };
+
+        let ((), ()) = tokio::join!(controller, device);
     }
 
     /// `dispatch_read` for `CommissioningInfo`: canned `ReportData` carries a

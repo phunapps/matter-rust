@@ -13,7 +13,7 @@
 //! ```
 
 use std::fs;
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -59,8 +59,9 @@ struct Cli {
     #[arg(long)]
     paa_dir: Option<PathBuf>,
 
-    /// PRODUCTION CD signing cert (PEM). When set, the bundled CSA test CD roots
-    /// are not used.
+    /// PRODUCTION CD signing roots: a directory of CSA CD signing certs
+    /// (loads every *.der, e.g. connectedhomeip credentials/production/cd-certs),
+    /// or a single *.der cert. When set, the bundled CSA test CD roots are not used.
     #[arg(long)]
     cd_root: Option<PathBuf>,
 
@@ -95,8 +96,8 @@ fn build_trust_roots(cli: &Cli) -> anyhow::Result<TrustRoots> {
     };
 
     let cd = if let Some(path) = &cli.cd_root {
-        let pem = fs::read(path).with_context(|| format!("reading CD root {}", path.display()))?;
-        CdSigningRoots::from_pem(&[pem.as_slice()]).context("parsing --cd-root PEM")?
+        load_production_cd(path)
+            .with_context(|| format!("loading CD signing roots from {}", path.display()))?
     } else {
         using_test_roots = true;
         CdSigningRoots::with_csa_test_roots()
@@ -131,6 +132,35 @@ fn load_production_paa(dir: &std::path::Path) -> anyhow::Result<PaaTrustStore> {
     Ok(store)
 }
 
+/// Load CSA CD signing roots from `path`: a directory of `*.der` CD signing
+/// certificates (e.g. connectedhomeip `credentials/production/cd-certs/`, which
+/// ships several distinct CSA keys), or a single `*.der` certificate.
+///
+/// Real-world CD signing roots are X.509 certificates, so this uses
+/// [`CdSigningRoots::from_cert_der`] (not the `from_pem` `SubjectPublicKeyInfo`
+/// path the bundled test root uses).
+fn load_production_cd(path: &std::path::Path) -> anyhow::Result<CdSigningRoots> {
+    let mut ders: Vec<Vec<u8>> = Vec::new();
+    if path.is_dir() {
+        for entry in
+            fs::read_dir(path).with_context(|| format!("reading dir {}", path.display()))?
+        {
+            let p = entry?.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("der") {
+                continue;
+            }
+            ders.push(fs::read(&p).with_context(|| format!("reading {}", p.display()))?);
+        }
+        if ders.is_empty() {
+            bail!("no *.der CD signing certs found in {}", path.display());
+        }
+    } else {
+        ders.push(fs::read(path).with_context(|| format!("reading {}", path.display()))?);
+    }
+    let refs: Vec<&[u8]> = ders.iter().map(Vec::as_slice).collect();
+    CdSigningRoots::from_cert_der(&refs).context("parsing CD signing certificates")
+}
+
 /// Resolve the setup payload from exactly one of `--qr` / `--manual`.
 fn parse_setup_payload(cli: &Cli) -> anyhow::Result<SetupPayload> {
     match (&cli.qr, &cli.manual) {
@@ -140,6 +170,25 @@ fn parse_setup_payload(cli: &Cli) -> anyhow::Result<SetupPayload> {
         // clap's `conflicts_with` prevents both, but guard anyway.
         (Some(_), Some(_)) => bail!("--qr and --manual are mutually exclusive"),
     }
+}
+
+/// Parse a `--addr` value, supporting an IPv6 zone (scope) id for link-local
+/// targets: `[fe80::1%11]:5540` (numeric interface index). Matter devices in a
+/// commissioning window are typically reachable on their `fe80::` link-local
+/// address, which requires a scope id that `SocketAddr`'s own parser rejects.
+fn parse_dial_addr(s: &str) -> anyhow::Result<SocketAddr> {
+    if let Some(pct) = s.find('%') {
+        let close = s
+            .find(']')
+            .context("--addr with a zone id must be bracketed: [fe80::1%11]:5540")?;
+        let ip: Ipv6Addr = s[1..pct].parse().context("--addr IPv6 address")?;
+        let scope: u32 = s[pct + 1..close]
+            .parse()
+            .context("--addr zone id must be a numeric interface index, e.g. %11")?;
+        let port: u16 = s[close + 2..].parse().context("--addr port")?;
+        return Ok(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)));
+    }
+    s.parse::<SocketAddr>().context("parsing --addr")
 }
 
 /// Current wall-clock time as `MatterTime`. A binary may read the system clock.
@@ -278,9 +327,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Optional direct-dial address (skips the mDNS commissionable browse).
     let commissionable_addr = match &cli.addr {
-        Some(s) => Some(s.parse::<SocketAddr>().context("parsing --addr")?),
+        Some(s) => Some(parse_dial_addr(s)?),
         None => None,
     };
+
+    // Match the local socket's family to a direct-dial IPv4 target (the default
+    // bind(0) is IPv6 dual-stack, which cannot route to a plain IPv4 peer).
+    let dial_ipv4 = commissionable_addr.is_some_and(|a| a.is_ipv4());
 
     let config = DriverConfig {
         commissioner,
@@ -288,10 +341,16 @@ async fn main() -> anyhow::Result<()> {
         passcode: payload.passcode.as_u32(),
     };
 
-    // Real IO: dual-stack [::]:0 UDP socket + mDNS discovery.
-    let transport = TokioUdpTransport::bind(0)
-        .await
-        .context("binding UDP socket")?;
+    // Real IO: UDP socket (IPv6 dual-stack by default; IPv4 for a v4 --addr) + mDNS.
+    let transport = if dial_ipv4 {
+        TokioUdpTransport::bind_addr(SocketAddr::from(([0u8, 0, 0, 0], 0)))
+            .await
+            .context("binding IPv4 UDP socket")?
+    } else {
+        TokioUdpTransport::bind(0)
+            .await
+            .context("binding UDP socket")?
+    };
     let mut discovery = MdnsSdDiscovery::new().context("starting mDNS discovery")?;
 
     println!("commissioning… (this performs PASE → attestation → NOC → CASE)");

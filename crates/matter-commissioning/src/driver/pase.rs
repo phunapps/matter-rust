@@ -14,16 +14,15 @@ use matter_transport::{PeerHint, SessionId, SessionManager, SessionRole};
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
-use crate::driver::unsecured::UnsecuredExchange;
+use crate::driver::unsecured::{parse_status_report, require_handshake_opcode, UnsecuredExchange};
 
 // SecureChannel opcodes for the PASE handshake (Matter Core Spec §4.14.1).
 const OP_PBKDF_PARAM_REQUEST: u8 = 0x20;
+const OP_PBKDF_PARAM_RESPONSE: u8 = 0x21;
 const OP_PASE_PAKE1: u8 = 0x22;
+const OP_PASE_PAKE2: u8 = 0x23;
 const OP_PASE_PAKE3: u8 = 0x24;
 
-// FLAGGED (from M6.6.2): production should seed the unsecured counter randomly
-// (Matter Core Spec §4.5.1.1); a fixed seed is deterministic for tests.
-const PASE_INITIAL_COUNTER: u32 = 1;
 const PASE_EXCHANGE_ID: u16 = 1;
 
 /// Drive a full PASE handshake against `peer` and register the resulting
@@ -34,7 +33,10 @@ const PASE_EXCHANGE_ID: u16 = 1;
 /// - [`DriverError::Crypto`] if a SPAKE2+ step fails (e.g. wrong passcode).
 /// - [`DriverError::Io`] / [`DriverError::Transport`] / [`DriverError::Timeout`]
 ///   on datagram, framing, or reply-timeout failure.
-/// - [`DriverError::Handshake`] if negotiation produced no responder session id.
+/// - [`DriverError::Handshake`] if negotiation produced no responder session
+///   id or the handshake did not close with a `StatusReport`.
+/// - [`DriverError::SessionEstablishmentFailed`] if the device's closing
+///   `StatusReport` reports failure.
 pub async fn run_pase<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -43,12 +45,22 @@ pub async fn run_pase<T: AsyncDatagram>(
 ) -> Result<SessionId, DriverError> {
     let local = sessions.allocate_session_id();
     let mut prover = PaseProver::new_with_negotiation(passcode, local.0)?;
-    let mut exch = UnsecuredExchange::new(PASE_INITIAL_COUNTER, PASE_EXCHANGE_ID);
+    // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
+    // §4.13.2.1) — devices drop session-establishment frames without them.
+    let mut exch = UnsecuredExchange::new_ephemeral(PASE_EXCHANGE_ID)?;
 
     let request = prover.start()?;
     let resp = exch
         .send_and_recv(transport, peer, OP_PBKDF_PARAM_REQUEST, &request, None)
         .await?;
+    if let Err(e) = require_handshake_opcode(&resp, OP_PBKDF_PARAM_RESPONSE) {
+        // Best-effort ack so a rejecting device stops retransmitting its
+        // (reliable) StatusReport before we abort.
+        let _ = exch
+            .send_standalone_ack(transport, peer, resp.message_counter)
+            .await;
+        return Err(e);
+    }
     prover.handle_pbkdf_response(&resp.payload)?;
 
     let pake1 = prover.next_message()?;
@@ -61,17 +73,39 @@ pub async fn run_pase<T: AsyncDatagram>(
             Some(resp.message_counter),
         )
         .await?;
+    if let Err(e) = require_handshake_opcode(&pake2, OP_PASE_PAKE2) {
+        // A wrong passcode surfaces here: the device rejects Pake1 with a
+        // StatusReport (InvalidParameter) instead of sending Pake2.
+        let _ = exch
+            .send_standalone_ack(transport, peer, pake2.message_counter)
+            .await;
+        return Err(e);
+    }
     prover.handle_pake2(&pake2.payload)?;
 
+    // Pake3 is sent reliably and the device closes the handshake with a
+    // SecureChannel StatusReport (success or failure), which must be consumed
+    // and acked here — otherwise its retransmits straggle into the secured IM
+    // phase (observed: Tapo P110M, M6.6.5 validation).
     let pake3 = prover.next_message()?;
-    exch.send(
-        transport,
-        peer,
-        OP_PASE_PAKE3,
-        &pake3,
-        Some(pake2.message_counter),
-    )
-    .await?;
+    let report = exch
+        .send_and_recv(
+            transport,
+            peer,
+            OP_PASE_PAKE3,
+            &pake3,
+            Some(pake2.message_counter),
+        )
+        .await?;
+    let status = parse_status_report(&report)?;
+    exch.send_standalone_ack(transport, peer, report.message_counter)
+        .await?;
+    if !status.is_session_establishment_success() {
+        return Err(DriverError::SessionEstablishmentFailed {
+            general_code: status.general_code,
+            protocol_code: status.protocol_code,
+        });
+    }
 
     // Capture the responder session id before `finish` consumes `prover`.
     let peer_session_id = prover.responder_session_id().ok_or(DriverError::Handshake(
@@ -100,6 +134,18 @@ mod tests {
 
     const OP_PBKDF_RESP: u8 = 0x21;
     const OP_PAKE2: u8 = 0x23;
+    const OP_STATUS_REPORT: u8 = 0x40;
+    const OP_STANDALONE_ACK: u8 = 0x10;
+
+    /// `SecureChannel` `StatusReport` body: general code, protocol id,
+    /// protocol code (all little-endian; spec §4.10.1.1).
+    fn status_report_body(general: u16, protocol_code: u16) -> Vec<u8> {
+        let mut b = Vec::with_capacity(8);
+        b.extend_from_slice(&general.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes()); // SECURE_CHANNEL
+        b.extend_from_slice(&protocol_code.to_le_bytes());
+        b
+    }
 
     #[tokio::test]
     async fn run_pase_establishes_matching_session() {
@@ -129,6 +175,7 @@ mod tests {
                 false,
                 true,
                 Some(m.message_counter),
+                None,
                 &resp,
             );
             ctr += 1;
@@ -146,6 +193,7 @@ mod tests {
                 false,
                 true,
                 Some(m.message_counter),
+                None,
                 &pake2,
             );
             dev_io.send_to(&wire, ctrl_addr).await.unwrap();
@@ -153,6 +201,32 @@ mod tests {
             let (p, _) = dev_io.recv_from().await.unwrap();
             let m = decode_unsecured(&p).unwrap();
             verifier.handle_pake3(&m.payload).unwrap();
+
+            // Real devices close the handshake with a reliable StatusReport
+            // (SessionEstablishmentSuccess) and expect it to be acked
+            // (observed: Tapo P110M, M6.6.5 validation).
+            ctr += 1;
+            let report = encode_unsecured(
+                ctr,
+                m.exchange_id,
+                OP_STATUS_REPORT,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &status_report_body(0, 0),
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+
+            let ack = tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                .await
+                .expect("controller must ack the StatusReport")
+                .unwrap();
+            let ack = decode_unsecured(&ack.0).unwrap();
+            assert_eq!(ack.opcode, OP_STANDALONE_ACK);
+            assert_eq!(ack.ack_counter, Some(ctr));
+
             verifier.finish().unwrap()
         };
 
@@ -163,5 +237,78 @@ mod tests {
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from(dev_keys));
         assert_eq!(registered.peer_id, matter_transport::SessionId(0x00BB));
+    }
+
+    #[tokio::test]
+    async fn run_pase_surfaces_status_report_rejection() {
+        // A device that rejects session establishment (e.g. too many failed
+        // attempts) answers Pake3 with a failure StatusReport; run_pase must
+        // surface it as an error, not register a session.
+        let pin = 20_202_021;
+        let params = PasePbkdfParams {
+            iterations: 1000,
+            salt: vec![0x55; 16],
+        };
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut sessions = SessionManager::new();
+
+        let device = async {
+            let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x00BB).unwrap();
+            let mut ctr: u32 = 100;
+            for op in [OP_PBKDF_RESP, OP_PAKE2] {
+                let (p, _) = dev_io.recv_from().await.unwrap();
+                let m = decode_unsecured(&p).unwrap();
+                match op {
+                    OP_PBKDF_RESP => verifier.handle_pbkdf_request(&m.payload).unwrap(),
+                    _ => verifier.handle_pake1(&m.payload).unwrap(),
+                }
+                let reply = verifier.next_message().unwrap();
+                let wire = encode_unsecured(
+                    ctr,
+                    m.exchange_id,
+                    op,
+                    matter_transport::ProtocolId::SECURE_CHANNEL,
+                    false,
+                    true,
+                    Some(m.message_counter),
+                    None,
+                    &reply,
+                );
+                ctr += 1;
+                dev_io.send_to(&wire, ctrl_addr).await.unwrap();
+            }
+            // Pake3 arrives; reject with FAILURE / InvalidParameter (0x0002).
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            let report = encode_unsecured(
+                ctr,
+                m.exchange_id,
+                OP_STATUS_REPORT,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &status_report_body(1, 0x0002),
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+        };
+
+        let controller = run_pase(&ctrl_io, &mut sessions, dev_addr, pin);
+        let (ctrl_result, ()) = tokio::join!(controller, device);
+        let err = ctrl_result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                DriverError::SessionEstablishmentFailed {
+                    general_code: 1,
+                    protocol_code: 0x0002,
+                }
+            ),
+            "expected SessionEstablishmentFailed, got: {err:?}"
+        );
     }
 }

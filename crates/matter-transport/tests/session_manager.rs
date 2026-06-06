@@ -155,7 +155,7 @@ fn decode_inbound_unknown_session_errors() {
         source_node_id: None,
         destination_node_id: None,
     };
-    let wire = encode_secured(&header, b"x", &keys, SessionRole::Initiator).unwrap();
+    let wire = encode_secured(&header, b"x", &keys, SessionRole::Initiator, 0).unwrap();
 
     let err = mgr
         .decode_inbound(&wire, std::time::Instant::now())

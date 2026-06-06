@@ -1231,10 +1231,11 @@ pub fn respond(
                 }
             }
             let cert_der = match cert_type.expect("CertificateChainRequest: type at ctx(0)") {
-                0x01 => pki.pai_der.clone(), // PAI = 0x01
-                0x02 => pki.dac_der.clone(), // DAC = 0x02
+                // CertificateChainTypeEnum (spec §11.18.5.2): 1 = DAC, 2 = PAI.
+                0x01 => pki.dac_der.clone(),
+                0x02 => pki.pai_der.clone(),
                 other => panic!(
-                    "CertificateChainRequest: unknown CertChainType 0x{other:02X} (expected 0x01=PAI or 0x02=DAC)"
+                    "CertificateChainRequest: unknown CertChainType 0x{other:02X} (expected 0x01=DAC or 0x02=PAI)"
                 ),
             };
             // Encode as { ctx(0): cert_der bytes }.
@@ -1327,13 +1328,13 @@ pub fn respond(
 ///
 /// | Cluster | Attr ID | Description                   | Value TLV                           |
 /// |---------|---------|-------------------------------|-------------------------------------|
-/// | 0x0030  | 0x0000  | RegulatoryConfig              | anonymous uint 0 (IndoorOutdoor)    |
-/// | 0x0030  | 0x0001  | LocationCapability            | anonymous uint 2 (IndoorOutdoor)    |
-/// | 0x0030  | 0x0002  | SupportsConcurrentConnection  | anonymous bool true                 |
-/// | 0x0030  | 0x0004  | BasicCommissioningInfo        | anonymous struct {ctx(0):60, ctx(1):900} |
+/// | 0x0030  | 0x0000  | Breadcrumb                    | anonymous uint 0                    |
+/// | 0x0030  | 0x0001  | BasicCommissioningInfo        | anonymous struct {ctx(0):60, ctx(1):900} |
+/// | 0x0030  | 0x0002  | RegulatoryConfig              | anonymous uint 2 (IndoorOutdoor)    |
+/// | 0x0030  | 0x0004  | SupportsConcurrentConnection  | anonymous bool true                 |
 /// | 0x0031  | 0xFFFC  | FeatureMap (NetworkComm.)     | anonymous uint 4 (ETHERNET only)   |
 ///
-/// The `CommissioningInfo` struct (attr 0x0004) is what the driver scans for
+/// The `CommissioningInfo` struct (attr 0x0001) is what the driver scans for
 /// and re-encodes via `write_value(Tag::Anonymous, struct_val)`. The anonymous
 /// struct here carries `ctx(0)=failsafe_expiry_length_seconds=60` and
 /// `ctx(1)=max_cumulative_failsafe_seconds=900`, matching `BasicCommissioningInfo`.
@@ -1352,38 +1353,19 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
 
     match (attr_path.cluster, attr_path.attribute) {
         // ── GeneralCommissioning cluster (0x0030) ─────────────────────────────
+        // Attribute ids per spec §11.10.6, matching real-device reports
+        // (Tapo P110M, M6.6.5 validation).
 
-        // RegulatoryConfig (0x0030/0x0000): current regulatory location.
-        // Type: u8 enum RegulatoryLocationTypeEnum. 2 = IndoorOutdoor.
+        // Breadcrumb (0x0030/0x0000): commissioning breadcrumb, starts at 0.
         (0x0030, 0x0000) => {
             let mut buf = Vec::new();
             TlvWriter::new(&mut buf)
-                .put_uint(Tag::Anonymous, 2)
-                .unwrap(); // IndoorOutdoor
-            buf
-        }
-
-        // LocationCapability (0x0030/0x0001): device's supported regulatory
-        // location types. 2 = IndoorOutdoor.
-        (0x0030, 0x0001) => {
-            let mut buf = Vec::new();
-            TlvWriter::new(&mut buf)
-                .put_uint(Tag::Anonymous, 2)
+                .put_uint(Tag::Anonymous, 0)
                 .unwrap();
             buf
         }
 
-        // SupportsConcurrentConnection (0x0030/0x0002): whether the device
-        // supports concurrent commissioning connections. true for Ethernet.
-        (0x0030, 0x0002) => {
-            let mut buf = Vec::new();
-            TlvWriter::new(&mut buf)
-                .put_bool(Tag::Anonymous, true)
-                .unwrap();
-            buf
-        }
-
-        // BasicCommissioningInfo (0x0030/0x0004): the struct the driver scans for.
+        // BasicCommissioningInfo (0x0030/0x0001): the struct the driver scans for.
         // Wire shape after extract_read_payload re-encoding:
         //   anonymous struct { ctx(0): failsafe_expiry_length_seconds u16,
         //                      ctx(1): max_cumulative_failsafe_seconds u16 }
@@ -1392,13 +1374,33 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
         //   w.write_value(Tag::Anonymous, struct_val).
         // So we emit an anonymous struct here that round-trips through the
         //   build_report_data → parse_report_data → extract_read_payload pipeline.
-        (0x0030, 0x0004) => {
+        (0x0030, 0x0001) => {
             let mut buf = Vec::new();
             let mut w = TlvWriter::new(&mut buf);
             w.start_structure(Tag::Anonymous).unwrap();
             w.put_uint(Tag::Context(0), 60_u64).unwrap(); // failsafe_expiry_length_seconds = 60 s
             w.put_uint(Tag::Context(1), 900_u64).unwrap(); // max_cumulative_failsafe_seconds = 900 s
             w.end_container().unwrap();
+            buf
+        }
+
+        // RegulatoryConfig (0x0030/0x0002): current regulatory location.
+        // Type: u8 enum RegulatoryLocationTypeEnum. 2 = IndoorOutdoor.
+        (0x0030, 0x0002) => {
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_uint(Tag::Anonymous, 2)
+                .unwrap(); // IndoorOutdoor
+            buf
+        }
+
+        // SupportsConcurrentConnection (0x0030/0x0004): whether the device
+        // supports concurrent commissioning connections. true for Ethernet.
+        (0x0030, 0x0004) => {
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_bool(Tag::Anonymous, true)
+                .unwrap();
             buf
         }
 
@@ -1592,7 +1594,7 @@ mod mock_device_response_table {
         let commissioning_info_tlv = respond_read_attribute(AttributePath {
             endpoint: 0,
             cluster: 0x0030,
-            attribute: 0x0004,
+            attribute: 0x0001, // BasicCommissioningInfo
         });
         // The driver re-encodes the struct value; simulate by building a
         // well-formed anonymous struct directly (the state machine's CommissioningInfo
@@ -1701,7 +1703,7 @@ mod mock_device_response_table {
             cluster: 0x003E,
             command: 0x02,
         };
-        let fields = cert_chain_request_fields(0x01); // PAI
+        let fields = cert_chain_request_fields(0x02); // PAI (spec §11.18.5.2: 2 = PAI)
         let reply = respond(path, &fields, [0u8; 16], &pki);
         let fields_tlv = match reply {
             DeviceReply::Command(v) => v,
@@ -1713,7 +1715,7 @@ mod mock_device_response_table {
         assert_eq!(decoded.certificate, pki.pai_der, "PAI DER mismatch");
     }
 
-    /// respond(0x003E/0x02) with type=DAC (0x02) returns dac_der.
+    /// respond(0x003E/0x02) with type=DAC (0x01) returns dac_der.
     #[test]
     fn cert_chain_request_dac_returns_dac_der() {
         let pki = build_mock_device_pki(now());
@@ -1722,7 +1724,7 @@ mod mock_device_response_table {
             cluster: 0x003E,
             command: 0x02,
         };
-        let fields = cert_chain_request_fields(0x02); // DAC
+        let fields = cert_chain_request_fields(0x01); // DAC (spec §11.18.5.2: 1 = DAC)
         let reply = respond(path, &fields, [0u8; 16], &pki);
         let fields_tlv = match reply {
             DeviceReply::Command(v) => v,
@@ -1784,7 +1786,7 @@ mod mock_device_response_table {
 
     // ── BasicCommissioningInfo read ────────────────────────────────────────────
 
-    /// respond_read_attribute(0x0030/0x0004) returns an anonymous struct that
+    /// respond_read_attribute(0x0030/0x0001) returns an anonymous struct that
     /// decode_basic_commissioning_info parses as failsafe=60, max_cumulative=900.
     #[test]
     fn basic_commissioning_info_decodes_correctly() {
@@ -1793,7 +1795,7 @@ mod mock_device_response_table {
         let value_tlv = respond_read_attribute(AttributePath {
             endpoint: 0,
             cluster: 0x0030,
-            attribute: 0x0004,
+            attribute: 0x0001, // BasicCommissioningInfo
         });
         let info =
             decode_basic_commissioning_info(&value_tlv).expect("BasicCommissioningInfo decodes");
@@ -1975,7 +1977,7 @@ mod device_im_roundtrip {
             AttributePath {
                 endpoint: 0,
                 cluster: 0x0030,
-                attribute: 0x0004, // BasicCommissioningInfo
+                attribute: 0x0001, // BasicCommissioningInfo
             },
             AttributePath {
                 endpoint: 0,
@@ -2103,6 +2105,9 @@ mod op {
     pub const CASE_SIGMA1: u8 = 0x30;
     pub const CASE_SIGMA2: u8 = 0x31;
     pub const CASE_SIGMA3: u8 = 0x32;
+    // SecureChannel — MRP / status.
+    pub const MRP_STANDALONE_ACK: u8 = 0x10;
+    pub const STATUS_REPORT: u8 = 0x40;
     // Interaction Model.
     pub const IM_INVOKE_REQUEST: u8 = 0x08;
     pub const IM_INVOKE_RESPONSE: u8 = 0x09;
@@ -2114,6 +2119,39 @@ mod op {
 /// command 0x04). When the device services this on the CASE session, the
 /// commissioning flow is done and the loop returns.
 const CMD_COMMISSIONING_COMPLETE: u32 = 0x04;
+
+/// Close a PASE/CASE handshake the way a real device does: send a reliable
+/// success `StatusReport` on the exchange, then consume the controller's MRP
+/// standalone ack for it (observed: Tapo P110M, M6.6.5 validation).
+async fn close_handshake_with_status_report<T: AsyncDatagram>(
+    dev_io: &T,
+    peer: std::net::SocketAddr,
+    counter: u32,
+    exchange_id: u16,
+    ack_counter: u32,
+) -> Result<(), DriverError> {
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&0u16.to_le_bytes()); // general code: SUCCESS
+    body.extend_from_slice(&0u32.to_le_bytes()); // protocol id: SecureChannel
+    body.extend_from_slice(&0u16.to_le_bytes()); // SessionEstablishmentSuccess
+    let report = encode_unsecured(
+        counter,
+        exchange_id,
+        op::STATUS_REPORT,
+        ProtocolId::SECURE_CHANNEL,
+        false,
+        true,
+        Some(ack_counter),
+        None,
+        &body,
+    );
+    dev_io.send_to(&report, peer).await?;
+    let (p, _) = dev_io.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::MRP_STANDALONE_ACK);
+    debug_assert_eq!(m.ack_counter, Some(counter));
+    Ok(())
+}
 
 /// Inputs the mock device needs to play the device side of one commissioning run.
 ///
@@ -2243,6 +2281,7 @@ pub async fn run_mock_device(
         false,
         true,
         Some(m.message_counter),
+        None,
         &resp,
     );
     unsecured_ctr += 1;
@@ -2264,17 +2303,27 @@ pub async fn run_mock_device(
         false,
         true,
         Some(m.message_counter),
+        None,
         &pake2,
     );
     dev_io.send_to(&wire, peer).await?;
 
-    // Pake3 (terminal; no reply) → finish.
+    // Pake3 → success StatusReport (acked by the controller) → finish.
     let (p, _) = dev_io.recv_from().await?;
     let m = decode_unsecured(&p)?;
     debug_assert_eq!(m.opcode, op::PASE_PAKE3);
     verifier
         .handle_pake3(&m.payload)
         .map_err(DriverError::Crypto)?;
+    unsecured_ctr += 1;
+    close_handshake_with_status_report(
+        dev_io,
+        peer,
+        unsecured_ctr,
+        m.exchange_id,
+        m.message_counter,
+    )
+    .await?;
     let pase_keys = verifier.finish().map_err(DriverError::Crypto)?;
 
     // The attestation challenge is the PASE-derived attestation_key — identical
@@ -2435,6 +2484,7 @@ pub async fn run_mock_device(
         false,
         true,
         Some(m.message_counter),
+        None,
         &sigma2,
     );
     dev_io.send_to(&wire, peer).await?;
@@ -2445,6 +2495,15 @@ pub async fn run_mock_device(
     responder
         .handle_sigma3(&m.payload)
         .map_err(DriverError::Crypto)?;
+    unsecured_ctr += 1;
+    close_handshake_with_status_report(
+        dev_io,
+        peer,
+        unsecured_ctr,
+        m.exchange_id,
+        m.message_counter,
+    )
+    .await?;
     let case_output = responder.finish().map_err(DriverError::Crypto)?;
     let case_sid = sessions.register_case(&case_output, SessionRole::Responder);
 

@@ -69,6 +69,58 @@ pub fn derive_compressed_fabric_id(root_public_key: &[u8; 65], fabric_id: u64) -
     Ok(out)
 }
 
+/// HKDF info label for operational group-key derivation (Matter Core Spec
+/// §4.15.2, `GroupKey v1.0`).
+const GROUP_KEY_INFO: &[u8] = b"GroupKey v1.0";
+
+/// `KeyType` adapter for a fixed 16-byte HKDF output.
+struct Len16;
+
+impl hkdf::KeyType for Len16 {
+    fn len(&self) -> usize {
+        16
+    }
+}
+
+/// Derive the 16-byte *operational* Identity Protection Key from the IPK
+/// epoch key (Matter Core Spec §4.15.2 — operational group key derivation).
+///
+/// The IPK distributed in `AddNOC` is an **epoch key**; everything that uses
+/// the IPK on the wire — most importantly the CASE Sigma1 *destination
+/// identifier* (§4.14.2.2) — uses the operational key derived from it:
+///
+/// - **IKM**: the 16-byte epoch key.
+/// - **Salt**: the 8-byte Compressed Fabric Identifier
+///   ([`derive_compressed_fabric_id`]).
+/// - **Info**: the ASCII literal `"GroupKey v1.0"`.
+/// - **Output length**: 16 bytes.
+///
+/// Mirrors matter.js `Fabric.operationalIdentityProtectionKey`
+/// (`createHkdfKey(identityProtectionKey, globalId, GROUP_SECURITY_INFO)`)
+/// and chip's `Crypto::DeriveGroupOperationalKey`. Using the *epoch* key
+/// directly makes real devices reject Sigma1 with `NoSharedTrustRoots`
+/// (observed: Tapo P110M, M6.6.5 validation).
+///
+/// # Errors
+///
+/// Returns [`Error::KeyDerivationFailed`] if the internal HKDF `expand` or
+/// `fill` call fails (effectively unreachable for the fixed 16-byte output).
+pub fn derive_operational_ipk(
+    epoch_key: &[u8; 16],
+    compressed_fabric_id: &[u8; 8],
+) -> Result<[u8; 16]> {
+    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, compressed_fabric_id).extract(epoch_key);
+
+    let okm = prk
+        .expand(&[GROUP_KEY_INFO], Len16)
+        .map_err(|_| Error::KeyDerivationFailed)?;
+
+    let mut out = [0u8; 16];
+    okm.fill(&mut out).map_err(|_| Error::KeyDerivationFailed)?;
+
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -89,5 +141,24 @@ mod tests {
         let fabric_id: u64 = 0x2906_C908_D115_D362;
         let got = derive_compressed_fabric_id(&root_pub, fabric_id).unwrap();
         assert_eq!(got, [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30]);
+    }
+
+    /// Cross-verified against matter.js 0.17.1 (`StandardCrypto.createHkdfKey`
+    /// with the `Fabric.operationalIdentityProtectionKey` inputs): epoch key
+    /// from chip's group-key test vectors, salt = the §4.3.2.2 compressed
+    /// fabric id above, info = `"GroupKey v1.0"`.
+    #[test]
+    fn operational_ipk_matches_matter_js() {
+        let epoch_key: [u8; 16] = [
+            0x23, 0x5b, 0xf7, 0xe6, 0x28, 0x23, 0xd3, 0x58, 0xdc, 0xf7, 0x46, 0xbf, 0xa7, 0x54,
+            0x1c, 0xf2,
+        ];
+        let cfid: [u8; 8] = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let got = derive_operational_ipk(&epoch_key, &cfid).unwrap();
+        let expected: [u8; 16] = [
+            0xda, 0xee, 0x42, 0x4f, 0x43, 0x46, 0x77, 0xaf, 0xb5, 0x94, 0x97, 0x06, 0x57, 0x2b,
+            0x4c, 0xcb,
+        ];
+        assert_eq!(got, expected);
     }
 }
