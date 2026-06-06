@@ -101,7 +101,7 @@ pub struct CommissionerConfig<'a> {
     /// Wi-Fi credentials for `AddOrUpdateWiFiNetwork`.
     ///
     /// `None` skips the Wi-Fi sub-cursor entirely, mirroring chip's
-    /// AutoCommissioner: network provisioning runs ONLY when credentials
+    /// `AutoCommissioner`: network provisioning runs ONLY when credentials
     /// are supplied. `None` is correct both for Ethernet-only devices and
     /// for Wi-Fi devices that are already on the network (the usual case
     /// for IP commissioning, e.g. a second-fabric commission). Supplying
@@ -519,7 +519,7 @@ impl Commissioner {
                     })?;
                 #[cfg(feature = "tracing")]
                 tracing::debug!(
-                    rcac_tlv = %rcac_tlv.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                    rcac_tlv = %crate::hexdump::hex(&rcac_tlv),
                     "sending AddTrustedRootCertificate"
                 );
                 let payload = encode_add_trusted_root(&rcac_tlv);
@@ -988,8 +988,8 @@ impl Commissioner {
         let dac = Dac::from_der(dac_der)?;
         #[cfg(feature = "tracing")]
         tracing::debug!(
-            dac_der = %dac_der.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-            pai_der = %pai_der.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            dac_der = %crate::hexdump::hex(dac_der),
+            pai_der = %crate::hexdump::hex(pai_der),
             "verifying attestation chain"
         );
 
@@ -1018,11 +1018,7 @@ impl Commissioner {
         //    from `attestation_elements`.
         #[cfg(feature = "tracing")]
         tracing::debug!(
-            cd_cms = %fields
-                .certification_declaration
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>(),
+            cd_cms = %crate::hexdump::hex(&fields.certification_declaration),
             "verifying certification declaration"
         );
         crate::attestation::verify_certification_declaration(

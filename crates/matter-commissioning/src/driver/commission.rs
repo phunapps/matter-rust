@@ -195,19 +195,6 @@ pub(crate) fn extract_read_payload(
     }
 }
 
-/// Send a single `ReadRequest` over an already-established secured session
-/// and await the `ReportData`.
-///
-/// Builds the `ReadRequestMessage` from `paths`, sends it via
-/// [`secured_round_trip`], then parses the `ReportDataMessage` and returns
-/// the result.
-///
-/// # Errors
-///
-/// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
-///   propagated from [`secured_round_trip`].
-/// - [`DriverError::Im`] if the response cannot be parsed as a valid
-///   `ReportDataMessage`.
 /// Drive any *imminent* pending MRP deadlines (within ~500 ms — in practice
 /// the 200 ms standalone-ack timer buffered for the most recent secured
 /// response, see `secured_round_trip`'s pending-ack note) and send the
@@ -245,6 +232,19 @@ async fn flush_pending_acks<T: AsyncDatagram>(
     Ok(())
 }
 
+/// Send a single `ReadRequest` over an already-established secured session
+/// and await the `ReportData`.
+///
+/// Builds the `ReadRequestMessage` from `paths`, sends it via
+/// [`secured_round_trip`], then parses the `ReportDataMessage` and returns
+/// the result.
+///
+/// # Errors
+///
+/// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
+///   propagated from [`secured_round_trip`].
+/// - [`DriverError::Im`] if the response cannot be parsed as a valid
+///   `ReportDataMessage`.
 pub(crate) async fn dispatch_read<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -266,11 +266,7 @@ pub(crate) async fn dispatch_read<T: AsyncDatagram>(
     .await?;
     #[cfg(feature = "tracing")]
     tracing::debug!(
-        report_data_tlv = %resp
-            .payload
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>(),
+        report_data_tlv = %crate::hexdump::hex(&resp.payload),
         "ReportData received"
     );
     let report = crate::im::parse_report_data(&resp.payload)?;
@@ -1203,7 +1199,7 @@ mod tests {
         );
     }
 
-    /// Replay of a real device's GeneralCommissioning report (Tapo P110M,
+    /// Replay of a real device's `GeneralCommissioning` report (Tapo P110M,
     /// M6.6.5 validation): all four requested attributes come back, and
     /// `BasicCommissioningInfo` is attribute **0x0001** (spec §11.10.6) — NOT
     /// 0x0004, which is `SupportsConcurrentConnection`, a bool. The extractor

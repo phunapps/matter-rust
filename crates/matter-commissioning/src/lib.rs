@@ -96,6 +96,22 @@ pub mod clusters;
 #[cfg(feature = "driver")]
 pub mod driver;
 pub mod error;
+/// Lowercase-hex rendering for `tracing` debug dumps of wire bytes.
+#[cfg(feature = "tracing")]
+pub(crate) mod hexdump {
+    use std::fmt::Write;
+
+    /// Render `bytes` as a contiguous lowercase-hex string.
+    pub(crate) fn hex(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
+                // Vec-backed String writes are infallible.
+                let _ = write!(out, "{b:02x}");
+                out
+            })
+    }
+}
 pub mod im;
 pub mod noc;
 pub mod setup;

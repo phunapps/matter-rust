@@ -85,7 +85,7 @@ pub fn parse_status_report(msg: &UnsecuredMessage) -> Result<SecureChannelStatus
     })
 }
 
-/// Require `msg` to be the SecureChannel handshake message `opcode`.
+/// Require `msg` to be the `SecureChannel` handshake message `opcode`.
 ///
 /// A `StatusReport` in its place is a *rejection* (e.g. `NoSharedTrustRoots`
 /// when Sigma1's destination id matches no fabric, or `InvalidParameter` on
@@ -354,7 +354,7 @@ impl UnsecuredExchange {
         tracing::debug!(
             opcode = format_args!("{opcode:#04x}"),
             exchange_id = self.exchange_id,
-            wire = %wire.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            wire = %crate::hexdump::hex(&wire),
             "unsecured send"
         );
         let mut attempts: u8 = 0;
@@ -378,7 +378,7 @@ impl UnsecuredExchange {
                     #[cfg(feature = "tracing")]
                     tracing::debug!(
                         len = packet.len(),
-                        head = %packet.iter().take(24).map(|b| format!("{b:02x}")).collect::<String>(),
+                        head = %crate::hexdump::hex(&packet[..packet.len().min(24)]),
                         "unsecured recv"
                     );
                     // Secured-session stragglers (session id ≠ 0 at header
@@ -684,14 +684,14 @@ mod tests {
         let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, b"sigma1", None);
 
         let device = async {
-            let (pkt, _) = dev_io.recv_from().await.unwrap();
-            let m = decode_unsecured(&pkt).unwrap();
-            // Straggler: a secured frame (session id 1) — header built via the
-            // transport primitive, payload irrelevant (it would be encrypted).
             use matter_transport::{
                 encode_header, MessageCounter, SecuredMessageFlags, SecuredMessageHeader,
                 SecurityFlags, SessionId,
             };
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&pkt).unwrap();
+            // Straggler: a secured frame (session id 1) — header built via the
+            // transport primitive, payload irrelevant (it would be encrypted).
             let hdr = SecuredMessageHeader {
                 flags: SecuredMessageFlags::empty(),
                 session_id: SessionId(1),

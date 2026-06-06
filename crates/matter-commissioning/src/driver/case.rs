@@ -58,8 +58,8 @@ fn preferred_address(addresses: &[std::net::IpAddr]) -> Option<std::net::IpAddr>
 /// Browse `_matter._tcp` operational records and return the socket address of
 /// the node whose instance name matches `(compressed_fabric_id, node_id)`.
 ///
-/// The advertised address list is filtered through [`preferred_address`]
-/// (IPv4 → routable IPv6 → fallback).
+/// The advertised address list is filtered for routability
+/// (IPv4 → non-link-local IPv6 → fallback) — see `preferred_address`.
 ///
 /// # Errors
 ///
@@ -147,7 +147,7 @@ pub async fn run_case<T: AsyncDatagram>(
     }
     #[cfg(feature = "tracing")]
     tracing::debug!(
-        sigma2 = %sigma2.payload.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        sigma2 = %crate::hexdump::hex(&sigma2.payload),
         "received Sigma2"
     );
     initiator.handle_sigma2(&sigma2.payload)?;
