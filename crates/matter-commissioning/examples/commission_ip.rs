@@ -288,7 +288,7 @@ fn init_tracing(verbose: u8, trace_out: Option<&std::path::Path>) -> anyhow::Res
 
         #[cfg(feature = "wiretrace")]
         if let Some(path) = trace_out {
-            let file = std::fs::File::create(path)
+            let file = fs::File::create(path)
                 .with_context(|| format!("creating trace file {}", path.display()))?;
             tracing_subscriber::registry()
                 .with(fmt)
@@ -297,6 +297,8 @@ fn init_tracing(verbose: u8, trace_out: Option<&std::path::Path>) -> anyhow::Res
             return Ok(());
         }
 
+        // wiretrace absent: --trace-out was given but the feature is off → hard
+        // error (mutually exclusive with the cfg(wiretrace) arm above).
         #[cfg(not(feature = "wiretrace"))]
         if trace_out.is_some() {
             anyhow::bail!("--trace-out requires building with --features driver,tracing,wiretrace");
