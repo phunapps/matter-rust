@@ -312,6 +312,18 @@ impl UnsecuredExchange {
             &[],
         );
         transport.send_to(&wire, peer).await?;
+        // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            target: "matter_wire",
+            dir = "tx",
+            session_id = 0_u64,
+            exchange_id = u64::from(self.exchange_id),
+            protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
+            opcode = u64::from(OPCODE_MRP_STANDALONE_ACK),
+            payload = "",
+            "wire"
+        );
         Ok(())
     }
 
@@ -357,6 +369,18 @@ impl UnsecuredExchange {
             wire = %crate::hexdump::hex(&wire),
             "unsecured send"
         );
+        // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            target: "matter_wire",
+            dir = "tx",
+            session_id = 0_u64,
+            exchange_id = u64::from(self.exchange_id),
+            protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
+            opcode = u64::from(opcode),
+            payload = %crate::hexdump::hex(app_payload),
+            "wire"
+        );
         let mut attempts: u8 = 0;
         // Once the peer acknowledges delivery (standalone ack), stop
         // retransmitting and switch to the longer response timeout — the
@@ -400,6 +424,18 @@ impl UnsecuredExchange {
                         acked = true;
                         continue;
                     }
+                    // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!(
+                        target: "matter_wire",
+                        dir = "rx",
+                        session_id = 0_u64,
+                        exchange_id = u64::from(msg.exchange_id),
+                        protocol = u64::from(msg.protocol_id.protocol),
+                        opcode = u64::from(msg.opcode),
+                        payload = %crate::hexdump::hex(&msg.payload),
+                        "wire"
+                    );
                     return Ok(msg);
                 }
                 Err(_elapsed) => {
