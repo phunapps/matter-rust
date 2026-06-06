@@ -88,11 +88,13 @@ impl Visit for WireVisitor {
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        // `%`-recorded Display values arrive here; tracing's wrapper
-        // forwards Debug to Display, so this yields the raw string.
+        // `%`-recorded values arrive here as tracing's Display wrapper,
+        // whose Debug forwards to Display — so this yields the raw string
+        // with no quotes. The trim is belt-and-suspenders for a future
+        // plainly-Debug-recorded &str; hex payloads contain no quotes, so
+        // it can never corrupt real data.
         if matches!(field.name(), "dir" | "payload") {
             let rendered = format!("{value:?}");
-            // Defensive: a Debug-recorded &str would carry quotes.
             let trimmed = rendered.trim_matches('"').to_owned();
             match field.name() {
                 "dir" => self.dir = Some(trimmed),
@@ -134,17 +136,19 @@ where
             // but a capture layer must not panic mid-commission; drop it.
             return;
         };
-        let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-        let line = serde_json::json!({
-            "seq": seq,
-            "dir": dir,
-            "session_id": session_id,
-            "exchange": exchange,
-            "protocol": protocol,
-            "opcode": opcode,
-            "payload": payload,
-        });
         if let Ok(mut w) = self.writer.lock() {
+            // Assign seq and write under the same lock so file order matches
+            // seq order unconditionally, even when concurrent events race.
+            let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            let line = serde_json::json!({
+                "seq": seq,
+                "dir": dir,
+                "session_id": session_id,
+                "exchange": exchange,
+                "protocol": protocol,
+                "opcode": opcode,
+                "payload": payload,
+            });
             // Tooling-grade: ignore write errors (see module docs).
             let _ = writeln!(w, "{line}");
         }
@@ -219,5 +223,56 @@ mod tests {
         assert_eq!(lines[0]["payload"], "15300120aa18");
         assert_eq!(lines[1]["seq"], 1);
         assert_eq!(lines[1]["dir"], "rx");
+    }
+
+    #[test]
+    fn wire_event_missing_schema_field_is_dropped() {
+        // A `matter_wire` event that omits `opcode` must produce zero lines.
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let layer = JsonlLayer::new(SharedBuf(buf.clone()));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(
+                target: "matter_wire",
+                dir = "tx",
+                session_id = 0_u64,
+                exchange_id = 1_u64,
+                protocol = 0_u64,
+                // `opcode` intentionally omitted
+                payload = %"deadbeef",
+                "wire"
+            );
+        });
+        let bytes = buf.lock().unwrap().clone();
+        assert!(bytes.is_empty(), "expected no output for incomplete event");
+    }
+
+    #[test]
+    fn empty_str_payload_serializes_as_empty_string() {
+        // A standalone-ack has an empty payload. The `record_str` path (used
+        // when the field is not `%`-recorded) must store "" as-is.
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let layer = JsonlLayer::new(SharedBuf(buf.clone()));
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(
+                target: "matter_wire",
+                dir = "tx",
+                session_id = 0_u64,
+                exchange_id = 1_u64,
+                protocol = 0_u64,
+                opcode = 0x10_u64,
+                payload = "",   // exercises record_str with empty string
+                "wire"
+            );
+        });
+        let bytes = buf.lock().unwrap().clone();
+        let text = String::from_utf8(bytes).unwrap();
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 1, "expected exactly one line");
+        assert_eq!(lines[0]["payload"], "", "payload must be empty string");
     }
 }
