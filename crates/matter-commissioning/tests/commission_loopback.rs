@@ -185,8 +185,12 @@ fn build_device_case_setup(fabric: &FabricRecord, ipk_epoch_key: [u8; 16]) -> Mo
     }
 }
 
-#[tokio::test]
-async fn commission_reaches_done_against_mock_device() {
+// ── Shared loopback helper ─────────────────────────────────────────────────────
+
+/// Run the full mock-device loopback commission (the M6.6.4 gate),
+/// returning normally on success. Shared by the headline test and the
+/// wiretrace capture test.
+async fn run_loopback_commission() {
     // ── 1. Mock-device PKI: PAA/PAI/DAC chain + the PAA trust store the
     //       controller validates the device attestation against. ──────────────
     let mock_pki = build_mock_device_pki(now());
@@ -302,5 +306,167 @@ async fn commission_reaches_done_against_mock_device() {
     assert_eq!(
         commissioned.fabric.fabric_id, FABRIC_ID,
         "commissioned fabric id must match the fabric we commissioned under"
+    );
+}
+
+// ── Headline gate ──────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn commission_reaches_done_against_mock_device() {
+    run_loopback_commission().await;
+}
+
+// ── Wire-trace capture test ────────────────────────────────────────────────────
+
+/// M6 cross-verification: the same loopback run, captured through
+/// `JsonlLayer`, must produce a well-formed JSONL dialogue with the
+/// expected message sequence.
+///
+/// ## Subscriber installation note
+///
+/// `tracing::subscriber::set_default` is thread-local, which is the right
+/// tool here: `#[tokio::test]` uses a current-thread runtime so every future
+/// in `run_loopback_commission().await` is polled on the same OS thread where
+/// the guard was installed.
+///
+/// However, `tracing-core` caches callsite *interest* (Never / Sometimes /
+/// Always) at first use by consulting only **globally-registered** dispatchers
+/// (`DISPATCHERS`). A thread-local subscriber installed via `set_default` is
+/// NOT in `DISPATCHERS`, so all callsites whose first `interest()` call fires
+/// while only a thread-local subscriber is active get permanently cached as
+/// `Interest::Never` — silencing every subsequent event on that callsite for
+/// the process lifetime.
+///
+/// Fix: before running the loopback we install a **trivial global subscriber**
+/// once (via `OnceLock`) whose sole job is to tell tracing "this callsite is
+/// `Sometimes` interesting", triggering a `rebuild_interest_cache` that
+/// ensures events flow through `get_default`. The actual per-test capture is
+/// still done via `set_default` (thread-local), so events from the concurrent
+/// baseline test — which runs on a different OS thread — go to the global
+/// subscriber (effectively discarded) while our thread's events go to our
+/// `JsonlLayer`.
+#[cfg(all(feature = "tracing", feature = "wiretrace"))]
+#[tokio::test]
+async fn loopback_commission_emits_wire_trace() {
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    use matter_commissioning::wiretrace::JsonlLayer;
+    use tracing_subscriber::layer::SubscriberExt as _;
+
+    #[derive(Clone)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    // Install a trivial global subscriber that reports `Sometimes` interest
+    // for all callsites. This primes `tracing-core`'s callsite-interest cache
+    // so that events flow through `get_default` (which dispatches to our
+    // thread-local `JsonlLayer`). Without this, thread-local-only subscribers
+    // do not participate in the global `DISPATCHERS` registry, causing all
+    // callsite interests to be permanently cached as `Never` at first use.
+    static GLOBAL_INIT: OnceLock<()> = OnceLock::new();
+    GLOBAL_INIT.get_or_init(|| {
+        // A minimal `Subscriber` that tells every callsite it's `Sometimes`
+        // interesting. The actual per-thread dispatch goes to whatever
+        // `set_default` subscriber is active on that thread.
+        struct AlwaysSometimes;
+        impl tracing::Subscriber for AlwaysSometimes {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+            fn register_callsite(
+                &self,
+                _: &'static tracing::Metadata<'static>,
+            ) -> tracing::subscriber::Interest {
+                tracing::subscriber::Interest::sometimes()
+            }
+        }
+        // Ignore error: if another test already installed a global subscriber
+        // (not expected in this binary, but possible in theory), the existing
+        // subscriber is fine as long as it reports `Sometimes` interest.
+        let _ = tracing::subscriber::set_global_default(AlwaysSometimes);
+    });
+
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(JsonlLayer::new(SharedBuf(buf.clone())));
+    // set_default installs our JsonlLayer as the thread-local dispatcher.
+    // Because `AlwaysSometimes` above primed all callsite interests to
+    // `Sometimes`, events reach `get_default` which dispatches to our
+    // thread-local subscriber. The concurrent baseline test's events on its
+    // own thread go to `get_default` on that thread, which (absent a
+    // thread-local subscriber there) falls back to `AlwaysSometimes` whose
+    // `event()` is a no-op.
+    let guard = tracing::subscriber::set_default(subscriber);
+    run_loopback_commission().await;
+    drop(guard);
+
+    let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("well-formed JSONL"))
+        .collect();
+    assert!(!records.is_empty(), "no wire events captured");
+
+    // seq strictly increasing from 0.
+    for (i, r) in records.iter().enumerate() {
+        assert_eq!(r["seq"], i as u64);
+    }
+
+    // The dialogue opens with PBKDFParamRequest (tx, unsecured, SC 0x20).
+    let first = records
+        .iter()
+        .find(|r| r["opcode"] != 0x10) // skip any leading standalone ack
+        .expect("a non-ack first message");
+    assert_eq!(first["dir"], "tx");
+    assert_eq!(first["session_id"], 0);
+    assert_eq!(first["protocol"], 0);
+    assert_eq!(first["opcode"], 0x20);
+
+    // PASE handshake opcodes all present, in order, on the unsecured session.
+    let sc_unsecured: Vec<u64> = records
+        .iter()
+        .filter(|r| r["session_id"] == 0 && r["protocol"] == 0 && r["opcode"] != 0x10)
+        .map(|r| r["opcode"].as_u64().unwrap())
+        .collect();
+    let pase: Vec<u64> = sc_unsecured
+        .iter()
+        .copied()
+        .filter(|op| (0x20..=0x24).contains(op))
+        .collect();
+    assert_eq!(pase, vec![0x20, 0x21, 0x22, 0x23, 0x24], "PASE sequence");
+
+    // CASE sigma exchange present.
+    let sigmas: Vec<u64> = sc_unsecured
+        .iter()
+        .copied()
+        .filter(|op| (0x30..=0x32).contains(op))
+        .collect();
+    assert_eq!(sigmas, vec![0x30, 0x31, 0x32], "CASE sigma sequence");
+
+    // Secured IM traffic exists on at least two distinct secured sessions
+    // (PASE-encrypted stages, then CASE-encrypted CommissioningComplete).
+    let secured_sessions: std::collections::BTreeSet<u64> = records
+        .iter()
+        .filter(|r| r["session_id"] != 0 && r["protocol"] == 1)
+        .map(|r| r["session_id"].as_u64().unwrap())
+        .collect();
+    assert!(
+        secured_sessions.len() >= 2,
+        "expected PASE + CASE secured sessions, got {secured_sessions:?}"
     );
 }
