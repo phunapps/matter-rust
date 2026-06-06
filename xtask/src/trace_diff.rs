@@ -743,9 +743,11 @@ pub(crate) fn compare_payload(
     theirs_hex: &str,
     rules: &[Rule],
 ) -> Verdict {
-    // StatusReport is NOT TLV — raw byte equality.
+    // StatusReport is NOT TLV — raw byte equality. Case-insensitive so a
+    // future capture source emitting uppercase hex cannot false-DIVERGENT
+    // a byte-identical payload (both current producers emit lowercase).
     if is_raw_payload(protocol, opcode) {
-        if ours_hex == theirs_hex {
+        if ours_hex.eq_ignore_ascii_case(theirs_hex) {
             return Verdict::Match;
         }
         return Verdict::Divergent {
