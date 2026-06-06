@@ -40,4 +40,4 @@ scratch/
 **/fuzz/target/
 **/fuzz/artifacts/
 **/fuzz/Cargo.lock
-fabric.json
+fabric*.json
