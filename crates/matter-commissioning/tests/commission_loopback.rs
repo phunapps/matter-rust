@@ -345,6 +345,11 @@ async fn commission_reaches_done_against_mock_device() {
 /// baseline test — which runs on a different OS thread — go to the global
 /// subscriber (effectively discarded) while our thread's events go to our
 /// `JsonlLayer`.
+///
+/// This workaround can be deleted if/when `tracing-core` lets thread-local-only
+/// subscribers participate in callsite-interest rebuilds, or if this test moves
+/// to its own binary (where no global subscriber races against the first callsite
+/// registration).
 #[cfg(all(feature = "tracing", feature = "wiretrace"))]
 #[tokio::test]
 async fn loopback_commission_emits_wire_trace() {
@@ -418,13 +423,16 @@ async fn loopback_commission_emits_wire_trace() {
     let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
     let records: Vec<serde_json::Value> = text
         .lines()
-        .map(|l| serde_json::from_str(l).expect("well-formed JSONL"))
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("bad JSONL line {l:?}: {e}")))
         .collect();
-    assert!(!records.is_empty(), "no wire events captured");
+    assert!(
+        !records.is_empty(),
+        "no wire events captured — has the AlwaysSometimes interest-priming regressed?"
+    );
 
     // seq strictly increasing from 0.
     for (i, r) in records.iter().enumerate() {
-        assert_eq!(r["seq"], i as u64);
+        assert_eq!(r["seq"], i as u64, "record {i} seq out of order");
     }
 
     // The dialogue opens with PBKDFParamRequest (tx, unsecured, SC 0x20).
