@@ -23,16 +23,20 @@
 //! - `capture-commissioning` — drive matter.js through a full
 //!   commissioning and capture per-stage Invoke / `ReadAttribute`
 //!   payloads for byte-parity (Milestone 6.4.6).
+//! - `trace-diff`    — structurally compare two decrypted commissioning
+//!   dialogues (ours vs matter.js) for M6 cross-verification.
 //! - `codegen`       — generate cluster definitions from the Matter spec
 //!   (Milestone 7).
 //! - `release`       — workspace release helper (post-Milestone 1).
 
 mod capture_cd;
 mod capture_commissioning;
+mod trace_diff;
 
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
+#[allow(clippy::too_many_lines)]
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let cmd = args.next();
@@ -125,6 +129,19 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("trace-diff") => {
+            let (Some(a), Some(b)) = (args.next(), args.next()) else {
+                eprintln!("usage: cargo xtask trace-diff <ours.jsonl> <theirs.jsonl>");
+                return ExitCode::FAILURE;
+            };
+            match trace_diff::run(&PathBuf::from(a), &PathBuf::from(b)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("trace-diff: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some(other) => {
             eprintln!("xtask: unknown subcommand `{other}`");
             print_help();
@@ -153,7 +170,8 @@ fn print_help() {
              capture-attestation      Capture Matter AttestationResponse fixtures from matter.js.\n  \
              capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n  \
              capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n  \
-             capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n"
+             capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n  \
+             trace-diff               Compare two decrypted commissioning traces for M6 cross-verification.\n"
     );
 }
 
