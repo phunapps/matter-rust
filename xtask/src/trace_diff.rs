@@ -318,6 +318,18 @@ pub(crate) enum VarianceClass {
 /// Paths match the output of [`parse_tree`] walking the node tree starting
 /// from path "": the outermost anonymous structure is "[]", its context-1
 /// child is "[]/1", etc.
+///
+/// **Invariant — scalar leaves only:** rule paths must resolve to a SCALAR
+/// leaf node. [`find_rule`] is consulted only inside the `(Scalar, Scalar)`
+/// match arm of [`compare_nodes`], so a rule whose path points at a
+/// container never fires — container-level variance is unsupported. If two
+/// traces differ structurally at a container node, classify the differing
+/// scalar leaves individually instead.
+///
+/// **Anonymous array elements:** all anonymous array elements share the `[]`
+/// path segment. A rule cannot disambiguate array elements by index — this
+/// is intentional and fine for single-command commissioning invokes where
+/// every array element has the same shape.
 pub(crate) struct Rule {
     pub protocol: u16,
     pub opcode: u8,
@@ -539,6 +551,11 @@ fn tag_segment(tag: &Tag) -> String {
     match tag {
         Tag::Anonymous => "[]".to_string(),
         Tag::Context(n) => n.to_string(),
+        // Only Anonymous and Context tags appear in commissioning TLV. Other
+        // tag forms (CommonProfile, ImplicitProfile, FullyQualified) render
+        // debug-only here and will not match any rule path, so any scalar
+        // difference under such a tag always falls through to an unclassified
+        // diff — which is the safe, conservative behaviour.
         other => format!("{other:?}"),
     }
 }
@@ -915,6 +932,11 @@ pub(crate) fn commissioning_complete_end(trace: &[Annotated]) -> Result<usize, S
     let mut invoke_idx: Option<usize> = None;
 
     for (i, ann) in trace.iter().enumerate() {
+        // "tx" / "rx" are the only legal values in the trace schema — both
+        // capture sides (our commission_ip and the matter.js script) emit
+        // exactly these lowercase ASCII literals. Anything else is a schema
+        // violation that will fail safe: the string simply never matches,
+        // leaving invoke_idx None and returning the truncated-trace error.
         if ann.record.dir == "tx"
             && ann.record.protocol == PROTO_INTERACTION_MODEL
             && ann.record.opcode == IM_OPCODE_INVOKE_REQUEST
@@ -939,6 +961,8 @@ pub(crate) fn commissioning_complete_end(trace: &[Annotated]) -> Result<usize, S
     })?;
 
     // Scan forward from start+1 for the first rx IM InvokeResponse.
+    // "rx" is one of only two legal dir values in the schema (see "tx" note
+    // above); a non-matching dir fails safe into the truncated-trace error.
     for (i, ann) in trace.iter().enumerate().skip(start + 1) {
         if ann.record.dir == "rx"
             && ann.record.protocol == PROTO_INTERACTION_MODEL
@@ -1435,6 +1459,208 @@ mod tests {
         assert!(
             err.contains("truncated") || err.contains("no CommissioningComplete"),
             "error message should mention truncated or no CommissioningComplete: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Item 4: run() returns Err("divergences found") when an UNCLASSIFIED
+    // field differs between the two traces.
+    //
+    // We build two otherwise-identical dialogues but give the InvokeResponse
+    // a different uint value in one trace. The InvokeResponse payload uses a
+    // context-99 uint child that has no variance rule, so compare_payload
+    // produces Divergent — and run() must propagate that as Err.
+    // -----------------------------------------------------------------------
+
+    /// Build an `InvokeResponse` payload with an extra context-99 uint field
+    /// that has no variance rule. Varying this field across traces produces an
+    /// UNCLASSIFIED diff → DIVERGENT verdict.
+    fn invoke_response_with_extra_uint_hex(extra: u64) -> String {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap(); // suppressResponse
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponseIBs (empty)
+        w.end_container().unwrap();
+        // ctx-99: a vendor-specific uint with no variance rule — any difference
+        // here must be caught as DIVERGENT.
+        w.put_uint(Tag::Context(99), extra).unwrap();
+        w.end_container().unwrap();
+        hex::encode(&buf)
+    }
+
+    /// Write a synthetic trace whose `InvokeResponse` carries a custom uint
+    /// value in an unclassified field.
+    fn write_synthetic_trace_with_invoke_resp_uint(
+        path: &std::path::Path,
+        case_session_id: u64,
+        invoke_resp_extra_uint: u64,
+    ) {
+        let pbkdf_req = tlv_struct(&[0xaa; 32], 1);
+        let pbkdf_resp = tlv_struct(&[0xbb; 32], 2);
+        let invoke_req = commissioning_complete_invoke_hex();
+        let invoke_resp = invoke_response_with_extra_uint_hex(invoke_resp_extra_uint);
+
+        let lines = [
+            rec(
+                0,
+                "tx",
+                0,
+                PROTO_SECURE_CHANNEL,
+                SC_PBKDF_PARAM_REQUEST,
+                &pbkdf_req,
+            ),
+            rec(
+                1,
+                "rx",
+                0,
+                PROTO_SECURE_CHANNEL,
+                SC_PBKDF_PARAM_RESPONSE,
+                &pbkdf_resp,
+            ),
+            rec(
+                2,
+                "tx",
+                case_session_id,
+                PROTO_INTERACTION_MODEL,
+                IM_OPCODE_INVOKE_REQUEST,
+                &invoke_req,
+            ),
+            rec(
+                3,
+                "rx",
+                case_session_id,
+                PROTO_INTERACTION_MODEL,
+                IM_OPCODE_INVOKE_RESPONSE,
+                &invoke_resp,
+            ),
+        ]
+        .join("\n");
+
+        std::fs::write(path, lines).unwrap();
+    }
+
+    #[test]
+    fn run_returns_err_divergent_when_unclassified_field_differs() {
+        let dir = std::env::temp_dir();
+        let ours_path = dir.join("trace_diff_test_divergent_ours.jsonl");
+        let theirs_path = dir.join("trace_diff_test_divergent_theirs.jsonl");
+
+        // Both traces have the same structure; only the unclassified ctx-99
+        // uint in the InvokeResponse differs (1 vs 2).
+        write_synthetic_trace_with_invoke_resp_uint(&ours_path, 42, 1);
+        write_synthetic_trace_with_invoke_resp_uint(&theirs_path, 42, 2);
+
+        let result = run(&ours_path, &theirs_path);
+        assert!(
+            result.is_err(),
+            "expected Err for DIVERGENT unclassified field"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("divergences found"),
+            "error should say 'divergences found': {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Item 5a: run() returns Ok when a CLASSIFIED-variance field differs.
+    //
+    // PBKDFParamRequest ctx-1 (initiatorRandom) is class Random: same length,
+    // different bytes → MATCH* verdict. run() must succeed (Ok).
+    //
+    // Item 5b: run() returns Ok when one trace has extra messages AFTER the
+    // CommissioningComplete InvokeResponse (tail is ignored).
+    //
+    // Combined into one test for brevity.
+    // -----------------------------------------------------------------------
+
+    /// Write a synthetic trace like `write_synthetic_trace` but with:
+    /// - a distinct random value in the `PBKDFParamRequest` (different bytes,
+    ///   same length → classified Random variance → MATCH*)
+    /// - optional extra messages appended after the `InvokeResponse` (ignored tail)
+    fn write_synthetic_trace_with_classified_variance_and_tail(
+        path: &std::path::Path,
+        case_session_id: u64,
+        pbkdf_random_byte: u8,
+        extra_tail_messages: usize,
+    ) {
+        let pbkdf_req = tlv_struct(&[pbkdf_random_byte; 32], 1);
+        let pbkdf_resp = tlv_struct(&[0xbb; 32], 2);
+        let invoke_req = commissioning_complete_invoke_hex();
+        let invoke_resp = invoke_response_hex();
+
+        let mut records = vec![
+            rec(
+                0,
+                "tx",
+                0,
+                PROTO_SECURE_CHANNEL,
+                SC_PBKDF_PARAM_REQUEST,
+                &pbkdf_req,
+            ),
+            rec(
+                1,
+                "rx",
+                0,
+                PROTO_SECURE_CHANNEL,
+                SC_PBKDF_PARAM_RESPONSE,
+                &pbkdf_resp,
+            ),
+            rec(
+                2,
+                "tx",
+                case_session_id,
+                PROTO_INTERACTION_MODEL,
+                IM_OPCODE_INVOKE_REQUEST,
+                &invoke_req,
+            ),
+            rec(
+                3,
+                "rx",
+                case_session_id,
+                PROTO_INTERACTION_MODEL,
+                IM_OPCODE_INVOKE_RESPONSE,
+                &invoke_resp,
+            ),
+        ];
+
+        // Append extra IM ReadRequest messages after CommissioningComplete as
+        // an ignored tail (seq 4, 5, …). The dir "tx" and opcode 0x02
+        // (IM ReadRequest) do not match the CommissioningComplete window
+        // sentinel, so commissioning_complete_end returns the InvokeResponse
+        // index and the tail is silently dropped.
+        for i in 0..extra_tail_messages {
+            records.push(rec(
+                (4 + i) as u64,
+                "tx",
+                case_session_id,
+                PROTO_INTERACTION_MODEL,
+                0x02, // IM ReadRequest
+                "1518",
+            ));
+        }
+
+        std::fs::write(path, records.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn run_succeeds_with_classified_variance_and_ignored_tail() {
+        let dir = std::env::temp_dir();
+        let ours_path = dir.join("trace_diff_test_matchstar_ours.jsonl");
+        let theirs_path = dir.join("trace_diff_test_matchstar_theirs.jsonl");
+
+        // 5a: PBKDFParamRequest random bytes differ (0xaa vs 0xcc, same 32-byte
+        //     length) → MATCH* verdict; run() must still return Ok.
+        // 5b: "ours" has 2 extra messages after the InvokeResponse; they are
+        //     outside the CommissioningComplete window and must be ignored.
+        write_synthetic_trace_with_classified_variance_and_tail(&ours_path, 42, 0xaa, 2);
+        write_synthetic_trace_with_classified_variance_and_tail(&theirs_path, 42, 0xcc, 0);
+
+        let result = run(&ours_path, &theirs_path);
+        assert!(
+            result.is_ok(),
+            "expected Ok for classified-variance + ignored tail, got: {result:?}"
         );
     }
 }
