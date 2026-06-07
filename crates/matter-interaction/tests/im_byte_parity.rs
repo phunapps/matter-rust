@@ -18,9 +18,9 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
-use matter_commissioning::im::invoke::build_invoke_request;
-use matter_commissioning::im::read::{build_read_request, AttributePath};
-use matter_commissioning::im::CommandPath;
+use matter_interaction::invoke::build_invoke_request;
+use matter_interaction::read::{build_read_request, AttributePath};
+use matter_interaction::CommandPath;
 use serde::Deserialize;
 use std::{fs, path::PathBuf};
 
