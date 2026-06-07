@@ -1,0 +1,16 @@
+{
+  "name": "matter-rust-capture-im",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Drives matter.js's Interaction Model TLV schemas (TlvInvokeRequest/TlvReadRequest/TlvWriteRequest/TlvWriteResponse) with fixed inputs to capture byte-parity fixtures for crates/matter-interaction/tests/im_byte_parity.rs.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/general": "0.16.11",
+    "@matter/protocol": "0.16.11",
+    "@matter/types": "0.16.11"
+  }
+}
