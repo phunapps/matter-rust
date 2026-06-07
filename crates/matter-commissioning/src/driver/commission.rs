@@ -612,6 +612,9 @@ where
                     InvokeOutcome::Command(fields) => fields,
                     InvokeOutcome::Status(crate::im::ImStatus::Success) => vec![0x00],
                     InvokeOutcome::Status(crate::im::ImStatus::Failure(code)) => vec![code],
+                    // ImStatus is #[non_exhaustive] across the crate boundary since the
+                    // M7.1 lift: map any future variant to generic FAILURE, never success.
+                    InvokeOutcome::Status(_) => vec![0x01],
                 };
                 sm.on_response(expect, &response_payload)?;
             }

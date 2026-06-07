@@ -750,6 +750,7 @@ dependencies = [
  "matter-cert",
  "matter-codec",
  "matter-crypto",
+ "matter-interaction",
  "matter-transport",
  "p256",
  "proptest",
@@ -794,6 +795,17 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+ "thiserror",
+]
+
+[[package]]
+name = "matter-interaction"
+version = "0.1.0-pre"
+dependencies = [
+ "base64",
+ "matter-codec",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
