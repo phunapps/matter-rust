@@ -32,13 +32,13 @@ fn write_command_path(w: &mut TlvWriter<'_>, tag: Tag, path: CommandPath) {
 /// verbatim as the `CommandFields` member. `SuppressResponse` and
 /// `TimedRequest` are both `false`.
 ///
-/// # Errors
+/// # Panics
 ///
-/// This function is infallible; `Vec`-backed `TlvWriter` never fails.
-/// The `command_fields_tlv` slice must be a valid anonymous-tagged TLV
-/// element (panics otherwise — callers pass codec-generated output).
+/// Panics if `command_fields_tlv` is not a valid anonymous-tagged TLV
+/// element (i.e. not the output of a codec encode call). The function is
+/// otherwise infallible; `Vec`-backed `TlvWriter` never fails.
 #[must_use]
-#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 pub fn build_invoke_request(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);

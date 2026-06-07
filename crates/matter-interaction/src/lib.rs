@@ -58,6 +58,8 @@ pub fn expect_message_struct(r: &mut TlvReader<'_>) -> Result<(), error::ImError
 
 /// Reader positioned just after a container start: consume to its matching
 /// end, returning the members as `(tag, value)` pairs (for List/Structure).
+/// Calling this with the reader in any other position yields an
+/// [`error::ImError`] or misattributed members — never a panic or UB.
 ///
 /// # Errors
 ///
@@ -85,7 +87,9 @@ pub fn read_container_members(r: &mut TlvReader<'_>) -> Result<Vec<(Tag, Value)>
 }
 
 /// Reader positioned just after a container start (of `kind`): read the
-/// whole sub-tree into a [`Value`].
+/// whole sub-tree into a [`Value`]. Calling this with the reader in any other
+/// position yields an [`error::ImError`] or misattributed members — never a
+/// panic or UB.
 ///
 /// # Errors
 ///
@@ -104,7 +108,9 @@ pub fn read_container_value(
 }
 
 /// Reader positioned just after a container start: discard the whole
-/// sub-tree (used to skip fields we do not consume).
+/// sub-tree (used to skip fields we do not consume). Calling this with the
+/// reader in any other position yields an [`error::ImError`] or misattributed
+/// members — never a panic or UB.
 ///
 /// # Errors
 ///
