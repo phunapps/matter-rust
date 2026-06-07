@@ -803,6 +803,7 @@ name = "matter-interaction"
 version = "0.1.0-pre"
 dependencies = [
  "base64",
+ "hex",
  "matter-codec",
  "serde",
  "serde_json",
