@@ -47,6 +47,7 @@ import "@matter/nodejs";
 import { Environment, Logger, MockStorageService, StorageService } from "@matter/general";
 import { MessageCodec } from "@matter/protocol";
 import { ManualPairingCodeCodec, QrPairingCodeCodec } from "@matter/types";
+import { GeneralCommissioning } from "@matter/types/clusters";
 import { CommissioningController } from "@project-chip/matter.js";
 
 // --- CLI ---------------------------------------------------------------------
@@ -246,6 +247,17 @@ async function main() {
         // IP-network discovery using the identifier from the pairing code.
         discovery: { identifierData },
         passcode,
+        // Regulatory config is mandatory in matter.js's commissioning flow
+        // (step 8.1 SetRegulatoryConfig fails with a missing-field error
+        // otherwise — observed on the P110M first run). IndoorOutdoor + "XX"
+        // (unknown country) — matching what our Rust driver sends, so the
+        // SetRegulatoryConfig invokes pair byte-for-byte in trace-diff
+        // (modulo the run-specific breadcrumb counter).
+        commissioning: {
+          regulatoryLocation:
+            GeneralCommissioning.RegulatoryLocationType.IndoorOutdoor,
+          regulatoryCountryCode: "XX",
+        },
       },
       // Do not connect to the node after commissioning — keep the trace clean.
       { connectNodeAfterCommissioning: false },
