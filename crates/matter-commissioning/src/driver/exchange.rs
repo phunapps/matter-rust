@@ -78,6 +78,18 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
     )?;
     let our_exchange = out.exchange_id;
     transport.send_to(&out.wire_bytes, peer).await?;
+    // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        target: "matter_wire",
+        dir = "tx",
+        session_id = u64::from(session_id.0),
+        exchange_id = u64::from(our_exchange),
+        protocol = u64::from(protocol_id.protocol),
+        opcode = u64::from(opcode),
+        payload = %crate::hexdump::hex(app_payload),
+        "wire"
+    );
 
     // 2. recv-or-timer loop.
     loop {
@@ -99,9 +111,27 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                     continue;
                 }
                 match sessions.decode_inbound(&packet, Instant::now())? {
-                    DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
-                        if exchange_id == our_exchange =>
-                    {
+                    DecodeInboundOutput::AppMessage {
+                        exchange_id,
+                        payload,
+                        protocol_id: msg_protocol_id,
+                        opcode: msg_opcode,
+                        ..
+                    } if exchange_id == our_exchange => {
+                        // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(
+                            target: "matter_wire",
+                            dir = "rx",
+                            session_id = u64::from(session_id.0),
+                            exchange_id = u64::from(exchange_id),
+                            protocol = u64::from(msg_protocol_id.protocol),
+                            opcode = u64::from(msg_opcode),
+                            payload = %crate::hexdump::hex(&payload),
+                            "wire"
+                        );
+                        #[cfg(not(feature = "tracing"))]
+                        let _ = (&msg_protocol_id, &msg_opcode);
                         return Ok(SecuredResponse { exchange_id, payload });
                     }
                     // Two outcomes we simply wait through (identical handling):

@@ -144,6 +144,10 @@ pub enum InboundOutcome {
         exchange_id: u16,
         /// Whether the peer is the initiator (i.e. we are the responder).
         is_initiator: bool,
+        /// Protocol id from the decoded protocol header.
+        protocol_id: ProtocolId,
+        /// Protocol opcode from the decoded protocol header.
+        opcode: u8,
         /// Decrypted application payload (post-header).
         payload: Vec<u8>,
     },
@@ -571,6 +575,8 @@ impl MrpState {
         Ok(InboundOutcome::AppMessage {
             exchange_id,
             is_initiator: peer_is_initiator,
+            protocol_id: header.protocol_id,
+            opcode: header.opcode,
             payload: app_payload,
         })
     }
@@ -926,10 +932,14 @@ mod tests {
             InboundOutcome::AppMessage {
                 exchange_id,
                 is_initiator,
+                protocol_id,
+                opcode,
                 payload,
             } => {
                 assert_eq!(exchange_id, 0x4242);
                 assert!(is_initiator, "peer set I=1 → peer is the initiator");
+                assert_eq!(protocol_id, ProtocolId::INTERACTION_MODEL);
+                assert_eq!(opcode, 0x02);
                 assert_eq!(payload, b"hello from peer");
             }
             other => panic!("expected AppMessage, got {other:?}"),

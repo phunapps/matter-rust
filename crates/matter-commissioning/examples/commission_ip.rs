@@ -11,6 +11,11 @@
 //! ```text
 //! cargo run --example commission_ip --features driver,tracing -- --manual <code> -vv
 //! ```
+//! To capture a decrypted wire-message trace for `cargo xtask trace-diff`:
+//! ```text
+//! cargo run --example commission_ip --features driver,tracing,wiretrace -- \
+//!     --manual <code> --trace-out runs/rust-p110m.jsonl -vv
+//! ```
 
 use std::fs;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -68,6 +73,12 @@ struct Cli {
     /// Write the resulting fabric summary to this path as JSON.
     #[arg(long)]
     out: Option<PathBuf>,
+
+    /// Write the decrypted wire-message trace as JSON lines to this path
+    /// (for `cargo xtask trace-diff`). Requires building with
+    /// `--features driver,tracing,wiretrace`.
+    #[arg(long)]
+    trace_out: Option<PathBuf>,
 
     /// Increase log verbosity (-v = info spans, -vv = debug).
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -250,34 +261,66 @@ fn print_summary(fabric: &CommissionedFabric) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Initialize a tracing subscriber driven by `-v/-vv`, writing spans/events to
-/// stderr so they don't pollute the stdout summary. Library spans are gated
-/// behind the crate's `tracing` feature, so this is a no-op unless the example
-/// is built with `--features driver,tracing`.
-fn init_tracing(verbose: u8) {
+/// Initialize tracing: a stderr fmt layer driven by `-v/-vv`, plus — when
+/// `--trace-out` is set and the `wiretrace` feature is compiled in — a
+/// [`matter_commissioning::wiretrace::JsonlLayer`] writing the decrypted
+/// wire-message dialogue for `cargo xtask trace-diff`. The
+/// [`tracing_subscriber::EnvFilter`] is attached to the fmt layer only, so the
+/// wire trace always captures every `matter_wire` event regardless of `-v`.
+///
+/// Returns an error if `--trace-out` is given but the required features are
+/// not compiled in, or if the trace file cannot be created.
+fn init_tracing(verbose: u8, trace_out: Option<&std::path::Path>) -> anyhow::Result<()> {
     #[cfg(feature = "tracing")]
     {
+        use tracing_subscriber::layer::SubscriberExt as _;
+        use tracing_subscriber::util::SubscriberInitExt as _;
+        use tracing_subscriber::Layer as _;
+
         let level = match verbose {
             0 => "warn",
             1 => "info",
             _ => "debug",
         };
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::new(level))
+        let fmt = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
-            .init();
+            .with_filter(tracing_subscriber::EnvFilter::new(level));
+
+        #[cfg(feature = "wiretrace")]
+        if let Some(path) = trace_out {
+            let file = fs::File::create(path)
+                .with_context(|| format!("creating trace file {}", path.display()))?;
+            tracing_subscriber::registry()
+                .with(fmt)
+                .with(matter_commissioning::wiretrace::JsonlLayer::new(file))
+                .init();
+            return Ok(());
+        }
+
+        // wiretrace absent: --trace-out was given but the feature is off → hard
+        // error (mutually exclusive with the cfg(wiretrace) arm above).
+        #[cfg(not(feature = "wiretrace"))]
+        if trace_out.is_some() {
+            anyhow::bail!("--trace-out requires building with --features driver,tracing,wiretrace");
+        }
+
+        tracing_subscriber::registry().with(fmt).init();
     }
     #[cfg(not(feature = "tracing"))]
     {
         // `-v/-vv` only takes effect when built with the `tracing` feature.
         let _ = verbose;
+        if trace_out.is_some() {
+            anyhow::bail!("--trace-out requires building with --features driver,tracing,wiretrace");
+        }
     }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.verbose);
+    init_tracing(cli.verbose, cli.trace_out.as_deref())?;
     let payload = parse_setup_payload(&cli)?;
     println!(
         "setup payload: vid={:?} pid={:?} discriminator={} passcode=<redacted>",

@@ -41,3 +41,6 @@ scratch/
 **/fuzz/artifacts/
 **/fuzz/Cargo.lock
 fabric*.json
+
+# decrypted commissioning traces (contain DAC chains, NOCs, fabric ids)
+/runs/
