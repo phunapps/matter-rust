@@ -2,11 +2,12 @@
 
 #![forbid(unsafe_code)]
 
-use crate::im::error::ImError;
-use crate::im::status::ImStatus;
-use crate::im::{
+use crate::error::ImError;
+use crate::path::CommandPath;
+use crate::status::ImStatus;
+use crate::{
     expect_message_struct, read_container_members, read_container_value, skip_container,
-    CommandPath, IM_REVISION,
+    IM_REVISION,
 };
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
@@ -267,7 +268,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::im::CommandPath;
     use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_endpoint() {
-        use crate::im::error::ImError;
+        use crate::error::ImError;
         use matter_codec::{Tag, TlvWriter};
 
         let mut buf = Vec::new();
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn empty_invoke_responses_array_errors() {
-        use crate::im::error::ImError;
+        use crate::error::ImError;
         use matter_codec::{Tag, TlvWriter};
 
         let mut buf = Vec::new();
