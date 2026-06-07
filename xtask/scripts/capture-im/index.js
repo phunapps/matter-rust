@@ -151,7 +151,7 @@ writeFixture('read', 'basic_information_names.json', {
             { endpointId: 0, clusterId: 0x28, attributeId: 0x01 },
             { endpointId: 0, clusterId: 0x28, attributeId: 0x03 },
         ],
-        fabricFiltered: false,
+        isFabricFiltered: false,
         interactionModelRevision: 11,
     })),
 });
@@ -162,7 +162,7 @@ writeFixture('read', 'network_commissioning_feature_map.json', {
         attributeRequests: [
             { endpointId: 0, clusterId: 0x31, attributeId: 0xFFFC },
         ],
-        fabricFiltered: false,
+        isFabricFiltered: false,
         interactionModelRevision: 11,
     })),
 });

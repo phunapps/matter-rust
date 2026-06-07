@@ -4,7 +4,7 @@
 //! Each fixture provides the inputs and the matter.js-captured expected
 //! IM message bytes (base64). Tests SKIP (not fail) when fixtures are
 //! absent, matching the established M6.x pattern — fixtures are captured
-//! by a later `cargo xtask capture-im` operator step.
+//! by `cargo xtask capture-im` (xtask/scripts/capture-im).
 
 #![forbid(unsafe_code)]
 #![allow(
