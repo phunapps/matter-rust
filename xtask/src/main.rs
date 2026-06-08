@@ -35,6 +35,7 @@
 
 mod capture_cd;
 mod capture_commissioning;
+mod codegen;
 mod trace_diff;
 
 use std::path::PathBuf;
