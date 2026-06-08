@@ -395,11 +395,11 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool) {
     for f in &d.fields {
         emit_struct_field_read_arm(s, f);
     }
+    line!(s, "                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),");
     line!(
         s,
-        "                Some(Element::Scalar {{ .. }} | Element::ContainerStart {{ .. }}) => {{}}"
+        "                Some(_) => {{}} // unknown/future element — skip"
     );
-    line!(s, "                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),");
     line!(s, "            }}");
     line!(s, "        }}");
     line!(s, "        Ok(Self {{");

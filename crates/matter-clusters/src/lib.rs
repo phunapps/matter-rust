@@ -21,3 +21,9 @@
 //! - `DoorLock` (limited — Aliro features deferred)
 
 #![forbid(unsafe_code)]
+
+pub mod error;
+pub mod types;
+
+#[cfg(test)]
+mod golden;

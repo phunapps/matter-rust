@@ -1,0 +1,57 @@
+{
+  "meta": { "synthetic": true },
+  "clusters": [
+    {
+      "id": 64512,
+      "name": "GoldenFixture",
+      "revision": 1,
+      "features": [
+        { "bit": 0, "code": "FA", "name": "FeatureA" },
+        { "bit": 1, "code": "FB", "name": "FeatureB" }
+      ],
+      "attributes": [
+        { "id": 0, "name": "Switch", "type": "bool", "metatype": "boolean",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 1, "name": "Level", "type": "uint16", "metatype": "integer",
+          "nullable": true, "optional": false, "writable": true },
+        { "id": 2, "name": "Mode", "type": "ModeEnum", "metatype": "enum",
+          "nullable": false, "optional": false, "writable": true },
+        { "id": 3, "name": "Flags", "type": "FlagsBitmap", "metatype": "bitmap",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 4, "name": "Label", "type": "string", "metatype": "string",
+          "nullable": false, "optional": false, "writable": true },
+        { "id": 5, "name": "Token", "type": "octstr", "metatype": "bytes",
+          "nullable": false, "optional": false, "writable": false }
+      ],
+      "commands": [
+        { "id": 0, "name": "Reset", "direction": "request", "responseId": null, "fields": [] },
+        { "id": 1, "name": "SetLevel", "direction": "request", "responseId": 2,
+          "fields": [
+            { "id": 0, "name": "Target", "type": "uint16", "metatype": "integer",
+              "nullable": false, "optional": false },
+            { "id": 1, "name": "Mode", "type": "ModeEnum", "metatype": "enum",
+              "nullable": false, "optional": true }
+          ] },
+        { "id": 2, "name": "SetLevelResponse", "direction": "response", "responseId": null,
+          "fields": [
+            { "id": 0, "name": "Status", "type": "uint8", "metatype": "integer",
+              "nullable": false, "optional": false },
+            { "id": 1, "name": "Reached", "type": "uint16", "metatype": "integer",
+              "nullable": false, "optional": true }
+          ] }
+      ],
+      "datatypes": [
+        { "name": "ModeEnum", "base": "enum8", "kind": "enum", "description": null,
+          "values": [
+            { "value": 0, "name": "Auto" },
+            { "value": 1, "name": "Manual" }
+          ] },
+        { "name": "FlagsBitmap", "base": "map8", "kind": "bitmap", "description": null,
+          "bits": [
+            { "bit": 0, "name": "Alpha" },
+            { "bit": 1, "name": "Beta" }
+          ] }
+      ]
+    }
+  ]
+}
