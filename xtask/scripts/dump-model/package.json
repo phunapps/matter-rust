@@ -1,0 +1,14 @@
+{
+  "name": "matter-rust-dump-model",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Walks the @matter/model standard data model (pinned exact) and emits xtask/model/clusters.json: the frozen codegen input for matter-clusters (M7). Allowlisted to the 10 M7 target clusters; excludes provisional/deprecated/Aliro-gated/event/global elements with reasons recorded in the header.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/model": "0.17.1"
+  }
+}
