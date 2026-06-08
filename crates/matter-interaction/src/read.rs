@@ -2,28 +2,14 @@
 
 #![forbid(unsafe_code)]
 
-use crate::im::error::ImError;
-use crate::im::{
+use crate::error::ImError;
+use crate::path::attribute_path_from_value;
+pub use crate::path::AttributePath;
+use crate::{
     expect_message_struct, read_container_members, read_container_value, skip_container,
     IM_REVISION,
 };
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
-
-/// A concrete attribute path: `(endpoint, cluster, attribute)`.
-///
-/// Encoded as an `AttributePathIB` TLV **list** (Matter Appendix A.6):
-/// context tag 2 = endpoint, 3 = cluster, 4 = attribute. Commissioning
-/// reads only concrete attributes, so no wildcard/list-index fields are
-/// emitted.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct AttributePath {
-    /// Matter endpoint.
-    pub endpoint: u16,
-    /// Cluster ID.
-    pub cluster: u32,
-    /// Attribute ID.
-    pub attribute: u32,
-}
 
 /// Build a `ReadRequestMessage` for one or more concrete attribute paths.
 ///
@@ -63,42 +49,6 @@ pub struct ReportData {
     /// One entry per `AttributeReportIB` that carried `AttributeData`.
     /// `AttributeStatus` (error) reports are skipped.
     pub attributes: Vec<(AttributePath, Value)>,
-}
-
-/// Read an `AttributePathIB` list (`Value::List` members) into an
-/// [`AttributePath`]. Out-of-range values surface as
-/// [`ImError::UnexpectedValue`] (not as a missing field).
-fn attribute_path_from_value(members: &[(Tag, Value)]) -> Result<AttributePath, ImError> {
-    let mut endpoint = None;
-    let mut cluster = None;
-    let mut attribute = None;
-    for (tag, v) in members {
-        match (tag, v) {
-            (Tag::Context(2), Value::Uint(n)) => {
-                endpoint =
-                    Some(u16::try_from(*n).map_err(|_| {
-                        ImError::UnexpectedValue("AttributePath.endpoint exceeds u16")
-                    })?);
-            }
-            (Tag::Context(3), Value::Uint(n)) => {
-                cluster =
-                    Some(u32::try_from(*n).map_err(|_| {
-                        ImError::UnexpectedValue("AttributePath.cluster exceeds u32")
-                    })?);
-            }
-            (Tag::Context(4), Value::Uint(n)) => {
-                attribute = Some(u32::try_from(*n).map_err(|_| {
-                    ImError::UnexpectedValue("AttributePath.attribute exceeds u32")
-                })?);
-            }
-            _ => {}
-        }
-    }
-    Ok(AttributePath {
-        endpoint: endpoint.ok_or(ImError::MissingField("AttributePath.endpoint"))?,
-        cluster: cluster.ok_or(ImError::MissingField("AttributePath.cluster"))?,
-        attribute: attribute.ok_or(ImError::MissingField("AttributePath.attribute"))?,
-    })
 }
 
 /// Parse a `ReportDataMessage` into concrete `(path, value)` pairs.
@@ -385,7 +335,7 @@ mod tests {
 
     #[test]
     fn out_of_range_endpoint_yields_unexpected_value() {
-        use crate::im::error::ImError;
+        use crate::error::ImError;
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);

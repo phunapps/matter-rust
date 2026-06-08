@@ -4,7 +4,7 @@
 //! Each fixture provides the inputs and the matter.js-captured expected
 //! IM message bytes (base64). Tests SKIP (not fail) when fixtures are
 //! absent, matching the established M6.x pattern — fixtures are captured
-//! by a later `cargo xtask capture-im` operator step.
+//! by `cargo xtask capture-im` (xtask/scripts/capture-im).
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -18,9 +18,10 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
-use matter_commissioning::im::invoke::build_invoke_request;
-use matter_commissioning::im::read::{build_read_request, AttributePath};
-use matter_commissioning::im::CommandPath;
+use matter_interaction::invoke::build_invoke_request;
+use matter_interaction::path::AttributePath;
+use matter_interaction::read::build_read_request;
+use matter_interaction::CommandPath;
 use serde::Deserialize;
 use std::{fs, path::PathBuf};
 
@@ -130,4 +131,109 @@ fn read_request_matches_matter_js() {
         let theirs = B64.decode(&f.expected_message_b64).unwrap();
         assert_eq!(ours, theirs, "ReadRequest mismatch for {path:?}");
     }
+}
+
+#[derive(Deserialize)]
+struct WriteFixture {
+    writes: Vec<WriteEntryFixture>,
+    expected_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct WriteEntryFixture {
+    endpoint: u16,
+    cluster: u32,
+    attribute: u32,
+    value_tlv_b64: String,
+}
+
+#[derive(Deserialize)]
+struct WriteResponseFixture {
+    response_message_b64: String,
+    expected: Vec<WriteStatusFixture>,
+}
+
+#[derive(Deserialize)]
+struct WriteStatusFixture {
+    endpoint: u16,
+    cluster: u32,
+    attribute: u32,
+    status: u8,
+}
+
+#[test]
+fn write_request_matches_matter_js() {
+    use matter_interaction::write::{build_write_request, AttributeWriteRequest};
+
+    let paths = list_jsons("write");
+    if paths.is_empty() {
+        eprintln!("skipping: no write fixtures (run `cargo xtask capture-im`)");
+        return;
+    }
+    let mut asserted = 0;
+    for path in paths {
+        let bytes = fs::read(&path).unwrap();
+        let f: WriteFixture = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue, // response fixtures live in the same dir
+        };
+        let writes: Vec<AttributeWriteRequest> = f
+            .writes
+            .iter()
+            .map(|w| AttributeWriteRequest {
+                path: AttributePath {
+                    endpoint: w.endpoint,
+                    cluster: w.cluster,
+                    attribute: w.attribute,
+                },
+                value_tlv: B64.decode(&w.value_tlv_b64).unwrap(),
+            })
+            .collect();
+        let ours = build_write_request(&writes);
+        let theirs = B64.decode(&f.expected_message_b64).unwrap();
+        assert_eq!(
+            ours,
+            theirs,
+            "WriteRequest mismatch for {path:?}\n  ours:   {}\n  theirs: {}",
+            hex::encode(&ours),
+            hex::encode(&theirs)
+        );
+        asserted += 1;
+    }
+    assert!(asserted > 0, "no write-request fixtures parsed");
+}
+
+#[test]
+fn write_response_parses_matter_js() {
+    use matter_interaction::write::parse_write_response;
+    use matter_interaction::ImStatus;
+
+    let paths = list_jsons("write");
+    if paths.is_empty() {
+        eprintln!("skipping: no write fixtures (run `cargo xtask capture-im`)");
+        return;
+    }
+    let mut asserted = 0;
+    for path in paths {
+        let bytes = fs::read(&path).unwrap();
+        let f: WriteResponseFixture = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue, // request fixtures live in the same dir
+        };
+        let msg = B64.decode(&f.response_message_b64).unwrap();
+        let statuses = parse_write_response(&msg).unwrap();
+        assert_eq!(
+            statuses.len(),
+            f.expected.len(),
+            "count mismatch for {path:?}"
+        );
+        for (got, want) in statuses.iter().zip(&f.expected) {
+            assert_eq!(got.0.endpoint, want.endpoint);
+            assert_eq!(got.0.cluster, want.cluster);
+            assert_eq!(got.0.attribute, want.attribute);
+            assert_eq!(got.1, ImStatus::from_u8(want.status));
+        }
+        asserted += 1;
+    }
+    assert!(asserted > 0, "no write-response fixtures parsed");
 }

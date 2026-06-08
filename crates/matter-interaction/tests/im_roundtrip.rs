@@ -6,10 +6,8 @@
 
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
 use matter_codec::{Tag, TlvWriter};
-use matter_commissioning::im::invoke::{
-    build_invoke_request, parse_invoke_response, InvokeResponse,
-};
-use matter_commissioning::im::CommandPath;
+use matter_interaction::invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
+use matter_interaction::CommandPath;
 
 /// Build a minimal `InvokeResponseMessage` echoing `path` with `fields`.
 fn echo_invoke_response(path: CommandPath, fields: &[u8]) -> Vec<u8> {

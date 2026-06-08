@@ -5,6 +5,7 @@ members = [
     "crates/matter-cert",
     "crates/matter-crypto",
     "crates/matter-transport",
+    "crates/matter-interaction",
     "crates/matter-commissioning",
     "crates/matter-clusters",
     "crates/matter-controller",

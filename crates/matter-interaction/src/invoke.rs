@@ -2,11 +2,12 @@
 
 #![forbid(unsafe_code)]
 
-use crate::im::error::ImError;
-use crate::im::status::ImStatus;
-use crate::im::{
+use crate::error::ImError;
+use crate::path::CommandPath;
+use crate::status::ImStatus;
+use crate::{
     expect_message_struct, read_container_members, read_container_value, skip_container,
-    CommandPath, IM_REVISION,
+    IM_REVISION,
 };
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
@@ -31,13 +32,13 @@ fn write_command_path(w: &mut TlvWriter<'_>, tag: Tag, path: CommandPath) {
 /// verbatim as the `CommandFields` member. `SuppressResponse` and
 /// `TimedRequest` are both `false`.
 ///
-/// # Errors
+/// # Panics
 ///
-/// This function is infallible; `Vec`-backed `TlvWriter` never fails.
-/// The `command_fields_tlv` slice must be a valid anonymous-tagged TLV
-/// element (panics otherwise — callers pass codec-generated output).
+/// Panics if `command_fields_tlv` is not a valid anonymous-tagged TLV
+/// element (i.e. not the output of a codec encode call). The function is
+/// otherwise infallible; `Vec`-backed `TlvWriter` never fails.
 #[must_use]
-#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 pub fn build_invoke_request(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
@@ -267,7 +268,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::im::CommandPath;
     use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 
     #[test]
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_endpoint() {
-        use crate::im::error::ImError;
+        use crate::error::ImError;
         use matter_codec::{Tag, TlvWriter};
 
         let mut buf = Vec::new();
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn empty_invoke_responses_array_errors() {
-        use crate::im::error::ImError;
+        use crate::error::ImError;
         use matter_codec::{Tag, TlvWriter};
 
         let mut buf = Vec::new();

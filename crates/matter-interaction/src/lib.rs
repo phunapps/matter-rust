@@ -1,30 +1,36 @@
-//! Interaction Model (IM) message framing — Matter Core Spec §10.
+//! Matter Interaction Model (IM) message framing — Matter Core Spec §10.
 //!
-//! The commissioning state machine ([`crate::state_machine`]) emits bare
-//! cluster command/attribute TLV payloads. This module wraps them in the
-//! IM message envelopes the wire actually carries (`InvokeRequestMessage`,
-//! `ReadRequestMessage`) and parses the responses (`InvokeResponseMessage`,
-//! `ReportDataMessage`).
+//! Builders for the IM message envelopes the wire carries
+//! (`InvokeRequestMessage`, `ReadRequestMessage`, `WriteRequestMessage`)
+//! and parsers for the responses (`InvokeResponseMessage`,
+//! `ReportDataMessage`, `WriteResponseMessage`). Callers supply
+//! already-encoded cluster TLV payloads (e.g. from `matter-clusters`
+//! codecs) and compose them with the concrete paths in [`path`].
 //!
-//! It implements only the subset commissioning needs: one command per
-//! invoke, concrete (non-wildcard) attribute paths, no subscriptions, no
-//! timed invoke, no batched commands. The full IM engine is M7/M8 work.
+//! Scope is a deliberate subset: one command per invoke, concrete
+//! (non-wildcard) paths, no subscriptions, no events, no timed actions,
+//! no chunked writes. The full IM engine is M8 work.
 //!
-//! This module depends only on [`matter_codec`] and imports nothing from
-//! [`crate::state_machine`], so it can be lifted into a standalone
-//! `matter-interaction` crate later as a file move (M6.6 design §3).
+//! Lifted from `matter-commissioning` in M7.1 (the M6.6 design kept this
+//! module free of state-machine dependencies for exactly this move).
+//! Byte-parity with matter.js is enforced by `tests/im_byte_parity.rs`
+//! against fixtures captured via `cargo xtask capture-im`.
 
 #![forbid(unsafe_code)]
 
 pub mod error;
 pub mod invoke;
+pub mod path;
 pub mod read;
 pub mod status;
+pub mod write;
 
 pub use error::ImError;
 pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
-pub use read::{build_read_request, parse_report_data, AttributePath, ReportData};
+pub use path::{AttributePath, CommandPath};
+pub use read::{build_read_request, parse_report_data, ReportData};
 pub use status::ImStatus;
+pub use write::{build_write_request, parse_write_response, AttributeWriteRequest};
 
 /// Interaction Model protocol revision emitted at context tag `0xFF` in
 /// every top-level IM message. Confirmed against the matter.js byte-parity
@@ -42,7 +48,7 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 /// Returns [`error::ImError::NotAStruct`] if the first element is not an
 /// anonymous structure start, or propagates any [`error::ImError::Codec`]
 /// error from the reader.
-pub(crate) fn expect_message_struct(r: &mut TlvReader<'_>) -> Result<(), error::ImError> {
+pub fn expect_message_struct(r: &mut TlvReader<'_>) -> Result<(), error::ImError> {
     match r.next()? {
         Some(Element::ContainerStart {
             tag: Tag::Anonymous,
@@ -54,15 +60,15 @@ pub(crate) fn expect_message_struct(r: &mut TlvReader<'_>) -> Result<(), error::
 
 /// Reader positioned just after a container start: consume to its matching
 /// end, returning the members as `(tag, value)` pairs (for List/Structure).
+/// Calling this with the reader in any other position yields an
+/// [`error::ImError`] or misattributed members — never a panic or UB.
 ///
 /// # Errors
 ///
 /// Returns [`error::ImError::Codec`] wrapping
 /// [`matter_codec::Error::UnclosedContainer`] if the input ends before a
 /// matching end-of-container, or propagates any other codec error.
-pub(crate) fn read_container_members(
-    r: &mut TlvReader<'_>,
-) -> Result<Vec<(Tag, Value)>, error::ImError> {
+pub fn read_container_members(r: &mut TlvReader<'_>) -> Result<Vec<(Tag, Value)>, error::ImError> {
     let mut out = Vec::new();
     loop {
         match r.next()? {
@@ -83,12 +89,14 @@ pub(crate) fn read_container_members(
 }
 
 /// Reader positioned just after a container start (of `kind`): read the
-/// whole sub-tree into a [`Value`].
+/// whole sub-tree into a [`Value`]. Calling this with the reader in any other
+/// position yields an [`error::ImError`] or misattributed members — never a
+/// panic or UB.
 ///
 /// # Errors
 ///
 /// Propagates any error from [`read_container_members`].
-pub(crate) fn read_container_value(
+pub fn read_container_value(
     r: &mut TlvReader<'_>,
     kind: ContainerKind,
 ) -> Result<Value, error::ImError> {
@@ -102,26 +110,14 @@ pub(crate) fn read_container_value(
 }
 
 /// Reader positioned just after a container start: discard the whole
-/// sub-tree (used to skip fields we do not consume).
+/// sub-tree (used to skip fields we do not consume). Calling this with the
+/// reader in any other position yields an [`error::ImError`] or misattributed
+/// members — never a panic or UB.
 ///
 /// # Errors
 ///
 /// Propagates any error from [`read_container_members`].
-pub(crate) fn skip_container(r: &mut TlvReader<'_>) -> Result<(), error::ImError> {
+pub fn skip_container(r: &mut TlvReader<'_>) -> Result<(), error::ImError> {
     let _ = read_container_members(r)?;
     Ok(())
-}
-
-/// A concrete command path: `(endpoint, cluster, command)`.
-///
-/// Encoded as a `CommandPathIB` TLV **list** (Matter Appendix A.6):
-/// context tag 0 = endpoint, 1 = cluster, 2 = command.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct CommandPath {
-    /// Matter endpoint (always 0 for commissioning).
-    pub endpoint: u16,
-    /// Cluster ID.
-    pub cluster: u32,
-    /// Command ID.
-    pub command: u32,
 }

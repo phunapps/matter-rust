@@ -112,7 +112,9 @@ pub(crate) mod hexdump {
             })
     }
 }
-pub mod im;
+/// Interaction Model message framing — re-exported from [`matter_interaction`]
+/// (lifted out of this crate in M7.1; all `im::` paths are unchanged).
+pub use matter_interaction as im;
 pub mod noc;
 pub mod setup;
 pub mod state_machine;
