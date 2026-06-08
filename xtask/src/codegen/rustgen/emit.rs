@@ -79,8 +79,9 @@ fn emit_header(s: &mut String, c: &Cluster) {
     );
     line!(
         s,
-        "#![allow(clippy::all, clippy::pedantic, dead_code, unreachable_pub)]\n"
+        "#![allow(clippy::all, clippy::pedantic, dead_code, unreachable_pub, unused_imports)]\n"
     );
+    line!(s, "use crate::datatypes::SemanticTagStruct;");
     line!(s, "use crate::error::ClusterError;");
     line!(s, "use crate::types::Nullable;");
     line!(
