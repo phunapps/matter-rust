@@ -40,6 +40,8 @@ mod trace_diff;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
+use xtask::codegen;
+
 #[allow(clippy::too_many_lines)]
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -147,6 +149,16 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("codegen") => {
+            let check = args.next().as_deref() == Some("--check");
+            match run_codegen(check) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("xtask codegen: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("trace-diff") => {
             let (Some(a), Some(b)) = (args.next(), args.next()) else {
                 eprintln!("usage: cargo xtask trace-diff <ours.jsonl> <theirs.jsonl>");
@@ -191,6 +203,7 @@ fn print_help() {
              capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n  \
              capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n  \
              dump-model               Dump the @matter/model data model to xtask/model/clusters.json (M7.2).\n  \
+             codegen [--check]        Generate matter-clusters from clusters.json (M7); --check fails on drift.\n  \
              trace-diff               Compare two decrypted commissioning traces for M6 cross-verification.\n"
     );
 }
@@ -664,4 +677,42 @@ fn workspace_root() -> Result<PathBuf, String> {
         .parent()
         .map(PathBuf::from)
         .ok_or_else(|| "could not derive workspace root from CARGO_MANIFEST_DIR".to_string())
+}
+
+/// Generate `matter-clusters` cluster modules from `xtask/model/clusters.json`.
+///
+/// With `check`, regenerates and compares against the committed files,
+/// returning an error on drift (no writes). Otherwise writes the modules to
+/// `crates/matter-clusters/src/gen/`. The real generated output is committed
+/// in M7.4 (gated by byte-parity); in M7.3 this command is functional but its
+/// output is not committed.
+fn run_codegen(check: bool) -> Result<(), String> {
+    let root = workspace_root()?;
+    let model_path = root.join("xtask/model/clusters.json");
+    let model = codegen::model::load(&model_path)?;
+    let out_dir = root.join("crates/matter-clusters/src/gen");
+
+    for cluster in &model.clusters {
+        let module = codegen::rustgen::emit::generate_cluster(cluster);
+        let formatted = codegen::rustfmt_source(&module)?;
+        let file = out_dir.join(format!(
+            "{}.rs",
+            codegen::rustgen::types::snake(&cluster.name)
+        ));
+        if check {
+            let existing = std::fs::read_to_string(&file).unwrap_or_default();
+            if existing != formatted {
+                return Err(format!("codegen drift in {}", file.display()));
+            }
+        } else {
+            std::fs::create_dir_all(&out_dir)
+                .map_err(|e| format!("create {}: {e}", out_dir.display()))?;
+            std::fs::write(&file, formatted)
+                .map_err(|e| format!("write {}: {e}", file.display()))?;
+        }
+    }
+    if !check {
+        println!("codegen: wrote {} cluster modules", model.clusters.len());
+    }
+    Ok(())
 }
