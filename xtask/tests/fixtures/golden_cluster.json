@@ -42,6 +42,11 @@
               "nullable": false, "optional": false },
             { "id": 1, "name": "Reached", "type": "uint16", "metatype": "integer",
               "nullable": false, "optional": true }
+          ] },
+        { "id": 3, "name": "SetPoint", "direction": "request", "responseId": null,
+          "fields": [
+            { "id": 0, "name": "Point", "type": "PointStruct", "metatype": "object",
+              "nullable": false, "optional": false }
           ] }
       ],
       "datatypes": [
@@ -59,6 +64,11 @@
           "bits": [
             { "bit": 0, "name": "First" },
             { "bit": 8, "name": "Ninth" }
+          ] },
+        { "name": "PointStruct", "base": "struct", "kind": "struct", "description": null,
+          "fields": [
+            { "id": 0, "name": "X", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false },
+            { "id": 1, "name": "Y", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false }
           ] }
       ]
     }

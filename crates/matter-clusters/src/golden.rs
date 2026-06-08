@@ -20,6 +20,8 @@ pub mod command_id {
     pub const SET_LEVEL: u32 = 0x01;
     /// `SetLevelResponse` (response).
     pub const SET_LEVEL_RESPONSE: u32 = 0x02;
+    /// `SetPoint` (request).
+    pub const SET_POINT: u32 = 0x03;
 }
 
 /// Attribute IDs (cluster-specific).
@@ -104,6 +106,85 @@ bitflags::bitflags! {
         const FIRST = 1 << 0;
         /// Ninth.
         const NINTH = 1 << 8;
+    }
+}
+
+/// `PointStruct` struct.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PointStruct {
+    /// Field X (tag 0).
+    pub x: u16,
+    /// Field Y (tag 1).
+    pub y: u16,
+}
+
+impl PointStruct {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_x: Option<u16> = None;
+        let mut f_y: Option<u16> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => f_x = Some(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("X"))?),
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => f_y = Some(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Y"))?),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(_) => {} // unknown/future element — skip
+            }
+        }
+        Ok(Self {
+            x: f_x.ok_or(ClusterError::MissingField("X"))?,
+            y: f_y.ok_or(ClusterError::MissingField("Y"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "PointStruct",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+    /// Write this struct's fields into an already-open container.
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
+        w.put_uint(Tag::Context(0), u64::from(self.x))
+            .expect("infallible: vec writer");
+        w.put_uint(Tag::Context(1), u64::from(self.y))
+            .expect("infallible: vec writer");
+    }
+    /// Encode as a standalone anonymous TLV structure.
+    #[must_use]
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        self.write_fields(&mut w);
+        w.end_container().expect("infallible: vec writer");
+        buf
     }
 }
 
@@ -327,23 +408,12 @@ pub struct SetLevelResponse {
 }
 
 impl SetLevelResponse {
-    /// Decode from an anonymous TLV structure.
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
     ///
     /// # Errors
     /// Returns [`ClusterError`] on a malformed structure or missing required field.
-    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
-        let mut r = TlvReader::new(tlv);
-        match r.next()? {
-            Some(Element::ContainerStart {
-                kind: ContainerKind::Structure,
-                ..
-            }) => {}
-            _ => {
-                return Err(ClusterError::UnexpectedType {
-                    context: "SetLevelResponse",
-                })
-            }
-        }
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
         let mut f_status: Option<u8> = None;
         let mut f_reached: Option<u16> = None;
         loop {
@@ -372,4 +442,61 @@ impl SetLevelResponse {
             reached: f_reached,
         })
     }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "SetLevelResponse",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+    /// Write this struct's fields into an already-open container.
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
+        w.put_uint(Tag::Context(0), u64::from(self.status))
+            .expect("infallible: vec writer");
+        if let Some(reached) = &self.reached {
+            w.put_uint(Tag::Context(1), u64::from(*reached))
+                .expect("infallible: vec writer");
+        }
+    }
+    /// Encode as a standalone anonymous TLV structure.
+    #[must_use]
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        self.write_fields(&mut w);
+        w.end_container().expect("infallible: vec writer");
+        buf
+    }
+}
+
+/// Encode the `SetPoint` command request payload.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_set_point(point: PointStruct) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.start_structure(Tag::Context(0))
+        .expect("infallible: vec writer");
+    point.write_fields(&mut w);
+    w.end_container().expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
 }

@@ -304,27 +304,77 @@ fn emit_command_encoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>)
     line!(s, "}}\n");
 }
 
-/// Emit the `w.put_*` (with optional/nullable guards) for a struct/command
-/// field bound to local `var`, tagged `Tag::Context(f.id)`.
+/// Emit the field write (with optional/nullable guards) for a command field
+/// bound to local `var`, tagged `Tag::Context(f.id)`.
 fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'_>) {
     let tag = format!("Tag::Context({})", f.id);
     let scalar = matches!(
         f.metatype.as_str(),
         "boolean" | "integer" | "string" | "bytes" | "enum" | "bitmap"
     );
-    // M7.3 golden fixture uses scalar/enum/bitmap fields only; object/array
-    // fields inside commands are M7.4b Task 2 scope.
-    if !scalar {
-        line!(
-            s,
-            "    // field `{}` ({}) — composite field codec is M7.4b Task 2 scope.",
-            f.name,
-            f.metatype
-        );
+    if scalar {
+        let inner =
+            |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
+        emit_guarded_write(s, f, var, &tag, &inner);
         return;
     }
-    let inner =
-        |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
+    if f.metatype == "object" {
+        // A struct field: open a sub-structure at the context tag, write the
+        // struct's fields, close. (No request-command `array` field exists.)
+        let open = |s: &mut String, expr: &str| {
+            line!(
+                s,
+                "    w.start_structure({tag}).expect(\"infallible: vec writer\");"
+            );
+            line!(s, "    {expr}.write_fields(&mut w);");
+            line!(
+                s,
+                "    w.end_container().expect(\"infallible: vec writer\");"
+            );
+        };
+        match (f.optional, f.nullable) {
+            (false, false) => open(s, var),
+            (false, true) => {
+                line!(s, "    match &{var} {{");
+                line!(s, "        Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),");
+                line!(s, "        Nullable::Value({var}) => {{");
+                open(s, var);
+                line!(s, "        }}");
+                line!(s, "    }}");
+            }
+            (true, false) => {
+                line!(s, "    if let Some({var}) = &{var} {{");
+                open(s, var);
+                line!(s, "    }}");
+            }
+            (true, true) => {
+                line!(s, "    if let Some({var}) = &{var} {{ match {var} {{");
+                line!(s, "        Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),");
+                line!(s, "        Nullable::Value({var}) => {{");
+                open(s, var);
+                line!(s, "        }}");
+                line!(s, "    }} }}");
+            }
+        }
+        return;
+    }
+    // No request command has an `array` field in the 10 clusters; surface it
+    // rather than silently dropping if one ever appears.
+    line!(
+        s,
+        "    compile_error!(\"list-typed command field {} needs list-encode\");",
+        f.name
+    );
+}
+
+/// The scalar field-write with nullable/optional guards.
+fn emit_guarded_write(
+    s: &mut String,
+    f: &FieldDef,
+    var: &str,
+    tag: &str,
+    inner: &dyn Fn(&str) -> String,
+) {
     match (f.optional, f.nullable) {
         (false, false) => line!(s, "    {}", inner(var)),
         (false, true) => {
@@ -336,9 +386,7 @@ fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'
             line!(s, "        Nullable::Value({var}) => {{ {} }}", inner(var));
             line!(s, "    }}");
         }
-        (true, false) => {
-            line!(s, "    if let Some({var}) = {var} {{ {} }}", inner(var));
-        }
+        (true, false) => line!(s, "    if let Some({var}) = {var} {{ {} }}", inner(var)),
         (true, true) => {
             line!(s, "    if let Some({var}) = {var} {{");
             line!(s, "        match {var} {{");
@@ -387,9 +435,11 @@ fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
     emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts);
 }
 
-/// Emit `decode_struct`/`encode_struct`-style codec for a struct `d`. When
-/// `decl` is true, also emit the `pub struct` declaration (used for response
-/// command payloads, whose structs are not in the cluster `datatypes`).
+/// Emit the codec for a struct `d`: `decode_from`(positioned reader) +
+/// `decode`(bytes) + `write_fields`(into a writer) + `encode`(standalone
+/// bytes). When `decl` is true, also emit the `pub struct` declaration
+/// (response payloads aren't in the cluster datatypes).
+#[allow(clippy::too_many_lines)] // a code emitter — long but linear.
 fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &DatatypeMap<'_>) {
     if decl {
         line!(s, "/// Decoded `{}` payload.", d.name);
@@ -409,9 +459,17 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
         line!(s, "}}\n");
     }
 
-    // Decoder: read an anonymous structure, collect fields by context tag.
     line!(s, "impl {} {{", d.name);
-    line!(s, "    /// Decode from an anonymous TLV structure.");
+
+    // decode_from: reader positioned just AFTER the struct ContainerStart.
+    line!(
+        s,
+        "    /// Decode the fields of an already-opened anonymous structure"
+    );
+    line!(
+        s,
+        "    /// (reader positioned after the struct start; consumes to its end)."
+    );
     line!(s, "    ///");
     line!(s, "    /// # Errors");
     line!(
@@ -420,17 +478,8 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     );
     line!(
         s,
-        "    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {{"
+        "    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {{"
     );
-    line!(s, "        let mut r = TlvReader::new(tlv);");
-    line!(s, "        match r.next()? {{");
-    line!(s, "            Some(Element::ContainerStart {{ kind: ContainerKind::Structure, .. }}) => {{}}");
-    line!(
-        s,
-        "            _ => return Err(ClusterError::UnexpectedType {{ context: \"{}\" }}),",
-        d.name
-    );
-    line!(s, "        }}");
     for f in &d.fields {
         line!(
             s,
@@ -473,7 +522,113 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     }
     line!(s, "        }})");
     line!(s, "    }}");
+
+    // decode: from standalone bytes (expects the struct start).
+    line!(
+        s,
+        "    /// Decode from a standalone anonymous TLV structure."
+    );
+    line!(s, "    ///");
+    line!(s, "    /// # Errors");
+    line!(s, "    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.");
+    line!(
+        s,
+        "    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {{"
+    );
+    line!(s, "        let mut r = TlvReader::new(tlv);");
+    line!(s, "        match r.next()? {{");
+    line!(s, "            Some(Element::ContainerStart {{ kind: ContainerKind::Structure, .. }}) => {{}}");
+    line!(
+        s,
+        "            _ => return Err(ClusterError::UnexpectedType {{ context: \"{}\" }}),",
+        d.name
+    );
+    line!(s, "        }}");
+    line!(s, "        Self::decode_from(&mut r)");
+    line!(s, "    }}");
+
+    // write_fields: write this struct's fields into an already-open container.
+    line!(
+        s,
+        "    /// Write this struct's fields into an already-open container."
+    );
+    line!(
+        s,
+        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+    );
+    line!(
+        s,
+        "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {{"
+    );
+    for f in &d.fields {
+        emit_field_write_self(s, f, dts);
+    }
+    line!(s, "    }}");
+
+    // encode: standalone anonymous structure bytes.
+    line!(s, "    /// Encode as a standalone anonymous TLV structure.");
+    line!(s, "    #[must_use]");
+    line!(
+        s,
+        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+    );
+    line!(s, "    pub fn encode(&self) -> Vec<u8> {{");
+    line!(s, "        let mut buf = Vec::new();");
+    line!(s, "        let mut w = TlvWriter::new(&mut buf);");
+    line!(
+        s,
+        "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+    );
+    line!(s, "        self.write_fields(&mut w);");
+    line!(
+        s,
+        "        w.end_container().expect(\"infallible: vec writer\");"
+    );
+    line!(s, "        buf");
+    line!(s, "    }}");
+
     line!(s, "}}\n");
+}
+
+/// Emit a `write_fields` line for struct field `f`, reading `self.<field>`.
+/// (Struct datatypes in scope have only scalar/enum/bitmap fields.)
+fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
+    let var = snake(&f.name);
+    let tag = format!("Tag::Context({})", f.id);
+    let inner =
+        |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
+    match (f.optional, f.nullable) {
+        (false, false) => line!(s, "        {}", inner(&format!("self.{var}"))),
+        (false, true) => {
+            line!(s, "        match &self.{var} {{");
+            line!(s, "            Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),");
+            line!(
+                s,
+                "            Nullable::Value({var}) => {{ {} }}",
+                inner(&format!("*{var}"))
+            );
+            line!(s, "        }}");
+        }
+        (true, false) => {
+            line!(
+                s,
+                "        if let Some({var}) = &self.{var} {{ {} }}",
+                inner(&format!("*{var}"))
+            );
+        }
+        (true, true) => {
+            line!(s, "        if let Some({var}) = &self.{var} {{");
+            line!(s, "            match {var} {{");
+            line!(s, "                Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),");
+            line!(
+                s,
+                "                Nullable::Value({var}) => {{ {} }}",
+                inner(&format!("*{var}"))
+            );
+            line!(s, "            }}");
+            line!(s, "        }}");
+        }
+    }
 }
 
 /// One decoder arm reading struct field `f` at `Tag::Context(f.id)` into the
