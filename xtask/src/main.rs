@@ -27,6 +27,8 @@
 //!   payloads for byte-parity (Milestone 6.4.6).
 //! - `dump-model` — walk the pinned `@matter/model` standard data model and
 //!   emit `xtask/model/clusters.json`, the frozen codegen input (Milestone 7).
+//! - `capture-clusters` — encode curated cluster attribute/command TLV with
+//!   matter.js 0.16.11 into `test-vectors/clusters/` (Milestone 7.4a).
 //! - `trace-diff`    — structurally compare two decrypted commissioning
 //!   dialogues (ours vs matter.js) for M6 cross-verification.
 //! - `codegen`       — generate cluster definitions from the Matter spec
@@ -149,6 +151,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("capture-clusters") => match run_capture_clusters() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-clusters: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some("codegen") => {
             let check = args.next().as_deref() == Some("--check");
             match run_codegen(check) {
@@ -203,6 +212,7 @@ fn print_help() {
              capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n  \
              capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n  \
              dump-model               Dump the @matter/model data model to xtask/model/clusters.json (M7.2).\n  \
+             capture-clusters         Capture cluster attribute/command byte-parity vectors from matter.js (M7.4a).\n  \
              codegen [--check]        Generate matter-clusters from clusters.json (M7); --check fails on drift.\n  \
              trace-diff               Compare two decrypted commissioning traces for M6 cross-verification.\n"
     );
@@ -500,6 +510,35 @@ fn run_capture_im() -> Result<(), String> {
     if !script_dir.exists() {
         return Err(format!(
             "capture-im script directory not found: {}",
+            script_dir.display()
+        ));
+    }
+    if !script_dir.join("node_modules").exists() {
+        return Err(format!(
+            "node_modules not found in {}; run `npm install` there first",
+            script_dir.display()
+        ));
+    }
+
+    let status = Command::new("node")
+        .arg("index.js")
+        .current_dir(&script_dir)
+        .status()
+        .map_err(|err| format!("failed to spawn node: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("node index.js exited with status {status}"));
+    }
+    Ok(())
+}
+
+fn run_capture_clusters() -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let script_dir = workspace_root.join("xtask/scripts/capture-clusters");
+
+    if !script_dir.exists() {
+        return Err(format!(
+            "capture-clusters script directory not found: {}",
             script_dir.display()
         ));
     }
