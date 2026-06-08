@@ -7,7 +7,6 @@
 //! of the contract the dump script enforces on the JS side.
 
 // Structs and functions are scaffolding used by the emitter (next task).
-#![allow(dead_code)]
 
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -15,142 +14,142 @@ use std::path::Path;
 
 /// Top-level `clusters.json` document.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Model {
+pub struct Model {
     /// Provenance header (model version, exclusions). Not used by codegen
     /// beyond being carried for audit.
-    pub(crate) meta: serde_json::Value,
+    pub meta: serde_json::Value,
     /// The clusters to generate.
-    pub(crate) clusters: Vec<Cluster>,
+    pub clusters: Vec<Cluster>,
 }
 
 /// One cluster definition.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Cluster {
+pub struct Cluster {
     /// Cluster ID (e.g. `0x0006`).
-    pub(crate) id: u32,
+    pub id: u32,
     /// `PascalCase` cluster name (e.g. `OnOff`).
-    pub(crate) name: String,
+    pub name: String,
     /// Cluster revision.
-    pub(crate) revision: u16,
+    pub revision: u16,
     /// Feature bits.
     #[serde(default)]
-    pub(crate) features: Vec<Feature>,
+    pub features: Vec<Feature>,
     /// Cluster-specific attributes (globals already stripped by the dump).
-    pub(crate) attributes: Vec<Attribute>,
+    pub attributes: Vec<Attribute>,
     /// Request and response commands.
-    pub(crate) commands: Vec<CommandDef>,
+    pub commands: Vec<CommandDef>,
     /// Cluster-local datatypes (enums, bitmaps, structs).
-    pub(crate) datatypes: Vec<Datatype>,
+    pub datatypes: Vec<Datatype>,
 }
 
 /// A feature-map bit.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Feature {
+pub struct Feature {
     /// Bit position.
-    pub(crate) bit: u8,
+    pub bit: u8,
     /// Short code (e.g. `LT`).
-    pub(crate) code: String,
+    pub code: String,
     /// Long name (e.g. `Lighting`).
-    pub(crate) name: String,
+    pub name: String,
 }
 
 /// A cluster attribute.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Attribute {
+pub struct Attribute {
     /// Attribute ID.
-    pub(crate) id: u32,
+    pub id: u32,
     /// `PascalCase` attribute name.
-    pub(crate) name: String,
+    pub name: String,
     /// Matter type string (see [`rustgen::types`]).
     #[serde(rename = "type")]
-    pub(crate) ty: String,
+    pub ty: String,
     /// Categorical kind (`integer`, `enum`, `array`, …).
-    pub(crate) metatype: String,
+    pub metatype: String,
     /// List element type, when `metatype == "array"`.
     #[serde(default, rename = "entryType")]
-    pub(crate) entry_type: Option<String>,
+    pub entry_type: Option<String>,
     /// Wire-null allowed (quality `X`).
-    pub(crate) nullable: bool,
+    pub nullable: bool,
     /// Tag may be absent (conformance `O`).
-    pub(crate) optional: bool,
+    pub optional: bool,
     /// Writable (access `W`).
-    pub(crate) writable: bool,
+    pub writable: bool,
 }
 
 /// A request or response command.
 #[derive(Debug, Deserialize)]
-pub(crate) struct CommandDef {
+pub struct CommandDef {
     /// Command ID.
-    pub(crate) id: u32,
+    pub id: u32,
     /// `PascalCase` command name.
-    pub(crate) name: String,
+    pub name: String,
     /// `"request"` or `"response"`.
-    pub(crate) direction: String,
+    pub direction: String,
     /// For requests: ID of the paired response command, or `null` (default
     /// status response). Always `null` for responses.
     #[serde(rename = "responseId")]
-    pub(crate) response_id: Option<u32>,
+    pub response_id: Option<u32>,
     /// Command fields.
-    pub(crate) fields: Vec<FieldDef>,
+    pub fields: Vec<FieldDef>,
 }
 
 /// A struct or command field.
 #[derive(Debug, Deserialize)]
-pub(crate) struct FieldDef {
+pub struct FieldDef {
     /// Field tag number.
-    pub(crate) id: u32,
+    pub id: u32,
     /// `PascalCase` field name.
-    pub(crate) name: String,
+    pub name: String,
     /// Matter type string.
     #[serde(rename = "type")]
-    pub(crate) ty: String,
+    pub ty: String,
     /// Categorical kind.
-    pub(crate) metatype: String,
+    pub metatype: String,
     /// List element type, when `metatype == "array"`.
     #[serde(default, rename = "entryType")]
-    pub(crate) entry_type: Option<String>,
+    pub entry_type: Option<String>,
     /// Wire-null allowed.
-    pub(crate) nullable: bool,
+    pub nullable: bool,
     /// Tag may be absent.
-    pub(crate) optional: bool,
+    pub optional: bool,
 }
 
 /// A cluster-local datatype.
 #[derive(Debug, Deserialize)]
-pub(crate) struct Datatype {
+pub struct Datatype {
     /// `PascalCase` datatype name.
-    pub(crate) name: String,
+    pub name: String,
     /// Underlying base (`enum8`, `map8`, `struct`, …).
-    pub(crate) base: String,
+    pub base: String,
     /// Discriminator: `"enum"`, `"bitmap"`, `"struct"`, or `"scalar"`.
-    pub(crate) kind: String,
+    pub kind: String,
     /// Enum members (when `kind == "enum"`).
     #[serde(default)]
-    pub(crate) values: Vec<EnumValue>,
+    pub values: Vec<EnumValue>,
     /// Bitmap bits (when `kind == "bitmap"`).
     #[serde(default)]
-    pub(crate) bits: Vec<BitDef>,
+    pub bits: Vec<BitDef>,
     /// Struct fields (when `kind == "struct"`).
     #[serde(default)]
-    pub(crate) fields: Vec<FieldDef>,
+    pub fields: Vec<FieldDef>,
 }
 
 /// An enum member.
 #[derive(Debug, Deserialize)]
-pub(crate) struct EnumValue {
+pub struct EnumValue {
     /// Discriminant.
-    pub(crate) value: u32,
+    pub value: u32,
     /// `PascalCase` member name.
-    pub(crate) name: String,
+    pub name: String,
 }
 
 /// A bitmap bit.
 #[derive(Debug, Deserialize)]
-pub(crate) struct BitDef {
+pub struct BitDef {
     /// Bit position (single-bit fields only; ranges decode to `None`).
-    pub(crate) bit: Option<u8>,
+    pub bit: Option<u8>,
     /// `PascalCase` bit name.
-    pub(crate) name: String,
+    pub name: String,
 }
 
 /// Load and validate `clusters.json` from `path`.
@@ -159,7 +158,7 @@ pub(crate) struct BitDef {
 ///
 /// Returns a human-readable message if the file is unreadable, the JSON is
 /// malformed, or any [`validate`] check fails.
-pub(crate) fn load(path: &Path) -> Result<Model, String> {
+pub fn load(path: &Path) -> Result<Model, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let model: Model =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse {}: {e}", path.display()))?;
@@ -172,7 +171,7 @@ pub(crate) fn load(path: &Path) -> Result<Model, String> {
 /// # Errors
 ///
 /// Returns a message naming the first offending element.
-pub(crate) fn validate(model: &Model) -> Result<(), String> {
+pub fn validate(model: &Model) -> Result<(), String> {
     for c in &model.clusters {
         let datatype_names: HashSet<&str> = c.datatypes.iter().map(|d| d.name.as_str()).collect();
 

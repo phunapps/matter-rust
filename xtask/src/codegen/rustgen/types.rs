@@ -4,7 +4,6 @@
 //! branch is cheaply unit-tested (the M7 spec calls this out explicitly).
 
 // Items in this module are scaffolding wired up by the emitter (next task).
-#![allow(dead_code)]
 
 /// Map a non-list scalar/semantic Matter type to its backing Rust scalar,
 /// or `None` if `ty` is not a known scalar (then it is a datatype name).
@@ -43,13 +42,13 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
 /// True if `ty` is a known scalar/semantic type (i.e. not a datatype name).
 /// Used by validation and the emitter.
 #[must_use]
-pub(crate) fn is_known_scalar(ty: &str) -> bool {
+pub fn is_known_scalar(ty: &str) -> bool {
     scalar_rust(ty).is_some()
 }
 
 /// Position of a value, which decides whether `optional` adds `Option<…>`.
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub(crate) enum Position {
+pub enum Position {
     /// A top-level attribute value: `optional` does NOT wrap in `Option`
     /// (you only decode/encode an attribute that is present).
     Attribute,
@@ -65,7 +64,7 @@ pub(crate) enum Position {
 /// (for [`Position::Field`]) `optional` wraps `Option<…>`:
 /// `Option<Nullable<base>>`.
 #[must_use]
-pub(crate) fn rust_type(
+pub fn rust_type(
     ty: &str,
     entry_type: Option<&str>,
     nullable: bool,
@@ -85,7 +84,7 @@ pub(crate) fn rust_type(
 /// The unwrapped Rust type (no `Nullable`/`Option`): scalar, datatype name,
 /// or `Vec<element>`.
 #[must_use]
-pub(crate) fn base_type(ty: &str, entry_type: Option<&str>) -> String {
+pub fn base_type(ty: &str, entry_type: Option<&str>) -> String {
     if ty == "list" {
         let inner = entry_type.unwrap_or("octstr");
         return format!("Vec<{}>", base_type(inner, None));
@@ -98,7 +97,7 @@ pub(crate) fn base_type(ty: &str, entry_type: Option<&str>) -> String {
 
 /// Convert a `PascalCase`/`camelCase` name to `snake_case` (module/fn names).
 #[must_use]
-pub(crate) fn snake(name: &str) -> String {
+pub fn snake(name: &str) -> String {
     let mut out = String::new();
     let chars: Vec<char> = name.chars().collect();
     for (i, &ch) in chars.iter().enumerate() {
@@ -123,14 +122,14 @@ pub(crate) fn snake(name: &str) -> String {
 
 /// Convert a name to `SCREAMING_SNAKE_CASE` (const names).
 #[must_use]
-pub(crate) fn screaming(name: &str) -> String {
+pub fn screaming(name: &str) -> String {
     snake(name).to_ascii_uppercase()
 }
 
 /// Escape a Rust reserved word so it is a valid identifier (`type` →
 /// `r#type`). Names that are not keywords pass through unchanged.
 #[must_use]
-pub(crate) fn ident(name: &str) -> String {
+pub fn ident(name: &str) -> String {
     // Raw identifiers are illegal for these three, so suffix instead.
     const SUFFIX: [&str; 3] = ["crate", "self", "super"];
     const RAW: [&str; 49] = [
