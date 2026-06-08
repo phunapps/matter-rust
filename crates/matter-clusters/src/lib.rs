@@ -28,5 +28,7 @@ pub mod types;
 
 pub use datatypes::SemanticTagStruct;
 
+pub mod gen;
+
 #[cfg(test)]
 mod golden;

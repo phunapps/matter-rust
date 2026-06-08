@@ -181,8 +181,14 @@ fn emit_list_read_into(
     line!(s, "{indent}    match r.next()? {{");
     line!(s, "{indent}        Some(Element::ContainerEnd) => break,");
     if entry_meta == "object" {
+        // The element's Rust type name (a cluster-local struct == its name; a
+        // global like `semtag` maps via base_type -> `SemanticTagStruct`).
+        let elem_ty = base_type(entry, None);
         line!(s, "{indent}        Some(Element::ContainerStart {{ kind: ContainerKind::Structure, .. }}) => {{");
-        line!(s, "{indent}            out.push({entry}::decode_from(r)?);");
+        line!(
+            s,
+            "{indent}            out.push({elem_ty}::decode_from(r)?);"
+        );
         line!(s, "{indent}        }}");
     } else {
         let (pat, build) = read_scalar(entry_meta, entry, None, context, dts);
@@ -621,45 +627,49 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     line!(s, "        Self::decode_from(&mut r)");
     line!(s, "    }}");
 
-    // write_fields: write this struct's fields into an already-open container.
-    line!(
-        s,
-        "    /// Write this struct's fields into an already-open container."
-    );
-    line!(
-        s,
-        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
-    );
-    line!(
-        s,
-        "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {{"
-    );
-    for f in &d.fields {
-        emit_field_write_self(s, f, dts);
-    }
-    line!(s, "    }}");
+    // write_fields + encode: ONLY for real datatype structs (which the 10
+    // clusters guarantee have scalar-only fields, so write_fields compiles).
+    // Response-payload structs (`decl`) are decode-only — they may carry
+    // composite fields (e.g. list[struct]) that we never re-encode.
+    if !decl {
+        line!(
+            s,
+            "    /// Write this struct's fields into an already-open container."
+        );
+        line!(
+            s,
+            "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+        );
+        line!(
+            s,
+            "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {{"
+        );
+        for f in &d.fields {
+            emit_field_write_self(s, f, dts);
+        }
+        line!(s, "    }}");
 
-    // encode: standalone anonymous structure bytes.
-    line!(s, "    /// Encode as a standalone anonymous TLV structure.");
-    line!(s, "    #[must_use]");
-    line!(
-        s,
-        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
-    );
-    line!(s, "    pub fn encode(&self) -> Vec<u8> {{");
-    line!(s, "        let mut buf = Vec::new();");
-    line!(s, "        let mut w = TlvWriter::new(&mut buf);");
-    line!(
-        s,
-        "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
-    );
-    line!(s, "        self.write_fields(&mut w);");
-    line!(
-        s,
-        "        w.end_container().expect(\"infallible: vec writer\");"
-    );
-    line!(s, "        buf");
-    line!(s, "    }}");
+        line!(s, "    /// Encode as a standalone anonymous TLV structure.");
+        line!(s, "    #[must_use]");
+        line!(
+            s,
+            "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+        );
+        line!(s, "    pub fn encode(&self) -> Vec<u8> {{");
+        line!(s, "        let mut buf = Vec::new();");
+        line!(s, "        let mut w = TlvWriter::new(&mut buf);");
+        line!(
+            s,
+            "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+        );
+        line!(s, "        self.write_fields(&mut w);");
+        line!(
+            s,
+            "        w.end_container().expect(\"infallible: vec writer\");"
+        );
+        line!(s, "        buf");
+        line!(s, "    }}");
+    }
 
     line!(s, "}}\n");
 }
@@ -679,7 +689,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             line!(
                 s,
                 "            Nullable::Value({var}) => {{ {} }}",
-                inner(&format!("*{var}"))
+                inner(&format!("(*{var})"))
             );
             line!(s, "        }}");
         }
@@ -687,7 +697,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             line!(
                 s,
                 "        if let Some({var}) = &self.{var} {{ {} }}",
-                inner(&format!("*{var}"))
+                inner(&format!("(*{var})"))
             );
         }
         (true, true) => {
@@ -697,7 +707,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             line!(
                 s,
                 "                Nullable::Value({var}) => {{ {} }}",
-                inner(&format!("*{var}"))
+                inner(&format!("(*{var})"))
             );
             line!(s, "            }}");
             line!(s, "        }}");
