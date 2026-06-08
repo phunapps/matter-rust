@@ -42,6 +42,12 @@ pub mod attribute_id {
     pub const RAW_MODE: u32 = 0x0006;
     /// `Caps`.
     pub const CAPS: u32 = 0x0007;
+    /// `Point`.
+    pub const POINT: u32 = 0x0008;
+    /// `Ids`.
+    pub const IDS: u32 = 0x0009;
+    /// `Points`.
+    pub const POINTS: u32 = 0x000A;
 }
 
 bitflags::bitflags! {
@@ -366,6 +372,74 @@ pub fn decode_caps(tlv: &[u8]) -> Result<WideFlags, ClusterError> {
         )),
         _ => Err(ClusterError::UnexpectedType { context: "Caps" }),
     }
+}
+
+/// Decode the `Point` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_point(tlv: &[u8]) -> Result<PointStruct, ClusterError> {
+    PointStruct::decode(tlv)
+}
+
+/// Decode the `Ids` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_ids(tlv: &[u8]) -> Result<Vec<u32>, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Array,
+            ..
+        }) => {}
+        _ => return Err(ClusterError::UnexpectedType { context: "Ids" }),
+    }
+    let r = &mut r;
+    let mut out = Vec::new();
+    loop {
+        match r.next()? {
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                value: Value::Uint(v),
+                ..
+            }) => out.push(u32::try_from(v).map_err(|_| ClusterError::InvalidLength("Ids"))?),
+            None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+            Some(_) => {} // skip
+        }
+    }
+    Ok(out)
+}
+
+/// Decode the `Points` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_points(tlv: &[u8]) -> Result<Vec<PointStruct>, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Array,
+            ..
+        }) => {}
+        _ => return Err(ClusterError::UnexpectedType { context: "Points" }),
+    }
+    let r = &mut r;
+    let mut out = Vec::new();
+    loop {
+        match r.next()? {
+            Some(Element::ContainerEnd) => break,
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {
+                out.push(PointStruct::decode_from(r)?);
+            }
+            None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+            Some(_) => {} // skip
+        }
+    }
+    Ok(out)
 }
 
 /// Encode the `Reset` command request payload.

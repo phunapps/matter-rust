@@ -25,6 +25,12 @@
         { "id": 6, "name": "RawMode", "type": "enum8", "metatype": "enum",
           "nullable": false, "optional": false, "writable": true },
         { "id": 7, "name": "Caps", "type": "WideFlags", "metatype": "bitmap",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 8, "name": "Point", "type": "PointStruct", "metatype": "object",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 9, "name": "Ids", "type": "list", "entryType": "uint32", "metatype": "array",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 10, "name": "Points", "type": "list", "entryType": "PointStruct", "metatype": "array",
           "nullable": false, "optional": false, "writable": false }
       ],
       "commands": [

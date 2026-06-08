@@ -150,12 +150,54 @@ fn write_scalar(
     }
 }
 
-fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
-    // Only scalar/enum/bitmap attributes get a generated decoder in M7.3.
-    // (object/array attribute decoders are added in M7.4b Task 3.)
-    if a.metatype == "object" || a.metatype == "array" {
-        return;
+/// The `read_scalar` metatype of a list element, inferred from its Matter
+/// type string: a named struct datatype (or a global `*Struct`, e.g. `semtag`
+/// -> `SemanticTagStruct`) → "object"; every scalar list element in the 10
+/// clusters is an integer id (`cluster-id`/`endpoint-no`/`uint32`/...) → so
+/// the scalar case is "integer".
+fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
+    if matches!(dts.get(entry), Some(d) if d.kind == "struct") {
+        return "object";
     }
+    if base_type(entry, None).ends_with("Struct") {
+        return "object"; // a global struct (e.g. semtag -> SemanticTagStruct)
+    }
+    "integer"
+}
+
+/// Emit (into `s`, indented by `indent`) statements that read a TLV array
+/// whose reader `r` is positioned just AFTER its `ContainerStart`, leaving
+/// the result in a local `out: Vec<ElementRust>`.
+fn emit_list_read_into(
+    s: &mut String,
+    indent: &str,
+    entry: &str,
+    entry_meta: &str,
+    context: &str,
+    dts: &DatatypeMap<'_>,
+) {
+    line!(s, "{indent}let mut out = Vec::new();");
+    line!(s, "{indent}loop {{");
+    line!(s, "{indent}    match r.next()? {{");
+    line!(s, "{indent}        Some(Element::ContainerEnd) => break,");
+    if entry_meta == "object" {
+        line!(s, "{indent}        Some(Element::ContainerStart {{ kind: ContainerKind::Structure, .. }}) => {{");
+        line!(s, "{indent}            out.push({entry}::decode_from(r)?);");
+        line!(s, "{indent}        }}");
+    } else {
+        let (pat, build) = read_scalar(entry_meta, entry, None, context, dts);
+        line!(
+            s,
+            "{indent}        Some(Element::Scalar {{ value: {pat}, .. }}) => out.push({build}),"
+        );
+    }
+    line!(s, "{indent}        None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),");
+    line!(s, "{indent}        Some(_) => {{}} // skip");
+    line!(s, "{indent}    }}");
+    line!(s, "{indent}}}");
+}
+
+fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
     let ret = rust_type(
         &a.ty,
         a.entry_type.as_deref(),
@@ -163,8 +205,6 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         false,
         Position::Attribute,
     );
-    let ctx = a.name.clone();
-    let (pat, build) = read_scalar(&a.metatype, &a.ty, a.entry_type.as_deref(), &ctx, dts);
     line!(s, "/// Decode the `{}` attribute value.", a.name);
     line!(s, "///");
     line!(s, "/// # Errors");
@@ -178,6 +218,40 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         snake(&a.name),
         ret
     );
+
+    if a.metatype == "object" {
+        // struct attribute (all read-only in scope; no composite attribute is
+        // nullable in the 10 clusters).
+        line!(s, "    {}::decode(tlv)", a.ty);
+        line!(s, "}}\n");
+        return;
+    }
+    if a.metatype == "array" {
+        let entry = a.entry_type.as_deref().unwrap_or("octstr");
+        let entry_meta = entry_metatype(entry, dts);
+        line!(s, "    let mut r = TlvReader::new(tlv);");
+        line!(s, "    match r.next()? {{");
+        line!(
+            s,
+            "        Some(Element::ContainerStart {{ kind: ContainerKind::Array, .. }}) => {{}}"
+        );
+        line!(
+            s,
+            "        _ => return Err(ClusterError::UnexpectedType {{ context: \"{}\" }}),",
+            a.name
+        );
+        line!(s, "    }}");
+        // Reborrow as `&mut` so element struct decode (`decode_from(r)`) shares
+        // one code path with the struct-field call site.
+        line!(s, "    let r = &mut r;");
+        emit_list_read_into(s, "    ", entry, entry_meta, &a.name, dts);
+        line!(s, "    Ok(out)");
+        line!(s, "}}\n");
+        return;
+    }
+
+    let ctx = a.name.clone();
+    let (pat, build) = read_scalar(&a.metatype, &a.ty, a.entry_type.as_deref(), &ctx, dts);
     line!(s, "    let mut r = TlvReader::new(tlv);");
     line!(s, "    match r.next()? {{");
     if a.nullable {
@@ -632,29 +706,51 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
 }
 
 /// One decoder arm reading struct field `f` at `Tag::Context(f.id)` into the
-/// local `f_<name>: Option<…>` accumulator (scalar/enum/bitmap only in M7.3).
+/// local `f_<name>: Option<…>` accumulator (scalar/object/array).
 fn emit_struct_field_read_arm(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
     let var = snake(&f.name);
     let scalar = matches!(
         f.metatype.as_str(),
         "boolean" | "integer" | "string" | "bytes" | "enum" | "bitmap"
     );
-    if !scalar {
-        line!(
-            s,
-            "                // field `{}` ({}) — composite read is M7.4b Task 3 scope.",
-            f.name,
-            f.metatype
-        );
+    if scalar {
+        let ctx = f.name.clone();
+        let (pat, build) = read_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &ctx, dts);
+        if f.nullable {
+            line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: Value::Null }}) => f_{} = Some(Nullable::Null),", f.id, var);
+            line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some(Nullable::Value({})),", f.id, pat, var, build);
+        } else {
+            line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some({}),", f.id, pat, var, build);
+        }
+        let _ = ident;
         return;
     }
-    let ctx = f.name.clone();
-    let (pat, build) = read_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &ctx, dts);
+    if f.metatype == "object" {
+        let val = format!("{}::decode_from(r)?", f.ty);
+        let wrapped = if f.nullable {
+            format!("Nullable::Value({val})")
+        } else {
+            val
+        };
+        if f.nullable {
+            line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: Value::Null }}) => f_{} = Some(Nullable::Null),", f.id, var);
+        }
+        line!(s, "                Some(Element::ContainerStart {{ tag: Tag::Context({}), kind: ContainerKind::Structure }}) => f_{} = Some({}),", f.id, var, wrapped);
+        return;
+    }
+    // array field (e.g. GetUserResponse.Credentials = Nullable<Vec<...>>).
+    let entry = f.entry_type.as_deref().unwrap_or("octstr");
+    let entry_meta = entry_metatype(entry, dts);
     if f.nullable {
         line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: Value::Null }}) => f_{} = Some(Nullable::Null),", f.id, var);
-        line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some(Nullable::Value({})),", f.id, pat, var, build);
-    } else {
-        line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some({}),", f.id, pat, var, build);
     }
-    let _ = ident;
+    line!(s, "                Some(Element::ContainerStart {{ tag: Tag::Context({}), kind: ContainerKind::Array }}) => {{", f.id);
+    emit_list_read_into(s, "                    ", entry, entry_meta, &f.name, dts);
+    let wrapped = if f.nullable {
+        "Nullable::Value(out)"
+    } else {
+        "out"
+    };
+    line!(s, "                    f_{} = Some({});", var, wrapped);
+    line!(s, "                }}");
 }
