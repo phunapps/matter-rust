@@ -7,5 +7,5 @@
 //! types, emit strings) → rustfmt. The generator is pure: same JSON in →
 //! same Rust out, byte-for-byte.
 
-pub mod model;
-pub mod rustgen;
+pub(crate) mod model;
+pub(crate) mod rustgen;
