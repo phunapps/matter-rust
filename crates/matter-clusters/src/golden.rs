@@ -36,6 +36,10 @@ pub mod attribute_id {
     pub const LABEL: u32 = 0x0004;
     /// `Token`.
     pub const TOKEN: u32 = 0x0005;
+    /// `RawMode`.
+    pub const RAW_MODE: u32 = 0x0006;
+    /// `Caps`.
+    pub const CAPS: u32 = 0x0007;
 }
 
 bitflags::bitflags! {
@@ -89,6 +93,17 @@ bitflags::bitflags! {
         const ALPHA = 1 << 0;
         /// Beta.
         const BETA = 1 << 1;
+    }
+}
+
+bitflags::bitflags! {
+    /// `WideFlags` (map16).
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    pub struct WideFlags: u16 {
+        /// First.
+        const FIRST = 1 << 0;
+        /// Ninth.
+        const NINTH = 1 << 8;
     }
 }
 
@@ -226,6 +241,49 @@ pub fn decode_token(tlv: &[u8]) -> Result<Vec<u8>, ClusterError> {
             ..
         }) => Ok(v),
         _ => Err(ClusterError::UnexpectedType { context: "Token" }),
+    }
+}
+
+/// Decode the `RawMode` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_raw_mode(tlv: &[u8]) -> Result<u8, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(u8::try_from(v).map_err(|_| ClusterError::InvalidLength("RawMode"))?),
+        _ => Err(ClusterError::UnexpectedType { context: "RawMode" }),
+    }
+}
+
+/// Encode the `RawMode` attribute value as a standalone TLV element.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_raw_mode(value: u8) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.put_uint(Tag::Anonymous, u64::from(value))
+        .expect("infallible: vec writer");
+    buf
+}
+
+/// Decode the `Caps` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_caps(tlv: &[u8]) -> Result<WideFlags, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(WideFlags::from_bits_truncate(
+            u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Caps"))?,
+        )),
+        _ => Err(ClusterError::UnexpectedType { context: "Caps" }),
     }
 }
 
