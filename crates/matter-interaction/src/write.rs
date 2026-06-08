@@ -135,6 +135,7 @@ fn parse_attribute_status_ib(r: &mut TlvReader<'_>) -> Result<(AttributePath, Im
             }) => {
                 // StatusIB = { 0: Status (uint), 1: ClusterStatus (ignored) }
                 let members = read_container_members(r)?;
+                // Last value wins for duplicate tags (lenient parsing); real devices never duplicate Status.
                 for (tag, v) in &members {
                     if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
                         let code = u8::try_from(*n)

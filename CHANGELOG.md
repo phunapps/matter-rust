@@ -5,6 +5,39 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## matter-interaction
+
+### [Unreleased] — M7.1 crate created (IM lift + Write support)
+
+#### M7.1 — Interaction Model framing lifted out of matter-commissioning
+
+New crate (`0.1.0-pre`): the `im` module moved here as a file-move (the
+M6.6.1 design kept it free of state-machine dependencies for exactly this).
+`matter-commissioning` re-exports it as `im`, so existing import paths are
+unchanged — its full test suite passes with zero test edits.
+
+##### Added
+
+- `write` module: `build_write_request` / `parse_write_response` —
+  `WriteRequestMessage` builder and `WriteResponseMessage` parser with
+  per-path `AttributeStatusIB` statuses (success included). Concrete paths
+  only; no timed, chunked, or wildcard writes (M7 scope).
+- `path` module unifying `CommandPath` + `AttributePath`.
+- Container helpers (`expect_message_struct`, `read_container_members`,
+  `read_container_value`, `skip_container`) promoted to `pub` — the
+  commissioning driver consumes them across the crate boundary.
+- xtask `capture-im`: captures IM invoke/read/write byte-parity fixtures
+  from matter.js 0.16.11 into `test-vectors/commissioning/im/`. The
+  invoke/read parity tests promised in M6.6.1 now assert against real
+  fixtures (previously they skipped); write fixtures were captured before
+  `write.rs` was implemented (vectors before code).
+
+##### Changed
+
+- One commissioning-driver match gained a wildcard arm: `ImStatus`'s
+  `#[non_exhaustive]` now binds across the crate boundary; unknown status
+  variants map to generic FAILURE (0x01), never success.
+
 ## matter-commissioning
 
 ### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete), M6.6.5a production CD-root ingestion
