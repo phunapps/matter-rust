@@ -39,11 +39,26 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
     })
 }
 
-/// True if `ty` is a known scalar/semantic type (i.e. not a datatype name).
-/// Used by validation and the emitter.
+/// Matter *global* composite types referenced by the 10 clusters but not
+/// defined cluster-locally — mapped to hand-written foundation structs.
+///
+/// Currently just `semtag` (the `SemanticTagStruct` in `Descriptor.TagList`).
+/// The foundation struct is added to `matter-clusters` when the real
+/// Descriptor module is first compiled (M7.4); in M7.3 the mapping only needs
+/// to produce a valid type name so the generator does not reject the cluster.
+fn global_type_rust(ty: &str) -> Option<&'static str> {
+    match ty {
+        "semtag" => Some("SemanticTagStruct"),
+        _ => None,
+    }
+}
+
+/// True if `ty` is a type the generator knows how to map on its own (a
+/// scalar/semantic primitive or a known global composite) — i.e. not a
+/// cluster-local datatype name. Used by validation and the emitter.
 #[must_use]
-pub fn is_known_scalar(ty: &str) -> bool {
-    scalar_rust(ty).is_some()
+pub fn is_known_type(ty: &str) -> bool {
+    scalar_rust(ty).is_some() || global_type_rust(ty).is_some()
 }
 
 /// Position of a value, which decides whether `optional` adds `Option<…>`.
@@ -89,10 +104,13 @@ pub fn base_type(ty: &str, entry_type: Option<&str>) -> String {
         let inner = entry_type.unwrap_or("octstr");
         return format!("Vec<{}>", base_type(inner, None));
     }
-    match scalar_rust(ty) {
-        Some(s) => s.to_string(),
-        None => ty.to_string(), // a datatype name, used verbatim (already PascalCase)
+    if let Some(s) = scalar_rust(ty) {
+        return s.to_string();
     }
+    if let Some(s) = global_type_rust(ty) {
+        return s.to_string();
+    }
+    ty.to_string() // a cluster-local datatype name, used verbatim (PascalCase)
 }
 
 /// Convert a `PascalCase`/`camelCase` name to `snake_case` (module/fn names).
@@ -229,9 +247,17 @@ mod tests {
     }
 
     #[test]
-    fn known_scalar_predicate() {
-        assert!(is_known_scalar("uint16"));
-        assert!(is_known_scalar("cluster-id"));
-        assert!(!is_known_scalar("StartUpOnOffEnum"));
+    fn known_type_predicate() {
+        assert!(is_known_type("uint16"));
+        assert!(is_known_type("cluster-id"));
+        assert!(!is_known_type("StartUpOnOffEnum"));
+    }
+
+    #[test]
+    fn global_composite_semtag() {
+        // `semtag` is a Matter global struct (Descriptor.TagList = list[semtag]).
+        assert!(is_known_type("semtag"));
+        assert_eq!(base_type("semtag", None), "SemanticTagStruct");
+        assert_eq!(base_type("list", Some("semtag")), "Vec<SemanticTagStruct>");
     }
 }

@@ -263,7 +263,7 @@ fn check_type(
         let entry = entry.ok_or_else(|| format!("{cluster}.{element}: list without entryType"))?;
         return check_type(cluster, element, entry, None, datatypes);
     }
-    if crate::codegen::rustgen::types::is_known_scalar(ty) || datatypes.contains(ty) {
+    if crate::codegen::rustgen::types::is_known_type(ty) || datatypes.contains(ty) {
         Ok(())
     } else {
         Err(format!(
