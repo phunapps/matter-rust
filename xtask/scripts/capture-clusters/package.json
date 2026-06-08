@@ -1,0 +1,14 @@
+{
+  "name": "matter-rust-capture-clusters",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Encodes a curated set of cluster attribute values and command requests with matter.js 0.16.11 TLV combinators, capturing byte-parity vectors into test-vectors/clusters/ for matter-clusters' generated codecs (M7.4b).",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@matter/types": "0.16.11"
+  }
+}
