@@ -5,9 +5,35 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## matter-clusters
+
+### [Unreleased] — M7.3 foundation
+
+#### M7.3 — hand-written foundation for generated code
+
+- `Nullable<T>` (distinct from `Option`) and `ClusterError` (no
+  `InvalidEnumValue` — unknown enum discriminants decode to `Unknown(n)`).
+  Adds the `bitflags` dependency for generated bitmaps. The generated cluster
+  modules themselves land in M7.4.
+
 ## xtask (tooling)
 
-### [Unreleased] — M7.2 dump-model
+### [Unreleased] — M7.3 codegen, M7.2 dump-model
+
+#### M7.3 — cluster code generator (`cargo xtask codegen`)
+
+- `xtask/src/codegen/`: `model.rs` (typed `clusters.json` + strict
+  validation — unknown types, duplicate IDs, dangling `responseId`),
+  `rustgen/types.rs` (type mapping + identifier helpers),
+  `rustgen/emit.rs` + `emit_codecs.rs` (string-building emitter for the
+  uniform per-cluster module shape). `cargo xtask codegen [--check]`
+  regenerates clusters into `matter-clusters`. A golden test compiles the
+  generator's output for a synthetic fixture against the crate, proving it
+  emits valid Rust; a smoke test confirms all 10 real clusters generate
+  rustfmt-valid source. (The real generated modules are committed in M7.4,
+  gated by byte-parity.)
+
+#### M7.2 — `dump-model`: frozen codegen input (`clusters.json`)
 
 #### M7.2 — `dump-model`: frozen codegen input (`clusters.json`)
 
