@@ -1,27 +1,32 @@
-//! Error type for cluster encode/decode operations.
+//! Errors surfaced by generated cluster codecs.
 
-use thiserror::Error;
+use matter_codec::Error as TlvError;
 
-/// Errors that can occur when decoding or encoding a cluster attribute, command,
-/// or struct field.
-#[derive(Debug, Error)]
+/// Error returned by a generated attribute/command/struct decoder.
+///
+/// Deliberately has **no** `InvalidEnumValue` variant: unknown enum
+/// discriminants decode to the enum's `Unknown(n)` variant, never an error
+/// (forward compatibility — a device on a newer spec revision must not break
+/// our decode).
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClusterError {
-    /// The TLV element was present but carried an unexpected type.
+    /// The underlying TLV codec rejected the bytes.
+    #[error("TLV codec error: {0}")]
+    Tlv(#[from] TlvError),
+
+    /// A TLV element had a type we did not expect for this field.
     #[error("unexpected TLV type for {context}")]
     UnexpectedType {
-        /// Which field or attribute triggered the error.
+        /// Where the mismatch occurred (e.g. `"OnOff::OnTime"`).
         context: &'static str,
     },
 
-    /// A value could not be narrowed to the expected integer width.
-    #[error("value out of range for {0}")]
-    InvalidLength(&'static str),
-
-    /// A required struct field was absent from the TLV container.
-    #[error("required field missing: {0}")]
+    /// A required struct/command field was absent.
+    #[error("missing required field: {0}")]
     MissingField(&'static str),
 
-    /// A low-level TLV decode error propagated up from `matter-codec`.
-    #[error("TLV error: {0}")]
-    Tlv(#[from] matter_codec::Error),
+    /// An integer or list length did not fit its declared Rust width.
+    #[error("value out of range for {0}")]
+    InvalidLength(&'static str),
 }
