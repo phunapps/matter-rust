@@ -18,7 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## xtask (tooling)
 
-### [Unreleased] — M7.3 codegen, M7.2 dump-model
+### [Unreleased] — M7.4a capture-clusters, M7.3 codegen, M7.2 dump-model
+
+#### M7.4a — `capture-clusters`: cluster byte-parity vectors
+
+- `cargo xtask capture-clusters`: encodes a curated set of cluster attribute
+  values and command requests with matter.js 0.16.11 TLV combinators into
+  `test-vectors/clusters/`, covering the type matrix (scalars, enum, bitmap,
+  struct, lists, nullable, optional). The frozen oracle the generated cluster
+  codecs are byte-parity-tested against in M7.4b. A `serde_json` freeze test
+  gates the vectors in CI (no Node).
 
 #### M7.3 — cluster code generator (`cargo xtask codegen`)
 
