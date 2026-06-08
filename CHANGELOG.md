@@ -5,6 +5,29 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## xtask (tooling)
+
+### [Unreleased] — M7.2 dump-model
+
+#### M7.2 — `dump-model`: frozen codegen input (`clusters.json`)
+
+New `cargo xtask dump-model` subcommand: walks the pinned `@matter/model`
+0.17.1 standard data model and emits `xtask/model/clusters.json` — the
+frozen input the M7.3 codegen will consume for `matter-clusters`.
+
+##### Added
+
+- `xtask/scripts/dump-model/` — Node script (pins `@matter/model` exact,
+  the spec-revision pin) allowlisted to the 10 M7 target clusters. Records
+  each cluster's local attributes, request/response commands, enum/bitmap/
+  struct datatypes, and features in a flat JSON contract.
+- Dump-time exclusions, each recorded in the header with a reason (no
+  silent caps): provisional, deprecated, disallowed, and DoorLock
+  Aliro-feature-gated elements (an AST-based `ALIRO`/`ALBU` filter — the
+  "DoorLock limited" realization), events, and the six global attributes.
+- `xtask/tests/clusters_json_freeze.rs` — a `serde_json` freeze test that
+  gates the committed `clusters.json` in CI (reads the JSON; no Node).
+
 ## matter-interaction
 
 ### [Unreleased] — M7.1 crate created (IM lift + Write support)

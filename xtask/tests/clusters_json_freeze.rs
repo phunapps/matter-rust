@@ -59,7 +59,10 @@ fn every_cluster_has_id_revision_and_attributes() {
     for c in clusters(&v) {
         let name = c["name"].as_str().unwrap();
         assert!(c["id"].is_number(), "{name}: missing numeric id");
-        assert!(c["revision"].is_number(), "{name}: missing numeric revision");
+        assert!(
+            c["revision"].is_number(),
+            "{name}: missing numeric revision"
+        );
         let attrs = c["attributes"].as_array().expect("attributes array");
         assert!(!attrs.is_empty(), "{name}: expected at least one attribute");
     }
