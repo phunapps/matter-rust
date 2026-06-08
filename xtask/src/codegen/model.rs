@@ -60,7 +60,7 @@ pub struct Attribute {
     pub id: u32,
     /// `PascalCase` attribute name.
     pub name: String,
-    /// Matter type string (see [`rustgen::types`]).
+    /// Matter type string (see [`crate::codegen::rustgen::types`]).
     #[serde(rename = "type")]
     pub ty: String,
     /// Categorical kind (`integer`, `enum`, `array`, …).
