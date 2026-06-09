@@ -19,3 +19,7 @@ workspace = true
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+base64 = { workspace = true }
