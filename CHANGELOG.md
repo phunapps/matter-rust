@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-clusters
 
-### [Unreleased] — M7.3 foundation
+### [Unreleased] — M7.4b generated clusters, M7.3 foundation
+
+#### M7.4b — generated cluster modules (the 10 M7 clusters)
+
+- The 10 target clusters are generated into `matter_clusters::gen` (typed
+  attribute/command/struct codecs + feature/datatype enums & bitmaps), proven
+  **byte-parity** against the matter.js 0.16.11 `test-vectors/clusters/`
+  vectors, with proptest roundtrips and a `cargo-fuzz` target on the weekly
+  schedule. `SemanticTagStruct` global added (`Descriptor.TagList`).
+  Generator fixes: datatype-aware enum/bitmap codecs (correct backing width;
+  bare `enum8`/`status` as plain integers), struct encode, and list decode.
+  `cargo xtask codegen --check` now gates codegen drift in CI.
 
 #### M7.3 — hand-written foundation for generated code
 
