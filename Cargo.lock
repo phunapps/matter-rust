@@ -722,8 +722,11 @@ dependencies = [
 name = "matter-clusters"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "bitflags",
  "matter-codec",
+ "proptest",
+ "serde_json",
  "thiserror",
 ]
 
