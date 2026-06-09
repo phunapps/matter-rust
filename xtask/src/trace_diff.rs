@@ -61,6 +61,8 @@ const PROTO_INTERACTION_MODEL: u16 = 1;
 // IM opcode constants used in rules and CommissioningComplete detection.
 const IM_OPCODE_READ_REQUEST: u8 = 0x02;
 const IM_OPCODE_REPORT_DATA: u8 = 0x05;
+const IM_OPCODE_WRITE_REQUEST: u8 = 0x06;
+const IM_OPCODE_WRITE_RESPONSE: u8 = 0x07;
 const IM_OPCODE_INVOKE_REQUEST: u8 = 0x08;
 const IM_OPCODE_INVOKE_RESPONSE: u8 = 0x09;
 
@@ -153,6 +155,8 @@ pub(crate) fn opcode_name(protocol: u16, opcode: u8) -> &'static str {
         (PROTO_INTERACTION_MODEL, 0x01) => "IM StatusResponse",
         (PROTO_INTERACTION_MODEL, 0x02) => "IM ReadRequest",
         (PROTO_INTERACTION_MODEL, 0x05) => "IM ReportData",
+        (PROTO_INTERACTION_MODEL, 0x06) => "IM WriteRequest",
+        (PROTO_INTERACTION_MODEL, 0x07) => "IM WriteResponse",
         (PROTO_INTERACTION_MODEL, 0x08) => "IM InvokeRequest",
         (PROTO_INTERACTION_MODEL, 0x09) => "IM InvokeResponse",
         (PROTO_INTERACTION_MODEL, 0x0a) => "IM TimedRequest",
@@ -206,6 +210,8 @@ fn align_key(a: &Annotated) -> AlignKey {
             a.record.opcode,
             IM_OPCODE_READ_REQUEST
                 | IM_OPCODE_REPORT_DATA
+                | IM_OPCODE_WRITE_REQUEST
+                | IM_OPCODE_WRITE_RESPONSE
                 | IM_OPCODE_INVOKE_REQUEST
                 | IM_OPCODE_INVOKE_RESPONSE
         ) {
@@ -1744,6 +1750,48 @@ mod tests {
         format!(
             r#"{{"seq":{seq},"dir":"{dir}","session_id":{sid},"exchange":1,"protocol":{proto},"opcode":{op},"payload":"{payload}"}}"#
         )
+    }
+
+    #[test]
+    fn write_opcodes_are_named() {
+        assert_eq!(
+            opcode_name(PROTO_INTERACTION_MODEL, 0x06),
+            "IM WriteRequest"
+        );
+        assert_eq!(
+            opcode_name(PROTO_INTERACTION_MODEL, 0x07),
+            "IM WriteResponse"
+        );
+    }
+
+    #[test]
+    fn write_request_aligns_on_cluster_attribute_targets() {
+        // A WriteRequestMessage writing BasicInformation.NodeLabel (0x0028/0x0005)
+        // must align on the same (cluster, attribute) target a read would, so an
+        // extra write on one side cannot pair with a different-content message.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+        w.put_bool(Tag::Context(1), false).unwrap(); // TimedRequest
+        w.start_array(Tag::Context(2)).unwrap(); // WriteRequests
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeDataIB
+        w.start_list(Tag::Context(1)).unwrap(); // Path
+        w.put_uint(Tag::Context(2), 0).unwrap(); // endpoint
+        w.put_uint(Tag::Context(3), 0x0028).unwrap(); // cluster
+        w.put_uint(Tag::Context(4), 0x0005).unwrap(); // attribute
+        w.end_container().unwrap();
+        w.put_utf8(Tag::Context(2), "matter-rust").unwrap(); // Data
+        w.end_container().unwrap(); // AttributeDataIB
+        w.end_container().unwrap(); // WriteRequests
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        let payload = hex::encode(&buf);
+
+        let text = rec(0, "tx", 9, PROTO_INTERACTION_MODEL, 0x06, &payload);
+        let t = load_trace_str(&text).unwrap();
+        let key = align_key(&t[0]);
+        assert_eq!(key.targets, vec![(Some(0x0028), Some(0x0005))]);
     }
 
     #[test]
