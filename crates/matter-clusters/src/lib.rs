@@ -1,24 +1,64 @@
-//! Typed Matter cluster definitions.
+//! Typed Matter cluster definitions — generated from the Matter spec.
 //!
-//! This is Milestone 7 of the `matter-rust` roadmap. The crate is currently a
-//! placeholder.
+//! Per-cluster attribute / command / struct **codecs** (encode/decode to Matter
+//! TLV), feature bitflags, enums (with an `Unknown(n)` variant for
+//! forward-compatibility), and bitmaps. The cluster modules live under
+//! [`gen`]; the hand-written foundation is [`Nullable<T>`](types::Nullable)
+//! (distinct from `Option`), [`ClusterError`](error::ClusterError), and
+//! [`datatypes::SemanticTagStruct`].
 //!
-//! The cluster source-of-truth is the Matter Device Library Specification. The
-//! `xtask` codegen tool will turn those definitions into Rust types and place
-//! them in this crate.
+//! # Pipeline
 //!
-//! Initial clusters planned for the M7 release:
+//! The `gen/` modules are generated, not hand-written: a pinned `@matter/model`
+//! dump becomes the committed `xtask/model/clusters.json`, which
+//! `cargo xtask codegen` turns into the committed `src/gen/*.rs`. CI gates drift
+//! with `cargo xtask codegen --check`. **Do not edit `src/gen/` by hand** —
+//! change the emitter in `xtask/src/codegen/` and regenerate.
 //!
-//! - `BasicInformation`
-//! - `Descriptor`
-//! - `Identify`
-//! - `OnOff`
-//! - `LevelControl`
-//! - `ColorControl`
-//! - `OccupancySensing`
-//! - `TemperatureMeasurement`
-//! - `RelativeHumidityMeasurement`
-//! - `DoorLock` (limited — Aliro features deferred)
+//! Correctness: the generated codecs are **byte-parity tested against matter.js
+//! 0.16.11** (`test-vectors/clusters/`), with `proptest` roundtrips and a
+//! `cargo-fuzz` target.
+//!
+//! # Clusters
+//!
+//! BasicInformation, Descriptor, Identify, OnOff, LevelControl, ColorControl,
+//! OccupancySensing, TemperatureMeasurement, RelativeHumidityMeasurement, and
+//! DoorLock (Aliro features excluded).
+//!
+//! # Usage
+//!
+//! Codecs are free functions per attribute/command. Encoders return a standalone
+//! anonymous-tagged TLV element (ready to embed in an Interaction Model
+//! request); decoders take the attribute value bytes from a report.
+//!
+//! ```
+//! use matter_clusters::gen::{basic_information, on_off};
+//!
+//! // Command payload — embed in an InvokeRequest (see the `control_onoff` example).
+//! let _toggle = on_off::encode_toggle();
+//!
+//! // Attribute roundtrips: encode a value, decode it back.
+//! let tlv = on_off::encode_on_time(30);
+//! assert_eq!(on_off::decode_on_time(&tlv)?, 30);
+//!
+//! let tlv = basic_information::encode_node_label(&"living room".to_string());
+//! assert_eq!(basic_information::decode_node_label(&tlv)?, "living room");
+//! # Ok::<(), matter_clusters::error::ClusterError>(())
+//! ```
+//!
+//! See `crates/matter-commissioning/examples/control_onoff.rs` for an
+//! end-to-end read / toggle / write against a real device.
+//!
+//! # Scope — reading attributes beyond these clusters
+//!
+//! Typed codecs exist for these clusters' **mandatory and optional** attributes
+//! (a device may not implement a given optional attribute — it then returns
+//! `UNSUPPORTED_ATTRIBUTE`). To read attributes of clusters NOT in this set, or
+//! manufacturer-specific attributes, use the generic Interaction Model path:
+//! `matter_interaction::parse_report_data` decodes any attribute to a
+//! `(AttributePath, matter_codec::Value)` pair without a typed codec. A
+//! high-level generic + wildcard read API, and more typed clusters, arrive in
+//! later milestones.
 
 #![forbid(unsafe_code)]
 
