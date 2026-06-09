@@ -1,0 +1,16 @@
+{
+  "name": "matter-rust-capture-onoff-trace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Commissions a device with matter.js, then reads/toggles OnOff and writes BasicInformation.NodeLabel, capturing the decrypted operational wire trace as JSONL for cargo xtask trace-diff (M7.5).",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": { "capture": "node index.js" },
+  "dependencies": {
+    "@matter/general": "0.17.1",
+    "@matter/nodejs": "0.17.1",
+    "@matter/protocol": "0.17.1",
+    "@matter/types": "0.17.1",
+    "@project-chip/matter.js": "0.17.1"
+  }
+}

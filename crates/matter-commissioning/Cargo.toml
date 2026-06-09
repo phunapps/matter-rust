@@ -58,6 +58,10 @@ tracing-subscriber = { workspace = true, optional = true, features = ["registry"
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+# Example-only: the `control_onoff` example exercises the generated cluster
+# codecs over an operational session. Kept out of the main dependency graph so
+# matter-clusters' own crate independence is preserved.
+matter-clusters = { path = "../matter-clusters", version = "0.0.0" }
 hex = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
@@ -77,4 +81,8 @@ required-features = ["__test_shortcuts"]
 
 [[example]]
 name = "commission_ip"
+required-features = ["driver"]
+
+[[example]]
+name = "control_onoff"
 required-features = ["driver"]
