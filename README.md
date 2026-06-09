@@ -63,7 +63,7 @@ ends with a `cargo publish` to crates.io.
 | M4        | `matter-crypto` v0.2   | CASE / SIGMA (operational session establishment)    | ✓ done |
 | M5        | `matter-transport`     | IPv6 UDP, mDNS discovery, message framing, MRP      | ✓ done |
 | M6        | `matter-commissioning` | End-to-end commissioning of a real Matter device    | ✓ done |
-| M7        | `matter-clusters`      | Generated cluster definitions (OnOff, Level, …)     | mo 15-16 |
+| M7        | `matter-clusters`      | Generated cluster definitions (OnOff, Level, …)     | ✓ done |
 | M8        | `matter-controller`    | High-level controller API. **v1.0.**                | mo 17-18 |
 
 Features deferred past v1.0: Thread network commissioning, BLE commissioning
