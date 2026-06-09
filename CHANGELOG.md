@@ -29,7 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## xtask (tooling)
 
-### [Unreleased] — M7.4a capture-clusters, M7.3 codegen, M7.2 dump-model
+### [Unreleased] — M7.5 trace-diff write + onoff oracle, M7.4a capture-clusters, M7.3 codegen, M7.2 dump-model
+
+#### M7.5 — operational trace cross-verification tooling
+
+- `cargo xtask trace-diff` now decodes IM `WriteRequest` (0x06) /
+  `WriteResponse` (0x07): named in the verdict table and aligned on their
+  `(cluster, attribute)` target like reads, so an extra write on one side
+  cannot mis-pair.
+- `xtask/scripts/capture-onoff-trace/`: matter.js sibling of
+  `capture-commission-trace` that continues past commissioning — connects and
+  runs the same read/toggle/read + NodeLabel write/read the Rust
+  `control_onoff` example does, capturing the operational dialogue as the
+  trace-diff oracle. Same `@matter` 0.17.1 pins; operator-run (needs a device).
 
 #### M7.4a — `capture-clusters`: cluster byte-parity vectors
 
@@ -109,7 +121,19 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-commissioning
 
-### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete), M6.6.5a production CD-root ingestion
+### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete), M6.6.5a production CD-root ingestion, M7.5 control_onoff example
+
+#### M7.5 — `control_onoff` example (cluster control on a real device)
+
+- New `examples/control_onoff.rs` (behind `driver`): commissions a device, then
+  opens a **fresh operational CASE session** and drives the generated
+  `matter-clusters` codecs over `matter-interaction` framing — read
+  `OnOff.OnOff`, invoke `OnOff.Toggle`, re-read, write
+  `BasicInformation.NodeLabel`, read it back. Built on the public driver
+  primitives (`resolve_operational`, `run_case`, `secured_round_trip`) and
+  `noc::issue_noc`. `matter-clusters` is an **example-only dev-dependency**, so
+  the crate's dependency graph is unchanged. The validation artifact for M7 (see
+  `docs/runbooks/m7.5-control-onoff.md`).
 
 #### M6.6.5a — production CD signing-root ingestion (`CdSigningRoots::from_cert_der`)
 
