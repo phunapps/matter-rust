@@ -32,3 +32,25 @@ jobs:
           name: fuzz-artifacts
           path: crates/matter-codec/fuzz/artifacts/
           if-no-files-found: ignore
+
+  cluster_decoders:
+    name: cluster_decoders (5 min)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/matter-clusters/fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.12.0
+      - name: Run cluster_decoders for 5 minutes
+        working-directory: crates/matter-clusters/fuzz
+        run: cargo +nightly fuzz run cluster_decoders -- -max_total_time=300
+      - name: Upload artifacts on crash
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cluster-fuzz-artifacts
+          path: crates/matter-clusters/fuzz/artifacts/
+          if-no-files-found: ignore
