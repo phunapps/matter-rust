@@ -21,9 +21,9 @@
 //!
 //! # Clusters
 //!
-//! BasicInformation, Descriptor, Identify, OnOff, LevelControl, ColorControl,
-//! OccupancySensing, TemperatureMeasurement, RelativeHumidityMeasurement, and
-//! DoorLock (Aliro features excluded).
+//! `BasicInformation`, `Descriptor`, `Identify`, `OnOff`, `LevelControl`,
+//! `ColorControl`, `OccupancySensing`, `TemperatureMeasurement`,
+//! `RelativeHumidityMeasurement`, and `DoorLock` (Aliro features excluded).
 //!
 //! # Usage
 //!
