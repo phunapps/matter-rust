@@ -110,7 +110,22 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                 if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
                     continue;
                 }
-                match sessions.decode_inbound(&packet, Instant::now())? {
+                let decoded = match sessions.decode_inbound(&packet, Instant::now()) {
+                    Ok(d) => d,
+                    // A secured packet we cannot attribute to one of THIS
+                    // manager's sessions, or cannot decrypt, is not our
+                    // response — skip it, don't abort the exchange. Seen right
+                    // after `commission()` hands off to a fresh operational
+                    // `SessionManager`: the device keeps MRP-retransmitting its
+                    // final commissioning-session frame (addressed to the old,
+                    // now-unknown session id) into the new session's recv loop.
+                    Err(
+                        matter_transport::Error::UnknownSession(_)
+                        | matter_transport::Error::DecryptionFailed,
+                    ) => continue,
+                    Err(e) => return Err(e.into()),
+                };
+                match decoded {
                     DecodeInboundOutput::AppMessage {
                         exchange_id,
                         payload,
@@ -296,6 +311,83 @@ mod tests {
             );
             dev_io.send_to(&stray, ctrl_addr).await.unwrap();
             // Then the real secured response.
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    response,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, response);
+    }
+
+    #[tokio::test]
+    async fn secured_round_trip_skips_unknown_session_frames() {
+        // After commission() hands off to a fresh operational SessionManager,
+        // the device can keep MRP-retransmitting its final commissioning-session
+        // frame, addressed to a (now-unknown) session id the new manager never
+        // registered (observed: Tapo P110M, M7.5 validation). Such a secured
+        // frame must be skipped, not abort the round-trip.
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        // A "stale" peer whose frames are addressed to session id 99 — an id the
+        // controller's manager does not have.
+        let stale_keys = PaseSessionKeys {
+            ke: [9u8; 16],
+            i2r_key: [9u8; 16],
+            r2i_key: [9u8; 16],
+            attestation_key: [9u8; 16],
+        };
+        let mut stale = SessionManager::new();
+        let stale_sid =
+            stale.register_pase(stale_keys, SessionRole::Initiator, 99, PeerHint::default());
+
+        let request = b"req".as_slice();
+        let response = b"resp".as_slice();
+
+        let controller = secured_round_trip(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            request,
+        );
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected an application message");
+            };
+            // Straggler: a secured frame addressed to unknown session id 99.
+            let stray = stale
+                .encode_outbound(
+                    stale_sid,
+                    None,
+                    0x09,
+                    ProtocolId::INTERACTION_MODEL,
+                    b"stale",
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&stray.wire_bytes, ctrl_addr).await.unwrap();
+            // Then the real secured response on the live session.
             let out = dev
                 .encode_outbound(
                     session,
