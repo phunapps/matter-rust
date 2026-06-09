@@ -21,6 +21,16 @@
         { "id": 4, "name": "Label", "type": "string", "metatype": "string",
           "nullable": false, "optional": false, "writable": true },
         { "id": 5, "name": "Token", "type": "octstr", "metatype": "bytes",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 6, "name": "RawMode", "type": "enum8", "metatype": "enum",
+          "nullable": false, "optional": false, "writable": true },
+        { "id": 7, "name": "Caps", "type": "WideFlags", "metatype": "bitmap",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 8, "name": "Point", "type": "PointStruct", "metatype": "object",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 9, "name": "Ids", "type": "list", "entryType": "uint32", "metatype": "array",
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 10, "name": "Points", "type": "list", "entryType": "PointStruct", "metatype": "array",
           "nullable": false, "optional": false, "writable": false }
       ],
       "commands": [
@@ -38,6 +48,11 @@
               "nullable": false, "optional": false },
             { "id": 1, "name": "Reached", "type": "uint16", "metatype": "integer",
               "nullable": false, "optional": true }
+          ] },
+        { "id": 3, "name": "SetPoint", "direction": "request", "responseId": null,
+          "fields": [
+            { "id": 0, "name": "Point", "type": "PointStruct", "metatype": "object",
+              "nullable": false, "optional": false }
           ] }
       ],
       "datatypes": [
@@ -50,6 +65,16 @@
           "bits": [
             { "bit": 0, "name": "Alpha" },
             { "bit": 1, "name": "Beta" }
+          ] },
+        { "name": "WideFlags", "base": "map16", "kind": "bitmap", "description": null,
+          "bits": [
+            { "bit": 0, "name": "First" },
+            { "bit": 8, "name": "Ninth" }
+          ] },
+        { "name": "PointStruct", "base": "struct", "kind": "struct", "description": null,
+          "fields": [
+            { "id": 0, "name": "X", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false },
+            { "id": 1, "name": "Y", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false }
           ] }
       ]
     }

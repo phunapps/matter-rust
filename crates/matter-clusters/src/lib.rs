@@ -22,8 +22,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod datatypes;
 pub mod error;
 pub mod types;
+
+pub use datatypes::SemanticTagStruct;
+
+pub mod gen;
 
 #[cfg(test)]
 mod golden;
