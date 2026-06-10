@@ -1,5 +1,5 @@
 //! `MatterController` — the public entry point. A cheap, cloneable handle
-//! over the owning actor task (see [`crate::actor`]).
+//! over the owning actor task (a crate-internal `tokio` task).
 
 use std::sync::Arc;
 
@@ -56,7 +56,10 @@ impl MatterController {
         rng: Arc<dyn NocRng>,
     ) -> Result<Self, Error>
     where
-        T: AsyncDatagram + Send + 'static,
+        // `Sync` because the spawned actor future holds `&self.transport`
+        // across awaits (inside `run_case`/`secured_round_trip`); `Send` so the
+        // future can be `tokio::spawn`ed onto the multi-thread runtime.
+        T: AsyncDatagram + Send + Sync + 'static,
         D: Discovery + Send + 'static,
     {
         let state = match store.load()? {
