@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod controller;
+pub(crate) mod credentials;
 pub mod error;
 pub mod fabric;
 pub mod snapshot;
