@@ -256,9 +256,20 @@ mod tests {
     use super::*;
     use crate::fabric::FabricConfig;
     use crate::store::ControllerStore;
-    use matter_cert::MatterTime;
-    use matter_commissioning::driver::InMemoryDatagram;
-    use matter_transport::{Discovery, MatterService, QueryHandle, ServiceKind};
+    use matter_cert::{MatterTime, TrustAnchor, TrustedRoots};
+    use matter_commissioning::driver::{
+        decode_unsecured, encode_unsecured, operational_instance_name, InMemoryDatagram,
+    };
+    use matter_commissioning::{issue_noc, SystemNocRng, VerifiedCsr};
+    use matter_crypto::{
+        derive_compressed_fabric_id, derive_operational_ipk, CaseCredentials, CaseResponder,
+        RingSigner, Sigma1Outcome, Signer,
+    };
+    use matter_transport::{
+        DecodeInboundOutput, Discovery, MatterService, MrpFlags, ProtocolId, QueryHandle,
+        ServiceKind, SessionManager, SessionRole,
+    };
+    use std::time::Instant;
 
     /// A discovery that finds nothing (sufficient for the `create_fabric` test).
     struct NullDiscovery;
@@ -326,5 +337,231 @@ mod tests {
         let restored = crate::snapshot::deserialize(&bytes).expect("deserialize");
         assert_eq!(restored.fabrics.len(), 1);
         assert_eq!(restored.fabrics[0].commissioner.node_id, 1);
+    }
+
+    // --- loopback acceptance test (CaseResponder over InMemoryDatagram) ---
+
+    /// Discovery that always resolves the one operational node to `addr`.
+    struct FixedDiscovery {
+        addr: std::net::SocketAddr,
+        instance_name: String,
+    }
+    impl Discovery for FixedDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(1))
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+            vec![MatterService {
+                instance_name: self.instance_name.clone(),
+                kind: ServiceKind::Operational,
+                addresses: vec![self.addr.ip()],
+                port: self.addr.port(),
+                txt_records: std::collections::HashMap::new(),
+            }]
+        }
+    }
+
+    /// Device side: complete the CASE handshake (unsecured Sigma framing,
+    /// mirroring `matter-commissioning`'s `run_case` loopback test), then
+    /// answer `echoes` secured IM round-trips with a `b"pong"` `ReportData`.
+    async fn run_loopback_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        echoes: usize,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+
+        // Sigma1 -> Sigma2
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31, // Sigma2
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+
+        // Sigma3 -> success StatusReport, then absorb the controller's ack.
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes()); // general code: success
+        body.extend_from_slice(&0u32.to_le_bytes()); // protocol id
+        body.extend_from_slice(&0u16.to_le_bytes()); // protocol code
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40, // StatusReport
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap(); // controller's standalone ack
+
+        let output = responder.finish().unwrap();
+
+        // Secured IM echo: register the session, then reply to each request.
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+        for _ in 0..echoes {
+            let (wire, _) = io.recv_from().await.unwrap();
+            let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } = decoded else {
+                panic!("expected an IM request app message");
+            };
+            // Reply on the same exchange; this piggybacks the ack for the
+            // controller's reliable request. The reply itself is unreliable so
+            // the device need not await an ack back.
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05, // ReportData
+                    ProtocolId::INTERACTION_MODEL,
+                    b"pong",
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn connects_caches_and_round_trips_over_loopback() {
+        // One fabric; the controller authenticates as its commissioner identity,
+        // the device gets its own NOC under the same RCAC.
+        let fabric = {
+            let cfg = FabricConfig {
+                fabric_id: 0x0102_0304_0506_0708,
+                rcac_id: 1,
+                commissioner_node_id: 1,
+                validity: (
+                    MatterTime::from_unix_secs(1_700_000_000),
+                    MatterTime::NO_EXPIRY,
+                ),
+            };
+            crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
+        };
+        let device_node_id: u64 = 0x0000_0000_0000_0042;
+
+        // Device credentials: NOC for `device_node_id` signed by the fabric RCAC.
+        let device_record = fabric.to_fabric_record().unwrap();
+        let (device_signer, _pkcs8) = RingSigner::generate().unwrap();
+        let device_noc = issue_noc(
+            &device_record,
+            &VerifiedCsr {
+                public_key: device_signer.public_key().clone(),
+            },
+            device_node_id,
+            &[],
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+        let compressed =
+            derive_compressed_fabric_id(fabric.rcac_cert.public_key().as_bytes(), fabric.fabric_id)
+                .unwrap();
+        let device_ipk = derive_operational_ipk(&fabric.ipk, &compressed).unwrap();
+        let mut device_roots = TrustedRoots::new();
+        device_roots.add(TrustAnchor::from_root_cert(&fabric.rcac_cert));
+        let device_creds = CaseCredentials {
+            noc: device_noc,
+            icac: None,
+            signer: Box::new(device_signer),
+            fabric_id: fabric.fabric_id,
+            node_id: device_node_id,
+            ipk: device_ipk,
+            rcac_public_key: *fabric.rcac_cert.public_key().as_bytes(),
+        };
+
+        // Seed the store with the fabric, then open the controller over the
+        // controller end of the datagram pair + a discovery pinned to the
+        // device end.
+        let store = Arc::new(MemStore::default());
+        store
+            .save(
+                &crate::snapshot::serialize(&ControllerState {
+                    fabrics: vec![fabric],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let ctrl_addr = ctrl_io.local_addr();
+        let dev_addr = dev_io.local_addr();
+        let discovery = FixedDiscovery {
+            addr: dev_addr,
+            instance_name: operational_instance_name(compressed, device_node_id),
+        };
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            2,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+        )
+        .expect("open");
+
+        // First round-trip establishes + caches the session.
+        let node = controller.node(device_node_id);
+        let resp1 = node
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("first round-trip");
+        assert_eq!(resp1, b"pong");
+        assert_eq!(controller.session_count().await, 1, "session cached");
+
+        // Second round-trip reuses the cached session (no new handshake).
+        let resp2 = node
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("second round-trip");
+        assert_eq!(resp2, b"pong");
+        assert_eq!(
+            controller.session_count().await,
+            1,
+            "still one session — reused, not re-established"
+        );
+
+        device.await.unwrap();
     }
 }
