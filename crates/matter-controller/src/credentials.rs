@@ -19,8 +19,6 @@ use crate::state::FabricEntry;
 /// Returns [`Error::Signer`] if the commissioner key cannot be
 /// reconstructed, or [`Error::Operational`] if IPK / compressed-fabric-id
 /// derivation fails.
-// Called by the actor (Task 4); suppress dead-code until that module lands.
-#[allow(dead_code)]
 pub(crate) fn operational_credentials(
     fabric: &FabricEntry,
 ) -> Result<(CaseCredentials, TrustedRoots, [u8; 8]), Error> {
