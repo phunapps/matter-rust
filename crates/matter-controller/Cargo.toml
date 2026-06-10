@@ -23,3 +23,6 @@ matter-transport = { path = "../matter-transport", version = "0.1.0-pre" }
 matter-commissioning = { path = "../matter-commissioning", version = "0.0.0" }
 matter-clusters = { path = "../matter-clusters", version = "0.0.0" }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
