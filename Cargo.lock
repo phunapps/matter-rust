@@ -783,6 +783,7 @@ dependencies = [
  "matter-transport",
  "proptest",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

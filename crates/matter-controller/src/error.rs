@@ -32,4 +32,20 @@ pub enum Error {
     /// The persisted snapshot was structurally invalid or an unknown version.
     #[error("malformed snapshot: {0}")]
     Snapshot(String),
+
+    /// CASE session establishment failed, or a driver operation errored.
+    #[error("driver error: {0}")]
+    Driver(#[from] matter_commissioning::driver::DriverError),
+
+    /// No fabric exists, or the requested node/fabric is not addressable.
+    #[error("not commissioned: {0}")]
+    NotCommissioned(String),
+
+    /// The owning controller task has stopped (channel closed).
+    #[error("controller task is no longer running")]
+    ControllerStopped,
+
+    /// A cryptographic derivation (operational IPK / compressed fabric id) failed.
+    #[error("operational key derivation failed: {0}")]
+    Operational(String),
 }
