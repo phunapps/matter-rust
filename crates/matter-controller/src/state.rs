@@ -10,7 +10,7 @@ use matter_crypto::{RingSigner, Signer};
 use crate::error::Error;
 
 /// A device commissioned onto a fabric.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeviceEntry {
     /// The device's operational node ID on this fabric.
     pub node_id: u64,
@@ -20,6 +20,27 @@ pub struct DeviceEntry {
     pub resumption_record: Option<Vec<u8>>,
     /// Last operational address we reached the device at (a discovery hint).
     pub last_known_addr: Option<String>,
+}
+
+impl std::fmt::Debug for DeviceEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `resumption_record` is a serialized CASE ResumptionRecord and carries
+        // a session shared secret — redact it (matches the redaction discipline
+        // in `FabricEntry`/`CommissionerIdentity`). `peer_noc_public_key` and
+        // `last_known_addr` are not secret.
+        f.debug_struct("DeviceEntry")
+            .field("node_id", &self.node_id)
+            .field("peer_noc_public_key", &self.peer_noc_public_key)
+            .field(
+                "resumption_record",
+                &self
+                    .resumption_record
+                    .as_ref()
+                    .map(|_| "<redacted; CASE secret>"),
+            )
+            .field("last_known_addr", &self.last_known_addr)
+            .finish()
+    }
 }
 
 /// The controller's own stable operational identity on a fabric.

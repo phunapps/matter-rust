@@ -291,4 +291,63 @@ mod tests {
         let err = deserialize(&out).expect_err("must reject");
         assert!(matches!(err, Error::Snapshot(_)));
     }
+
+    // --- property-based round-trip (CLAUDE.md: encoders get a proptest) ---
+
+    use proptest::prelude::*;
+    use std::sync::OnceLock;
+
+    /// Mint one real fabric and reuse it across all proptest cases — key
+    /// generation is expensive, but cloning a `FabricEntry` is cheap.
+    fn shared_fabric() -> &'static FabricEntry {
+        static FABRIC: OnceLock<FabricEntry> = OnceLock::new();
+        FABRIC.get_or_init(|| {
+            let cfg = FabricConfig {
+                fabric_id: 0x0102_0304_0506_0708,
+                rcac_id: 1,
+                commissioner_node_id: 0x0000_0000_0000_0001,
+                validity: (
+                    MatterTime::from_unix_secs(1_700_000_000),
+                    MatterTime::NO_EXPIRY,
+                ),
+            };
+            create_fabric(&cfg, &SystemNocRng).expect("mint shared fabric")
+        })
+    }
+
+    prop_compose! {
+        fn arb_device()(
+            node_id in any::<u64>(),
+            pk in prop::collection::vec(any::<u8>(), 65),
+            rr in prop::option::of(prop::collection::vec(any::<u8>(), 0..40)),
+            addr in prop::option::of("[ -~]{0,32}"),
+        ) -> DeviceEntry {
+            let mut peer_noc_public_key = [0u8; 65];
+            peer_noc_public_key.copy_from_slice(&pk);
+            DeviceEntry { node_id, peer_noc_public_key, resumption_record: rr, last_known_addr: addr }
+        }
+    }
+
+    proptest! {
+        /// `deserialize(serialize(state)) == state` for arbitrary device lists.
+        #[test]
+        fn snapshot_round_trips(devices in prop::collection::vec(arb_device(), 0..6)) {
+            let mut fabric = shared_fabric().clone();
+            fabric.devices = devices.clone();
+            let state = ControllerState { fabrics: vec![fabric] };
+
+            let bytes = serialize(&state).expect("serialize");
+            let back = deserialize(&bytes).expect("deserialize");
+
+            prop_assert_eq!(back.fabrics.len(), 1);
+            let dev_back = &back.fabrics[0].devices;
+            prop_assert_eq!(dev_back.len(), devices.len());
+            for (a, b) in devices.iter().zip(dev_back.iter()) {
+                prop_assert_eq!(a.node_id, b.node_id);
+                prop_assert_eq!(a.peer_noc_public_key, b.peer_noc_public_key);
+                prop_assert_eq!(&a.resumption_record, &b.resumption_record);
+                prop_assert_eq!(&a.last_known_addr, &b.last_known_addr);
+            }
+        }
+    }
 }
