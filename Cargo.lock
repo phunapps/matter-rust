@@ -781,6 +781,7 @@ dependencies = [
  "matter-commissioning",
  "matter-crypto",
  "matter-transport",
+ "proptest",
  "thiserror",
 ]
 
