@@ -51,6 +51,7 @@ impl ControllerStore for FileStore {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md allows unwrap/expect with justification.
 mod tests {
     use super::*;
 
