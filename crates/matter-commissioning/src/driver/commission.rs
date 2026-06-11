@@ -1286,7 +1286,10 @@ mod tests {
     fn extract_read_payload_missing_feature_map_returns_error() {
         use crate::Expectation;
 
-        let report = crate::im::ReportData { attributes: vec![], subscription_id: None };
+        let report = crate::im::ReportData {
+            attributes: vec![],
+            subscription_id: None,
+        };
         let err = extract_read_payload(Expectation::NetworkCommissioningInfo, &report)
             .expect_err("missing attribute should fail");
         assert!(
@@ -1300,7 +1303,10 @@ mod tests {
     fn extract_read_payload_non_read_expectation_returns_error() {
         use crate::Expectation;
 
-        let report = crate::im::ReportData { attributes: vec![], subscription_id: None };
+        let report = crate::im::ReportData {
+            attributes: vec![],
+            subscription_id: None,
+        };
         let err = extract_read_payload(Expectation::ArmFailsafeResponse, &report)
             .expect_err("non-read expectation should fail");
         assert!(

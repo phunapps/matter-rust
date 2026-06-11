@@ -884,6 +884,129 @@ mod tests {
         }
     }
 
+    /// Build a `SubscribeResponse` TLV (device side): ctx0=subscriptionId,
+    /// ctx2=maxInterval, ctx0xFF=revision — matching `parse_subscribe_response`.
+    fn build_subscribe_response(subscription_id: u32, max_interval: u16) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(subscription_id))
+            .unwrap();
+        w.put_uint(Tag::Context(2), u64::from(max_interval))
+            .unwrap();
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// Device acting as a subscription source: completes CASE, answers a
+    /// `SubscribeRequest` with a `SubscribeResponse`, then sends `num_reports`
+    /// steady-state `ReportData` frames (OnOff.OnOff(ep1)=true) on the
+    /// subscription exchange.
+    async fn run_subscription_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        num_reports: usize,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        // Sigma1 -> Sigma2
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        // Sigma3 -> success StatusReport, absorb the ack.
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        // Receive the SubscribeRequest; reply with SubscribeResponse (the
+        // reply piggybacks the request's MRP ack).
+        let (wire, _) = io.recv_from().await.unwrap();
+        let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id,
+            opcode,
+            ..
+        } = decoded
+        else {
+            panic!("expected SubscribeRequest");
+        };
+        assert_eq!(opcode, 0x03, "expected SubscribeRequest opcode");
+        let sub_resp = build_subscribe_response(0x1234_5678, 30);
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x04,
+                ProtocolId::INTERACTION_MODEL,
+                &sub_resp,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        // Stream steady-state reports on the same exchange; drain the
+        // controller's StatusResponse acks between sends.
+        let report_blob = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        for _ in 0..num_reports {
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &report_blob,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
+        }
+    }
+
     /// Shared loopback setup: one fabric in the store, a device NOC under its
     /// RCAC, a paired datagram, and a discovery pinned to the device end.
     struct Harness {
@@ -1080,5 +1203,59 @@ mod tests {
         assert_eq!(*value, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscribe_streams_reports_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_subscription_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            3,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let mut sub = node
+            .subscribe(
+                &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                1,
+                30,
+            )
+            .await
+            .expect("subscribe");
+
+        // The device streams 3 steady-state reports; the consumer receives them.
+        for _ in 0..3 {
+            let report = sub.next().await.expect("subscription report");
+            assert_eq!(report.path.endpoint, 1);
+            assert_eq!(report.path.cluster, 0x06);
+            assert_eq!(report.value, matter_codec::Value::Bool(true));
+        }
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
     }
 }
