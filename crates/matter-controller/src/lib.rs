@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod actor;
+pub mod builder;
 pub mod controller;
 pub(crate) mod credentials;
 pub mod error;
@@ -15,10 +16,13 @@ pub mod node;
 pub mod snapshot;
 pub mod state;
 pub mod store;
+pub mod trust;
 
+pub use builder::MatterControllerBuilder;
 pub use controller::MatterController;
 pub use error::Error;
 pub use fabric::{create_fabric, FabricConfig};
 pub use node::Node;
 pub use state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
 pub use store::{ControllerStore, FileStore, StoreError};
+pub use trust::AttestationTrust;
