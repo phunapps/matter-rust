@@ -130,3 +130,17 @@ pub(crate) fn attribute_path_from_value(
         attribute: attribute.ok_or(ImError::MissingField("AttributePath.attribute"))?,
     })
 }
+
+/// Like [`attribute_path_from_value`], but also reports whether the path
+/// carried a `ListIndex` (context tag 5) equal to `null`, which in a
+/// `ReportData` signals a list **append** (Matter §10.6.4). Returns
+/// `(path, list_index_is_null_append)`.
+pub(crate) fn attribute_path_and_append_from_value(
+    members: &[(Tag, Value)],
+) -> Result<(AttributePath, bool), ImError> {
+    let path = attribute_path_from_value(members)?;
+    let append = members
+        .iter()
+        .any(|(tag, v)| matches!(tag, Tag::Context(5)) && matches!(v, Value::Null));
+    Ok((path, append))
+}
