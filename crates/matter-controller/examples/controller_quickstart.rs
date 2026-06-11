@@ -83,12 +83,21 @@ async fn main() -> Result<()> {
         .context("opening controller")?;
 
     if fresh {
+        // RCAC / commissioner-NOC validity: a real `notBefore` (backdated an hour
+        // to tolerate device clock skew), no expiry. A zero `notBefore` (the
+        // Matter 2000 epoch) trips a cert-encoding edge that devices reject.
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1_700_000_000, |d| d.as_secs());
         controller
             .create_fabric(FabricConfig {
                 fabric_id: 1,
                 rcac_id: 1,
                 commissioner_node_id: 1,
-                validity: (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
+                validity: (
+                    MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
+                    MatterTime::NO_EXPIRY,
+                ),
             })
             .await
             .context("creating fabric")?;
