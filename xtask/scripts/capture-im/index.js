@@ -22,7 +22,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TlvString, TlvUInt16, TlvUInt64, TlvObject, TlvField } from '@matter/types';
+import { TlvString, TlvUInt16, TlvUInt32, TlvUInt64, TlvObject, TlvField, TlvArray } from '@matter/types';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -349,6 +349,72 @@ writeFixture('subscribe', 'report_data_subscribed.json', {
         }],
         interactionModelRevision: 11,
     })),
+});
+
+// ---------------------------------------------------------------------
+// CHUNKED ReportData fixtures (CR.1) — written under report/.
+// matter.js TlvDataReport: subscriptionId[0], attributeReports[1],
+// eventReports[2], moreChunkedMessages[3], suppressResponse[4], imRev[0xFF].
+// ---------------------------------------------------------------------
+
+// Message-level chunking: a non-final chunk (moreChunkedMessages=true)
+// carrying ep0/BasicInformation.VendorID, then a final chunk carrying
+// ep1/OnOff.OnOff. Reassembly must yield BOTH attributes.
+const chunkA = TlvDataReport.encode({
+    attributeReports: [{
+        attributeData: {
+            path: { endpointId: 0, clusterId: 0x28, attributeId: 0x0002 },
+            data: TlvUInt16.encodeTlv(0x1392), // VendorID = 5010
+        },
+    }],
+    moreChunkedMessages: true,
+    interactionModelRevision: 11,
+});
+const chunkB = TlvDataReport.encode({
+    attributeReports: [{
+        attributeData: {
+            path: { endpointId: 1, clusterId: 0x06, attributeId: 0x0000 },
+            data: TlvBoolean.encodeTlv(true), // OnOff = true
+        },
+    }],
+    suppressResponse: true,
+    interactionModelRevision: 11,
+});
+writeFixture('report', 'report_data_chunked_message.json', {
+    chunks_b64: [b64(chunkA), b64(chunkB)],
+    expected: [
+        { endpoint: 0, cluster: 0x28, attribute: 0x0002 },
+        { endpoint: 1, cluster: 0x06, attribute: 0x0000 },
+    ],
+});
+
+// List-level chunking: a single list attribute split across chunks. Chunk 1
+// replaces the list with empty ([] array data); chunk 2 appends an element via
+// path.listIndex = null. Target: ep0/Descriptor.PartsList (0x1d / 0x0003).
+const listReplace = TlvDataReport.encode({
+    attributeReports: [{
+        attributeData: {
+            path: { endpointId: 0, clusterId: 0x1d, attributeId: 0x0003 },
+            data: TlvArray(TlvUInt32).encodeTlv([]), // replace with empty list
+        },
+    }],
+    moreChunkedMessages: true,
+    interactionModelRevision: 11,
+});
+const listAppend1 = TlvDataReport.encode({
+    attributeReports: [{
+        attributeData: {
+            path: { endpointId: 0, clusterId: 0x1d, attributeId: 0x0003, listIndex: null },
+            data: TlvUInt32.encodeTlv(1),
+        },
+    }],
+    suppressResponse: true,
+    interactionModelRevision: 11,
+});
+writeFixture('report', 'report_data_chunked_list.json', {
+    chunks_b64: [b64(listReplace), b64(listAppend1)],
+    expected_path: { endpoint: 0, cluster: 0x1d, attribute: 0x0003 },
+    expected_list: [1],
 });
 
 console.log('capture-im: all fixtures written.');
