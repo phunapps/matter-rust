@@ -36,6 +36,63 @@ pub struct AttributePath {
     pub attribute: u32,
 }
 
+/// A read-request attribute path with optional (wildcard) components. A `None`
+/// field is **omitted** from the encoded `AttributePathIB`, which the Matter IM
+/// interprets as a wildcard (Appendix A.6): omit `attribute` → all attributes of
+/// the cluster; omit `endpoint` → all endpoints; etc. Responses are always keyed
+/// by a concrete [`AttributePath`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct ReadPath {
+    /// Endpoint, or `None` for all endpoints.
+    pub endpoint: Option<u16>,
+    /// Cluster, or `None` for all clusters.
+    pub cluster: Option<u32>,
+    /// Attribute, or `None` for all attributes.
+    pub attribute: Option<u32>,
+}
+
+impl ReadPath {
+    /// A concrete `(endpoint, cluster, attribute)` path (no wildcards).
+    #[must_use]
+    pub fn concrete(endpoint: u16, cluster: u32, attribute: u32) -> Self {
+        Self {
+            endpoint: Some(endpoint),
+            cluster: Some(cluster),
+            attribute: Some(attribute),
+        }
+    }
+
+    /// All attributes of `cluster` on `endpoint`.
+    #[must_use]
+    pub fn cluster(endpoint: u16, cluster: u32) -> Self {
+        Self {
+            endpoint: Some(endpoint),
+            cluster: Some(cluster),
+            attribute: None,
+        }
+    }
+
+    /// Every attribute on every endpoint/cluster (full wildcard).
+    #[must_use]
+    pub fn all() -> Self {
+        Self {
+            endpoint: None,
+            cluster: None,
+            attribute: None,
+        }
+    }
+}
+
+impl From<AttributePath> for ReadPath {
+    fn from(p: AttributePath) -> Self {
+        Self {
+            endpoint: Some(p.endpoint),
+            cluster: Some(p.cluster),
+            attribute: Some(p.attribute),
+        }
+    }
+}
+
 /// Read an `AttributePathIB` list (`Value::List` members) into an
 /// [`AttributePath`]. Out-of-range values surface as
 /// [`ImError::UnexpectedValue`] (not as a missing field).

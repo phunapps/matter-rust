@@ -20,7 +20,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
 use matter_interaction::invoke::build_invoke_request;
 use matter_interaction::path::AttributePath;
-use matter_interaction::read::build_read_request;
+use matter_interaction::read::build_read_request_paths;
 use matter_interaction::CommandPath;
 use serde::Deserialize;
 use std::{fs, path::PathBuf};
@@ -67,9 +67,9 @@ struct ReadFixture {
 
 #[derive(Deserialize)]
 struct ReadPathFixture {
-    endpoint: u16,
-    cluster: u32,
-    attribute: u32,
+    endpoint: Option<u16>,
+    cluster: Option<u32>,
+    attribute: Option<u32>,
 }
 
 #[test]
@@ -118,16 +118,16 @@ fn read_request_matches_matter_js() {
                 continue;
             }
         };
-        let our_paths: Vec<AttributePath> = f
+        let our_paths: Vec<matter_interaction::ReadPath> = f
             .paths
             .iter()
-            .map(|p| AttributePath {
+            .map(|p| matter_interaction::ReadPath {
                 endpoint: p.endpoint,
                 cluster: p.cluster,
                 attribute: p.attribute,
             })
             .collect();
-        let ours = build_read_request(&our_paths);
+        let ours = build_read_request_paths(&our_paths);
         let theirs = B64.decode(&f.expected_message_b64).unwrap();
         assert_eq!(ours, theirs, "ReadRequest mismatch for {path:?}");
     }

@@ -27,8 +27,8 @@ pub mod write;
 
 pub use error::ImError;
 pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
-pub use path::{AttributePath, CommandPath};
-pub use read::{build_read_request, parse_report_data, ReportData};
+pub use path::{AttributePath, CommandPath, ReadPath};
+pub use read::{build_read_request, build_read_request_paths, parse_report_data, ReportData};
 pub use status::ImStatus;
 pub use write::{build_write_request, parse_write_response, AttributeWriteRequest};
 
