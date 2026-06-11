@@ -309,17 +309,30 @@ pub struct DriverConfig<'a> {
 }
 
 /// Browse `_matterc._udp` commissionable records and return the socket address
-/// of the first device whose `D` TXT record matches `discriminator`.
+/// of the device matching `discriminator`.
 ///
-/// The long (12-bit) discriminator is advertised as a decimal string in the
-/// `D` TXT key (Matter Core Spec §5.4.7.4). This function queries for
-/// commissionable services and returns the first that advertises the matching
-/// discriminator, with a bounded poll loop identical in structure to
-/// `resolve_operational` in `case.rs`.
+/// The device advertises its **long** (12-bit) discriminator as a decimal string
+/// in the `D` TXT key (Matter Core Spec §5.4.7.4). `discriminator` may be either:
+///
+/// - a **long** discriminator (from a QR code), matched exactly; or
+/// - a **short** (4-bit) discriminator from a manual pairing code, which Matter
+///   packs into the upper 4 bits and zero-extends — i.e. `short << 8`. A manual
+///   code does not carry the lower 8 bits, so it cannot match the advertised `D`
+///   exactly; per the Matter discovery model (and connectedhomeip's
+///   `kShortDiscriminator` filter) it is matched against the **upper 4 bits** of
+///   the advertised long discriminator (`advertised >> 8 == short`).
+///
+/// To handle both without a separate flag, each poll round prefers an **exact**
+/// long match and only falls back to the short (upper-4-bit) match — a value
+/// that came from a manual code never matches a device's full `D` exactly, so it
+/// deterministically takes the short path, while a QR's long discriminator
+/// exact-matches its device. Short discriminators are only 4 bits, so the
+/// fallback is inherently ambiguous if multiple devices are commissionable with
+/// the same upper nibble (the same limitation chip carries).
 ///
 /// FLAGGED: takes the first advertised address from `addresses[0]`. Link-local
 /// `fe80::` addresses need an interface scope-id that [`matter_transport::MatterService`]
-/// does not carry — dialing those is deferred to M6.6.5.
+/// does not carry.
 ///
 /// # Errors
 ///
@@ -330,26 +343,48 @@ pub async fn resolve_commissionable<D: Discovery>(
     discovery: &mut D,
     discriminator: u16,
 ) -> Result<SocketAddr, DriverError> {
+    let short = ((discriminator >> 8) & 0x0F) as u8;
     let handle = discovery
         .query(ServiceKind::Commissionable)
         .map_err(DriverError::Transport)?;
 
+    // A device advertises `CM=1`/`2` while a commissioning window is open and
+    // `CM=0` once it closes. Skip closed windows so a stale advertisement is not
+    // matched (which would then fail PASE). Absent `CM` is treated as open.
+    let window_open =
+        |svc: &matter_transport::MatterService| svc.txt_records.get("CM").is_none_or(|v| v != "0");
+
     for _ in 0..RESOLVE_POLL_ATTEMPTS {
-        for svc in discovery.poll_results(handle) {
-            if let Some(d_str) = svc.txt_records.get("D") {
-                if d_str.parse::<u16>().ok() == Some(discriminator) {
-                    if let Some(addr) = svc.addresses.first() {
+        let results = discovery.poll_results(handle);
+
+        // Prefer an exact long-discriminator match (QR codes).
+        for svc in results.iter().filter(|s| window_open(s)) {
+            if svc.txt_records.get("D").and_then(|d| d.parse::<u16>().ok()) == Some(discriminator) {
+                if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
+                    discovery.stop_query(handle);
+                    return Ok(SocketAddr::new(addr, svc.port));
+                }
+            }
+        }
+
+        // Fall back to the upper-4-bit short discriminator (manual codes).
+        for svc in results.iter().filter(|s| window_open(s)) {
+            let advertised = svc.txt_records.get("D").and_then(|d| d.parse::<u16>().ok());
+            if let Some(adv) = advertised {
+                if ((adv >> 8) & 0x0F) as u8 == short {
+                    if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
                         discovery.stop_query(handle);
-                        return Ok(SocketAddr::new(*addr, svc.port));
+                        return Ok(SocketAddr::new(addr, svc.port));
                     }
                 }
             }
         }
+
         tokio::time::sleep(RESOLVE_POLL_INTERVAL).await;
     }
     discovery.stop_query(handle);
     Err(DriverError::Discovery(format!(
-        "commissionable device with discriminator {discriminator} not found via mDNS"
+        "commissionable device with discriminator {discriminator} (short {short:#x}) not found via mDNS"
     )))
 }
 
@@ -974,6 +1009,35 @@ mod tests {
         assert_eq!(
             addr,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42)), 5540)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_commissionable_matches_short_discriminator_from_manual_code() {
+        // A device advertises its full long discriminator (0x4B4 = 1204 — the
+        // real Tapo P110M value), but a manual pairing code only carries the
+        // short discriminator 0x4, packed as `short << 8` = 0x400 = 1024. The
+        // exact long match fails; the upper-4-bit short match (0x4B4 >> 8 == 0x4)
+        // succeeds — the connectedhomeip `kShortDiscriminator` behaviour.
+        const DEVICE_LONG: u16 = 0x4B4;
+        const MANUAL_SHORT_PACKED: u16 = 0x0400;
+        let mut txt = HashMap::new();
+        txt.insert("D".to_string(), DEVICE_LONG.to_string());
+        let mut disc = FakeDiscovery {
+            service: MatterService {
+                instance_name: "3C64CF0B1D42".to_string(),
+                kind: ServiceKind::Commissionable,
+                addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248))],
+                port: 5540,
+                txt_records: txt,
+            },
+        };
+        let addr = resolve_commissionable(&mut disc, MANUAL_SHORT_PACKED)
+            .await
+            .unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248)), 5540)
         );
     }
 
