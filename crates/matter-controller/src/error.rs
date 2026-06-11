@@ -37,6 +37,10 @@ pub enum Error {
     #[error("driver error: {0}")]
     Driver(#[from] matter_commissioning::driver::DriverError),
 
+    /// A transport / session-manager (framing, MRP) operation failed.
+    #[error("transport error: {0}")]
+    Transport(#[from] matter_transport::Error),
+
     /// No fabric exists, or the requested node/fabric is not addressable.
     #[error("not commissioned: {0}")]
     NotCommissioned(String),

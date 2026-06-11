@@ -17,6 +17,7 @@ pub mod node;
 pub mod snapshot;
 pub mod state;
 pub mod store;
+pub mod subscription;
 pub mod trust;
 
 pub use builder::MatterControllerBuilder;
@@ -28,4 +29,5 @@ pub use matter_interaction::{AttributePath, CommandPath, ImStatus, ReadPath};
 pub use node::{InvokeResult, Node};
 pub use state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
 pub use store::{ControllerStore, FileStore, StoreError};
+pub use subscription::{AttributeReport, Subscription};
 pub use trust::AttestationTrust;
