@@ -34,6 +34,11 @@ pub(crate) enum Command {
         payload: Vec<u8>,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
+    /// Commission a device from a parsed setup payload; returns its node id.
+    Commission {
+        setup_payload: matter_commissioning::SetupPayload,
+        reply: oneshot::Sender<Result<u64, Error>>,
+    },
     /// Test/diagnostic: how many live cached sessions exist.
     #[cfg(test)]
     SessionCount { reply: oneshot::Sender<usize> },
@@ -55,10 +60,7 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     rng: Arc<dyn NocRng>,
     state: ControllerState,
     cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
-    // Held for Task 5 (handle_commission). Clippy dead_code fires until then.
-    #[allow(dead_code)]
     trust: Option<crate::trust::AttestationTrust>,
-    #[allow(dead_code)]
     admin_vendor_id: u16,
 }
 
@@ -104,6 +106,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             .await,
                     );
                 }
+                Command::Commission {
+                    setup_payload,
+                    reply,
+                } => {
+                    let _ = reply.send(self.handle_commission(setup_payload).await);
+                }
                 #[cfg(test)]
                 Command::SessionCount { reply } => {
                     let _ = reply.send(self.cache.len());
@@ -118,6 +126,88 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.state.fabrics.push(entry);
         self.persist()?;
         Ok(fabric_id)
+    }
+
+    /// Commission a device onto the sole fabric and persist a `DeviceEntry`.
+    async fn handle_commission(
+        &mut self,
+        setup_payload: matter_commissioning::SetupPayload,
+    ) -> Result<u64, Error> {
+        use matter_commissioning::driver::{commission, DriverConfig};
+        use matter_commissioning::CommissionerConfig;
+
+        // Bind trust + admin_vendor_id from disjoint fields before the borrow
+        // of self.sole_fabric() below. Binding them here keeps the lifetimes
+        // clean: `trust` borrows only `self.trust`, which is disjoint from
+        // `self.transport` and `self.discovery` used in commission().
+        let trust = self.trust.as_ref().ok_or(Error::NoTrust)?;
+        let admin_vendor_id = self.admin_vendor_id;
+
+        // Snapshot what we need from the sole fabric into owned locals so we
+        // don't hold a borrow of `self` across the commission() call (which
+        // needs `&self.transport` + `&mut self.discovery`).
+        let (
+            fabric_record,
+            fabric_id,
+            commissioner_node_id,
+            ipk_epoch_key,
+            commissioner_noc,
+            commissioner_pkcs8,
+            assigned_node_id,
+        ) = {
+            let fabric = self.sole_fabric()?;
+            (
+                fabric.to_fabric_record()?,
+                fabric.fabric_id,
+                fabric.commissioner.node_id,
+                fabric.ipk,
+                fabric.commissioner.noc.clone(),
+                fabric.commissioner.operational_pkcs8.clone(),
+                crate::commission::next_device_node_id(fabric),
+            )
+        };
+
+        let now = current_matter_time()?;
+        let rng: std::sync::Arc<dyn matter_commissioning::NocRng> = self.rng.clone();
+
+        let commissioner = CommissionerConfig {
+            pase_attestation_challenge: [0u8; 16], // commission() overwrites from live PASE
+            fabric: &fabric_record,
+            setup_payload: &setup_payload,
+            paa_trust_store: &trust.paa,
+            cd_signing_roots: &trust.cd,
+            commissioner_node_id,
+            assigned_node_id,
+            ipk_epoch_key,
+            case_admin_subject: commissioner_node_id,
+            admin_vendor_id,
+            now,
+            rng,
+            wifi_credentials: None,
+        };
+        let config = DriverConfig {
+            commissioner,
+            commissionable_addr: None, // discover via mDNS using the discriminator
+            passcode: setup_payload.passcode.as_u32(),
+            commissioner_noc: &commissioner_noc,
+            commissioner_signer_pkcs8: &commissioner_pkcs8,
+        };
+
+        let result = commission(&self.transport, &mut self.discovery, config).await?;
+
+        // Persist the device.
+        let device = crate::commission::device_entry_from_commissioned(&result);
+        let node_id = device.node_id;
+        if let Some(fabric) = self
+            .state
+            .fabrics
+            .iter_mut()
+            .find(|f| f.fabric_id == fabric_id)
+        {
+            fabric.devices.push(device);
+        }
+        self.persist()?;
+        Ok(node_id)
     }
 
     fn persist(&self) -> Result<(), Error> {
@@ -257,6 +347,21 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         .await?;
         Ok(resp.payload)
     }
+}
+
+/// Convert the current wall-clock time to a [`matter_cert::MatterTime`] for use
+/// in `CommissionerConfig.now`.
+///
+/// # Errors
+///
+/// Returns [`Error::Operational`] if the system clock is before the Unix epoch
+/// (extremely unlikely in practice).
+fn current_matter_time() -> Result<matter_cert::MatterTime, Error> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| Error::Operational(format!("clock: {e}")))?
+        .as_secs();
+    Ok(matter_cert::MatterTime::from_unix_secs(secs))
 }
 
 #[cfg(test)]

@@ -16,10 +16,7 @@ use crate::error::Error;
 /// The trust anchors used to verify a device during commissioning.
 #[derive(Debug)]
 pub struct AttestationTrust {
-    // Used in Task 5 handle_commission; dead_code fires until then.
-    #[allow(dead_code)]
     pub(crate) paa: PaaTrustStore,
-    #[allow(dead_code)]
     pub(crate) cd: CdSigningRoots,
 }
 

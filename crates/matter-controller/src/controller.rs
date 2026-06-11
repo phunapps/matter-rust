@@ -121,6 +121,27 @@ impl MatterController {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
+    /// Commission a device from a QR (`MT:...`) or manual pairing code, bring it
+    /// onto the controller's fabric, and persist it. Returns the device's node id.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTrust`] if no attestation trust was configured,
+    /// [`Error::SetupCode`] if the code is invalid, [`Error::ControllerStopped`]
+    /// if the task stopped, or any driver/commissioning error.
+    pub async fn commission(&self, setup_code: &str) -> Result<u64, Error> {
+        let setup_payload = parse_setup_code(setup_code)?;
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Commission {
+                setup_payload,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Handle addressing a device by node id (single-fabric in M8.2).
     #[must_use]
     pub fn node(&self, node_id: u64) -> Node {
@@ -131,7 +152,6 @@ impl MatterController {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)] // Used in Task 5 loopback test; allow until then.
     pub(crate) async fn session_count(&self) -> usize {
         let (reply, rx) = oneshot::channel();
         if self.tx.send(Command::SessionCount { reply }).await.is_err() {
@@ -139,4 +159,22 @@ impl MatterController {
         }
         rx.await.unwrap_or(0)
     }
+}
+
+/// Parse a QR (`MT:...`) or manual pairing code into a [`matter_commissioning::SetupPayload`].
+///
+/// QR codes are identified by the `MT:` prefix (Matter Core Spec §5.1.3.1).
+/// Anything else is treated as a manual pairing code.
+///
+/// # Errors
+///
+/// Returns [`Error::SetupCode`] if the string is not a valid QR or manual code.
+fn parse_setup_code(code: &str) -> Result<matter_commissioning::SetupPayload, Error> {
+    let trimmed = code.trim();
+    let parsed = if trimmed.starts_with("MT:") {
+        matter_commissioning::parse_qr(trimmed)
+    } else {
+        matter_commissioning::parse_manual_code(trimmed)
+    };
+    parsed.map_err(|e| Error::SetupCode(format!("{e:?}")))
 }

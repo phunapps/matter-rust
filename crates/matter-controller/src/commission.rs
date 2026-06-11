@@ -8,15 +8,11 @@ use crate::state::{DeviceEntry, FabricEntry};
 
 /// First device node id assigned on a fabric. The commissioner takes node id 1
 /// (M8.1 default); devices start at 2.
-// Called by the commissioning actor in Task 5.
-#[allow(dead_code)]
 pub(crate) const FIRST_DEVICE_NODE_ID: u64 = 2;
 
 /// Allocate the next operational node id for a new device on `fabric`: one past
 /// the highest existing device node id, or [`FIRST_DEVICE_NODE_ID`] if none.
 /// Skips the commissioner's own node id.
-// Called by the commissioning actor in Task 5.
-#[allow(dead_code)]
 pub(crate) fn next_device_node_id(fabric: &FabricEntry) -> u64 {
     let max = fabric.devices.iter().map(|d| d.node_id).max();
     let mut candidate = match max {
@@ -30,8 +26,6 @@ pub(crate) fn next_device_node_id(fabric: &FabricEntry) -> u64 {
 }
 
 /// Build the `DeviceEntry` to persist from a successful commissioning result.
-// Called by the commissioning actor in Task 5.
-#[allow(dead_code)]
 pub(crate) fn device_entry_from_commissioned(commissioned: &CommissionedFabric) -> DeviceEntry {
     DeviceEntry {
         node_id: commissioned.peer_node_id,
