@@ -55,6 +55,11 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     rng: Arc<dyn NocRng>,
     state: ControllerState,
     cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
+    // Held for Task 5 (handle_commission). Clippy dead_code fires until then.
+    #[allow(dead_code)]
+    trust: Option<crate::trust::AttestationTrust>,
+    #[allow(dead_code)]
+    admin_vendor_id: u16,
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -64,6 +69,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         store: Arc<dyn ControllerStore>,
         rng: Arc<dyn NocRng>,
         state: ControllerState,
+        trust: Option<crate::trust::AttestationTrust>,
+        admin_vendor_id: u16,
     ) -> Self {
         Self {
             transport,
@@ -73,6 +80,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             rng,
             state,
             cache: HashMap::new(),
+            trust,
+            admin_vendor_id,
         }
     }
 
@@ -323,6 +332,8 @@ mod tests {
             io,
             NullDiscovery,
             Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
         )
         .expect("open");
 
@@ -538,6 +549,8 @@ mod tests {
             ctrl_io,
             discovery,
             Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
         )
         .expect("open");
 

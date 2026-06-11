@@ -9,12 +9,14 @@ use matter_transport::Discovery;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::actor::{Actor, Command};
+use crate::builder::MatterControllerBuilder;
 use crate::error::Error;
 use crate::fabric::FabricConfig;
 use crate::node::Node;
 use crate::snapshot;
 use crate::state::ControllerState;
 use crate::store::ControllerStore;
+use crate::trust::AttestationTrust;
 
 const COMMAND_CHANNEL_DEPTH: usize = 32;
 
@@ -26,20 +28,41 @@ pub struct MatterController {
 }
 
 impl MatterController {
-    /// Open a controller backed by `store`, binding a dual-stack UDP socket
-    /// and mDNS discovery, and loading any persisted state.
+    /// Begin configuring a controller (attestation trust, admin vendor id).
+    #[must_use]
+    pub fn builder(store: Arc<dyn ControllerStore>) -> MatterControllerBuilder {
+        MatterControllerBuilder::new(store)
+    }
+
+    /// Open a controller with default settings and **no** attestation trust —
+    /// sufficient for operating already-commissioned devices, but `commission`
+    /// will return [`Error::NoTrust`]. Use [`Self::builder`] to commission.
     ///
     /// # Errors
     ///
-    /// [`Error::Store`] / [`Error::Snapshot`] if the snapshot cannot be
-    /// loaded, or [`Error::Operational`] if the socket / mDNS cannot start.
+    /// As [`MatterControllerBuilder::build`].
     pub async fn open(store: Arc<dyn ControllerStore>) -> Result<Self, Error> {
+        Self::spawn_default(store, None, crate::builder::DEFAULT_ADMIN_VENDOR_ID).await
+    }
+
+    pub(crate) async fn spawn_default(
+        store: Arc<dyn ControllerStore>,
+        trust: Option<AttestationTrust>,
+        admin_vendor_id: u16,
+    ) -> Result<Self, Error> {
         let transport = matter_transport::TokioUdpTransport::bind(0)
             .await
             .map_err(|e| Error::Operational(format!("bind: {e}")))?;
         let discovery = matter_transport::MdnsSdDiscovery::new()
             .map_err(|e| Error::Operational(format!("mdns: {e}")))?;
-        Self::with_components(store, transport, discovery, Arc::new(SystemNocRng))
+        Self::with_components(
+            store,
+            transport,
+            discovery,
+            Arc::new(SystemNocRng),
+            trust,
+            admin_vendor_id,
+        )
     }
 
     /// Construct over caller-supplied transport + discovery (used by tests to
@@ -54,6 +77,8 @@ impl MatterController {
         transport: T,
         discovery: D,
         rng: Arc<dyn NocRng>,
+        trust: Option<AttestationTrust>,
+        admin_vendor_id: u16,
     ) -> Result<Self, Error>
     where
         // `Sync` because the spawned actor future holds `&self.transport`
@@ -67,7 +92,15 @@ impl MatterController {
             None => ControllerState::default(),
         };
         let (tx, rx) = mpsc::channel(COMMAND_CHANNEL_DEPTH);
-        let actor = Actor::new(transport, discovery, store, rng, state);
+        let actor = Actor::new(
+            transport,
+            discovery,
+            store,
+            rng,
+            state,
+            trust,
+            admin_vendor_id,
+        );
         tokio::spawn(actor.run(rx));
         Ok(Self { tx })
     }
