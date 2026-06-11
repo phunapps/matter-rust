@@ -42,3 +42,8 @@ semantic versioning once published.
   owns the socket is acked but its value is not delivered to the consumer (a
   pure subscription stream loses nothing). Both are fixed by routing off-exchange
   reports out of the round-trip path / the full always-listening demux._
+- **M8.6** — v1.0 documentation pass: crate rustdoc with a runnable quickstart,
+  README feature overview, `docs/matter-js-migration-guide.md`, and an
+  `examples/controller_quickstart.rs` (commission → read / invoke / subscribe →
+  reconnect from snapshot). Re-exports `MatterTime` so `FabricConfig` is
+  constructible without a direct `matter-cert` dependency.
