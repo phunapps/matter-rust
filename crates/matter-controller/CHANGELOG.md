@@ -22,3 +22,8 @@ semantic versioning once published.
   The per-call throwaway commissioner-NOC mint (former M6.6.4 simplification) is
   retired — one stable identity is used for commission-time and operational CASE
   alike.
+- **M8.4** — `Node::read` / `write` / `invoke` over raw `matter_codec::Value`,
+  including **wildcard reads** (`ReadPath::cluster` / `ReadPath::all`) for reading
+  every attribute of a cluster or device. Re-exports `ReadPath` / `AttributePath`
+  / `CommandPath` / `ImStatus` / `Value` / `InvokeResult`. Wildcard read encoding
+  is byte-parity verified against matter.js.
