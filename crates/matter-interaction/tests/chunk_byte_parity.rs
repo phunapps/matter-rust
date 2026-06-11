@@ -1,6 +1,6 @@
 //! Byte-parity + reassembly for chunked `ReportData` fixtures captured from
 //! matter.js 0.16.11 (`xtask/scripts/capture-im`, subdir `report/`). Skips
-//! when no fixtures are present (capture's node_modules is gitignored).
+//! when no fixtures are present (capture's `node_modules` is gitignored).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{fs, path::PathBuf};

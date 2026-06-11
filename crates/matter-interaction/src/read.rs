@@ -98,7 +98,7 @@ pub struct AttributeReportItem {
     pub op: ReportOp,
     /// The data value (whole attribute for `Replace`, one element for `Append`).
     pub value: Value,
-    /// `DataVersion` (AttributeData context tag 0), if present.
+    /// `DataVersion` (`AttributeData` context tag 0), if present.
     pub data_version: Option<u32>,
 }
 

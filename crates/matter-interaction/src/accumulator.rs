@@ -141,8 +141,14 @@ mod tests {
     #[test]
     fn message_level_merge_preserves_order() {
         let mut acc = ReportAccumulator::new();
-        acc.push(report(vec![replace(ap(0, 0x28, 0x0002), Value::Uint(5010))]));
-        acc.push(report(vec![replace(ap(1, 0x06, 0x0000), Value::Bool(true))]));
+        acc.push(report(vec![replace(
+            ap(0, 0x28, 0x0002),
+            Value::Uint(5010),
+        )]));
+        acc.push(report(vec![replace(
+            ap(1, 0x06, 0x0000),
+            Value::Bool(true),
+        )]));
         let out = acc.finish();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].0, ap(0, 0x28, 0x0002));
