@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+mod accumulator;
 pub mod error;
 pub mod invoke;
 pub mod path;
@@ -27,10 +28,14 @@ pub mod status;
 pub mod subscription;
 pub mod write;
 
+pub use accumulator::ReportAccumulator;
 pub use error::ImError;
 pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 pub use path::{AttributePath, CommandPath, ReadPath};
-pub use read::{build_read_request, build_read_request_paths, parse_report_data, ReportData};
+pub use read::{
+    build_read_request, build_read_request_paths, parse_report_data, AttributeReportItem,
+    ReportData, ReportOp,
+};
 pub use status::ImStatus;
 pub use subscription::{
     build_status_response, build_subscribe_request, parse_subscribe_response, SubscribeRequest,

@@ -1227,6 +1227,9 @@ mod tests {
                 Value::Uint(feat_val),
             )],
             subscription_id: None,
+            items: Vec::new(),
+            more_chunked_messages: false,
+            suppress_response: false,
         };
 
         let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report).unwrap();
@@ -1284,6 +1287,9 @@ mod tests {
                 (path(0x0000), Value::Uint(0)), // Breadcrumb
             ],
             subscription_id: None,
+            items: Vec::new(),
+            more_chunked_messages: false,
+            suppress_response: false,
         };
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
@@ -1320,6 +1326,9 @@ mod tests {
                 struct_value.clone(),
             )],
             subscription_id: None,
+            items: Vec::new(),
+            more_chunked_messages: false,
+            suppress_response: false,
         };
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
@@ -1353,6 +1362,9 @@ mod tests {
         let report = crate::im::ReportData {
             attributes: vec![],
             subscription_id: None,
+            items: Vec::new(),
+            more_chunked_messages: false,
+            suppress_response: false,
         };
         let err = extract_read_payload(Expectation::NetworkCommissioningInfo, &report)
             .expect_err("missing attribute should fail");
@@ -1370,6 +1382,9 @@ mod tests {
         let report = crate::im::ReportData {
             attributes: vec![],
             subscription_id: None,
+            items: Vec::new(),
+            more_chunked_messages: false,
+            suppress_response: false,
         };
         let err = extract_read_payload(Expectation::ArmFailsafeResponse, &report)
             .expect_err("non-read expectation should fail");
