@@ -44,6 +44,41 @@ struct SubEntry {
 /// build the public [`Subscription`]).
 pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u16));
 
+/// Accumulates a chunked `ReportData` *sequence* (one logical notification) and
+/// yields the merged attributes only when the final chunk arrives
+/// (`MoreChunkedMessages` clear). A single-message report flushes immediately.
+/// This is the streaming-subscription analogue of the read path's per-call
+/// [`ReportAccumulator`](matter_interaction::ReportAccumulator) use: it merges
+/// `Replace`/`Append` (`ListIndex`=null) items across a notification's chunks
+/// before delivery, so list attributes and list-appends are not lost.
+#[derive(Default)]
+struct ReportReassembler {
+    acc: matter_interaction::ReportAccumulator,
+}
+
+impl ReportReassembler {
+    /// Push one `ReportData` chunk payload. Returns `Some(merged attributes)`
+    /// when this payload is the final chunk (`more_chunked_messages == false`),
+    /// resetting for the next notification; returns `None` while more chunks are
+    /// pending or the payload failed to parse.
+    fn push(
+        &mut self,
+        payload: &[u8],
+    ) -> Option<Vec<(matter_interaction::AttributePath, matter_codec::Value)>> {
+        let rd = match matter_interaction::parse_report_data(payload) {
+            Ok(rd) => rd,
+            Err(_) => return None, // drop a malformed chunk; keep prior accumulation
+        };
+        let more = rd.more_chunked_messages;
+        self.acc.push(rd);
+        if more {
+            None
+        } else {
+            Some(std::mem::take(&mut self.acc).finish())
+        }
+    }
+}
+
 /// Messages the handles send to the owning task. Each carries a `oneshot`
 /// reply sender; a dropped reply sender means the caller gave up.
 pub(crate) enum Command {
@@ -1481,6 +1516,29 @@ mod tests {
         assert_eq!(report[1].1, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
+    }
+
+    #[test]
+    fn reassembler_flushes_only_on_final_chunk() {
+        let mut r = ReportReassembler::default();
+        // chunk 0: ep0/0x28/0x0002 = 5010, MoreChunkedMessages=true → no flush.
+        let c0 = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(5010), true);
+        assert!(r.push(&c0).is_none(), "non-final chunk must not flush");
+        // chunk 1: ep1/0x06/0x0000 = true, final → flush both.
+        let c1 = build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+        let merged = r.push(&c1).expect("final chunk flushes");
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].0.endpoint, 0);
+        assert_eq!(merged[1].0.endpoint, 1);
+    }
+
+    #[test]
+    fn reassembler_single_message_flushes_immediately() {
+        let mut r = ReportReassembler::default();
+        let only = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let merged = r.push(&only).expect("single-message report flushes at once");
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.cluster, 0x06);
     }
 
     #[tokio::test]
