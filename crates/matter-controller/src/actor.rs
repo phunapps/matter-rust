@@ -547,6 +547,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Parse a `ReportData` payload and push each attribute to the subscription.
+    ///
+    // TODO(CR.3 subscription chunking): this forwards only `rd.attributes`
+    // (Replace-only, single message). A chunked or list-append subscription
+    // report (`more_chunked_messages` / `ReportOp::Append`) loses data here —
+    // it must be reassembled through `matter_interaction::ReportAccumulator`
+    // across the chunk sequence before forwarding. Tracked as the CR.3 / the
+    // subscription-hardening follow-up.
     fn forward_report(payload: &[u8], tx: &mpsc::Sender<AttributeReport>) {
         if let Ok(rd) = matter_interaction::parse_report_data(payload) {
             for (path, value) in rd.attributes {

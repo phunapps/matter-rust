@@ -21,6 +21,12 @@ use crate::read::{ReportData, ReportOp};
 ///
 /// First-seen attribute order is preserved by [`finish`](Self::finish).
 ///
+/// This accumulator is **unbounded** — it has no view of how many chunks a
+/// transport has received. A caller driving it from an untrusted peer must
+/// enforce its own chunk / total-size cap before pushing (the read-transaction
+/// layer does this); do not feed it directly from a hostile device assuming it
+/// self-limits.
+///
 /// # Examples
 ///
 /// ```
@@ -74,8 +80,15 @@ impl ReportAccumulator {
                         self.values.insert(key, Value::Array(Vec::new()));
                         self.versions.insert(key, item.data_version);
                     }
-                    if let Some(Value::Array(list)) = self.values.get_mut(&key) {
-                        list.push(item.value);
+                    match self.values.get_mut(&key) {
+                        Some(Value::Array(list)) => list.push(item.value),
+                        // Malformed: an append targeting a non-list value (e.g.
+                        // a prior scalar `Replace` for the same path). A
+                        // conformant device never does this; coerce to a fresh
+                        // single-element list rather than silently dropping the
+                        // element.
+                        Some(slot) => *slot = Value::Array(vec![item.value]),
+                        None => {}
                     }
                 }
             }
@@ -175,6 +188,17 @@ mod tests {
         let p = ap(0, 0x1d, 0x0003);
         acc.push(report(vec![append(p, Value::Uint(9))]));
         assert_eq!(acc.finish()[0].1, Value::Array(vec![Value::Uint(9)]));
+    }
+
+    #[test]
+    fn append_onto_non_array_coerces_instead_of_dropping() {
+        // Malformed input: a scalar Replace then an Append on the same path.
+        // The element must not vanish — the slot coerces to a fresh list.
+        let mut acc = ReportAccumulator::new();
+        let p = ap(0, 0x1d, 0x0003);
+        acc.push(report(vec![replace(p, Value::Uint(1))]));
+        acc.push(report(vec![append(p, Value::Uint(2))]));
+        assert_eq!(acc.finish()[0].1, Value::Array(vec![Value::Uint(2)]));
     }
 
     #[test]
