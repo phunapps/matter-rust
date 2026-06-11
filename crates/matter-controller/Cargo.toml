@@ -36,3 +36,6 @@ name = "controller_quickstart"
 
 [[example]]
 name = "power"
+
+[[example]]
+name = "dump_attributes"
