@@ -21,18 +21,24 @@ const RECV_BUF_SIZE: usize = 1500;
 
 /// An async, unreliable, message-oriented datagram transport.
 ///
-/// Native async-fn-in-trait is used (MSRV 1.88). The driver runs all IO on a
-/// single task via `tokio::join!` and never `tokio::spawn`s these futures, so
-/// they need not be `Send`; the `#[allow]` documents that deliberate choice
-/// and keeps the `-D warnings` gate green without an `async_trait` dependency.
-#[allow(async_fn_in_trait)]
+/// The returned futures are `Send`-bound (`-> impl Future + Send`) so a
+/// downstream owner can drive this transport from a `tokio::spawn`ed task —
+/// `matter-controller`'s session actor does exactly that. Both in-tree impls
+/// (`TokioUdpTransport`, `InMemoryDatagram`) already yield `Send` futures, so
+/// the bound is free for them; it only constrains hypothetical future impls.
+/// The driver itself still runs all IO inline on a single task via
+/// `tokio::join!`.
 pub trait AsyncDatagram {
     /// Send `buf` as a single datagram to `peer`.
     ///
     /// # Errors
     ///
     /// Returns an [`io::Error`] on socket-level failures.
-    async fn send_to(&self, buf: &[u8], peer: SocketAddr) -> io::Result<()>;
+    fn send_to(
+        &self,
+        buf: &[u8],
+        peer: SocketAddr,
+    ) -> impl std::future::Future<Output = io::Result<()>> + Send;
 
     /// Await the next inbound datagram, returning its bytes and source address.
     ///
@@ -40,7 +46,9 @@ pub trait AsyncDatagram {
     ///
     /// Returns an [`io::Error`] on socket-level failures or when the peer
     /// endpoint is closed ([`io::ErrorKind::BrokenPipe`]).
-    async fn recv_from(&self) -> io::Result<(Vec<u8>, SocketAddr)>;
+    fn recv_from(
+        &self,
+    ) -> impl std::future::Future<Output = io::Result<(Vec<u8>, SocketAddr)>> + Send;
 }
 
 /// Real-socket implementation over the M5 `TokioUdpTransport`. Uses the

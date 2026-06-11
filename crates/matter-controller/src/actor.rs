@@ -1,0 +1,567 @@
+//! The owning controller task. Holds the transport, `SessionManager`,
+//! discovery, and `ControllerState`; processes [`Command`]s sequentially.
+//! Connect/round-trip logic is filled in Task 4.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use matter_commissioning::driver::AsyncDatagram;
+use matter_commissioning::NocRng;
+use matter_transport::{Discovery, SessionId, SessionManager};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::error::Error;
+use crate::fabric::FabricConfig;
+use crate::snapshot;
+use crate::state::ControllerState;
+use crate::store::ControllerStore;
+
+/// Messages the handles send to the owning task. Each carries a `oneshot`
+/// reply sender; a dropped reply sender means the caller gave up.
+pub(crate) enum Command {
+    CreateFabric {
+        cfg: FabricConfig,
+        reply: oneshot::Sender<Result<u64, Error>>,
+    },
+    /// Raw secured IM round-trip to `node_id` (typed verbs wrap this in M8.4).
+    // Variant constructed in Node::round_trip (crate-internal). Task 4 wires the
+    // handler; the #[allow] is removed when that code lands.
+    #[allow(dead_code)]
+    RoundTrip {
+        node_id: u64,
+        opcode: u8,
+        protocol_id: matter_transport::ProtocolId,
+        payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    },
+    /// Test/diagnostic: how many live cached sessions exist.
+    #[cfg(test)]
+    SessionCount { reply: oneshot::Sender<usize> },
+}
+
+/// A cached operational session to one device.
+struct CachedSession {
+    session_id: SessionId,
+    peer: std::net::SocketAddr,
+}
+
+/// Owns all mutable state. Generic over transport + discovery so tests can
+/// inject `InMemoryDatagram` + a mock `Discovery`.
+pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
+    transport: T,
+    discovery: D,
+    sessions: SessionManager,
+    store: Arc<dyn ControllerStore>,
+    rng: Arc<dyn NocRng>,
+    state: ControllerState,
+    cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
+}
+
+impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
+    pub(crate) fn new(
+        transport: T,
+        discovery: D,
+        store: Arc<dyn ControllerStore>,
+        rng: Arc<dyn NocRng>,
+        state: ControllerState,
+    ) -> Self {
+        Self {
+            transport,
+            discovery,
+            sessions: SessionManager::new(),
+            store,
+            rng,
+            state,
+            cache: HashMap::new(),
+        }
+    }
+
+    /// The task loop: process commands until all handles drop.
+    pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                Command::CreateFabric { cfg, reply } => {
+                    let _ = reply.send(self.handle_create_fabric(&cfg));
+                }
+                Command::RoundTrip {
+                    node_id,
+                    opcode,
+                    protocol_id,
+                    payload,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        self.handle_round_trip(node_id, opcode, protocol_id, &payload)
+                            .await,
+                    );
+                }
+                #[cfg(test)]
+                Command::SessionCount { reply } => {
+                    let _ = reply.send(self.cache.len());
+                }
+            }
+        }
+    }
+
+    fn handle_create_fabric(&mut self, cfg: &FabricConfig) -> Result<u64, Error> {
+        let entry = crate::fabric::create_fabric(cfg, self.rng.as_ref())?;
+        let fabric_id = entry.fabric_id;
+        self.state.fabrics.push(entry);
+        self.persist()?;
+        Ok(fabric_id)
+    }
+
+    fn persist(&self) -> Result<(), Error> {
+        let bytes = snapshot::serialize(&self.state)?;
+        self.store.save(&bytes)?;
+        Ok(())
+    }
+
+    /// The sole fabric, or an error if not exactly one (M8.2 is single-fabric;
+    /// multi-fabric `fabric(id).node(id)` addressing is deferred).
+    fn sole_fabric(&self) -> Result<&crate::state::FabricEntry, Error> {
+        match self.state.fabrics.as_slice() {
+            [one] => Ok(one),
+            [] => Err(Error::NotCommissioned("no fabric created yet".into())),
+            _ => Err(Error::NotCommissioned(
+                "multiple fabrics; fabric(id).node(id) addressing is not in M8.2".into(),
+            )),
+        }
+    }
+
+    /// Establish a fresh CASE session to `node_id`, cache it, and record an
+    /// address hint in persisted state. Resumption is dormant (M4.2): this
+    /// always performs a full SIGMA handshake.
+    async fn connect(&mut self, node_id: u64) -> Result<(SessionId, std::net::SocketAddr), Error> {
+        let fabric_id = self.sole_fabric()?.fabric_id;
+        let (credentials, roots, compressed) =
+            crate::credentials::operational_credentials(self.sole_fabric()?)?;
+
+        let peer = matter_commissioning::driver::resolve_operational(
+            &mut self.discovery,
+            compressed,
+            node_id,
+        )
+        .await?;
+
+        let sid = matter_commissioning::driver::run_case(
+            &self.transport,
+            &mut self.sessions,
+            peer,
+            credentials,
+            roots,
+            node_id,
+            fabric_id,
+        )
+        .await?;
+
+        self.upsert_device(fabric_id, node_id, peer);
+        self.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: sid,
+                peer,
+            },
+        );
+        Ok((sid, peer))
+    }
+
+    /// Record/refresh the device's last-known address in persisted state.
+    /// The NOC public key stays unknown until M8.3 learns it during
+    /// commissioning; this entry is an address/resumption cache only.
+    fn upsert_device(&mut self, fabric_id: u64, node_id: u64, peer: std::net::SocketAddr) {
+        let addr = peer.to_string();
+        if let Some(fabric) = self
+            .state
+            .fabrics
+            .iter_mut()
+            .find(|f| f.fabric_id == fabric_id)
+        {
+            if let Some(dev) = fabric.devices.iter_mut().find(|d| d.node_id == node_id) {
+                dev.last_known_addr = Some(addr);
+            } else {
+                fabric.devices.push(crate::state::DeviceEntry {
+                    node_id,
+                    peer_noc_public_key: [0u8; 65],
+                    resumption_record: None,
+                    last_known_addr: Some(addr),
+                });
+            }
+        }
+        // Address-hint persistence is best-effort; a write failure must not
+        // abort an otherwise-successful connection.
+        let _ = self.persist();
+    }
+
+    /// Send a secured IM payload, establishing/caching the session as needed.
+    /// On a *cached*-session failure (e.g. the device evicted our session), the
+    /// stale entry is dropped and the session re-established once before retry.
+    async fn handle_round_trip(
+        &mut self,
+        node_id: u64,
+        opcode: u8,
+        protocol_id: matter_transport::ProtocolId,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let fabric_id = self.sole_fabric()?.fabric_id;
+
+        if let Some((sid, peer)) = self
+            .cache
+            .get(&(fabric_id, node_id))
+            .map(|c| (c.session_id, c.peer))
+        {
+            match self
+                .round_trip_once(sid, peer, opcode, protocol_id, payload)
+                .await
+            {
+                Ok(resp) => return Ok(resp),
+                // Stale cached session — evict, re-establish once, retry.
+                Err(Error::Driver(_)) => {
+                    self.cache.remove(&(fabric_id, node_id));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        let (sid, peer) = self.connect(node_id).await?;
+        self.round_trip_once(sid, peer, opcode, protocol_id, payload)
+            .await
+    }
+
+    async fn round_trip_once(
+        &mut self,
+        sid: SessionId,
+        peer: std::net::SocketAddr,
+        opcode: u8,
+        protocol_id: matter_transport::ProtocolId,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let resp = matter_commissioning::driver::secured_round_trip(
+            &self.transport,
+            &mut self.sessions,
+            sid,
+            peer,
+            opcode,
+            protocol_id,
+            payload,
+        )
+        .await?;
+        Ok(resp.payload)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md allows unwrap/expect with justification.
+mod tests {
+    use super::*;
+    use crate::fabric::FabricConfig;
+    use crate::store::ControllerStore;
+    use matter_cert::{MatterTime, TrustAnchor, TrustedRoots};
+    use matter_commissioning::driver::{
+        decode_unsecured, encode_unsecured, operational_instance_name, InMemoryDatagram,
+    };
+    use matter_commissioning::{issue_noc, SystemNocRng, VerifiedCsr};
+    use matter_crypto::{
+        derive_compressed_fabric_id, derive_operational_ipk, CaseCredentials, CaseResponder,
+        RingSigner, Sigma1Outcome, Signer,
+    };
+    use matter_transport::{
+        DecodeInboundOutput, Discovery, MatterService, MrpFlags, ProtocolId, QueryHandle,
+        ServiceKind, SessionManager, SessionRole,
+    };
+    use std::time::Instant;
+
+    /// A discovery that finds nothing (sufficient for the `create_fabric` test).
+    struct NullDiscovery;
+    impl Discovery for NullDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(0))
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+            Vec::new()
+        }
+    }
+
+    /// In-memory store for tests.
+    #[derive(Default)]
+    struct MemStore(std::sync::Mutex<Option<Vec<u8>>>);
+    impl ControllerStore for MemStore {
+        fn load(&self) -> Result<Option<Vec<u8>>, crate::store::StoreError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn save(&self, snapshot: &[u8]) -> Result<(), crate::store::StoreError> {
+            *self.0.lock().unwrap() = Some(snapshot.to_vec());
+            Ok(())
+        }
+    }
+
+    fn cfg() -> FabricConfig {
+        FabricConfig {
+            fabric_id: 0xAABB_CCDD_0000_0001,
+            rcac_id: 1,
+            commissioner_node_id: 1,
+            validity: (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_fabric_persists_and_reopens() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+        )
+        .expect("open");
+
+        let fid = controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+        assert_eq!(fid, 0xAABB_CCDD_0000_0001);
+
+        // The store now holds a snapshot that deserializes with one fabric.
+        let bytes = store.load().expect("load").expect("snapshot present");
+        let restored = crate::snapshot::deserialize(&bytes).expect("deserialize");
+        assert_eq!(restored.fabrics.len(), 1);
+        assert_eq!(restored.fabrics[0].commissioner.node_id, 1);
+    }
+
+    // --- loopback acceptance test (CaseResponder over InMemoryDatagram) ---
+
+    /// Discovery that always resolves the one operational node to `addr`.
+    struct FixedDiscovery {
+        addr: std::net::SocketAddr,
+        instance_name: String,
+    }
+    impl Discovery for FixedDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(1))
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+            vec![MatterService {
+                instance_name: self.instance_name.clone(),
+                kind: ServiceKind::Operational,
+                addresses: vec![self.addr.ip()],
+                port: self.addr.port(),
+                txt_records: std::collections::HashMap::new(),
+            }]
+        }
+    }
+
+    /// Device side: complete the CASE handshake (unsecured Sigma framing,
+    /// mirroring `matter-commissioning`'s `run_case` loopback test), then
+    /// answer `echoes` secured IM round-trips with a `b"pong"` `ReportData`.
+    async fn run_loopback_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        echoes: usize,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+
+        // Sigma1 -> Sigma2
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31, // Sigma2
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+
+        // Sigma3 -> success StatusReport, then absorb the controller's ack.
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes()); // general code: success
+        body.extend_from_slice(&0u32.to_le_bytes()); // protocol id
+        body.extend_from_slice(&0u16.to_le_bytes()); // protocol code
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40, // StatusReport
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap(); // controller's standalone ack
+
+        let output = responder.finish().unwrap();
+
+        // Secured IM echo: register the session, then reply to each request.
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+        for _ in 0..echoes {
+            let (wire, _) = io.recv_from().await.unwrap();
+            let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } = decoded else {
+                panic!("expected an IM request app message");
+            };
+            // Reply on the same exchange; this piggybacks the ack for the
+            // controller's reliable request. The reply itself is unreliable so
+            // the device need not await an ack back.
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05, // ReportData
+                    ProtocolId::INTERACTION_MODEL,
+                    b"pong",
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn connects_caches_and_round_trips_over_loopback() {
+        // One fabric; the controller authenticates as its commissioner identity,
+        // the device gets its own NOC under the same RCAC.
+        let fabric = {
+            let cfg = FabricConfig {
+                fabric_id: 0x0102_0304_0506_0708,
+                rcac_id: 1,
+                commissioner_node_id: 1,
+                validity: (
+                    MatterTime::from_unix_secs(1_700_000_000),
+                    MatterTime::NO_EXPIRY,
+                ),
+            };
+            crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
+        };
+        let device_node_id: u64 = 0x0000_0000_0000_0042;
+
+        // Device credentials: NOC for `device_node_id` signed by the fabric RCAC.
+        let device_record = fabric.to_fabric_record().unwrap();
+        let (device_signer, _pkcs8) = RingSigner::generate().unwrap();
+        let device_noc = issue_noc(
+            &device_record,
+            &VerifiedCsr {
+                public_key: device_signer.public_key().clone(),
+            },
+            device_node_id,
+            &[],
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+        let compressed =
+            derive_compressed_fabric_id(fabric.rcac_cert.public_key().as_bytes(), fabric.fabric_id)
+                .unwrap();
+        let device_ipk = derive_operational_ipk(&fabric.ipk, &compressed).unwrap();
+        let mut device_roots = TrustedRoots::new();
+        device_roots.add(TrustAnchor::from_root_cert(&fabric.rcac_cert));
+        let device_creds = CaseCredentials {
+            noc: device_noc,
+            icac: None,
+            signer: Box::new(device_signer),
+            fabric_id: fabric.fabric_id,
+            node_id: device_node_id,
+            ipk: device_ipk,
+            rcac_public_key: *fabric.rcac_cert.public_key().as_bytes(),
+        };
+
+        // Seed the store with the fabric, then open the controller over the
+        // controller end of the datagram pair + a discovery pinned to the
+        // device end.
+        let store = Arc::new(MemStore::default());
+        store
+            .save(
+                &crate::snapshot::serialize(&ControllerState {
+                    fabrics: vec![fabric],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let ctrl_addr = ctrl_io.local_addr();
+        let dev_addr = dev_io.local_addr();
+        let discovery = FixedDiscovery {
+            addr: dev_addr,
+            instance_name: operational_instance_name(compressed, device_node_id),
+        };
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            2,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+        )
+        .expect("open");
+
+        // First round-trip establishes + caches the session.
+        let node = controller.node(device_node_id);
+        let resp1 = node
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("first round-trip");
+        assert_eq!(resp1, b"pong");
+        assert_eq!(controller.session_count().await, 1, "session cached");
+
+        // Second round-trip reuses the cached session (no new handshake).
+        let resp2 = node
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("second round-trip");
+        assert_eq!(resp2, b"pong");
+        assert_eq!(
+            controller.session_count().await,
+            1,
+            "still one session — reused, not re-established"
+        );
+
+        device.await.unwrap();
+    }
+}
