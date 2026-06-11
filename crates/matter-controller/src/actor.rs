@@ -987,14 +987,24 @@ mod tests {
             )
             .unwrap();
         io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
-        // 3. Receive the controller's StatusResponse ack (opcode 0x01).
+        // 3. Receive the controller's StatusResponse ack (opcode 0x01). It must
+        //    arrive on the SAME exchange as the read — that is what piggybacks
+        //    chunk 0's MRP ack and solicits the next chunk; a fresh-exchange
+        //    StatusResponse (no piggyback) would be caught here.
         let (ack, _) = io.recv_from().await.unwrap();
-        let DecodeInboundOutput::AppMessage { opcode, .. } =
-            sessions.decode_inbound(&ack, Instant::now()).unwrap()
+        let DecodeInboundOutput::AppMessage {
+            opcode,
+            exchange_id: ack_exchange,
+            ..
+        } = sessions.decode_inbound(&ack, Instant::now()).unwrap()
         else {
             panic!("expected StatusResponse ack");
         };
         assert_eq!(opcode, 0x01, "controller must ack the chunk");
+        assert_eq!(
+            ack_exchange, exchange_id,
+            "StatusResponse must ride the read exchange (enables the chunk-ack piggyback)"
+        );
         // 4. Send the final chunk.
         let out = sessions
             .encode_outbound(
@@ -1433,8 +1443,10 @@ mod tests {
         // Wildcard read answered in two chunks: chunk 0 = ep0/BasicInfo.VendorID
         // (MoreChunkedMessages=true), final chunk = ep1/OnOff.OnOff. Reassembly
         // must surface BOTH — the real-device truncation this whole follow-up fixes.
-        let chunk0 = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(5010), true);
-        let chunk1 = build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+        let chunk0 =
+            build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(5010), true);
+        let chunk1 =
+            build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
         let device = tokio::spawn(run_chunked_read_device(
             dev_io,
             ctrl_addr,

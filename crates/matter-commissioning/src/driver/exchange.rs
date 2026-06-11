@@ -241,9 +241,9 @@ pub async fn secured_read<T: AsyncDatagram>(
     // 2. recv-or-timer loop, acking each non-final chunk to solicit the next.
     loop {
         let now = Instant::now();
-        let sleep_for = sessions
-            .poll_timeout()
-            .map_or(IDLE_SLEEP, |deadline| deadline.saturating_duration_since(now));
+        let sleep_for = sessions.poll_timeout().map_or(IDLE_SLEEP, |deadline| {
+            deadline.saturating_duration_since(now)
+        });
 
         tokio::select! {
             biased;
@@ -665,16 +665,25 @@ mod tests {
                 )
                 .unwrap();
             dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
-            // 3. Receive the controller's StatusResponse ack (opcode 0x01).
+            // 3. Receive the controller's StatusResponse ack (opcode 0x01). It
+            //    must ride the SAME exchange as the read — that is what
+            //    piggybacks chunk 0's MRP ack and solicits the next chunk.
             let (ack, _) = dev_io.recv_from().await.unwrap();
-            let DecodeInboundOutput::AppMessage { opcode, .. } =
-                dev.decode_inbound(&ack, Instant::now()).unwrap()
+            let DecodeInboundOutput::AppMessage {
+                opcode,
+                exchange_id: ack_exchange,
+                ..
+            } = dev.decode_inbound(&ack, Instant::now()).unwrap()
             else {
                 panic!("expected StatusResponse");
             };
             assert_eq!(
                 opcode, 0x01,
                 "controller must ack the chunk with StatusResponse"
+            );
+            assert_eq!(
+                ack_exchange, exchange_id,
+                "StatusResponse must ride the read exchange (enables the chunk-ack piggyback)"
             );
             // 4. Send the final chunk (no MoreChunkedMessages): ep1/0x06/0x0000 = 1.
             let c1 = report_data(1, 0x06, 0x0000, 1, false);
