@@ -294,6 +294,18 @@ pub struct DriverConfig<'a> {
     pub commissionable_addr: Option<SocketAddr>,
     /// Device passcode (from the setup payload).
     pub passcode: u32,
+    /// The controller's **persistent** commissioner operational identity on
+    /// this fabric: its NOC (signed by the fabric RCAC, subject node id ==
+    /// `commissioner.commissioner_node_id`) and its operational private key
+    /// as PKCS#8 DER. Used to authenticate the post-commissioning CASE.
+    ///
+    /// Replaces the per-call throwaway mint (former M6.6.4 simplification):
+    /// the caller now owns one stable identity for commission-time and
+    /// operational sessions alike (matter-controller persists it in M8.1).
+    pub commissioner_noc: &'a matter_cert::MatterCertificate,
+    /// PKCS#8 DER of the commissioner operational private key (pairs with
+    /// `commissioner_noc`'s subject public key).
+    pub commissioner_signer_pkcs8: &'a [u8],
 }
 
 /// Browse `_matterc._udp` commissionable records and return the socket address
@@ -488,10 +500,16 @@ where
     T: AsyncDatagram,
     D: matter_transport::Discovery,
 {
-    use crate::noc::{issue_noc, SystemNocRng, VerifiedCsr};
     use crate::{Action, SessionContext};
     use matter_cert::{TrustAnchor, TrustedRoots};
-    use matter_crypto::{CaseSigner as _, RingSigner};
+    use matter_crypto::RingSigner;
+
+    // Bind the persisted identity fields BEFORE the partial move of
+    // config.commissioner below (Rust partial-move rules: these are distinct
+    // fields, so the borrows are fine in either order, but binding them first
+    // keeps the borrow checker unambiguous).
+    let commissioner_noc = config.commissioner_noc.clone();
+    let commissioner_pkcs8 = config.commissioner_signer_pkcs8;
 
     // 1. Resolve the commissionable address.
     let peer = if let Some(addr) = config.commissionable_addr {
@@ -526,52 +544,19 @@ where
     let mut commissioner_cfg = config.commissioner;
     commissioner_cfg.pase_attestation_challenge = pase_attestation_challenge;
 
-    // 3. Issue the commissioner's own NOC so we have CASE credentials ready
-    //    when Action::EstablishCase arrives.
-    //
-    //    The FabricRecord holds the RCAC signer but not the commissioner's own
-    //    operational keypair. We generate a fresh keypair here and mint a NOC
-    //    for commissioner_node_id under the fabric's RCAC — the same RCAC that
-    //    the device receives via AddTrustedRootCertificate, so the device
-    //    validates this NOC during CASE. This is correct for a single
-    //    commissioning run.
-    //
-    //    FLAG (M6.6.4 simplification — deferred to M8): the commissioner's
-    //    operational keypair is minted fresh on every commission() call, so the
-    //    controller has NO stable/persistent operational identity. Commissioning
-    //    two devices would present two different commissioner operational keys.
-    //    A real Matter controller self-issues ONE admin NOC at fabric-creation
-    //    time and persists it (devices store that identity in their ACL/fabric
-    //    table). M8 (matter-controller: fabric create/persist/restore) must model
-    //    the commissioner's persistent operational identity on the fabric and
-    //    feed it here instead of minting per-call.
-    //
-    //    commissioner_signer is stored as Option<RingSigner> so we can `take()`
-    //    it into the CaseCredentials exactly once when EstablishCase arrives.
-    //    EstablishCase fires at most once per commissioning run.
+    // 3. Load the caller's PERSISTENT commissioner operational identity so we
+    //    have CASE credentials ready when Action::EstablishCase arrives. The
+    //    NOC is signed by the fabric RCAC (the same RCAC the device receives
+    //    via AddTrustedRootCertificate), so the device validates it during
+    //    CASE. One stable identity is used here and for all later operational
+    //    sessions — see matter-controller's persisted CommissionerIdentity.
     let fabric = commissioner_cfg.fabric;
-    let (commissioner_signer_value, _pkcs8) =
-        RingSigner::generate().map_err(DriverError::Crypto)?;
-    let commissioner_pub = commissioner_signer_value.public_key().clone();
-    let commissioner_verified_csr = VerifiedCsr {
-        public_key: commissioner_pub,
-    };
     let commissioner_node_id = commissioner_cfg.commissioner_node_id;
-    // The IPK epoch key AddNOC distributes — CASE later derives the
-    // *operational* IPK from it (spec §4.15.2); they MUST come from the same
-    // epoch key or the device rejects Sigma1 with NoSharedTrustRoots.
     let ipk_epoch_key = commissioner_cfg.ipk_epoch_key;
-    let commissioner_noc = issue_noc(
-        fabric,
-        &commissioner_verified_csr,
-        commissioner_node_id,
-        &[],
-        (commissioner_cfg.now, matter_cert::MatterTime::NO_EXPIRY),
-        &SystemNocRng,
-    )
-    .map_err(|e| DriverError::Commissioning(crate::CommissioningError::from(e)))?;
-
-    // Wrap in Option so we can move it into CaseCredentials exactly once.
+    let commissioner_signer_value =
+        RingSigner::from_pkcs8(commissioner_pkcs8).map_err(DriverError::Crypto)?;
+    // Wrap in Option so we can move it into CaseCredentials exactly once
+    // (EstablishCase fires at most once per run).
     let mut commissioner_signer: Option<RingSigner> = Some(commissioner_signer_value);
 
     let mut case_sid: Option<SessionId> = None;

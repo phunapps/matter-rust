@@ -48,4 +48,16 @@ pub enum Error {
     /// A cryptographic derivation (operational IPK / compressed fabric id) failed.
     #[error("operational key derivation failed: {0}")]
     Operational(String),
+
+    /// Attestation trust material could not be loaded.
+    #[error("attestation trust error: {0}")]
+    Trust(String),
+
+    /// The setup code (QR / manual) could not be parsed.
+    #[error("invalid setup code: {0}")]
+    SetupCode(String),
+
+    /// Commissioning requires attestation trust, but none was configured.
+    #[error("no attestation trust configured (use MatterController::builder)")]
+    NoTrust,
 }
