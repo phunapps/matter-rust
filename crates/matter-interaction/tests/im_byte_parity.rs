@@ -109,6 +109,7 @@ fn read_request_matches_matter_js() {
         eprintln!("skipping: no read fixtures (run `cargo xtask capture-im`)");
         return;
     }
+    let mut asserted = 0;
     for path in paths {
         let bytes = fs::read(&path).unwrap();
         let f: ReadFixture = match serde_json::from_slice(&bytes) {
@@ -130,7 +131,9 @@ fn read_request_matches_matter_js() {
         let ours = build_read_request_paths(&our_paths);
         let theirs = B64.decode(&f.expected_message_b64).unwrap();
         assert_eq!(ours, theirs, "ReadRequest mismatch for {path:?}");
+        asserted += 1;
     }
+    assert!(asserted > 0, "no read-request fixtures parsed");
 }
 
 #[derive(Deserialize)]
