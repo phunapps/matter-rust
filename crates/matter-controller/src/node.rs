@@ -6,13 +6,13 @@ use matter_codec::{Tag, TlvReader, TlvWriter, Value};
 use matter_interaction::{
     build_invoke_request, build_read_request_paths, build_write_request, parse_invoke_response,
     parse_report_data, parse_write_response, AttributePath, AttributeWriteRequest, CommandPath,
-    ImStatus, InvokeResponse, ReadPath,
+    ImStatus, InvokeResponse, ReadPath, ReportAccumulator,
 };
 
 use crate::actor::Command;
 use crate::error::Error;
 
-const OP_READ_REQUEST: u8 = 0x02;
+pub(crate) const OP_READ_REQUEST: u8 = 0x02;
 const OP_WRITE_REQUEST: u8 = 0x06;
 const OP_INVOKE_REQUEST: u8 = 0x08;
 
@@ -97,24 +97,47 @@ impl Node {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
+    /// Send a chunked read request and collect every `ReportData` chunk payload
+    /// in order. A non-chunked read yields a single-element `Vec`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task has stopped, or any
+    /// connect / transport / driver error.
+    pub(crate) async fn round_trip_chunked(&self, payload: Vec<u8>) -> Result<Vec<Vec<u8>>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Read {
+                node_id: self.node_id,
+                payload,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Read attributes (concrete or wildcard paths). Returns the device's
     /// `(path, value)` reports keyed by the concrete paths it reports. Values
     /// are raw [`Value`]; decode them with `matter-clusters` codecs.
     ///
+    /// A wildcard read (e.g. [`ReadPath::all`]) whose response spans multiple
+    /// `ReportData` chunks is reassembled transparently — every chunk is
+    /// solicited and merged through [`ReportAccumulator`], so the result is the
+    /// device's complete attribute set, not just the first chunk.
+    ///
     /// # Errors
     ///
     /// [`Error::ControllerStopped`], any connect/transport error, or
-    /// [`Error::InteractionModel`] if the response cannot be parsed.
+    /// [`Error::InteractionModel`] if a response chunk cannot be parsed.
     pub async fn read(&self, paths: &[ReadPath]) -> Result<Vec<(AttributePath, Value)>, Error> {
         let req = build_read_request_paths(paths);
-        let resp = self
-            .round_trip(
-                OP_READ_REQUEST,
-                matter_transport::ProtocolId::INTERACTION_MODEL,
-                req,
-            )
-            .await?;
-        Ok(parse_report_data(&resp)?.attributes)
+        let chunks = self.round_trip_chunked(req).await?;
+        let mut acc = ReportAccumulator::new();
+        for chunk in &chunks {
+            acc.push(parse_report_data(chunk)?);
+        }
+        Ok(acc.finish())
     }
 
     /// Write attributes. Each `Value` is TLV-encoded into the write payload.

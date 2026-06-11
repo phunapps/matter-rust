@@ -19,7 +19,9 @@ pub use case::{operational_instance_name, resolve_operational, run_case};
 pub use commission::{commission, resolve_commissionable, DriverConfig};
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
-pub use exchange::{secured_round_trip, SecuredResponse};
+pub use exchange::{
+    secured_read, secured_round_trip, SecuredResponse, MAX_READ_BYTES, MAX_READ_CHUNKS,
+};
 pub use pase::run_pase;
 pub use unsecured::{
     decode_unsecured, encode_unsecured, parse_status_report, require_handshake_opcode,

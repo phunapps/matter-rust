@@ -179,6 +179,144 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
     }
 }
 
+/// Maximum number of `ReportData` chunks a single read may span before
+/// [`secured_read`] aborts. A conformant wildcard read of a typical device is a
+/// handful of chunks; 64 is far above that and bounds a buggy/hostile peer.
+pub const MAX_READ_CHUNKS: usize = 64;
+
+/// Maximum total decoded payload bytes a single read may accumulate before
+/// [`secured_read`] aborts (256 `KiB`).
+pub const MAX_READ_BYTES: usize = 256 * 1024;
+
+/// IM `StatusResponse` opcode (Matter §8.7) — the per-chunk ack the reader
+/// sends to solicit the next chunk.
+const OP_STATUS_RESPONSE: u8 = 0x01;
+
+/// Send a `ReadRequest` (`app_payload`) as a reliable secured message, then
+/// drive the Matter chunked-read transaction: for every inbound `ReportData`
+/// chunk that sets `MoreChunkedMessages`, reply with `StatusResponse(SUCCESS)`
+/// on the same exchange — which piggybacks the chunk's MRP ack and solicits the
+/// next chunk — stopping at the final chunk. Returns every chunk payload in
+/// order.
+///
+/// A non-chunked read returns a single-element `Vec` (the loop runs once). The
+/// final chunk's MRP ack is left pending on return — identical to
+/// [`secured_round_trip`]'s contract; the next exchange or the standalone-ack
+/// timer flushes it. Inbound demultiplexing (exchange match, unsecured-straggler
+/// skip, `UnknownSession`/`DecryptionFailed` skip, duplicate-ack bounce, MRP
+/// timer) is identical to [`secured_round_trip`].
+///
+/// # Errors
+///
+/// - [`DriverError::ReadTooLarge`] if the read exceeds [`MAX_READ_CHUNKS`] or
+///   [`MAX_READ_BYTES`].
+/// - [`DriverError::Im`] if a chunk is not a parseable `ReportData`.
+/// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
+///   as for [`secured_round_trip`].
+pub async fn secured_read<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    session_id: SessionId,
+    peer: SocketAddr,
+    opcode: u8,
+    protocol_id: ProtocolId,
+    app_payload: &[u8],
+) -> Result<Vec<Vec<u8>>, DriverError> {
+    // 1. Encode + send the ReadRequest (reliable → MRP tracks it).
+    let out = sessions.encode_outbound(
+        session_id,
+        None,
+        opcode,
+        protocol_id,
+        app_payload,
+        MrpFlags { reliable: true },
+        Instant::now(),
+    )?;
+    let our_exchange = out.exchange_id;
+    transport.send_to(&out.wire_bytes, peer).await?;
+
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    let mut total_bytes = 0usize;
+
+    // 2. recv-or-timer loop, acking each non-final chunk to solicit the next.
+    loop {
+        let now = Instant::now();
+        let sleep_for = sessions.poll_timeout().map_or(IDLE_SLEEP, |deadline| {
+            deadline.saturating_duration_since(now)
+        });
+
+        tokio::select! {
+            biased;
+            recv = transport.recv_from() => {
+                let (packet, _from) = recv?;
+                // Unsecured stragglers (session id 0) are not ours — skip.
+                if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
+                    continue;
+                }
+                let decoded = match sessions.decode_inbound(&packet, Instant::now()) {
+                    Ok(d) => d,
+                    Err(
+                        matter_transport::Error::UnknownSession(_)
+                        | matter_transport::Error::DecryptionFailed,
+                    ) => continue,
+                    Err(e) => return Err(e.into()),
+                };
+                match decoded {
+                    DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
+                        if exchange_id == our_exchange =>
+                    {
+                        total_bytes = total_bytes.saturating_add(payload.len());
+                        if chunks.len() + 1 > MAX_READ_CHUNKS {
+                            return Err(DriverError::ReadTooLarge { limit: "MAX_READ_CHUNKS" });
+                        }
+                        if total_bytes > MAX_READ_BYTES {
+                            return Err(DriverError::ReadTooLarge { limit: "MAX_READ_BYTES" });
+                        }
+                        let more = crate::im::parse_report_data(&payload)?.more_chunked_messages;
+                        chunks.push(payload);
+                        if !more {
+                            return Ok(chunks);
+                        }
+                        // Ack this chunk + solicit the next on the same exchange.
+                        let status = crate::im::build_status_response(0);
+                        let ack = sessions.encode_outbound(
+                            session_id,
+                            Some(our_exchange),
+                            OP_STATUS_RESPONSE,
+                            ProtocolId::INTERACTION_MODEL,
+                            &status,
+                            MrpFlags { reliable: true },
+                            Instant::now(),
+                        )?;
+                        transport.send_to(&ack.wire_bytes, peer).await?;
+                    }
+                    // App message on another exchange, or an AckOnly for our
+                    // request — keep waiting.
+                    DecodeInboundOutput::AppMessage { .. }
+                    | DecodeInboundOutput::AckOnly { .. } => {}
+                    // Peer re-sent a reliable frame; bounce its standalone ack.
+                    DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
+                        transport.send_to(&ack_packet, peer).await?;
+                    }
+                }
+            }
+            () = tokio::time::sleep(sleep_for) => {
+                for event in sessions.handle_timeout(Instant::now()) {
+                    match event {
+                        MrpEvent::Retransmit { packet, .. }
+                        | MrpEvent::SendStandaloneAck { packet, .. } => {
+                            transport.send_to(&packet, peer).await?;
+                        }
+                        MrpEvent::Expired { exchange_id, .. } => {
+                            return Err(DriverError::Timeout { exchange_id });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -458,5 +596,122 @@ mod tests {
         let (got, ()) = tokio::join!(controller, device);
         let got = got.unwrap();
         assert_eq!(got.payload, response);
+    }
+
+    /// Build a `ReportData` carrying one attribute `(ep,cl,at)=val` with the
+    /// given `MoreChunkedMessages` flag (CR.1 wire shape).
+    fn report_data(ep: u16, cl: u32, at: u32, val: u64, more: bool) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeReportIB
+        w.start_structure(Tag::Context(1)).unwrap(); // AttributeData
+        w.start_list(Tag::Context(1)).unwrap(); // Path
+        w.put_uint(Tag::Context(2), u64::from(ep)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(cl)).unwrap();
+        w.put_uint(Tag::Context(4), u64::from(at)).unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(2), val).unwrap(); // Data
+        w.end_container().unwrap(); // AttributeData
+        w.end_container().unwrap(); // AttributeReportIB
+        w.end_container().unwrap(); // array
+        if more {
+            w.put_bool(Tag::Context(3), true).unwrap(); // MoreChunkedMessages
+        }
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[tokio::test]
+    async fn secured_read_reassembles_two_chunks() {
+        let (mut ctrl, mut dev) = paired_pase_sessions();
+        let session = matter_transport::SessionId(1);
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let controller = secured_read(
+            &ctrl_io,
+            &mut ctrl,
+            session,
+            dev_addr,
+            0x02, // ReadRequest
+            ProtocolId::INTERACTION_MODEL,
+            b"readreq",
+        );
+
+        let device = async {
+            // 1. Receive the ReadRequest.
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+                dev.decode_inbound(&pkt, Instant::now()).unwrap()
+            else {
+                panic!("expected ReadRequest");
+            };
+            // 2. Send chunk 0 (MoreChunkedMessages=true): ep0/0x28/0x0002 = 5010.
+            let c0 = report_data(0, 0x28, 0x0002, 5010, true);
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x05, // ReportData
+                    ProtocolId::INTERACTION_MODEL,
+                    &c0,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            // 3. Receive the controller's StatusResponse ack (opcode 0x01). It
+            //    must ride the SAME exchange as the read — that is what
+            //    piggybacks chunk 0's MRP ack and solicits the next chunk.
+            let (ack, _) = dev_io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage {
+                opcode,
+                exchange_id: ack_exchange,
+                ..
+            } = dev.decode_inbound(&ack, Instant::now()).unwrap()
+            else {
+                panic!("expected StatusResponse");
+            };
+            assert_eq!(
+                opcode, 0x01,
+                "controller must ack the chunk with StatusResponse"
+            );
+            assert_eq!(
+                ack_exchange, exchange_id,
+                "StatusResponse must ride the read exchange (enables the chunk-ack piggyback)"
+            );
+            // 4. Send the final chunk (no MoreChunkedMessages): ep1/0x06/0x0000 = 1.
+            let c1 = report_data(1, 0x06, 0x0000, 1, false);
+            let out = dev
+                .encode_outbound(
+                    session,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &c1,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            dev_io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        let chunks = got.unwrap();
+        assert_eq!(chunks.len(), 2, "both chunks returned");
+        // Reassemble through the CR.1 accumulator.
+        let mut acc = crate::im::ReportAccumulator::new();
+        for c in &chunks {
+            acc.push(crate::im::parse_report_data(c).unwrap());
+        }
+        let attrs = acc.finish();
+        assert_eq!(attrs.len(), 2);
+        assert_eq!(attrs[0].0.endpoint, 0);
+        assert_eq!(attrs[1].0.endpoint, 1);
     }
 }
