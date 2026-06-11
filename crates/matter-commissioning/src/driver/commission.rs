@@ -348,30 +348,34 @@ pub async fn resolve_commissionable<D: Discovery>(
         .query(ServiceKind::Commissionable)
         .map_err(DriverError::Transport)?;
 
+    // A device advertises `CM=1`/`2` while a commissioning window is open and
+    // `CM=0` once it closes. Skip closed windows so a stale advertisement is not
+    // matched (which would then fail PASE). Absent `CM` is treated as open.
+    let window_open = |svc: &matter_transport::MatterService| {
+        svc.txt_records.get("CM").map_or(true, |v| v != "0")
+    };
+
     for _ in 0..RESOLVE_POLL_ATTEMPTS {
         let results = discovery.poll_results(handle);
 
         // Prefer an exact long-discriminator match (QR codes).
-        for svc in &results {
-            if svc.addresses.is_empty() {
-                continue;
-            }
+        for svc in results.iter().filter(|s| window_open(s)) {
             if svc.txt_records.get("D").and_then(|d| d.parse::<u16>().ok()) == Some(discriminator) {
-                if let Some(addr) = svc.addresses.first() {
+                if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
                     discovery.stop_query(handle);
-                    return Ok(SocketAddr::new(*addr, svc.port));
+                    return Ok(SocketAddr::new(addr, svc.port));
                 }
             }
         }
 
         // Fall back to the upper-4-bit short discriminator (manual codes).
-        for svc in &results {
+        for svc in results.iter().filter(|s| window_open(s)) {
             let advertised = svc.txt_records.get("D").and_then(|d| d.parse::<u16>().ok());
             if let Some(adv) = advertised {
                 if ((adv >> 8) & 0x0F) as u8 == short {
-                    if let Some(addr) = svc.addresses.first() {
+                    if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
                         discovery.stop_query(handle);
-                        return Ok(SocketAddr::new(*addr, svc.port));
+                        return Ok(SocketAddr::new(addr, svc.port));
                     }
                 }
             }

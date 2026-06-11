@@ -56,6 +56,17 @@ pub trait AsyncDatagram {
 /// take `&self`), so this impl needs only a shared reference.
 impl AsyncDatagram for matter_transport::TokioUdpTransport {
     async fn send_to(&self, buf: &[u8], peer: SocketAddr) -> io::Result<()> {
+        // The transport binds a dual-stack IPv6 socket (`[::]:port`). Sending to
+        // a plain IPv4 destination on an `AF_INET6` socket fails with `EINVAL`;
+        // it must be expressed as the IPv4-mapped IPv6 form `::ffff:a.b.c.d`.
+        // (Devices commonly advertise an IPv4 address alongside their IPv6 ones,
+        // which `preferred_address` selects.)
+        let peer = match (self.socket().local_addr(), peer) {
+            (Ok(SocketAddr::V6(_)), SocketAddr::V4(v4)) => {
+                SocketAddr::new(std::net::IpAddr::V6(v4.ip().to_ipv6_mapped()), v4.port())
+            }
+            _ => peer,
+        };
         self.socket().send_to(buf, peer).await.map(|_n| ())
     }
 

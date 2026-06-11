@@ -41,8 +41,8 @@ const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// interface scope id that [`MatterService`](matter_transport::MatterService)
 /// does not carry, so a dial-out socket cannot route to it — devices often
 /// list it FIRST, ahead of perfectly routable addresses (M6.6.5: closes the
-/// previously FLAGGED `.first()` pick).
-fn preferred_address(addresses: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
+/// previously FLAGGED `.first()` pick). Shared with `resolve_commissionable`.
+pub(crate) fn preferred_address(addresses: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
     let is_v6_link_local = |a: &std::net::IpAddr| match a {
         std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
         std::net::IpAddr::V4(_) => false,
