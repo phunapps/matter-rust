@@ -1162,6 +1162,7 @@ mod tests {
                 },
                 Value::Uint(feat_val),
             )],
+            subscription_id: None,
         };
 
         let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report).unwrap();
@@ -1218,6 +1219,7 @@ mod tests {
                 ),
                 (path(0x0000), Value::Uint(0)), // Breadcrumb
             ],
+            subscription_id: None,
         };
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
@@ -1253,6 +1255,7 @@ mod tests {
                 },
                 struct_value.clone(),
             )],
+            subscription_id: None,
         };
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
@@ -1283,7 +1286,7 @@ mod tests {
     fn extract_read_payload_missing_feature_map_returns_error() {
         use crate::Expectation;
 
-        let report = crate::im::ReportData { attributes: vec![] };
+        let report = crate::im::ReportData { attributes: vec![], subscription_id: None };
         let err = extract_read_payload(Expectation::NetworkCommissioningInfo, &report)
             .expect_err("missing attribute should fail");
         assert!(
@@ -1297,7 +1300,7 @@ mod tests {
     fn extract_read_payload_non_read_expectation_returns_error() {
         use crate::Expectation;
 
-        let report = crate::im::ReportData { attributes: vec![] };
+        let report = crate::im::ReportData { attributes: vec![], subscription_id: None };
         let err = extract_read_payload(Expectation::ArmFailsafeResponse, &report)
             .expect_err("non-read expectation should fail");
         assert!(

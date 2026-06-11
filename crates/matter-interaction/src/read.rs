@@ -68,6 +68,10 @@ pub struct ReportData {
     /// One entry per `AttributeReportIB` that carried `AttributeData`.
     /// `AttributeStatus` (error) reports are skipped.
     pub attributes: Vec<(AttributePath, Value)>,
+    /// Server-assigned subscription identifier, present only in
+    /// subscription `ReportData` messages (context tag 0); `None` in
+    /// plain `ReadResponse` messages.
+    pub subscription_id: Option<u32>,
 }
 
 /// Parse a `ReportDataMessage` into concrete `(path, value)` pairs.
@@ -87,11 +91,27 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
     expect_message_struct(&mut r)?;
 
     let mut attributes = Vec::new();
+    let mut subscription_id: Option<u32> = None;
 
-    // Find AttributeReports [1] (array). Absent → empty result.
+    // Scan top-level fields: ctx[0] is the optional subscriptionId (present
+    // in subscription ReportData, absent in plain read responses); ctx[1] is
+    // the AttributeReports array. Other fields are skipped.
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => return Ok(ReportData { attributes }),
+            None | Some(Element::ContainerEnd) => {
+                return Ok(ReportData {
+                    attributes,
+                    subscription_id,
+                })
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(n),
+            }) => {
+                subscription_id = Some(u32::try_from(n).map_err(|_| {
+                    ImError::UnexpectedValue("ReportData.subscriptionId exceeds u32")
+                })?);
+            }
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Array,
@@ -119,7 +139,10 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
         }
     }
 
-    Ok(ReportData { attributes })
+    Ok(ReportData {
+        attributes,
+        subscription_id,
+    })
 }
 
 /// Parse one `AttributeReportIB` body. Returns `Some((path, value))` if it

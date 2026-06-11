@@ -1,15 +1,16 @@
 //! Matter Interaction Model (IM) message framing — Matter Core Spec §10.
 //!
 //! Builders for the IM message envelopes the wire carries
-//! (`InvokeRequestMessage`, `ReadRequestMessage`, `WriteRequestMessage`)
+//! (`InvokeRequestMessage`, `ReadRequestMessage`, `WriteRequestMessage`,
+//! `SubscribeRequestMessage`, `StatusResponseMessage`)
 //! and parsers for the responses (`InvokeResponseMessage`,
-//! `ReportDataMessage`, `WriteResponseMessage`). Callers supply
-//! already-encoded cluster TLV payloads (e.g. from `matter-clusters`
-//! codecs) and compose them with the concrete paths in [`path`].
+//! `ReportDataMessage`, `WriteResponseMessage`, `SubscribeResponseMessage`).
+//! Callers supply already-encoded cluster TLV payloads (e.g. from
+//! `matter-clusters` codecs) and compose them with the concrete paths in
+//! [`path`].
 //!
 //! Scope is a deliberate subset: one command per invoke, concrete
-//! (non-wildcard) paths, no subscriptions, no events, no timed actions,
-//! no chunked writes. The full IM engine is M8 work.
+//! (non-wildcard) paths, no events, no timed actions, no chunked writes.
 //!
 //! Lifted from `matter-commissioning` in M7.1 (the M6.6 design kept this
 //! module free of state-machine dependencies for exactly this move).
@@ -23,6 +24,7 @@ pub mod invoke;
 pub mod path;
 pub mod read;
 pub mod status;
+pub mod subscription;
 pub mod write;
 
 pub use error::ImError;
@@ -30,6 +32,10 @@ pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 pub use path::{AttributePath, CommandPath, ReadPath};
 pub use read::{build_read_request, build_read_request_paths, parse_report_data, ReportData};
 pub use status::ImStatus;
+pub use subscription::{
+    build_status_response, build_subscribe_request, parse_subscribe_response, SubscribeRequest,
+    SubscribeResponse,
+};
 pub use write::{build_write_request, parse_write_response, AttributeWriteRequest};
 
 /// Interaction Model protocol revision emitted at context tag `0xFF` in
