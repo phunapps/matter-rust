@@ -64,7 +64,7 @@ ends with a `cargo publish` to crates.io.
 | M5        | `matter-transport`     | IPv6 UDP, mDNS discovery, message framing, MRP      | ✓ done |
 | M6        | `matter-commissioning` | End-to-end commissioning of a real Matter device    | ✓ done |
 | M7        | `matter-clusters`      | Generated cluster definitions (OnOff, Level, …)     | ✓ done |
-| M8        | `matter-controller`    | High-level controller API. **v1.0.**                | mo 17-18 |
+| M8        | `matter-controller`    | High-level controller API. **v1.0.**                | ✓ done |
 
 Features deferred past v1.0: Thread network commissioning, BLE commissioning
 transport, OTA (BDX), multi-admin, groups, Scenes, Thermostat, advanced ACL,
@@ -123,15 +123,25 @@ Nothing is published yet. When M1 ships:
 matter-codec = "0.1"
 ```
 
-The high-level API (M8) will look approximately like:
+The high-level API (M8, `matter-controller`) looks like:
 
 ```rust,ignore
-let controller = MatterController::new(fabric_store).await?;
-let device = controller.commission_with_qr_code("MT:...").await?;
-device.on_off().on().await?;
+let controller = MatterController::builder(store)
+    .attestation_trust(AttestationTrust::csa_test_roots())
+    .build()
+    .await?;
+controller.create_fabric(fabric_config).await?;
+let node_id = controller.commission("MT:...").await?;
+let node = controller.node(node_id);
+
+node.invoke(toggle_path, Value::Structure(vec![])).await?;       // commands
+let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;   // wildcard read
+let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
+while let Some(change) = sub.next().await { /* live reports */ }
 ```
 
-The exact API will be locked in at M8.
+See [`crates/matter-controller`](crates/matter-controller/) and the
+[matter.js migration guide](docs/matter-js-migration-guide.md).
 
 ## Contributing
 
