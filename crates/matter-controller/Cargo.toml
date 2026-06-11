@@ -28,3 +28,8 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+
+[[example]]
+name = "controller_quickstart"
