@@ -1,0 +1,24 @@
+# Changelog — matter-controller
+
+All notable changes to this crate are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/), and the crate adheres to
+semantic versioning once published.
+
+## [Unreleased]
+
+### Added
+- **M8.1** — Persistence foundation: `ControllerStore` trait + `FileStore`
+  (atomic, `0600`); a versioned TLV snapshot of controller state; `create_fabric`
+  mints and persists a **stable commissioner operational identity** once per
+  fabric.
+- **M8.2** — `MatterController` + `Node` over a single owning async task:
+  transparent operational CASE connect / cache / reconnect; raw IM round-trip
+  primitive.
+- **M8.3** — `MatterController::commission` (QR or manual pairing code) brings a
+  device onto the controller's fabric using the persisted commissioner identity,
+  allocates a device node id, and persists a `DeviceEntry`. Attestation trust is
+  configured on the controller via `MatterController::builder(store)
+  .attestation_trust(AttestationTrust::csa_test_roots() | AttestationTrust::from_dirs(..))`.
+  The per-call throwaway commissioner-NOC mint (former M6.6.4 simplification) is
+  retired — one stable identity is used for commission-time and operational CASE
+  alike.
