@@ -351,9 +351,8 @@ pub async fn resolve_commissionable<D: Discovery>(
     // A device advertises `CM=1`/`2` while a commissioning window is open and
     // `CM=0` once it closes. Skip closed windows so a stale advertisement is not
     // matched (which would then fail PASE). Absent `CM` is treated as open.
-    let window_open = |svc: &matter_transport::MatterService| {
-        svc.txt_records.get("CM").map_or(true, |v| v != "0")
-    };
+    let window_open =
+        |svc: &matter_transport::MatterService| svc.txt_records.get("CM").is_none_or(|v| v != "0");
 
     for _ in 0..RESOLVE_POLL_ATTEMPTS {
         let results = discovery.poll_results(handle);
