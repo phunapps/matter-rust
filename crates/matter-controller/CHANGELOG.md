@@ -27,3 +27,18 @@ semantic versioning once published.
   every attribute of a cluster or device. Re-exports `ReadPath` / `AttributePath`
   / `CommandPath` / `ImStatus` / `Value` / `InvokeResult`. Wildcard read encoding
   is byte-parity verified against matter.js.
+- **M8.5** — `Node::subscribe` — live attribute-report streams via a concrete
+  `Subscription` (`next().await` + `cancel()`) yielding `AttributeReport`s. The
+  actor now conditionally listens for unsolicited steady-state reports while any
+  subscription is active (between command handlers), acking each with a
+  `StatusResponse`; the round-trip / read / commission paths are unchanged.
+  Subscription IM messages (`SubscribeRequest`, `SubscribeResponse`,
+  `StatusResponse`, steady-state `ReportData` with `subscriptionId`) are
+  byte-parity verified against matter.js. _Known limitations (subscription
+  hardening follow-up): (1) liveness-driven auto-resubscribe on staleness /
+  session loss is not yet implemented — a report gap surfaces as a stalled
+  stream rather than a transparent re-establish; (2) a steady-state report
+  arriving while a concurrent round-trip (read/write/invoke) on the same node
+  owns the socket is acked but its value is not delivered to the consumer (a
+  pure subscription stream loses nothing). Both are fixed by routing off-exchange
+  reports out of the round-trip path / the full always-listening demux._

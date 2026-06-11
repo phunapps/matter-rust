@@ -50,7 +50,17 @@ async function loadImSchemas() {
     );
 }
 
-const { TlvInvokeRequest, TlvReadRequest, TlvWriteRequest, TlvWriteResponse } = await loadImSchemas();
+const {
+    TlvInvokeRequest,
+    TlvReadRequest,
+    TlvWriteRequest,
+    TlvWriteResponse,
+    TlvSubscribeRequest,
+    TlvSubscribeResponse,
+    TlvStatusResponse,
+    TlvDataReport,
+    TlvBoolean,
+} = await loadImSchemas();
 
 // encodeTlv (TlvStream form, for TlvAny fields) must exist on schemas.
 if (typeof TlvString.encodeTlv !== 'function') {
@@ -283,6 +293,62 @@ writeFixture('write', 'mixed_status_response.json', {
         { endpoint: 0, cluster: 0x28, attribute: 0x05, status: 0 },
         { endpoint: 0, cluster: 0x28, attribute: 0x06, status: 1 },
     ],
+});
+
+// ---------------------------------------------------------------------
+// SUBSCRIBE fixtures (gate matter-interaction::subscription — M8.5)
+// ---------------------------------------------------------------------
+
+// SubscribeRequest: OnOff.OnOff on ep 1, min 1s / max 30s.
+writeFixture('subscribe', 'subscribe_onoff.json', {
+    keep_subscriptions: false,
+    min_interval_floor: 1,
+    max_interval_ceiling: 30,
+    paths: [{ endpoint: 1, cluster: 0x06, attribute: 0x0000 }],
+    expected_message_b64: b64(TlvSubscribeRequest.encode({
+        keepSubscriptions: false,
+        minIntervalFloorSeconds: 1,
+        maxIntervalCeilingSeconds: 30,
+        attributeRequests: [{ endpointId: 1, clusterId: 0x06, attributeId: 0x0000 }],
+        isFabricFiltered: false,
+        interactionModelRevision: 11,
+    })),
+});
+
+// SubscribeResponse parse: subscriptionId + maxInterval.
+writeFixture('subscribe', 'subscribe_response.json', {
+    subscription_id: 0x1234_5678,
+    max_interval: 30,
+    response_message_b64: b64(TlvSubscribeResponse.encode({
+        subscriptionId: 0x1234_5678,
+        maxInterval: 30,
+        interactionModelRevision: 11,
+    })),
+});
+
+// StatusResponse: success ack (the controller's per-report ack).
+writeFixture('subscribe', 'status_response_success.json', {
+    status: 0,
+    expected_message_b64: b64(TlvStatusResponse.encode({
+        status: 0,
+        interactionModelRevision: 11,
+    })),
+});
+
+// Steady-state ReportData: subscriptionId + OnOff.OnOff(ep 1) = true.
+writeFixture('subscribe', 'report_data_subscribed.json', {
+    subscription_id: 0x1234_5678,
+    attributes: [{ endpoint: 1, cluster: 0x06, attribute: 0x0000, bool: true }],
+    response_message_b64: b64(TlvDataReport.encode({
+        subscriptionId: 0x1234_5678,
+        attributeReports: [{
+            attributeData: {
+                path: { endpointId: 1, clusterId: 0x06, attributeId: 0x0000 },
+                data: TlvBoolean.encodeTlv(true),
+            },
+        }],
+        interactionModelRevision: 11,
+    })),
 });
 
 console.log('capture-im: all fixtures written.');

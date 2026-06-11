@@ -169,4 +169,40 @@ impl Node {
             }),
         }
     }
+
+    /// Subscribe to attribute reports for `paths` (concrete or wildcard). The
+    /// device reports the priming values, then changes within
+    /// `[min_interval, max_interval]` seconds. Await reports via
+    /// [`Subscription::next`](crate::subscription::Subscription::next).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped, or any
+    /// connect / transport / interaction-model error while establishing the
+    /// subscription.
+    pub async fn subscribe(
+        &self,
+        paths: &[ReadPath],
+        min_interval: u16,
+        max_interval: u16,
+    ) -> Result<crate::subscription::Subscription, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Subscribe {
+                node_id: self.node_id,
+                paths: paths.to_vec(),
+                min_interval,
+                max_interval,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        let (report_rx, key) = rx.await.map_err(|_| Error::ControllerStopped)??;
+        Ok(crate::subscription::Subscription {
+            rx: report_rx,
+            tx: self.tx.clone(),
+            key,
+            cancelled: false,
+        })
+    }
 }

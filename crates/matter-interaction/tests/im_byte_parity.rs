@@ -21,7 +21,11 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use matter_interaction::invoke::build_invoke_request;
 use matter_interaction::path::AttributePath;
 use matter_interaction::read::build_read_request_paths;
+use matter_interaction::subscription::{
+    build_status_response, build_subscribe_request, parse_subscribe_response, SubscribeRequest,
+};
 use matter_interaction::CommandPath;
+use matter_interaction::{parse_report_data, ReadPath};
 use serde::Deserialize;
 use std::{fs, path::PathBuf};
 
@@ -239,4 +243,209 @@ fn write_response_parses_matter_js() {
         asserted += 1;
     }
     assert!(asserted > 0, "no write-response fixtures parsed");
+}
+
+// ---------------------------------------------------------------------------
+// Subscribe byte-parity fixtures
+// ---------------------------------------------------------------------------
+
+/// Fixture for a `SubscribeRequest` message — contains the input parameters
+/// and the matter.js-encoded `expected_message_b64`.
+#[derive(Deserialize)]
+struct SubscribeRequestFixture {
+    keep_subscriptions: bool,
+    min_interval_floor: u16,
+    max_interval_ceiling: u16,
+    paths: Vec<SubscribePathFixture>,
+    expected_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct SubscribePathFixture {
+    endpoint: Option<u16>,
+    cluster: Option<u32>,
+    attribute: Option<u32>,
+}
+
+/// Fixture for a `SubscribeResponse` message — contains the expected parse
+/// results and the matter.js-encoded `response_message_b64`.
+#[derive(Deserialize)]
+struct SubscribeResponseFixture {
+    subscription_id: u32,
+    max_interval: u16,
+    response_message_b64: String,
+}
+
+/// Fixture for a `StatusResponse` message — contains the status code and
+/// the matter.js-encoded `expected_message_b64`.
+#[derive(Deserialize)]
+struct StatusResponseFixture {
+    status: u8,
+    expected_message_b64: String,
+}
+
+/// Fixture for a subscribed `ReportData` — contains the expected
+/// `subscription_id`, attribute list, and the matter.js-encoded
+/// `response_message_b64`.
+#[derive(Deserialize)]
+struct ReportDataSubscribedFixture {
+    subscription_id: u32,
+    attributes: Vec<ReportDataAttributeFixture>,
+    response_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct ReportDataAttributeFixture {
+    endpoint: u16,
+    cluster: u32,
+    attribute: u32,
+    #[serde(rename = "bool")]
+    bool_value: Option<bool>,
+}
+
+/// `build_subscribe_request` matches matter.js byte-for-byte.
+#[test]
+fn subscribe_request_matches_matter_js() {
+    let paths = list_jsons("subscribe");
+    if paths.is_empty() {
+        eprintln!("skipping: no subscribe fixtures (run `cargo xtask capture-im`)");
+        return;
+    }
+    let mut asserted = 0;
+    for path in &paths {
+        let bytes = fs::read(path).unwrap();
+        let f: SubscribeRequestFixture = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue, // not a subscribe-request fixture
+        };
+        let our_paths: Vec<ReadPath> = f
+            .paths
+            .iter()
+            .map(|p| ReadPath {
+                endpoint: p.endpoint,
+                cluster: p.cluster,
+                attribute: p.attribute,
+            })
+            .collect();
+        let req = SubscribeRequest {
+            keep_subscriptions: f.keep_subscriptions,
+            min_interval_floor: f.min_interval_floor,
+            max_interval_ceiling: f.max_interval_ceiling,
+            paths: our_paths,
+        };
+        let ours = build_subscribe_request(&req);
+        let theirs = B64.decode(&f.expected_message_b64).unwrap();
+        assert_eq!(
+            ours,
+            theirs,
+            "SubscribeRequest mismatch for {path:?}\n  ours:   {}\n  theirs: {}",
+            hex::encode(&ours),
+            hex::encode(&theirs)
+        );
+        asserted += 1;
+    }
+    assert!(asserted > 0, "no subscribe-request fixtures parsed");
+}
+
+/// `parse_subscribe_response` parses the matter.js-captured bytes correctly.
+#[test]
+fn subscribe_response_parses_matter_js() {
+    let paths = list_jsons("subscribe");
+    if paths.is_empty() {
+        eprintln!("skipping: no subscribe fixtures (run `cargo xtask capture-im`)");
+        return;
+    }
+    let mut asserted = 0;
+    for path in &paths {
+        let bytes = fs::read(path).unwrap();
+        let f: SubscribeResponseFixture = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue, // not a subscribe-response fixture
+        };
+        let msg = B64.decode(&f.response_message_b64).unwrap();
+        let resp = parse_subscribe_response(&msg).unwrap();
+        assert_eq!(
+            resp.subscription_id, f.subscription_id,
+            "subscriptionId mismatch for {path:?}"
+        );
+        assert_eq!(
+            resp.max_interval, f.max_interval,
+            "maxInterval mismatch for {path:?}"
+        );
+        asserted += 1;
+    }
+    assert!(asserted > 0, "no subscribe-response fixtures parsed");
+}
+
+/// `build_status_response` matches matter.js byte-for-byte.
+#[test]
+fn status_response_matches_matter_js() {
+    let paths = list_jsons("subscribe");
+    if paths.is_empty() {
+        eprintln!("skipping: no subscribe fixtures (run `cargo xtask capture-im`)");
+        return;
+    }
+    let mut asserted = 0;
+    for path in &paths {
+        let bytes = fs::read(path).unwrap();
+        let f: StatusResponseFixture = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue, // not a status-response fixture
+        };
+        let ours = build_status_response(f.status);
+        let theirs = B64.decode(&f.expected_message_b64).unwrap();
+        assert_eq!(
+            ours,
+            theirs,
+            "StatusResponse mismatch for {path:?}\n  ours:   {}\n  theirs: {}",
+            hex::encode(&ours),
+            hex::encode(&theirs)
+        );
+        asserted += 1;
+    }
+    assert!(asserted > 0, "no status-response fixtures parsed");
+}
+
+/// `parse_report_data` surfaces `subscription_id` from a subscribed report.
+#[test]
+fn report_data_subscribed_parses_matter_js() {
+    let paths = list_jsons("subscribe");
+    if paths.is_empty() {
+        eprintln!("skipping: no subscribe fixtures (run `cargo xtask capture-im`)");
+        return;
+    }
+    let mut asserted = 0;
+    for path in &paths {
+        let bytes = fs::read(path).unwrap();
+        let f: ReportDataSubscribedFixture = match serde_json::from_slice(&bytes) {
+            Ok(v) => v,
+            Err(_) => continue, // not a report-data-subscribed fixture
+        };
+        let msg = B64.decode(&f.response_message_b64).unwrap();
+        let report = parse_report_data(&msg).unwrap();
+        assert_eq!(
+            report.subscription_id,
+            Some(f.subscription_id),
+            "subscription_id mismatch for {path:?}"
+        );
+        assert_eq!(
+            report.attributes.len(),
+            f.attributes.len(),
+            "attribute count mismatch for {path:?}"
+        );
+        for (got, want) in report.attributes.iter().zip(&f.attributes) {
+            assert_eq!(got.0.endpoint, want.endpoint, "endpoint mismatch");
+            assert_eq!(got.0.cluster, want.cluster, "cluster mismatch");
+            assert_eq!(got.0.attribute, want.attribute, "attribute mismatch");
+            if let Some(expected_bool) = want.bool_value {
+                assert_eq!(
+                    got.1,
+                    matter_codec::Value::Bool(expected_bool),
+                    "value mismatch for {path:?}"
+                );
+            }
+        }
+        asserted += 1;
+    }
+    assert!(asserted > 0, "no report-data-subscribed fixtures parsed");
 }

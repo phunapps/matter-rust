@@ -1,13 +1,17 @@
 //! The owning controller task. Holds the transport, `SessionManager`,
-//! discovery, and `ControllerState`; processes [`Command`]s sequentially.
-//! Connect/round-trip logic is filled in Task 4.
+//! discovery, and `ControllerState`. Processes [`Command`]s; while any
+//! subscription is active it also listens for unsolicited reports.
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use matter_commissioning::driver::AsyncDatagram;
 use matter_commissioning::NocRng;
-use matter_transport::{Discovery, SessionId, SessionManager};
+use matter_transport::{
+    DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolId, SessionId, SessionManager,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::Error;
@@ -15,6 +19,30 @@ use crate::fabric::FabricConfig;
 use crate::snapshot;
 use crate::state::ControllerState;
 use crate::store::ControllerStore;
+use crate::subscription::AttributeReport;
+
+/// IM opcodes used by the subscription flow.
+const OP_SUBSCRIBE_REQUEST: u8 = 0x03;
+const OP_SUBSCRIBE_RESPONSE: u8 = 0x04;
+const OP_REPORT_DATA: u8 = 0x05;
+const OP_STATUS_RESPONSE: u8 = 0x01;
+
+/// How often the loop wakes to drive MRP / liveness when no MRP deadline is
+/// pending and subscriptions are active.
+const LIVENESS_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Per-subscription routing state held by the actor.
+struct SubEntry {
+    /// Channel to the consumer's [`Subscription`].
+    tx: mpsc::Sender<AttributeReport>,
+    /// Operational peer address (for `StatusResponse` acks).
+    peer: SocketAddr,
+}
+
+/// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
+/// and the `(session, exchange)` key (the `Node` adds the command sender to
+/// build the public [`Subscription`]).
+pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u16));
 
 /// Messages the handles send to the owning task. Each carries a `oneshot`
 /// reply sender; a dropped reply sender means the caller gave up.
@@ -23,10 +51,8 @@ pub(crate) enum Command {
         cfg: FabricConfig,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
-    /// Raw secured IM round-trip to `node_id` (typed verbs wrap this in M8.4).
-    // Variant constructed in Node::round_trip (crate-internal). Task 4 wires the
-    // handler; the #[allow] is removed when that code lands.
-    #[allow(dead_code)]
+    /// Raw secured IM round-trip to `node_id`. Constructed by the crate-internal
+    /// `Node::round_trip`, which the typed `read`/`write`/`invoke` verbs wrap.
     RoundTrip {
         node_id: u64,
         opcode: u8,
@@ -39,6 +65,17 @@ pub(crate) enum Command {
         setup_payload: matter_commissioning::SetupPayload,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// Establish a subscription to `paths` on `node_id`; returns the report
+    /// receiver + `(session, exchange)` key for the `Node` to wrap.
+    Subscribe {
+        node_id: u64,
+        paths: Vec<matter_interaction::ReadPath>,
+        min_interval: u16,
+        max_interval: u16,
+        reply: oneshot::Sender<Result<SubEstablished, Error>>,
+    },
+    /// Cancel the subscription identified by its `(session, exchange)` key.
+    CancelSubscription { key: (SessionId, u16) },
     /// Test/diagnostic: how many live cached sessions exist.
     #[cfg(test)]
     SessionCount { reply: oneshot::Sender<usize> },
@@ -62,6 +99,9 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
     trust: Option<crate::trust::AttestationTrust>,
     admin_vendor_id: u16,
+    /// Active subscriptions, keyed by `(session, exchange)`. While non-empty,
+    /// the run loop listens for unsolicited steady-state reports.
+    subscriptions: HashMap<(SessionId, u16), SubEntry>,
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -84,38 +124,101 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             cache: HashMap::new(),
             trust,
             admin_vendor_id,
+            subscriptions: HashMap::new(),
         }
     }
 
-    /// The task loop: process commands until all handles drop.
+    /// The task loop. With no active subscription it simply awaits commands
+    /// (recv is owned only inside a command's `secured_round_trip`), so the
+    /// round-trip / read / commission paths are byte-for-byte unchanged. While
+    /// any subscription is active it also listens for unsolicited steady-state
+    /// reports and drives MRP, between command handlers — recv is never owned
+    /// concurrently (a command handler runs to completion first).
+    ///
+    /// KNOWN LIMITATION: a steady-state `ReportData` that arrives *while* a
+    /// concurrent round-trip owns recv inside `secured_round_trip` is consumed
+    /// there (counter recorded in the replay window) and discarded; on the
+    /// device's retransmit it is recognised as a duplicate and re-acked, so the
+    /// device stops resending — but that report's *value* is not delivered to
+    /// the consumer. This bounded silent-loss window only exists when the caller
+    /// issues round-trips on a node it is concurrently subscribed to (a pure
+    /// subscription stream loses nothing). A full fix routes off-exchange
+    /// subscription reports out of `secured_round_trip` (deferred with
+    /// auto-resubscribe to the subscription-hardening follow-up).
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
-        while let Some(cmd) = rx.recv().await {
-            match cmd {
-                Command::CreateFabric { cfg, reply } => {
-                    let _ = reply.send(self.handle_create_fabric(&cfg));
+        loop {
+            if self.subscriptions.is_empty() {
+                match rx.recv().await {
+                    Some(cmd) => self.dispatch(cmd).await,
+                    None => return,
                 }
-                Command::RoundTrip {
-                    node_id,
-                    opcode,
-                    protocol_id,
-                    payload,
-                    reply,
-                } => {
-                    let _ = reply.send(
-                        self.handle_round_trip(node_id, opcode, protocol_id, &payload)
-                            .await,
-                    );
+            } else {
+                let now = Instant::now();
+                let sleep_for = self
+                    .sessions
+                    .poll_timeout()
+                    .map_or(LIVENESS_TICK, |d| d.saturating_duration_since(now));
+                tokio::select! {
+                    biased;
+                    maybe = rx.recv() => match maybe {
+                        Some(cmd) => self.dispatch(cmd).await,
+                        None => return,
+                    },
+                    recv = self.transport.recv_from() => {
+                        if let Ok((packet, from)) = recv {
+                            self.demux_subscription_inbound(&packet, from).await;
+                        }
+                    }
+                    () = tokio::time::sleep(sleep_for) => {
+                        self.drive_subscription_mrp().await;
+                    }
                 }
-                Command::Commission {
-                    setup_payload,
-                    reply,
-                } => {
-                    let _ = reply.send(self.handle_commission(setup_payload).await);
-                }
-                #[cfg(test)]
-                Command::SessionCount { reply } => {
-                    let _ = reply.send(self.cache.len());
-                }
+            }
+        }
+    }
+
+    /// Process one command.
+    async fn dispatch(&mut self, cmd: Command) {
+        match cmd {
+            Command::CreateFabric { cfg, reply } => {
+                let _ = reply.send(self.handle_create_fabric(&cfg));
+            }
+            Command::RoundTrip {
+                node_id,
+                opcode,
+                protocol_id,
+                payload,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.handle_round_trip(node_id, opcode, protocol_id, &payload)
+                        .await,
+                );
+            }
+            Command::Commission {
+                setup_payload,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_commission(setup_payload).await);
+            }
+            Command::Subscribe {
+                node_id,
+                paths,
+                min_interval,
+                max_interval,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.handle_subscribe(node_id, &paths, min_interval, max_interval)
+                        .await,
+                );
+            }
+            Command::CancelSubscription { key } => {
+                self.subscriptions.remove(&key);
+            }
+            #[cfg(test)]
+            Command::SessionCount { reply } => {
+                let _ = reply.send(self.cache.len());
             }
         }
     }
@@ -346,6 +449,196 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         )
         .await?;
         Ok(resp.payload)
+    }
+
+    /// Establish a subscription: send a `SubscribeRequest`, absorb the priming
+    /// `ReportData`(s) (forwarding their attributes + acking), and register the
+    /// subscription on the `SubscribeResponse`. Steady-state reports then arrive
+    /// via the run loop's `demux_subscription_inbound`.
+    async fn handle_subscribe(
+        &mut self,
+        node_id: u64,
+        paths: &[matter_interaction::ReadPath],
+        min_interval: u16,
+        max_interval: u16,
+    ) -> Result<SubEstablished, Error> {
+        let fabric_id = self.sole_fabric()?.fabric_id;
+        let (sid, peer) = match self.cache.get(&(fabric_id, node_id)) {
+            Some(c) => (c.session_id, c.peer),
+            None => self.connect(node_id).await?,
+        };
+
+        let req =
+            matter_interaction::build_subscribe_request(&matter_interaction::SubscribeRequest {
+                keep_subscriptions: false,
+                min_interval_floor: min_interval,
+                max_interval_ceiling: max_interval,
+                paths: paths.to_vec(),
+            });
+        let out = self.sessions.encode_outbound(
+            sid,
+            None,
+            OP_SUBSCRIBE_REQUEST,
+            ProtocolId::INTERACTION_MODEL,
+            &req,
+            MrpFlags { reliable: true },
+            Instant::now(),
+        )?;
+        let exchange = out.exchange_id;
+        self.transport
+            .send_to(&out.wire_bytes, peer)
+            .await
+            .map_err(|e| Error::Operational(format!("subscribe send: {e}")))?;
+
+        let (tx, rx) = mpsc::channel::<AttributeReport>(64);
+
+        // Bounded handshake: collect priming reports + ack them until the
+        // SubscribeResponse arrives (or MRP gives up).
+        loop {
+            let now = Instant::now();
+            let sleep_for = self
+                .sessions
+                .poll_timeout()
+                .map_or(LIVENESS_TICK, |d| d.saturating_duration_since(now));
+            tokio::select! {
+                biased;
+                recv = self.transport.recv_from() => {
+                    let (packet, _from) = recv.map_err(|e| Error::Operational(format!("subscribe recv: {e}")))?;
+                    if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
+                        continue;
+                    }
+                    let decoded = match self.sessions.decode_inbound(&packet, Instant::now()) {
+                        Ok(d) => d,
+                        Err(matter_transport::Error::UnknownSession(_) | matter_transport::Error::DecryptionFailed) => continue,
+                        Err(e) => return Err(Error::Operational(format!("subscribe decode: {e}"))),
+                    };
+                    match decoded {
+                        DecodeInboundOutput::AppMessage { session_id, exchange_id, opcode, payload, .. }
+                            if exchange_id == exchange =>
+                        {
+                            if opcode == OP_REPORT_DATA {
+                                Self::forward_report(&payload, &tx);
+                                self.send_status_ack(session_id, exchange_id, peer).await?;
+                            } else if opcode == OP_SUBSCRIBE_RESPONSE {
+                                self.subscriptions.insert((session_id, exchange_id), SubEntry { tx, peer });
+                                return Ok((rx, (session_id, exchange_id)));
+                            }
+                        }
+                        DecodeInboundOutput::AppMessage { .. } | DecodeInboundOutput::AckOnly { .. } => {}
+                        DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
+                            let _ = self.transport.send_to(&ack_packet, peer).await;
+                        }
+                    }
+                }
+                () = tokio::time::sleep(sleep_for) => {
+                    for event in self.sessions.handle_timeout(Instant::now()) {
+                        match event {
+                            MrpEvent::Retransmit { packet, .. } | MrpEvent::SendStandaloneAck { packet, .. } => {
+                                let _ = self.transport.send_to(&packet, peer).await;
+                            }
+                            MrpEvent::Expired { .. } => {
+                                return Err(Error::Operational("subscribe handshake timed out".into()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Parse a `ReportData` payload and push each attribute to the subscription.
+    fn forward_report(payload: &[u8], tx: &mpsc::Sender<AttributeReport>) {
+        if let Ok(rd) = matter_interaction::parse_report_data(payload) {
+            for (path, value) in rd.attributes {
+                let _ = tx.try_send(AttributeReport { path, value });
+            }
+        }
+    }
+
+    /// Send an application `StatusResponse(Success)` on a subscription exchange
+    /// (also piggybacks the MRP ack for the received report).
+    async fn send_status_ack(
+        &mut self,
+        sid: SessionId,
+        exchange: u16,
+        peer: SocketAddr,
+    ) -> Result<(), Error> {
+        let status = matter_interaction::build_status_response(0);
+        let out = self.sessions.encode_outbound(
+            sid,
+            Some(exchange),
+            OP_STATUS_RESPONSE,
+            ProtocolId::INTERACTION_MODEL,
+            &status,
+            MrpFlags { reliable: false },
+            Instant::now(),
+        )?;
+        self.transport
+            .send_to(&out.wire_bytes, peer)
+            .await
+            .map_err(|e| Error::Operational(format!("status ack send: {e}")))?;
+        Ok(())
+    }
+
+    /// Route an unsolicited inbound packet: a steady-state `ReportData` on a
+    /// known subscription exchange is forwarded + acked; everything else is
+    /// skipped.
+    async fn demux_subscription_inbound(&mut self, packet: &[u8], from: SocketAddr) {
+        if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
+            return;
+        }
+        let Ok(decoded) = self.sessions.decode_inbound(packet, Instant::now()) else {
+            return;
+        };
+        match decoded {
+            DecodeInboundOutput::AppMessage {
+                session_id,
+                exchange_id,
+                opcode,
+                payload,
+                ..
+            } => {
+                if opcode == OP_REPORT_DATA {
+                    if let Some(entry) = self.subscriptions.get(&(session_id, exchange_id)) {
+                        let tx = entry.tx.clone();
+                        let peer = entry.peer;
+                        Self::forward_report(&payload, &tx);
+                        let _ = self.send_status_ack(session_id, exchange_id, peer).await;
+                    }
+                }
+            }
+            DecodeInboundOutput::AckOnly { .. } => {}
+            DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
+                let _ = self.transport.send_to(&ack_packet, from).await;
+            }
+        }
+    }
+
+    /// Drive MRP retransmits/acks for active subscription sessions.
+    async fn drive_subscription_mrp(&mut self) {
+        for event in self.sessions.handle_timeout(Instant::now()) {
+            match event {
+                MrpEvent::Retransmit {
+                    session_id, packet, ..
+                }
+                | MrpEvent::SendStandaloneAck {
+                    session_id, packet, ..
+                } => {
+                    if let Some(peer) = self.peer_for_session(session_id) {
+                        let _ = self.transport.send_to(&packet, peer).await;
+                    }
+                }
+                MrpEvent::Expired { .. } => {}
+            }
+        }
+    }
+
+    /// The peer address of any active subscription on `sid`.
+    fn peer_for_session(&self, sid: SessionId) -> Option<SocketAddr> {
+        self.subscriptions
+            .iter()
+            .find(|((s, _), _)| *s == sid)
+            .map(|(_, e)| e.peer)
     }
 }
 
@@ -599,6 +892,129 @@ mod tests {
         }
     }
 
+    /// Build a `SubscribeResponse` TLV (device side): ctx0=subscriptionId,
+    /// ctx2=maxInterval, ctx0xFF=revision — matching `parse_subscribe_response`.
+    fn build_subscribe_response(subscription_id: u32, max_interval: u16) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), u64::from(subscription_id))
+            .unwrap();
+        w.put_uint(Tag::Context(2), u64::from(max_interval))
+            .unwrap();
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// Device acting as a subscription source: completes CASE, answers a
+    /// `SubscribeRequest` with a `SubscribeResponse`, then sends `num_reports`
+    /// steady-state `ReportData` frames (OnOff.OnOff(ep1)=true) on the
+    /// subscription exchange.
+    async fn run_subscription_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        num_reports: usize,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        // Sigma1 -> Sigma2
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        // Sigma3 -> success StatusReport, absorb the ack.
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        // Receive the SubscribeRequest; reply with SubscribeResponse (the
+        // reply piggybacks the request's MRP ack).
+        let (wire, _) = io.recv_from().await.unwrap();
+        let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id,
+            opcode,
+            ..
+        } = decoded
+        else {
+            panic!("expected SubscribeRequest");
+        };
+        assert_eq!(opcode, 0x03, "expected SubscribeRequest opcode");
+        let sub_resp = build_subscribe_response(0x1234_5678, 30);
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x04,
+                ProtocolId::INTERACTION_MODEL,
+                &sub_resp,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        // Stream steady-state reports on the same exchange; drain the
+        // controller's StatusResponse acks between sends.
+        let report_blob = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        for _ in 0..num_reports {
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &report_blob,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
+        }
+    }
+
     /// Shared loopback setup: one fabric in the store, a device NOC under its
     /// RCAC, a paired datagram, and a discovery pinned to the device end.
     struct Harness {
@@ -795,5 +1211,59 @@ mod tests {
         assert_eq!(*value, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscribe_streams_reports_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_subscription_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            3,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let mut sub = node
+            .subscribe(
+                &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                1,
+                30,
+            )
+            .await
+            .expect("subscribe");
+
+        // The device streams 3 steady-state reports; the consumer receives them.
+        for _ in 0..3 {
+            let report = sub.next().await.expect("subscription report");
+            assert_eq!(report.path.endpoint, 1);
+            assert_eq!(report.path.cluster, 0x06);
+            assert_eq!(report.value, matter_codec::Value::Bool(true));
+        }
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
     }
 }
