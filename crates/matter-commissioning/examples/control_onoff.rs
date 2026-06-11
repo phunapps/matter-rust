@@ -34,7 +34,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 use clap::Parser;
 
-use matter_cert::{MatterTime, TrustAnchor, TrustedRoots};
+use matter_cert::{MatterCertificate, MatterTime, TrustAnchor, TrustedRoots};
 use matter_clusters::gen::{basic_information, on_off};
 use matter_codec::{Tag, TlvWriter, Value};
 use matter_commissioning::attestation::{CdSigningRoots, Paa, PaaTrustStore};
@@ -495,6 +495,25 @@ async fn main() -> anyhow::Result<()> {
         wifi_credentials: None, // ECM/Ethernet path; see runbook.
     };
 
+    // Mint the commissioner's operational NOC ONCE here — used both for the
+    // commissioning CASE (passed into DriverConfig) and the subsequent
+    // operational CASE (passed into operational_phase). One stable identity
+    // for both, as M8's persistent CommissionerIdentity will provide.
+    // FLAG: per-run identity only — M8 owns a stable persistent commissioner identity.
+    let (commissioner_signer, commissioner_pkcs8) =
+        RingSigner::generate().context("generating commissioner operational key")?;
+    let commissioner_noc = issue_noc(
+        &rcac_fabric,
+        &VerifiedCsr {
+            public_key: commissioner_signer.public_key().clone(),
+        },
+        COMMISSIONER_NODE_ID,
+        &[],
+        (now, MatterTime::NO_EXPIRY),
+        &SystemNocRng,
+    )
+    .context("minting commissioner operational NOC")?;
+
     let commissionable_addr = match &cli.addr {
         Some(s) => Some(parse_dial_addr(s)?),
         None => None,
@@ -505,6 +524,8 @@ async fn main() -> anyhow::Result<()> {
         commissioner,
         commissionable_addr,
         passcode: payload.passcode.as_u32(),
+        commissioner_noc: &commissioner_noc,
+        commissioner_signer_pkcs8: &commissioner_pkcs8,
     };
 
     let transport = if dial_ipv4 {
@@ -527,7 +548,14 @@ async fn main() -> anyhow::Result<()> {
         device.peer_node_id
     );
 
-    operational_phase(&transport, &mut discovery, &rcac_fabric, now).await?;
+    operational_phase(
+        &transport,
+        &mut discovery,
+        &rcac_fabric,
+        commissioner_signer,
+        &commissioner_noc,
+    )
+    .await?;
 
     println!("✅ control_onoff complete");
     Ok(())
@@ -535,11 +563,17 @@ async fn main() -> anyhow::Result<()> {
 
 /// Open a fresh operational CASE session to the just-commissioned device and
 /// drive the five `matter-clusters` operations over it.
+///
+/// Accepts the pre-minted commissioner identity (the same NOC and private key
+/// passed to `DriverConfig` during commissioning) so that one stable identity
+/// is used for both the commissioning CASE and the operational CASE, matching
+/// the M8 persistent `CommissionerIdentity` model.
 async fn operational_phase(
     transport: &TokioUdpTransport,
     discovery: &mut MdnsSdDiscovery,
     rcac_fabric: &FabricRecord,
-    now: MatterTime,
+    commissioner_signer: RingSigner,
+    commissioner_noc: &MatterCertificate,
 ) -> anyhow::Result<()> {
     println!("opening operational CASE session…");
 
@@ -549,30 +583,13 @@ async fn operational_phase(
         .await
         .context("resolving operational device address via mDNS")?;
 
-    // Mint the commissioner's own operational NOC (fresh keypair, signed by the
-    // fabric RCAC) — its CASE identity. Same per-call minting commission() does
-    // internally; FLAG: M8 owns a stable persistent commissioner identity.
-    let (commissioner_signer, _pkcs8) =
-        RingSigner::generate().context("generating commissioner operational key")?;
-    let verified_csr = VerifiedCsr {
-        public_key: commissioner_signer.public_key().clone(),
-    };
-    let commissioner_noc = issue_noc(
-        rcac_fabric,
-        &verified_csr,
-        COMMISSIONER_NODE_ID,
-        &[],
-        (now, MatterTime::NO_EXPIRY),
-        &SystemNocRng,
-    )
-    .context("minting commissioner operational NOC")?;
     // The *operational* IPK (what Sigma1's destination id is HMAC'd with) is
     // derived from the SAME epoch key AddNOC distributed, salted with the
     // compressed fabric id (spec §4.15.2) — NOT the raw epoch key.
     let operational_ipk =
         derive_operational_ipk(&IPK_EPOCH_KEY, &compressed).context("deriving operational IPK")?;
     let credentials = CaseCredentials {
-        noc: commissioner_noc,
+        noc: commissioner_noc.clone(),
         icac: rcac_fabric.icac_cert.clone(), // None for a root-only fabric.
         signer: Box::new(commissioner_signer),
         fabric_id: FABRIC_ID,

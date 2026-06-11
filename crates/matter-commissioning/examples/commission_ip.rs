@@ -28,7 +28,7 @@ use clap::Parser;
 use matter_cert::MatterTime;
 use matter_commissioning::attestation::{CdSigningRoots, Paa, PaaTrustStore};
 use matter_commissioning::driver::{commission, DriverConfig};
-use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
+use matter_commissioning::noc::{issue_noc, FabricRecord, NocRng, SystemNocRng, VerifiedCsr};
 use matter_commissioning::setup::{parse_manual_code, parse_qr, SetupPayload};
 use matter_commissioning::state_machine::{CommissionedFabric, CommissionerConfig};
 use matter_crypto::{derive_compressed_fabric_id, RingSigner, Signer};
@@ -378,10 +378,29 @@ async fn main() -> anyhow::Result<()> {
     // bind(0) is IPv6 dual-stack, which cannot route to a plain IPv4 peer).
     let dial_ipv4 = commissionable_addr.is_some_and(|a| a.is_ipv4());
 
+    // Persistent commissioner operational identity (replaces the former
+    // per-call throwaway mint inside commission()).
+    // FLAG: per-run identity only — M8 owns a stable persistent commissioner identity.
+    let (commissioner_signer, commissioner_pkcs8) =
+        RingSigner::generate().context("generating commissioner operational key")?;
+    let commissioner_noc = issue_noc(
+        &fabric,
+        &VerifiedCsr {
+            public_key: commissioner_signer.public_key().clone(),
+        },
+        COMMISSIONER_NODE_ID,
+        &[],
+        (now, matter_cert::MatterTime::NO_EXPIRY),
+        &SystemNocRng,
+    )
+    .context("minting commissioner operational NOC")?;
+
     let config = DriverConfig {
         commissioner,
         commissionable_addr,
         passcode: payload.passcode.as_u32(),
+        commissioner_noc: &commissioner_noc,
+        commissioner_signer_pkcs8: &commissioner_pkcs8,
     };
 
     // Real IO: UDP socket (IPv6 dual-stack by default; IPv4 for a v4 --addr) + mDNS.

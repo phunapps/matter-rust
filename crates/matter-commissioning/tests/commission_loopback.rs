@@ -190,6 +190,7 @@ fn build_device_case_setup(fabric: &FabricRecord, ipk_epoch_key: [u8; 16]) -> Mo
 /// Run the full mock-device loopback commission (the M6.6.4 gate),
 /// returning normally on success. Shared by the headline test and the
 /// wiretrace capture test.
+#[allow(clippy::too_many_lines)] // Commissioning setup is inherently verbose; extracting sub-functions would obscure the mutually-consistent assembly.
 async fn run_loopback_commission() {
     // ── 1. Mock-device PKI: PAA/PAI/DAC chain + the PAA trust store the
     //       controller validates the device attestation against. ──────────────
@@ -262,10 +263,28 @@ async fn run_loopback_commission() {
         rng,
         wifi_credentials: None, // Ethernet path
     };
+    // Persistent commissioner operational identity (replaces the former
+    // per-call throwaway mint inside commission()).
+    let (commissioner_signer, commissioner_pkcs8) =
+        matter_crypto::RingSigner::generate().expect("commissioner keypair");
+    let commissioner_noc = matter_commissioning::issue_noc(
+        &fabric,
+        &matter_commissioning::VerifiedCsr {
+            public_key: matter_crypto::CaseSigner::public_key(&commissioner_signer).clone(),
+        },
+        COMMISSIONER_NODE_ID,
+        &[],
+        (now(), matter_cert::MatterTime::NO_EXPIRY),
+        &matter_commissioning::SystemNocRng,
+    )
+    .expect("commissioner NOC");
+
     let config = DriverConfig {
         commissioner,
         commissionable_addr: Some(dev_addr),
         passcode: PASSCODE,
+        commissioner_noc: &commissioner_noc,
+        commissioner_signer_pkcs8: &commissioner_pkcs8,
     };
 
     // ── 6. Device CASE setup (NOC under the SAME fabric RCAC; operational IPK
