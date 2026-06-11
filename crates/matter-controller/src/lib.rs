@@ -8,6 +8,7 @@
 
 pub(crate) mod actor;
 pub mod builder;
+pub(crate) mod commission;
 pub mod controller;
 pub(crate) mod credentials;
 pub mod error;
