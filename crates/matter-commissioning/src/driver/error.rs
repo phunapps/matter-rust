@@ -76,4 +76,13 @@ pub enum DriverError {
     /// human-readable summary surfaced by the state machine.
     #[error("commissioning aborted: {0}")]
     Aborted(String),
+
+    /// A chunked read exceeded its safety bound (too many chunks or too many
+    /// total bytes) before the device sent a final chunk — a buggy or hostile
+    /// peer. Carries the name of the cap that was hit.
+    #[error("chunked read exceeded its bound: {limit}")]
+    ReadTooLarge {
+        /// Which cap was hit (`"MAX_READ_CHUNKS"` or `"MAX_READ_BYTES"`).
+        limit: &'static str,
+    },
 }
