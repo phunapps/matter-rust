@@ -60,6 +60,14 @@ pub(crate) enum Command {
         payload: Vec<u8>,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
+    /// Chunked secured read to `node_id` — returns every `ReportData` chunk
+    /// payload in order (the `Node` reassembles them via `ReportAccumulator`).
+    /// Used by `Node::read`; a non-chunked read yields a single-element `Vec`.
+    Read {
+        node_id: u64,
+        payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<Vec<u8>>, Error>>,
+    },
     /// Commission a device from a parsed setup payload; returns its node id.
     Commission {
         setup_payload: matter_commissioning::SetupPayload,
@@ -194,6 +202,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.handle_round_trip(node_id, opcode, protocol_id, &payload)
                         .await,
                 );
+            }
+            Command::Read {
+                node_id,
+                payload,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_read(node_id, &payload).await);
             }
             Command::Commission {
                 setup_payload,
@@ -449,6 +464,51 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         )
         .await?;
         Ok(resp.payload)
+    }
+
+    /// Chunked read with the same connect-on-demand + reconnect-once policy as
+    /// [`handle_round_trip`](Self::handle_round_trip): try the cached session,
+    /// drop it and reconnect once on a driver error, else connect fresh.
+    async fn handle_read(&mut self, node_id: u64, payload: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
+        let fabric_id = self.sole_fabric()?.fabric_id;
+
+        if let Some((sid, peer)) = self
+            .cache
+            .get(&(fabric_id, node_id))
+            .map(|c| (c.session_id, c.peer))
+        {
+            match self.read_once(sid, peer, payload).await {
+                Ok(resp) => return Ok(resp),
+                // Stale cached session — evict, re-establish once, retry.
+                Err(Error::Driver(_)) => {
+                    self.cache.remove(&(fabric_id, node_id));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        let (sid, peer) = self.connect(node_id).await?;
+        self.read_once(sid, peer, payload).await
+    }
+
+    /// One `secured_read` (chunked read transaction) over an established session.
+    async fn read_once(
+        &mut self,
+        sid: SessionId,
+        peer: std::net::SocketAddr,
+        payload: &[u8],
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        let chunks = matter_commissioning::driver::secured_read(
+            &self.transport,
+            &mut self.sessions,
+            sid,
+            peer,
+            crate::node::OP_READ_REQUEST,
+            matter_transport::ProtocolId::INTERACTION_MODEL,
+            payload,
+        )
+        .await?;
+        Ok(chunks)
     }
 
     /// Establish a subscription: send a `SubscribeRequest`, absorb the priming
@@ -811,6 +871,143 @@ mod tests {
         w.put_uint(Tag::Context(0xFF), 11).unwrap(); // interactionModelRevision
         w.end_container().unwrap(); // /ReportDataMessage
         buf
+    }
+
+    /// Like [`build_report_data`] but sets `MoreChunkedMessages` (context tag 3)
+    /// when `more` — i.e. a non-final chunk that must be acked + continued.
+    fn build_report_data_chunk(
+        ep: u16,
+        cl: u32,
+        at: u32,
+        value: &matter_codec::Value,
+        more: bool,
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), u64::from(ep)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(cl)).unwrap();
+        w.put_uint(Tag::Context(4), u64::from(at)).unwrap();
+        w.end_container().unwrap();
+        w.write_value(Tag::Context(2), value).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap(); // /AttributeReports
+        if more {
+            w.put_bool(Tag::Context(3), true).unwrap(); // MoreChunkedMessages
+        }
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// Loopback device that completes CASE, then answers ONE `Node::read` with a
+    /// two-chunk `ReportData` sequence: chunk 0 (`MoreChunkedMessages=true`),
+    /// then — after the controller's `StatusResponse` ack — the final chunk.
+    async fn run_chunked_read_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        chunk0: Vec<u8>,
+        chunk1: Vec<u8>,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+
+        // --- CASE handshake (identical to run_loopback_device) ---
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        // --- Chunked read transaction ---
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        // 1. Receive the ReadRequest.
+        let (wire, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage { exchange_id, .. } =
+            sessions.decode_inbound(&wire, Instant::now()).unwrap()
+        else {
+            panic!("expected ReadRequest");
+        };
+        // 2. Send chunk 0 (MoreChunkedMessages=true), reliably.
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                &chunk0,
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        // 3. Receive the controller's StatusResponse ack (opcode 0x01).
+        let (ack, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage { opcode, .. } =
+            sessions.decode_inbound(&ack, Instant::now()).unwrap()
+        else {
+            panic!("expected StatusResponse ack");
+        };
+        assert_eq!(opcode, 0x01, "controller must ack the chunk");
+        // 4. Send the final chunk.
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                &chunk1,
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
     }
 
     /// Loopback device: completes CASE, then replies to each secured IM request
@@ -1216,6 +1413,60 @@ mod tests {
         assert_eq!(path.cluster, 0x06);
         assert_eq!(path.attribute, 0x0000);
         assert_eq!(*value, matter_codec::Value::Bool(true));
+
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_reassembles_chunked_report_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Wildcard read answered in two chunks: chunk 0 = ep0/BasicInfo.VendorID
+        // (MoreChunkedMessages=true), final chunk = ep1/OnOff.OnOff. Reassembly
+        // must surface BOTH — the real-device truncation this whole follow-up fixes.
+        let chunk0 = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(5010), true);
+        let chunk1 = build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+        let device = tokio::spawn(run_chunked_read_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            chunk0,
+            chunk1,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let report = node
+            .read(&[matter_interaction::ReadPath::all()])
+            .await
+            .expect("chunked read");
+
+        assert_eq!(report.len(), 2, "both chunks reassembled");
+        assert_eq!(report[0].0.endpoint, 0);
+        assert_eq!(report[0].1, matter_codec::Value::Uint(5010));
+        assert_eq!(report[1].0.endpoint, 1);
+        assert_eq!(report[1].0.cluster, 0x06);
+        assert_eq!(report[1].1, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
     }
