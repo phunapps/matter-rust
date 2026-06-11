@@ -4,19 +4,21 @@
 
 use crate::error::ImError;
 use crate::path::attribute_path_from_value;
-pub use crate::path::AttributePath;
+pub use crate::path::{AttributePath, ReadPath};
 use crate::{
     expect_message_struct, read_container_members, read_container_value, skip_container,
     IM_REVISION,
 };
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
-/// Build a `ReadRequestMessage` for one or more concrete attribute paths.
+/// Build a `ReadRequestMessage` for the given (possibly wildcard) paths.
 ///
-/// `FabricFiltered` is `false` (commissioning reads global attributes).
+/// Each [`ReadPath`] field that is `Some` is emitted as a context-tagged member of
+/// the `AttributePathIB` list (endpoint=2, cluster=3, attribute=4); `None` fields
+/// are omitted (wildcard). `FabricFiltered` is `false`.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn build_read_request(paths: &[AttributePath]) -> Vec<u8> {
+pub fn build_read_request_paths(paths: &[ReadPath]) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
@@ -26,12 +28,18 @@ pub fn build_read_request(paths: &[AttributePath]) -> Vec<u8> {
     for p in paths {
         w.start_list(Tag::Anonymous)
             .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(2), u64::from(p.endpoint))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(3), u64::from(p.cluster))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(4), u64::from(p.attribute))
-            .expect("infallible: vec writer");
+        if let Some(ep) = p.endpoint {
+            w.put_uint(Tag::Context(2), u64::from(ep))
+                .expect("infallible: vec writer");
+        }
+        if let Some(cl) = p.cluster {
+            w.put_uint(Tag::Context(3), u64::from(cl))
+                .expect("infallible: vec writer");
+        }
+        if let Some(at) = p.attribute {
+            w.put_uint(Tag::Context(4), u64::from(at))
+                .expect("infallible: vec writer");
+        }
         w.end_container().expect("infallible: vec writer");
     }
     w.end_container().expect("infallible: vec writer"); // AttributeRequests array
@@ -41,6 +49,17 @@ pub fn build_read_request(paths: &[AttributePath]) -> Vec<u8> {
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
+}
+
+/// Build a `ReadRequestMessage` for one or more concrete attribute paths.
+///
+/// Delegates to [`build_read_request_paths`] so that the output is
+/// byte-identical to before: same context tags 2/3/4, same order, same
+/// `isFabricFiltered`/`interactionModelRevision`.
+#[must_use]
+pub fn build_read_request(paths: &[AttributePath]) -> Vec<u8> {
+    let read_paths: Vec<ReadPath> = paths.iter().map(|&p| ReadPath::from(p)).collect();
+    build_read_request_paths(&read_paths)
 }
 
 /// Parsed `ReportDataMessage`: concrete `(path, value)` attribute pairs.

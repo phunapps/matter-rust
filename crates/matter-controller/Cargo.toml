@@ -21,6 +21,7 @@ matter-cert = { path = "../matter-cert", version = "0.2.0-pre" }
 matter-crypto = { path = "../matter-crypto", version = "0.1.0-pre" }
 matter-transport = { path = "../matter-transport", version = "0.1.0-pre" }
 matter-commissioning = { path = "../matter-commissioning", version = "0.0.0", features = ["driver"] }
+matter-interaction = { path = "../matter-interaction", version = "0.1.0-pre" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 matter-clusters = { path = "../matter-clusters", version = "0.0.0" }
 thiserror = { workspace = true }

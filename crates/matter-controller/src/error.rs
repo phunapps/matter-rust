@@ -45,6 +45,10 @@ pub enum Error {
     #[error("controller task is no longer running")]
     ControllerStopped,
 
+    /// An Interaction-Model request/response failed to build or parse.
+    #[error("interaction model error: {0}")]
+    InteractionModel(#[from] matter_interaction::ImError),
+
     /// A cryptographic derivation (operational IPK / compressed fabric id) failed.
     #[error("operational key derivation failed: {0}")]
     Operational(String),

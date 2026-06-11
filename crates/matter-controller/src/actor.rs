@@ -487,6 +487,35 @@ mod tests {
     /// Device side: complete the CASE handshake (unsecured Sigma framing,
     /// mirroring `matter-commissioning`'s `run_case` loopback test), then
     /// answer `echoes` secured IM round-trips with a `b"pong"` `ReportData`.
+    /// Build a minimal `ReportDataMessage` carrying one attribute
+    /// `(ep, cl, at) = value`. Mirrors the exact TLV structure
+    /// `matter-interaction`'s `parse_report_data` expects (see its
+    /// `parses_single_attribute_value` test).
+    fn build_report_data(ep: u16, cl: u32, at: u32, value: &matter_codec::Value) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // ReportDataMessage
+        w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeReportIB
+        w.start_structure(Tag::Context(1)).unwrap(); // AttributeData
+        w.start_list(Tag::Context(1)).unwrap(); // Path (AttributePathIB)
+        w.put_uint(Tag::Context(2), u64::from(ep)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(cl)).unwrap();
+        w.put_uint(Tag::Context(4), u64::from(at)).unwrap();
+        w.end_container().unwrap(); // /Path
+        w.write_value(Tag::Context(2), value).unwrap(); // Data
+        w.end_container().unwrap(); // /AttributeData
+        w.end_container().unwrap(); // /AttributeReportIB
+        w.end_container().unwrap(); // /AttributeReports
+        w.put_uint(Tag::Context(0xFF), 11).unwrap(); // interactionModelRevision
+        w.end_container().unwrap(); // /ReportDataMessage
+        buf
+    }
+
+    /// Loopback device: completes CASE, then replies to each secured IM request
+    /// with `reply_payload` (opcode 0x05). Pass `b"pong"` for a raw-round-trip
+    /// echo, or a `build_report_data` blob to answer a `Node::read`.
     async fn run_loopback_device(
         io: InMemoryDatagram,
         ctrl_addr: std::net::SocketAddr,
@@ -494,6 +523,7 @@ mod tests {
         roots: TrustedRoots,
         responder_session_id: u16,
         echoes: usize,
+        reply_payload: Vec<u8>,
     ) {
         let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
 
@@ -560,7 +590,7 @@ mod tests {
                     Some(exchange_id),
                     0x05, // ReportData
                     ProtocolId::INTERACTION_MODEL,
-                    b"pong",
+                    &reply_payload,
                     MrpFlags { reliable: false },
                     Instant::now(),
                 )
@@ -569,10 +599,20 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn connects_caches_and_round_trips_over_loopback() {
-        // One fabric; the controller authenticates as its commissioner identity,
-        // the device gets its own NOC under the same RCAC.
+    /// Shared loopback setup: one fabric in the store, a device NOC under its
+    /// RCAC, a paired datagram, and a discovery pinned to the device end.
+    struct Harness {
+        store: Arc<MemStore>,
+        ctrl_io: InMemoryDatagram,
+        dev_io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        discovery: FixedDiscovery,
+        device_creds: CaseCredentials,
+        device_roots: TrustedRoots,
+        device_node_id: u64,
+    }
+
+    fn loopback_harness() -> Harness {
         let fabric = {
             let cfg = FabricConfig {
                 fabric_id: 0x0102_0304_0506_0708,
@@ -587,7 +627,6 @@ mod tests {
         };
         let device_node_id: u64 = 0x0000_0000_0000_0042;
 
-        // Device credentials: NOC for `device_node_id` signed by the fabric RCAC.
         let device_record = fabric.to_fabric_record().unwrap();
         let (device_signer, _pkcs8) = RingSigner::generate().unwrap();
         let device_noc = issue_noc(
@@ -620,9 +659,6 @@ mod tests {
             rcac_public_key: *fabric.rcac_cert.public_key().as_bytes(),
         };
 
-        // Seed the store with the fabric, then open the controller over the
-        // controller end of the datagram pair + a discovery pinned to the
-        // device end.
         let store = Arc::new(MemStore::default());
         store
             .save(
@@ -640,6 +676,31 @@ mod tests {
             instance_name: operational_instance_name(compressed, device_node_id),
         };
 
+        Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        }
+    }
+
+    #[tokio::test]
+    async fn connects_caches_and_round_trips_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
         let device = tokio::spawn(run_loopback_device(
             dev_io,
             ctrl_addr,
@@ -647,6 +708,7 @@ mod tests {
             device_roots,
             0x00D2,
             2,
+            b"pong".to_vec(),
         ));
 
         let controller = crate::controller::MatterController::with_components(
@@ -679,6 +741,58 @@ mod tests {
             1,
             "still one session — reused, not re-established"
         );
+
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_verb_returns_report_data_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // The device answers the one read with a ReportData carrying
+        // OnOff.OnOff(ep 1) = true.
+        let report_blob = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            report_blob,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let report = node
+            .read(&[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)])
+            .await
+            .expect("read");
+
+        assert_eq!(report.len(), 1);
+        let (path, value) = &report[0];
+        assert_eq!(path.endpoint, 1);
+        assert_eq!(path.cluster, 0x06);
+        assert_eq!(path.attribute, 0x0000);
+        assert_eq!(*value, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
     }
