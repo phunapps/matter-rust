@@ -51,10 +51,8 @@ pub(crate) enum Command {
         cfg: FabricConfig,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
-    /// Raw secured IM round-trip to `node_id` (typed verbs wrap this in M8.4).
-    // Variant constructed in Node::round_trip (crate-internal). Task 4 wires the
-    // handler; the #[allow] is removed when that code lands.
-    #[allow(dead_code)]
+    /// Raw secured IM round-trip to `node_id`. Constructed by the crate-internal
+    /// `Node::round_trip`, which the typed `read`/`write`/`invoke` verbs wrap.
     RoundTrip {
         node_id: u64,
         opcode: u8,
@@ -131,12 +129,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// The task loop. With no active subscription it simply awaits commands
-    /// (recv is owned only inside a command's `secured_round_trip`). While any
-    /// subscription is active it also listens for unsolicited steady-state
+    /// (recv is owned only inside a command's `secured_round_trip`), so the
+    /// round-trip / read / commission paths are byte-for-byte unchanged. While
+    /// any subscription is active it also listens for unsolicited steady-state
     /// reports and drives MRP, between command handlers — recv is never owned
-    /// concurrently (a command handler runs to completion first), and reports
-    /// are reliable so any that arrive during a brief round-trip are
-    /// retransmitted by the device and acked once the loop resumes.
+    /// concurrently (a command handler runs to completion first).
+    ///
+    /// KNOWN LIMITATION: a steady-state `ReportData` that arrives *while* a
+    /// concurrent round-trip owns recv inside `secured_round_trip` is consumed
+    /// there (counter recorded in the replay window) and discarded; on the
+    /// device's retransmit it is recognised as a duplicate and re-acked, so the
+    /// device stops resending — but that report's *value* is not delivered to
+    /// the consumer. This bounded silent-loss window only exists when the caller
+    /// issues round-trips on a node it is concurrently subscribed to (a pure
+    /// subscription stream loses nothing). A full fix routes off-exchange
+    /// subscription reports out of `secured_round_trip` (deferred with
+    /// auto-resubscribe to the subscription-hardening follow-up).
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
             if self.subscriptions.is_empty() {
