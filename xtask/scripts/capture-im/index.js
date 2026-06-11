@@ -167,6 +167,31 @@ writeFixture('read', 'network_commissioning_feature_map.json', {
     })),
 });
 
+// Wildcard: ALL attributes of OnOff (0x06) on endpoint 1 (attributeId omitted).
+writeFixture('read', 'onoff_wildcard_attributes.json', {
+    paths: [{ endpoint: 1, cluster: 0x06 }],
+    expected_message_b64: b64(TlvReadRequest.encode({
+        attributeRequests: [
+            { endpointId: 1, clusterId: 0x06 },
+        ],
+        isFabricFiltered: false,
+        interactionModelRevision: 11,
+    })),
+});
+
+// Wildcard: BasicInformation.NodeLabel (0x28 / 0x05) across ALL endpoints
+// (endpointId omitted).
+writeFixture('read', 'endpoint_wildcard_basic_info.json', {
+    paths: [{ cluster: 0x28, attribute: 0x05 }],
+    expected_message_b64: b64(TlvReadRequest.encode({
+        attributeRequests: [
+            { clusterId: 0x28, attributeId: 0x05 },
+        ],
+        isFabricFiltered: false,
+        interactionModelRevision: 11,
+    })),
+});
+
 // ---------------------------------------------------------------------
 // WRITE fixtures (gate matter-interaction::write — Task 6)
 // ---------------------------------------------------------------------
