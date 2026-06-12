@@ -97,6 +97,9 @@ pub async fn resolve_operational<D: Discovery>(
 const OP_SIGMA1: u8 = 0x30;
 const OP_SIGMA2: u8 = 0x31;
 const OP_SIGMA3: u8 = 0x32;
+/// `SecureChannel` `StatusReport` opcode (spec §4.10.1.1) — the frame the
+/// device sends to close the handshake after the terminal `Sigma3`.
+const OP_STATUS_REPORT: u8 = 0x40;
 
 const CASE_EXCHANGE_ID: u16 = 1;
 
@@ -146,7 +149,7 @@ pub async fn run_case<T: AsyncDatagram>(
 
     let sigma1 = initiator.start()?;
     let sigma2 = exch
-        .send_and_recv(transport, peer, OP_SIGMA1, &sigma1, None)
+        .send_and_recv(transport, peer, OP_SIGMA1, OP_SIGMA2, &sigma1, None)
         .await?;
     if let Err(e) = require_handshake_opcode(&sigma2, OP_SIGMA2) {
         // Best-effort ack so a rejecting device stops retransmitting its
@@ -172,6 +175,7 @@ pub async fn run_case<T: AsyncDatagram>(
             transport,
             peer,
             OP_SIGMA3,
+            OP_STATUS_REPORT,
             &sigma3,
             Some(sigma2.message_counter),
         )

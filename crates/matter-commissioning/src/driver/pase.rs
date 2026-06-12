@@ -22,6 +22,9 @@ const OP_PBKDF_PARAM_RESPONSE: u8 = 0x21;
 const OP_PASE_PAKE1: u8 = 0x22;
 const OP_PASE_PAKE2: u8 = 0x23;
 const OP_PASE_PAKE3: u8 = 0x24;
+/// `SecureChannel` `StatusReport` opcode (spec §4.10.1.1) — the frame the
+/// device sends to close the handshake after the terminal `Pake3`.
+const OP_STATUS_REPORT: u8 = 0x40;
 
 const PASE_EXCHANGE_ID: u16 = 1;
 
@@ -51,7 +54,14 @@ pub async fn run_pase<T: AsyncDatagram>(
 
     let request = prover.start()?;
     let resp = exch
-        .send_and_recv(transport, peer, OP_PBKDF_PARAM_REQUEST, &request, None)
+        .send_and_recv(
+            transport,
+            peer,
+            OP_PBKDF_PARAM_REQUEST,
+            OP_PBKDF_PARAM_RESPONSE,
+            &request,
+            None,
+        )
         .await?;
     if let Err(e) = require_handshake_opcode(&resp, OP_PBKDF_PARAM_RESPONSE) {
         // Best-effort ack so a rejecting device stops retransmitting its
@@ -69,6 +79,7 @@ pub async fn run_pase<T: AsyncDatagram>(
             transport,
             peer,
             OP_PASE_PAKE1,
+            OP_PASE_PAKE2,
             &pake1,
             Some(resp.message_counter),
         )
@@ -93,6 +104,7 @@ pub async fn run_pase<T: AsyncDatagram>(
             transport,
             peer,
             OP_PASE_PAKE3,
+            OP_STATUS_REPORT,
             &pake3,
             Some(pake2.message_counter),
         )
@@ -134,7 +146,6 @@ mod tests {
 
     const OP_PBKDF_RESP: u8 = 0x21;
     const OP_PAKE2: u8 = 0x23;
-    const OP_STATUS_REPORT: u8 = 0x40;
     const OP_STANDALONE_ACK: u8 = 0x10;
 
     /// `SecureChannel` `StatusReport` body: general code, protocol id,

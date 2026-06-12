@@ -234,6 +234,12 @@ pub struct UnsecuredExchange {
     retransmit: Duration,
     response_timeout: Duration,
     max_attempts: u8,
+    /// The peer's highest message counter we have already consumed as a real
+    /// response on this exchange, if any. Used by `send_and_recv` to drop a
+    /// retransmitted prior-step frame (stop-and-wait dedup): the unsecured path
+    /// has no `ReplayWindow` (that lives only in the secured `SessionManager`),
+    /// so we track it here. `None` until the first response is consumed.
+    last_consumed_peer_counter: Option<u32>,
 }
 
 impl UnsecuredExchange {
@@ -252,6 +258,7 @@ impl UnsecuredExchange {
             retransmit: Duration::from_millis(300),
             response_timeout: Duration::from_secs(30),
             max_attempts: 5,
+            last_consumed_peer_counter: None,
         }
     }
 
@@ -330,9 +337,28 @@ impl UnsecuredExchange {
     /// Send one unsecured message (initiator, reliable) and await the
     /// exchange's response, retransmitting on timeout. `ack` piggybacks the
     /// previous message's counter when the caller has one to acknowledge.
-    /// MRP standalone acks (`SecureChannel` `0x10`) and frames from other
-    /// exchanges are skipped, not returned; a standalone ack stops further
-    /// retransmission and extends the wait to the response timeout.
+    ///
+    /// `opcode` is the opcode being sent; `expected_opcode` is the
+    /// `SecureChannel` opcode of the awaited next-step response (e.g.
+    /// `PBKDFParamResponse 0x21` after sending `PBKDFParamRequest 0x20`, or
+    /// `StatusReport 0x40` after the terminal `Pake3`/`Sigma3`).
+    ///
+    /// Frames that are NOT the awaited next step are skipped rather than
+    /// returned, so the handshake waits for the real frame instead of aborting:
+    ///
+    /// - MRP standalone acks (`SecureChannel 0x10`) — a standalone ack stops
+    ///   further retransmission and extends the wait to the response timeout.
+    /// - Frames from other exchanges (mismatched exchange id).
+    /// - **Stale prior-step responses**: an in-flight MRP retransmit of a
+    ///   previous step's response (the peer resends reliable frames until it
+    ///   sees our next message) matches the exchange id but is not the awaited
+    ///   opcode. The unsecured path has no `ReplayWindow`, so these are dropped
+    ///   here both by opcode (not `expected_opcode`) and, as a backstop, by
+    ///   message-counter dedup (counter `<=` the last consumed response).
+    ///
+    /// A terminal `StatusReport 0x40` is always surfaced (it carries a possible
+    /// rejection); a genuinely unexpected frame that never resolves still fails
+    /// via the response deadline rather than hanging.
     ///
     /// # Errors
     ///
@@ -340,11 +366,18 @@ impl UnsecuredExchange {
     /// - [`DriverError::Transport`] / [`DriverError::UnexpectedSecuredMessage`]
     ///   if the reply does not decode as an unsecured message.
     /// - [`DriverError::Timeout`] if no reply arrives within `max_attempts`.
+    // Cohesive single retransmit/recv loop: the length comes from the
+    // cfg-gated wire-tracing blocks and the documented per-frame skip cases
+    // (secured straggler, foreign exchange, standalone-ack, counter dedup,
+    // opcode gate). Splitting it would force threading the loop state
+    // (acked/attempts/counter) through a helper for no readability gain.
+    #[allow(clippy::too_many_lines)]
     pub async fn send_and_recv<T: AsyncDatagram>(
         &mut self,
         transport: &T,
         peer: SocketAddr,
         opcode: u8,
+        expected_opcode: u8,
         app_payload: &[u8],
         ack: Option<u32>,
     ) -> Result<UnsecuredMessage, DriverError> {
@@ -424,6 +457,34 @@ impl UnsecuredExchange {
                         acked = true;
                         continue;
                     }
+                    // Counter dedup backstop: a retransmit of a prior-step
+                    // response carries a counter we have already consumed on
+                    // this exchange. The unsecured path has no ReplayWindow, so
+                    // drop it here (stop-and-wait: each step's response counter
+                    // is strictly greater than the last).
+                    if let Some(last) = self.last_consumed_peer_counter {
+                        if msg.message_counter <= last {
+                            continue;
+                        }
+                    }
+                    // Opcode gate: skip any frame that is neither the awaited
+                    // next-step opcode nor a terminal StatusReport (a rejection
+                    // we must surface). A retransmitted previous-step response
+                    // (e.g. PBKDFParamResponse 0x21 while awaiting Pake2 0x23)
+                    // is dropped here rather than returned — returning it would
+                    // trip the require_handshake_opcode gate and abort the
+                    // handshake (observed cause of intermittent commissioning
+                    // failures on lossy/duplicating networks).
+                    if msg.protocol_id == ProtocolId::SECURE_CHANNEL
+                        && msg.opcode != expected_opcode
+                        && msg.opcode != OPCODE_STATUS_REPORT
+                    {
+                        continue;
+                    }
+                    // This is the awaited response (or a terminal StatusReport):
+                    // record its counter so any later retransmit of it is
+                    // deduped on the next step.
+                    self.last_consumed_peer_counter = Some(msg.message_counter);
                     // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
                     #[cfg(feature = "tracing")]
                     tracing::debug!(
@@ -524,6 +585,7 @@ mod tests {
 
         let controller = exch.send_and_recv(
             &ctrl_io, dev_addr, 0x20, /* PBKDFParamRequest */
+            0x21, /* awaiting PBKDFParamResponse */
             b"req", None,
         );
 
@@ -666,7 +728,7 @@ mod tests {
         let ctrl_addr = ctrl_io.local_addr();
         let mut exch = UnsecuredExchange::new(1, 7, 0xE0E0);
 
-        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, b"req", None);
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", None);
 
         let device = async {
             let (pkt, _) = dev_io.recv_from().await.unwrap();
@@ -717,7 +779,7 @@ mod tests {
         let ctrl_addr = ctrl_io.local_addr();
         let mut exch = UnsecuredExchange::new(1, 7, 0xE0E0);
 
-        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, b"sigma1", None);
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
 
         let device = async {
             use matter_transport::{
@@ -761,6 +823,127 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unsecured_send_and_recv_skips_stale_prior_step_response() {
+        // After step N's response is consumed and we send step N+1's request,
+        // an in-flight MRP retransmit of step N's response (the device resends
+        // reliable frames until it sees our next message) still matches the
+        // exchange id. send_and_recv must skip it and wait for the real
+        // next-step frame, not return it (which would abort the handshake at
+        // the require_handshake_opcode gate). Here: awaiting Pake2 (0x23), the
+        // device first re-emits the previous PBKDFParamResponse (0x21), then
+        // sends the real Pake2.
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7, 0xE0E0);
+
+        let controller = exch.send_and_recv(
+            &ctrl_io, dev_addr, 0x22, /* Pake1 */
+            0x23, /* awaiting Pake2 */
+            b"pake1", None,
+        );
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&pkt).unwrap();
+            // Stale retransmit of the PREVIOUS step's response (0x21).
+            let stale = encode_unsecured(
+                100,
+                m.exchange_id,
+                0x21, /* PBKDFParamResponse — stale */
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                b"stale-pbkdf-response",
+            );
+            dev_io.send_to(&stale, ctrl_addr).await.unwrap();
+            // Then the real next-step frame, Pake2 (0x23).
+            let reply = encode_unsecured(
+                101,
+                m.exchange_id,
+                0x23,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                b"pake2",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        let got = got.unwrap();
+        assert_eq!(
+            got.opcode, 0x23,
+            "stale prior-step response must be skipped"
+        );
+        assert_eq!(got.payload, b"pake2");
+    }
+
+    #[tokio::test]
+    async fn unsecured_send_and_recv_unexpected_frame_times_out() {
+        // A frame that is neither the awaited next-step opcode, a standalone
+        // ack, nor a terminal StatusReport (and that never resolves) must not
+        // hang forever — the response deadline must still fire and surface a
+        // Timeout, so a misbehaving peer fails cleanly.
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7, 0xE0E0);
+        // Shorten the deadlines so the test is fast.
+        exch.retransmit = Duration::from_millis(30);
+        exch.response_timeout = Duration::from_millis(60);
+        exch.max_attempts = 2;
+
+        let controller = exch.send_and_recv(
+            &ctrl_io, dev_addr, 0x22, /* Pake1 */
+            0x23, /* awaiting Pake2 */
+            b"pake1", None,
+        );
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&pkt).unwrap();
+            // Standalone ack to stop retransmission and switch to the response
+            // deadline, then a wrong-opcode frame that is never followed by the
+            // real next-step frame.
+            let ack = encode_unsecured(
+                100,
+                m.exchange_id,
+                OPCODE_MRP_STANDALONE_ACK,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                Some(m.message_counter),
+                None,
+                b"",
+            );
+            dev_io.send_to(&ack, ctrl_addr).await.unwrap();
+            let stale = encode_unsecured(
+                101,
+                m.exchange_id,
+                0x21, /* wrong opcode, never resolves */
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                b"stale",
+            );
+            dev_io.send_to(&stale, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert!(
+            matches!(got, Err(DriverError::Timeout { exchange_id: 7 })),
+            "unexpected unresolving frame must time out, got: {got:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn unsecured_send_and_recv_retransmits_dropped_send() {
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
         let dev_addr = dev_io.local_addr();
@@ -769,7 +952,7 @@ mod tests {
 
         ctrl_io.set_drops(1); // drop the first send; the retransmit must land
 
-        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, b"req", None);
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", None);
 
         let device = async {
             let (pkt, _) = dev_io.recv_from().await.unwrap(); // sees the retransmit
