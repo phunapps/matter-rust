@@ -66,6 +66,27 @@ pub enum AttestationError {
     #[error("PAI is not authorized for DAC's product")]
     PaiVidNotAuthorized,
 
+    /// The PAA that anchored the chain is VID-scoped (its subject DN
+    /// carries a [`VendorId`]) but that VID does not equal the DAC/PAI
+    /// subject VID.
+    ///
+    /// Matter Core Spec §6.2.2.1 requires a commissioner to verify that
+    /// a VID-scoped PAA only anchors attestation chains whose DAC and
+    /// PAI subject VID equal the PAA's scoped VID. `rustls-webpki`
+    /// performs only RFC 5280 DN-chaining — it treats the Matter VID
+    /// OID as an opaque DN attribute, not as a `NameConstraint` — so
+    /// without this overlay a VID-scoped PAA could anchor a chain for a
+    /// different vendor. (chip's `DeviceAttestationVerifier` enforces
+    /// the same rule.)
+    #[error("VID-scoped PAA scope mismatch: PAA={paa_vid:?} DAC/PAI={dac_vid:?}")]
+    PaaVidScopeMismatch {
+        /// [`VendorId`] the anchoring PAA is scoped to (its subject DN).
+        paa_vid: VendorId,
+        /// [`VendorId`] observed on the DAC/PAI subject (these two are
+        /// already known equal by the time this check runs).
+        dac_vid: VendorId,
+    },
+
     /// `attestation_elements` TLV failed to decode or is missing
     /// required fields (CD bytes, nonce, timestamp).
     ///

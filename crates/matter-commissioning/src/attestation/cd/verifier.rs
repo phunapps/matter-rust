@@ -161,7 +161,10 @@ impl CdSigningRoots {
 /// 4. Decode the inner CD TLV.
 /// 5. Cross-check declared VID + PID against `expected_vid` /
 ///    `expected_pid` (sourced from the verified DAC chain by the
-///    caller).
+///    caller). Per Matter Core Spec §6.2.3, when the CD carries both
+///    `dac_origin_vendor_id` (tag 9) and `dac_origin_product_id`
+///    (tag 10), those override fields are compared instead of the CD's
+///    own `vendor_id` / `product_id_array`.
 ///
 /// # Errors
 ///
@@ -259,17 +262,49 @@ pub fn verify_certification_declaration(
     }
 
     // 6. Decode the inner CD TLV and cross-check VID / PID.
+    //
+    // Matter Core Spec §6.2.3: when the CD carries the optional
+    // `dac_origin_vendor_id` (tag 9) AND `dac_origin_product_id`
+    // (tag 10), the commissioner MUST validate the DAC/PAI subject
+    // VID/PID against THOSE origin fields, not the CD's own
+    // `vendor_id` / `product_id_array`. This supports CDs issued for a
+    // PAA/PAI scoped to a different vendor than the device's own VID
+    // (e.g. white-label / contract-manufactured products).
+    //
+    // Decision on partial presence: the spec treats `dac_origin_*` as a
+    // both-or-neither pair. We trigger the override only when BOTH are
+    // present; if exactly one is present we ignore the override and fall
+    // back to the standard fields (the safe, conservative reading — a
+    // half-specified override is not a valid §6.2.3 override).
     let parsed = parse_inner_cd_tlv(&content_bytes)?;
-    if parsed.vendor_id != expected_vid {
-        return Err(AttestationError::CertificationDeclarationVidMismatch {
-            declared: parsed.vendor_id,
-            expected: expected_vid,
-        });
-    }
-    if !parsed.product_ids.contains(&expected_pid) {
-        return Err(AttestationError::CertificationDeclarationPidMismatch(
-            expected_pid,
-        ));
+    if let (Some(origin_vid), Some(origin_pid)) =
+        (parsed.dac_origin_vendor_id, parsed.dac_origin_product_id)
+    {
+        // Override path: bind the DAC against the dac_origin_* fields.
+        if origin_vid != expected_vid {
+            return Err(AttestationError::CertificationDeclarationVidMismatch {
+                declared: origin_vid,
+                expected: expected_vid,
+            });
+        }
+        if origin_pid != expected_pid {
+            return Err(AttestationError::CertificationDeclarationPidMismatch(
+                expected_pid,
+            ));
+        }
+    } else {
+        // Standard path: bind against vendor_id / product_id_array.
+        if parsed.vendor_id != expected_vid {
+            return Err(AttestationError::CertificationDeclarationVidMismatch {
+                declared: parsed.vendor_id,
+                expected: expected_vid,
+            });
+        }
+        if !parsed.product_ids.contains(&expected_pid) {
+            return Err(AttestationError::CertificationDeclarationPidMismatch(
+                expected_pid,
+            ));
+        }
     }
 
     Ok(())
@@ -283,17 +318,30 @@ struct ParsedCd {
     vendor_id: VendorId,
     /// Product ID list (tag 2 — at least one element required).
     product_ids: Vec<ProductId>,
+    /// `dac_origin_vendor_id` (Matter Core Spec §6.3.1 tag 9, optional).
+    ///
+    /// When present (together with [`Self::dac_origin_product_id`]), the
+    /// commissioner MUST validate the DAC/PAI subject VID against THIS
+    /// value rather than [`Self::vendor_id`] (Matter Core Spec §6.2.3).
+    dac_origin_vendor_id: Option<VendorId>,
+    /// `dac_origin_product_id` (Matter Core Spec §6.3.1 tag 10, optional).
+    ///
+    /// The PID counterpart to [`Self::dac_origin_vendor_id`]; see its docs.
+    dac_origin_product_id: Option<ProductId>,
 }
 
 /// Decode the inner CD TLV per Matter Core Spec §6.3.1: an anonymous
 /// outer structure with context-tagged fields including tag 1
-/// (`vendor_id`, u16) and tag 2 (`product_id_array`, array of u16).
+/// (`vendor_id`, u16), tag 2 (`product_id_array`, array of u16), and the
+/// optional override fields tag 9 (`dac_origin_vendor_id`, u16) and tag
+/// 10 (`dac_origin_product_id`, u16).
 ///
 /// All other context-tagged fields (`format_version`, `device_type_id`,
 /// `certificate_id`, `security_level`, `security_information`,
-/// `version_number`, `certification_type`) and any future-extension
-/// fields are forward-compat ignored — the verifier only needs VID +
-/// PID for cross-checking against the DAC subject.
+/// `version_number`, `certification_type`, `authorized_paa_list`) and
+/// any future-extension fields are forward-compat ignored — the verifier
+/// only needs VID + PID (and the optional `dac_origin_*` overrides) for
+/// cross-checking against the DAC subject.
 fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
     use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 
@@ -311,6 +359,8 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
 
     let mut vid: Option<VendorId> = None;
     let mut pids: Vec<ProductId> = Vec::new();
+    let mut origin_vendor: Option<VendorId> = None;
+    let mut origin_product: Option<ProductId> = None;
 
     loop {
         match reader
@@ -360,6 +410,30 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
                     }
                 }
             }
+            // dac_origin_vendor_id (tag 9) — optional override; see §6.2.3.
+            Some(Element::Scalar {
+                tag: Tag::Context(9),
+                value: Value::Uint(v),
+            }) => {
+                if origin_vendor.is_some() {
+                    return Err(AttestationError::CertificationDeclarationTlvMalformed);
+                }
+                let v16 = u16::try_from(v)
+                    .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?;
+                origin_vendor = Some(VendorId::new(v16));
+            }
+            // dac_origin_product_id (tag 10) — optional override; see §6.2.3.
+            Some(Element::Scalar {
+                tag: Tag::Context(10),
+                value: Value::Uint(p),
+            }) => {
+                if origin_product.is_some() {
+                    return Err(AttestationError::CertificationDeclarationTlvMalformed);
+                }
+                let p16 = u16::try_from(p)
+                    .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?;
+                origin_product = Some(ProductId::new(p16));
+            }
             // Forward-compat: ignore other context-tagged scalars / containers.
             Some(_) => {}
         }
@@ -373,6 +447,8 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
     Ok(ParsedCd {
         vendor_id,
         product_ids: pids,
+        dac_origin_vendor_id: origin_vendor,
+        dac_origin_product_id: origin_product,
     })
 }
 
@@ -476,6 +552,12 @@ fn verify_ecdsa_p256_sha256(
 
 #[cfg(test)]
 mod tests {
+    // The CD test helpers pair `dac_origin_vid`/`dac_origin_pid` and
+    // `origin_vid`/`origin_pid` (and VendorId/ProductId locals) by design —
+    // the near-identical names mirror the spec field pairs. Same carve-out
+    // as `tests/support/mod.rs`.
+    #![allow(clippy::similar_names)]
+
     use super::*;
 
     #[test]
@@ -677,5 +759,253 @@ mod tests {
             err,
             AttestationError::CertificationDeclarationTlvMalformed
         ));
+    }
+
+    #[test]
+    fn parse_inner_cd_tlv_captures_dac_origin_fields() {
+        // Test-code carve-out: see CLAUDE.md.
+        #![allow(clippy::unwrap_used, clippy::expect_used)]
+        let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, Some(0x1234), Some(0x5678), &[0x8001]);
+        let parsed = parse_inner_cd_tlv(&tlv).expect("decodes with dac_origin");
+        assert_eq!(parsed.vendor_id, VendorId::new(0xFFF1));
+        assert_eq!(parsed.product_ids, vec![ProductId::new(0x8001)]);
+        assert_eq!(parsed.dac_origin_vendor_id, Some(VendorId::new(0x1234)));
+        assert_eq!(parsed.dac_origin_product_id, Some(ProductId::new(0x5678)));
+    }
+
+    // ── Fix B — CD dac_origin override binding (Matter §6.2.3) ──────────────
+    //
+    // These tests sign a synthetic CD with the bundled CSA-test signing key
+    // (which `CdSigningRoots::with_csa_test_roots()` trusts) and run it
+    // through the public `verify_certification_declaration`, exercising the
+    // dac_origin override path end-to-end:
+    //
+    //   - CD with dac_origin set + DAC matching the ORIGIN VID/PID (but NOT
+    //     the CD's own vendor_id) → accepted.
+    //   - CD with dac_origin set + DAC matching neither → rejected.
+    //   - CD WITHOUT dac_origin → unchanged: compares vendor_id /
+    //     product_id_array.
+
+    /// PKCS#8 private key for the bundled CSA-test CD signing root. The
+    /// matching public key is bundled in
+    /// `csa_cd_signing_roots/csa-test-cd-signing-root.pem` and trusted by
+    /// `CdSigningRoots::with_csa_test_roots()`.
+    const CSA_TEST_CD_SIGNING_KEY_PKCS8: &[u8] = include_bytes!(
+        "../../../../../test-vectors/commissioning/cd/csa-test-cd-signing-root.pkcs8.der"
+    );
+
+    /// Build the inner CD TLV per Matter Core Spec §6.3.1, optionally
+    /// including the `dac_origin_*` override fields (tags 9 / 10).
+    ///
+    /// Mirrors `xtask/src/capture_cd.rs::build_inner_cd_tlv` but adds the
+    /// optional tags 9/10 so the Fix B override path can be exercised.
+    #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+    fn build_inner_cd_tlv(
+        vendor_id: u16,
+        product_id: u16,
+        dac_origin_vid: Option<u16>,
+        dac_origin_pid: Option<u16>,
+        product_id_array: &[u16],
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 1).unwrap(); // format_version
+            w.put_uint(Tag::Context(1), u64::from(vendor_id)).unwrap(); // vendor_id
+            w.start_array(Tag::Context(2)).unwrap(); // product_id_array
+            let pids: Vec<u16> = if product_id_array.is_empty() {
+                vec![product_id]
+            } else {
+                product_id_array.to_vec()
+            };
+            for p in pids {
+                w.put_uint(Tag::Anonymous, u64::from(p)).unwrap();
+            }
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(3), 0x0100).unwrap(); // device_type_id
+            w.put_utf8(Tag::Context(4), "CSA00000000000000").unwrap(); // certificate_id
+            w.put_uint(Tag::Context(5), 0).unwrap(); // security_level
+            w.put_uint(Tag::Context(6), 0).unwrap(); // security_information
+            w.put_uint(Tag::Context(7), 1).unwrap(); // version_number
+            w.put_uint(Tag::Context(8), 0).unwrap(); // certification_type
+            if let Some(v) = dac_origin_vid {
+                w.put_uint(Tag::Context(9), u64::from(v)).unwrap();
+            }
+            if let Some(p) = dac_origin_pid {
+                w.put_uint(Tag::Context(10), u64::from(p)).unwrap();
+            }
+            w.end_container().unwrap();
+        }
+        buf
+    }
+
+    /// Sign `content` (the inner CD TLV) into a CMS `SignedData`
+    /// `ContentInfo` DER blob with the bundled CSA-test key, using the
+    /// no-`signedAttrs` shape the verifier expects. Mirrors
+    /// `xtask/src/capture_cd.rs::sign_into_cms`.
+    #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn sign_into_cms(content: &[u8]) -> Vec<u8> {
+        use cms::cert::IssuerAndSerialNumber;
+        use cms::content_info::{CmsVersion, ContentInfo};
+        use cms::signed_data::{
+            EncapsulatedContentInfo, SignedData, SignerIdentifier, SignerInfo, SignerInfos,
+        };
+        use const_oid::ObjectIdentifier;
+        use der::asn1::{Any, AnyRef, OctetString, SetOfVec};
+        use der::{Encode, Tag as DerTag};
+        use ring::rand::SystemRandom;
+        use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+        use spki::AlgorithmIdentifierOwned;
+        use x509_cert::name::RdnSequence;
+        use x509_cert::serial_number::SerialNumber;
+
+        const ID_DATA: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.1");
+        const ID_SIGNED_DATA: ObjectIdentifier =
+            ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.2");
+        const ID_SHA_256: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
+        const ECDSA_WITH_SHA_256: ObjectIdentifier =
+            ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2");
+
+        let rng = SystemRandom::new();
+        let key = EcdsaKeyPair::from_pkcs8(
+            &ECDSA_P256_SHA256_FIXED_SIGNING,
+            CSA_TEST_CD_SIGNING_KEY_PKCS8,
+            &rng,
+        )
+        .expect("bundled CSA-test CD signing key loads");
+        let signature = key.sign(&rng, content).expect("sign eContent");
+
+        let econtent_any =
+            Any::new(DerTag::OctetString, content.to_vec()).expect("Any(OctetString)");
+        let encap = EncapsulatedContentInfo {
+            econtent_type: ID_DATA,
+            econtent: Some(econtent_any),
+        };
+        let sha256 = AlgorithmIdentifierOwned {
+            oid: ID_SHA_256,
+            parameters: None,
+        };
+        let digest_algorithms =
+            SetOfVec::try_from(vec![sha256.clone()]).expect("digest_algorithms");
+        let serial = SerialNumber::new(&[0x01]).expect("serial");
+        let sid = SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+            issuer: RdnSequence::default(),
+            serial_number: serial,
+        });
+        let signature_octets =
+            OctetString::new(signature.as_ref().to_vec()).expect("signature octets");
+        let signer_info = SignerInfo {
+            version: CmsVersion::V1,
+            sid,
+            digest_alg: sha256,
+            signed_attrs: None,
+            signature_algorithm: AlgorithmIdentifierOwned {
+                oid: ECDSA_WITH_SHA_256,
+                parameters: None,
+            },
+            signature: signature_octets,
+            unsigned_attrs: None,
+        };
+        let signer_infos = SignerInfos(SetOfVec::try_from(vec![signer_info]).expect("signer set"));
+        let signed_data = SignedData {
+            version: CmsVersion::V1,
+            digest_algorithms,
+            encap_content_info: encap,
+            certificates: None,
+            crls: None,
+            signer_infos,
+        };
+        let signed_data_der = signed_data.to_der().expect("SignedData der");
+        let signed_data_any =
+            Any::from(AnyRef::try_from(signed_data_der.as_slice()).expect("AnyRef"));
+        let content_info = ContentInfo {
+            content_type: ID_SIGNED_DATA,
+            content: signed_data_any,
+        };
+        content_info.to_der().expect("ContentInfo der")
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn dac_origin_present_dac_matches_origin_is_accepted() {
+        // CD's own vendor_id/product_id_array are 0xFFF1 / 0x8001, but
+        // dac_origin says the DAC is scoped to 0x1234 / 0x5678. A DAC at
+        // 0x1234 / 0x5678 must be accepted (bound to the origin fields),
+        // even though it does NOT match the CD's own vendor_id.
+        let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, Some(0x1234), Some(0x5678), &[0x8001]);
+        let cd = sign_into_cms(&tlv);
+        let trust = CdSigningRoots::with_csa_test_roots();
+
+        verify_certification_declaration(
+            &cd,
+            VendorId::new(0x1234),
+            ProductId::new(0x5678),
+            &trust,
+        )
+        .expect("DAC matching dac_origin VID/PID must be accepted");
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn dac_origin_present_dac_matches_neither_is_rejected() {
+        // dac_origin = 0x1234/0x5678. A DAC at 0xFFF1/0x8001 (the CD's own
+        // vendor_id/pid) must be REJECTED, because the override path binds
+        // against dac_origin, not the CD's own fields.
+        let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, Some(0x1234), Some(0x5678), &[0x8001]);
+        let cd = sign_into_cms(&tlv);
+        let trust = CdSigningRoots::with_csa_test_roots();
+
+        let err = verify_certification_declaration(
+            &cd,
+            VendorId::new(0xFFF1),
+            ProductId::new(0x8001),
+            &trust,
+        )
+        .expect_err("DAC not matching dac_origin must be rejected");
+        assert!(
+            matches!(
+                err,
+                AttestationError::CertificationDeclarationVidMismatch {
+                    declared,
+                    expected,
+                } if declared == VendorId::new(0x1234) && expected == VendorId::new(0xFFF1)
+            ),
+            "expected VID mismatch against the dac_origin VID, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn no_dac_origin_uses_vendor_id_and_pid_array() {
+        // Without dac_origin, the standard path compares against the CD's
+        // own vendor_id / product_id_array (unchanged behaviour).
+        let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, None, None, &[0x8001, 0x8002]);
+        let cd = sign_into_cms(&tlv);
+        let trust = CdSigningRoots::with_csa_test_roots();
+
+        // A PID present in the array is accepted.
+        verify_certification_declaration(
+            &cd,
+            VendorId::new(0xFFF1),
+            ProductId::new(0x8002),
+            &trust,
+        )
+        .expect("DAC matching vendor_id and a member of product_id_array accepted");
+
+        // A PID NOT in the array is rejected (still the standard path).
+        let err = verify_certification_declaration(
+            &cd,
+            VendorId::new(0xFFF1),
+            ProductId::new(0x9999),
+            &trust,
+        )
+        .expect_err("PID outside product_id_array rejected");
+        assert!(
+            matches!(err, AttestationError::CertificationDeclarationPidMismatch(p)
+                if p == ProductId::new(0x9999)),
+            "expected PID mismatch, got {err:?}"
+        );
     }
 }

@@ -136,6 +136,9 @@ pub struct ChainVerification {
 ///   equal PAI subject VID.
 /// - [`AttestationError::PaiVidNotAuthorized`] — PAI is product-scoped
 ///   (carries a subject PID) and that PID does not equal the DAC's.
+/// - [`AttestationError::PaaVidScopeMismatch`] — the anchoring PAA is
+///   VID-scoped and its scoped VID does not equal the DAC/PAI subject
+///   VID (Matter §6.2.2.1).
 /// - [`AttestationError::Parse`] — a PAA in the trust store could not
 ///   be re-parsed by webpki (should be unreachable, since
 ///   [`Paa::from_der`] already validated the bytes).
@@ -224,17 +227,32 @@ pub fn verify_chain(
     // byte-comparing.
     let pai_issuer_contents =
         strip_sequence_wrapper(pai.issuer_raw()).ok_or(AttestationError::UntrustedRoot)?;
-    let paa_subject = trust_store
+    let (anchoring_paa, paa_subject) = trust_store
         .iter()
         .find_map(|paa| {
             let anchor = paa_to_trust_anchor(paa).ok()?;
             if anchor.subject.as_ref() == pai_issuer_contents {
-                Some(anchor.subject.as_ref().to_vec())
+                Some((paa, anchor.subject.as_ref().to_vec()))
             } else {
                 None
             }
         })
         .ok_or(AttestationError::UntrustedRoot)?;
+
+    // 7. Matter §6.2.2.1 — VID-scoped PAA scope. webpki name-chained the
+    //    PAI to this PAA on subject/issuer DN equality alone; it does
+    //    NOT interpret the Matter VID OID as a NameConstraint. So when
+    //    the anchoring PAA is itself VID-scoped, we must enforce that
+    //    its scoped VID equals the DAC/PAI subject VID — otherwise a
+    //    VID-scoped PAA could anchor a chain for a different vendor.
+    //    A non-VID-scoped PAA (subject_vid == None) imposes no
+    //    constraint. `dac_vid == pai_vid` was already established in
+    //    step 5, so comparing against `dac_vid` covers both.
+    if let Some(paa_vid) = anchoring_paa.subject_vid() {
+        if paa_vid != dac_vid {
+            return Err(AttestationError::PaaVidScopeMismatch { paa_vid, dac_vid });
+        }
+    }
 
     Ok(ChainVerification {
         vendor_id: dac_vid,
@@ -290,6 +308,11 @@ fn strip_sequence_wrapper(bytes: &[u8]) -> Option<&[u8]> {
 
 #[cfg(test)]
 mod tests {
+    // The synthetic-chain helpers pair `dac_vid`/`paa_vid`,
+    // `dac_der`/`pai_der`/`paa_der`, etc. — the near-identical names mirror
+    // the PKI roles by design. Same carve-out as `tests/support/mod.rs`.
+    #![allow(clippy::similar_names, clippy::struct_field_names)]
+
     use super::*;
     use crate::attestation::PaaTrustStore;
 
@@ -327,5 +350,214 @@ mod tests {
         assert_eq!(result.product_id, ProductId::new(0x8000));
         assert_eq!(result.dac_public_key.len(), 65);
         assert!(!result.paa_subject.is_empty());
+    }
+
+    // ── Fix A — VID-scoped PAA scope (Matter §6.2.2.1) ──────────────────────
+    //
+    // These tests synthesise a fresh DAC → PAI → PAA chain whose subject
+    // VIDs we control independently, using the same recipe as the
+    // integration-test `build_mock_device_pki` helper (the chip
+    // `gen-negative-fixtures.py` extension layout). They exercise the
+    // step-7 overlay added in this task:
+    //
+    //   - VID-scoped PAA whose scope MATCHES the DAC/PAI VID → accepted.
+    //   - VID-scoped PAA whose scope DIFFERS from the DAC/PAI VID →
+    //     PaaVidScopeMismatch (pre-fix this wrongly passed, because webpki
+    //     name-chains on DN equality and never reads the Matter VID OID as
+    //     a NameConstraint).
+    //   - Non-VID-scoped PAA (subject_vid None) → accepted regardless of
+    //     the DAC/PAI VID.
+
+    use matter_cert::test_support::{build_x509_der, TestCertFields};
+    use matter_cert::{
+        BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyUsage, Signature,
+    };
+    use matter_crypto::{CaseSigner as _, RingSigner};
+
+    /// EKU compact integer for `id-kp-clientAuth` (OID 1.3.6.1.5.5.7.3.2),
+    /// the EKU `verify_chain` requires on the DAC. Matches the value the
+    /// matter-cert X.509 encoder maps to clientAuth.
+    const EKU_CLIENT_AUTH: u32 = 2;
+
+    /// A synthetic DAC → PAI → PAA chain with independently chosen VIDs,
+    /// returned as raw DER for feeding into `verify_chain`.
+    struct SyntheticChain {
+        dac_der: Vec<u8>,
+        pai_der: Vec<u8>,
+        paa_der: Vec<u8>,
+    }
+
+    /// Build a synthetic chain. `paa_vid == None` produces a non-VID-scoped
+    /// PAA; `Some(v)` scopes the PAA subject to VID `v`. The PAI and DAC are
+    /// always scoped to `device_vid`; the DAC also carries `device_pid`.
+    ///
+    /// Validity windows bracket `at_unix` exactly as `build_mock_device_pki`
+    /// does, so the resulting chain validates at that instant.
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn build_synthetic_chain(
+        at_unix: u64,
+        paa_vid: Option<u16>,
+        device_vid: u16,
+        device_pid: u16,
+    ) -> SyntheticChain {
+        // PAA: self-signed root, optionally VID-scoped.
+        let (paa_signer, paa_pkcs8) = RingSigner::generate().expect("PAA key");
+        let mut paa_attrs = vec![DnAttribute::CommonName("Synthetic Test PAA".into())];
+        if let Some(v) = paa_vid {
+            paa_attrs.push(DnAttribute::VendorId(v));
+        }
+        let paa_dn = DistinguishedName::new(paa_attrs);
+        let paa_der = build_x509_der(
+            TestCertFields {
+                serial: vec![0x01],
+                issuer: paa_dn.clone(),
+                not_before: MatterTime::from_unix_secs(at_unix.saturating_sub(365 * 86_400)),
+                not_after: MatterTime::from_unix_secs(at_unix.saturating_add(3650 * 86_400)),
+                subject: paa_dn.clone(),
+                public_key: paa_signer.public_key().clone(),
+                extensions: Extensions {
+                    basic_constraints: Some(BasicConstraints {
+                        is_ca: true,
+                        path_len_constraint: Some(1),
+                    }),
+                    key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
+                    ..Default::default()
+                },
+                signature: Signature::new([0u8; 64]),
+            },
+            &paa_pkcs8,
+        )
+        .expect("PAA DER");
+
+        // PAI: signed by PAA, scoped to device_vid.
+        let (pai_signer, pai_pkcs8) = RingSigner::generate().expect("PAI key");
+        let pai_dn = DistinguishedName::new(vec![
+            DnAttribute::CommonName("Synthetic Test PAI".into()),
+            DnAttribute::VendorId(device_vid),
+        ]);
+        let pai_der = build_x509_der(
+            TestCertFields {
+                serial: vec![0x02],
+                issuer: paa_dn,
+                not_before: MatterTime::from_unix_secs(at_unix.saturating_sub(180 * 86_400)),
+                not_after: MatterTime::from_unix_secs(at_unix.saturating_add(1825 * 86_400)),
+                subject: pai_dn.clone(),
+                public_key: pai_signer.public_key().clone(),
+                extensions: Extensions {
+                    basic_constraints: Some(BasicConstraints {
+                        is_ca: true,
+                        path_len_constraint: Some(0),
+                    }),
+                    key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
+                    ..Default::default()
+                },
+                signature: Signature::new([0u8; 64]),
+            },
+            &paa_pkcs8,
+        )
+        .expect("PAI DER");
+
+        // DAC: leaf, signed by PAI, scoped to device_vid + device_pid.
+        let (dac_signer, _dac_pkcs8) = RingSigner::generate().expect("DAC key");
+        let dac_dn = DistinguishedName::new(vec![
+            DnAttribute::CommonName("Synthetic Test DAC".into()),
+            DnAttribute::VendorId(device_vid),
+            DnAttribute::ProductId(device_pid),
+        ]);
+        let dac_der = build_x509_der(
+            TestCertFields {
+                serial: vec![0x03],
+                issuer: pai_dn,
+                not_before: MatterTime::from_unix_secs(at_unix.saturating_sub(30 * 86_400)),
+                not_after: MatterTime::from_unix_secs(at_unix.saturating_add(365 * 86_400)),
+                subject: dac_dn,
+                public_key: dac_signer.public_key().clone(),
+                extensions: Extensions {
+                    basic_constraints: Some(BasicConstraints {
+                        is_ca: false,
+                        path_len_constraint: None,
+                    }),
+                    key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
+                    extended_key_usage: Some(vec![EKU_CLIENT_AUTH]),
+                    ..Default::default()
+                },
+                signature: Signature::new([0u8; 64]),
+            },
+            &pai_pkcs8,
+        )
+        .expect("DAC DER");
+
+        SyntheticChain {
+            dac_der,
+            pai_der,
+            paa_der,
+        }
+    }
+
+    /// Build a single-PAA trust store from the synthetic PAA DER.
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn store_with(paa_der: &[u8]) -> PaaTrustStore {
+        let mut store = PaaTrustStore::empty();
+        store.add(Paa::from_der(paa_der).expect("synthetic PAA parses"));
+        store
+    }
+
+    const SYNTH_AT_UNIX: u64 = 1_800_000_000; // ~2027-01-15, inside every window.
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn vid_scoped_paa_matching_device_vid_is_accepted() {
+        // VID-scoped PAA (0xFFF1) anchoring a 0xFFF1 device → no mismatch.
+        let chain = build_synthetic_chain(SYNTH_AT_UNIX, Some(0xFFF1), 0xFFF1, 0x8001);
+        let dac = Dac::from_der(&chain.dac_der).expect("DAC parses");
+        let pai = Pai::from_der(&chain.pai_der).expect("PAI parses");
+        let store = store_with(&chain.paa_der);
+        let at = MatterTime::from_unix_secs(SYNTH_AT_UNIX);
+
+        let result =
+            verify_chain(&dac, &pai, &store, at).expect("matching VID-scoped PAA accepted");
+        assert_eq!(result.vendor_id, VendorId::new(0xFFF1));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn vid_scoped_paa_mismatched_device_vid_is_rejected() {
+        // VID-scoped PAA (0xFFF2) anchoring a 0xFFF1 device. webpki accepts
+        // the DN-chained path (the VID OID is opaque to it), so the §6.2.2.1
+        // overlay must reject. Pre-fix this wrongly passed.
+        let chain = build_synthetic_chain(SYNTH_AT_UNIX, Some(0xFFF2), 0xFFF1, 0x8001);
+        let dac = Dac::from_der(&chain.dac_der).expect("DAC parses");
+        let pai = Pai::from_der(&chain.pai_der).expect("PAI parses");
+        let store = store_with(&chain.paa_der);
+        let at = MatterTime::from_unix_secs(SYNTH_AT_UNIX);
+
+        let err = verify_chain(&dac, &pai, &store, at)
+            .expect_err("VID-scoped PAA anchoring a different vendor must be rejected");
+        assert!(
+            matches!(
+                err,
+                AttestationError::PaaVidScopeMismatch {
+                    paa_vid,
+                    dac_vid,
+                } if paa_vid == VendorId::new(0xFFF2) && dac_vid == VendorId::new(0xFFF1)
+            ),
+            "expected PaaVidScopeMismatch {{ paa_vid: FFF2, dac_vid: FFF1 }}, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn non_vid_scoped_paa_imposes_no_vid_constraint() {
+        // Non-VID-scoped PAA anchoring a 0xFFF1 device → accepted; the
+        // overlay short-circuits on subject_vid() == None.
+        let chain = build_synthetic_chain(SYNTH_AT_UNIX, None, 0xFFF1, 0x8001);
+        let dac = Dac::from_der(&chain.dac_der).expect("DAC parses");
+        let pai = Pai::from_der(&chain.pai_der).expect("PAI parses");
+        let store = store_with(&chain.paa_der);
+        let at = MatterTime::from_unix_secs(SYNTH_AT_UNIX);
+
+        let result =
+            verify_chain(&dac, &pai, &store, at).expect("non-VID-scoped PAA imposes no constraint");
+        assert_eq!(result.vendor_id, VendorId::new(0xFFF1));
     }
 }

@@ -74,6 +74,14 @@ matter-cert = { path = "../matter-cert", version = "0.2.0-pre", features = ["tes
 anyhow = { workspace = true }
 clap = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry"] }
+# CMS / DER construction for the CD-verifier unit tests: build synthetic
+# Certification Declarations (incl. dac_origin tag 9/10 overrides) signed by
+# the bundled CSA-test root. Mirrors xtask/src/capture_cd.rs. These are
+# already in the lockfile as transitive deps of `cms`; naming them here only
+# makes them addressable from `#[cfg(test)]`.
+const-oid = "0.9"
+spki = "0.7"
+x509-cert = "0.2"
 
 [[test]]
 name = "state_machine_network"
