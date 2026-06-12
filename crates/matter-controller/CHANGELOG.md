@@ -47,6 +47,13 @@ semantic versioning once published.
   `examples/controller_quickstart.rs` (commission → read / invoke / subscribe →
   reconnect from snapshot). Re-exports `MatterTime` so `FabricConfig` is
   constructible without a direct `matter-cert` dependency.
+- **SH.2b** — Auto-resubscribe: a subscription that goes silent past its liveness
+  deadline (negotiated max interval + grace) is transparently re-established on a
+  chip-faithful Fibonacci backoff (10 s base, ~92 min cap, 30–100 % jitter, retry
+  forever). The consumer sees `SubscriptionEvent::Resubscribing` → `Established` →
+  a re-primed snapshot behind a **stable `Subscription` handle** — the device's
+  wire subscription id changes across a resubscribe, the handle does not. Report
+  delivery moved to an unbounded channel so a full re-prime is never truncated.
 
 ### Changed
 - **SH.1** — The controller actor now runs a single always-listening demux that
@@ -71,3 +78,5 @@ semantic versioning once published.
   `SubscriptionId` rather than the original `SubscribeRequest` exchange. The prior
   exchange-keying was not spec-correct for a device that reports on a fresh,
   device-initiated exchange.
+- **SH.2b** — A reconnect now evicts the prior session from the `SessionManager`,
+  so a stale session's dead MRP retransmits stop instead of firing until expiry.

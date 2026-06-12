@@ -165,9 +165,10 @@ Use `?` and match on the variants you care about.
 
 ## Current limitations (v1.0)
 
-- Subscription hardening is in progress: liveness-driven auto-resubscribe is not
-  wired yet (the `SubscriptionEvent::Resubscribing` event is reserved for it). The
-  always-listening demux already delivers steady-state reports that arrive during
-  a concurrent round-trip on the same node.
+- Subscriptions are hardened: an always-listening demux delivers steady-state
+  reports even during a concurrent round-trip on the same node, and a subscription
+  that goes silent past its liveness deadline is transparently auto-resubscribed
+  on a chip-faithful backoff (`SubscriptionEvent::Resubscribing` → `Established` →
+  re-primed reports, behind the same handle).
 - Wi-Fi/Thread network commissioning, BLE commissioning transport, OTA,
   multi-admin, and groups are deferred past v1.0.

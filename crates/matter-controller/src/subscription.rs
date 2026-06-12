@@ -2,7 +2,6 @@
 
 use matter_codec::Value;
 use matter_interaction::AttributePath;
-use matter_transport::SessionId;
 use tokio::sync::mpsc;
 
 use crate::actor::Command;
@@ -42,10 +41,15 @@ pub enum SubscriptionEvent {
 
 /// A live attribute subscription. Await events with [`Self::next`]; dropping
 /// the handle cancels the subscription (best-effort).
+///
+/// Events are buffered in an unbounded channel so a full re-prime (after an
+/// auto-resubscribe) is never truncated. Call [`Self::next`] promptly: a handle
+/// that is kept alive but never drained accumulates events in memory (bounded in
+/// practice by the device's reporting cadence).
 pub struct Subscription {
-    pub(crate) rx: mpsc::Receiver<SubscriptionEvent>,
+    pub(crate) rx: mpsc::UnboundedReceiver<SubscriptionEvent>,
     pub(crate) tx: mpsc::Sender<Command>,
-    pub(crate) key: (SessionId, u32),
+    pub(crate) key: crate::actor::SubId,
     pub(crate) cancelled: bool,
 }
 
