@@ -134,6 +134,7 @@
 
 use p256::SecretKey;
 use ring::rand::{SecureRandom, SystemRandom};
+use zeroize::Zeroizing;
 
 use matter_cert::{CertificateChain, MatterCertificate, MatterTime, Signature, TrustedRoots};
 
@@ -860,7 +861,9 @@ impl CaseInitiator {
                 // resumption). The peer's session ID comes from Sigma2_Resume.
                 let peer = PeerInfo {
                     session_id: sigma2_resume.responder_session_id,
-                    ..record.peer
+                    // `record` is `Drop` (ZeroizeOnDrop), so its non-`Copy`
+                    // fields cannot be moved out — clone the peer identity.
+                    ..record.peer.clone()
                 };
                 let local = LocalInfo {
                     node_id: credentials.node_id,
@@ -998,7 +1001,9 @@ fn process_sigma2(
     let sigma2 = Sigma2::decode(sigma2_bytes)?;
 
     // Step 1: ECDH shared secret from our eph secret + peer's eph pub.
-    let shared_secret = ecdh_shared_secret(eph_secret, &sigma2.responder_eph_pub)?;
+    // Wrap in `Zeroizing` so the raw ECDH output is wiped when this function
+    // returns; it is the root secret all Sigma2/Sigma3/session keys derive from.
+    let shared_secret = Zeroizing::new(ecdh_shared_secret(eph_secret, &sigma2.responder_eph_pub)?);
 
     // Step 2: Derive S2K.
     // sigma2Salt = IPK(16) || responderRandom(32) || responderEphPub(65) || SHA-256(sigma1)
@@ -1008,8 +1013,14 @@ fn process_sigma2(
     sigma2_salt.extend_from_slice(&sigma2.responder_random);
     sigma2_salt.extend_from_slice(&sigma2.responder_eph_pub);
     sigma2_salt.extend_from_slice(&h_sigma1);
-    let mut s2k = [0u8; AEAD_KEY_LEN];
-    hkdf_derive(&shared_secret, &sigma2_salt, HKDF_INFO_SIGMA2, &mut s2k)?;
+    // `s2k` is a derived secret key; wrap in `Zeroizing` so it is wiped on return.
+    let mut s2k = Zeroizing::new([0u8; AEAD_KEY_LEN]);
+    hkdf_derive(
+        shared_secret.as_slice(),
+        &sigma2_salt,
+        HKDF_INFO_SIGMA2,
+        &mut *s2k,
+    )?;
 
     // Step 3: AES-128-CCM decrypt.
     let sigma2_decrypted = aead_decrypt(&s2k, NONCE_TBE_DATA2, b"", &sigma2.encrypted)?;
@@ -1103,8 +1114,14 @@ fn process_sigma2(
     let mut sigma3_salt: Vec<u8> = Vec::with_capacity(16 + 32);
     sigma3_salt.extend_from_slice(&credentials.ipk);
     sigma3_salt.extend_from_slice(&h_s1_s2);
-    let mut s3k = [0u8; AEAD_KEY_LEN];
-    hkdf_derive(&shared_secret, &sigma3_salt, HKDF_INFO_SIGMA3, &mut s3k)?;
+    // `s3k` is a derived secret key; wrap in `Zeroizing` so it is wiped on return.
+    let mut s3k = Zeroizing::new([0u8; AEAD_KEY_LEN]);
+    hkdf_derive(
+        shared_secret.as_slice(),
+        &sigma3_salt,
+        HKDF_INFO_SIGMA3,
+        &mut *s3k,
+    )?;
 
     let sigma3_plaintext = encode_tbedata3(&our_noc_tlv, our_icac_tlv.as_deref(), &our_signature)?;
     let encrypted3 = aead_encrypt(&s3k, NONCE_TBE_DATA3, b"", &sigma3_plaintext)?;
@@ -1119,12 +1136,14 @@ fn process_sigma2(
     let mut session_salt: Vec<u8> = Vec::with_capacity(16 + 32);
     session_salt.extend_from_slice(&credentials.ipk);
     session_salt.extend_from_slice(&h_all);
-    let mut keys_blob = [0u8; 48];
+    // `keys_blob` holds the raw 48-byte session-key material; wrap in
+    // `Zeroizing` so it is wiped once the per-direction keys are split out.
+    let mut keys_blob = Zeroizing::new([0u8; 48]);
     hkdf_derive(
-        &shared_secret,
+        shared_secret.as_slice(),
         &session_salt,
         HKDF_INFO_SESSION_KEYS,
-        &mut keys_blob,
+        &mut *keys_blob,
     )?;
 
     // Initiator key assignment (NodeSession.ts lines 75–77, isInitiator=true):

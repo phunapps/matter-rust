@@ -60,6 +60,7 @@ use crate::pase::spake2plus::{
     verify_tag,
 };
 use crate::pase::{PaseMessageKind, PasePbkdfParams, PaseSessionKeys};
+use zeroize::Zeroize;
 
 // =============================================================================
 // Internal state enum
@@ -601,11 +602,14 @@ impl PaseProver {
                     &w0,
                 );
 
-                // Split Ka (first 16) and Ke (last 16).
-                let (ka, ke) = ka_ke_from_transcript(&t_t);
+                // Split Ka (first 16) and Ke (last 16). Both are SPAKE2+ secrets
+                // (`ke` is the root session secret); zeroize them after their last
+                // use so no copy lingers on the stack.
+                let (mut ka, mut ke) = ka_ke_from_transcript(&t_t);
 
                 // Derive KcA and KcB from Ka.
                 let (kca, kcb) = derive_confirmation_keys(&ka)?;
+                ka.zeroize();
 
                 // Verify the device's confirmation tag cB = HMAC-SHA256(KcB, X).
                 // MUST use constant-time comparison.
@@ -616,8 +620,11 @@ impl PaseProver {
                 let ca = compute_ca(&kca, &pake2.y);
 
                 // Derive 48-byte session key material from Ke.
+                // `build_session_keys` copies `ke` into the `ZeroizeOnDrop`
+                // `PaseSessionKeys`; wipe our local copy afterwards.
                 let session_keys_blob = derive_session_keys(&ke)?;
                 let session_keys = build_session_keys(ke, &session_keys_blob);
+                ke.zeroize();
 
                 self.state = State::ReadyToSendPake3 { ca, session_keys };
                 Ok(())

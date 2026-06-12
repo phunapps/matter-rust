@@ -42,7 +42,15 @@ pub enum CaseMessageKind {
 /// claimed `FabricId` + `NodeId`, the fabric-scoped IPK, and
 /// the RCAC's public key (needed for `DestinationId` computation).
 /// Consumed by both `CaseInitiator::new` and `CaseResponder::new`.
-#[derive(Debug)]
+///
+/// # Secret hygiene
+///
+/// Carries the fabric-scoped IPK (a 16-byte secret). The [`Debug`] impl
+/// redacts the IPK, and a manual [`Drop`] zeroizes the IPK bytes when the
+/// credentials are dropped. We cannot derive [`zeroize::ZeroizeOnDrop`] on the
+/// whole struct because several fields (`noc`, `icac`, the boxed `signer`) are
+/// not `Zeroize`; the NOC private key inside `signer` is owned and wiped by the
+/// signer implementation itself.
 pub struct CaseCredentials {
     /// Node Operational Certificate. Issued by this fabric's CA chain.
     pub noc: MatterCertificate,
@@ -78,6 +86,31 @@ pub struct CaseCredentials {
     pub rcac_public_key: [u8; 65],
 }
 
+impl core::fmt::Debug for CaseCredentials {
+    /// Redacts the secret `ipk`; prints the remaining (non-secret) fields.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CaseCredentials")
+            .field("noc", &self.noc)
+            .field("icac", &self.icac)
+            .field("signer", &self.signer)
+            .field("fabric_id", &self.fabric_id)
+            .field("node_id", &self.node_id)
+            .field("ipk", &"<redacted>")
+            .field("rcac_public_key", &self.rcac_public_key)
+            .finish()
+    }
+}
+
+impl Drop for CaseCredentials {
+    /// Wipe the secret IPK from memory on drop. The other fields are either
+    /// non-secret or own their own secret material (the boxed signer wipes its
+    /// private key in its own `Drop`).
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.ipk.zeroize();
+    }
+}
+
 /// Output of a successful CASE handshake.
 #[derive(Debug, Clone)]
 pub struct CaseSessionOutput {
@@ -95,7 +128,17 @@ pub struct CaseSessionOutput {
 /// Symmetric session keys derived by a completed CASE handshake.
 ///
 /// Consumed by M5 transport's AES-CCM cipher wrapper.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # Secret hygiene
+///
+/// This type carries live symmetric key material. It implements
+/// [`zeroize::ZeroizeOnDrop`] so the key bytes are wiped from memory when the
+/// value is dropped, and its [`Debug`] impl redacts every field (printing
+/// `CaseSessionKeys { .. }`) so key bytes never reach logs. Equality is
+/// intentionally *not* derived: comparing session keys with the variable-time
+/// `==` would be a timing side-channel, and no caller needs it (tests compare
+/// individual byte-array fields directly).
+#[derive(Clone, zeroize::ZeroizeOnDrop)]
 pub struct CaseSessionKeys {
     /// Key for encrypting initiator → responder traffic.
     pub i2r_key: [u8; 16],
@@ -103,6 +146,13 @@ pub struct CaseSessionKeys {
     pub r2i_key: [u8; 16],
     /// Challenge used for the attestation step on the operational session.
     pub attestation_challenge: [u8; 16],
+}
+
+impl core::fmt::Debug for CaseSessionKeys {
+    /// Redacts all key material; never prints key bytes.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CaseSessionKeys").finish_non_exhaustive()
+    }
 }
 
 /// Identity of the peer we just shook hands with.
@@ -137,18 +187,49 @@ pub struct ResumptionId(pub [u8; 16]);
 /// State persisted by the caller after a successful CASE handshake,
 /// allowing a future session to skip the full 3-message handshake via
 /// `Sigma2_Resume`. Resumption flow lands in M4.2.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # Secret hygiene
+///
+/// Carries the resumption `shared_secret`. Implements
+/// [`zeroize::ZeroizeOnDrop`] (only the secret is wiped — the non-secret
+/// metadata fields `id`, `peer`, and `expires_at` are `#[zeroize(skip)]`),
+/// redacts the secret in its [`Debug`] impl, and does not derive variable-time
+/// equality.
+#[derive(Clone, zeroize::ZeroizeOnDrop)]
 pub struct ResumptionRecord {
     /// Identifier the peer sends back in Sigma1 to attempt resumption.
+    ///
+    /// Skipped from zeroization: a public, non-secret session identifier (it is
+    /// sent on the wire in Sigma1). Only `shared_secret` is sensitive.
+    #[zeroize(skip)]
     pub id: ResumptionId,
     /// 16-byte shared secret derived from the original session. Caller
     /// treats this as opaque.
     pub shared_secret: [u8; 16],
     /// Peer's identity at the time the record was created.
+    ///
+    /// Skipped from zeroization: non-secret identity/cert metadata, and
+    /// `PeerInfo` is not `Zeroize`.
+    #[zeroize(skip)]
     pub peer: PeerInfo,
     /// Optional expiry timestamp. Callers should reject resumption
     /// attempts after this point.
+    ///
+    /// Skipped from zeroization: non-secret timestamp metadata.
+    #[zeroize(skip)]
     pub expires_at: Option<MatterTime>,
+}
+
+impl core::fmt::Debug for ResumptionRecord {
+    /// Redacts `shared_secret`; the non-secret fields are printed verbatim.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ResumptionRecord")
+            .field("id", &self.id)
+            .field("shared_secret", &"<redacted>")
+            .field("peer", &self.peer)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Outcome of processing a Sigma1 message.
@@ -166,4 +247,99 @@ pub enum Sigma1Outcome {
         /// The resumption ID the initiator presented.
         id: ResumptionId,
     },
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+mod secret_hygiene_tests {
+    use super::*;
+    use matter_cert::test_support::{build_unsigned, TestCertFields};
+    use matter_cert::{
+        DistinguishedName, DnAttribute, Extensions, MatterTime, PublicKey, Signature,
+    };
+
+    /// Compile-time proof that `T: ZeroizeOnDrop`. Instantiating it for each
+    /// secret-bearing type fails to compile if the trait is ever removed,
+    /// which is the strongest guarantee we can give without observing the
+    /// (already-freed) memory at runtime.
+    fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+
+    #[test]
+    fn secret_key_types_are_zeroize_on_drop() {
+        assert_zeroize_on_drop::<CaseSessionKeys>();
+        assert_zeroize_on_drop::<ResumptionRecord>();
+        assert_zeroize_on_drop::<crate::pase::PaseSessionKeys>();
+    }
+
+    /// A minimal `MatterCertificate` for building a `PeerInfo`.
+    fn dummy_cert() -> MatterCertificate {
+        let subject = DistinguishedName::new(vec![
+            DnAttribute::FabricId(0x5678),
+            DnAttribute::NodeId(0x1234),
+        ]);
+        let issuer = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
+        build_unsigned(TestCertFields {
+            serial: vec![1],
+            issuer,
+            not_before: MatterTime::from_unix_secs(0),
+            not_after: MatterTime::NO_EXPIRY,
+            subject,
+            public_key: PublicKey::new([0x04u8; 65]).unwrap(),
+            extensions: Extensions::default(),
+            signature: Signature::new([0u8; 64]),
+        })
+    }
+
+    #[test]
+    fn case_session_keys_debug_redacts_key_bytes() {
+        let keys = CaseSessionKeys {
+            i2r_key: [0xAA; 16],
+            r2i_key: [0xBB; 16],
+            attestation_challenge: [0xCC; 16],
+        };
+        let s = format!("{keys:?}");
+        // The redacting Debug must not leak any key byte pattern.
+        assert!(!s.contains("aa"), "i2r_key bytes leaked: {s}");
+        assert!(!s.contains("bb"), "r2i_key bytes leaked: {s}");
+        assert!(!s.contains("cc"), "attestation bytes leaked: {s}");
+        assert!(s.contains("CaseSessionKeys"));
+    }
+
+    #[test]
+    fn resumption_record_debug_redacts_shared_secret() {
+        let record = ResumptionRecord {
+            id: ResumptionId([0x11; 16]),
+            shared_secret: [0xDD; 16],
+            peer: PeerInfo {
+                node_id: 0x1234,
+                fabric_id: 0x5678,
+                noc: dummy_cert(),
+                session_id: 1,
+            },
+            expires_at: None,
+        };
+        let s = format!("{record:?}");
+        assert!(!s.contains("dd"), "shared_secret leaked: {s}");
+        assert!(s.contains("<redacted>"));
+        assert!(s.contains("ResumptionRecord"));
+    }
+
+    #[test]
+    fn case_credentials_debug_redacts_ipk() {
+        use crate::case::signer::RingSigner;
+        let (signer, _) = RingSigner::generate().unwrap();
+        let creds = CaseCredentials {
+            noc: dummy_cert(),
+            icac: None,
+            signer: Box::new(signer),
+            fabric_id: 0x5678,
+            node_id: 0x1234,
+            ipk: [0xEE; 16],
+            rcac_public_key: [0x04; 65],
+        };
+        let s = format!("{creds:?}");
+        assert!(!s.contains("ee"), "ipk bytes leaked: {s}");
+        assert!(s.contains("<redacted>"));
+        assert!(s.contains("CaseCredentials"));
+    }
 }

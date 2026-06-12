@@ -30,6 +30,7 @@ p256 = { workspace = true }
 ring = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

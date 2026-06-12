@@ -56,7 +56,17 @@ pub struct PasePbkdfParams {
 /// r2i_key  = blob[16..32]  (responder→initiator; decrypt for commissioner)
 /// attestation_key = blob[32..48]
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # Secret hygiene
+///
+/// This type carries live symmetric key material. It implements
+/// [`zeroize::ZeroizeOnDrop`] so the key bytes are wiped from memory when the
+/// value is dropped, and its [`Debug`] impl redacts every field (printing
+/// `PaseSessionKeys { .. }`) so key bytes never reach logs. Equality is
+/// intentionally *not* derived: comparing session keys with the variable-time
+/// `==` would be a timing side-channel, and no caller needs it (tests compare
+/// individual byte-array fields directly).
+#[derive(Clone, zeroize::ZeroizeOnDrop)]
 pub struct PaseSessionKeys {
     /// Shared symmetric secret (`Ke`): `TT_HASH`\[16..32\].
     ///
@@ -69,4 +79,40 @@ pub struct PaseSessionKeys {
     pub r2i_key: [u8; 16],
     /// Attestation challenge key (used for device attestation in commissioning).
     pub attestation_key: [u8; 16],
+}
+
+impl core::fmt::Debug for PaseSessionKeys {
+    /// Redacts all key material; never prints key bytes.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PaseSessionKeys").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod secret_hygiene_tests {
+    use super::*;
+
+    /// Compile-time proof that `PaseSessionKeys: ZeroizeOnDrop`.
+    fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+
+    #[test]
+    fn pase_session_keys_is_zeroize_on_drop() {
+        assert_zeroize_on_drop::<PaseSessionKeys>();
+    }
+
+    #[test]
+    fn pase_session_keys_debug_redacts_key_bytes() {
+        let keys = PaseSessionKeys {
+            ke: [0xAA; 16],
+            i2r_key: [0xBB; 16],
+            r2i_key: [0xCC; 16],
+            attestation_key: [0xDD; 16],
+        };
+        let s = format!("{keys:?}");
+        assert!(!s.contains("aa"), "ke bytes leaked: {s}");
+        assert!(!s.contains("bb"), "i2r_key bytes leaked: {s}");
+        assert!(!s.contains("cc"), "r2i_key bytes leaked: {s}");
+        assert!(!s.contains("dd"), "attestation_key bytes leaked: {s}");
+        assert!(s.contains("PaseSessionKeys"));
+    }
 }

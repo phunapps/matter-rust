@@ -92,6 +92,8 @@
 
 use p256::SecretKey;
 use ring::rand::{SecureRandom, SystemRandom};
+use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use matter_cert::{CertificateChain, MatterCertificate, MatterTime, Signature, TrustedRoots};
 
@@ -454,7 +456,12 @@ impl CaseResponder {
                     credentials.node_id,
                     &sigma1.initiator_random,
                 );
-                if expected_dest_id != sigma1.dest_id {
+                // `DestinationId` is an HMAC-SHA256 keyed by the secret IPK, so
+                // it must be compared in constant time to avoid leaking timing
+                // information about the keyed digest. `ct_eq` returns
+                // `subtle::Choice` (1 = equal); `.into()` converts to `bool`.
+                let dest_id_matches: bool = expected_dest_id.ct_eq(&sigma1.dest_id).into();
+                if !dest_id_matches {
                     self.state = State::AwaitingSigma1 {
                         credentials,
                         trusted_roots,
@@ -582,6 +589,13 @@ impl CaseResponder {
     ///   Sigma1 does not verify against `record.shared_secret`.
     /// - [`Error::EphemeralKeyGenerationFailed`] if the OS RNG or HKDF fails.
     /// - [`Error::Codec`] on TLV encoding failure.
+    // Takes `record` by value deliberately: the caller hands over ownership of
+    // the secret-bearing `ResumptionRecord` so it is consumed (and zeroized on
+    // drop) here rather than lingering in the caller. We only clone the
+    // non-`Copy` `peer` out of it (the record itself is `ZeroizeOnDrop`, so its
+    // `shared_secret` cannot be moved out), which is why clippy no longer sees a
+    // move that consumes the value.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn accept_resumption(&mut self, record: ResumptionRecord) -> Result<()> {
         let prev = std::mem::replace(&mut self.state, State::Poisoned);
         match prev {
@@ -689,7 +703,9 @@ impl CaseResponder {
                 let next_record = ResumptionRecord {
                     id: ResumptionId(new_resumption_id),
                     shared_secret: record.shared_secret,
-                    peer: record.peer,
+                    // `record` is `Drop` (ZeroizeOnDrop), so its non-`Copy`
+                    // `peer` cannot be moved out — clone it.
+                    peer: record.peer.clone(),
                     expires_at: None, // M6 commissioning sets a real expiry.
                 };
 
@@ -1024,8 +1040,11 @@ fn build_sigma2(
     sigma2_salt.extend_from_slice(responder_random);
     sigma2_salt.extend_from_slice(eph_pub);
     sigma2_salt.extend_from_slice(&h_sigma1);
-    let mut s2k = [0u8; AEAD_KEY_LEN];
-    hkdf_derive(&shared_secret, &sigma2_salt, HKDF_INFO_SIGMA2, &mut s2k)?;
+    // `s2k` is a derived secret key; wrap in `Zeroizing` so it is wiped from
+    // memory when this function returns. (`shared_secret` is intentionally
+    // returned to the state machine and zeroized when that state is dropped.)
+    let mut s2k = Zeroizing::new([0u8; AEAD_KEY_LEN]);
+    hkdf_derive(&shared_secret, &sigma2_salt, HKDF_INFO_SIGMA2, &mut *s2k)?;
 
     // Step 3: Build TBSData2 and sign with our NOC key.
     // TBSData2 = TlvSignedData { ourNoc, ourIcac?, ourEphPub, initiatorEphPub }
@@ -1116,8 +1135,10 @@ fn process_sigma3(
     let mut sigma3_salt: Vec<u8> = Vec::with_capacity(16 + 32);
     sigma3_salt.extend_from_slice(&credentials.ipk);
     sigma3_salt.extend_from_slice(&h_s1_s2);
-    let mut s3k = [0u8; AEAD_KEY_LEN];
-    hkdf_derive(shared_secret, &sigma3_salt, HKDF_INFO_SIGMA3, &mut s3k)?;
+    // `s3k` is a derived secret key; wrap in `Zeroizing` so it is wiped from
+    // memory when this function returns (success or error).
+    let mut s3k = Zeroizing::new([0u8; AEAD_KEY_LEN]);
+    hkdf_derive(shared_secret, &sigma3_salt, HKDF_INFO_SIGMA3, &mut *s3k)?;
 
     // Step 2: AES-128-CCM decrypt.
     let sigma3_decrypted = aead_decrypt(&s3k, NONCE_TBE_DATA3, b"", &sigma3.encrypted)?;
@@ -1188,12 +1209,14 @@ fn process_sigma3(
     let mut session_salt: Vec<u8> = Vec::with_capacity(16 + 32);
     session_salt.extend_from_slice(&credentials.ipk);
     session_salt.extend_from_slice(&h_all);
-    let mut keys_blob = [0u8; 48];
+    // `keys_blob` holds the raw 48-byte session-key material; wrap in
+    // `Zeroizing` so it is wiped once the per-direction keys are split out.
+    let mut keys_blob = Zeroizing::new([0u8; 48]);
     hkdf_derive(
         shared_secret,
         &session_salt,
         HKDF_INFO_SESSION_KEYS,
-        &mut keys_blob,
+        &mut *keys_blob,
     )?;
 
     // Responder key assignment (NodeSession.ts, isInitiator=false):
