@@ -53,8 +53,10 @@ pub enum Error {
     #[error("interaction model error: {0}")]
     InteractionModel(#[from] matter_interaction::ImError),
 
-    /// A cryptographic derivation (operational IPK / compressed fabric id) failed.
-    #[error("operational key derivation failed: {0}")]
+    /// An operational-path failure with a human-readable detail — a key
+    /// derivation (operational IPK / compressed fabric id), a transport/session
+    /// send or decode, a request timeout, or a subscription liveness timeout.
+    #[error("operational error: {0}")]
     Operational(String),
 
     /// Attestation trust material could not be loaded.
