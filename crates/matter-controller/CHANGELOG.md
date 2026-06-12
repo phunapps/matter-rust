@@ -40,10 +40,28 @@ semantic versioning once published.
   stream rather than a transparent re-establish; (2) a steady-state report
   arriving while a concurrent round-trip (read/write/invoke) on the same node
   owns the socket is acked but its value is not delivered to the consumer (a
-  pure subscription stream loses nothing). Both are fixed by routing off-exchange
-  reports out of the round-trip path / the full always-listening demux._
+  pure subscription stream loses nothing). Limitation (2) is fixed by SH.1 (see
+  below); limitation (1) is fixed by SH.2 (auto-resubscribe / liveness)._
 - **M8.6** — v1.0 documentation pass: crate rustdoc with a runnable quickstart,
   README feature overview, `docs/matter-js-migration-guide.md`, and an
   `examples/controller_quickstart.rs` (commission → read / invoke / subscribe →
   reconnect from snapshot). Re-exports `MatterTime` so `FabricConfig` is
   constructible without a direct `matter-cert` dependency.
+
+### Changed
+- **SH.1** — The controller actor now runs a single always-listening demux that
+  owns the UDP socket continuously, regardless of whether subscriptions are
+  active. Round-trips and reads register a pending oneshot keyed by
+  `(session, exchange)` instead of owning recv inside `secured_round_trip` /
+  `secured_read`; steady-state subscription reports are routed to their consumer
+  by **SubscriptionId**. MRP is driven centrally for all sessions, preserving the
+  reconnect-once policy via a transparent reconnect-and-retry on timeout.
+
+### Fixed
+- **SH.1** — Subscription reports are no longer dropped when a round-trip
+  (read / write / invoke) is concurrently in flight on the same node (M8.5 known
+  limitation #2 — previously a bounded silent data-loss window).
+- **SH.1** — Steady-state `ReportData` is now matched to its subscription by
+  `SubscriptionId` rather than the original `SubscribeRequest` exchange. The prior
+  exchange-keying was not spec-correct for a device that reports on a fresh,
+  device-initiated exchange.

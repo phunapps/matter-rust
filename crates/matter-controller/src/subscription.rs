@@ -22,7 +22,7 @@ pub struct AttributeReport {
 pub struct Subscription {
     pub(crate) rx: mpsc::Receiver<AttributeReport>,
     pub(crate) tx: mpsc::Sender<Command>,
-    pub(crate) key: (SessionId, u16),
+    pub(crate) key: (SessionId, u32),
     pub(crate) cancelled: bool,
 }
 
