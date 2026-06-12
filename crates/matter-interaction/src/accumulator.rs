@@ -96,13 +96,20 @@ impl ReportAccumulator {
     }
 
     /// Consume the accumulator, yielding `(path, value)` in first-seen order.
+    ///
+    /// Each [`Value`] is **moved** out of the consumed accumulator rather than
+    /// cloned: `self.order` records every accumulated path exactly once (a path
+    /// is pushed only on the first insert for its key — see [`push`](Self::push)),
+    /// so a single [`HashMap::remove`] per path drains the map without aliasing.
+    /// This avoids a full deep copy of every attribute subtree on the
+    /// chunked-read / subscription completion path.
     #[must_use]
-    pub fn finish(self) -> Vec<(AttributePath, Value)> {
+    pub fn finish(mut self) -> Vec<(AttributePath, Value)> {
         let mut out = Vec::with_capacity(self.order.len());
-        for path in self.order {
+        for path in std::mem::take(&mut self.order) {
             let key = (path.endpoint, path.cluster, path.attribute);
-            if let Some(v) = self.values.get(&key) {
-                out.push((path, v.clone()));
+            if let Some(v) = self.values.remove(&key) {
+                out.push((path, v));
             }
         }
         out
@@ -117,7 +124,6 @@ mod tests {
 
     fn report(items: Vec<AttributeReportItem>) -> ReportData {
         ReportData {
-            attributes: Vec::new(),
             items,
             subscription_id: None,
             more_chunked_messages: false,
@@ -221,6 +227,34 @@ mod tests {
             acc.finish()[0].1,
             Value::Uint(1),
             "older DataVersion must not overwrite"
+        );
+    }
+
+    /// `finish()` now MOVES values out of the consumed accumulator rather than
+    /// cloning them. Drive it with heap-bearing values (strings, byte strings,
+    /// nested lists) and assert the resulting `(path, value)` set is exactly
+    /// what was inserted — proving the move preserves content and order and
+    /// drops nothing.
+    #[test]
+    fn finish_moves_values_preserving_content_and_order() {
+        let mut acc = ReportAccumulator::new();
+        let p0 = ap(0, 0x28, 0x0001);
+        let p1 = ap(1, 0x06, 0x0000);
+        let p2 = ap(2, 0x1d, 0x0003);
+        let v0 = Value::Utf8(String::from("VendorName"));
+        let v1 = Value::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
+        let v2 = Value::Array(vec![Value::Uint(1), Value::Utf8(String::from("x"))]);
+        acc.push(report(vec![
+            replace(p0, v0.clone()),
+            replace(p1, v1.clone()),
+            replace(p2, v2.clone()),
+        ]));
+
+        let out = acc.finish();
+        assert_eq!(
+            out,
+            vec![(p0, v0), (p1, v1), (p2, v2)],
+            "moved-out set must match inserted (path, value) pairs in first-seen order"
         );
     }
 

@@ -428,18 +428,19 @@ fn report_data_subscribed_parses_matter_js() {
             Some(f.subscription_id),
             "subscription_id mismatch for {path:?}"
         );
+        let report_attrs: Vec<_> = report.attributes().collect();
         assert_eq!(
-            report.attributes.len(),
+            report_attrs.len(),
             f.attributes.len(),
             "attribute count mismatch for {path:?}"
         );
-        for (got, want) in report.attributes.iter().zip(&f.attributes) {
+        for (got, want) in report_attrs.iter().zip(&f.attributes) {
             assert_eq!(got.0.endpoint, want.endpoint, "endpoint mismatch");
             assert_eq!(got.0.cluster, want.cluster, "cluster mismatch");
             assert_eq!(got.0.attribute, want.attribute, "attribute mismatch");
             if let Some(expected_bool) = want.bool_value {
                 assert_eq!(
-                    got.1,
+                    *got.1,
                     matter_codec::Value::Bool(expected_bool),
                     "value mismatch for {path:?}"
                 );

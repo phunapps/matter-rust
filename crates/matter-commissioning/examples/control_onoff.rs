@@ -250,8 +250,7 @@ fn value_to_tlv(value: &Value) -> Vec<u8> {
 /// Find one attribute value in a `ReportData` by (cluster, attribute).
 fn find_attr(report: &ReportData, cluster: u32, attribute: u32) -> anyhow::Result<&Value> {
     report
-        .attributes
-        .iter()
+        .attributes()
         .find(|(p, _)| p.cluster == cluster && p.attribute == attribute)
         .map(|(_, v)| v)
         .ok_or_else(|| {

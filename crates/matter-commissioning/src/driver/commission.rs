@@ -138,8 +138,7 @@ pub(crate) fn extract_read_payload(
         Expectation::NetworkCommissioningInfo => {
             // Scan for FeatureMap (cluster 0x0031, attribute 0xFFFC).
             let feat_val = report
-                .attributes
-                .iter()
+                .attributes()
                 .find(|(p, _)| {
                     p.cluster == crate::clusters::network_commissioning::CLUSTER_ID
                         && p.attribute == attr_id::FEATURE_MAP
@@ -170,8 +169,7 @@ pub(crate) fn extract_read_payload(
         Expectation::CommissioningInfo => {
             // Scan for BasicCommissioningInfo (cluster 0x0030, attribute 0x0001).
             let struct_val = report
-                .attributes
-                .iter()
+                .attributes()
                 .find(|(p, _)| {
                     p.cluster == crate::clusters::general_commissioning::CLUSTER_ID
                         && p.attribute == attr_id::BASIC_COMMISSIONING_INFO
@@ -1217,23 +1215,24 @@ mod tests {
     /// anonymous-tagged uint TLV that `decode_feature_map` expects.
     #[test]
     fn extract_read_payload_network_commissioning_info_bare_uint() {
-        use crate::im::AttributePath;
+        use crate::im::{AttributePath, AttributeReportItem, ReportOp};
         use crate::Expectation;
         use matter_codec::Value;
 
         // FeatureMap = 0x01 (WIFI bit set)
         let feat_val: u64 = 0x01;
         let report = crate::im::ReportData {
-            attributes: vec![(
-                AttributePath {
+            items: vec![AttributeReportItem {
+                path: AttributePath {
                     endpoint: 0,
                     cluster: crate::clusters::network_commissioning::CLUSTER_ID, // 0x0031
                     attribute: crate::clusters::network_commissioning::attribute_id::FEATURE_MAP, // 0xFFFC
                 },
-                Value::Uint(feat_val),
-            )],
+                op: ReportOp::Replace,
+                value: Value::Uint(feat_val),
+                data_version: None,
+            }],
             subscription_id: None,
-            items: Vec::new(),
             more_chunked_messages: false,
             suppress_response: false,
         };
@@ -1268,32 +1267,36 @@ mod tests {
     /// must pick the struct at 0x0001.
     #[test]
     fn extract_read_payload_picks_basic_commissioning_info_at_0x0001() {
-        use crate::im::AttributePath;
+        use crate::im::{AttributePath, AttributeReportItem, ReportOp};
         use crate::Expectation;
         use matter_codec::{Tag, Value};
 
         let gc = crate::clusters::general_commissioning::CLUSTER_ID;
-        let path = |attribute: u32| AttributePath {
-            endpoint: 0,
-            cluster: gc,
-            attribute,
+        let item = |attribute: u32, value: Value| AttributeReportItem {
+            path: AttributePath {
+                endpoint: 0,
+                cluster: gc,
+                attribute,
+            },
+            op: ReportOp::Replace,
+            value,
+            data_version: None,
         };
         // Order and values as the Tapo returned them.
         let report = crate::im::ReportData {
-            attributes: vec![
-                (path(0x0004), Value::Bool(true)), // SupportsConcurrentConnection
-                (path(0x0002), Value::Uint(0)),    // RegulatoryConfig
-                (
-                    path(0x0001), // BasicCommissioningInfo
+            items: vec![
+                item(0x0004, Value::Bool(true)), // SupportsConcurrentConnection
+                item(0x0002, Value::Uint(0)),    // RegulatoryConfig
+                item(
+                    0x0001, // BasicCommissioningInfo
                     Value::Structure(vec![
                         (Tag::Context(0), Value::Uint(60)),
                         (Tag::Context(1), Value::Uint(900)),
                     ]),
                 ),
-                (path(0x0000), Value::Uint(0)), // Breadcrumb
+                item(0x0000, Value::Uint(0)), // Breadcrumb
             ],
             subscription_id: None,
-            items: Vec::new(),
             more_chunked_messages: false,
             suppress_response: false,
         };
@@ -1313,7 +1316,7 @@ mod tests {
     /// an anonymous-tagged struct that `decode_basic_commissioning_info` accepts.
     #[test]
     fn extract_read_payload_commissioning_info_struct() {
-        use crate::im::AttributePath;
+        use crate::im::{AttributePath, AttributeReportItem, ReportOp};
         use crate::Expectation;
         use matter_codec::{Tag, Value};
 
@@ -1323,16 +1326,17 @@ mod tests {
             (Tag::Context(1), Value::Uint(900)),
         ]);
         let report = crate::im::ReportData {
-            attributes: vec![(
-                AttributePath {
+            items: vec![AttributeReportItem {
+                path: AttributePath {
                     endpoint: 0,
                     cluster: crate::clusters::general_commissioning::CLUSTER_ID, // 0x0030
                     attribute: attr_id::BASIC_COMMISSIONING_INFO,                // 0x0001
                 },
-                struct_value.clone(),
-            )],
+                op: ReportOp::Replace,
+                value: struct_value.clone(),
+                data_version: None,
+            }],
             subscription_id: None,
-            items: Vec::new(),
             more_chunked_messages: false,
             suppress_response: false,
         };
@@ -1366,9 +1370,8 @@ mod tests {
         use crate::Expectation;
 
         let report = crate::im::ReportData {
-            attributes: vec![],
-            subscription_id: None,
             items: Vec::new(),
+            subscription_id: None,
             more_chunked_messages: false,
             suppress_response: false,
         };
@@ -1386,9 +1389,8 @@ mod tests {
         use crate::Expectation;
 
         let report = crate::im::ReportData {
-            attributes: vec![],
-            subscription_id: None,
             items: Vec::new(),
+            subscription_id: None,
             more_chunked_messages: false,
             suppress_response: false,
         };
@@ -1470,12 +1472,13 @@ mod tests {
         let report = report_result.unwrap();
 
         // Verify the report parsed correctly.
-        assert_eq!(report.attributes.len(), 1);
+        let attrs: Vec<_> = report.attributes().collect();
+        assert_eq!(attrs.len(), 1);
         assert_eq!(
-            report.attributes[0].0.cluster,
+            attrs[0].0.cluster,
             crate::clusters::network_commissioning::CLUSTER_ID
         );
-        assert_eq!(report.attributes[0].1, Value::Uint(feat_val));
+        assert_eq!(*attrs[0].1, Value::Uint(feat_val));
 
         // Verify extract_read_payload produces bytes that decode_feature_map accepts.
         let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report).unwrap();
@@ -1946,7 +1949,7 @@ mod tests {
         let (report_result, ()) = tokio::join!(controller, device);
         let report = report_result.unwrap();
 
-        assert_eq!(report.attributes.len(), 1);
+        assert_eq!(report.attributes().count(), 1);
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
         let info =

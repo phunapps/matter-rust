@@ -2024,13 +2024,14 @@ mod device_im_roundtrip {
             build_report_data(&[(path1, val1_buf.as_slice()), (path2, val2_buf.as_slice())]);
         let parsed = parse_report_data(&report_bytes).unwrap();
 
-        assert_eq!(parsed.attributes.len(), 2);
+        let attrs: Vec<_> = parsed.attributes().collect();
+        assert_eq!(attrs.len(), 2);
 
-        let (p0, v0) = &parsed.attributes[0];
+        let (p0, v0) = attrs[0];
         assert_eq!(*p0, path1);
         assert_eq!(*v0, Value::Uint(0x01));
 
-        let (p1, v1) = &parsed.attributes[1];
+        let (p1, v1) = attrs[1];
         assert_eq!(*p1, path2);
         assert_eq!(*v1, Value::Uint(3));
     }

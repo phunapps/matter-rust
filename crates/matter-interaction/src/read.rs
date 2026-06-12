@@ -65,15 +65,12 @@ pub fn build_read_request(paths: &[AttributePath]) -> Vec<u8> {
 /// Parsed `ReportDataMessage` (Matter §10.6.4).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReportData {
-    /// One entry per `AttributeReportIB` carrying `AttributeData`, as a
-    /// flattened `(path, value)` convenience for the common single-message
-    /// (non-chunked) case. List-append IBs (`ListIndex` = null) are **not**
-    /// included here — use [`items`](ReportData::items) +
-    /// [`ReportAccumulator`](crate::ReportAccumulator) for chunked / list
-    /// reassembly. `AttributeStatus` (error) reports are skipped.
-    pub attributes: Vec<(AttributePath, Value)>,
     /// Every `AttributeReportIB` carrying `AttributeData`, with the
     /// information needed to reassemble chunked and list-chunked reports.
+    ///
+    /// For the common single-message (non-chunked) `Replace`-only case, prefer
+    /// the [`attributes`](ReportData::attributes) borrowing view over this raw
+    /// list.
     pub items: Vec<AttributeReportItem>,
     /// Server-assigned subscription identifier, present only in
     /// subscription `ReportData` messages (context tag 0); `None` in
@@ -88,8 +85,29 @@ pub struct ReportData {
     pub suppress_response: bool,
 }
 
+impl ReportData {
+    /// Borrowing `(path, value)` view over the whole-attribute `Replace` reports
+    /// in [`items`](Self::items), as a flattened convenience for the common
+    /// single-message (non-chunked) case.
+    ///
+    /// List-append IBs (`ListIndex` = null, [`ReportOp::Append`]) are **not**
+    /// included — use [`items`](Self::items) +
+    /// [`ReportAccumulator`](crate::ReportAccumulator) for chunked / list
+    /// reassembly. `AttributeStatus` (error) reports never reach `items`, so they
+    /// are absent here too.
+    ///
+    /// This borrows from `items`; it neither allocates nor copies any [`Value`],
+    /// unlike materializing an owned `Vec`.
+    pub fn attributes(&self) -> impl Iterator<Item = (&AttributePath, &Value)> {
+        self.items
+            .iter()
+            .filter(|it| it.op == ReportOp::Replace)
+            .map(|it| (&it.path, &it.value))
+    }
+}
+
 /// One `AttributeReportIB` carrying `AttributeData`, retaining the list-merge
-/// metadata that [`ReportData::attributes`] flattens away.
+/// metadata that the [`ReportData::attributes`] convenience view flattens away.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AttributeReportItem {
     /// Concrete `(endpoint, cluster, attribute)`.
@@ -168,14 +186,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
         }
     }
 
-    let attributes = items
-        .iter()
-        .filter(|it| it.op == ReportOp::Replace)
-        .map(|it| (it.path, it.value.clone()))
-        .collect();
-
     Ok(ReportData {
-        attributes,
         items,
         subscription_id,
         more_chunked_messages,
@@ -382,8 +393,9 @@ mod tests {
         w.end_container().unwrap();
 
         let report = parse_report_data(&buf).unwrap();
-        assert_eq!(report.attributes.len(), 1);
-        let (path, value) = &report.attributes[0];
+        let attrs: Vec<_> = report.attributes().collect();
+        assert_eq!(attrs.len(), 1);
+        let (path, value) = attrs[0];
         assert_eq!(path.endpoint, 0);
         assert_eq!(path.cluster, 0x0031);
         assert_eq!(path.attribute, 0xFFFC);
@@ -407,7 +419,7 @@ mod tests {
         w.end_container().unwrap();
 
         let report = parse_report_data(&buf).unwrap();
-        assert!(report.attributes.is_empty());
+        assert_eq!(report.attributes().count(), 0);
     }
 
     #[test]
@@ -447,15 +459,16 @@ mod tests {
         w.end_container().unwrap();
 
         let report = parse_report_data(&buf).unwrap();
-        assert_eq!(report.attributes.len(), 2);
+        let attrs: Vec<_> = report.attributes().collect();
+        assert_eq!(attrs.len(), 2);
 
-        let (path0, val0) = &report.attributes[0];
+        let (path0, val0) = attrs[0];
         assert_eq!(path0.endpoint, 0);
         assert_eq!(path0.cluster, 0x0028);
         assert_eq!(path0.attribute, 0x0000);
         assert_eq!(*val0, matter_codec::Value::Uint(42));
 
-        let (path1, val1) = &report.attributes[1];
+        let (path1, val1) = attrs[1];
         assert_eq!(path1.endpoint, 1);
         assert_eq!(path1.cluster, 0x0006);
         assert_eq!(path1.attribute, 0x0000);
@@ -559,6 +572,76 @@ mod tests {
         assert_eq!(it.data_version, Some(7));
         assert_eq!(it.value, Value::Uint(42));
         // Append items are excluded from the flattened convenience view.
-        assert!(report.attributes.is_empty());
+        assert_eq!(report.attributes().count(), 0);
+    }
+
+    /// The borrowing `attributes()` view yields exactly the `Replace` items'
+    /// `(path, value)` pairs — same content the removed owned `attributes` Vec
+    /// used to deep-clone — and skips `Append` items.
+    #[test]
+    fn attributes_view_matches_items_filtered_to_replace() {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
+
+        // Replace: ep0/0x0028/0x0000 = 42
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.put_uint(Tag::Context(3), 0x0028).unwrap();
+        w.put_uint(Tag::Context(4), 0x0000).unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(2), 42).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        // Append: ep0/0x001d/0x0003 list element (must be excluded from view).
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.put_uint(Tag::Context(3), 0x001d).unwrap();
+        w.put_uint(Tag::Context(4), 0x0003).unwrap();
+        w.put_null(Tag::Context(5)).unwrap(); // ListIndex = null ⇒ append
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(2), 7).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        // Replace: ep1/0x0006/0x0000 = true
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_uint(Tag::Context(3), 0x0006).unwrap();
+        w.put_uint(Tag::Context(4), 0x0000).unwrap();
+        w.end_container().unwrap();
+        w.put_bool(Tag::Context(2), true).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        w.end_container().unwrap(); // array
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+
+        let report = parse_report_data(&buf).unwrap();
+
+        // Independently derive the expected pairs from `items`.
+        let expected: Vec<(&AttributePath, &Value)> = report
+            .items
+            .iter()
+            .filter(|it| it.op == ReportOp::Replace)
+            .map(|it| (&it.path, &it.value))
+            .collect();
+        let got: Vec<(&AttributePath, &Value)> = report.attributes().collect();
+        assert_eq!(got, expected);
+
+        // Concretely: the two Replace values, in order; the Append is excluded.
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].1, &Value::Uint(42));
+        assert_eq!(got[1].1, &Value::Bool(true));
     }
 }
