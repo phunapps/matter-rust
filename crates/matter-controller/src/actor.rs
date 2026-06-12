@@ -379,6 +379,21 @@ struct CachedSession {
     peer: std::net::SocketAddr,
 }
 
+/// Await a blocking store save on the Tokio blocking pool.
+///
+/// Free function (owns its inputs) so the actor never holds a `&self` borrow
+/// across the `.await`: that would make the actor future non-`Send` and so
+/// unspawnable. A panic inside `save` surfaces as a `JoinError`, mapped to an
+/// operational persistence error rather than unwinding the actor loop.
+async fn save_offloaded(store: Arc<dyn ControllerStore>, bytes: Vec<u8>) -> Result<(), Error> {
+    match tokio::task::spawn_blocking(move || store.save(&bytes)).await {
+        Ok(saved) => Ok(saved?),
+        Err(join_err) => Err(Error::Operational(format!(
+            "persistence task failed: {join_err}"
+        ))),
+    }
+}
+
 /// Owns all mutable state. Generic over transport + discovery so tests can
 /// inject `InMemoryDatagram` + a mock `Discovery`.
 pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
@@ -475,7 +490,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     async fn dispatch(&mut self, cmd: Command) {
         match cmd {
             Command::CreateFabric { cfg, reply } => {
-                let _ = reply.send(self.handle_create_fabric(&cfg));
+                let _ = reply.send(self.handle_create_fabric(&cfg).await);
             }
             Command::RoundTrip {
                 node_id,
@@ -525,11 +540,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    fn handle_create_fabric(&mut self, cfg: &FabricConfig) -> Result<u64, Error> {
+    async fn handle_create_fabric(&mut self, cfg: &FabricConfig) -> Result<u64, Error> {
         let entry = crate::fabric::create_fabric(cfg, self.rng.as_ref())?;
         let fabric_id = entry.fabric_id;
         self.state.fabrics.push(entry);
-        self.persist()?;
+        // Durability-critical: the caller must not consider the fabric created
+        // (and its private keys safe) until the snapshot is on disk. Serialize
+        // under `&self`, then drop the borrow before awaiting the offloaded save.
+        let (store, bytes) = self.durable_save_inputs()?;
+        save_offloaded(store, bytes).await?;
         Ok(fabric_id)
     }
 
@@ -611,14 +630,63 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         {
             fabric.devices.push(device);
         }
-        self.persist()?;
+        // Durability-critical: commissioning is reported successful to the
+        // caller only after the device entry is durably persisted. Serialize
+        // under `&self`, then drop the borrow before awaiting the offloaded save.
+        let (store, bytes) = self.durable_save_inputs()?;
+        save_offloaded(store, bytes).await?;
         Ok(node_id)
     }
 
-    fn persist(&self) -> Result<(), Error> {
+    /// Prepare the inputs for a durable, await-to-completion snapshot save.
+    ///
+    /// The actual blocking save (`File::create` + `write_all` + `fsync` +
+    /// `rename` in the default [`FileStore`](crate::store::FileStore)) is run by
+    /// [`save_offloaded`] on the Tokio blocking pool via
+    /// [`spawn_blocking`](tokio::task::spawn_blocking), so a multi-millisecond
+    /// fsync never runs on the actor task itself. The caller `await`s the
+    /// returned save so it only sees success once the bytes are durable, and any
+    /// [`StoreError`](crate::store::StoreError) propagates.
+    ///
+    /// Use this for state changes the caller relies on being durable before the
+    /// operation is reported successful: fabric creation and commissioning. For
+    /// best-effort updates (e.g. the per-connect address hint) use
+    /// [`Self::persist_best_effort`].
+    ///
+    /// Returns the `(store, bytes)` to feed to [`save_offloaded`]. The split is
+    /// deliberate: serializing under `&self` and awaiting the save are kept in
+    /// separate statements so no borrow of the (non-`Sync`) actor is held across
+    /// the `.await` — that would make the actor future non-`Send` and so
+    /// unspawnable. Callers do `let (s, b) = self.durable_save_inputs()?;
+    /// save_offloaded(s, b).await?;`.
+    fn durable_save_inputs(&self) -> Result<(Arc<dyn ControllerStore>, Vec<u8>), Error> {
         let bytes = snapshot::serialize(&self.state)?;
-        self.store.save(&bytes)?;
-        Ok(())
+        Ok((self.store.clone(), bytes))
+    }
+
+    /// Persist the snapshot best-effort, off the actor loop, without awaiting.
+    ///
+    /// The serialized bytes are handed to [`spawn_blocking`](tokio::task::spawn_blocking)
+    /// and the join handle is dropped: the actor neither blocks on the fsync nor
+    /// waits for its result. Use this only for updates a failed write may safely
+    /// lose — currently just the per-connect last-known-address hint, which is a
+    /// cache the controller can rebuild via mDNS. Durability-critical state must
+    /// use [`Self::durable_save_inputs`] + [`save_offloaded`] (await-to-durable)
+    /// instead.
+    fn persist_best_effort(&self) {
+        // Serialization failure here is purely best-effort state; dropping it
+        // must not abort the connection that triggered it.
+        let Ok(bytes) = snapshot::serialize(&self.state) else {
+            return;
+        };
+        let store = self.store.clone();
+        // Fire-and-forget: detach the blocking save. The actor loop returns
+        // immediately and never observes the fsync latency or its outcome.
+        // (No logging facility is wired into this crate yet; a write error is
+        // silently dropped, which is acceptable for a rebuildable address cache.)
+        drop(tokio::task::spawn_blocking(move || {
+            let _ = store.save(&bytes);
+        }));
     }
 
     /// The sole fabric, or an error if not exactly one (M8.2 is single-fabric;
@@ -709,6 +777,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// commissioning; this entry is an address/resumption cache only.
     fn upsert_device(&mut self, fabric_id: u64, node_id: u64, peer: std::net::SocketAddr) {
         let addr = peer.to_string();
+        // Track whether this connect actually changed persisted state. A
+        // reconnect to the *same* address (the common hot-path case) leaves the
+        // address hint unchanged, so we skip the save entirely — debouncing the
+        // best-effort persist instead of firing a full fsync on every connect.
+        let mut changed = false;
         if let Some(fabric) = self
             .state
             .fabrics
@@ -716,7 +789,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .find(|f| f.fabric_id == fabric_id)
         {
             if let Some(dev) = fabric.devices.iter_mut().find(|d| d.node_id == node_id) {
-                dev.last_known_addr = Some(addr);
+                if dev.last_known_addr.as_deref() != Some(addr.as_str()) {
+                    dev.last_known_addr = Some(addr);
+                    changed = true;
+                }
             } else {
                 fabric.devices.push(crate::state::DeviceEntry {
                     node_id,
@@ -724,11 +800,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     resumption_record: None,
                     last_known_addr: Some(addr),
                 });
+                changed = true;
             }
         }
-        // Address-hint persistence is best-effort; a write failure must not
-        // abort an otherwise-successful connection.
-        let _ = self.persist();
+        // Address-hint persistence is best-effort and offloaded off the actor
+        // loop; a write failure must not abort an otherwise-successful
+        // connection. Only persist when the hint actually changed (debounce):
+        // an unchanged reconnect skips the fsync altogether.
+        if changed {
+            self.persist_best_effort();
+        }
     }
 
     /// Return a live `(session, peer)` for `node_id`: the cached session if any,
@@ -3451,5 +3532,157 @@ mod tests {
             Some(SubscriptionEvent::Report(_)) => {}
             other => panic!("expected a buffered Report next, got {other:?}"),
         }
+    }
+
+    // --- Task 14: offloaded persistence (store fsync off the actor loop) ---
+
+    /// A store whose `save` always fails — proves durability-critical persists
+    /// still surface their error to the caller after offloading.
+    #[derive(Default)]
+    struct FailingStore;
+    impl ControllerStore for FailingStore {
+        fn load(&self) -> Result<Option<Vec<u8>>, crate::store::StoreError> {
+            Ok(None)
+        }
+        fn save(&self, _snapshot: &[u8]) -> Result<(), crate::store::StoreError> {
+            Err(crate::store::StoreError::Io(std::io::Error::other(
+                "disk full",
+            )))
+        }
+    }
+
+    /// A store that blocks inside `save` until released, and counts saves —
+    /// used to prove a slow fsync runs off the actor loop (so the loop keeps
+    /// serving other work) and that best-effort saves are debounced.
+    #[derive(Default)]
+    struct BlockingStore {
+        inner: std::sync::Mutex<Option<Vec<u8>>>,
+        saves: std::sync::atomic::AtomicUsize,
+        /// While held by the test, every `save` blocks on acquiring it.
+        gate: std::sync::Mutex<()>,
+    }
+    impl ControllerStore for BlockingStore {
+        fn load(&self) -> Result<Option<Vec<u8>>, crate::store::StoreError> {
+            Ok(self.inner.lock().unwrap().clone())
+        }
+        fn save(&self, snapshot: &[u8]) -> Result<(), crate::store::StoreError> {
+            // Block here until the test drops its hold on `gate`. This models a
+            // multi-millisecond fsync. If this ran on the actor task, the loop
+            // would be wedged for the whole duration.
+            let _held = self.gate.lock().unwrap();
+            self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.inner.lock().unwrap() = Some(snapshot.to_vec());
+            Ok(())
+        }
+    }
+
+    /// Durability-critical persists (fabric create) still surface store errors
+    /// to the caller, even though the save is offloaded to the blocking pool.
+    #[tokio::test]
+    async fn durable_persist_surfaces_store_error() {
+        let store: Arc<dyn ControllerStore> = Arc::new(FailingStore);
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let err = controller
+            .create_fabric(cfg())
+            .await
+            .expect_err("a failing store must fail create_fabric");
+        // The error must be the persistence failure, not a silent success.
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("disk full") || msg.to_lowercase().contains("i/o"),
+            "expected the store I/O error to propagate, got: {msg}"
+        );
+    }
+
+    /// Build a bare actor for unit-testing the persist paths in isolation.
+    fn test_actor(store: Arc<dyn ControllerStore>) -> Actor<InMemoryDatagram, NullDiscovery> {
+        let (io, _peer) = InMemoryDatagram::pair();
+        Actor::new(
+            io,
+            NullDiscovery,
+            store,
+            Arc::new(SystemNocRng),
+            ControllerState { fabrics: vec![] },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+    }
+
+    /// The best-effort per-connect persist (address hint) does NOT block the
+    /// caller on the fsync: it is offloaded fire-and-forget. We hold the store's
+    /// `gate` so any save would wedge, call `persist_best_effort`, and assert it
+    /// returns immediately. Releasing the gate then lets the offloaded save run.
+    ///
+    /// This is the hot-path guarantee: a multi-ms fsync on a per-connect address
+    /// hint never stalls the actor's `select!` loop (recv/MRP/liveness).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn best_effort_persist_does_not_block_on_fsync() {
+        let store = Arc::new(BlockingStore::default());
+        let actor = test_actor(store.clone());
+
+        // Wedge any save until we release this guard.
+        let held = store.gate.lock().unwrap();
+
+        // Fire-and-forget; this must return immediately despite the wedged store.
+        let start = std::time::Instant::now();
+        actor.persist_best_effort();
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(500),
+            "best-effort persist must not block on the fsync"
+        );
+        // The blocked save hasn't run yet.
+        assert_eq!(store.saves.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // Release the gate; the offloaded save eventually completes off-task.
+        drop(held);
+        let mut ran = false;
+        for _ in 0..200 {
+            if store.saves.load(std::sync::atomic::Ordering::SeqCst) >= 1 {
+                ran = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(ran, "the offloaded best-effort save must eventually run");
+    }
+
+    /// Durability-critical persists block until the save completes AND surface
+    /// store errors — the offload preserves these semantics. A successful
+    /// durable save returns Ok and the bytes are present; a failing store
+    /// returns Err. (The error-propagation path is also covered end-to-end by
+    /// `durable_persist_surfaces_store_error`.)
+    #[tokio::test]
+    async fn durable_persist_inputs_offload_round_trip() {
+        // Success path: a normal store records the save and returns Ok.
+        let store = Arc::new(MemStore::default());
+        let actor = test_actor(store.clone());
+        let (s, bytes) = actor.durable_save_inputs().expect("serialize");
+        save_offloaded(s, bytes).await.expect("durable save ok");
+        assert!(
+            store.load().expect("load").is_some(),
+            "durable save must have written the snapshot"
+        );
+
+        // Failure path: a failing store surfaces the error to the awaiter.
+        let actor = test_actor(Arc::new(FailingStore));
+        let (s, bytes) = actor.durable_save_inputs().expect("serialize");
+        let err = save_offloaded(s, bytes)
+            .await
+            .expect_err("a failing store must surface its error");
+        assert!(
+            format!("{err}").to_lowercase().contains("disk full")
+                || format!("{err}").to_lowercase().contains("i/o"),
+            "expected the store error to propagate, got: {err}"
+        );
     }
 }
