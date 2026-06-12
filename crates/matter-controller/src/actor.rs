@@ -1280,9 +1280,19 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // commonly a device reboot, which invalidates CASE). Evict it so
                 // the next attempt forces a fresh handshake; otherwise we would
                 // retry forever on a session the device can no longer decrypt.
+                // Only evict if the cache still holds the *expired* session; a
+                // sibling timeout may already have replaced it with a fresh
+                // healthy session, which we must not tear down (see the
+                // round-trip branch below for the full rationale).
                 if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
-                    if let Some(old) = self.cache.remove(&(fabric_id, node_id)) {
-                        self.sessions.remove(old.session_id);
+                    if self
+                        .cache
+                        .get(&(fabric_id, node_id))
+                        .is_some_and(|c| c.session_id == session_id)
+                    {
+                        if let Some(old) = self.cache.remove(&(fabric_id, node_id)) {
+                            self.sessions.remove(old.session_id);
+                        }
                     }
                 }
                 self.reschedule_resubscribe(PendingResubscribe {
@@ -1300,7 +1310,19 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
         if !p.retried {
             if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
-                self.cache.remove(&(fabric_id, p.node_id));
+                // Only evict if the cache still holds the *expired* session. A
+                // sibling op may have already timed out, evicted it, reconnected,
+                // and cached a fresh healthy session under this node — dropping
+                // that here would force a redundant CASE handshake and churn every
+                // subscription just bound to the new session. The superseded op
+                // simply retries below on its own fresh session.
+                if self
+                    .cache
+                    .get(&(fabric_id, p.node_id))
+                    .is_some_and(|c| c.session_id == session_id)
+                {
+                    self.cache.remove(&(fabric_id, p.node_id));
+                }
             }
             match self.connect(p.node_id).await {
                 Ok((sid, peer)) => {
@@ -3078,6 +3100,131 @@ mod tests {
         assert!(actor.subscriptions.contains_key(&SubId(2)));
         assert!(!actor.resubscribes.iter().any(|pr| pr.sub_id == SubId(2)));
         assert!(rx_b.try_recv().is_err(), "unaffected sub gets no event");
+    }
+
+    /// Build an actor with one real fabric in state so `sole_fabric()` (and thus
+    /// the cache-eviction path in `on_pending_timeout`) is exercised. Discovery
+    /// is null, so any `connect()` the timeout path attempts will fail without
+    /// touching the cached session — exactly what we want to observe the guard.
+    fn actor_with_one_fabric() -> Actor<InMemoryDatagram, NullDiscovery> {
+        let (io, _peer) = InMemoryDatagram::pair();
+        let fabric = {
+            let cfg = FabricConfig {
+                fabric_id: 0x0A0B_0C0D_0E0F_1011,
+                rcac_id: 1,
+                commissioner_node_id: 1,
+                validity: (
+                    MatterTime::from_unix_secs(1_700_000_000),
+                    MatterTime::NO_EXPIRY,
+                ),
+            };
+            crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
+        };
+        Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(SystemNocRng),
+            ControllerState {
+                fabrics: vec![fabric],
+            },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+    }
+
+    fn seed_pending_round_trip(
+        actor: &mut Actor<InMemoryDatagram, NullDiscovery>,
+        session: SessionId,
+        exchange: u16,
+        node_id: u64,
+    ) {
+        let (reply_tx, _reply_rx) = oneshot::channel();
+        actor.pending.insert(
+            (session, exchange),
+            Pending {
+                node_id,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+                request: PendingRequest {
+                    opcode: 0x02,
+                    protocol_id: ProtocolId::INTERACTION_MODEL,
+                    payload: vec![],
+                },
+                retried: false,
+                reply: PendingReply::RoundTrip(reply_tx),
+            },
+        );
+    }
+
+    /// The bug: two ops are pending on session S (`Node` is `Clone`, so every
+    /// concurrent op to one node shares a single cached session). Op A times out,
+    /// evicts the cache, reconnects, and caches a fresh healthy session S'. Op B —
+    /// still on the superseded S — later times out and `on_pending_timeout(S, …)`
+    /// must NOT evict S' from the cache (which would force a redundant CASE
+    /// handshake + churn every subscription just bound to S').
+    #[tokio::test]
+    async fn late_timeout_on_superseded_session_does_not_evict_current_session() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let node_id = 0x42u64;
+        let old_session = SessionId(7);
+        let new_session = SessionId(9);
+
+        // Op A already retried (evicted S, reconnected, cached the fresh S').
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: new_session,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+
+        // Op B is still pending on the superseded session S; fire its timeout.
+        seed_pending_round_trip(&mut actor, old_session, 0xABCD, node_id);
+        actor.on_pending_timeout(old_session, 0xABCD).await;
+
+        // The healthy current session S' is still cached and untouched.
+        let cached = actor
+            .cache
+            .get(&(fabric_id, node_id))
+            .expect("current healthy session must remain cached");
+        assert_eq!(
+            cached.session_id, new_session,
+            "late timeout on a superseded session must not evict the current session"
+        );
+        // No subscription churn was triggered.
+        assert!(
+            actor.resubscribes.is_empty(),
+            "no resubscribe churn should be scheduled by a superseded-session timeout"
+        );
+    }
+
+    /// The genuine-reconnect path: a timeout on the *current* cached session DOES
+    /// evict it, so a real device reboot still forces a fresh handshake.
+    #[tokio::test]
+    async fn timeout_on_current_session_evicts_it() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let node_id = 0x42u64;
+        let session = SessionId(7);
+
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: session,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+
+        // The pending op is on the same session that is cached; its timeout must
+        // evict the cache (connect then fails under NullDiscovery, leaving it empty).
+        seed_pending_round_trip(&mut actor, session, 0xABCD, node_id);
+        actor.on_pending_timeout(session, 0xABCD).await;
+
+        assert!(
+            !actor.cache.contains_key(&(fabric_id, node_id)),
+            "timeout on the current session must evict it so genuine reconnect happens"
+        );
     }
 
     fn mk_report(seq: usize) -> AttributeReport {
