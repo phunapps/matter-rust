@@ -56,8 +56,16 @@ mod tests {
     use super::*;
 
     fn temp_path(name: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        // Unique per (process, call): a fixed shared path races when two test
+        // processes (or a re-run overlapping a prior run) touch the same file.
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let uniq = COUNTER.fetch_add(1, Ordering::Relaxed);
         let mut p = std::env::temp_dir();
-        p.push(format!("matter-controller-test-{name}"));
+        p.push(format!(
+            "matter-controller-test-{name}-{}-{uniq}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&p);
         let _ = std::fs::remove_file(p.with_extension("tmp"));
         p
