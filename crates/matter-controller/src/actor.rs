@@ -952,6 +952,41 @@ mod tests {
         buf
     }
 
+    /// Build a `ReportData` whose single attribute is a list **append**
+    /// (`AttributePathIB` carries `ListIndex` = null, context tag 5) — the
+    /// list-chunking append form — with the given `MoreChunkedMessages` flag.
+    fn build_report_data_append(
+        ep: u16,
+        cl: u32,
+        at: u32,
+        value: &matter_codec::Value,
+        more: bool,
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), u64::from(ep)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(cl)).unwrap();
+        w.put_uint(Tag::Context(4), u64::from(at)).unwrap();
+        w.put_null(Tag::Context(5)).unwrap(); // ListIndex = null ⇒ append
+        w.end_container().unwrap();
+        w.write_value(Tag::Context(2), value).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        if more {
+            w.put_bool(Tag::Context(3), true).unwrap();
+        }
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
     /// Loopback device that completes CASE, then answers ONE `Node::read` with a
     /// two-chunk `ReportData` sequence: chunk 0 (`MoreChunkedMessages=true`),
     /// then — after the controller's `StatusResponse` ack — the final chunk.
@@ -1178,7 +1213,7 @@ mod tests {
         creds: CaseCredentials,
         roots: TrustedRoots,
         responder_session_id: u16,
-        num_reports: usize,
+        reports: Vec<Vec<u8>>,
     ) {
         let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
         // Sigma1 -> Sigma2
@@ -1254,17 +1289,18 @@ mod tests {
             .unwrap();
         io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
 
-        // Stream steady-state reports on the same exchange; drain the
-        // controller's StatusResponse acks between sends.
-        let report_blob = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
-        for _ in 0..num_reports {
+        // Stream the given `ReportData` payloads on the same exchange (chunked
+        // notifications just pass multiple payloads, the non-final ones with
+        // MoreChunkedMessages set); drain the controller's StatusResponse acks
+        // between sends.
+        for report in &reports {
             let out = sessions
                 .encode_outbound(
                     sid,
                     Some(exchange_id),
                     0x05,
                     ProtocolId::INTERACTION_MODEL,
-                    &report_blob,
+                    report,
                     MrpFlags { reliable: false },
                     Instant::now(),
                 )
@@ -1573,7 +1609,7 @@ mod tests {
             device_creds,
             device_roots,
             0x00D2,
-            3,
+            vec![build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true)); 3],
         ));
 
         let controller = crate::controller::MatterController::with_components(
@@ -1603,6 +1639,130 @@ mod tests {
             assert_eq!(report.path.cluster, 0x06);
             assert_eq!(report.value, matter_codec::Value::Bool(true));
         }
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
+    }
+
+    #[tokio::test]
+    async fn subscribe_reassembles_chunked_report_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // One steady-state notification split into two chunks: chunk 0 carries
+        // StartUpOnOff (MoreChunkedMessages=true), the final chunk carries OnOff.
+        // The consumer must receive BOTH merged attributes, not just one chunk.
+        let chunk0 =
+            build_report_data_chunk(1, 0x06, 0x4000, &matter_codec::Value::Bool(true), true);
+        let chunk1 =
+            build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(false), false);
+        let device = tokio::spawn(run_subscription_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D5,
+            vec![chunk0, chunk1],
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let mut sub = node
+            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x06)], 1, 30)
+            .await
+            .expect("subscribe");
+
+        let mut got = vec![
+            sub.next().await.expect("merged report 1"),
+            sub.next().await.expect("merged report 2"),
+        ];
+        got.sort_by_key(|r| r.path.attribute);
+        assert_eq!(got[0].path.attribute, 0x0000);
+        assert_eq!(got[0].value, matter_codec::Value::Bool(false));
+        assert_eq!(got[1].path.attribute, 0x4000);
+        assert_eq!(got[1].value, matter_codec::Value::Bool(true));
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
+    }
+
+    #[tokio::test]
+    async fn subscribe_reassembles_list_append_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // List-chunked notification: chunk 0 replaces Descriptor.PartsList with
+        // an empty list (MoreChunkedMessages=true); the final chunk appends one
+        // element (ListIndex=null). The consumer must receive ONE merged report
+        // whose value is the reassembled list.
+        let chunk0 = build_report_data_chunk(
+            1,
+            0x1d,
+            0x0003,
+            &matter_codec::Value::Array(Vec::new()),
+            true,
+        );
+        let chunk1 =
+            build_report_data_append(1, 0x1d, 0x0003, &matter_codec::Value::Uint(7), false);
+        let device = tokio::spawn(run_subscription_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D6,
+            vec![chunk0, chunk1],
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let mut sub = node
+            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x1d)], 1, 30)
+            .await
+            .expect("subscribe");
+
+        let report = sub.next().await.expect("merged list report");
+        assert_eq!(report.path.endpoint, 1);
+        assert_eq!(report.path.cluster, 0x1d);
+        assert_eq!(report.path.attribute, 0x0003);
+        assert_eq!(
+            report.value,
+            matter_codec::Value::Array(vec![matter_codec::Value::Uint(7)]),
+            "list-append must reassemble into the full list"
+        );
 
         device.await.unwrap();
         sub.cancel().await.expect("cancel");
