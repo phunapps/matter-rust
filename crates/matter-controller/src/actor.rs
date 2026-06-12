@@ -37,6 +37,55 @@ const MAX_READ_CHUNKS: usize = 64;
 /// Max total decoded payload bytes a single read may accumulate (256 `KiB`).
 const MAX_READ_BYTES: usize = 256 * 1024;
 
+// SH.2b backoff/liveness — wired into the resubscribe engine in later tasks; the
+// `dead_code` allows are removed once `resubscribe_backoff`/`LIVENESS_GRACE` are used.
+/// chip resubscribe backoff constants (`CHIPConfig.h`, verbatim).
+const RESUB_MAX_FIBONACCI_STEP_INDEX: u32 = 14;
+const RESUB_WAIT_TIME_MULTIPLIER_MS: u64 = 10_000;
+const RESUB_MAX_RETRY_WAIT_INTERVAL_MS: u64 = 5_538_000;
+const RESUB_MIN_WAIT_PERCENT: u64 = 30;
+
+/// Approximation of chip's `roundTripTimeout`, added to the negotiated max
+/// interval to form a subscription's liveness deadline. chip derives it from the
+/// session MRP params + `kExpectedIMProcessingTime`; 5 s is a safe, tunable
+/// stand-in (too small ⇒ spurious resubscribes).
+#[allow(dead_code)] // wired in SH.2b Task 2
+const LIVENESS_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// chip `GetFibonacciForIndex` (F(0)=0, F(1)=1, F(2)=1, F(3)=2, …).
+fn fibonacci(n: u32) -> u64 {
+    let (mut a, mut b) = (0u64, 1u64);
+    for _ in 0..n {
+        let next = a + b;
+        a = b;
+        b = next;
+    }
+    a
+}
+
+/// chip `ComputeTimeTillNextSubscription(retry_count)`: a Fibonacci-stepped max
+/// wait (capped at [`RESUB_MAX_RETRY_WAIT_INTERVAL_MS`]), then a uniform jitter
+/// in `[30%, 100%]` of it. `retry_count` 0 yields zero (immediate first retry).
+#[allow(dead_code)] // wired in SH.2b Task 4
+fn resubscribe_backoff(rng: &dyn NocRng, retry_count: u32) -> std::time::Duration {
+    let max_wait_ms = if retry_count <= RESUB_MAX_FIBONACCI_STEP_INDEX {
+        fibonacci(retry_count).saturating_mul(RESUB_WAIT_TIME_MULTIPLIER_MS)
+    } else {
+        RESUB_MAX_RETRY_WAIT_INTERVAL_MS
+    };
+    let min_wait_ms = (RESUB_MIN_WAIT_PERCENT * max_wait_ms) / 100;
+    let span = max_wait_ms - min_wait_ms;
+    let jitter = if span == 0 {
+        0
+    } else {
+        let mut buf = [0u8; 8];
+        // RNG failure is effectively impossible for `SystemNocRng`; fall back to 0.
+        let _ = rng.fill(&mut buf);
+        u64::from_le_bytes(buf) % span
+    };
+    std::time::Duration::from_millis(min_wait_ms + jitter)
+}
+
 /// Per-subscription routing state held by the actor.
 struct SubEntry {
     /// Channel to the consumer's [`Subscription`].
@@ -2079,6 +2128,40 @@ mod tests {
         let merged = r.push(&last).expect("final chunk flushes");
         assert_eq!(merged.len(), 1, "runaway partial was dropped, not merged");
         assert_eq!(merged[0].0.cluster, 0x06);
+    }
+
+    #[test]
+    fn fibonacci_matches_chip_sequence() {
+        // F(0)=0, F(1)=1, F(2)=1, F(3)=2, F(4)=3, F(5)=5, F(14)=377.
+        assert_eq!(fibonacci(0), 0);
+        assert_eq!(fibonacci(1), 1);
+        assert_eq!(fibonacci(2), 1);
+        assert_eq!(fibonacci(3), 2);
+        assert_eq!(fibonacci(5), 5);
+        assert_eq!(fibonacci(14), 377);
+    }
+
+    #[test]
+    fn resubscribe_backoff_respects_chip_bounds() {
+        let rng = SystemNocRng;
+        // n=0 → Fib(0)=0 → maxWait 0 → wait 0 (immediate first retry).
+        assert_eq!(resubscribe_backoff(&rng, 0), std::time::Duration::ZERO);
+        // n=3 → Fib(3)=2 → maxWait 20_000ms; wait ∈ [6_000, 20_000].
+        for _ in 0..32 {
+            let d = u64::try_from(resubscribe_backoff(&rng, 3).as_millis()).unwrap();
+            assert!(
+                (6_000..=20_000).contains(&d),
+                "n=3 wait {d} out of [6000,20000]"
+            );
+        }
+        // Above the Fibonacci cap: maxWait = 5_538_000ms; wait ∈ [1_661_400, 5_538_000].
+        for _ in 0..32 {
+            let d = u64::try_from(resubscribe_backoff(&rng, 99).as_millis()).unwrap();
+            assert!(
+                (1_661_400..=5_538_000).contains(&d),
+                "n=99 wait {d} out of cap band"
+            );
+        }
     }
 
     #[tokio::test]
