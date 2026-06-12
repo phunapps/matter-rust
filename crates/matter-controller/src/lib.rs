@@ -18,8 +18,8 @@
 //!   over raw [`Value`]s and support **wildcard reads** ([`ReadPath::cluster`],
 //!   [`ReadPath::all`]) for reading every attribute off a device.
 //! - **Subscriptions** — [`Node::subscribe`] returns a [`Subscription`] stream
-//!   of [`SubscriptionEvent`]s (`Report` / `Established` / `Resubscribing`;
-//!   `next().await` + `cancel()`).
+//!   of [`SubscriptionEvent`]s (`Report` / `Established` / `Resubscribing` /
+//!   `Lagged`; `next().await` + `cancel()`).
 //!
 //! # Quickstart
 //!

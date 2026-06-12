@@ -19,7 +19,7 @@ use crate::fabric::FabricConfig;
 use crate::snapshot;
 use crate::state::ControllerState;
 use crate::store::ControllerStore;
-use crate::subscription::{AttributeReport, SubscriptionEvent};
+use crate::subscription::{AttributeReport, SubscriptionEvent, SUBSCRIPTION_CHANNEL_CAP};
 
 /// IM opcodes used by the subscription flow.
 const OP_SUBSCRIBE_REQUEST: u8 = 0x03;
@@ -88,10 +88,67 @@ fn resubscribe_backoff(rng: &dyn NocRng, retry_count: u32) -> std::time::Duratio
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SubId(pub(crate) u64);
 
+/// The actor's two senders into one consumer [`Subscription`], plus the
+/// per-subscription dropped-report counter.
+///
+/// Steady-state reports go on a **bounded** channel (`report_tx`,
+/// [`SUBSCRIPTION_CHANNEL_CAP`]) and are dropped — never blocked on — when full,
+/// so a device that floods reports cannot grow controller memory or stall the
+/// actor loop. Control events ([`SubscriptionEvent::Established`] /
+/// [`SubscriptionEvent::Resubscribing`]) go on a separate, reliable, low-volume
+/// channel (`ctrl_tx`) so they are never dropped by report backpressure.
+struct ReportSink {
+    /// Bounded report channel (capacity [`SUBSCRIPTION_CHANNEL_CAP`]).
+    report_tx: mpsc::Sender<SubscriptionEvent>,
+    /// Reliable control-event channel ([`SubscriptionEvent::Established`] /
+    /// [`SubscriptionEvent::Resubscribing`]).
+    ctrl_tx: mpsc::UnboundedSender<SubscriptionEvent>,
+    /// Reports dropped (buffer full) since the last delivered `Lagged`.
+    dropped: usize,
+}
+
+impl ReportSink {
+    /// Try to forward a steady-state report without ever blocking the actor.
+    ///
+    /// On a full buffer the report is dropped and counted; the loss is later
+    /// surfaced as a single coalesced [`SubscriptionEvent::Lagged`] once capacity
+    /// frees. Returns `false` only if the consumer's report receiver is gone
+    /// (closed), signalling the subscription should be reaped.
+    fn try_send_report(&mut self, report: AttributeReport) -> bool {
+        // Flush a pending Lagged first so the consumer learns of prior drops as
+        // soon as there is room; if it still doesn't fit, fold this into dropped.
+        if self.dropped > 0 {
+            match self.report_tx.try_send(SubscriptionEvent::Lagged {
+                dropped: self.dropped,
+            }) {
+                Ok(()) => self.dropped = 0,
+                Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                Err(mpsc::error::TrySendError::Full(_)) => {}
+            }
+        }
+        match self.report_tx.try_send(SubscriptionEvent::Report(report)) {
+            Ok(()) => true,
+            // Buffer full: drop this report and count it (coalesced Lagged later).
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped += 1;
+                true
+            }
+            // Consumer gone: reap the subscription.
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
+
+    /// Deliver a control event reliably. Returns `false` if the consumer's
+    /// control receiver is gone (the subscription should be reaped).
+    fn send_control(&self, event: SubscriptionEvent) -> bool {
+        self.ctrl_tx.send(event).is_ok()
+    }
+}
+
 /// Per-subscription routing + resubscribe state, keyed by [`SubId`].
 struct SubEntry {
-    /// Channel to the consumer's [`Subscription`].
-    tx: mpsc::UnboundedSender<SubscriptionEvent>,
+    /// Channels to the consumer's [`Subscription`].
+    tx: ReportSink,
     /// Operational peer address (for `StatusResponse` acks).
     peer: SocketAddr,
     /// Reassembles a chunked steady-state notification before delivery.
@@ -117,7 +174,7 @@ struct PendingResubscribe {
     min_interval: u16,
     max_interval: u16,
     retry_count: u32,
-    tx: mpsc::UnboundedSender<SubscriptionEvent>,
+    tx: ReportSink,
 }
 
 /// An in-flight request awaiting its response, keyed in `pending` by
@@ -163,8 +220,10 @@ enum PendingReply {
     Subscribe {
         sub_id: SubId,
         reply: Option<oneshot::Sender<Result<SubEstablished, Error>>>,
-        report_tx: mpsc::UnboundedSender<SubscriptionEvent>,
-        report_rx: Option<mpsc::UnboundedReceiver<SubscriptionEvent>>,
+        report_tx: ReportSink,
+        /// The consumer's receivers, handed back on the initial `Established`.
+        /// `None` for a resubscribe (the consumer keeps its existing receivers).
+        report_rx: Option<SubReceivers>,
         priming: ReportReassembler,
         node_id: u64,
         paths: Vec<matter_interaction::ReadPath>,
@@ -174,10 +233,19 @@ enum PendingReply {
     },
 }
 
-/// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
+/// The consumer-side receivers for one subscription: the bounded report channel
+/// and the reliable control-event channel.
+pub(crate) struct SubReceivers {
+    /// Bounded report receiver (capacity [`SUBSCRIPTION_CHANNEL_CAP`]).
+    pub(crate) report_rx: mpsc::Receiver<SubscriptionEvent>,
+    /// Reliable control-event receiver.
+    pub(crate) ctrl_rx: mpsc::UnboundedReceiver<SubscriptionEvent>,
+}
+
+/// What `handle_subscribe` returns to `Node::subscribe`: the report receivers
 /// and the `(session, subscription_id)` key (the `Node` adds the command sender
 /// to build the public [`Subscription`]).
-pub(crate) type SubEstablished = (mpsc::UnboundedReceiver<SubscriptionEvent>, SubId);
+pub(crate) type SubEstablished = (SubReceivers, SubId);
 
 /// Maximum non-final chunks a single subscription notification may span before
 /// [`ReportReassembler`] drops the partial accumulation. Bounds memory against a
@@ -919,24 +987,35 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             return; // steady-state reports must carry a subscriptionId
         };
         let now = Instant::now();
-        let forwarded = self
+        let Some((sub_id, entry)) = self
             .subscriptions
-            .values_mut()
-            .find(|e| e.session_id == session_id && e.wire_sub_id == wire_sub_id)
-            .map(|e| {
-                e.liveness_deadline = now
-                    + std::time::Duration::from_secs(u64::from(e.max_interval))
-                    + LIVENESS_GRACE;
-                (e.tx.clone(), e.peer, e.reassembler.push(payload))
-            });
-        if let Some((tx, peer, merged)) = forwarded {
-            if let Some(attrs) = merged {
-                for (path, value) in attrs {
-                    let _ = tx.send(SubscriptionEvent::Report(AttributeReport { path, value }));
+            .iter_mut()
+            .find(|(_, e)| e.session_id == session_id && e.wire_sub_id == wire_sub_id)
+        else {
+            return;
+        };
+        entry.liveness_deadline =
+            now + std::time::Duration::from_secs(u64::from(entry.max_interval)) + LIVENESS_GRACE;
+        let peer = entry.peer;
+        let merged = entry.reassembler.push(payload);
+        let mut consumer_gone = false;
+        if let Some(attrs) = merged {
+            for (path, value) in attrs {
+                // try_send: never blocks the actor loop. A full buffer drops the
+                // report and counts it (surfaced later as a coalesced `Lagged`);
+                // a closed receiver means the consumer is gone — reap the sub.
+                if !entry.tx.try_send_report(AttributeReport { path, value }) {
+                    consumer_gone = true;
+                    break;
                 }
             }
-            let _ = self.send_status_ack(session_id, exchange_id, peer).await;
         }
+        if consumer_gone {
+            let sub_id = *sub_id;
+            self.subscriptions.remove(&sub_id);
+            return;
+        }
+        let _ = self.send_status_ack(session_id, exchange_id, peer).await;
     }
 
     /// Send a `SubscribeRequest` and register a pending subscribe handshake. The
@@ -978,7 +1057,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Ok(exchange) => {
                 let sub_id = SubId(self.next_sub_id);
                 self.next_sub_id += 1;
-                let (report_tx, report_rx) = mpsc::unbounded_channel::<SubscriptionEvent>();
+                // Bounded report channel + reliable control channel. The bounded
+                // cap is the memory-DoS guard; control events bypass it.
+                let (report_tx, report_rx) =
+                    mpsc::channel::<SubscriptionEvent>(SUBSCRIPTION_CHANNEL_CAP);
+                let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel::<SubscriptionEvent>();
+                let report_tx = ReportSink {
+                    report_tx,
+                    ctrl_tx,
+                    dropped: 0,
+                };
+                let report_rx = SubReceivers { report_rx, ctrl_rx };
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -1038,8 +1127,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             {
                 if let Some(attrs) = priming.push(&payload) {
                     for (path, value) in attrs {
-                        let _ = report_tx
-                            .send(SubscriptionEvent::Report(AttributeReport { path, value }));
+                        // Priming reports are bounded the same way as steady-state
+                        // ones: try_send, drop+count on a full buffer.
+                        if !report_tx.try_send_report(AttributeReport { path, value }) {
+                            break;
+                        }
                     }
                 }
             }
@@ -1067,10 +1159,23 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     let deadline = Instant::now()
                         + std::time::Duration::from_secs(u64::from(resp.max_interval))
                         + LIVENESS_GRACE;
+                    // Signal (re-)establishment to the consumer on the reliable
+                    // control channel BEFORE inserting, so we can reap on a dead
+                    // receiver. Control events are never dropped by report
+                    // backpressure (chip's OnSubscriptionEstablished). Any priming
+                    // Reports already flowed — they precede the SubscribeResponse
+                    // on the wire. If the consumer's receiver is already gone (a
+                    // resubscribe raced a cancel/Drop), do not insert a zombie
+                    // SubEntry that resubscribes forever.
+                    if !report_tx.send_control(SubscriptionEvent::Established {
+                        subscription_id: resp.subscription_id,
+                    }) {
+                        return;
+                    }
                     self.subscriptions.insert(
                         sub_id,
                         SubEntry {
-                            tx: report_tx.clone(),
+                            tx: report_tx,
                             peer: p.peer,
                             reassembler: ReportReassembler::default(),
                             session_id,
@@ -1082,23 +1187,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             liveness_deadline: deadline,
                         },
                     );
-                    // Signal (re-)establishment to the consumer (chip's
-                    // OnSubscriptionEstablished). Any priming Reports already
-                    // flowed — they precede the SubscribeResponse on the wire.
-                    // If the consumer's receiver is already gone (a resubscribe
-                    // raced a cancel/Drop), reap the entry rather than leaving a
-                    // zombie that resubscribes forever.
-                    if report_tx
-                        .send(SubscriptionEvent::Established {
-                            subscription_id: resp.subscription_id,
-                        })
-                        .is_err()
-                    {
-                        self.subscriptions.remove(&sub_id);
-                        return;
-                    }
-                    // Initial subscribe hands the receiver back; a resubscribe
-                    // (reply/report_rx None) reuses the consumer's existing rx.
+                    // Initial subscribe hands the receivers back; a resubscribe
+                    // (reply/report_rx None) reuses the consumer's existing ones.
                     if let (Some(reply), Some(rx)) = (reply, report_rx) {
                         let _ = reply.send(Ok((rx, sub_id)));
                     }
@@ -1299,11 +1389,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         };
         // If the consumer dropped its receiver, reap the subscription instead of
         // resubscribing forever (closes the zombie-SubEntry window when a cancel
-        // races an in-flight resubscribe, or the Drop cancel was lost).
-        if entry
+        // races an in-flight resubscribe, or the Drop cancel was lost). Sent on
+        // the reliable control channel so it is never dropped by report backpressure.
+        if !entry
             .tx
-            .send(SubscriptionEvent::Resubscribing { cause })
-            .is_err()
+            .send_control(SubscriptionEvent::Resubscribing { cause })
         {
             return;
         }
@@ -1563,6 +1653,27 @@ mod tests {
     /// Device side: complete the CASE handshake (unsecured Sigma framing,
     /// mirroring `matter-commissioning`'s `run_case` loopback test), then
     /// answer `echoes` secured IM round-trips with a `b"pong"` `ReportData`.
+    /// Build a [`ReportSink`] wired to fresh consumer receivers, mirroring what
+    /// `start_subscribe` constructs (bounded report channel + reliable control
+    /// channel). Returns the sink and both receivers for assertions.
+    fn test_report_sink() -> (
+        ReportSink,
+        mpsc::Receiver<SubscriptionEvent>,
+        mpsc::UnboundedReceiver<SubscriptionEvent>,
+    ) {
+        let (report_tx, report_rx) = mpsc::channel::<SubscriptionEvent>(SUBSCRIPTION_CHANNEL_CAP);
+        let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel::<SubscriptionEvent>();
+        (
+            ReportSink {
+                report_tx,
+                ctrl_tx,
+                dropped: 0,
+            },
+            report_rx,
+            ctrl_rx,
+        )
+    }
+
     /// Build a minimal `ReportDataMessage` carrying one attribute
     /// `(ep, cl, at) = value`. Mirrors the exact TLV structure
     /// `matter-interaction`'s `parse_report_data` expects (see its
@@ -2888,6 +2999,7 @@ mod tests {
                         reprimed_after_resub = true;
                     }
                 }
+                Ok(Some(_)) => {}
                 Ok(None) | Err(_) => break,
             }
         }
@@ -2935,10 +3047,16 @@ mod tests {
             max_interval: 30,
             liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
         };
-        let (tx_a, mut rx_a) = mpsc::unbounded_channel::<SubscriptionEvent>();
-        let (tx_b, mut rx_b) = mpsc::unbounded_channel::<SubscriptionEvent>();
-        actor.subscriptions.insert(SubId(1), mk(tx_a, SessionId(7)));
-        actor.subscriptions.insert(SubId(2), mk(tx_b, SessionId(9)));
+        // `Resubscribing` rides the reliable control channel, so the asserted
+        // receivers below are the control (unbounded) ones.
+        let (sink_a, _report_rx_a, mut rx_a) = test_report_sink();
+        let (sink_b, _report_rx_b, mut rx_b) = test_report_sink();
+        actor
+            .subscriptions
+            .insert(SubId(1), mk(sink_a, SessionId(7)));
+        actor
+            .subscriptions
+            .insert(SubId(2), mk(sink_b, SessionId(9)));
 
         // Session 7 was replaced → only SubId(1) is resubscribed.
         actor.resubscribe_stranded(SessionId(7));
@@ -2960,5 +3078,155 @@ mod tests {
         assert!(actor.subscriptions.contains_key(&SubId(2)));
         assert!(!actor.resubscribes.iter().any(|pr| pr.sub_id == SubId(2)));
         assert!(rx_b.try_recv().is_err(), "unaffected sub gets no event");
+    }
+
+    fn mk_report(seq: usize) -> AttributeReport {
+        AttributeReport {
+            path: matter_interaction::AttributePath {
+                endpoint: 1,
+                cluster: 0x06,
+                attribute: u32::try_from(seq).unwrap_or(u32::MAX),
+            },
+            value: matter_codec::Value::Bool(true),
+        }
+    }
+
+    /// Memory-DoS guard: a device flooding reports past the bounded buffer must
+    /// never block the actor (`try_send_report` always returns `true` for a live
+    /// consumer) and must not grow the buffer past [`SUBSCRIPTION_CHANNEL_CAP`].
+    /// The overflow is later surfaced as a single coalesced `Lagged { dropped }`.
+    #[tokio::test]
+    async fn report_overflow_drops_and_surfaces_lagged_without_blocking() {
+        let (mut sink, mut report_rx, _ctrl_rx) = test_report_sink();
+
+        // Stall the consumer: push far more than capacity without draining.
+        let overflow = 100usize;
+        let total = SUBSCRIPTION_CHANNEL_CAP + overflow;
+        for i in 0..total {
+            // Never blocks, never reports the consumer gone — reports past the
+            // cap are dropped and counted, not awaited.
+            assert!(
+                sink.try_send_report(mk_report(i)),
+                "actor must never block or fail on a full buffer (live consumer)"
+            );
+        }
+        assert_eq!(
+            sink.dropped, overflow,
+            "exactly the over-capacity reports were dropped + counted"
+        );
+        // The buffer is bounded: it holds at most the cap, not the flood.
+        assert_eq!(
+            report_rx.len(),
+            SUBSCRIPTION_CHANNEL_CAP,
+            "buffered reports are bounded by the channel capacity"
+        );
+
+        // Drain enough slots to make room, then push again: the freed capacity
+        // first carries a single coalesced Lagged announcing the dropped count.
+        // (One drained slot is consumed by the Lagged itself, so the very next
+        // report can still be dropped if the buffer immediately refills — drain a
+        // couple to leave genuine headroom.)
+        let first = report_rx.try_recv().expect("a buffered report");
+        assert!(matches!(first, SubscriptionEvent::Report(_)));
+        let _ = report_rx.try_recv().expect("a buffered report");
+        assert!(
+            sink.try_send_report(mk_report(9999)),
+            "post-drain send still succeeds"
+        );
+        assert_eq!(
+            sink.dropped, 0,
+            "Lagged flush cleared the dropped counter and the new report fit"
+        );
+
+        // Drain the rest; somewhere in the stream is exactly one Lagged whose
+        // count equals the overflow, and the report count stays bounded.
+        let mut saw_lagged = None;
+        let mut reports = 1usize; // the one drained above
+        while let Ok(ev) = report_rx.try_recv() {
+            match ev {
+                SubscriptionEvent::Lagged { dropped } => {
+                    assert!(saw_lagged.is_none(), "drops are coalesced into one Lagged");
+                    saw_lagged = Some(dropped);
+                }
+                SubscriptionEvent::Report(_) => reports += 1,
+                other => panic!("unexpected event on report channel: {other:?}"),
+            }
+        }
+        assert_eq!(
+            saw_lagged,
+            Some(overflow),
+            "a single Lagged surfaced the exact dropped count"
+        );
+        assert!(
+            reports < total,
+            "the flood was bounded: delivered fewer reports than were sent"
+        );
+    }
+
+    /// A closed consumer (receiver dropped) is reported so the actor reaps the
+    /// subscription rather than spinning forever.
+    #[tokio::test]
+    async fn report_send_reports_consumer_gone_when_receiver_dropped() {
+        let (mut sink, report_rx, _ctrl_rx) = test_report_sink();
+        drop(report_rx);
+        assert!(
+            !sink.try_send_report(mk_report(0)),
+            "a closed report receiver signals the consumer is gone"
+        );
+    }
+
+    /// Control events (`Established` / `Resubscribing`) must stay reliable even
+    /// when the report buffer is saturated — they ride a separate channel and are
+    /// never dropped by report backpressure, and `Subscription::next` prioritises
+    /// them ahead of the report backlog.
+    #[tokio::test]
+    async fn control_events_delivered_even_when_report_channel_saturated() {
+        let (mut sink, report_rx, ctrl_rx) = test_report_sink();
+
+        // Saturate the report channel completely (and then some).
+        for i in 0..(SUBSCRIPTION_CHANNEL_CAP + 50) {
+            assert!(sink.try_send_report(mk_report(i)));
+        }
+
+        // Both control events still go through despite the full report buffer.
+        assert!(
+            sink.send_control(SubscriptionEvent::Established {
+                subscription_id: 0xABCD,
+            }),
+            "Established must be delivered under report backpressure"
+        );
+        assert!(
+            sink.send_control(SubscriptionEvent::Resubscribing {
+                cause: Error::ControllerStopped,
+            }),
+            "Resubscribing must be delivered under report backpressure"
+        );
+
+        // Build the consumer handle and confirm next() yields the control events
+        // FIRST, ahead of the buffered report backlog.
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<Command>(8);
+        let mut sub = crate::subscription::Subscription {
+            rx: report_rx,
+            ctrl_rx,
+            tx: cmd_tx,
+            key: SubId(1),
+            cancelled: true, // suppress the Drop cancel (no live actor here)
+        };
+
+        match sub.next().await {
+            Some(SubscriptionEvent::Established { subscription_id }) => {
+                assert_eq!(subscription_id, 0xABCD);
+            }
+            other => panic!("expected Established first, got {other:?}"),
+        }
+        match sub.next().await {
+            Some(SubscriptionEvent::Resubscribing { .. }) => {}
+            other => panic!("expected Resubscribing second, got {other:?}"),
+        }
+        // Only after the control events are drained do reports flow.
+        match sub.next().await {
+            Some(SubscriptionEvent::Report(_)) => {}
+            other => panic!("expected a buffered Report next, got {other:?}"),
+        }
     }
 }

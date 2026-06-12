@@ -220,9 +220,10 @@ impl Node {
             })
             .await
             .map_err(|_| Error::ControllerStopped)?;
-        let (report_rx, key) = rx.await.map_err(|_| Error::ControllerStopped)??;
+        let (receivers, key) = rx.await.map_err(|_| Error::ControllerStopped)??;
         Ok(crate::subscription::Subscription {
-            rx: report_rx,
+            rx: receivers.report_rx,
+            ctrl_rx: receivers.ctrl_rx,
             tx: self.tx.clone(),
             key,
             cancelled: false,

@@ -164,6 +164,10 @@ async fn main() -> Result<()> {
             Some(SubscriptionEvent::Resubscribing { cause }) => {
                 println!("  resubscribing: {cause}");
             }
+            Some(SubscriptionEvent::Lagged { dropped }) => {
+                println!("  lagged: dropped {dropped} report(s) (consumer too slow)");
+            }
+            Some(_) => {}
             None => break,
         }
     }
