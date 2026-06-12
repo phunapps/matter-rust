@@ -28,8 +28,14 @@ const OP_REPORT_DATA: u8 = 0x05;
 const OP_STATUS_RESPONSE: u8 = 0x01;
 
 /// How often the loop wakes to drive MRP / liveness when no MRP deadline is
-/// pending and subscriptions are active.
+/// pending.
 const LIVENESS_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Max `ReportData` chunks a single read may span before aborting (mirrors
+/// `matter_commissioning::driver::MAX_READ_CHUNKS`).
+const MAX_READ_CHUNKS: usize = 64;
+/// Max total decoded payload bytes a single read may accumulate (256 `KiB`).
+const MAX_READ_BYTES: usize = 256 * 1024;
 
 /// Per-subscription routing state held by the actor.
 struct SubEntry {
@@ -39,6 +45,52 @@ struct SubEntry {
     peer: SocketAddr,
     /// Reassembles a chunked steady-state notification before delivery.
     reassembler: ReportReassembler,
+}
+
+/// An in-flight request awaiting its response, keyed in `pending` by
+/// `(session, exchange)`. The actor owns recv centrally, so a round-trip/read
+/// cannot block on its own response — it registers one of these and the central
+/// [`Actor::handle_inbound`] resolves it.
+struct Pending {
+    /// Node this op targets, for the reconnect-once retry on timeout.
+    node_id: u64,
+    /// Peer the request was sent to.
+    peer: SocketAddr,
+    /// The request bytes, retained to re-send once after a transparent
+    /// reconnect when the cached session was stale.
+    request: PendingRequest,
+    /// Has this op already been retried once after a reconnect?
+    retried: bool,
+    /// Where the resolved result is delivered.
+    reply: PendingReply,
+}
+
+/// The original request, kept so a timed-out op on a stale cached session can be
+/// re-sent once on a freshly re-established session.
+struct PendingRequest {
+    opcode: u8,
+    protocol_id: ProtocolId,
+    payload: Vec<u8>,
+}
+
+/// Where a resolved pending op delivers its result.
+enum PendingReply {
+    /// Single request/response (`Node::round_trip`).
+    RoundTrip(oneshot::Sender<Result<Vec<u8>, Error>>),
+    /// Chunked read: accumulate `ReportData` chunk payloads; resolve on the
+    /// final chunk.
+    Read {
+        reply: oneshot::Sender<Result<Vec<Vec<u8>>, Error>>,
+        chunks: Vec<Vec<u8>>,
+        total_bytes: usize,
+    },
+    /// Subscribe handshake: buffer/ack priming reports until `SubscribeResponse`.
+    Subscribe {
+        reply: oneshot::Sender<Result<SubEstablished, Error>>,
+        report_tx: mpsc::Sender<AttributeReport>,
+        report_rx: Option<mpsc::Receiver<AttributeReport>>,
+        priming: ReportReassembler,
+    },
 }
 
 /// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
@@ -64,11 +116,12 @@ const MAX_SUB_CHUNKS: usize = 64;
 /// chunked sequence whose final chunk never arrives (a device that dies
 /// mid-notification) leaves a partial accumulation that would merge into the
 /// *next* notification's flush. The [`MAX_SUB_CHUNKS`] cap bounds the memory of
-/// such a runaway sequence; the stale-merge window itself is only fully closed
-/// by the always-listening demux of the subscription-hardening follow-up (which
-/// tracks liveness and re-subscribes). Conformant devices do not start a new
-/// notification before the prior chunked sequence completes, so this requires
-/// non-conformant behaviour. See the `run` KNOWN LIMITATION note.
+/// such a runaway sequence; the stale-merge window itself is closed by the
+/// liveness tracking + auto-resubscribe of SH.2 (an abandoned notification means
+/// no complete report within `max_interval`, so liveness fires and we
+/// re-subscribe to a fresh priming snapshot). Conformant devices do not start a
+/// new notification before the prior chunked sequence completes, so this
+/// requires non-conformant behaviour.
 #[derive(Default)]
 struct ReportReassembler {
     acc: matter_interaction::ReportAccumulator,
@@ -174,6 +227,9 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// `SubscribeResponse` — steady-state `ReportData` messages carry it in
     /// the payload (context tag 0), not the original exchange id.
     subscriptions: HashMap<(SessionId, u32), SubEntry>,
+    /// In-flight round-trips/reads/subscribe-handshakes, keyed by
+    /// `(session, exchange)`. Resolved by [`Self::handle_inbound`].
+    pending: HashMap<(SessionId, u16), Pending>,
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -197,62 +253,43 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             trust,
             admin_vendor_id,
             subscriptions: HashMap::new(),
+            pending: HashMap::new(),
         }
     }
 
-    /// The task loop. With no active subscription it simply awaits commands
-    /// (recv is owned only inside a command's `secured_round_trip`), so the
-    /// round-trip / read / commission paths are byte-for-byte unchanged. While
-    /// any subscription is active it also listens for unsolicited steady-state
-    /// reports and drives MRP, between command handlers — recv is never owned
-    /// concurrently (a command handler runs to completion first).
+    /// The task loop. A single `select!` owns `recv_from()` continuously: it
+    /// dispatches commands, routes every inbound datagram through
+    /// [`Self::handle_inbound`] (resolving pending round-trips/reads by
+    /// `(session, exchange)` and delivering subscription reports by
+    /// `(session, subscriptionId)`), and drives MRP for all sessions in the
+    /// timer arm. Because round-trips/reads register a pending op and return to
+    /// the loop instead of owning recv, a steady-state report arriving during a
+    /// concurrent round-trip is delivered, not dropped.
     ///
-    /// KNOWN LIMITATION: a steady-state `ReportData` that arrives *while* a
-    /// concurrent round-trip owns recv inside `secured_round_trip` is consumed
-    /// there (counter recorded in the replay window) and discarded; on the
-    /// device's retransmit it is recognised as a duplicate and re-acked, so the
-    /// device stops resending — but that report's *value* is not delivered to
-    /// the consumer. This bounded silent-loss window only exists when the caller
-    /// issues round-trips on a node it is concurrently subscribed to (a pure
-    /// subscription stream loses nothing). A full fix routes off-exchange
-    /// subscription reports out of `secured_round_trip` (deferred with
-    /// auto-resubscribe to the subscription-hardening follow-up).
-    ///
-    /// KNOWN LIMITATION (chunked subscription reports, CR.3): a chunked
-    /// steady-state notification is reassembled per-subscription by
-    /// [`ReportReassembler`], which flushes only on the final chunk. If a device
-    /// abandons a chunked notification mid-sequence (never sends the final
-    /// chunk) and later starts a new one, the stale partial would merge into the
-    /// next flush. Conformant devices do not do this, the chunk count is capped
-    /// (memory bound), and the same subscription-hardening follow-up closes the
-    /// window via liveness tracking + re-subscribe.
+    /// `run_case` (CASE connect) and `handle_commission` remain blocking command
+    /// handlers that briefly pause the loop; a report arriving during a connect
+    /// is handled by `run_case`'s own recv. This residual window is far narrower
+    /// than the pre-SH.1 per-round-trip window.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
-            if self.subscriptions.is_empty() {
-                match rx.recv().await {
+            let now = Instant::now();
+            let sleep_for = self
+                .sessions
+                .poll_timeout()
+                .map_or(LIVENESS_TICK, |d| d.saturating_duration_since(now));
+            tokio::select! {
+                biased;
+                maybe = rx.recv() => match maybe {
                     Some(cmd) => self.dispatch(cmd).await,
                     None => return,
+                },
+                recv = self.transport.recv_from() => {
+                    if let Ok((packet, from)) = recv {
+                        self.handle_inbound(&packet, from).await;
+                    }
                 }
-            } else {
-                let now = Instant::now();
-                let sleep_for = self
-                    .sessions
-                    .poll_timeout()
-                    .map_or(LIVENESS_TICK, |d| d.saturating_duration_since(now));
-                tokio::select! {
-                    biased;
-                    maybe = rx.recv() => match maybe {
-                        Some(cmd) => self.dispatch(cmd).await,
-                        None => return,
-                    },
-                    recv = self.transport.recv_from() => {
-                        if let Ok((packet, from)) = recv {
-                            self.demux_subscription_inbound(&packet, from).await;
-                        }
-                    }
-                    () = tokio::time::sleep(sleep_for) => {
-                        self.drive_subscription_mrp().await;
-                    }
+                () = tokio::time::sleep(sleep_for) => {
+                    self.drive_mrp().await;
                 }
             }
         }
@@ -271,17 +308,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 payload,
                 reply,
             } => {
-                let _ = reply.send(
-                    self.handle_round_trip(node_id, opcode, protocol_id, &payload)
-                        .await,
-                );
+                self.start_round_trip(node_id, opcode, protocol_id, payload, reply)
+                    .await;
             }
             Command::Read {
                 node_id,
                 payload,
                 reply,
             } => {
-                let _ = reply.send(self.handle_read(node_id, &payload).await);
+                self.start_read(node_id, payload, reply).await;
             }
             Command::Commission {
                 setup_payload,
@@ -296,10 +331,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 max_interval,
                 reply,
             } => {
-                let _ = reply.send(
-                    self.handle_subscribe(node_id, &paths, min_interval, max_interval)
-                        .await,
-                );
+                self.start_subscribe(node_id, paths, min_interval, max_interval, reply)
+                    .await;
             }
             Command::CancelSubscription { key } => {
                 self.subscriptions.remove(&key);
@@ -483,138 +516,35 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let _ = self.persist();
     }
 
-    /// Send a secured IM payload, establishing/caching the session as needed.
-    /// On a *cached*-session failure (e.g. the device evicted our session), the
-    /// stale entry is dropped and the session re-established once before retry.
-    async fn handle_round_trip(
-        &mut self,
-        node_id: u64,
-        opcode: u8,
-        protocol_id: matter_transport::ProtocolId,
-        payload: &[u8],
-    ) -> Result<Vec<u8>, Error> {
+    /// Return a live `(session, peer)` for `node_id`: the cached session if any,
+    /// else connect fresh (this blocks the loop briefly — accepted residual).
+    async fn session_for(&mut self, node_id: u64) -> Result<(SessionId, SocketAddr), Error> {
         let fabric_id = self.sole_fabric()?.fabric_id;
-
         if let Some((sid, peer)) = self
             .cache
             .get(&(fabric_id, node_id))
             .map(|c| (c.session_id, c.peer))
         {
-            match self
-                .round_trip_once(sid, peer, opcode, protocol_id, payload)
-                .await
-            {
-                Ok(resp) => return Ok(resp),
-                // Stale cached session — evict, re-establish once, retry.
-                Err(Error::Driver(_)) => {
-                    self.cache.remove(&(fabric_id, node_id));
-                }
-                Err(e) => return Err(e),
-            }
+            return Ok((sid, peer));
         }
-
-        let (sid, peer) = self.connect(node_id).await?;
-        self.round_trip_once(sid, peer, opcode, protocol_id, payload)
-            .await
+        self.connect(node_id).await
     }
 
-    async fn round_trip_once(
+    /// Encode+send a reliable secured request; returns the allocated exchange id.
+    async fn send_request(
         &mut self,
         sid: SessionId,
-        peer: std::net::SocketAddr,
+        peer: SocketAddr,
         opcode: u8,
-        protocol_id: matter_transport::ProtocolId,
+        protocol_id: ProtocolId,
         payload: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        let resp = matter_commissioning::driver::secured_round_trip(
-            &self.transport,
-            &mut self.sessions,
-            sid,
-            peer,
-            opcode,
-            protocol_id,
-            payload,
-        )
-        .await?;
-        Ok(resp.payload)
-    }
-
-    /// Chunked read with the same connect-on-demand + reconnect-once policy as
-    /// [`handle_round_trip`](Self::handle_round_trip): try the cached session,
-    /// drop it and reconnect once on a driver error, else connect fresh.
-    async fn handle_read(&mut self, node_id: u64, payload: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
-        let fabric_id = self.sole_fabric()?.fabric_id;
-
-        if let Some((sid, peer)) = self
-            .cache
-            .get(&(fabric_id, node_id))
-            .map(|c| (c.session_id, c.peer))
-        {
-            match self.read_once(sid, peer, payload).await {
-                Ok(resp) => return Ok(resp),
-                // Stale cached session — evict, re-establish once, retry.
-                Err(Error::Driver(_)) => {
-                    self.cache.remove(&(fabric_id, node_id));
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        let (sid, peer) = self.connect(node_id).await?;
-        self.read_once(sid, peer, payload).await
-    }
-
-    /// One `secured_read` (chunked read transaction) over an established session.
-    async fn read_once(
-        &mut self,
-        sid: SessionId,
-        peer: std::net::SocketAddr,
-        payload: &[u8],
-    ) -> Result<Vec<Vec<u8>>, Error> {
-        let chunks = matter_commissioning::driver::secured_read(
-            &self.transport,
-            &mut self.sessions,
-            sid,
-            peer,
-            crate::node::OP_READ_REQUEST,
-            matter_transport::ProtocolId::INTERACTION_MODEL,
-            payload,
-        )
-        .await?;
-        Ok(chunks)
-    }
-
-    /// Establish a subscription: send a `SubscribeRequest`, absorb the priming
-    /// `ReportData`(s) — reassembling any chunked sequence through a
-    /// [`ReportReassembler`] and acking each chunk — then register the
-    /// subscription on the `SubscribeResponse`. Steady-state reports then arrive
-    /// via the run loop's `demux_subscription_inbound`.
-    async fn handle_subscribe(
-        &mut self,
-        node_id: u64,
-        paths: &[matter_interaction::ReadPath],
-        min_interval: u16,
-        max_interval: u16,
-    ) -> Result<SubEstablished, Error> {
-        let fabric_id = self.sole_fabric()?.fabric_id;
-        let (sid, peer) = match self.cache.get(&(fabric_id, node_id)) {
-            Some(c) => (c.session_id, c.peer),
-            None => self.connect(node_id).await?,
-        };
-
-        let req =
-            matter_interaction::build_subscribe_request(&matter_interaction::SubscribeRequest {
-                keep_subscriptions: false,
-                min_interval_floor: min_interval,
-                max_interval_ceiling: max_interval,
-                paths: paths.to_vec(),
-            });
+    ) -> Result<u16, Error> {
         let out = self.sessions.encode_outbound(
             sid,
             None,
-            OP_SUBSCRIBE_REQUEST,
-            ProtocolId::INTERACTION_MODEL,
-            &req,
+            opcode,
+            protocol_id,
+            payload,
             MrpFlags { reliable: true },
             Instant::now(),
         )?;
@@ -622,74 +552,391 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.transport
             .send_to(&out.wire_bytes, peer)
             .await
-            .map_err(|e| Error::Operational(format!("subscribe send: {e}")))?;
+            .map_err(|e| Error::Operational(format!("request send: {e}")))?;
+        Ok(exchange)
+    }
 
-        let (tx, rx) = mpsc::channel::<AttributeReport>(64);
-        let mut priming = ReportReassembler::default();
+    /// Send a secured IM round-trip and register a pending op; the central
+    /// [`Self::handle_inbound`] resolves `reply` when the response (or timeout)
+    /// arrives.
+    async fn start_round_trip(
+        &mut self,
+        node_id: u64,
+        opcode: u8,
+        protocol_id: ProtocolId,
+        payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    ) {
+        let (sid, peer) = match self.session_for(node_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        match self
+            .send_request(sid, peer, opcode, protocol_id, &payload)
+            .await
+        {
+            Ok(exchange) => {
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode,
+                            protocol_id,
+                            payload,
+                        },
+                        retried: false,
+                        reply: PendingReply::RoundTrip(reply),
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e));
+            }
+        }
+    }
 
-        // Bounded handshake: collect priming reports + ack them until the
-        // SubscribeResponse arrives (or MRP gives up).
-        loop {
-            let now = Instant::now();
-            let sleep_for = self
-                .sessions
-                .poll_timeout()
-                .map_or(LIVENESS_TICK, |d| d.saturating_duration_since(now));
-            tokio::select! {
-                biased;
-                recv = self.transport.recv_from() => {
-                    let (packet, _from) = recv.map_err(|e| Error::Operational(format!("subscribe recv: {e}")))?;
-                    if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
-                        continue;
+    /// Send a `ReadRequest` and register a pending read; chunks accumulate in
+    /// the pending entry and resolve on the final chunk.
+    async fn start_read(
+        &mut self,
+        node_id: u64,
+        payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<Vec<u8>>, Error>>,
+    ) {
+        let (sid, peer) = match self.session_for(node_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let opcode = crate::node::OP_READ_REQUEST;
+        match self
+            .send_request(sid, peer, opcode, ProtocolId::INTERACTION_MODEL, &payload)
+            .await
+        {
+            Ok(exchange) => {
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode,
+                            protocol_id: ProtocolId::INTERACTION_MODEL,
+                            payload,
+                        },
+                        retried: false,
+                        reply: PendingReply::Read {
+                            reply,
+                            chunks: Vec::new(),
+                            total_bytes: 0,
+                        },
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e));
+            }
+        }
+    }
+
+    /// Route one inbound datagram: resolve a pending round-trip/read by
+    /// `(session, exchange)`; deliver a steady-state `ReportData` to its
+    /// subscription by `(session, subscriptionId)`; otherwise let MRP absorb it.
+    async fn handle_inbound(&mut self, packet: &[u8], from: SocketAddr) {
+        // Unsecured stragglers (session id 0) are not ours.
+        if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
+            return;
+        }
+        let Ok(decoded) = self.sessions.decode_inbound(packet, Instant::now()) else {
+            return;
+        };
+        match decoded {
+            DecodeInboundOutput::AppMessage {
+                session_id,
+                exchange_id,
+                opcode,
+                payload,
+                ..
+            } => {
+                if self.pending.contains_key(&(session_id, exchange_id)) {
+                    self.resolve_pending(session_id, exchange_id, opcode, payload)
+                        .await;
+                } else if opcode == OP_REPORT_DATA {
+                    self.deliver_report(session_id, exchange_id, &payload).await;
+                }
+                // else: foreign app message — nothing to do (MRP already acked).
+            }
+            DecodeInboundOutput::AckOnly { .. } => {}
+            DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
+                let _ = self.transport.send_to(&ack_packet, from).await;
+            }
+        }
+    }
+
+    /// Resolve a pending op identified by `(session, exchange)`. For a
+    /// round-trip, reply with the payload. For a read, accumulate the chunk and,
+    /// if more chunks follow, ack to solicit the next; otherwise reply with all
+    /// chunks. For a subscribe handshake, buffer/ack priming reports and finish
+    /// on the `SubscribeResponse`.
+    async fn resolve_pending(
+        &mut self,
+        session_id: SessionId,
+        exchange_id: u16,
+        opcode: u8,
+        payload: Vec<u8>,
+    ) {
+        // Classify by variant, dropping the borrow before we remove/await.
+        enum Kind {
+            RoundTrip,
+            Read,
+            Subscribe,
+        }
+        let key = (session_id, exchange_id);
+        let kind = match self.pending.get(&key) {
+            Some(p) => match &p.reply {
+                PendingReply::RoundTrip(_) => Kind::RoundTrip,
+                PendingReply::Read { .. } => Kind::Read,
+                PendingReply::Subscribe { .. } => Kind::Subscribe,
+            },
+            None => return,
+        };
+        match kind {
+            Kind::RoundTrip => {
+                if let Some(PendingReply::RoundTrip(reply)) =
+                    self.pending.remove(&key).map(|p| p.reply)
+                {
+                    let _ = reply.send(Ok(payload));
+                }
+            }
+            Kind::Read => {
+                let peer = self.pending.get(&key).map(|p| p.peer);
+                // `payload` is moved into `chunks` below, so compute `more` first.
+                let more = matter_interaction::parse_report_data(&payload)
+                    .is_ok_and(|rd| rd.more_chunked_messages);
+                let over = match self.pending.get_mut(&key).map(|p| &mut p.reply) {
+                    Some(PendingReply::Read {
+                        chunks,
+                        total_bytes,
+                        ..
+                    }) => {
+                        *total_bytes = total_bytes.saturating_add(payload.len());
+                        chunks.push(payload);
+                        chunks.len() > MAX_READ_CHUNKS || *total_bytes > MAX_READ_BYTES
                     }
-                    let decoded = match self.sessions.decode_inbound(&packet, Instant::now()) {
-                        Ok(d) => d,
-                        Err(matter_transport::Error::UnknownSession(_) | matter_transport::Error::DecryptionFailed) => continue,
-                        Err(e) => return Err(Error::Operational(format!("subscribe decode: {e}"))),
-                    };
-                    match decoded {
-                        DecodeInboundOutput::AppMessage { session_id, exchange_id, opcode, payload, .. }
-                            if exchange_id == exchange =>
-                        {
-                            if opcode == OP_REPORT_DATA {
-                                // Ack first (solicits the next chunk), then merge.
-                                self.send_status_ack(session_id, exchange_id, peer).await?;
-                                if let Some(merged) = priming.push(&payload) {
-                                    for (path, value) in merged {
-                                        let _ = tx.try_send(AttributeReport { path, value });
-                                    }
-                                }
-                            } else if opcode == OP_SUBSCRIBE_RESPONSE {
-                                let resp = matter_interaction::parse_subscribe_response(&payload)?;
-                                let key = (session_id, resp.subscription_id);
-                                self.subscriptions.insert(
-                                    key,
-                                    SubEntry {
-                                        tx,
-                                        peer,
-                                        reassembler: ReportReassembler::default(),
-                                    },
-                                );
-                                return Ok((rx, key));
-                            }
-                        }
-                        DecodeInboundOutput::AppMessage { .. } | DecodeInboundOutput::AckOnly { .. } => {}
-                        DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
-                            let _ = self.transport.send_to(&ack_packet, peer).await;
-                        }
+                    _ => return,
+                };
+                if over {
+                    if let Some(PendingReply::Read { reply, .. }) =
+                        self.pending.remove(&key).map(|p| p.reply)
+                    {
+                        let _ = reply.send(Err(Error::Operational("read too large".into())));
+                    }
+                } else if more {
+                    // Ack this chunk on the same exchange to solicit the next.
+                    if let Some(peer) = peer {
+                        let _ = self.send_chunk_ack(session_id, exchange_id, peer).await;
+                    }
+                } else if let Some(PendingReply::Read { reply, chunks, .. }) =
+                    self.pending.remove(&key).map(|p| p.reply)
+                {
+                    let _ = reply.send(Ok(chunks));
+                }
+            }
+            Kind::Subscribe => {
+                self.resolve_subscribe(session_id, exchange_id, opcode, payload)
+                    .await;
+            }
+        }
+    }
+
+    /// Reliable `StatusResponse(SUCCESS)` on a read exchange to solicit the next
+    /// chunk (mirrors `secured_read`'s per-chunk ack).
+    async fn send_chunk_ack(
+        &mut self,
+        sid: SessionId,
+        exchange: u16,
+        peer: SocketAddr,
+    ) -> Result<(), Error> {
+        let status = matter_interaction::build_status_response(0);
+        let out = self.sessions.encode_outbound(
+            sid,
+            Some(exchange),
+            OP_STATUS_RESPONSE,
+            ProtocolId::INTERACTION_MODEL,
+            &status,
+            MrpFlags { reliable: true },
+            Instant::now(),
+        )?;
+        self.transport
+            .send_to(&out.wire_bytes, peer)
+            .await
+            .map_err(|e| Error::Operational(format!("chunk ack send: {e}")))?;
+        Ok(())
+    }
+
+    /// Deliver a steady-state `ReportData` to its subscription by
+    /// `SubscriptionId`, reassembling chunks, then ack on the report's own
+    /// exchange.
+    async fn deliver_report(&mut self, session_id: SessionId, exchange_id: u16, payload: &[u8]) {
+        let Ok(rd) = matter_interaction::parse_report_data(payload) else {
+            return;
+        };
+        let Some(sub_id) = rd.subscription_id else {
+            return; // steady-state reports must carry a subscriptionId
+        };
+        let forwarded = self
+            .subscriptions
+            .get_mut(&(session_id, sub_id))
+            .map(|entry| {
+                (
+                    entry.tx.clone(),
+                    entry.peer,
+                    entry.reassembler.push(payload),
+                )
+            });
+        if let Some((tx, peer, merged)) = forwarded {
+            if let Some(attrs) = merged {
+                for (path, value) in attrs {
+                    let _ = tx.try_send(AttributeReport { path, value });
+                }
+            }
+            let _ = self.send_status_ack(session_id, exchange_id, peer).await;
+        }
+    }
+
+    /// Send a `SubscribeRequest` and register a pending subscribe handshake. The
+    /// report receiver is handed back via `reply` once the `SubscribeResponse`
+    /// arrives (see [`Self::resolve_subscribe`]); priming reports that precede it
+    /// flow through the same channel.
+    async fn start_subscribe(
+        &mut self,
+        node_id: u64,
+        paths: Vec<matter_interaction::ReadPath>,
+        min_interval: u16,
+        max_interval: u16,
+        reply: oneshot::Sender<Result<SubEstablished, Error>>,
+    ) {
+        let (sid, peer) = match self.session_for(node_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let req =
+            matter_interaction::build_subscribe_request(&matter_interaction::SubscribeRequest {
+                keep_subscriptions: false,
+                min_interval_floor: min_interval,
+                max_interval_ceiling: max_interval,
+                paths,
+            });
+        match self
+            .send_request(
+                sid,
+                peer,
+                OP_SUBSCRIBE_REQUEST,
+                ProtocolId::INTERACTION_MODEL,
+                &req,
+            )
+            .await
+        {
+            Ok(exchange) => {
+                let (report_tx, report_rx) = mpsc::channel::<AttributeReport>(64);
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode: OP_SUBSCRIBE_REQUEST,
+                            protocol_id: ProtocolId::INTERACTION_MODEL,
+                            payload: req,
+                        },
+                        retried: false,
+                        reply: PendingReply::Subscribe {
+                            reply,
+                            report_tx,
+                            report_rx: Some(report_rx),
+                            priming: ReportReassembler::default(),
+                        },
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e));
+            }
+        }
+    }
+
+    /// Drive the subscribe handshake on its exchange: ack+buffer priming
+    /// `ReportData`, and on `SubscribeResponse` register the subscription under
+    /// `(session, subscriptionId)` and hand the report receiver back to the
+    /// caller.
+    async fn resolve_subscribe(
+        &mut self,
+        session_id: SessionId,
+        exchange_id: u16,
+        opcode: u8,
+        payload: Vec<u8>,
+    ) {
+        let key = (session_id, exchange_id);
+        if opcode == OP_REPORT_DATA {
+            // Ack first (solicits the next chunk), then merge into priming.
+            if let Some(peer) = self.pending.get(&key).map(|p| p.peer) {
+                let _ = self.send_status_ack(session_id, exchange_id, peer).await;
+            }
+            if let Some(Pending {
+                reply:
+                    PendingReply::Subscribe {
+                        report_tx, priming, ..
+                    },
+                ..
+            }) = self.pending.get_mut(&key)
+            {
+                if let Some(attrs) = priming.push(&payload) {
+                    for (path, value) in attrs {
+                        let _ = report_tx.try_send(AttributeReport { path, value });
                     }
                 }
-                () = tokio::time::sleep(sleep_for) => {
-                    for event in self.sessions.handle_timeout(Instant::now()) {
-                        match event {
-                            MrpEvent::Retransmit { packet, .. } | MrpEvent::SendStandaloneAck { packet, .. } => {
-                                let _ = self.transport.send_to(&packet, peer).await;
-                            }
-                            MrpEvent::Expired { .. } => {
-                                return Err(Error::Operational("subscribe handshake timed out".into()));
-                            }
-                        }
-                    }
+            }
+        } else if opcode == OP_SUBSCRIBE_RESPONSE {
+            let Some(p) = self.pending.remove(&key) else {
+                return;
+            };
+            let PendingReply::Subscribe {
+                reply,
+                report_tx,
+                report_rx,
+                ..
+            } = p.reply
+            else {
+                return;
+            };
+            let Some(rx) = report_rx else {
+                return;
+            };
+            match matter_interaction::parse_subscribe_response(&payload) {
+                Ok(resp) => {
+                    let sub_key = (session_id, resp.subscription_id);
+                    self.subscriptions.insert(
+                        sub_key,
+                        SubEntry {
+                            tx: report_tx,
+                            peer: p.peer,
+                            reassembler: ReportReassembler::default(),
+                        },
+                    );
+                    let _ = reply.send(Ok((rx, sub_key)));
+                }
+                Err(e) => {
+                    let _ = reply.send(Err(Error::InteractionModel(e)));
                 }
             }
         }
@@ -720,63 +967,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok(())
     }
 
-    /// Route an unsolicited inbound packet: a steady-state `ReportData` on a
-    /// known subscription exchange is forwarded + acked; everything else is
-    /// skipped.
-    async fn demux_subscription_inbound(&mut self, packet: &[u8], from: SocketAddr) {
-        if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
-            return;
-        }
-        let Ok(decoded) = self.sessions.decode_inbound(packet, Instant::now()) else {
-            return;
-        };
-        match decoded {
-            DecodeInboundOutput::AppMessage {
-                session_id,
-                exchange_id,
-                opcode,
-                payload,
-                ..
-            } => {
-                if opcode == OP_REPORT_DATA {
-                    let Ok(rd) = matter_interaction::parse_report_data(&payload) else {
-                        return;
-                    };
-                    let Some(sub_id) = rd.subscription_id else {
-                        return; // steady-state reports must carry a subscriptionId
-                    };
-                    // Extract everything from the entry before the ack await so
-                    // the `&mut self.subscriptions` borrow does not overlap the
-                    // `&mut self.sessions` borrow inside `send_status_ack`.
-                    let forwarded =
-                        self.subscriptions
-                            .get_mut(&(session_id, sub_id))
-                            .map(|entry| {
-                                (
-                                    entry.tx.clone(),
-                                    entry.peer,
-                                    entry.reassembler.push(&payload),
-                                )
-                            });
-                    if let Some((tx, peer, merged)) = forwarded {
-                        if let Some(attrs) = merged {
-                            for (path, value) in attrs {
-                                let _ = tx.try_send(AttributeReport { path, value });
-                            }
-                        }
-                        let _ = self.send_status_ack(session_id, exchange_id, peer).await;
-                    }
-                }
-            }
-            DecodeInboundOutput::AckOnly { .. } => {}
-            DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
-                let _ = self.transport.send_to(&ack_packet, from).await;
-            }
-        }
-    }
-
-    /// Drive MRP retransmits/acks for active subscription sessions.
-    async fn drive_subscription_mrp(&mut self) {
+    /// Drive MRP for all sessions: send retransmits/standalone-acks, and on
+    /// `Expired` resolve the matching pending op — retrying once on a fresh
+    /// session if the cached one was stale (preserves the pre-SH.1
+    /// reconnect-once policy).
+    async fn drive_mrp(&mut self) {
         for event in self.sessions.handle_timeout(Instant::now()) {
             match event {
                 MrpEvent::Retransmit {
@@ -789,17 +984,90 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         let _ = self.transport.send_to(&packet, peer).await;
                     }
                 }
-                MrpEvent::Expired { .. } => {}
+                MrpEvent::Expired {
+                    session_id,
+                    exchange_id,
+                    ..
+                } => {
+                    self.on_pending_timeout(session_id, exchange_id).await;
+                }
             }
         }
     }
 
-    /// The peer address of any active subscription on `sid`.
+    /// A pending op timed out. If it ran on a stale cached session and has not
+    /// yet been retried, evict the session, reconnect, and re-send once on the
+    /// new session; otherwise resolve it with a timeout error.
+    async fn on_pending_timeout(&mut self, session_id: SessionId, exchange_id: u16) {
+        let Some(p) = self.pending.remove(&(session_id, exchange_id)) else {
+            return;
+        };
+        if !p.retried {
+            if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
+                self.cache.remove(&(fabric_id, p.node_id));
+            }
+            match self.connect(p.node_id).await {
+                Ok((sid, peer)) => {
+                    if let Ok(exchange) = self
+                        .send_request(
+                            sid,
+                            peer,
+                            p.request.opcode,
+                            p.request.protocol_id,
+                            &p.request.payload,
+                        )
+                        .await
+                    {
+                        let mut np = p;
+                        np.peer = peer;
+                        np.retried = true;
+                        self.pending.insert((sid, exchange), np);
+                        return;
+                    }
+                }
+                Err(e) => {
+                    Self::fail_pending(p, e);
+                    return;
+                }
+            }
+        }
+        Self::fail_pending(p, Error::Operational("round-trip timed out".into()));
+    }
+
+    /// Resolve a pending op's reply channel with an error.
+    fn fail_pending(p: Pending, err: Error) {
+        match p.reply {
+            PendingReply::RoundTrip(reply) => {
+                let _ = reply.send(Err(err));
+            }
+            PendingReply::Read { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            PendingReply::Subscribe { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+        }
+    }
+
+    /// The peer address for `sid`: from an active subscription, a pending op, or
+    /// the session cache.
     fn peer_for_session(&self, sid: SessionId) -> Option<SocketAddr> {
         self.subscriptions
             .iter()
             .find(|((s, _), _)| *s == sid)
             .map(|(_, e)| e.peer)
+            .or_else(|| {
+                self.pending
+                    .iter()
+                    .find(|((s, _), _)| *s == sid)
+                    .map(|(_, p)| p.peer)
+            })
+            .or_else(|| {
+                self.cache
+                    .values()
+                    .find(|c| c.session_id == sid)
+                    .map(|c| c.peer)
+            })
     }
 }
 
