@@ -235,33 +235,21 @@ impl ReplayWindow {
         }
     }
 
-    /// Validate `counter` against the window and, on success, record it.
+    /// Classify `counter` against the current window WITHOUT mutating any
+    /// state. Both [`Self::check_and_record`] and [`Self::would_reject`]
+    /// delegate here so the accept/reject decision can never drift between
+    /// the mutating and non-mutating paths.
     ///
-    /// # Errors
-    ///
-    /// - [`Error::ReplayedCounter`] if `counter` is inside the window and
-    ///   has already been observed.
-    /// - [`Error::CounterTooOld`] if `counter` is older than
-    ///   `highest_seen - 31`.
-    pub fn check_and_record(&mut self, counter: u32) -> Result<()> {
+    /// Returns `Err` for the same conditions [`Self::check_and_record`]
+    /// documents; otherwise `Ok`.
+    fn classify(&self, counter: u32) -> Result<()> {
         let Some(highest) = self.highest_seen else {
             // Empty window: any counter is fresh.
-            self.highest_seen = Some(counter);
-            self.bitmap = 1;
             return Ok(());
         };
 
         if counter > highest {
-            // Forward jump. Shift the bitmap so the new highest is bit 0
-            // and the previous highest moves to bit (counter - highest).
-            let shift = counter - highest;
-            self.bitmap = if shift >= Self::WIDTH {
-                0
-            } else {
-                self.bitmap << shift
-            };
-            self.bitmap |= 1;
-            self.highest_seen = Some(counter);
+            // Forward jump — always novel.
             Ok(())
         } else {
             let offset = highest - counter;
@@ -272,13 +260,70 @@ impl ReplayWindow {
                     window_high: highest,
                 });
             }
-            let bit = 1u32 << offset;
-            if self.bitmap & bit != 0 {
+            if self.bitmap & (1u32 << offset) != 0 {
                 return Err(Error::ReplayedCounter { counter });
             }
-            self.bitmap |= bit;
             Ok(())
         }
+    }
+
+    /// Check whether `counter` WOULD be rejected, without recording it or
+    /// otherwise mutating the window. Takes `&self` and never writes.
+    ///
+    /// This exists so a caller can cheaply reject obvious replays before
+    /// spending AES-CCM cycles — but, crucially, the window is only
+    /// *advanced* by [`Self::check_and_record`] AFTER the message has been
+    /// authenticated. A non-mutating pre-check cannot be poisoned by a
+    /// forged datagram carrying an unauthenticated counter.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ReplayedCounter`] if `counter` is inside the window and
+    ///   has already been observed.
+    /// - [`Error::CounterTooOld`] if `counter` is older than
+    ///   `highest_seen - 31`.
+    pub fn would_reject(&self, counter: u32) -> Result<()> {
+        self.classify(counter)
+    }
+
+    /// Validate `counter` against the window and, on success, record it.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ReplayedCounter`] if `counter` is inside the window and
+    ///   has already been observed.
+    /// - [`Error::CounterTooOld`] if `counter` is older than
+    ///   `highest_seen - 31`.
+    pub fn check_and_record(&mut self, counter: u32) -> Result<()> {
+        // Decide first (no mutation); only commit once the counter is
+        // accepted. Keeps the reject logic identical to `would_reject`.
+        self.classify(counter)?;
+
+        match self.highest_seen {
+            None => {
+                // Empty window: any counter is fresh.
+                self.highest_seen = Some(counter);
+                self.bitmap = 1;
+            }
+            Some(highest) if counter > highest => {
+                // Forward jump. Shift the bitmap so the new highest is bit 0
+                // and the previous highest moves to bit (counter - highest).
+                let shift = counter - highest;
+                self.bitmap = if shift >= Self::WIDTH {
+                    0
+                } else {
+                    self.bitmap << shift
+                };
+                self.bitmap |= 1;
+                self.highest_seen = Some(counter);
+            }
+            Some(highest) => {
+                // In-window, novel (classify already ruled out replay/old).
+                let offset = highest - counter;
+                self.bitmap |= 1u32 << offset;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -340,10 +385,16 @@ pub fn encode_secured(
 
 /// Decrypt + decode a Matter secured message.
 ///
-/// On success returns the parsed header and the decrypted payload. The
-/// caller's `replay_window` is consulted before decryption is even
-/// attempted: a replayed or too-old counter is rejected without burning
-/// AES-CCM cycles.
+/// On success returns the parsed header and the decrypted payload.
+///
+/// Replay state is COMMITTED only after the message authenticates: the
+/// header (session id, counter) is unauthenticated plaintext, so advancing
+/// the replay window before verifying the AES-CCM tag would let a forged
+/// datagram poison it (a far-future counter could strand later genuine
+/// traffic — a remote single-packet `DoS`). We therefore authenticate first,
+/// then call [`ReplayWindow::check_and_record`]. An optional non-mutating
+/// fast-path ([`ReplayWindow::would_reject`]) rejects obvious replays up
+/// front to avoid burning AES-CCM cycles, but it never mutates the window.
 ///
 /// # Errors
 ///
@@ -363,7 +414,11 @@ pub fn decode_secured(
     nonce_source_node_id: u64,
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
     let (header, rest) = decode_header(bytes)?;
-    replay_window.check_and_record(header.message_counter.0)?;
+
+    // Non-mutating fast-path: reject obvious replays before spending AES
+    // cycles. This MUST NOT advance the window — the header counter is
+    // unauthenticated at this point.
+    replay_window.would_reject(header.message_counter.0)?;
 
     let aad = encode_header(&header);
     let nonce = build_nonce(&header, nonce_source_node_id);
@@ -376,6 +431,10 @@ pub fn decode_secured(
 
     let plaintext = matter_crypto::aead::decrypt(key, &nonce, &aad, rest)
         .map_err(|_| Error::DecryptionFailed)?;
+
+    // Authenticated: now it is safe to COMMIT the counter to the replay
+    // window. A forged datagram never reaches this point.
+    replay_window.check_and_record(header.message_counter.0)?;
     Ok((header, plaintext))
 }
 
@@ -544,8 +603,141 @@ mod tests {
         assert!(matches!(err, Error::MalformedHeader(_)));
     }
 
+    /// Build a minimal secured header at `counter` for the secured-message
+    /// tests below. S=0/DSIZ=0 (the common CASE/PASE unicast shape).
+    fn secured_header(counter: u32) -> SecuredMessageHeader {
+        SecuredMessageHeader {
+            flags: SecuredMessageFlags::empty(),
+            session_id: SessionId(0x0042),
+            security_flags: SecurityFlags::empty(),
+            message_counter: MessageCounter(counter),
+            source_node_id: None,
+            destination_node_id: None,
+        }
+    }
+
+    /// Fixed, distinct key material for the secured-message tests. The exact
+    /// bytes don't matter — only that encrypt/decrypt agree on them.
+    fn test_session_keys() -> crate::session::SessionKeys {
+        crate::session::SessionKeys {
+            i2r_key: [0x11; 16],
+            r2i_key: [0x22; 16],
+            attestation_key: [0x33; 16],
+        }
+    }
+
+    /// A forged datagram must not advance the replay window when its tag
+    /// fails to verify. Pre-fix, `decode_secured` recorded the counter
+    /// BEFORE authenticating, so a forged large counter poisoned the window
+    /// and rejected subsequent genuine (smaller-counter) traffic.
+    #[test]
+    fn forged_packet_does_not_poison_replay_window() {
+        let keys = test_session_keys();
+        let mut window = ReplayWindow::new();
+
+        // Genuine message at counter=5 — encoded by the Initiator (sender),
+        // decoded by us as the Responder (receiver). Seeds the window at 5.
+        let genuine5 = encode_secured(
+            &secured_header(5),
+            b"hello",
+            &keys,
+            crate::session::SessionRole::Initiator,
+            0,
+        )
+        .unwrap();
+        let (h5, _) = decode_secured(
+            &genuine5,
+            &keys,
+            crate::session::SessionRole::Responder,
+            &mut window,
+            0,
+        )
+        .unwrap();
+        assert_eq!(h5.message_counter.0, 5);
+
+        // Forged datagram: well-formed header with a far-future counter
+        // (1000) but garbage ciphertext, so the AES-CCM tag cannot verify.
+        let mut forged = encode_header(&secured_header(1000));
+        forged.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, 0x00]);
+        let err = decode_secured(
+            &forged,
+            &keys,
+            crate::session::SessionRole::Responder,
+            &mut window,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, Error::DecryptionFailed),
+            "forged packet must fail authentication; got {err:?}",
+        );
+
+        // The window must still be seeded at 5, not 1000 — so a genuine
+        // follow-up at counter=6 is accepted. Pre-fix this failed as
+        // CounterTooOld (6 < 1000 - 31).
+        let genuine6 = encode_secured(
+            &secured_header(6),
+            b"world",
+            &keys,
+            crate::session::SessionRole::Initiator,
+            0,
+        )
+        .unwrap();
+        let (h6, payload) = decode_secured(
+            &genuine6,
+            &keys,
+            crate::session::SessionRole::Responder,
+            &mut window,
+            0,
+        )
+        .unwrap_or_else(|e| {
+            panic!("genuine counter=6 must decode after a forged packet; got {e:?}")
+        });
+        assert_eq!(h6.message_counter.0, 6);
+        assert_eq!(payload, b"world");
+    }
+
     mod replay_window {
         use super::super::*;
+
+        #[test]
+        fn would_reject_does_not_mutate() {
+            // Seed the window at 100.
+            let mut w = ReplayWindow::new();
+            w.check_and_record(100).unwrap();
+
+            // An in-window, not-yet-seen counter: would_reject says Ok and
+            // must NOT record it — check_and_record afterwards still succeeds.
+            assert!(w.would_reject(95).is_ok());
+            assert!(
+                w.check_and_record(95).is_ok(),
+                "would_reject must not have recorded counter 95",
+            );
+
+            // Agreement on a replayed counter (100 was recorded as the seed).
+            assert!(matches!(
+                w.would_reject(100),
+                Err(Error::ReplayedCounter { counter: 100 })
+            ));
+            assert!(matches!(
+                w.check_and_record(100),
+                Err(Error::ReplayedCounter { counter: 100 })
+            ));
+
+            // Agreement on a too-old counter (window covers 69..=100).
+            assert!(matches!(
+                w.would_reject(68),
+                Err(Error::CounterTooOld { counter: 68, .. })
+            ));
+            assert!(matches!(
+                w.check_and_record(68),
+                Err(Error::CounterTooOld { counter: 68, .. })
+            ));
+
+            // Empty-window case: would_reject accepts anything.
+            let empty = ReplayWindow::new();
+            assert!(empty.would_reject(7).is_ok());
+        }
 
         #[test]
         fn first_counter_accepted() {
