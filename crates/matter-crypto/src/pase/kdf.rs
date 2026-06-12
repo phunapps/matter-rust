@@ -54,17 +54,44 @@ const W_HALF_LEN: usize = 40;
 /// Minimum PBKDF2 iterations per Matter spec §3.10.3.
 const PBKDF_MIN_ITERATIONS: u32 = 1_000;
 
+/// Maximum PBKDF2 iterations we accept from a (peer-supplied) responder.
+///
+/// The iteration count arrives in the device's `PBKDFParamResponse` and is
+/// the only unbounded peer-controlled cost multiplier on the PIN-derivation
+/// path: it maps 1:1 to HMAC-SHA256 passes inside [`derive_w0_w1`]. Without a
+/// ceiling, a spoofed responder advertising `u32::MAX` (~4.29e9) would pin a
+/// commissioner CPU core for minutes-to-hours per handshake — a commissioning
+/// CPU-DoS. We cap it at the Matter spec's published maximum.
+///
+/// `100_000` matches the upper bound of the Matter Core Spec §3.10.3
+/// `PBKDFParameter` `iterations` range (1000–100000), and the maximum used by
+/// the reference SPAKE2+ parameter generation (project-chip SPAKE2+ tooling
+/// and matter.js generate iteration counts within 1000–100000). Legitimate
+/// devices stay well within this range, so the cap never rejects a compliant
+/// responder while bounding the worst-case derivation cost.
+const PBKDF_MAX_ITERATIONS: u32 = 100_000;
+
 /// Salt length bounds per Matter spec §3.10.3.
 const PBKDF_SALT_MIN: usize = 16;
 const PBKDF_SALT_MAX: usize = 32;
 
 /// Validate PBKDF parameters per Matter spec §3.10.3.
 ///
-/// Returns [`Error::PbkdfIterationsTooLow`] or [`Error::PbkdfSaltLengthInvalid`]
-/// if the constraints are violated.
+/// Returns [`Error::PbkdfIterationsTooLow`], [`Error::PbkdfIterationsTooHigh`],
+/// or [`Error::PbkdfSaltLengthInvalid`] if the constraints are violated.
+///
+/// The upper iteration bound ([`PBKDF_MAX_ITERATIONS`]) is enforced here,
+/// *before* any PBKDF2 derivation runs, to prevent a peer-supplied iteration
+/// count from inflicting a commissioner CPU denial-of-service.
 pub(crate) fn validate_params(iterations: u32, salt: &[u8]) -> Result<()> {
     if iterations < PBKDF_MIN_ITERATIONS {
         return Err(Error::PbkdfIterationsTooLow(iterations));
+    }
+    if iterations > PBKDF_MAX_ITERATIONS {
+        return Err(Error::PbkdfIterationsTooHigh {
+            iterations,
+            max: PBKDF_MAX_ITERATIONS,
+        });
     }
     if salt.len() < PBKDF_SALT_MIN || salt.len() > PBKDF_SALT_MAX {
         return Err(Error::PbkdfSaltLengthInvalid(salt.len()));
@@ -270,6 +297,34 @@ mod tests {
         validate_params(1_000, &[0u8; 16]).unwrap();
         // Larger values must be accepted.
         validate_params(10_000, &[0u8; 32]).unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_iter_above_max() {
+        // A peer advertising u32::MAX iterations must be rejected before any
+        // PBKDF2 derivation runs (commissioner CPU-DoS guard).
+        assert!(matches!(
+            validate_params(u32::MAX, &[0u8; 16]),
+            Err(Error::PbkdfIterationsTooHigh {
+                iterations: u32::MAX,
+                max: PBKDF_MAX_ITERATIONS,
+            })
+        ));
+        // One above the ceiling is also rejected.
+        let over = PBKDF_MAX_ITERATIONS + 1;
+        assert!(matches!(
+            validate_params(over, &[0u8; 16]),
+            Err(Error::PbkdfIterationsTooHigh {
+                iterations,
+                max,
+            }) if iterations == over && max == PBKDF_MAX_ITERATIONS
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_max_boundary() {
+        // The ceiling itself is a legitimate spec value and must be accepted.
+        validate_params(PBKDF_MAX_ITERATIONS, &[0u8; 16]).unwrap();
     }
 
     // ─── derive_w0_w1 ────────────────────────────────────────────────────────

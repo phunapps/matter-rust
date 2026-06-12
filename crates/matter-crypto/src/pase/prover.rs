@@ -489,8 +489,10 @@ impl PaseProver {
     /// - [`Error::UnexpectedMessage`] if called from the wrong state.
     /// - [`Error::InvalidParameter`] if the response is malformed or missing
     ///   the required `pbkdf_parameters` field.
-    /// - [`Error::PbkdfIterationsTooLow`] / [`Error::PbkdfSaltLengthInvalid`]
-    ///   if the responder's parameters are out of spec.
+    /// - [`Error::PbkdfIterationsTooLow`] / [`Error::PbkdfIterationsTooHigh`] /
+    ///   [`Error::PbkdfSaltLengthInvalid`] if the responder's parameters are
+    ///   out of spec. The too-high case caps a peer-supplied iteration count
+    ///   to prevent a commissioner CPU denial-of-service.
     /// - [`Error::Codec`] on TLV decoding failure.
     pub fn handle_pbkdf_response(&mut self, bytes: &[u8]) -> Result<()> {
         let prev = std::mem::replace(&mut self.state, State::Poisoned);

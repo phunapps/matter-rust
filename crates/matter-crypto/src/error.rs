@@ -72,6 +72,23 @@ pub enum Error {
     #[error("PBKDF iteration count {0} below spec minimum 1000")]
     PbkdfIterationsTooLow(u32),
 
+    /// PBKDF iteration count above the accepted ceiling.
+    ///
+    /// The iteration count is peer-controlled and is fed directly into
+    /// PBKDF2-HMAC-SHA256 (one HMAC pass per iteration). A malicious or
+    /// spoofed PASE responder could advertise an inflated count
+    /// (up to `u32::MAX`) to force the commissioner into billions of HMAC
+    /// rounds — a single-threaded CPU denial-of-service per handshake. We
+    /// reject anything above the Matter spec's published maximum (100000)
+    /// *before* any key derivation runs.
+    #[error("PBKDF iteration count {iterations} above accepted maximum {max}")]
+    PbkdfIterationsTooHigh {
+        /// The (rejected) iteration count advertised by the peer.
+        iterations: u32,
+        /// The maximum iteration count we accept.
+        max: u32,
+    },
+
     /// PBKDF salt length outside [16, 32] bytes per Matter spec §3.10.3.
     #[error("PBKDF salt length {0} not in [16, 32]")]
     PbkdfSaltLengthInvalid(usize),
