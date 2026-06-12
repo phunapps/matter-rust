@@ -67,9 +67,9 @@ impl ReportReassembler {
         &mut self,
         payload: &[u8],
     ) -> Option<Vec<(matter_interaction::AttributePath, matter_codec::Value)>> {
-        let rd = match matter_interaction::parse_report_data(payload) {
-            Ok(rd) => rd,
-            Err(_) => return None, // drop a malformed chunk; keep prior accumulation
+        // Drop a malformed chunk; keep prior accumulation.
+        let Ok(rd) = matter_interaction::parse_report_data(payload) else {
+            return None;
         };
         let more = rd.more_chunked_messages;
         self.acc.push(rd);
@@ -1689,7 +1689,7 @@ mod tests {
             .await
             .expect("subscribe");
 
-        let mut got = vec![
+        let mut got = [
             sub.next().await.expect("merged report 1"),
             sub.next().await.expect("merged report 2"),
         ];
