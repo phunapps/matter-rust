@@ -205,13 +205,13 @@ struct PendingAck {
     is_active: bool,
 }
 
-/// Buffered piggyback-ack slot. At most one outstanding inbound reliable
-/// message is held here at a time; either drained by the next outbound in
-/// the same exchange (cheap) or flushed as a standalone-ack when the 200ms
-/// deadline expires (fallback).
+/// Buffered piggyback-ack for one exchange. Held in a per-exchange map
+/// (keyed by `exchange_id`) so concurrent reliable inbounds on different
+/// exchanges never clobber each other's buffered ack. Each entry is either
+/// drained by the next outbound in the same exchange (cheap) or flushed as
+/// a standalone-ack when the 200ms deadline expires (fallback).
 #[derive(Debug)]
 struct PendingOutboundAck {
-    exchange_id: u16,
     ack_counter: MessageCounter,
     is_local_initiator: bool,
     deadline: Instant,
@@ -240,7 +240,7 @@ struct ExchangeState {
 #[derive(Debug)]
 pub struct MrpState {
     pending_acks: HashMap<MessageCounter, PendingAck>,
-    pending_outbound_ack: Option<PendingOutboundAck>,
+    pending_outbound_acks: HashMap<u16, PendingOutboundAck>,
     recent_reliable: [Option<RecentInbound>; 32],
     recent_next_slot: usize,
     exchanges: HashMap<u16, ExchangeState>,
@@ -255,7 +255,7 @@ impl MrpState {
     pub fn new(config: MrpConfig) -> Self {
         Self {
             pending_acks: HashMap::new(),
-            pending_outbound_ack: None,
+            pending_outbound_acks: HashMap::new(),
             recent_reliable: std::array::from_fn(|_| None),
             recent_next_slot: 0,
             exchanges: HashMap::new(),
@@ -274,8 +274,8 @@ impl MrpState {
     /// prior inbound), inserts a default record with `is_local_initiator =
     /// false` (we assume responding).
     ///
-    /// When `pending_outbound_ack` is drained, the outgoing header carries
-    /// `A=1` and `ack_counter = pending.ack_counter`. The drain path's
+    /// When this exchange's buffered piggyback ack is drained, the outgoing
+    /// header carries `A=1` and `ack_counter = pending.ack_counter`. The drain path's
     /// `is_local_initiator` is guaranteed to agree with the exchange-table
     /// lookup because both were populated from the same
     /// `!peer_is_initiator` computation during `process_inbound`.
@@ -322,18 +322,14 @@ impl MrpState {
             }
         };
 
-        // Drain pending piggyback if it matches THIS exchange.
-        let (ack_flag, ack_counter, piggyback_acked) = match self.pending_outbound_ack.take() {
-            Some(p) if p.exchange_id == exchange_id => {
+        // Drain the buffered piggyback for THIS exchange, if any. Other
+        // exchanges' buffered acks are untouched.
+        let (ack_flag, ack_counter, piggyback_acked) =
+            if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
                 (ExchangeFlags::ACK, Some(p.ack_counter), true)
-            }
-            Some(p) => {
-                // Different exchange — put it back, do not consume.
-                self.pending_outbound_ack = Some(p);
+            } else {
                 (ExchangeFlags::empty(), None, false)
-            }
-            None => (ExchangeFlags::empty(), None, false),
-        };
+            };
 
         let mut flags = ack_flag;
         if is_local_initiator {
@@ -418,7 +414,11 @@ impl MrpState {
     #[must_use]
     pub fn poll_timeout(&self) -> Option<Instant> {
         let retransmit = self.pending_acks.values().map(|p| p.next_attempt).min();
-        let standalone = self.pending_outbound_ack.as_ref().map(|p| p.deadline);
+        let standalone = self
+            .pending_outbound_acks
+            .values()
+            .map(|p| p.deadline)
+            .min();
         match (retransmit, standalone) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (Some(a), None) => Some(a),
@@ -479,16 +479,25 @@ impl MrpState {
             self.pending_acks.remove(&c);
         }
 
-        // Standalone-ack deadline: if the buffered piggyback expired before
-        // the next outbound in its exchange, flush it as a standalone-ack.
-        if let Some(p) = &self.pending_outbound_ack {
-            if p.deadline <= now {
+        // Standalone-ack deadline: flush every buffered piggyback whose
+        // deadline has passed before the next outbound in its exchange,
+        // emitting one standalone-ack per due exchange.
+        let mut due_exchanges: Vec<u16> = self
+            .pending_outbound_acks
+            .iter()
+            .filter(|(_, p)| p.deadline <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        // Deterministic emission order — HashMap iteration order is
+        // unspecified; sorting keeps event ordering stable for callers/tests.
+        due_exchanges.sort_unstable();
+        for exchange_id in due_exchanges {
+            if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
                 events.push(MrpTimerEvent::StandaloneAckDeadlineFired {
-                    exchange_id: p.exchange_id,
+                    exchange_id,
                     ack_counter: p.ack_counter,
                     is_local_initiator: p.is_local_initiator,
                 });
-                self.pending_outbound_ack = None;
             }
         }
         events
@@ -500,7 +509,7 @@ impl MrpState {
     /// - On `A=1`: clears the matching pending retransmit (`ack_counter`).
     ///   If the payload is a bare `StandaloneAck` (opcode `0x10`, empty app
     ///   payload, `R=0`), returns [`InboundOutcome::AckOnly`].
-    /// - On `R=1`: buffers a piggyback ack (`pending_outbound_ack`) with the
+    /// - On `R=1`: buffers a per-exchange piggyback ack with the
     ///   200ms deadline from [`MrpConfig::standalone_ack_deadline`]. The
     ///   ack will be drained by the next outbound in the same exchange, or
     ///   flushed as a standalone-ack via [`MrpTimerEvent::StandaloneAckDeadlineFired`].
@@ -556,13 +565,17 @@ impl MrpState {
         }
 
         if header.exchange_flags.contains(ExchangeFlags::RELIABLE) {
-            // Peer set I=1 ⇒ we are the responder for this exchange.
-            self.pending_outbound_ack = Some(PendingOutboundAck {
+            // Buffer (or refresh) this exchange's piggyback ack. Keyed by
+            // exchange_id so a concurrent reliable inbound on a different
+            // exchange never clobbers this one.
+            self.pending_outbound_acks.insert(
                 exchange_id,
-                ack_counter: peer_counter,
-                is_local_initiator: we_are_initiator,
-                deadline: now + self.config.standalone_ack_deadline,
-            });
+                PendingOutboundAck {
+                    ack_counter: peer_counter,
+                    is_local_initiator: we_are_initiator,
+                    deadline: now + self.config.standalone_ack_deadline,
+                },
+            );
             // Insertion-order eviction into the 32-entry ring buffer.
             self.recent_reliable[self.recent_next_slot] = Some(RecentInbound {
                 exchange_id,
@@ -617,11 +630,7 @@ impl MrpState {
         self.exchanges.remove(&exchange_id);
         self.pending_acks
             .retain(|_, p| p.exchange_id != exchange_id);
-        if let Some(p) = &self.pending_outbound_ack {
-            if p.exchange_id == exchange_id {
-                self.pending_outbound_ack = None;
-            }
-        }
+        self.pending_outbound_acks.remove(&exchange_id);
     }
 }
 
@@ -1194,6 +1203,126 @@ mod tests {
         let view = mrp.check_duplicate_reliable(MessageCounter(100)).unwrap();
         assert_eq!(view.exchange_id, 0x4242);
         assert!(!view.is_local_initiator, "peer was initiator");
+    }
+
+    #[test]
+    fn concurrent_exchanges_each_retain_their_pending_ack() {
+        // H3 regression: a reliable inbound on exchange B must NOT clobber
+        // the buffered piggyback ack for exchange A. Both exchanges must
+        // drain their own ack on the next outbound in that exchange.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Reliable inbound on exchange A (peer counter 100).
+        let in_a = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0xAAAA,
+            None,
+            b"req-a",
+        );
+        mrp.process_inbound(in_a, MessageCounter(100), now).unwrap();
+
+        // Reliable inbound on exchange B (peer counter 200) BEFORE any
+        // outbound or timeout drains A's ack.
+        let in_b = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0xBBBB,
+            None,
+            b"req-b",
+        );
+        mrp.process_inbound(in_b, MessageCounter(200), now).unwrap();
+
+        // Respond on exchange A — must piggyback A's ack (counter 100).
+        let resp_a = mrp
+            .prepare_outbound(
+                0x03,
+                ProtocolId::INTERACTION_MODEL,
+                Some(0xAAAA),
+                b"resp-a",
+                MrpFlags::default(),
+                now + Duration::from_millis(10),
+            )
+            .unwrap();
+        assert!(resp_a.piggyback_acked, "exchange A's ack must drain");
+        let (hdr_a, _) =
+            crate::protocol_header::decode_protocol_header(&resp_a.wire_payload).unwrap();
+        assert!(hdr_a.exchange_flags.contains(ExchangeFlags::ACK));
+        assert_eq!(hdr_a.ack_counter, Some(MessageCounter(100)));
+
+        // Respond on exchange B — must piggyback B's ack (counter 200).
+        let resp_b = mrp
+            .prepare_outbound(
+                0x03,
+                ProtocolId::INTERACTION_MODEL,
+                Some(0xBBBB),
+                b"resp-b",
+                MrpFlags::default(),
+                now + Duration::from_millis(10),
+            )
+            .unwrap();
+        assert!(resp_b.piggyback_acked, "exchange B's ack must drain");
+        let (hdr_b, _) =
+            crate::protocol_header::decode_protocol_header(&resp_b.wire_payload).unwrap();
+        assert!(hdr_b.exchange_flags.contains(ExchangeFlags::ACK));
+        assert_eq!(hdr_b.ack_counter, Some(MessageCounter(200)));
+
+        // Both drained → no standalone deadline pending.
+        assert_eq!(mrp.poll_timeout(), None);
+    }
+
+    #[test]
+    fn handle_timeout_flushes_all_due_standalone_acks() {
+        // H3 regression: two buffered piggyback acks on different exchanges
+        // must BOTH flush as standalone acks once their deadline passes.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        let in_a = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0xAAAA,
+            None,
+            b"a",
+        );
+        mrp.process_inbound(in_a, MessageCounter(100), now).unwrap();
+
+        let in_b = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0xBBBB,
+            None,
+            b"b",
+        );
+        mrp.process_inbound(in_b, MessageCounter(200), now).unwrap();
+
+        // Advance past the 200ms standalone-ack deadline.
+        let events = mrp.handle_timeout(now + Duration::from_millis(200));
+
+        // Collect the (exchange_id, ack_counter) pairs from every
+        // standalone-ack-deadline-fired event.
+        let mut flushed: Vec<(u16, MessageCounter)> = events
+            .iter()
+            .filter_map(|e| match e {
+                MrpTimerEvent::StandaloneAckDeadlineFired {
+                    exchange_id,
+                    ack_counter,
+                    ..
+                } => Some((*exchange_id, *ack_counter)),
+                _ => None,
+            })
+            .collect();
+        flushed.sort_by_key(|(xid, _)| *xid);
+
+        assert_eq!(
+            flushed,
+            vec![(0xAAAA, MessageCounter(100)), (0xBBBB, MessageCounter(200)),],
+            "both exchanges must flush a standalone ack"
+        );
+
+        // All drained → nothing pending.
+        assert_eq!(mrp.poll_timeout(), None);
     }
 
     #[test]
