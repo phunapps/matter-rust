@@ -46,6 +46,12 @@ struct SubEntry {
 /// build the public [`Subscription`]).
 pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u16));
 
+/// Maximum non-final chunks a single subscription notification may span before
+/// [`ReportReassembler`] drops the partial accumulation. Bounds memory against a
+/// device that streams `MoreChunkedMessages=true` without ever finalising; far
+/// above any conformant notification (a handful of chunks at most).
+const MAX_SUB_CHUNKS: usize = 64;
+
 /// Accumulates a chunked `ReportData` *sequence* (one logical notification) and
 /// yields the merged attributes only when the final chunk arrives
 /// (`MoreChunkedMessages` clear). A single-message report flushes immediately.
@@ -53,16 +59,29 @@ pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u
 /// [`ReportAccumulator`](matter_interaction::ReportAccumulator) use: it merges
 /// `Replace`/`Append` (`ListIndex`=null) items across a notification's chunks
 /// before delivery, so list attributes and list-appends are not lost.
+///
+/// LIMITATION: there is no on-the-wire marker for a notification boundary, so a
+/// chunked sequence whose final chunk never arrives (a device that dies
+/// mid-notification) leaves a partial accumulation that would merge into the
+/// *next* notification's flush. The [`MAX_SUB_CHUNKS`] cap bounds the memory of
+/// such a runaway sequence; the stale-merge window itself is only fully closed
+/// by the always-listening demux of the subscription-hardening follow-up (which
+/// tracks liveness and re-subscribes). Conformant devices do not start a new
+/// notification before the prior chunked sequence completes, so this requires
+/// non-conformant behaviour. See the `run` KNOWN LIMITATION note.
 #[derive(Default)]
 struct ReportReassembler {
     acc: matter_interaction::ReportAccumulator,
+    /// Non-final chunks accumulated since the last flush.
+    pending_chunks: usize,
 }
 
 impl ReportReassembler {
     /// Push one `ReportData` chunk payload. Returns `Some(merged attributes)`
     /// when this payload is the final chunk (`more_chunked_messages == false`),
     /// resetting for the next notification; returns `None` while more chunks are
-    /// pending or the payload failed to parse.
+    /// pending, the payload failed to parse, or the chunk cap was exceeded
+    /// (partial dropped).
     fn push(
         &mut self,
         payload: &[u8],
@@ -73,11 +92,17 @@ impl ReportReassembler {
         };
         let more = rd.more_chunked_messages;
         self.acc.push(rd);
-        if more {
-            None
-        } else {
-            Some(std::mem::take(&mut self.acc).finish())
+        if !more {
+            self.pending_chunks = 0;
+            return Some(std::mem::take(&mut self.acc).finish());
         }
+        self.pending_chunks += 1;
+        if self.pending_chunks > MAX_SUB_CHUNKS {
+            // Runaway non-finalising sequence — drop the partial to bound memory.
+            self.acc = matter_interaction::ReportAccumulator::default();
+            self.pending_chunks = 0;
+        }
+        None
     }
 }
 
@@ -190,6 +215,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// subscription stream loses nothing). A full fix routes off-exchange
     /// subscription reports out of `secured_round_trip` (deferred with
     /// auto-resubscribe to the subscription-hardening follow-up).
+    ///
+    /// KNOWN LIMITATION (chunked subscription reports, CR.3): a chunked
+    /// steady-state notification is reassembled per-subscription by
+    /// [`ReportReassembler`], which flushes only on the final chunk. If a device
+    /// abandons a chunked notification mid-sequence (never sends the final
+    /// chunk) and later starts a new one, the stale partial would merge into the
+    /// next flush. Conformant devices do not do this, the chunk count is capped
+    /// (memory bound), and the same subscription-hardening follow-up closes the
+    /// window via liveness tracking + re-subscribe.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
             if self.subscriptions.is_empty() {
@@ -549,7 +583,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Establish a subscription: send a `SubscribeRequest`, absorb the priming
-    /// `ReportData`(s) (forwarding their attributes + acking), and register the
+    /// `ReportData`(s) — reassembling any chunked sequence through a
+    /// [`ReportReassembler`] and acking each chunk — then register the
     /// subscription on the `SubscribeResponse`. Steady-state reports then arrive
     /// via the run loop's `demux_subscription_inbound`.
     async fn handle_subscribe(
@@ -1590,6 +1625,23 @@ mod tests {
         assert_eq!(merged[0].0.cluster, 0x06);
     }
 
+    #[test]
+    fn reassembler_drops_runaway_sequence() {
+        // A device that streams MoreChunkedMessages=true forever: past the cap
+        // the partial is dropped, so a later final chunk flushes only itself —
+        // the runaway accumulation does not bleed in.
+        let mut r = ReportReassembler::default();
+        let runaway = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(1), true);
+        for _ in 0..=MAX_SUB_CHUNKS {
+            assert!(r.push(&runaway).is_none(), "non-final chunk never flushes");
+        }
+        let last =
+            build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+        let merged = r.push(&last).expect("final chunk flushes");
+        assert_eq!(merged.len(), 1, "runaway partial was dropped, not merged");
+        assert_eq!(merged[0].0.cluster, 0x06);
+    }
+
     #[tokio::test]
     async fn subscribe_streams_reports_over_loopback() {
         let Harness {
@@ -1644,64 +1696,12 @@ mod tests {
         sub.cancel().await.expect("cancel");
     }
 
-    #[tokio::test]
-    async fn subscribe_reassembles_chunked_report_over_loopback() {
-        let Harness {
-            store,
-            ctrl_io,
-            dev_io,
-            ctrl_addr,
-            discovery,
-            device_creds,
-            device_roots,
-            device_node_id,
-        } = loopback_harness();
-
-        // One steady-state notification split into two chunks: chunk 0 carries
-        // StartUpOnOff (MoreChunkedMessages=true), the final chunk carries OnOff.
-        // The consumer must receive BOTH merged attributes, not just one chunk.
-        let chunk0 =
-            build_report_data_chunk(1, 0x06, 0x4000, &matter_codec::Value::Bool(true), true);
-        let chunk1 =
-            build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(false), false);
-        let device = tokio::spawn(run_subscription_device(
-            dev_io,
-            ctrl_addr,
-            device_creds,
-            device_roots,
-            0x00D5,
-            vec![chunk0, chunk1],
-        ));
-
-        let controller = crate::controller::MatterController::with_components(
-            store,
-            ctrl_io,
-            discovery,
-            Arc::new(SystemNocRng),
-            None,
-            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
-        )
-        .expect("open");
-
-        let node = controller.node(device_node_id);
-        let mut sub = node
-            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x06)], 1, 30)
-            .await
-            .expect("subscribe");
-
-        let mut got = [
-            sub.next().await.expect("merged report 1"),
-            sub.next().await.expect("merged report 2"),
-        ];
-        got.sort_by_key(|r| r.path.attribute);
-        assert_eq!(got[0].path.attribute, 0x0000);
-        assert_eq!(got[0].value, matter_codec::Value::Bool(false));
-        assert_eq!(got[1].path.attribute, 0x4000);
-        assert_eq!(got[1].value, matter_codec::Value::Bool(true));
-
-        device.await.unwrap();
-        sub.cancel().await.expect("cancel");
-    }
+    // Note: a message-level chunked steady-state notification (whole attributes
+    // spread across chunks) was already delivered correctly by the pre-CR.3
+    // streaming code (each ReportData forwarded + acked), so it is not a
+    // regression guard. The list-append test below is the discriminating guard:
+    // the dropped `ListIndex=null` append is exactly what CR.3 fixes, and it
+    // also exercises the `MoreChunkedMessages=true` accumulate-then-flush path.
 
     #[tokio::test]
     async fn subscribe_reassembles_list_append_over_loopback() {
