@@ -37,6 +37,8 @@ struct SubEntry {
     tx: mpsc::Sender<AttributeReport>,
     /// Operational peer address (for `StatusResponse` acks).
     peer: SocketAddr,
+    /// Reassembles a chunked steady-state notification before delivery.
+    reassembler: ReportReassembler,
 }
 
 /// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
@@ -586,6 +588,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .map_err(|e| Error::Operational(format!("subscribe send: {e}")))?;
 
         let (tx, rx) = mpsc::channel::<AttributeReport>(64);
+        let mut priming = ReportReassembler::default();
 
         // Bounded handshake: collect priming reports + ack them until the
         // SubscribeResponse arrives (or MRP gives up).
@@ -612,10 +615,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             if exchange_id == exchange =>
                         {
                             if opcode == OP_REPORT_DATA {
-                                Self::forward_report(&payload, &tx);
+                                // Ack first (solicits the next chunk), then merge.
                                 self.send_status_ack(session_id, exchange_id, peer).await?;
+                                if let Some(merged) = priming.push(&payload) {
+                                    for (path, value) in merged {
+                                        let _ = tx.try_send(AttributeReport { path, value });
+                                    }
+                                }
                             } else if opcode == OP_SUBSCRIBE_RESPONSE {
-                                self.subscriptions.insert((session_id, exchange_id), SubEntry { tx, peer });
+                                self.subscriptions.insert(
+                                    (session_id, exchange_id),
+                                    SubEntry { tx, peer, reassembler: ReportReassembler::default() },
+                                );
                                 return Ok((rx, (session_id, exchange_id)));
                             }
                         }
@@ -637,22 +648,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    /// Parse a `ReportData` payload and push each attribute to the subscription.
-    ///
-    // TODO(CR.3 subscription chunking): this forwards only `rd.attributes`
-    // (Replace-only, single message). A chunked or list-append subscription
-    // report (`more_chunked_messages` / `ReportOp::Append`) loses data here —
-    // it must be reassembled through `matter_interaction::ReportAccumulator`
-    // across the chunk sequence before forwarding. Tracked as the CR.3 / the
-    // subscription-hardening follow-up.
-    fn forward_report(payload: &[u8], tx: &mpsc::Sender<AttributeReport>) {
-        if let Ok(rd) = matter_interaction::parse_report_data(payload) {
-            for (path, value) in rd.attributes {
-                let _ = tx.try_send(AttributeReport { path, value });
             }
         }
     }
@@ -701,10 +696,26 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 ..
             } => {
                 if opcode == OP_REPORT_DATA {
-                    if let Some(entry) = self.subscriptions.get(&(session_id, exchange_id)) {
-                        let tx = entry.tx.clone();
-                        let peer = entry.peer;
-                        Self::forward_report(&payload, &tx);
+                    // Reassemble the (possibly chunked) notification, then ack.
+                    // Extract everything from the entry before the ack await so
+                    // the `&mut self.subscriptions` borrow does not overlap the
+                    // `&mut self.sessions` borrow inside `send_status_ack`.
+                    let forwarded =
+                        self.subscriptions
+                            .get_mut(&(session_id, exchange_id))
+                            .map(|entry| {
+                                (
+                                    entry.tx.clone(),
+                                    entry.peer,
+                                    entry.reassembler.push(&payload),
+                                )
+                            });
+                    if let Some((tx, peer, merged)) = forwarded {
+                        if let Some(attrs) = merged {
+                            for (path, value) in attrs {
+                                let _ = tx.try_send(AttributeReport { path, value });
+                            }
+                        }
                         let _ = self.send_status_ack(session_id, exchange_id, peer).await;
                     }
                 }
@@ -1536,7 +1547,9 @@ mod tests {
     fn reassembler_single_message_flushes_immediately() {
         let mut r = ReportReassembler::default();
         let only = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
-        let merged = r.push(&only).expect("single-message report flushes at once");
+        let merged = r
+            .push(&only)
+            .expect("single-message report flushes at once");
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].0.cluster, 0x06);
     }
