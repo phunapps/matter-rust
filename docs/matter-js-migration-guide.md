@@ -22,7 +22,7 @@ matter-rust returns **raw `Value`s** rather than runtime-typed cluster objects.
 | `clusterClient.toggle()` | `node.invoke(CommandPath, Value)` | Raw command fields as a `Value` |
 | `clusterClient.setX(v)` | `node.write(&[(AttributePath, Value)])` | Returns per-path `ImStatus` |
 | `node.subscribeAllAttributes(…)` / `subscribeMultiple` | `node.subscribe(&[ReadPath], min, max)` → `Subscription` | Pull stream (`next().await`), not an `EventEmitter` |
-| `subscription` callback | `while let Some(report) = sub.next().await { … }` | `report: AttributeReport { path, value }` |
+| `subscription` callback | `while let Some(event) = sub.next().await { … }` | `event: SubscriptionEvent::{Report(AttributeReport), Established, Resubscribing}` |
 | wildcard read | `ReadPath::cluster(ep, cl)` / `ReadPath::all()` | `None` fields = wildcard |
 
 ## Construction & persistence
@@ -136,8 +136,12 @@ node.events.attributeChanged.on(data => { … });
 ```rust
 // matter-rust
 let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
-while let Some(report) = sub.next().await {
-    println!("{:?} = {:?}", report.path, report.value);
+while let Some(event) = sub.next().await {
+    match event {
+        SubscriptionEvent::Report(report) => println!("{:?} = {:?}", report.path, report.value),
+        SubscriptionEvent::Established { subscription_id } => println!("established {subscription_id:#x}"),
+        SubscriptionEvent::Resubscribing { cause } => println!("resubscribing: {cause}"),
+    }
 }
 sub.cancel().await?; // or just drop `sub`
 ```
@@ -161,9 +165,9 @@ Use `?` and match on the variants you care about.
 
 ## Current limitations (v1.0)
 
-- Subscription hardening is a tracked follow-up: no liveness-driven
-  auto-resubscribe yet, and a steady-state report arriving while a concurrent
-  round-trip on the same node owns the socket is acked but not delivered (a pure
-  subscription stream loses nothing).
+- Subscription hardening is in progress: liveness-driven auto-resubscribe is not
+  wired yet (the `SubscriptionEvent::Resubscribing` event is reserved for it). The
+  always-listening demux already delivers steady-state reports that arrive during
+  a concurrent round-trip on the same node.
 - Wi-Fi/Thread network commissioning, BLE commissioning transport, OTA,
   multi-admin, and groups are deferred past v1.0.
