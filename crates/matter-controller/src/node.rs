@@ -5,8 +5,8 @@ use tokio::sync::oneshot;
 use matter_codec::{Tag, TlvReader, TlvWriter, Value};
 use matter_interaction::{
     build_invoke_request, build_read_request_paths, build_write_request, parse_invoke_response,
-    parse_report_data, parse_write_response, AttributePath, AttributeWriteRequest, CommandPath,
-    ImStatus, InvokeResponse, ReadPath, ReportAccumulator,
+    parse_write_response, AttributePath, AttributeWriteRequest, CommandPath, ImStatus,
+    InvokeResponse, ReadPath, ReportAccumulator, ReportData,
 };
 
 use crate::actor::Command;
@@ -104,7 +104,10 @@ impl Node {
     ///
     /// [`Error::ControllerStopped`] if the owning task has stopped, or any
     /// connect / transport / driver error.
-    pub(crate) async fn round_trip_chunked(&self, payload: Vec<u8>) -> Result<Vec<Vec<u8>>, Error> {
+    pub(crate) async fn round_trip_chunked(
+        &self,
+        payload: Vec<u8>,
+    ) -> Result<Vec<ReportData>, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Command::Read {
@@ -132,10 +135,12 @@ impl Node {
     /// [`Error::InteractionModel`] if a response chunk cannot be parsed.
     pub async fn read(&self, paths: &[ReadPath]) -> Result<Vec<(AttributePath, Value)>, Error> {
         let req = build_read_request_paths(paths);
+        // Chunks arrive already parsed (the actor's receive path parses each
+        // `ReportData` exactly once); merge them without re-walking the TLV.
         let chunks = self.round_trip_chunked(req).await?;
         let mut acc = ReportAccumulator::new();
-        for chunk in &chunks {
-            acc.push(parse_report_data(chunk)?);
+        for chunk in chunks {
+            acc.push(chunk);
         }
         Ok(acc.finish())
     }

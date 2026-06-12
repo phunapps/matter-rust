@@ -207,11 +207,13 @@ struct PendingRequest {
 enum PendingReply {
     /// Single request/response (`Node::round_trip`).
     RoundTrip(oneshot::Sender<Result<Vec<u8>, Error>>),
-    /// Chunked read: accumulate `ReportData` chunk payloads; resolve on the
-    /// final chunk.
+    /// Chunked read: accumulate parsed `ReportData` chunks; resolve on the
+    /// final chunk. Each chunk is parsed exactly once here (in the actor's
+    /// receive path) and handed to `Node::read` already decoded, so the read
+    /// path does not walk the TLV a second time.
     Read {
-        reply: oneshot::Sender<Result<Vec<Vec<u8>>, Error>>,
-        chunks: Vec<Vec<u8>>,
+        reply: oneshot::Sender<Result<Vec<matter_interaction::ReportData>, Error>>,
+        chunks: Vec<matter_interaction::ReportData>,
         total_bytes: usize,
     },
     /// Subscribe handshake: buffer/ack priming reports until `SubscribeResponse`.
@@ -279,19 +281,20 @@ struct ReportReassembler {
 }
 
 impl ReportReassembler {
-    /// Push one `ReportData` chunk payload. Returns `Some(merged attributes)`
-    /// when this payload is the final chunk (`more_chunked_messages == false`),
-    /// resetting for the next notification; returns `None` while more chunks are
-    /// pending, the payload failed to parse, or the chunk cap was exceeded
-    /// (partial dropped).
-    fn push(
+    /// Push one already-parsed `ReportData` chunk. Returns `Some(merged
+    /// attributes)` when this chunk is the final one
+    /// (`more_chunked_messages == false`), resetting for the next notification;
+    /// returns `None` while more chunks are pending or the chunk cap was
+    /// exceeded (partial dropped).
+    ///
+    /// This is the single-parse entry point: the caller (`deliver_report` /
+    /// the priming path) parses the inbound datagram exactly once and hands the
+    /// struct in by value, so the steady-state subscription hot path does not
+    /// walk the TLV twice.
+    fn push_parsed(
         &mut self,
-        payload: &[u8],
+        rd: matter_interaction::ReportData,
     ) -> Option<Vec<(matter_interaction::AttributePath, matter_codec::Value)>> {
-        // Drop a malformed chunk; keep prior accumulation.
-        let Ok(rd) = matter_interaction::parse_report_data(payload) else {
-            return None;
-        };
         let more = rd.more_chunked_messages;
         self.acc.push(rd);
         if !more {
@@ -305,6 +308,21 @@ impl ReportReassembler {
             self.pending_chunks = 0;
         }
         None
+    }
+
+    /// Parse one `ReportData` chunk payload and merge it via [`push_parsed`]. A
+    /// malformed chunk is dropped (prior accumulation kept). Retained for tests
+    /// that exercise the reassembler from raw bytes.
+    ///
+    /// [`push_parsed`]: ReportReassembler::push_parsed
+    #[cfg(test)]
+    fn push(
+        &mut self,
+        payload: &[u8],
+    ) -> Option<Vec<(matter_interaction::AttributePath, matter_codec::Value)>> {
+        // Drop a malformed chunk; keep prior accumulation.
+        let rd = matter_interaction::parse_report_data(payload).ok()?;
+        self.push_parsed(rd)
     }
 }
 
@@ -325,12 +343,14 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
     /// Chunked secured read to `node_id` — returns every `ReportData` chunk
-    /// payload in order (the `Node` reassembles them via `ReportAccumulator`).
-    /// Used by `Node::read`; a non-chunked read yields a single-element `Vec`.
+    /// already parsed, in order (the `Node` reassembles them via
+    /// `ReportAccumulator`). Each chunk is TLV-parsed exactly once, inside the
+    /// actor's receive path. Used by `Node::read`; a non-chunked read yields a
+    /// single-element `Vec`.
     Read {
         node_id: u64,
         payload: Vec<u8>,
-        reply: oneshot::Sender<Result<Vec<Vec<u8>>, Error>>,
+        reply: oneshot::Sender<Result<Vec<matter_interaction::ReportData>, Error>>,
     },
     /// Commission a device from a parsed setup payload; returns its node id.
     Commission {
@@ -801,7 +821,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         &mut self,
         node_id: u64,
         payload: Vec<u8>,
-        reply: oneshot::Sender<Result<Vec<Vec<u8>>, Error>>,
+        reply: oneshot::Sender<Result<Vec<matter_interaction::ReportData>, Error>>,
     ) {
         let (sid, peer) = match self.session_for(node_id).await {
             Ok(v) => v,
@@ -912,17 +932,33 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             Kind::Read => {
                 let peer = self.pending.get(&key).map(|p| p.peer);
-                // `payload` is moved into `chunks` below, so compute `more` first.
-                let more = matter_interaction::parse_report_data(&payload)
-                    .is_ok_and(|rd| rd.more_chunked_messages);
+                // Parse the chunk exactly once here; `Node::read` consumes the
+                // parsed structs directly (no second TLV walk). `total_bytes` is
+                // accounted from the wire length before parsing.
+                let chunk_len = payload.len();
+                let rd = match matter_interaction::parse_report_data(&payload) {
+                    Ok(rd) => rd,
+                    Err(e) => {
+                        // A malformed chunk fails the read, matching the old
+                        // `Node::read` behaviour where re-parsing surfaced the
+                        // error to the caller via `?`.
+                        if let Some(PendingReply::Read { reply, .. }) =
+                            self.pending.remove(&key).map(|p| p.reply)
+                        {
+                            let _ = reply.send(Err(Error::InteractionModel(e)));
+                        }
+                        return;
+                    }
+                };
+                let more = rd.more_chunked_messages;
                 let over = match self.pending.get_mut(&key).map(|p| &mut p.reply) {
                     Some(PendingReply::Read {
                         chunks,
                         total_bytes,
                         ..
                     }) => {
-                        *total_bytes = total_bytes.saturating_add(payload.len());
-                        chunks.push(payload);
+                        *total_bytes = total_bytes.saturating_add(chunk_len);
+                        chunks.push(rd);
                         chunks.len() > MAX_READ_CHUNKS || *total_bytes > MAX_READ_BYTES
                     }
                     _ => return,
@@ -997,7 +1033,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         entry.liveness_deadline =
             now + std::time::Duration::from_secs(u64::from(entry.max_interval)) + LIVENESS_GRACE;
         let peer = entry.peer;
-        let merged = entry.reassembler.push(payload);
+        // `rd` was parsed once above (to read its `subscription_id`); hand the
+        // parsed struct straight to the reassembler rather than re-parsing the
+        // same bytes inside `push`.
+        let merged = entry.reassembler.push_parsed(rd);
         let mut consumer_gone = false;
         if let Some(attrs) = merged {
             for (path, value) in attrs {
@@ -1125,7 +1164,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 ..
             }) = self.pending.get_mut(&key)
             {
-                if let Some(attrs) = priming.push(&payload) {
+                // Parse the priming chunk once and merge the parsed struct.
+                let Ok(rd) = matter_interaction::parse_report_data(&payload) else {
+                    return;
+                };
+                if let Some(attrs) = priming.push_parsed(rd) {
                     for (path, value) in attrs {
                         // Priming reports are bounded the same way as steady-state
                         // ones: try_send, drop+count on a full buffer.
@@ -2656,6 +2699,39 @@ mod tests {
         assert_eq!(report[1].1, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
+    }
+
+    #[test]
+    fn push_parsed_matches_byte_path() {
+        // The single-parse entry point (`push_parsed`, fed a pre-parsed
+        // `ReportData`) must reassemble a multi-chunk notification identically
+        // to the raw-bytes `push` path — proving the refactor that parses each
+        // report once (rather than once to read the sub id and again inside the
+        // reassembler) preserves decoded content and chunk reassembly.
+        let c0 = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(5010), true);
+        let c1 = build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+
+        // Reference: parse-then-bytes path.
+        let mut bytes_path = ReportReassembler::default();
+        assert!(bytes_path.push(&c0).is_none());
+        let via_bytes = bytes_path.push(&c1).expect("final chunk flushes");
+
+        // Under test: parse exactly once at the call site, hand in the struct.
+        let mut parsed_path = ReportReassembler::default();
+        let rd0 = matter_interaction::parse_report_data(&c0).expect("parse chunk 0");
+        let rd1 = matter_interaction::parse_report_data(&c1).expect("parse chunk 1");
+        assert!(parsed_path.push_parsed(rd0).is_none());
+        let via_parsed = parsed_path.push_parsed(rd1).expect("final chunk flushes");
+
+        assert_eq!(
+            via_parsed, via_bytes,
+            "single-parse path is content-identical"
+        );
+        assert_eq!(via_parsed.len(), 2);
+        assert_eq!(via_parsed[0].0.endpoint, 0);
+        assert_eq!(via_parsed[0].1, matter_codec::Value::Uint(5010));
+        assert_eq!(via_parsed[1].0.endpoint, 1);
+        assert_eq!(via_parsed[1].1, matter_codec::Value::Bool(true));
     }
 
     #[test]
