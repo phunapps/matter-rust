@@ -42,9 +42,9 @@ struct SubEntry {
 }
 
 /// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
-/// and the `(session, exchange)` key (the `Node` adds the command sender to
-/// build the public [`Subscription`]).
-pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u16));
+/// and the `(session, subscription_id)` key (the `Node` adds the command sender
+/// to build the public [`Subscription`]).
+pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u32));
 
 /// Maximum non-final chunks a single subscription notification may span before
 /// [`ReportReassembler`] drops the partial accumulation. Bounds memory against a
@@ -144,8 +144,8 @@ pub(crate) enum Command {
         max_interval: u16,
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
     },
-    /// Cancel the subscription identified by its `(session, exchange)` key.
-    CancelSubscription { key: (SessionId, u16) },
+    /// Cancel the subscription identified by its `(session, subscription_id)` key.
+    CancelSubscription { key: (SessionId, u32) },
     /// Test/diagnostic: how many live cached sessions exist.
     #[cfg(test)]
     SessionCount { reply: oneshot::Sender<usize> },
@@ -169,9 +169,11 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
     trust: Option<crate::trust::AttestationTrust>,
     admin_vendor_id: u16,
-    /// Active subscriptions, keyed by `(session, exchange)`. While non-empty,
-    /// the run loop listens for unsolicited steady-state reports.
-    subscriptions: HashMap<(SessionId, u16), SubEntry>,
+    /// Active subscriptions, keyed by `(session, subscription_id)`. The
+    /// `subscription_id` is the Matter-assigned id from the device's
+    /// `SubscribeResponse` — steady-state `ReportData` messages carry it in
+    /// the payload (context tag 0), not the original exchange id.
+    subscriptions: HashMap<(SessionId, u32), SubEntry>,
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -658,11 +660,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                                     }
                                 }
                             } else if opcode == OP_SUBSCRIBE_RESPONSE {
+                                let resp = matter_interaction::parse_subscribe_response(&payload)?;
+                                let key = (session_id, resp.subscription_id);
                                 self.subscriptions.insert(
-                                    (session_id, exchange_id),
-                                    SubEntry { tx, peer, reassembler: ReportReassembler::default() },
+                                    key,
+                                    SubEntry {
+                                        tx,
+                                        peer,
+                                        reassembler: ReportReassembler::default(),
+                                    },
                                 );
-                                return Ok((rx, (session_id, exchange_id)));
+                                return Ok((rx, key));
                             }
                         }
                         DecodeInboundOutput::AppMessage { .. } | DecodeInboundOutput::AckOnly { .. } => {}
@@ -731,13 +739,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 ..
             } => {
                 if opcode == OP_REPORT_DATA {
-                    // Reassemble the (possibly chunked) notification, then ack.
+                    let Ok(rd) = matter_interaction::parse_report_data(&payload) else {
+                        return;
+                    };
+                    let Some(sub_id) = rd.subscription_id else {
+                        return; // steady-state reports must carry a subscriptionId
+                    };
                     // Extract everything from the entry before the ack await so
                     // the `&mut self.subscriptions` borrow does not overlap the
                     // `&mut self.sessions` borrow inside `send_status_ack`.
                     let forwarded =
                         self.subscriptions
-                            .get_mut(&(session_id, exchange_id))
+                            .get_mut(&(session_id, sub_id))
                             .map(|entry| {
                                 (
                                     entry.tx.clone(),
@@ -937,6 +950,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap(); // ReportDataMessage
+        w.put_uint(Tag::Context(0), 0x1234_5678).unwrap(); // subscriptionId
         w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
         w.start_structure(Tag::Anonymous).unwrap(); // AttributeReportIB
         w.start_structure(Tag::Context(1)).unwrap(); // AttributeData
@@ -967,6 +981,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0x1234_5678).unwrap(); // subscriptionId
         w.start_array(Tag::Context(1)).unwrap();
         w.start_structure(Tag::Anonymous).unwrap();
         w.start_structure(Tag::Context(1)).unwrap();
@@ -1001,6 +1016,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0x1234_5678).unwrap(); // subscriptionId
         w.start_array(Tag::Context(1)).unwrap();
         w.start_structure(Tag::Anonymous).unwrap();
         w.start_structure(Tag::Context(1)).unwrap();
