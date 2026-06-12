@@ -10,9 +10,25 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::framing::{MessageCounter, SessionId};
 use crate::protocol_header::{encode_protocol_header, ExchangeFlags, ProtocolHeader, ProtocolId};
+
+/// Upper bound on the number of live exchanges tracked per session.
+///
+/// `exchange_id` is a peer-controlled 16-bit field, so without a bound a
+/// long-lived session could accumulate one [`ExchangeState`] per distinct id
+/// (up to 65 536) and never reclaim them — a slow memory-exhaustion denial
+/// of service. An
+/// exchange is reclaimed automatically once it goes idle (no pending
+/// retransmit and no buffered outbound ack), so this cap only ever bites a
+/// peer that holds an abnormal number of exchanges open simultaneously.
+///
+/// 256 sits far above any realistic concurrent-exchange count for a
+/// controller (a handful of in-flight reads/subscriptions per session) while
+/// still tightly bounding worst-case memory. The C++ reference
+/// (`connectedhomeip`) likewise services exchanges from a small fixed pool.
+pub const MAX_EXCHANGES_PER_SESSION: usize = 256;
 
 /// Configuration knobs for MRP retransmit + ack timing. Defaults match
 /// Matter Core Spec §4.11.8 (jitter omitted; see the M5.2 design's
@@ -434,6 +450,9 @@ impl MrpState {
     pub fn handle_timeout(&mut self, now: Instant) -> Vec<MrpTimerEvent> {
         let mut events = Vec::new();
         let mut to_remove = Vec::new();
+        // Exchanges whose live work cleared this tick (an expired retransmit
+        // or a drained buffered ack); each is reclaimed if it ends up idle.
+        let mut reclaim_candidates: Vec<u16> = Vec::new();
 
         for (counter, pending) in &mut self.pending_acks {
             if pending.next_attempt > now {
@@ -445,6 +464,7 @@ impl MrpState {
                     counter: *counter,
                 });
                 to_remove.push(*counter);
+                reclaim_candidates.push(pending.exchange_id);
                 continue;
             }
             events.push(MrpTimerEvent::Retransmit {
@@ -498,8 +518,16 @@ impl MrpState {
                     ack_counter: p.ack_counter,
                     is_local_initiator: p.is_local_initiator,
                 });
+                reclaim_candidates.push(exchange_id);
             }
         }
+
+        // Reclaim any exchange whose last piece of live work cleared this
+        // tick and is now idle (no pending retransmit, no buffered ack).
+        for exchange_id in reclaim_candidates {
+            self.reclaim_if_idle(exchange_id);
+        }
+
         events
     }
 
@@ -539,12 +567,23 @@ impl MrpState {
         let peer_is_initiator = header.exchange_flags.contains(ExchangeFlags::INITIATOR);
         let we_are_initiator = !peer_is_initiator;
 
-        // Record the exchange on first sight. `or_insert` ensures we don't
-        // overwrite an existing record if we already initiated this
-        // exchange and are now seeing the peer's first reply.
-        self.exchanges.entry(exchange_id).or_insert(ExchangeState {
-            is_local_initiator: we_are_initiator,
-        });
+        // Record the exchange on first sight, bounding the table so a peer
+        // cannot grow it without limit via fresh, peer-controlled
+        // exchange_ids. If this is a NEW exchange and the table is already
+        // at the cap, reject the message rather than insert. Messages on
+        // exchanges we already track are always accepted (they cost no new
+        // slot), so the cap never interferes with established traffic.
+        if !self.exchanges.contains_key(&exchange_id) {
+            if self.exchanges.len() >= MAX_EXCHANGES_PER_SESSION {
+                return Err(Error::ExchangeTableFull);
+            }
+            self.exchanges.insert(
+                exchange_id,
+                ExchangeState {
+                    is_local_initiator: we_are_initiator,
+                },
+            );
+        }
 
         if header.exchange_flags.contains(ExchangeFlags::ACK) {
             if let Some(MessageCounter(c)) = header.ack_counter {
@@ -557,6 +596,10 @@ impl MrpState {
                 && app_payload.is_empty()
                 && !header.exchange_flags.contains(ExchangeFlags::RELIABLE)
             {
+                // A pure ack completes the round-trip from our side — the
+                // pending retransmit just cleared above. Reclaim the
+                // exchange if nothing else keeps it live.
+                self.reclaim_if_idle(exchange_id);
                 return Ok(InboundOutcome::AckOnly {
                     exchange_id,
                     acked_counter: header.ack_counter.unwrap_or(MessageCounter(0)),
@@ -584,6 +627,11 @@ impl MrpState {
             });
             self.recent_next_slot = (self.recent_next_slot + 1) % 32;
         }
+
+        // If a piggybacked ack cleared this exchange's last pending
+        // retransmit and the inbound was not itself reliable (so it buffered
+        // no outbound ack), the exchange is now idle and can be reclaimed.
+        self.reclaim_if_idle(exchange_id);
 
         Ok(InboundOutcome::AppMessage {
             exchange_id,
@@ -632,12 +680,42 @@ impl MrpState {
             .retain(|_, p| p.exchange_id != exchange_id);
         self.pending_outbound_acks.remove(&exchange_id);
     }
+
+    /// Returns `true` if `exchange_id` has no live work attached: no pending
+    /// retransmit and no buffered outbound (piggyback) ack. Such an exchange
+    /// is genuinely complete and its [`ExchangeState`] can be reclaimed.
+    ///
+    /// `recent_reliable` entries are intentionally NOT consulted: they are a
+    /// fixed-size ring buffer (bounded memory) whose dedup-resend semantics
+    /// must outlive the exchange, exactly as [`Self::close_exchange`]
+    /// preserves them.
+    fn exchange_is_idle(&self, exchange_id: u16) -> bool {
+        let has_pending_retransmit = self
+            .pending_acks
+            .values()
+            .any(|p| p.exchange_id == exchange_id);
+        let has_buffered_ack = self.pending_outbound_acks.contains_key(&exchange_id);
+        !has_pending_retransmit && !has_buffered_ack
+    }
+
+    /// Reclaim `exchange_id`'s [`ExchangeState`] if it is now idle (see
+    /// [`Self::exchange_is_idle`]). Called at each point where an exchange's
+    /// last piece of live work clears (an ack is received, a retransmit
+    /// expires, or a buffered outbound ack drains), so completed exchanges
+    /// are evicted automatically rather than depending on a caller invoking
+    /// [`Self::close_exchange`].
+    fn reclaim_if_idle(&mut self, exchange_id: u16) {
+        if self.exchange_is_idle(exchange_id) {
+            self.exchanges.remove(&exchange_id);
+        }
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
+    use crate::error::Error;
     use crate::protocol_header::{decode_protocol_header, ExchangeFlags};
     use std::time::Duration;
 
@@ -1323,6 +1401,220 @@ mod tests {
 
         // All drained → nothing pending.
         assert_eq!(mrp.poll_timeout(), None);
+    }
+
+    #[test]
+    fn inbound_exchange_table_is_capped() {
+        // Memory-DoS regression: a peer driving many distinct inbound
+        // exchange_ids must not grow the exchange table without bound.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Drive far more distinct exchange_ids than the cap. Use
+        // non-reliable inbounds so no pending state lingers — each one is
+        // a complete, idle exchange the moment it is processed.
+        let n = u32::try_from(MAX_EXCHANGES_PER_SESSION).unwrap() + 500;
+        for id in 0..n {
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR,
+                0x02,
+                u16::try_from(id % 0xFFFF).unwrap(),
+                None,
+                b"x",
+            );
+            // Keep counters distinct so the replay/dedup paths stay sane.
+            let _ = mrp.process_inbound(inbound, MessageCounter(id), now);
+        }
+
+        assert!(
+            mrp.exchanges.len() <= MAX_EXCHANGES_PER_SESSION,
+            "exchange table grew past the cap: {} > {}",
+            mrp.exchanges.len(),
+            MAX_EXCHANGES_PER_SESSION
+        );
+    }
+
+    #[test]
+    fn capped_new_inbound_exchange_is_rejected() {
+        // Once the table is full of LIVE exchanges (each holding a buffered
+        // outbound ack so it is not idle), a brand-new exchange_id must be
+        // rejected rather than inserted.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Fill the table with reliable inbounds: each leaves a buffered
+        // piggyback ack, so the exchange counts as live and won't be
+        // reclaimed.
+        for id in 0..u32::try_from(MAX_EXCHANGES_PER_SESSION).unwrap() {
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x02,
+                u16::try_from(id).unwrap(),
+                None,
+                b"x",
+            );
+            mrp.process_inbound(inbound, MessageCounter(id), now)
+                .unwrap();
+        }
+        assert_eq!(mrp.exchanges.len(), MAX_EXCHANGES_PER_SESSION);
+
+        // A new exchange_id at the cap must be rejected.
+        let new_id = u16::try_from(MAX_EXCHANGES_PER_SESSION).unwrap();
+        let outcome = mrp.process_inbound(
+            build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x02,
+                new_id,
+                None,
+                b"x",
+            ),
+            MessageCounter(0xFFFF),
+            now,
+        );
+        assert!(
+            matches!(outcome, Err(Error::ExchangeTableFull)),
+            "new exchange past the cap must be rejected, got {outcome:?}"
+        );
+        assert_eq!(
+            mrp.exchanges.len(),
+            MAX_EXCHANGES_PER_SESSION,
+            "rejected exchange must not be inserted"
+        );
+
+        // An inbound on an ALREADY-KNOWN exchange must still be accepted
+        // even when the table is full.
+        let known = mrp.process_inbound(
+            build_inbound_payload(ExchangeFlags::INITIATOR, 0x02, 0, None, b"y"),
+            MessageCounter(0xF000),
+            now,
+        );
+        assert!(
+            known.is_ok(),
+            "inbound on a known exchange must still be accepted at the cap"
+        );
+    }
+
+    #[test]
+    fn completed_exchange_is_reclaimed() {
+        // Reclaim regression: an exchange whose round-trip finishes (its
+        // last pending ack clears, no buffered outbound ack) must be
+        // evicted from the exchange table automatically.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // We initiate a reliable outbound.
+        let prepared = mrp
+            .prepare_outbound(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                None,
+                b"read",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![0xAAu8; 8],
+            true,
+            now,
+        );
+        assert!(
+            mrp.exchanges.contains_key(&prepared.exchange_id),
+            "exchange recorded while round-trip is in flight"
+        );
+
+        // Peer acks our message (standalone ack). Round-trip complete.
+        let ack = build_inbound_payload(
+            ExchangeFlags::ACK,
+            opcode::secure_channel::STANDALONE_ACK,
+            prepared.exchange_id,
+            Some(MessageCounter(1)),
+            &[],
+        );
+        mrp.process_inbound(ack, MessageCounter(50), now).unwrap();
+
+        assert!(
+            !mrp.exchanges.contains_key(&prepared.exchange_id),
+            "completed exchange must be reclaimed once idle"
+        );
+        assert!(mrp.exchanges.is_empty(), "exchange table shrank to empty");
+    }
+
+    #[test]
+    fn active_exchange_is_not_reclaimed() {
+        // An exchange with a pending retransmit (round-trip still in
+        // flight) must NOT be evicted by the reclaim logic.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        let prepared = mrp
+            .prepare_outbound(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                None,
+                b"read",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![0xAAu8; 8],
+            true,
+            now,
+        );
+
+        // A reliable inbound arrives on a DIFFERENT exchange — processing it
+        // triggers a reclaim sweep, but our exchange has a pending
+        // retransmit and must survive.
+        let other = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x7777,
+            None,
+            b"other",
+        );
+        mrp.process_inbound(other, MessageCounter(100), now)
+            .unwrap();
+
+        assert!(
+            mrp.exchanges.contains_key(&prepared.exchange_id),
+            "exchange with a pending retransmit must not be reclaimed"
+        );
+    }
+
+    #[test]
+    fn buffered_outbound_ack_keeps_exchange_live() {
+        // An exchange with a buffered outbound (piggyback) ack is NOT idle
+        // and must not be reclaimed until the ack drains.
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+
+        // Reliable inbound buffers a piggyback ack for exchange 0x4242.
+        let inbound = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            0x02,
+            0x4242,
+            None,
+            b"req",
+        );
+        mrp.process_inbound(inbound, MessageCounter(100), now)
+            .unwrap();
+        assert!(
+            mrp.exchanges.contains_key(&0x4242),
+            "exchange with a buffered outbound ack stays live"
+        );
+
+        // Drain the ack via a standalone-ack timeout flush. After the ack
+        // drains and nothing else is pending, the exchange is reclaimed.
+        mrp.handle_timeout(now + Duration::from_millis(200));
+        assert!(
+            !mrp.exchanges.contains_key(&0x4242),
+            "exchange reclaimed once its buffered ack drains and it is idle"
+        );
     }
 
     #[test]

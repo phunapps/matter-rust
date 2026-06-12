@@ -84,6 +84,16 @@ pub enum Error {
         counter: u32,
     },
 
+    /// An inbound message referenced a previously-unseen exchange ID while
+    /// the per-session exchange table was already at its cap
+    /// (`MAX_EXCHANGES_PER_SESSION`). The new exchange is dropped to bound
+    /// memory; messages on already-tracked exchanges are unaffected. A
+    /// well-behaved peer never reaches this limit (the cap sits far above
+    /// any realistic concurrent-exchange count), so this surfaces only an
+    /// an abusive or buggy peer.
+    #[error("per-session MRP exchange table is full; dropping new exchange")]
+    ExchangeTableFull,
+
     /// UDP I/O failure from the Tokio adapter. Feature-gated so embedded
     /// builds without `tokio` don't carry an `io::Error` dependency on
     /// this variant.
