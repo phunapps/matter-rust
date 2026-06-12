@@ -138,6 +138,7 @@ pub fn verify_attestation_response(
 /// M6.4.3 `verify_certification_declaration` call and to confirm the
 /// device echoed back the commissioner's `attestation_nonce`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AttestationElementsFields {
     /// Certification Declaration — opaque CMS/PKCS#7 `SignedData` bytes.
     /// M6.4.3's `verify_certification_declaration` consumes this.

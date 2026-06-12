@@ -152,6 +152,7 @@ impl Passcode {
 ///
 /// Two bits on the wire. Value `3` is reserved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CommissioningFlow {
     /// `0` — Device is fully configured; commissioning works as published.
     Standard,

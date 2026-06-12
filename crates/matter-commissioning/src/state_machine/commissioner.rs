@@ -1778,10 +1778,7 @@ mod tests {
             .public_key(PublicKey::new(key_bytes).expect("valid sec1 prefix"))
             .extensions(
                 Extensions::builder()
-                    .basic_constraints(Some(BasicConstraints {
-                        is_ca: false,
-                        path_len_constraint: None,
-                    }))
+                    .basic_constraints(Some(BasicConstraints::new(false, None)))
                     .build(),
             )
             .build_unsigned()
@@ -1855,10 +1852,7 @@ mod tests {
             .public_key(PublicKey::new(key_bytes).expect("valid sec1 prefix"))
             .extensions(
                 Extensions::builder()
-                    .basic_constraints(Some(BasicConstraints {
-                        is_ca: false,
-                        path_len_constraint: None,
-                    }))
+                    .basic_constraints(Some(BasicConstraints::new(false, None)))
                     .build(),
             )
             .build_unsigned()

@@ -69,10 +69,7 @@ pub fn issue_noc(
         })?;
 
     let extensions = Extensions::builder()
-        .basic_constraints(Some(BasicConstraints {
-            is_ca: false,
-            path_len_constraint: None,
-        }))
+        .basic_constraints(Some(BasicConstraints::new(false, None)))
         .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
         .extended_key_usage(Some(vec![EKU_CLIENT_AUTH, EKU_SERVER_AUTH]))
         .subject_key_identifier(Some(KeyIdentifier(ski_arr)))

@@ -94,10 +94,7 @@ fn main_chain() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             subject: paa_dn.clone(),
             public_key: paa_pk,
             extensions: Extensions::builder()
-                .basic_constraints(Some(BasicConstraints {
-                    is_ca: true,
-                    path_len_constraint: Some(1),
-                }))
+                .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
                 .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
                 .build(),
             signature: placeholder_sig(),
@@ -121,10 +118,7 @@ fn main_chain() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             subject: pai_dn.clone(),
             public_key: pai_pk,
             extensions: Extensions::builder()
-                .basic_constraints(Some(BasicConstraints {
-                    is_ca: true,
-                    path_len_constraint: Some(0),
-                }))
+                .basic_constraints(Some(BasicConstraints::new(true, Some(0))))
                 .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
                 .build(),
             signature: placeholder_sig(),
@@ -149,10 +143,7 @@ fn main_chain() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             subject: dac_dn,
             public_key: dac_pk,
             extensions: Extensions::builder()
-                .basic_constraints(Some(BasicConstraints {
-                    is_ca: false,
-                    path_len_constraint: None,
-                }))
+                .basic_constraints(Some(BasicConstraints::new(false, None)))
                 .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
                 .extended_key_usage(Some(vec![EKU_CLIENT_AUTH]))
                 .build(),

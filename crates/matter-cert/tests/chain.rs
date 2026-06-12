@@ -189,10 +189,7 @@ fn non_ca_intermediate_returns_not_a_ca_at_index_1() {
 
     // ICA with is_ca = false (this is what we're testing).
     let mut ica_fields = common::ca_template(ica_key.public_key.clone(), None);
-    ica_fields.extensions.basic_constraints = Some(BasicConstraints {
-        is_ca: false,
-        path_len_constraint: None,
-    });
+    ica_fields.extensions.basic_constraints = Some(BasicConstraints::new(false, None));
     ica_fields.subject = ica_dn.clone();
     ica_fields.issuer = root_dn.clone();
     let ica = common::build_signed_cert(ica_fields, &root_key);
@@ -334,10 +331,7 @@ fn leaf_asserting_is_ca_true_is_rejected() {
     let mut leaf_fields = common::leaf_template(leaf_key.public_key.clone());
     leaf_fields.issuer = ica_dn;
     // Force the leaf to (illegally) assert the CA bit.
-    leaf_fields.extensions.basic_constraints = Some(BasicConstraints {
-        is_ca: true,
-        path_len_constraint: None,
-    });
+    leaf_fields.extensions.basic_constraints = Some(BasicConstraints::new(true, None));
     let leaf = common::build_signed_cert(leaf_fields, &ica_key);
 
     let mut roots = TrustedRoots::new();

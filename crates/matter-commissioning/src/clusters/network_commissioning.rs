@@ -137,6 +137,7 @@ pub fn decode_feature_map(tlv: &[u8]) -> Result<NetworkCommissioningFeature, Com
 /// Decoded `NetworkConfigResponse` (spec §11.9.6.5). Emitted by
 /// `AddOrUpdateWiFiNetwork`, `RemoveNetwork`, `ReorderNetworks`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NetworkConfigResponse {
     /// `NetworkCommissioningStatusEnum` (spec §11.9.5.1). 0 = OK.
     pub networking_status: u8,
@@ -148,6 +149,7 @@ pub struct NetworkConfigResponse {
 
 /// Decoded `ConnectNetworkResponse` (spec §11.9.6.6.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ConnectNetworkResponse {
     /// `NetworkCommissioningStatusEnum`. 0 = OK.
     pub networking_status: u8,

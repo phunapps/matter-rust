@@ -58,10 +58,7 @@ fn build_test_rcac() -> (RingSigner, TrustedRoots, [u8; 65]) {
     let rcac_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
 
     let extensions = Extensions::builder()
-        .basic_constraints(Some(BasicConstraints {
-            is_ca: true,
-            path_len_constraint: Some(1),
-        }))
+        .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
         .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
         .subject_key_identifier(Some(KeyIdentifier(TEST_SKI)))
         .authority_key_identifier(Some(KeyIdentifier(TEST_SKI)))
@@ -107,10 +104,7 @@ fn build_test_noc(
     let issuer_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
 
     let extensions = Extensions::builder()
-        .basic_constraints(Some(BasicConstraints {
-            is_ca: false,
-            path_len_constraint: None,
-        }))
+        .basic_constraints(Some(BasicConstraints::new(false, None)))
         .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
         .subject_key_identifier(Some(KeyIdentifier(NOC_SKI)))
         .authority_key_identifier(Some(KeyIdentifier(TEST_SKI)))

@@ -106,10 +106,7 @@ impl FabricRecord {
 
         let rcac_subject = DistinguishedName::new(vec![DnAttribute::RcacId(rcac_id)]);
         let rcac_extensions = Extensions::builder()
-            .basic_constraints(Some(BasicConstraints {
-                is_ca: true,
-                path_len_constraint: Some(1),
-            }))
+            .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
             .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
             .subject_key_identifier(Some(ski_id))
             // Self-signed root: AKI = SKI. RFC 5280 §4.2.1.1 would allow

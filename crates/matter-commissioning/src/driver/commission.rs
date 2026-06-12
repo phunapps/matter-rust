@@ -223,7 +223,10 @@ async fn flush_pending_acks<T: AsyncDatagram>(
                 | MrpEvent::SendStandaloneAck { packet, .. } => {
                     transport.send_to(&packet, peer).await?;
                 }
-                MrpEvent::Expired { .. } => {}
+                // MrpEvent::Expired and — `MrpEvent` being `#[non_exhaustive]`
+                // — any future variant are not relevant to this ack-collection
+                // loop.
+                _ => {}
             }
         }
     }
@@ -999,13 +1002,13 @@ mod tests {
         let mut txt = HashMap::new();
         txt.insert("D".to_string(), DISCRIMINATOR.to_string());
         let mut disc = FakeDiscovery {
-            service: MatterService {
-                instance_name: "AABBCCDDEEFF1122".to_string(),
-                kind: ServiceKind::Commissionable,
-                addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42))],
-                port: 5540,
-                txt_records: txt,
-            },
+            service: MatterService::new(
+                "AABBCCDDEEFF1122".to_string(),
+                ServiceKind::Commissionable,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42))],
+                5540,
+                txt,
+            ),
         };
         let addr = resolve_commissionable(&mut disc, DISCRIMINATOR)
             .await
@@ -1028,13 +1031,13 @@ mod tests {
         let mut txt = HashMap::new();
         txt.insert("D".to_string(), DEVICE_LONG.to_string());
         let mut disc = FakeDiscovery {
-            service: MatterService {
-                instance_name: "3C64CF0B1D42".to_string(),
-                kind: ServiceKind::Commissionable,
-                addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248))],
-                port: 5540,
-                txt_records: txt,
-            },
+            service: MatterService::new(
+                "3C64CF0B1D42".to_string(),
+                ServiceKind::Commissionable,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248))],
+                5540,
+                txt,
+            ),
         };
         let addr = resolve_commissionable(&mut disc, MANUAL_SHORT_PACKED)
             .await
@@ -1221,21 +1224,21 @@ mod tests {
 
         // FeatureMap = 0x01 (WIFI bit set)
         let feat_val: u64 = 0x01;
-        let report = crate::im::ReportData {
-            items: vec![AttributeReportItem {
-                path: AttributePath {
+        let report = crate::im::ReportData::new(
+            vec![AttributeReportItem::new(
+                AttributePath {
                     endpoint: 0,
                     cluster: crate::clusters::network_commissioning::CLUSTER_ID, // 0x0031
                     attribute: crate::clusters::network_commissioning::attribute_id::FEATURE_MAP, // 0xFFFC
                 },
-                op: ReportOp::Replace,
-                value: Value::Uint(feat_val),
-                data_version: None,
-            }],
-            subscription_id: None,
-            more_chunked_messages: false,
-            suppress_response: false,
-        };
+                ReportOp::Replace,
+                Value::Uint(feat_val),
+                None,
+            )],
+            None,
+            false,
+            false,
+        );
 
         let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report).unwrap();
 
@@ -1272,19 +1275,21 @@ mod tests {
         use matter_codec::{Tag, Value};
 
         let gc = crate::clusters::general_commissioning::CLUSTER_ID;
-        let item = |attribute: u32, value: Value| AttributeReportItem {
-            path: AttributePath {
-                endpoint: 0,
-                cluster: gc,
-                attribute,
-            },
-            op: ReportOp::Replace,
-            value,
-            data_version: None,
+        let item = |attribute: u32, value: Value| {
+            AttributeReportItem::new(
+                AttributePath {
+                    endpoint: 0,
+                    cluster: gc,
+                    attribute,
+                },
+                ReportOp::Replace,
+                value,
+                None,
+            )
         };
         // Order and values as the Tapo returned them.
-        let report = crate::im::ReportData {
-            items: vec![
+        let report = crate::im::ReportData::new(
+            vec![
                 item(0x0004, Value::Bool(true)), // SupportsConcurrentConnection
                 item(0x0002, Value::Uint(0)),    // RegulatoryConfig
                 item(
@@ -1296,10 +1301,10 @@ mod tests {
                 ),
                 item(0x0000, Value::Uint(0)), // Breadcrumb
             ],
-            subscription_id: None,
-            more_chunked_messages: false,
-            suppress_response: false,
-        };
+            None,
+            false,
+            false,
+        );
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
         // Must be the anonymous-tagged STRUCT (0x15 … 0x18), not the bool.
@@ -1325,21 +1330,21 @@ mod tests {
             (Tag::Context(0), Value::Uint(120)),
             (Tag::Context(1), Value::Uint(900)),
         ]);
-        let report = crate::im::ReportData {
-            items: vec![AttributeReportItem {
-                path: AttributePath {
+        let report = crate::im::ReportData::new(
+            vec![AttributeReportItem::new(
+                AttributePath {
                     endpoint: 0,
                     cluster: crate::clusters::general_commissioning::CLUSTER_ID, // 0x0030
                     attribute: attr_id::BASIC_COMMISSIONING_INFO,                // 0x0001
                 },
-                op: ReportOp::Replace,
-                value: struct_value.clone(),
-                data_version: None,
-            }],
-            subscription_id: None,
-            more_chunked_messages: false,
-            suppress_response: false,
-        };
+                ReportOp::Replace,
+                struct_value.clone(),
+                None,
+            )],
+            None,
+            false,
+            false,
+        );
 
         let payload = extract_read_payload(Expectation::CommissioningInfo, &report).unwrap();
 
@@ -1369,12 +1374,7 @@ mod tests {
     fn extract_read_payload_missing_feature_map_returns_error() {
         use crate::Expectation;
 
-        let report = crate::im::ReportData {
-            items: Vec::new(),
-            subscription_id: None,
-            more_chunked_messages: false,
-            suppress_response: false,
-        };
+        let report = crate::im::ReportData::new(Vec::new(), None, false, false);
         let err = extract_read_payload(Expectation::NetworkCommissioningInfo, &report)
             .expect_err("missing attribute should fail");
         assert!(
@@ -1388,12 +1388,7 @@ mod tests {
     fn extract_read_payload_non_read_expectation_returns_error() {
         use crate::Expectation;
 
-        let report = crate::im::ReportData {
-            items: Vec::new(),
-            subscription_id: None,
-            more_chunked_messages: false,
-            suppress_response: false,
-        };
+        let report = crate::im::ReportData::new(Vec::new(), None, false, false);
         let err = extract_read_payload(Expectation::ArmFailsafeResponse, &report)
             .expect_err("non-read expectation should fail");
         assert!(
@@ -1594,10 +1589,7 @@ mod tests {
             let rcac_pub = *rcac_signer.public_key().as_bytes();
             let rcac_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
             let ext = Extensions::builder()
-                .basic_constraints(Some(BasicConstraints {
-                    is_ca: true,
-                    path_len_constraint: Some(1),
-                }))
+                .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
                 .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
                 .subject_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
                 .authority_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
@@ -1634,10 +1626,7 @@ mod tests {
             ]);
             let issuer = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
             let ext = Extensions::builder()
-                .basic_constraints(Some(BasicConstraints {
-                    is_ca: false,
-                    path_len_constraint: None,
-                }))
+                .basic_constraints(Some(BasicConstraints::new(false, None)))
                 .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
                 .subject_key_identifier(Some(KeyIdentifier(T_NOC_SKI)))
                 .authority_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
@@ -1723,13 +1712,13 @@ mod tests {
         }
 
         let mut discovery = FakeOpDiscovery {
-            service: MatterService {
-                instance_name: instance,
-                kind: ServiceKind::Operational,
-                addresses: vec![dev_addr.ip()],
-                port: dev_addr.port(),
-                txt_records: HashMap::new(),
-            },
+            service: MatterService::new(
+                instance,
+                ServiceKind::Operational,
+                vec![dev_addr.ip()],
+                dev_addr.port(),
+                HashMap::new(),
+            ),
         };
 
         // Device side: CaseResponder.

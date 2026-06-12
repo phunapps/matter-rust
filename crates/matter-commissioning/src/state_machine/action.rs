@@ -161,6 +161,7 @@ pub enum Expectation {
 /// Output of a successful commissioning run. Returned in
 /// [`Action::Done`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CommissionedFabric {
     /// The fabric record the device is now a member of (RCAC + IPK +
     /// fabric ID).

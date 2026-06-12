@@ -1209,10 +1209,7 @@ mod tests {
         ]);
         let issuer = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
         let extensions = Extensions::builder()
-            .basic_constraints(Some(BasicConstraints {
-                is_ca: false,
-                path_len_constraint: None,
-            }))
+            .basic_constraints(Some(BasicConstraints::new(false, None)))
             .build();
         build_unsigned(TestCertFields {
             serial: vec![1],

@@ -416,10 +416,7 @@ mod tests {
                 subject: paa_dn.clone(),
                 public_key: paa_signer.public_key().clone(),
                 extensions: Extensions::builder()
-                    .basic_constraints(Some(BasicConstraints {
-                        is_ca: true,
-                        path_len_constraint: Some(1),
-                    }))
+                    .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
                     .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
                     .build(),
                 signature: Signature::new([0u8; 64]),
@@ -443,10 +440,7 @@ mod tests {
                 subject: pai_dn.clone(),
                 public_key: pai_signer.public_key().clone(),
                 extensions: Extensions::builder()
-                    .basic_constraints(Some(BasicConstraints {
-                        is_ca: true,
-                        path_len_constraint: Some(0),
-                    }))
+                    .basic_constraints(Some(BasicConstraints::new(true, Some(0))))
                     .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
                     .build(),
                 signature: Signature::new([0u8; 64]),
@@ -471,10 +465,7 @@ mod tests {
                 subject: dac_dn,
                 public_key: dac_signer.public_key().clone(),
                 extensions: Extensions::builder()
-                    .basic_constraints(Some(BasicConstraints {
-                        is_ca: false,
-                        path_len_constraint: None,
-                    }))
+                    .basic_constraints(Some(BasicConstraints::new(false, None)))
                     .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
                     .extended_key_usage(Some(vec![EKU_CLIENT_AUTH]))
                     .build(),

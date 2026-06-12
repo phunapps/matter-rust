@@ -81,6 +81,7 @@ impl SessionKeys {
 /// operational identity yet). CASE sessions populate both from the peer's
 /// validated NOC.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PeerHint {
     /// Peer's operational Node ID (CASE only).
     pub node_id: Option<NodeId>,
@@ -91,6 +92,7 @@ pub struct PeerHint {
 /// Single session — keys, counters, replay tracking, role, peer hint, MRP
 /// state.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Session {
     /// Our local ID. Peers send packets addressed to this ID.
     pub local_id: SessionId,
@@ -126,6 +128,7 @@ pub struct Session {
 /// wire bytes plus the bookkeeping the caller needs to track the message
 /// (exchange id, counter, whether a piggyback ack was attached).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct EncodeOutboundOutput {
     /// Fully-encrypted secured-message bytes ready to hand to the UDP
     /// transport.
@@ -152,6 +155,7 @@ pub struct EncodeOutboundOutput {
 /// for which the manager has already pre-built a standalone-ack packet to
 /// re-send.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DecodeInboundOutput {
     /// A new application message arrived. `payload` is the bytes AFTER the
     /// protocol header.

@@ -18,6 +18,7 @@ pub use verifier::PaseVerifier;
 /// [`crate::Error::UnexpectedMessage`] and `expected_inbound()` accessors
 /// on the state machines (added in M3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PaseMessageKind {
     /// Commissioner -> verifier, negotiation path.
     PbkdfParamRequest,

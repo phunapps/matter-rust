@@ -969,10 +969,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 }
                 // else: foreign app message — nothing to do (MRP already acked).
             }
-            DecodeInboundOutput::AckOnly { .. } => {}
             DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
                 let _ = self.transport.send_to(&ack_packet, from).await;
             }
+            // AckOnly (no app payload), and — `DecodeInboundOutput` being
+            // `#[non_exhaustive]` — any future outcome: nothing to route here.
+            _ => {}
         }
     }
 
@@ -1375,6 +1377,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 } => {
                     self.on_pending_timeout(session_id, exchange_id).await;
                 }
+                // `MrpEvent` is `#[non_exhaustive]`; ignore future timer
+                // events in the controller's MRP pump.
+                _ => {}
             }
         }
     }
@@ -1786,13 +1791,13 @@ mod tests {
         }
         fn stop_query(&mut self, _h: QueryHandle) {}
         fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
-            vec![MatterService {
-                instance_name: self.instance_name.clone(),
-                kind: ServiceKind::Operational,
-                addresses: vec![self.addr.ip()],
-                port: self.addr.port(),
-                txt_records: std::collections::HashMap::new(),
-            }]
+            vec![MatterService::new(
+                self.instance_name.clone(),
+                ServiceKind::Operational,
+                vec![self.addr.ip()],
+                self.addr.port(),
+                std::collections::HashMap::new(),
+            )]
         }
     }
 

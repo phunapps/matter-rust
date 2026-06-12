@@ -34,6 +34,7 @@ pub const MAX_EXCHANGES_PER_SESSION: usize = 256;
 /// Matter Core Spec §4.11.8 (jitter omitted; see the M5.2 design's
 /// "Non-goals" section).
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct MrpConfig {
     /// Base retransmit delay used when the session is "active" (recent
     /// outbound traffic).
@@ -78,6 +79,7 @@ pub struct MrpFlags {
 /// Per-session timer event before `SessionManager` folds it into
 /// [`MrpEvent`] with the `session_id` attached.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum MrpTimerEvent {
     /// A pending reliable message hit its retransmit deadline. The cached
     /// encrypted wire bytes are returned so the manager can re-send them
@@ -117,6 +119,7 @@ pub enum MrpTimerEvent {
 /// per-session timer streams. `SessionManager` pre-builds standalone-ack
 /// packets before pushing `SendStandaloneAck` here.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum MrpEvent {
     /// A pending reliable message must be re-sent.
     Retransmit {
@@ -152,6 +155,7 @@ pub enum MrpEvent {
 
 /// Outcome of processing an inbound decrypted payload through MRP.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum InboundOutcome {
     /// A new application message was received. `payload` is the bytes
     /// AFTER the protocol header.

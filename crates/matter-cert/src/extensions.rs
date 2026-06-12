@@ -88,12 +88,29 @@ impl ExtensionsBuilder {
 
 /// Basic constraints extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BasicConstraints {
     /// Whether this certificate's subject may sign other certificates.
     pub is_ca: bool,
     /// Maximum number of intermediate certificates that may follow.
     /// `None` means unbounded (or no constraint set).
     pub path_len_constraint: Option<u8>,
+}
+
+impl BasicConstraints {
+    /// Construct a [`BasicConstraints`] extension.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]`: callers in other
+    /// crates cannot use a struct literal, so this constructor is the stable
+    /// way to build one. Any future spec-driven field will gain a default
+    /// here without breaking existing callers.
+    #[must_use]
+    pub const fn new(is_ca: bool, path_len_constraint: Option<u8>) -> Self {
+        Self {
+            is_ca,
+            path_len_constraint,
+        }
+    }
 }
 
 bitflags! {

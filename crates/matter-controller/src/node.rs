@@ -18,6 +18,7 @@ const OP_INVOKE_REQUEST: u8 = 0x08;
 
 /// Outcome of [`Node::invoke`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum InvokeResult {
     /// The device returned a response command with (anonymous-tagged) fields.
     Data {

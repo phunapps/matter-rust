@@ -241,13 +241,13 @@ mod tests {
         let node_id: u64 = 1;
         let name = operational_instance_name(cfid, node_id);
         let mut disc = FakeDiscovery {
-            service: MatterService {
-                instance_name: name,
-                kind: ServiceKind::Operational,
-                addresses: vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))],
-                port: 5540,
-                txt_records: HashMap::new(),
-            },
+            service: MatterService::new(
+                name,
+                ServiceKind::Operational,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))],
+                5540,
+                HashMap::new(),
+            ),
         };
         let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
         assert_eq!(
@@ -272,26 +272,26 @@ mod tests {
 
         // Link-local listed first, IPv4 buried last — IPv4 must win.
         let mut disc = FakeDiscovery {
-            service: MatterService {
-                instance_name: name.clone(),
-                kind: ServiceKind::Operational,
-                addresses: vec![link_local, ula, v4],
-                port: 5540,
-                txt_records: HashMap::new(),
-            },
+            service: MatterService::new(
+                name.clone(),
+                ServiceKind::Operational,
+                vec![link_local, ula, v4],
+                5540,
+                HashMap::new(),
+            ),
         };
         let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
         assert_eq!(addr, std::net::SocketAddr::new(v4, 5540));
 
         // No IPv4: the non-link-local IPv6 must win over fe80.
         let mut disc = FakeDiscovery {
-            service: MatterService {
-                instance_name: name,
-                kind: ServiceKind::Operational,
-                addresses: vec![link_local, ula],
-                port: 5540,
-                txt_records: HashMap::new(),
-            },
+            service: MatterService::new(
+                name,
+                ServiceKind::Operational,
+                vec![link_local, ula],
+                5540,
+                HashMap::new(),
+            ),
         };
         let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
         assert_eq!(addr, std::net::SocketAddr::new(ula, 5540));
@@ -329,10 +329,7 @@ mod tests {
         let rcac_pub = *rcac_signer.public_key().as_bytes();
         let rcac_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
         let extensions = Extensions::builder()
-            .basic_constraints(Some(BasicConstraints {
-                is_ca: true,
-                path_len_constraint: Some(1),
-            }))
+            .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
             .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
             .subject_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
             .authority_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
@@ -369,10 +366,7 @@ mod tests {
         ]);
         let issuer_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
         let extensions = Extensions::builder()
-            .basic_constraints(Some(BasicConstraints {
-                is_ca: false,
-                path_len_constraint: None,
-            }))
+            .basic_constraints(Some(BasicConstraints::new(false, None)))
             .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
             .subject_key_identifier(Some(KeyIdentifier(T_NOC_SKI)))
             .authority_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))

@@ -52,6 +52,7 @@ impl ServiceKind {
 
 /// One Matter mDNS record — what we publish, what we discover.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MatterService {
     /// DNS instance name (left-most label, e.g. `"DEADBEEFCAFEBABE-0000000000000001"`).
     pub instance_name: String,
@@ -63,6 +64,31 @@ pub struct MatterService {
     pub port: u16,
     /// TXT records (vendor/product IDs, discriminator, etc.).
     pub txt_records: HashMap<String, String>,
+}
+
+impl MatterService {
+    /// Construct a [`MatterService`] from its mDNS record fields.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]`: callers in other
+    /// crates cannot use a struct literal, so this constructor is the stable
+    /// way to build one. Future spec-driven fields will gain defaults here
+    /// without breaking existing callers.
+    #[must_use]
+    pub fn new(
+        instance_name: String,
+        kind: ServiceKind,
+        addresses: Vec<IpAddr>,
+        port: u16,
+        txt_records: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            instance_name,
+            kind,
+            addresses,
+            port,
+            txt_records,
+        }
+    }
 }
 
 /// Opaque handle for an in-progress query. Returned by

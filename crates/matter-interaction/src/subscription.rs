@@ -38,6 +38,7 @@ pub struct SubscribeRequest {
 /// Contains the server-assigned `subscription_id` (opaque, stable for the
 /// lifetime of the subscription) and the negotiated `max_interval`.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SubscribeResponse {
     /// Server-assigned subscription identifier.
     pub subscription_id: u32,

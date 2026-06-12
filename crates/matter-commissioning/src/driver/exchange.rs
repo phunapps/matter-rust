@@ -149,17 +149,16 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                         let _ = (&msg_protocol_id, &msg_opcode);
                         return Ok(SecuredResponse { exchange_id, payload });
                     }
-                    // Two outcomes we simply wait through (identical handling):
-                    //  - an app message for a *different* exchange — not expected
-                    //    in the strictly sequential commissioning flow; and
-                    //  - an `AckOnly` for our request — the response is still
-                    //    pending.
-                    DecodeInboundOutput::AppMessage { .. }
-                    | DecodeInboundOutput::AckOnly { .. } => {}
                     // Peer re-sent a reliable frame; bounce its standalone ack.
                     DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
                         transport.send_to(&ack_packet, peer).await?;
                     }
+                    // Wait through everything else: an app message for a
+                    // *different* exchange (not expected in the strictly
+                    // sequential commissioning flow), an `AckOnly` for our request
+                    // (response still pending), and — `DecodeInboundOutput` being
+                    // `#[non_exhaustive]` — any future outcome.
+                    _ => {}
                 }
             }
             () = tokio::time::sleep(sleep_for) => {
@@ -172,6 +171,9 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                         MrpEvent::Expired { exchange_id, .. } => {
                             return Err(DriverError::Timeout { exchange_id });
                         }
+                        // `MrpEvent` is `#[non_exhaustive]`; ignore future
+                        // timer events here.
+                        _ => {}
                     }
                 }
             }
@@ -290,14 +292,15 @@ pub async fn secured_read<T: AsyncDatagram>(
                         )?;
                         transport.send_to(&ack.wire_bytes, peer).await?;
                     }
-                    // App message on another exchange, or an AckOnly for our
-                    // request — keep waiting.
-                    DecodeInboundOutput::AppMessage { .. }
-                    | DecodeInboundOutput::AckOnly { .. } => {}
                     // Peer re-sent a reliable frame; bounce its standalone ack.
                     DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
                         transport.send_to(&ack_packet, peer).await?;
                     }
+                    // Keep waiting through everything else: an app message on
+                    // another exchange, an `AckOnly` for our request, and —
+                    // `DecodeInboundOutput` being `#[non_exhaustive]` — any
+                    // future outcome.
+                    _ => {}
                 }
             }
             () = tokio::time::sleep(sleep_for) => {
@@ -310,6 +313,9 @@ pub async fn secured_read<T: AsyncDatagram>(
                         MrpEvent::Expired { exchange_id, .. } => {
                             return Err(DriverError::Timeout { exchange_id });
                         }
+                        // `MrpEvent` is `#[non_exhaustive]`; ignore future
+                        // timer events here.
+                        _ => {}
                     }
                 }
             }

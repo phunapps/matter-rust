@@ -237,13 +237,13 @@ async fn run_loopback_commission() {
         .expect("compressed fabric id");
     let op_instance_name = operational_instance_name(compressed, ASSIGNED_NODE_ID);
     let mut fake_disc = FakeDiscovery {
-        service: MatterService {
-            instance_name: op_instance_name,
-            kind: ServiceKind::Operational,
-            addresses: vec![dev_addr.ip()],
-            port: dev_addr.port(),
-            txt_records: std::collections::HashMap::new(),
-        },
+        service: MatterService::new(
+            op_instance_name,
+            ServiceKind::Operational,
+            vec![dev_addr.ip()],
+            dev_addr.port(),
+            std::collections::HashMap::new(),
+        ),
     };
 
     // ── 5. CommissionerConfig + DriverConfig (the controller under test). ─────

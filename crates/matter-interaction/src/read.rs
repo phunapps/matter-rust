@@ -64,6 +64,7 @@ pub fn build_read_request(paths: &[AttributePath]) -> Vec<u8> {
 
 /// Parsed `ReportDataMessage` (Matter §10.6.4).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ReportData {
     /// Every `AttributeReportIB` carrying `AttributeData`, with the
     /// information needed to reassemble chunked and list-chunked reports.
@@ -86,6 +87,28 @@ pub struct ReportData {
 }
 
 impl ReportData {
+    /// Construct a [`ReportData`] from its decoded parts.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]`: callers in other
+    /// crates cannot use a struct literal, so this constructor is the stable
+    /// way to build one (e.g. test fixtures that synthesize a report). Any
+    /// future spec-driven field will gain a default here without breaking
+    /// existing callers.
+    #[must_use]
+    pub fn new(
+        items: Vec<AttributeReportItem>,
+        subscription_id: Option<u32>,
+        more_chunked_messages: bool,
+        suppress_response: bool,
+    ) -> Self {
+        Self {
+            items,
+            subscription_id,
+            more_chunked_messages,
+            suppress_response,
+        }
+    }
+
     /// Borrowing `(path, value)` view over the whole-attribute `Replace` reports
     /// in [`items`](Self::items), as a flattened convenience for the common
     /// single-message (non-chunked) case.
@@ -109,6 +132,7 @@ impl ReportData {
 /// One `AttributeReportIB` carrying `AttributeData`, retaining the list-merge
 /// metadata that the [`ReportData::attributes`] convenience view flattens away.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AttributeReportItem {
     /// Concrete `(endpoint, cluster, attribute)`.
     pub path: AttributePath,
@@ -120,8 +144,27 @@ pub struct AttributeReportItem {
     pub data_version: Option<u32>,
 }
 
+impl AttributeReportItem {
+    /// Construct an [`AttributeReportItem`] from its decoded parts.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]`: callers in other
+    /// crates cannot use a struct literal, so this constructor is the stable
+    /// way to build one. Any future spec-driven field will gain a default
+    /// here without breaking existing callers.
+    #[must_use]
+    pub fn new(path: AttributePath, op: ReportOp, value: Value, data_version: Option<u32>) -> Self {
+        Self {
+            path,
+            op,
+            value,
+            data_version,
+        }
+    }
+}
+
 /// How an [`AttributeReportItem`] merges into accumulated state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ReportOp {
     /// Replace the attribute's value (path carried no `ListIndex`).
     Replace,

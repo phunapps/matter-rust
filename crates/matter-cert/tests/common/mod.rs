@@ -95,10 +95,7 @@ pub(crate) fn leaf_template(public_key: PublicKey) -> TestCertFields {
         not_after: MatterTime::from_unix_secs(1_800_000_000),
         public_key,
         extensions: Extensions::builder()
-            .basic_constraints(Some(BasicConstraints {
-                is_ca: false,
-                path_len_constraint: None,
-            }))
+            .basic_constraints(Some(BasicConstraints::new(false, None)))
             .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
             .subject_key_identifier(Some(KeyIdentifier([0x01; 20])))
             .authority_key_identifier(Some(KeyIdentifier([0x02; 20])))
@@ -113,10 +110,7 @@ pub(crate) fn leaf_template(public_key: PublicKey) -> TestCertFields {
 pub(crate) fn ca_template(public_key: PublicKey, path_len: Option<u8>) -> TestCertFields {
     TestCertFields {
         extensions: Extensions::builder()
-            .basic_constraints(Some(BasicConstraints {
-                is_ca: true,
-                path_len_constraint: path_len,
-            }))
+            .basic_constraints(Some(BasicConstraints::new(true, path_len)))
             .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
             .subject_key_identifier(Some(KeyIdentifier([0x02; 20])))
             .authority_key_identifier(Some(KeyIdentifier([0x03; 20])))
