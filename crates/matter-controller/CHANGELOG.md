@@ -80,3 +80,7 @@ semantic versioning once published.
   device-initiated exchange.
 - **SH.2b** — A reconnect now evicts the prior session from the `SessionManager`,
   so a stale session's dead MRP retransmits stop instead of firing until expiry.
+- **SH.2b** — A reconnect that replaces a node's session now proactively
+  resubscribes any subscription stranded on the old session (rather than waiting
+  for its liveness deadline), so a round-trip reconnect transparently
+  re-establishes the subscription too — closing a bounded reports-gap window.
