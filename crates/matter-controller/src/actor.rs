@@ -37,8 +37,6 @@ const MAX_READ_CHUNKS: usize = 64;
 /// Max total decoded payload bytes a single read may accumulate (256 `KiB`).
 const MAX_READ_BYTES: usize = 256 * 1024;
 
-// SH.2b backoff/liveness — wired into the resubscribe engine in later tasks; the
-// `dead_code` allows are removed once `resubscribe_backoff`/`LIVENESS_GRACE` are used.
 /// chip resubscribe backoff constants (`CHIPConfig.h`, verbatim).
 const RESUB_MAX_FIBONACCI_STEP_INDEX: u32 = 14;
 const RESUB_WAIT_TIME_MULTIPLIER_MS: u64 = 10_000;
@@ -49,7 +47,6 @@ const RESUB_MIN_WAIT_PERCENT: u64 = 30;
 /// interval to form a subscription's liveness deadline. chip derives it from the
 /// session MRP params + `kExpectedIMProcessingTime`; 5 s is a safe, tunable
 /// stand-in (too small ⇒ spurious resubscribes).
-#[allow(dead_code)] // wired in SH.2b Task 2
 const LIVENESS_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// chip `GetFibonacciForIndex` (F(0)=0, F(1)=1, F(2)=1, F(3)=2, …).
@@ -66,7 +63,6 @@ fn fibonacci(n: u32) -> u64 {
 /// chip `ComputeTimeTillNextSubscription(retry_count)`: a Fibonacci-stepped max
 /// wait (capped at [`RESUB_MAX_RETRY_WAIT_INTERVAL_MS`]), then a uniform jitter
 /// in `[30%, 100%]` of it. `retry_count` 0 yields zero (immediate first retry).
-#[allow(dead_code)] // wired in SH.2b Task 4
 fn resubscribe_backoff(rng: &dyn NocRng, retry_count: u32) -> std::time::Duration {
     let max_wait_ms = if retry_count <= RESUB_MAX_FIBONACCI_STEP_INDEX {
         fibonacci(retry_count).saturating_mul(RESUB_WAIT_TIME_MULTIPLIER_MS)
@@ -86,14 +82,42 @@ fn resubscribe_backoff(rng: &dyn NocRng, retry_count: u32) -> std::time::Duratio
     std::time::Duration::from_millis(min_wait_ms + jitter)
 }
 
-/// Per-subscription routing state held by the actor.
+/// Controller-assigned stable subscription handle id. Survives auto-resubscribes
+/// (the device's wire `subscription_id` changes on each re-establish, this does
+/// not), so the consumer's [`Subscription`] stays valid across a resubscribe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SubId(pub(crate) u64);
+
+/// Per-subscription routing + resubscribe state, keyed by [`SubId`].
 struct SubEntry {
     /// Channel to the consumer's [`Subscription`].
-    tx: mpsc::Sender<SubscriptionEvent>,
+    tx: mpsc::UnboundedSender<SubscriptionEvent>,
     /// Operational peer address (for `StatusResponse` acks).
     peer: SocketAddr,
     /// Reassembles a chunked steady-state notification before delivery.
     reassembler: ReportReassembler,
+    /// Current device session + wire subscription id (both change on resubscribe).
+    session_id: SessionId,
+    wire_sub_id: u32,
+    /// Subscribe params, retained to re-issue the `SubscribeRequest` on resubscribe.
+    node_id: u64,
+    paths: Vec<matter_interaction::ReadPath>,
+    min_interval: u16,
+    max_interval: u16,
+    /// Re-subscribe if no report arrives by this instant.
+    liveness_deadline: Instant,
+}
+
+/// A scheduled resubscribe attempt, fired by the timer arm when due.
+struct PendingResubscribe {
+    sub_id: SubId,
+    attempt_at: Instant,
+    node_id: u64,
+    paths: Vec<matter_interaction::ReadPath>,
+    min_interval: u16,
+    max_interval: u16,
+    retry_count: u32,
+    tx: mpsc::UnboundedSender<SubscriptionEvent>,
 }
 
 /// An in-flight request awaiting its response, keyed in `pending` by
@@ -134,18 +158,26 @@ enum PendingReply {
         total_bytes: usize,
     },
     /// Subscribe handshake: buffer/ack priming reports until `SubscribeResponse`.
+    /// `reply`/`report_rx` are `Some` for an initial subscribe and `None` for a
+    /// resubscribe attempt (the consumer keeps its existing receiver).
     Subscribe {
-        reply: oneshot::Sender<Result<SubEstablished, Error>>,
-        report_tx: mpsc::Sender<SubscriptionEvent>,
-        report_rx: Option<mpsc::Receiver<SubscriptionEvent>>,
+        sub_id: SubId,
+        reply: Option<oneshot::Sender<Result<SubEstablished, Error>>>,
+        report_tx: mpsc::UnboundedSender<SubscriptionEvent>,
+        report_rx: Option<mpsc::UnboundedReceiver<SubscriptionEvent>>,
         priming: ReportReassembler,
+        node_id: u64,
+        paths: Vec<matter_interaction::ReadPath>,
+        min_interval: u16,
+        max_interval: u16,
+        retry_count: u32,
     },
 }
 
 /// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
 /// and the `(session, subscription_id)` key (the `Node` adds the command sender
 /// to build the public [`Subscription`]).
-pub(crate) type SubEstablished = (mpsc::Receiver<SubscriptionEvent>, (SessionId, u32));
+pub(crate) type SubEstablished = (mpsc::UnboundedReceiver<SubscriptionEvent>, SubId);
 
 /// Maximum non-final chunks a single subscription notification may span before
 /// [`ReportReassembler`] drops the partial accumulation. Bounds memory against a
@@ -247,7 +279,7 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
     },
     /// Cancel the subscription identified by its `(session, subscription_id)` key.
-    CancelSubscription { key: (SessionId, u32) },
+    CancelSubscription { key: SubId },
     /// Test/diagnostic: how many live cached sessions exist.
     #[cfg(test)]
     SessionCount { reply: oneshot::Sender<usize> },
@@ -271,14 +303,17 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
     trust: Option<crate::trust::AttestationTrust>,
     admin_vendor_id: u16,
-    /// Active subscriptions, keyed by `(session, subscription_id)`. The
-    /// `subscription_id` is the Matter-assigned id from the device's
-    /// `SubscribeResponse` — steady-state `ReportData` messages carry it in
-    /// the payload (context tag 0), not the original exchange id.
-    subscriptions: HashMap<(SessionId, u32), SubEntry>,
+    /// Active subscriptions, keyed by the stable [`SubId`]. Each entry tracks its
+    /// current device `(session, wire_sub_id)`; steady-state `ReportData` is
+    /// routed by matching those (see [`Self::deliver_report`]).
+    subscriptions: HashMap<SubId, SubEntry>,
     /// In-flight round-trips/reads/subscribe-handshakes, keyed by
     /// `(session, exchange)`. Resolved by [`Self::handle_inbound`].
     pending: HashMap<(SessionId, u16), Pending>,
+    /// Monotonic source of stable [`SubId`]s.
+    next_sub_id: u64,
+    /// Scheduled resubscribe attempts (fired from the timer arm when due).
+    resubscribes: Vec<PendingResubscribe>,
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -303,6 +338,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             admin_vendor_id,
             subscriptions: HashMap::new(),
             pending: HashMap::new(),
+            next_sub_id: 1,
+            resubscribes: Vec::new(),
         }
     }
 
@@ -339,6 +376,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 }
                 () = tokio::time::sleep(sleep_for) => {
                     self.drive_mrp().await;
+                    self.check_liveness();
+                    self.drive_resubscribes().await;
                 }
             }
         }
@@ -385,6 +424,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             Command::CancelSubscription { key } => {
                 self.subscriptions.remove(&key);
+                // Also drop any scheduled resubscribe for this handle. An
+                // in-flight resubscribe attempt (a pending Subscribe) will
+                // re-insert a SubEntry on its response — a benign tiny window
+                // closed by the consumer's next cancel/Drop.
+                self.resubscribes.retain(|pr| pr.sub_id != key);
             }
             #[cfg(test)]
             Command::SessionCount { reply } => {
@@ -527,6 +571,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         )
         .await?;
 
+        // Evict any prior session for this node from the SessionManager so its
+        // dead MRP retransmits stop; we keep only the freshly-established one.
+        if let Some(old) = self.cache.get(&(fabric_id, node_id)) {
+            self.sessions.remove(old.session_id);
+        }
         self.upsert_device(fabric_id, node_id, peer);
         self.cache.insert(
             (fabric_id, node_id),
@@ -830,30 +879,31 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok(())
     }
 
-    /// Deliver a steady-state `ReportData` to its subscription by
-    /// `SubscriptionId`, reassembling chunks, then ack on the report's own
-    /// exchange.
+    /// Deliver a steady-state `ReportData` to its subscription, matched by the
+    /// current `(session, wire_sub_id)`, reassembling chunks and resetting the
+    /// liveness deadline, then ack on the report's own exchange.
     async fn deliver_report(&mut self, session_id: SessionId, exchange_id: u16, payload: &[u8]) {
         let Ok(rd) = matter_interaction::parse_report_data(payload) else {
             return;
         };
-        let Some(sub_id) = rd.subscription_id else {
+        let Some(wire_sub_id) = rd.subscription_id else {
             return; // steady-state reports must carry a subscriptionId
         };
+        let now = Instant::now();
         let forwarded = self
             .subscriptions
-            .get_mut(&(session_id, sub_id))
-            .map(|entry| {
-                (
-                    entry.tx.clone(),
-                    entry.peer,
-                    entry.reassembler.push(payload),
-                )
+            .values_mut()
+            .find(|e| e.session_id == session_id && e.wire_sub_id == wire_sub_id)
+            .map(|e| {
+                e.liveness_deadline = now
+                    + std::time::Duration::from_secs(u64::from(e.max_interval))
+                    + LIVENESS_GRACE;
+                (e.tx.clone(), e.peer, e.reassembler.push(payload))
             });
         if let Some((tx, peer, merged)) = forwarded {
             if let Some(attrs) = merged {
                 for (path, value) in attrs {
-                    let _ = tx.try_send(SubscriptionEvent::Report(AttributeReport { path, value }));
+                    let _ = tx.send(SubscriptionEvent::Report(AttributeReport { path, value }));
                 }
             }
             let _ = self.send_status_ack(session_id, exchange_id, peer).await;
@@ -884,7 +934,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 keep_subscriptions: false,
                 min_interval_floor: min_interval,
                 max_interval_ceiling: max_interval,
-                paths,
+                paths: paths.clone(),
             });
         match self
             .send_request(
@@ -897,7 +947,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .await
         {
             Ok(exchange) => {
-                let (report_tx, report_rx) = mpsc::channel::<SubscriptionEvent>(64);
+                let sub_id = SubId(self.next_sub_id);
+                self.next_sub_id += 1;
+                let (report_tx, report_rx) = mpsc::unbounded_channel::<SubscriptionEvent>();
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -910,10 +962,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         },
                         retried: false,
                         reply: PendingReply::Subscribe {
-                            reply,
+                            sub_id,
+                            reply: Some(reply),
                             report_tx,
                             report_rx: Some(report_rx),
                             priming: ReportReassembler::default(),
+                            node_id,
+                            paths,
+                            min_interval,
+                            max_interval,
+                            retry_count: 0,
                         },
                     },
                 );
@@ -952,7 +1010,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 if let Some(attrs) = priming.push(&payload) {
                     for (path, value) in attrs {
                         let _ = report_tx
-                            .try_send(SubscriptionEvent::Report(AttributeReport { path, value }));
+                            .send(SubscriptionEvent::Report(AttributeReport { path, value }));
                     }
                 }
             }
@@ -961,38 +1019,56 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return;
             };
             let PendingReply::Subscribe {
+                sub_id,
                 reply,
                 report_tx,
                 report_rx,
+                node_id,
+                paths,
+                min_interval,
                 ..
             } = p.reply
             else {
                 return;
             };
-            let Some(rx) = report_rx else {
-                return;
-            };
             match matter_interaction::parse_subscribe_response(&payload) {
                 Ok(resp) => {
-                    let sub_key = (session_id, resp.subscription_id);
+                    // Liveness + the re-request ceiling both use the *negotiated*
+                    // max interval (the device's agreed reporting cadence).
+                    let deadline = Instant::now()
+                        + std::time::Duration::from_secs(u64::from(resp.max_interval))
+                        + LIVENESS_GRACE;
                     self.subscriptions.insert(
-                        sub_key,
+                        sub_id,
                         SubEntry {
                             tx: report_tx.clone(),
                             peer: p.peer,
                             reassembler: ReportReassembler::default(),
+                            session_id,
+                            wire_sub_id: resp.subscription_id,
+                            node_id,
+                            paths,
+                            min_interval,
+                            max_interval: resp.max_interval,
+                            liveness_deadline: deadline,
                         },
                     );
                     // Signal (re-)establishment to the consumer (chip's
                     // OnSubscriptionEstablished). Any priming Reports already
                     // flowed — they precede the SubscribeResponse on the wire.
-                    let _ = report_tx.try_send(SubscriptionEvent::Established {
+                    let _ = report_tx.send(SubscriptionEvent::Established {
                         subscription_id: resp.subscription_id,
                     });
-                    let _ = reply.send(Ok((rx, sub_key)));
+                    // Initial subscribe hands the receiver back; a resubscribe
+                    // (reply/report_rx None) reuses the consumer's existing rx.
+                    if let (Some(reply), Some(rx)) = (reply, report_rx) {
+                        let _ = reply.send(Ok((rx, sub_id)));
+                    }
                 }
                 Err(e) => {
-                    let _ = reply.send(Err(Error::InteractionModel(e)));
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(Error::InteractionModel(e)));
+                    }
                 }
             }
         }
@@ -1058,6 +1134,33 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let Some(p) = self.pending.remove(&(session_id, exchange_id)) else {
             return;
         };
+        // A resubscribe attempt (no oneshot reply) reschedules on the backoff
+        // rather than failing — chip retries forever.
+        if matches!(&p.reply, PendingReply::Subscribe { reply: None, .. }) {
+            if let PendingReply::Subscribe {
+                sub_id,
+                report_tx,
+                node_id,
+                paths,
+                min_interval,
+                max_interval,
+                retry_count,
+                ..
+            } = p.reply
+            {
+                self.reschedule_resubscribe(PendingResubscribe {
+                    sub_id,
+                    attempt_at: Instant::now(),
+                    node_id,
+                    paths,
+                    min_interval,
+                    max_interval,
+                    retry_count,
+                    tx: report_tx,
+                });
+            }
+            return;
+        }
         if !p.retried {
             if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
                 self.cache.remove(&(fabric_id, p.node_id));
@@ -1117,18 +1220,140 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 let _ = reply.send(Err(err));
             }
             PendingReply::Subscribe { reply, .. } => {
-                let _ = reply.send(Err(err));
+                if let Some(reply) = reply {
+                    let _ = reply.send(Err(err));
+                }
             }
         }
+    }
+
+    /// Re-subscribe any subscription whose liveness deadline has passed.
+    fn check_liveness(&mut self) {
+        let now = Instant::now();
+        let stale: Vec<SubId> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, e)| e.liveness_deadline <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stale {
+            self.begin_resubscribe(
+                id,
+                Error::Operational("subscription liveness timeout".into()),
+            );
+        }
+    }
+
+    /// Move a stale subscription into the resubscribe queue: emit `Resubscribing`,
+    /// drop the dead `SubEntry`, and schedule the first attempt (retry 0 ≈ immediate).
+    fn begin_resubscribe(&mut self, sub_id: SubId, cause: Error) {
+        let Some(entry) = self.subscriptions.remove(&sub_id) else {
+            return;
+        };
+        let _ = entry.tx.send(SubscriptionEvent::Resubscribing { cause });
+        let wait = resubscribe_backoff(self.rng.as_ref(), 0);
+        self.resubscribes.push(PendingResubscribe {
+            sub_id,
+            attempt_at: Instant::now() + wait,
+            node_id: entry.node_id,
+            paths: entry.paths,
+            min_interval: entry.min_interval,
+            max_interval: entry.max_interval,
+            retry_count: 0,
+            tx: entry.tx,
+        });
+    }
+
+    /// Fire any due resubscribe attempts.
+    async fn drive_resubscribes(&mut self) {
+        let now = Instant::now();
+        let mut due = Vec::new();
+        let mut i = 0;
+        while i < self.resubscribes.len() {
+            if self.resubscribes[i].attempt_at <= now {
+                due.push(self.resubscribes.swap_remove(i));
+            } else {
+                i += 1;
+            }
+        }
+        for pr in due {
+            self.attempt_resubscribe(pr).await;
+        }
+    }
+
+    /// One resubscribe attempt: connect if needed, send a fresh `SubscribeRequest`,
+    /// and register a pending Subscribe (no oneshot reply) so the central demux
+    /// drives the handshake. On connect/send failure, reschedule with backoff.
+    async fn attempt_resubscribe(&mut self, pr: PendingResubscribe) {
+        let Ok((sid, peer)) = self.session_for(pr.node_id).await else {
+            self.reschedule_resubscribe(pr);
+            return;
+        };
+        let req =
+            matter_interaction::build_subscribe_request(&matter_interaction::SubscribeRequest {
+                keep_subscriptions: false,
+                min_interval_floor: pr.min_interval,
+                max_interval_ceiling: pr.max_interval,
+                paths: pr.paths.clone(),
+            });
+        match self
+            .send_request(
+                sid,
+                peer,
+                OP_SUBSCRIBE_REQUEST,
+                ProtocolId::INTERACTION_MODEL,
+                &req,
+            )
+            .await
+        {
+            Ok(exchange) => {
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id: pr.node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode: OP_SUBSCRIBE_REQUEST,
+                            protocol_id: ProtocolId::INTERACTION_MODEL,
+                            payload: req,
+                        },
+                        // Skip SH.1's reconnect-once — a timeout reschedules on
+                        // the backoff (see `on_pending_timeout`).
+                        retried: true,
+                        reply: PendingReply::Subscribe {
+                            sub_id: pr.sub_id,
+                            reply: None,
+                            report_tx: pr.tx,
+                            report_rx: None,
+                            priming: ReportReassembler::default(),
+                            node_id: pr.node_id,
+                            paths: pr.paths,
+                            min_interval: pr.min_interval,
+                            max_interval: pr.max_interval,
+                            retry_count: pr.retry_count,
+                        },
+                    },
+                );
+            }
+            Err(_) => self.reschedule_resubscribe(pr),
+        }
+    }
+
+    /// Reschedule a failed attempt with the next backoff step (retry forever).
+    fn reschedule_resubscribe(&mut self, mut pr: PendingResubscribe) {
+        pr.retry_count = pr.retry_count.saturating_add(1);
+        let wait = resubscribe_backoff(self.rng.as_ref(), pr.retry_count);
+        pr.attempt_at = Instant::now() + wait;
+        self.resubscribes.push(pr);
     }
 
     /// The peer address for `sid`: from an active subscription, a pending op, or
     /// the session cache.
     fn peer_for_session(&self, sid: SessionId) -> Option<SocketAddr> {
         self.subscriptions
-            .iter()
-            .find(|((s, _), _)| *s == sid)
-            .map(|(_, e)| e.peer)
+            .values()
+            .find(|e| e.session_id == sid)
+            .map(|e| e.peer)
             .or_else(|| {
                 self.pending
                     .iter()
