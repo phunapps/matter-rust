@@ -2059,6 +2059,132 @@ mod tests {
         let _ = tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
     }
 
+    /// Device that answers two subscribe cycles: it establishes (priming report
+    /// then `SubscribeResponse`), goes silent so the controller's liveness fires,
+    /// then answers the controller's auto-resubscribe with a fresh
+    /// `SubscribeResponse` (new wire id) + a re-primed report, then returns.
+    /// Only reacts to `SubscribeRequest`s (opcode 0x03); drains acks/other frames.
+    #[allow(clippy::too_many_lines)] // CASE-handshake boilerplate, as the sibling mocks.
+    async fn run_resubscribe_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        // --- CASE handshake (identical to run_subscription_device) ---
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        // Two subscribe cycles with distinct wire subscription ids.
+        let wire_ids = [0x1111_1111_u32, 0x2222_2222_u32];
+        let mut cycle = 0usize;
+        // The recv loop tolerates a long silent gap (the controller's liveness +
+        // backoff before it resubscribes).
+        loop {
+            let Ok(Ok((wire, _))) =
+                tokio::time::timeout(std::time::Duration::from_secs(30), io.recv_from()).await
+            else {
+                return; // timeout or io error → device is done
+            };
+            if wire.len() >= 3 && wire[1] == 0 && wire[2] == 0 {
+                continue; // unsecured straggler
+            }
+            let Ok(decoded) = sessions.decode_inbound(&wire, Instant::now()) else {
+                continue;
+            };
+            let DecodeInboundOutput::AppMessage {
+                exchange_id,
+                opcode,
+                ..
+            } = decoded
+            else {
+                continue; // ack / duplicate — ignore
+            };
+            if opcode != 0x03 {
+                continue; // only react to SubscribeRequest; drain StatusResponse acks
+            }
+            // Priming report FIRST (wire order: priming precedes SubscribeResponse),
+            // then the SubscribeResponse — both on the request's exchange.
+            let prime = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &prime,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            let sub_resp = build_subscribe_response(wire_ids[cycle.min(1)], 0);
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x04,
+                    ProtocolId::INTERACTION_MODEL,
+                    &sub_resp,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+            cycle += 1;
+            if cycle >= 2 {
+                // Drain a little, then leave (the controller's later liveness
+                // re-subscribe attempts go unanswered — fine, the test cancels).
+                let _ = tokio::time::timeout(std::time::Duration::from_millis(200), io.recv_from())
+                    .await;
+                return;
+            }
+        }
+    }
+
     /// Shared loopback setup: one fabric in the store, a device NOC under its
     /// RCAC, a paired datagram, and a discovery pinned to the device end.
     struct Harness {
@@ -2608,5 +2734,89 @@ mod tests {
 
         device.await.unwrap();
         sub.cancel().await.expect("cancel");
+    }
+
+    /// SH.2b discriminating guard: a subscription that goes silent past its
+    /// liveness deadline (negotiated max interval 0 + `LIVENESS_GRACE`) must be
+    /// transparently re-established — the consumer sees `Resubscribing`, a SECOND
+    /// `Established`, and a re-primed `Report`, all behind the same handle. Takes
+    /// ~`LIVENESS_GRACE` (≈5 s) to trip liveness.
+    #[tokio::test]
+    async fn liveness_timeout_triggers_resubscribe() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_resubscribe_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        // max_interval ceiling 0 → negotiated 0 → liveness ≈ LIVENESS_GRACE.
+        let mut sub = node
+            .subscribe(
+                &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                1,
+                0,
+            )
+            .await
+            .expect("subscribe");
+
+        // Read events until we observe the resubscribe lifecycle (or give up).
+        let mut establishes = 0u32;
+        let mut saw_resubscribing = false;
+        let mut reprimed_after_resub = false;
+        let overall = tokio::time::Instant::now() + std::time::Duration::from_secs(25);
+        // Keep reading until the full resubscribe lifecycle is observed: a second
+        // Established arrives AFTER the re-primed Report (priming precedes the
+        // SubscribeResponse on the wire), so do not stop on the Report alone.
+        while tokio::time::Instant::now() < overall
+            && !(saw_resubscribing && establishes >= 2 && reprimed_after_resub)
+        {
+            match tokio::time::timeout(std::time::Duration::from_secs(15), sub.next()).await {
+                Ok(Some(SubscriptionEvent::Established { .. })) => establishes += 1,
+                Ok(Some(SubscriptionEvent::Resubscribing { .. })) => saw_resubscribing = true,
+                Ok(Some(SubscriptionEvent::Report(_))) => {
+                    if saw_resubscribing {
+                        reprimed_after_resub = true;
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        assert!(saw_resubscribing, "expected a Resubscribing event");
+        assert!(
+            establishes >= 2,
+            "expected a second Established after resubscribe, saw {establishes}"
+        );
+        assert!(
+            reprimed_after_resub,
+            "expected a re-primed Report after the resubscribe"
+        );
+
+        let _ = device.await;
+        sub.cancel().await.ok();
     }
 }
