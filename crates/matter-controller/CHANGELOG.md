@@ -56,6 +56,12 @@ semantic versioning once published.
   `secured_read`; steady-state subscription reports are routed to their consumer
   by **SubscriptionId**. MRP is driven centrally for all sessions, preserving the
   reconnect-once policy via a transparent reconnect-and-retry on timeout.
+- **SH.2a** — `Node::subscribe`'s stream now yields a `SubscriptionEvent` enum
+  (`Report(AttributeReport)` / `Established { subscription_id }` /
+  `Resubscribing { cause }`) instead of a bare `AttributeReport`, and emits an
+  `Established` event on each successful `SubscribeResponse`. (Breaking change to
+  the M8.5 `Subscription::next()` signature; nothing published yet.)
+  `Resubscribing` is wired by SH.2b (auto-resubscribe).
 
 ### Fixed
 - **SH.1** — Subscription reports are no longer dropped when a round-trip

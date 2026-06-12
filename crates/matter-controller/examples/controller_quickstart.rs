@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use matter_controller::{
     AttestationTrust, CommandPath, FabricConfig, FileStore, MatterController, MatterTime, ReadPath,
-    Value,
+    SubscriptionEvent, Value,
 };
 
 /// `OnOff` cluster on a typical plug/light endpoint.
@@ -155,7 +155,15 @@ async fn main() -> Result<()> {
     println!("subscribed; printing up to 3 reports (Ctrl-C to stop)…");
     for _ in 0..3 {
         match sub.next().await {
-            Some(change) => println!("  report: {:?} = {:?}", change.path, change.value),
+            Some(SubscriptionEvent::Report(change)) => {
+                println!("  report: {:?} = {:?}", change.path, change.value);
+            }
+            Some(SubscriptionEvent::Established { subscription_id }) => {
+                println!("  subscription established (id 0x{subscription_id:08X})");
+            }
+            Some(SubscriptionEvent::Resubscribing { cause }) => {
+                println!("  resubscribing: {cause}");
+            }
             None => break,
         }
     }
