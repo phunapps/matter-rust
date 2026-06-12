@@ -73,6 +73,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --all-features --no-deps
 
+  embedded:
+    name: embedded (matter-transport no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Sans-IO core: no tokio, no mdns-sd. Mirrors the embedded build the
+      # crate docs advertise; keeps the always-compiled docs free of
+      # intra-doc links to feature-gated items.
+      - run: cargo build -p matter-transport --no-default-features
+      - run: cargo test -p matter-transport --no-default-features
+      - name: rustdoc (no-default-features)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc -p matter-transport --no-default-features --no-deps
+      # Each default feature on its own — catches a feature that only
+      # compiles when its sibling is also enabled.
+      - run: cargo build -p matter-transport --no-default-features --features tokio
+      - run: cargo build -p matter-transport --no-default-features --features mdns-sd
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest

@@ -2,9 +2,12 @@
 //!
 //! The trait is what embedded callers implement to plug their own mDNS
 //! stack into the rest of `matter-transport`. The default mdns-sd
-//! adapter ([`crate::mdns_sd_discovery::MdnsSdDiscovery`]) implements
-//! it over `mdns_sd::ServiceDaemon` when the `mdns-sd` Cargo feature is
-//! enabled.
+//! adapter implements it over `mdns_sd::ServiceDaemon` when the
+//! `mdns-sd` Cargo feature is enabled.
+#![cfg_attr(
+    feature = "mdns-sd",
+    doc = "See [`crate::mdns_sd_discovery::MdnsSdDiscovery`] for that adapter."
+)]
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -70,24 +73,38 @@ pub struct QueryHandle(pub u64);
 
 /// What an mDNS adapter must do to publish and query Matter services.
 ///
-/// Implemented by [`crate::mdns_sd_discovery::MdnsSdDiscovery`] for the
-/// default daemon when the `mdns-sd` feature is enabled.
+/// The default daemon adapter is available when the `mdns-sd` feature
+/// is enabled.
+#[cfg_attr(
+    feature = "mdns-sd",
+    doc = "It is implemented by [`crate::mdns_sd_discovery::MdnsSdDiscovery`]."
+)]
 pub trait Discovery {
     /// Publish a Matter service. Idempotent — re-publishing the same
     /// `(instance_name, kind)` replaces the prior advertisement.
     ///
     /// # Errors
-    /// - [`Error::Mdns`] on daemon failure (feature-gated).
-    ///
-    /// [`Error::Mdns`]: crate::error::Error::Mdns
+    #[cfg_attr(
+        feature = "mdns-sd",
+        doc = "- [`Error::Mdns`](crate::error::Error::Mdns) on daemon failure."
+    )]
+    #[cfg_attr(
+        not(feature = "mdns-sd"),
+        doc = "- `Error::Mdns` on daemon failure (only present with the `mdns-sd` feature)."
+    )]
     fn publish(&mut self, service: &MatterService) -> Result<()>;
 
     /// Withdraw a previously-published service.
     ///
     /// # Errors
-    /// - [`Error::Mdns`] on daemon failure.
-    ///
-    /// [`Error::Mdns`]: crate::error::Error::Mdns
+    #[cfg_attr(
+        feature = "mdns-sd",
+        doc = "- [`Error::Mdns`](crate::error::Error::Mdns) on daemon failure."
+    )]
+    #[cfg_attr(
+        not(feature = "mdns-sd"),
+        doc = "- `Error::Mdns` on daemon failure (only present with the `mdns-sd` feature)."
+    )]
     fn unpublish(&mut self, instance_name: &str, kind: ServiceKind) -> Result<()>;
 
     /// Begin a query for services of `kind`. Returns a handle the
@@ -95,9 +112,14 @@ pub trait Discovery {
     /// arrive.
     ///
     /// # Errors
-    /// - [`Error::Mdns`] on daemon failure.
-    ///
-    /// [`Error::Mdns`]: crate::error::Error::Mdns
+    #[cfg_attr(
+        feature = "mdns-sd",
+        doc = "- [`Error::Mdns`](crate::error::Error::Mdns) on daemon failure."
+    )]
+    #[cfg_attr(
+        not(feature = "mdns-sd"),
+        doc = "- `Error::Mdns` on daemon failure (only present with the `mdns-sd` feature)."
+    )]
     fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle>;
 
     /// Stop an in-progress query. Idempotent — calling on a stopped or

@@ -15,10 +15,22 @@
 //!
 //! # Cargo features
 //!
-//! - `tokio` (default): enables [`tokio_udp::TokioUdpTransport`] and the
-//!   `Error::Io` variant.
-//! - `mdns-sd` (default): enables [`mdns_sd_discovery::MdnsSdDiscovery`]
-//!   and the `Error::Mdns` variant.
+#![cfg_attr(
+    feature = "tokio",
+    doc = "- `tokio` (default): enables [`tokio_udp::TokioUdpTransport`] and the `Error::Io` variant."
+)]
+#![cfg_attr(
+    not(feature = "tokio"),
+    doc = "- `tokio` (default): enables `tokio_udp::TokioUdpTransport` and the `Error::Io` variant."
+)]
+#![cfg_attr(
+    feature = "mdns-sd",
+    doc = "- `mdns-sd` (default): enables [`mdns_sd_discovery::MdnsSdDiscovery`] and the `Error::Mdns` variant."
+)]
+#![cfg_attr(
+    not(feature = "mdns-sd"),
+    doc = "- `mdns-sd` (default): enables `mdns_sd_discovery::MdnsSdDiscovery` and the `Error::Mdns` variant."
+)]
 //!
 //! Embedded callers disable defaults: the sans-IO core (framing, MRP,
 //! protocol header, session manager, `Transport`/`Discovery` traits)

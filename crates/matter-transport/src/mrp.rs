@@ -17,7 +17,7 @@ use crate::protocol_header::{encode_protocol_header, ExchangeFlags, ProtocolHead
 /// Upper bound on the number of live exchanges tracked per session.
 ///
 /// `exchange_id` is a peer-controlled 16-bit field, so without a bound a
-/// long-lived session could accumulate one [`ExchangeState`] per distinct id
+/// long-lived session could accumulate one `ExchangeState` per distinct id
 /// (up to 65 536) and never reclaim them — a slow memory-exhaustion denial
 /// of service. An
 /// exchange is reclaimed automatically once it goes idle (no pending

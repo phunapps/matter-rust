@@ -2,9 +2,12 @@
 //!
 //! The trait is what embedded callers (Embassy, smoltcp, custom HAL)
 //! implement to plug their own UDP stack into the rest of
-//! `matter-transport`. The default Tokio adapter
-//! ([`crate::tokio_udp::TokioUdpTransport`]) implements it over
+//! `matter-transport`. The default Tokio adapter implements it over
 //! `tokio::net::UdpSocket` when the `tokio` Cargo feature is enabled.
+#![cfg_attr(
+    feature = "tokio",
+    doc = "See [`crate::tokio_udp::TokioUdpTransport`] for that adapter."
+)]
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -45,19 +48,28 @@ impl PeerAddress {
 
 /// What a network adapter must do to ship Matter packets.
 ///
-/// Implemented by [`crate::tokio_udp::TokioUdpTransport`] for the
-/// default async runtime when the `tokio` feature is enabled.
-/// Embedded callers implement against their own UDP stack.
+/// The default adapter for the Tokio async runtime is available when the
+/// `tokio` feature is enabled. Embedded callers implement against their
+/// own UDP stack.
+#[cfg_attr(
+    feature = "tokio",
+    doc = "It is implemented by [`crate::tokio_udp::TokioUdpTransport`]."
+)]
 pub trait Transport {
     /// Ship one packet to `peer`. Non-blocking — on a real socket may
-    /// fail with [`Error::Io`] containing `WouldBlock` if the OS send
+    /// fail with an I/O error containing `WouldBlock` if the OS send
     /// queue is full; callers retry after the socket reports writable.
-    ///
-    /// [`Error::Io`]: crate::error::Error::Io
     ///
     /// # Errors
     ///
-    /// - [`Error::Io`] on any socket-level failure (feature-gated).
+    #[cfg_attr(
+        feature = "tokio",
+        doc = "- [`Error::Io`](crate::error::Error::Io) on any socket-level failure."
+    )]
+    #[cfg_attr(
+        not(feature = "tokio"),
+        doc = "- `Error::Io` on any socket-level failure (only present with the `tokio` feature)."
+    )]
     fn send(&mut self, peer: PeerAddress, packet: Vec<u8>) -> Result<()>;
 
     /// Poll for an inbound packet. Returns `Ok(None)` if no packet is
@@ -68,9 +80,14 @@ pub trait Transport {
     ///
     /// # Errors
     ///
-    /// - [`Error::Io`] on any socket-level failure (feature-gated).
-    ///
-    /// [`Error::Io`]: crate::error::Error::Io
+    #[cfg_attr(
+        feature = "tokio",
+        doc = "- [`Error::Io`](crate::error::Error::Io) on any socket-level failure."
+    )]
+    #[cfg_attr(
+        not(feature = "tokio"),
+        doc = "- `Error::Io` on any socket-level failure (only present with the `tokio` feature)."
+    )]
     fn poll_recv(&mut self) -> Result<Option<(PeerAddress, Vec<u8>)>>;
 
     /// Local socket address (what the adapter bound to). Useful for
