@@ -149,7 +149,10 @@ enum State {
         trusted_roots: TrustedRoots,
         sigma2_bytes: Vec<u8>,
         sigma1_bytes: Vec<u8>,
-        shared_secret: [u8; 32],
+        /// Raw ECDH shared secret. Wrapped in `Zeroizing` so the bytes are
+        /// wiped on every drop path of this state (including an abandoned
+        /// handshake), matching the initiator side.
+        shared_secret: Zeroizing<[u8; 32]>,
         initiator_random: [u8; 32],
         responder_random: [u8; 32],
         initiator_eph_pub: [u8; 65],
@@ -164,7 +167,10 @@ enum State {
         trusted_roots: TrustedRoots,
         sigma1_bytes: Vec<u8>,
         sigma2_bytes: Vec<u8>,
-        shared_secret: [u8; 32],
+        /// Raw ECDH shared secret. Wrapped in `Zeroizing` so the bytes are
+        /// wiped on every drop path of this state (including an abandoned
+        /// handshake), matching the initiator side.
+        shared_secret: Zeroizing<[u8; 32]>,
         /// Stored for M4.2 resumption (`Sigma1_Resume` MIC needs this).
         /// Not read in the new-session path implemented here.
         #[allow(dead_code)]
@@ -513,7 +519,9 @@ impl CaseResponder {
                     &responder_random,
                     responder_session_id,
                 ) {
-                    Ok(v) => v,
+                    // Wrap the raw ECDH secret in `Zeroizing` immediately so it
+                    // is wiped on every drop path once parked in `State`.
+                    Ok((bytes, secret)) => (bytes, Zeroizing::new(secret)),
                     Err(e) => {
                         self.state = State::AwaitingSigma1 {
                             credentials,
@@ -773,6 +781,9 @@ impl CaseResponder {
                     &responder_random,
                     responder_session_id,
                 )?;
+                // Wrap the raw ECDH secret in `Zeroizing` immediately so it is
+                // wiped on every drop path once parked in `State`.
+                let shared_secret = Zeroizing::new(shared_secret);
 
                 // Transition to the standard new-session state, identical to
                 // what handle_sigma1 (new-session path) would have produced.
@@ -1041,8 +1052,9 @@ fn build_sigma2(
     sigma2_salt.extend_from_slice(eph_pub);
     sigma2_salt.extend_from_slice(&h_sigma1);
     // `s2k` is a derived secret key; wrap in `Zeroizing` so it is wiped from
-    // memory when this function returns. (`shared_secret` is intentionally
-    // returned to the state machine and zeroized when that state is dropped.)
+    // memory when this function returns. (`shared_secret` is returned to the
+    // state machine, which wraps it in `Zeroizing` so it is wiped on every drop
+    // path of the parked state.)
     let mut s2k = Zeroizing::new([0u8; AEAD_KEY_LEN]);
     hkdf_derive(&shared_secret, &sigma2_salt, HKDF_INFO_SIGMA2, &mut *s2k)?;
 
