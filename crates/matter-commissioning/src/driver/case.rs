@@ -7,7 +7,7 @@
 
 use std::net::SocketAddr;
 
-use matter_cert::TrustedRoots;
+use matter_cert::{MatterTime, TrustedRoots};
 use matter_crypto::{CaseCredentials, CaseInitiator};
 use matter_transport::{Discovery, ServiceKind, SessionId, SessionManager, SessionRole};
 
@@ -106,12 +106,21 @@ const CASE_EXCHANGE_ID: u16 = 1;
 /// identity; `peer_node_id`/`peer_fabric_id` identify the device. Resumption is
 /// not used (a fresh handshake every time); that is M8.
 ///
+/// `now` is the wall-clock instant against which the device's operational
+/// certificate chain is checked for temporal validity during Sigma2. The caller
+/// (controller layer) supplies the real time; this crate never reads the system
+/// clock.
+///
 /// # Errors
 ///
 /// - [`DriverError::Crypto`] if a SIGMA step fails (peer chain/signature
 ///   invalid, key mismatch, etc.).
 /// - [`DriverError::Io`] / [`DriverError::Transport`] / [`DriverError::Timeout`]
 ///   on datagram, framing, or reply-timeout failure.
+// 8 params: the CASE setup (transport, sessions, peer, credentials, roots,
+// node/fabric ids) plus the injected validation clock; bundling them would
+// obscure the call site.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_case<T: AsyncDatagram>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -120,6 +129,7 @@ pub async fn run_case<T: AsyncDatagram>(
     trusted_roots: TrustedRoots,
     peer_node_id: u64,
     peer_fabric_id: u64,
+    now: MatterTime,
 ) -> Result<SessionId, DriverError> {
     let local = sessions.allocate_session_id();
     let mut initiator = CaseInitiator::new(
@@ -128,6 +138,7 @@ pub async fn run_case<T: AsyncDatagram>(
         peer_node_id,
         peer_fabric_id,
         local.0,
+        now,
     )?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — same unsecured-header requirements as PASE apply to SIGMA.
@@ -445,6 +456,7 @@ mod tests {
             ctrl_roots,
             T_RESPONDER_NODE,
             T_FABRIC_ID,
+            MatterTime::from_unix_secs(2_000_000_000),
         );
 
         let (ctrl_result, ()) = tokio::join!(controller, device);
@@ -477,7 +489,13 @@ mod tests {
         let mut sessions = SessionManager::new();
 
         let device = async {
-            let mut responder = CaseResponder::new(resp_creds, resp_roots, 0x00D2).unwrap();
+            let mut responder = CaseResponder::new(
+                resp_creds,
+                resp_roots,
+                0x00D2,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
             let (p, _) = dev_io.recv_from().await.unwrap();
             let m = decode_unsecured(&p).unwrap();
             assert!(matches!(
@@ -538,6 +556,7 @@ mod tests {
             ctrl_roots,
             T_RESPONDER_NODE,
             T_FABRIC_ID,
+            MatterTime::from_unix_secs(2_000_000_000),
         );
 
         let (ctrl_result, dev_out) = tokio::join!(controller, device);

@@ -21,7 +21,7 @@
 //! (big-endian, < curve order). Passing the zero scalar or a value ≥ the
 //! curve order returns `Err(Error::InvalidScalar)`.
 
-use matter_cert::TrustedRoots;
+use matter_cert::{MatterTime, TrustedRoots};
 
 use crate::case::initiator::CaseInitiator;
 use crate::case::responder::CaseResponder;
@@ -204,6 +204,9 @@ pub fn verifier_with_scalar_from_pin(
 /// Used by the matter.js byte-parity tests to replay a captured handshake
 /// with deterministic inputs.
 ///
+/// `now` is the injected validation clock for the peer certificate chain (see
+/// [`CaseInitiator::new`]).
+///
 /// # Errors
 ///
 /// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
@@ -215,6 +218,7 @@ pub fn case_initiator_with_eph_key(
     peer_fabric_id: u64,
     eph_private_key: [u8; 32],
     initiator_random: [u8; 32],
+    now: MatterTime,
 ) -> Result<CaseInitiator> {
     CaseInitiator::new_with_eph_and_random(
         credentials,
@@ -223,6 +227,7 @@ pub fn case_initiator_with_eph_key(
         peer_fabric_id,
         eph_private_key,
         initiator_random,
+        now,
     )
 }
 
@@ -232,10 +237,14 @@ pub fn case_initiator_with_eph_key(
 /// `resumption_id` (tag 6) and `initiator_resume_mic` (tag 7) derived from
 /// `record`. All random inputs are still bypassed.
 ///
+/// `now` is the injected validation clock for the peer certificate chain (see
+/// [`CaseInitiator::new`]).
+///
 /// # Errors
 ///
 /// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
 ///   zero, >= the P-256 curve order, or otherwise not a valid scalar.
+#[allow(clippy::too_many_arguments)]
 pub fn case_initiator_with_resumption_eph_key(
     credentials: CaseCredentials,
     trusted_roots: TrustedRoots,
@@ -244,6 +253,7 @@ pub fn case_initiator_with_resumption_eph_key(
     record: ResumptionRecord,
     eph_private_key: [u8; 32],
     initiator_random: [u8; 32],
+    now: MatterTime,
 ) -> Result<CaseInitiator> {
     CaseInitiator::new_with_resumption_eph_and_random(
         credentials,
@@ -253,6 +263,7 @@ pub fn case_initiator_with_resumption_eph_key(
         record,
         eph_private_key,
         initiator_random,
+        now,
     )
 }
 
@@ -264,6 +275,9 @@ pub fn case_initiator_with_resumption_eph_key(
 /// Used by the matter.js byte-parity tests to replay a captured handshake
 /// with deterministic inputs.
 ///
+/// `now` is the injected validation clock for the initiator certificate chain
+/// (see [`CaseResponder::new`]).
+///
 /// # Errors
 ///
 /// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
@@ -273,12 +287,14 @@ pub fn case_responder_with_eph_key(
     trusted_roots: TrustedRoots,
     eph_private_key: [u8; 32],
     responder_random: [u8; 32],
+    now: MatterTime,
 ) -> Result<CaseResponder> {
     CaseResponder::new_with_eph_and_random(
         credentials,
         trusted_roots,
         eph_private_key,
         responder_random,
+        now,
     )
 }
 

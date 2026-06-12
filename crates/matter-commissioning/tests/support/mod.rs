@@ -2174,6 +2174,11 @@ pub struct MockDeviceCaseSetup {
     /// controller to address the operational session by. Mirrors the `0x00D2`
     /// the `run_case` loopback uses.
     pub responder_session_id: u16,
+    /// Wall-clock instant the responder validates the controller's NOC chain
+    /// at. Must fall within the controller NOC's validity window (the
+    /// commissioner mints it with `not_before = config.now`), so callers set
+    /// this to the same `now` the commissioner uses.
+    pub now: MatterTime,
 }
 
 /// Run the full device side of one commissioning run against `commission()`.
@@ -2457,10 +2462,12 @@ pub async fn run_mock_device(
         credentials,
         trusted_roots,
         responder_session_id,
+        now: case_now,
     } = case_setup;
 
-    let mut responder = CaseResponder::new(credentials, trusted_roots, responder_session_id)
-        .map_err(DriverError::Crypto)?;
+    let mut responder =
+        CaseResponder::new(credentials, trusted_roots, responder_session_id, case_now)
+            .map_err(DriverError::Crypto)?;
     let m = decode_unsecured(&sigma1_packet)?;
     debug_assert_eq!(m.opcode, op::CASE_SIGMA1);
     match responder

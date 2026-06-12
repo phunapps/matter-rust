@@ -182,6 +182,9 @@ fn build_device_case_setup(fabric: &FabricRecord, ipk_epoch_key: [u8; 16]) -> Mo
         credentials,
         trusted_roots,
         responder_session_id: CASE_RESPONDER_SESSION_ID,
+        // Validate the controller's NOC at the same instant the commissioner
+        // mints it (its `not_before`), so the chain is within its window.
+        now: now(),
     }
 }
 

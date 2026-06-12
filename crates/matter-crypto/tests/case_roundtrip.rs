@@ -190,10 +190,16 @@ fn case_roundtrip_new_session() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator construction");
-    let mut responder =
-        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder construction");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder construction");
 
     // --- Sigma1 ---
     let sigma1 = initiator.start().expect("sigma1");
@@ -313,9 +319,16 @@ fn case_roundtrip_wrong_fabric_returns_fabric_mismatch() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).unwrap();
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .unwrap();
 
     // Sigma1: computed dest_id is HMAC(IPK, random || rcacPub || initiatorFabricId || responderNodeId).
     // The responder recomputes using WRONG_FABRIC — so dest_id will mismatch immediately.
@@ -378,10 +391,16 @@ fn drive_new_session_handshake() -> (
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator");
-    let mut responder =
-        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -489,10 +508,16 @@ fn case_resumption_roundtrip_accepted() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         record_for_initiator,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator2 with resumption");
-    let mut responder2 =
-        CaseResponder::new(responder_creds2, trusted_roots2, 0x0002).expect("responder2");
+    let mut responder2 = CaseResponder::new(
+        responder_creds2,
+        trusted_roots2,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder2");
 
     // Step 4: Drive the 2-message resumption handshake.
     let sigma1_r = initiator2.start().expect("sigma1 (resumption)");
@@ -626,10 +651,16 @@ fn case_resumption_declined_falls_back_to_new_session() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         bogus_record,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator with resumption");
-    let mut responder =
-        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -737,10 +768,16 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         initiator_record,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator with resumption");
-    let mut responder =
-        CaseResponder::new(responder_creds, trusted_roots, 0x0002).expect("responder");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder");
 
     let sigma1 = initiator.start().expect("sigma1");
     let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
@@ -799,9 +836,16 @@ fn case_roundtrip_threads_session_ids() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         0x00C1,
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
-    let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x00D2).unwrap();
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x00D2,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .unwrap();
 
     let sigma1 = initiator.start().unwrap();
     let outcome = responder.handle_sigma1(&sigma1).unwrap();
@@ -891,9 +935,10 @@ proptest! {
             responder_node_id,
             TEST_FABRIC_ID,
             0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
         )
         .unwrap();
-        let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).unwrap();
+        let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002, MatterTime::from_unix_secs(2_000_000_000)).unwrap();
 
         let sigma1 = initiator.start().unwrap();
         responder.handle_sigma1(&sigma1).unwrap();
@@ -950,9 +995,10 @@ proptest! {
             RESPONDER_NODE_ID,
             TEST_FABRIC_ID,
             0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
         )
         .unwrap();
-        let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002).unwrap();
+        let mut responder = CaseResponder::new(responder_creds, trusted_roots, 0x0002, MatterTime::from_unix_secs(2_000_000_000)).unwrap();
 
         let sigma1 = initiator.start().unwrap();
         responder.handle_sigma1(&sigma1).unwrap();

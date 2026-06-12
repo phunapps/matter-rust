@@ -607,8 +607,9 @@ async fn operational_phase(
         peer,
         credentials,
         trusted_roots,
-        ASSIGNED_NODE_ID, // peer_node_id = the device
-        FABRIC_ID,        // peer_fabric_id
+        ASSIGNED_NODE_ID,       // peer_node_id = the device
+        FABRIC_ID,              // peer_fabric_id
+        current_matter_time()?, // validate the device NOC at real wall-clock
     )
     .await
     .context("operational CASE handshake (run_case)")?;

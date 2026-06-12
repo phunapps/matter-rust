@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use matter_cert::TrustedRoots;
+use matter_cert::{MatterTime, TrustedRoots};
 use matter_crypto::{derive_compressed_fabric_id, CaseCredentials};
 use matter_transport::{Discovery, MrpEvent, ProtocolId, ServiceKind, SessionId, SessionManager};
 
@@ -449,6 +449,7 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
     credentials: CaseCredentials,
     trusted_roots: TrustedRoots,
     peer_node_id: u64,
+    now: MatterTime,
 ) -> Result<SessionId, DriverError> {
     let compressed =
         derive_compressed_fabric_id(root_public_key, fabric_id).map_err(DriverError::Crypto)?;
@@ -462,6 +463,7 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
         trusted_roots,
         peer_node_id,
         peer_fabric_id,
+        now,
     )
     .await
 }
@@ -588,6 +590,9 @@ where
     let fabric = commissioner_cfg.fabric;
     let commissioner_node_id = commissioner_cfg.commissioner_node_id;
     let ipk_epoch_key = commissioner_cfg.ipk_epoch_key;
+    // Validation clock for the device's operational cert chain during CASE.
+    // Captured here before `commissioner_cfg` is moved into the state machine.
+    let validation_time = commissioner_cfg.now;
     let commissioner_signer_value =
         RingSigner::from_pkcs8(commissioner_pkcs8).map_err(DriverError::Crypto)?;
     // Wrap in Option so we can move it into CaseCredentials exactly once
@@ -722,6 +727,7 @@ where
                     credentials,
                     trusted_roots,
                     peer_node_id,
+                    validation_time,
                 )
                 .await
                 {
@@ -1728,7 +1734,13 @@ mod tests {
         // Device side: CaseResponder.
         const OP_SIGMA2: u8 = 0x31;
         let device = async {
-            let mut responder = CaseResponder::new(resp_creds, resp_roots, 0x00D2).unwrap();
+            let mut responder = CaseResponder::new(
+                resp_creds,
+                resp_roots,
+                0x00D2,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
             let (p, _) = dev_io.recv_from().await.unwrap();
             let m = decode_unsecured(&p).unwrap();
             assert!(matches!(
@@ -1790,6 +1802,7 @@ mod tests {
             init_creds,
             ctrl_roots,
             T_RESPONDER_NODE,
+            MatterTime::from_unix_secs(2_000_000_000),
         );
 
         let (ctrl_result, dev_out) = tokio::join!(controller, device);

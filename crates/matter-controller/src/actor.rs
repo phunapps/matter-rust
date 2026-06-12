@@ -560,6 +560,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         )
         .await?;
 
+        // Validate the device's operational cert chain against the real
+        // wall-clock — the crypto layer never reads the system clock itself.
+        let now = current_matter_time()?;
         let sid = matter_commissioning::driver::run_case(
             &self.transport,
             &mut self.sessions,
@@ -568,6 +571,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             roots,
             node_id,
             fabric_id,
+            now,
         )
         .await?;
 
@@ -1668,7 +1672,13 @@ mod tests {
         chunk0: Vec<u8>,
         chunk1: Vec<u8>,
     ) {
-        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
 
         // --- CASE handshake (identical to run_loopback_device) ---
         let (p, _) = io.recv_from().await.unwrap();
@@ -1782,7 +1792,13 @@ mod tests {
         echoes: usize,
         reply_payload: Vec<u8>,
     ) {
-        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
 
         // Sigma1 -> Sigma2
         let (p, _) = io.recv_from().await.unwrap();
@@ -1884,7 +1900,13 @@ mod tests {
         responder_session_id: u16,
         reports: Vec<Vec<u8>>,
     ) {
-        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         // Sigma1 -> Sigma2
         let (p, _) = io.recv_from().await.unwrap();
         let m = decode_unsecured(&p).unwrap();
@@ -1993,7 +2015,13 @@ mod tests {
         roots: TrustedRoots,
         responder_session_id: u16,
     ) {
-        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         // --- CASE handshake (identical to run_subscription_device) ---
         let (p, _) = io.recv_from().await.unwrap();
         let m = decode_unsecured(&p).unwrap();
@@ -2124,7 +2152,13 @@ mod tests {
         roots: TrustedRoots,
         responder_session_id: u16,
     ) {
-        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         // --- CASE handshake (identical to run_subscription_device) ---
         let (p, _) = io.recv_from().await.unwrap();
         let m = decode_unsecured(&p).unwrap();

@@ -15,7 +15,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use matter_cert::{MatterCertificate, TrustAnchor, TrustedRoots};
+use matter_cert::{MatterCertificate, MatterTime, TrustAnchor, TrustedRoots};
 use matter_crypto::{
     test_support::{
         case_initiator_with_eph_key, case_initiator_with_resumption_eph_key,
@@ -375,6 +375,7 @@ fn matter_js_byte_parity_new_session() {
         fx.inputs.fabric_id,
         hex_to_array::<32>(&fx.inputs.initiator_eph_priv),
         hex_to_array::<32>(&fx.inputs.initiator_random),
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
     let mut responder = case_responder_with_eph_key(
@@ -382,6 +383,7 @@ fn matter_js_byte_parity_new_session() {
         roots,
         hex_to_array::<32>(&fx.inputs.responder_eph_priv),
         hex_to_array::<32>(&fx.inputs.responder_random),
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
 
@@ -513,6 +515,7 @@ fn matter_js_byte_parity_resumption_accepted() {
         record.clone(),
         hex_to_array::<32>(&fx.inputs.initiator_eph_priv),
         hex_to_array::<32>(&fx.inputs.initiator_random),
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
     let mut responder = case_responder_with_eph_key(
@@ -520,6 +523,7 @@ fn matter_js_byte_parity_resumption_accepted() {
         roots,
         hex_to_array::<32>(&fx.inputs.responder_eph_priv),
         hex_to_array::<32>(&fx.inputs.responder_random),
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
 
@@ -648,6 +652,7 @@ fn matter_js_byte_parity_resumption_declined() {
         bogus_record,
         hex_to_array::<32>(&fx.inputs.initiator_eph_priv),
         hex_to_array::<32>(&fx.inputs.initiator_random),
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
     let mut responder = case_responder_with_eph_key(
@@ -655,6 +660,7 @@ fn matter_js_byte_parity_resumption_declined() {
         roots,
         hex_to_array::<32>(&fx.inputs.responder_eph_priv),
         hex_to_array::<32>(&fx.inputs.responder_random),
+        MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
 

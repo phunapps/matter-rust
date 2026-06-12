@@ -277,6 +277,11 @@ enum State {
 /// which message the machine is currently waiting to receive.
 pub struct CaseInitiator {
     state: State,
+    /// Wall-clock instant at which inbound peer certificate chains are checked
+    /// for temporal validity (`not_before <= now <= not_after`). Injected at
+    /// construction so this crate never reads the system clock itself — the
+    /// controller layer supplies the real time. See `process_sigma2`.
+    validation_time: MatterTime,
 }
 
 impl CaseInitiator {
@@ -293,6 +298,11 @@ impl CaseInitiator {
     ///
     /// For the resumption path, use [`new_with_resumption`][Self::new_with_resumption].
     ///
+    /// `now` is the wall-clock instant against which the peer's operational
+    /// certificate chain is checked for temporal validity during Sigma2. This
+    /// crate never reads the system clock; the caller (controller layer) must
+    /// supply the real time.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if the OS RNG fails
@@ -303,6 +313,7 @@ impl CaseInitiator {
         peer_node_id: u64,
         peer_fabric_id: u64,
         initiator_session_id: u16,
+        now: MatterTime,
     ) -> Result<Self> {
         let rng = SystemRandom::new();
         Self::new_inner(
@@ -312,6 +323,7 @@ impl CaseInitiator {
             peer_fabric_id,
             initiator_session_id,
             None,
+            now,
             &rng,
         )
     }
@@ -330,6 +342,7 @@ impl CaseInitiator {
         trusted_roots: TrustedRoots,
         peer_node_id: u64,
         peer_fabric_id: u64,
+        now: MatterTime,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         Self::new_inner(
@@ -339,6 +352,7 @@ impl CaseInitiator {
             peer_fabric_id,
             0,
             None,
+            now,
             rng,
         )
     }
@@ -352,6 +366,10 @@ impl CaseInitiator {
     /// [`handle_sigma2_resume`][Self::handle_sigma2_resume]) or fall back to a
     /// regular `Sigma2` (call [`handle_sigma2`][Self::handle_sigma2]).
     ///
+    /// `now` is the wall-clock instant against which the peer's operational
+    /// certificate chain is checked for temporal validity during Sigma2 (used
+    /// only on the non-resumption fallback path). See [`new`][Self::new].
+    ///
     /// # Errors
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if the OS RNG fails.
@@ -361,6 +379,7 @@ impl CaseInitiator {
         peer_node_id: u64,
         peer_fabric_id: u64,
         record: ResumptionRecord,
+        now: MatterTime,
     ) -> Result<Self> {
         let rng = SystemRandom::new();
         Self::new_with_resumption_using_rng(
@@ -369,6 +388,7 @@ impl CaseInitiator {
             peer_node_id,
             peer_fabric_id,
             record,
+            now,
             &rng,
         )
     }
@@ -388,6 +408,7 @@ impl CaseInitiator {
         peer_node_id: u64,
         peer_fabric_id: u64,
         record: ResumptionRecord,
+        now: MatterTime,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         Self::new_inner(
@@ -397,6 +418,7 @@ impl CaseInitiator {
             peer_fabric_id,
             0,
             Some(record),
+            now,
             rng,
         )
     }
@@ -420,6 +442,7 @@ impl CaseInitiator {
         peer_fabric_id: u64,
         eph_private_key: [u8; 32],
         initiator_random: [u8; 32],
+        now: MatterTime,
     ) -> Result<Self> {
         use p256::elliptic_curve::sec1::ToEncodedPoint;
         use p256::NonZeroScalar;
@@ -442,6 +465,7 @@ impl CaseInitiator {
                 initiator_session_id: 0,
                 resumption_record: None,
             },
+            validation_time: now,
         })
     }
 
@@ -457,6 +481,7 @@ impl CaseInitiator {
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
     /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_resumption_eph_and_random(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
@@ -465,6 +490,7 @@ impl CaseInitiator {
         record: ResumptionRecord,
         eph_private_key: [u8; 32],
         initiator_random: [u8; 32],
+        now: MatterTime,
     ) -> Result<Self> {
         use p256::elliptic_curve::sec1::ToEncodedPoint;
         use p256::NonZeroScalar;
@@ -487,6 +513,7 @@ impl CaseInitiator {
                 initiator_session_id: 0,
                 resumption_record: Some(record),
             },
+            validation_time: now,
         })
     }
 
@@ -494,6 +521,7 @@ impl CaseInitiator {
     /// an optional resumption record baked in.
     ///
     /// Called by all four public/crate-internal constructors.
+    #[allow(clippy::too_many_arguments)]
     fn new_inner(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
@@ -501,6 +529,7 @@ impl CaseInitiator {
         peer_fabric_id: u64,
         initiator_session_id: u16,
         resumption_record: Option<ResumptionRecord>,
+        now: MatterTime,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
         let (eph_secret, eph_pub) = generate_ephemeral_keypair(rng)?;
@@ -519,6 +548,7 @@ impl CaseInitiator {
                 initiator_session_id,
                 resumption_record,
             },
+            validation_time: now,
         })
     }
 
@@ -677,6 +707,7 @@ impl CaseInitiator {
     /// - [`Error::SigningFailed`] if our own signing operation fails.
     /// - [`Error::EphemeralKeyGenerationFailed`] on HKDF failure.
     pub fn handle_sigma2(&mut self, bytes: &[u8]) -> Result<()> {
+        let now = self.validation_time;
         let prev = std::mem::replace(&mut self.state, State::Poisoned);
         match prev {
             State::AwaitingSigma2 {
@@ -701,6 +732,7 @@ impl CaseInitiator {
                     &eph_pub,
                     initiator_session_id,
                     &sigma1_bytes,
+                    now,
                 )?;
                 self.state = State::ReadyToSendSigma3 {
                     sigma3_bytes,
@@ -961,6 +993,7 @@ fn process_sigma2(
     eph_pub: &[u8; 65],
     initiator_session_id: u16,
     sigma1_bytes: &[u8],
+    now: MatterTime,
 ) -> Result<(Vec<u8>, CaseSessionKeys, PeerInfo, LocalInfo)> {
     let sigma2 = Sigma2::decode(sigma2_bytes)?;
 
@@ -984,11 +1017,10 @@ fn process_sigma2(
     // Step 4: Parse TBEData2.
     let peer_tbe = decode_tbedata2(&sigma2_decrypted)?;
 
-    // Step 5: Validate peer NOC chain against trusted roots.
-    // Fixed-time stub (Unix 2033-05-18); Task 8 integration test uses real clock.
-    // Set far enough in the future that any cert generated by `cargo xtask capture-case`
-    // will have a not_before in the past relative to this value.
-    let now = MatterTime::from_unix_secs(2_000_000_000);
+    // Step 5: Validate peer NOC chain against trusted roots at the injected
+    // wall-clock instant (`not_before <= now <= not_after`). The clock is
+    // supplied by the caller via the constructor; this crate never reads the
+    // system clock.
     let chain_certs: Vec<MatterCertificate> = match &peer_tbe.peer_icac {
         Some(icac) => vec![peer_tbe.peer_noc.clone(), icac.clone()],
         None => vec![peer_tbe.peer_noc.clone()],
@@ -1215,7 +1247,15 @@ mod tests {
     #[test]
     fn new_succeeds_with_valid_credentials() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let _initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let _initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
     }
 
     // ─── start() ──────────────────────────────────────────────────────────
@@ -1225,8 +1265,15 @@ mod tests {
     #[test]
     fn start_returns_sigma1_bytes() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let bytes = initiator.start().unwrap();
         assert!(!bytes.is_empty(), "Sigma1 bytes must be non-empty");
         assert_eq!(bytes[0], 0x15, "anonymous structure must start with 0x15");
@@ -1236,8 +1283,15 @@ mod tests {
     #[test]
     fn expected_inbound_after_start_is_sigma2() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let _ = initiator.start().unwrap();
         assert_eq!(initiator.expected_inbound(), Some(CaseMessageKind::Sigma2));
     }
@@ -1247,8 +1301,15 @@ mod tests {
     fn start_produces_valid_sigma1() {
         use crate::case::messages::Sigma1;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let bytes = initiator.start().unwrap();
         // Must decode without error.
         let decoded = Sigma1::decode(&bytes).unwrap();
@@ -1267,7 +1328,15 @@ mod tests {
     #[test]
     fn finish_before_complete_returns_handshake_incomplete() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         assert!(matches!(
             initiator.finish(),
             Err(Error::HandshakeIncomplete)
@@ -1278,7 +1347,15 @@ mod tests {
     #[test]
     fn finish_after_start_returns_handshake_incomplete() {
         let creds2 = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let fresh = CaseInitiator::new(creds2, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let fresh = CaseInitiator::new(
+            creds2,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         // The initiator is in AwaitingStart — finish() must fail.
         assert!(matches!(fresh.finish(), Err(Error::HandshakeIncomplete)));
     }
@@ -1291,8 +1368,15 @@ mod tests {
     fn handle_sigma2_before_start_is_rejected() {
         use crate::case::messages::Sigma2;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let dummy_sigma2 = Sigma2 {
             responder_random: [0u8; 32],
             responder_session_id: 1,
@@ -1312,8 +1396,15 @@ mod tests {
     #[test]
     fn next_message_before_handle_sigma2_is_rejected() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let _ = initiator.start().unwrap();
         // Still in AwaitingSigma2; next_message is not valid here.
         assert!(matches!(
@@ -1326,8 +1417,15 @@ mod tests {
     #[test]
     fn double_start_is_rejected() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let _ = initiator.start().unwrap();
         assert!(matches!(
             initiator.start(),
@@ -1341,7 +1439,15 @@ mod tests {
     #[test]
     fn expected_inbound_before_start_is_none() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let initiator = CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         assert_eq!(initiator.expected_inbound(), None);
     }
 
@@ -1390,9 +1496,15 @@ mod tests {
     fn new_with_resumption_succeeds() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
         let record = make_resumption_record([0x01u8; 16], [0x02u8; 16], 0x1234, 0x5678);
-        let _initiator =
-            CaseInitiator::new_with_resumption(creds, empty_roots(), 0x1234, 0x5678, record)
-                .unwrap();
+        let _initiator = CaseInitiator::new_with_resumption(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            record,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
     }
 
     /// When started with a resumption record, `start()` must produce a Sigma1
@@ -1403,9 +1515,15 @@ mod tests {
         use crate::case::messages::Sigma1;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
         let record = make_resumption_record([0x01u8; 16], [0x02u8; 16], 0x1234, 0x5678);
-        let mut initiator =
-            CaseInitiator::new_with_resumption(creds, empty_roots(), 0x1234, 0x5678, record)
-                .unwrap();
+        let mut initiator = CaseInitiator::new_with_resumption(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            record,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let bytes = initiator.start().unwrap();
         let decoded = Sigma1::decode(&bytes).unwrap();
         assert!(
@@ -1434,8 +1552,15 @@ mod tests {
     fn start_without_resumption_omits_sigma1_resume_fields() {
         use crate::case::messages::Sigma1;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let bytes = initiator.start().unwrap();
         let decoded = Sigma1::decode(&bytes).unwrap();
         assert!(
@@ -1476,6 +1601,7 @@ mod tests {
             0x1234,
             0x5678,
             record,
+            MatterTime::from_unix_secs(2_000_000_000),
             &rng,
         )
         .unwrap();
@@ -1542,6 +1668,7 @@ mod tests {
             0x1234,
             0x5678,
             record,
+            MatterTime::from_unix_secs(2_000_000_000),
             &rng,
         )
         .unwrap();
@@ -1579,8 +1706,15 @@ mod tests {
         use crate::case::messages::Sigma2Resume;
 
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let mut initiator =
-            CaseInitiator::new(creds, empty_roots(), 0x1234, 0x5678, 0x0001).unwrap();
+        let mut initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
         let _ = initiator.start().unwrap();
 
         // Build any syntactically valid Sigma2_Resume.
