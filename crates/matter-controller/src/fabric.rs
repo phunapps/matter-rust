@@ -13,7 +13,12 @@ use crate::error::Error;
 use crate::state::{CommissionerIdentity, FabricEntry};
 
 /// Inputs for creating a new fabric.
+///
+/// `#[non_exhaustive]`: future fabric-creation knobs (e.g. an explicit IPK or
+/// an ICAC tier) can be added without a semver break. Construct via
+/// [`FabricConfig::new`] from outside this crate.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FabricConfig {
     /// Matter fabric identifier (spec §6.2.1).
     pub fabric_id: u64,
@@ -23,6 +28,28 @@ pub struct FabricConfig {
     pub commissioner_node_id: u64,
     /// `(not_before, not_after)` validity for the RCAC and commissioner NOC.
     pub validity: (MatterTime, MatterTime),
+}
+
+impl FabricConfig {
+    /// Construct a fabric configuration.
+    ///
+    /// This is the supported construction path now that [`FabricConfig`] is
+    /// `#[non_exhaustive]`; the public fields remain readable/writable in
+    /// place.
+    #[must_use]
+    pub fn new(
+        fabric_id: u64,
+        rcac_id: u64,
+        commissioner_node_id: u64,
+        validity: (MatterTime, MatterTime),
+    ) -> Self {
+        Self {
+            fabric_id,
+            rcac_id,
+            commissioner_node_id,
+            validity,
+        }
+    }
 }
 
 /// Create a fabric: generate the RCAC root key + self-signed RCAC, a fresh
@@ -91,15 +118,31 @@ mod tests {
     use matter_commissioning::SystemNocRng;
 
     fn sample_cfg() -> FabricConfig {
-        FabricConfig {
-            fabric_id: 0xDEAD_BEEF_0000_0001,
-            rcac_id: 1,
-            commissioner_node_id: 0x0000_0000_0000_0001,
-            validity: (
+        FabricConfig::new(
+            0xDEAD_BEEF_0000_0001,
+            1,
+            0x0000_0000_0000_0001,
+            (
                 MatterTime::from_unix_secs(1_700_000_000),
                 MatterTime::NO_EXPIRY,
             ),
-        }
+        )
+    }
+
+    #[test]
+    fn new_constructor_sets_all_fields() {
+        // `FabricConfig` is `#[non_exhaustive]`; `new` is the supported
+        // construction path. Verify it populates every field.
+        let cfg = FabricConfig::new(
+            7,
+            9,
+            3,
+            (MatterTime::from_unix_secs(1), MatterTime::NO_EXPIRY),
+        );
+        assert_eq!(cfg.fabric_id, 7);
+        assert_eq!(cfg.rcac_id, 9);
+        assert_eq!(cfg.commissioner_node_id, 3);
+        assert_eq!(cfg.validity.0, MatterTime::from_unix_secs(1));
     }
 
     #[test]

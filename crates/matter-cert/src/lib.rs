@@ -50,7 +50,7 @@ pub use builder::{Builder, UnsignedCertificate};
 pub use certificate::MatterCertificate;
 pub use chain::{CertificateChain, TrustAnchor, TrustedRoots};
 pub use error::{Error, Result};
-pub use extensions::{BasicConstraints, Extensions, KeyIdentifier, KeyUsage};
+pub use extensions::{BasicConstraints, Extensions, ExtensionsBuilder, KeyIdentifier, KeyUsage};
 pub use name::{DistinguishedName, DnAttribute, DnAttributeValue};
 pub use public_key::PublicKey;
 pub use signature::Signature;

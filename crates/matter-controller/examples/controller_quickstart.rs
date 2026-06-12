@@ -90,15 +90,15 @@ async fn main() -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1_700_000_000, |d| d.as_secs());
         controller
-            .create_fabric(FabricConfig {
-                fabric_id: 1,
-                rcac_id: 1,
-                commissioner_node_id: 1,
-                validity: (
+            .create_fabric(FabricConfig::new(
+                1,
+                1,
+                1,
+                (
                     MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
                     MatterTime::NO_EXPIRY,
                 ),
-            })
+            ))
             .await
             .context("creating fabric")?;
         println!("created a new fabric (stable commissioner identity persisted)");

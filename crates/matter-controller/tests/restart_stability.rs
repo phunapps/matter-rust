@@ -22,19 +22,17 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn commissioner_identity_is_stable_across_restart() {
-    let cfg = FabricConfig {
-        fabric_id: 0x0102_0304_0506_0708,
-        rcac_id: 1,
-        commissioner_node_id: 0x0000_0000_0000_0001,
-        validity: (
+    let cfg = FabricConfig::new(
+        0x0102_0304_0506_0708,
+        1,
+        0x0000_0000_0000_0001,
+        (
             MatterTime::from_unix_secs(1_700_000_000),
             MatterTime::NO_EXPIRY,
         ),
-    };
+    );
     let fabric = create_fabric(&cfg, &SystemNocRng).expect("create_fabric");
-    let original_state = ControllerState {
-        fabrics: vec![fabric],
-    };
+    let original_state = ControllerState::new(vec![fabric]);
 
     // "First boot": serialize and persist.
     let path = temp_path("identity");

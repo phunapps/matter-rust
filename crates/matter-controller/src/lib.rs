@@ -42,12 +42,12 @@
 //!
 //! // One-time: create the fabric (idempotent across restarts — load the
 //! // snapshot instead of re-creating in real apps).
-//! let fabric_id = controller.create_fabric(FabricConfig {
-//!     fabric_id: 1,
-//!     rcac_id: 1,
-//!     commissioner_node_id: 1,
-//!     validity: (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
-//! }).await?;
+//! let fabric_id = controller.create_fabric(FabricConfig::new(
+//!     1,
+//!     1,
+//!     1,
+//!     (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
+//! )).await?;
 //! let _ = fabric_id;
 //!
 //! // Commission a device, then control it.

@@ -46,17 +46,16 @@ fn build_test_rcac() -> (MatterCertificate, RingSigner, TrustedRoots, [u8; 65]) 
     //    The NOC issuer DN must equal this DN for chain validation to succeed.
     let rcac_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
 
-    let extensions = Extensions {
-        basic_constraints: Some(BasicConstraints {
+    let extensions = Extensions::builder()
+        .basic_constraints(Some(BasicConstraints {
             is_ca: true,
             path_len_constraint: Some(1),
-        }),
-        key_usage: Some(KeyUsage::KEY_CERT_SIGN),
-        extended_key_usage: None,
-        subject_key_identifier: Some(KeyIdentifier(TEST_SKI)),
+        }))
+        .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
+        .subject_key_identifier(Some(KeyIdentifier(TEST_SKI)))
         // Self-signed: AKI == SKI.
-        authority_key_identifier: Some(KeyIdentifier(TEST_SKI)),
-    };
+        .authority_key_identifier(Some(KeyIdentifier(TEST_SKI)))
+        .build();
 
     let fields = TestCertFields {
         serial: vec![0x01],
@@ -103,17 +102,16 @@ fn build_test_noc(
     // Issuer DN must match the RCAC subject DN.
     let issuer_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
 
-    let extensions = Extensions {
-        basic_constraints: Some(BasicConstraints {
+    let extensions = Extensions::builder()
+        .basic_constraints(Some(BasicConstraints {
             is_ca: false,
             path_len_constraint: None,
-        }),
-        key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
-        extended_key_usage: None,
-        subject_key_identifier: Some(KeyIdentifier(NOC_SKI)),
+        }))
+        .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
+        .subject_key_identifier(Some(KeyIdentifier(NOC_SKI)))
         // AKI must match the RCAC's SKI to pass the SKI gate.
-        authority_key_identifier: Some(KeyIdentifier(TEST_SKI)),
-    };
+        .authority_key_identifier(Some(KeyIdentifier(TEST_SKI)))
+        .build();
 
     let fields = TestCertFields {
         serial: vec![0x02],

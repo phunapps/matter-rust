@@ -68,16 +68,16 @@ pub fn issue_noc(
             NocError::CertBuild(matter_cert::Error::MissingField(4))
         })?;
 
-    let extensions = Extensions {
-        basic_constraints: Some(BasicConstraints {
+    let extensions = Extensions::builder()
+        .basic_constraints(Some(BasicConstraints {
             is_ca: false,
             path_len_constraint: None,
-        }),
-        key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
-        extended_key_usage: Some(vec![EKU_CLIENT_AUTH, EKU_SERVER_AUTH]),
-        subject_key_identifier: Some(KeyIdentifier(ski_arr)),
-        authority_key_identifier: Some(root_ski),
-    };
+        }))
+        .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
+        .extended_key_usage(Some(vec![EKU_CLIENT_AUTH, EKU_SERVER_AUTH]))
+        .subject_key_identifier(Some(KeyIdentifier(ski_arr)))
+        .authority_key_identifier(Some(root_ski))
+        .build();
 
     // Serial: 19 random bytes (matter.js convention; pinned by M6.3.3
     // byte-parity).

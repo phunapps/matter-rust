@@ -10,7 +10,12 @@ use matter_crypto::{RingSigner, Signer};
 use crate::error::Error;
 
 /// A device commissioned onto a fabric.
+///
+/// `#[non_exhaustive]`: persisted record whose shape may grow (e.g. CAT tags,
+/// typed resumption state); marking it keeps such additions non-breaking. Only
+/// constructed inside `matter-controller`.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct DeviceEntry {
     /// The device's operational node ID on this fabric.
     pub node_id: u64,
@@ -48,7 +53,11 @@ impl std::fmt::Debug for DeviceEntry {
 /// Minted **once** when the fabric is created (see
 /// [`crate::fabric::create_fabric`]) and reused for every CASE handshake,
 /// replacing M6.6.4's per-call NOC minting.
+///
+/// `#[non_exhaustive]`: persisted identity record that may grow; marking it
+/// keeps additions non-breaking. Only constructed inside `matter-controller`.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct CommissionerIdentity {
     /// The commissioner's stable node ID on this fabric.
     pub node_id: u64,
@@ -70,7 +79,12 @@ impl std::fmt::Debug for CommissionerIdentity {
 
 /// One fabric the controller administers: trust root, IPK, the
 /// commissioner identity, and the devices commissioned onto it.
+///
+/// `#[non_exhaustive]`: persisted record that may gain fields (e.g. an ICAC
+/// tier, fabric label); marking it keeps such additions non-breaking. Only
+/// constructed inside `matter-controller`.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct FabricEntry {
     /// Matter fabric identifier.
     pub fabric_id: u64,
@@ -141,16 +155,41 @@ impl FabricEntry {
 }
 
 /// The full controller state: all administered fabrics.
+///
+/// `#[non_exhaustive]`: the persisted top-level record may gain fields (e.g.
+/// schema version, controller-wide settings); marking it keeps such additions
+/// non-breaking. Construct via [`ControllerState::new`] or
+/// [`ControllerState::default`] from outside this crate.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ControllerState {
     /// Fabrics this controller administers.
     pub fabrics: Vec<FabricEntry>,
+}
+
+impl ControllerState {
+    /// Construct controller state from a list of administered fabrics.
+    ///
+    /// Supported construction path now that [`ControllerState`] is
+    /// `#[non_exhaustive]`; the `fabrics` field stays directly accessible.
+    #[must_use]
+    pub fn new(fabrics: Vec<FabricEntry>) -> Self {
+        Self { fabrics }
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_state_new_builds_from_fabrics() {
+        // `ControllerState` is `#[non_exhaustive]`; `new` is the supported
+        // construction path. An empty list yields no fabrics.
+        let state = ControllerState::new(Vec::new());
+        assert!(state.fabrics.is_empty());
+    }
 
     #[test]
     fn reconstructed_signer_signs_and_verifies() {

@@ -14,7 +14,14 @@ use crate::error::{Error, Result};
 use crate::tlv_tags as tags;
 
 /// Decoded certificate extensions.
+///
+/// `#[non_exhaustive]`: the spec (§6.5.4) defines exactly five extensions
+/// today, but marking this prevents a future spec-driven addition from being
+/// a semver-breaking change for downstream crates. Outside `matter-cert`,
+/// construct via [`Extensions::builder`] (or [`Extensions::default`]) rather
+/// than a struct literal.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct Extensions {
     /// Basic constraints extension, if present.
     pub basic_constraints: Option<BasicConstraints>,
@@ -26,6 +33,57 @@ pub struct Extensions {
     pub subject_key_identifier: Option<KeyIdentifier>,
     /// Authority key identifier (20-byte SHA-1 of issuer public key), if present.
     pub authority_key_identifier: Option<KeyIdentifier>,
+}
+
+/// Builder for [`Extensions`] (the supported construction path for downstream
+/// crates, since [`Extensions`] is `#[non_exhaustive]`).
+///
+/// Each setter takes the already-wrapped `Option`, mirroring the struct
+/// fields one-to-one; unset fields remain `None`.
+#[derive(Debug, Clone, Default)]
+pub struct ExtensionsBuilder(Extensions);
+
+impl ExtensionsBuilder {
+    /// Set the basic-constraints extension.
+    #[must_use]
+    pub fn basic_constraints(mut self, v: Option<BasicConstraints>) -> Self {
+        self.0.basic_constraints = v;
+        self
+    }
+
+    /// Set the key-usage extension.
+    #[must_use]
+    pub fn key_usage(mut self, v: Option<KeyUsage>) -> Self {
+        self.0.key_usage = v;
+        self
+    }
+
+    /// Set the extended-key-usage OID list.
+    #[must_use]
+    pub fn extended_key_usage(mut self, v: Option<Vec<u32>>) -> Self {
+        self.0.extended_key_usage = v;
+        self
+    }
+
+    /// Set the subject-key-identifier extension.
+    #[must_use]
+    pub fn subject_key_identifier(mut self, v: Option<KeyIdentifier>) -> Self {
+        self.0.subject_key_identifier = v;
+        self
+    }
+
+    /// Set the authority-key-identifier extension.
+    #[must_use]
+    pub fn authority_key_identifier(mut self, v: Option<KeyIdentifier>) -> Self {
+        self.0.authority_key_identifier = v;
+        self
+    }
+
+    /// Finish building.
+    #[must_use]
+    pub fn build(self) -> Extensions {
+        self.0
+    }
 }
 
 /// Basic constraints extension.
@@ -90,6 +148,16 @@ impl KeyIdentifier {
 }
 
 impl Extensions {
+    /// Start building an [`Extensions`] value.
+    ///
+    /// Because [`Extensions`] is `#[non_exhaustive]`, downstream crates cannot
+    /// build it with a struct literal; this builder is the supported path.
+    /// Unset fields default to `None`.
+    #[must_use]
+    pub fn builder() -> ExtensionsBuilder {
+        ExtensionsBuilder(Self::default())
+    }
+
     /// Read the extensions list (positioned BEFORE its `ContainerStart`).
     ///
     /// # Errors

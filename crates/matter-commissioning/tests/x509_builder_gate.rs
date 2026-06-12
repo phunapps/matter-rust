@@ -93,14 +93,13 @@ fn main_chain() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             not_after: at_offset(365 * 10),
             subject: paa_dn.clone(),
             public_key: paa_pk,
-            extensions: Extensions {
-                basic_constraints: Some(BasicConstraints {
+            extensions: Extensions::builder()
+                .basic_constraints(Some(BasicConstraints {
                     is_ca: true,
                     path_len_constraint: Some(1),
-                }),
-                key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
-                ..Default::default()
-            },
+                }))
+                .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+                .build(),
             signature: placeholder_sig(),
         },
         &paa_pkcs8, // self-signed
@@ -121,14 +120,13 @@ fn main_chain() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             not_after: at_offset(365 * 5),
             subject: pai_dn.clone(),
             public_key: pai_pk,
-            extensions: Extensions {
-                basic_constraints: Some(BasicConstraints {
+            extensions: Extensions::builder()
+                .basic_constraints(Some(BasicConstraints {
                     is_ca: true,
                     path_len_constraint: Some(0),
-                }),
-                key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
-                ..Default::default()
-            },
+                }))
+                .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+                .build(),
             signature: placeholder_sig(),
         },
         &paa_pkcs8, // signed by PAA
@@ -150,15 +148,14 @@ fn main_chain() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
             not_after: at_offset(365),
             subject: dac_dn,
             public_key: dac_pk,
-            extensions: Extensions {
-                basic_constraints: Some(BasicConstraints {
+            extensions: Extensions::builder()
+                .basic_constraints(Some(BasicConstraints {
                     is_ca: false,
                     path_len_constraint: None,
-                }),
-                key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
-                extended_key_usage: Some(vec![EKU_CLIENT_AUTH]),
-                ..Default::default()
-            },
+                }))
+                .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
+                .extended_key_usage(Some(vec![EKU_CLIENT_AUTH]))
+                .build(),
             signature: placeholder_sig(),
         },
         &pai_pkcs8, // signed by PAI

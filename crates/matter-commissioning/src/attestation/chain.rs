@@ -415,14 +415,13 @@ mod tests {
                 not_after: MatterTime::from_unix_secs(at_unix.saturating_add(3650 * 86_400)),
                 subject: paa_dn.clone(),
                 public_key: paa_signer.public_key().clone(),
-                extensions: Extensions {
-                    basic_constraints: Some(BasicConstraints {
+                extensions: Extensions::builder()
+                    .basic_constraints(Some(BasicConstraints {
                         is_ca: true,
                         path_len_constraint: Some(1),
-                    }),
-                    key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
-                    ..Default::default()
-                },
+                    }))
+                    .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+                    .build(),
                 signature: Signature::new([0u8; 64]),
             },
             &paa_pkcs8,
@@ -443,14 +442,13 @@ mod tests {
                 not_after: MatterTime::from_unix_secs(at_unix.saturating_add(1825 * 86_400)),
                 subject: pai_dn.clone(),
                 public_key: pai_signer.public_key().clone(),
-                extensions: Extensions {
-                    basic_constraints: Some(BasicConstraints {
+                extensions: Extensions::builder()
+                    .basic_constraints(Some(BasicConstraints {
                         is_ca: true,
                         path_len_constraint: Some(0),
-                    }),
-                    key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
-                    ..Default::default()
-                },
+                    }))
+                    .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+                    .build(),
                 signature: Signature::new([0u8; 64]),
             },
             &paa_pkcs8,
@@ -472,15 +470,14 @@ mod tests {
                 not_after: MatterTime::from_unix_secs(at_unix.saturating_add(365 * 86_400)),
                 subject: dac_dn,
                 public_key: dac_signer.public_key().clone(),
-                extensions: Extensions {
-                    basic_constraints: Some(BasicConstraints {
+                extensions: Extensions::builder()
+                    .basic_constraints(Some(BasicConstraints {
                         is_ca: false,
                         path_len_constraint: None,
-                    }),
-                    key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
-                    extended_key_usage: Some(vec![EKU_CLIENT_AUTH]),
-                    ..Default::default()
-                },
+                    }))
+                    .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
+                    .extended_key_usage(Some(vec![EKU_CLIENT_AUTH]))
+                    .build(),
                 signature: Signature::new([0u8; 64]),
             },
             &pai_pkcs8,

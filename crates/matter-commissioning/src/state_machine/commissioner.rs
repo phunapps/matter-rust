@@ -1776,13 +1776,14 @@ mod tests {
                 MatterTime::NO_EXPIRY,
             )
             .public_key(PublicKey::new(key_bytes).expect("valid sec1 prefix"))
-            .extensions(Extensions {
-                basic_constraints: Some(BasicConstraints {
-                    is_ca: false,
-                    path_len_constraint: None,
-                }),
-                ..Default::default()
-            })
+            .extensions(
+                Extensions::builder()
+                    .basic_constraints(Some(BasicConstraints {
+                        is_ca: false,
+                        path_len_constraint: None,
+                    }))
+                    .build(),
+            )
             .build_unsigned()
             .expect("builder")
             .assemble([0u8; 64]);
@@ -1852,13 +1853,14 @@ mod tests {
                 MatterTime::NO_EXPIRY,
             )
             .public_key(PublicKey::new(key_bytes).expect("valid sec1 prefix"))
-            .extensions(Extensions {
-                basic_constraints: Some(BasicConstraints {
-                    is_ca: false,
-                    path_len_constraint: None,
-                }),
-                ..Default::default()
-            })
+            .extensions(
+                Extensions::builder()
+                    .basic_constraints(Some(BasicConstraints {
+                        is_ca: false,
+                        path_len_constraint: None,
+                    }))
+                    .build(),
+            )
             .build_unsigned()
             .expect("builder")
             .assemble([0u8; 64]);

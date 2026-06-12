@@ -15,7 +15,12 @@ use crate::error::Result;
 ///
 /// Matter Core Spec §5.4 + §4.3.1 define three DNS-SD service types
 /// the controller side interacts with.
+///
+/// `#[non_exhaustive]`: the spec may define further service types (and we may
+/// surface group/border-router records later); marking this avoids a semver
+/// break. Downstream `match`es must include a `_` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ServiceKind {
     /// `_matterc._udp` — devices in commissioning mode.
     Commissionable,

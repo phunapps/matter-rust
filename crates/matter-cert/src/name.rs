@@ -93,7 +93,12 @@ pub enum DnAttribute {
 }
 
 /// The wire-typed value carried inside a [`DnAttribute::Other`].
+///
+/// `#[non_exhaustive]`: TLV admits value types beyond the three surfaced here
+/// (e.g. signed integers, booleans); marking this lets a future variant be
+/// added without a semver break. Downstream `match`es must include a `_` arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DnAttributeValue {
     /// A UTF-8 string value.
     Utf8(String),

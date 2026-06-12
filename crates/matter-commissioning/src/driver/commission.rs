@@ -1593,16 +1593,15 @@ mod tests {
             let (rcac_signer, _) = RingSigner::generate().unwrap();
             let rcac_pub = *rcac_signer.public_key().as_bytes();
             let rcac_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
-            let ext = Extensions {
-                basic_constraints: Some(BasicConstraints {
+            let ext = Extensions::builder()
+                .basic_constraints(Some(BasicConstraints {
                     is_ca: true,
                     path_len_constraint: Some(1),
-                }),
-                key_usage: Some(KeyUsage::KEY_CERT_SIGN),
-                extended_key_usage: None,
-                subject_key_identifier: Some(KeyIdentifier(T_RCAC_SKI)),
-                authority_key_identifier: Some(KeyIdentifier(T_RCAC_SKI)),
-            };
+                }))
+                .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
+                .subject_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
+                .authority_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
+                .build();
             let fields = TestCertFields {
                 serial: vec![0x01],
                 issuer: rcac_dn.clone(),
@@ -1634,16 +1633,15 @@ mod tests {
                 DnAttribute::NodeId(node_id),
             ]);
             let issuer = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
-            let ext = Extensions {
-                basic_constraints: Some(BasicConstraints {
+            let ext = Extensions::builder()
+                .basic_constraints(Some(BasicConstraints {
                     is_ca: false,
                     path_len_constraint: None,
-                }),
-                key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
-                extended_key_usage: None,
-                subject_key_identifier: Some(KeyIdentifier(T_NOC_SKI)),
-                authority_key_identifier: Some(KeyIdentifier(T_RCAC_SKI)),
-            };
+                }))
+                .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
+                .subject_key_identifier(Some(KeyIdentifier(T_NOC_SKI)))
+                .authority_key_identifier(Some(KeyIdentifier(T_RCAC_SKI)))
+                .build();
             let fields = TestCertFields {
                 serial: vec![0x02],
                 issuer,

@@ -1208,13 +1208,12 @@ mod tests {
             DnAttribute::NodeId(node_id),
         ]);
         let issuer = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
-        let extensions = Extensions {
-            basic_constraints: Some(BasicConstraints {
+        let extensions = Extensions::builder()
+            .basic_constraints(Some(BasicConstraints {
                 is_ca: false,
                 path_len_constraint: None,
-            }),
-            ..Default::default()
-        };
+            }))
+            .build();
         build_unsigned(TestCertFields {
             serial: vec![1],
             issuer,

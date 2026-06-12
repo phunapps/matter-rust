@@ -105,22 +105,21 @@ impl FabricRecord {
         serial[0] &= 0x7F;
 
         let rcac_subject = DistinguishedName::new(vec![DnAttribute::RcacId(rcac_id)]);
-        let rcac_extensions = Extensions {
-            basic_constraints: Some(BasicConstraints {
+        let rcac_extensions = Extensions::builder()
+            .basic_constraints(Some(BasicConstraints {
                 is_ca: true,
                 path_len_constraint: Some(1),
-            }),
-            key_usage: Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN),
-            extended_key_usage: None,
-            subject_key_identifier: Some(ski_id),
+            }))
+            .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+            .subject_key_identifier(Some(ski_id))
             // Self-signed root: AKI = SKI. RFC 5280 §4.2.1.1 would allow
             // omission, but Matter (spec §6.5.11.3) makes the extension
             // MANDATORY on every Matter cert — matter.js's
             // TlvRootCertificate rejects an RCAC without it, and real
             // devices answer AddTrustedRootCertificate with IM status 0x85
             // INVALID_COMMAND (observed: Tapo P110M, M6.6.5 validation).
-            authority_key_identifier: Some(ski_id),
-        };
+            .authority_key_identifier(Some(ski_id))
+            .build();
 
         let unsigned = MatterCertificate::builder()
             .serial(serial)

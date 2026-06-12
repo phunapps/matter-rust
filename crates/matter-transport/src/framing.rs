@@ -78,7 +78,12 @@ pub struct NodeId(pub u64);
 
 /// Destination address: either a unicast 64-bit Node ID or a 16-bit
 /// Group ID.
+///
+/// `#[non_exhaustive]`: the `DSIZ` field reserves a `0b11` encoding the spec
+/// may later define; marking this lets a future variant land without a semver
+/// break. Downstream `match`es must include a `_` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DestNodeId {
     /// Unicast — `DSIZ = 0b01`.
     Node(NodeId),

@@ -94,16 +94,15 @@ pub(crate) fn leaf_template(public_key: PublicKey) -> TestCertFields {
         not_before: MatterTime::from_unix_secs(1_700_000_000),
         not_after: MatterTime::from_unix_secs(1_800_000_000),
         public_key,
-        extensions: Extensions {
-            basic_constraints: Some(BasicConstraints {
+        extensions: Extensions::builder()
+            .basic_constraints(Some(BasicConstraints {
                 is_ca: false,
                 path_len_constraint: None,
-            }),
-            key_usage: Some(KeyUsage::DIGITAL_SIGNATURE),
-            extended_key_usage: None,
-            subject_key_identifier: Some(KeyIdentifier([0x01; 20])),
-            authority_key_identifier: Some(KeyIdentifier([0x02; 20])),
-        },
+            }))
+            .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
+            .subject_key_identifier(Some(KeyIdentifier([0x01; 20])))
+            .authority_key_identifier(Some(KeyIdentifier([0x02; 20])))
+            .build(),
         signature: Signature::new([0u8; 64]),
     }
 }
@@ -113,16 +112,15 @@ pub(crate) fn leaf_template(public_key: PublicKey) -> TestCertFields {
 /// The caller must overwrite `issuer` and `subject` before signing.
 pub(crate) fn ca_template(public_key: PublicKey, path_len: Option<u8>) -> TestCertFields {
     TestCertFields {
-        extensions: Extensions {
-            basic_constraints: Some(BasicConstraints {
+        extensions: Extensions::builder()
+            .basic_constraints(Some(BasicConstraints {
                 is_ca: true,
                 path_len_constraint: path_len,
-            }),
-            key_usage: Some(KeyUsage::KEY_CERT_SIGN),
-            extended_key_usage: None,
-            subject_key_identifier: Some(KeyIdentifier([0x02; 20])),
-            authority_key_identifier: Some(KeyIdentifier([0x03; 20])),
-        },
+            }))
+            .key_usage(Some(KeyUsage::KEY_CERT_SIGN))
+            .subject_key_identifier(Some(KeyIdentifier([0x02; 20])))
+            .authority_key_identifier(Some(KeyIdentifier([0x03; 20])))
+            .build(),
         subject: ca_dn("test-ca"),
         ..leaf_template(public_key)
     }
