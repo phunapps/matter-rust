@@ -167,6 +167,28 @@ pub enum Error {
         /// Index of the cert whose path-length constraint was violated.
         cert_index: u8,
     },
+
+    /// A non-leaf (CA) certificate lacked the `keyCertSign` `KeyUsage` bit.
+    ///
+    /// RFC 5280 §4.2.1.3 and Matter §6.5.5 require any certificate that
+    /// signs other certificates to carry the `keyCertSign` `KeyUsage` bit
+    /// (and a `KeyUsage` extension at all). A cert asserting `is_ca = true`
+    /// but lacking `KeyUsage::KEY_CERT_SIGN` (or with no `KeyUsage` extension)
+    /// is not a valid signing CA and is rejected here.
+    #[error("CA certificate lacks the keyCertSign KeyUsage bit (cert_index={cert_index})")]
+    MissingKeyCertSign {
+        /// Index of the offending CA cert in the chain (always > 0).
+        cert_index: u8,
+    },
+
+    /// The end-entity leaf certificate asserted `basic_constraints.is_ca = true`.
+    ///
+    /// RFC 5280 forbids an end-entity (leaf) certificate from asserting the
+    /// CA bit. A leaf at chain index 0 with an explicit `is_ca = true` is a
+    /// profile violation and is rejected. An absent `basic_constraints`
+    /// extension on the leaf is permitted (it is not a violation).
+    #[error("end-entity leaf certificate asserts is_ca=true (cert_index=0)")]
+    LeafIsCa,
 }
 
 /// `Result<T, Error>` for convenience.

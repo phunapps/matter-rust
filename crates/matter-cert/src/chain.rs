@@ -158,6 +158,9 @@ impl<'a> CertificateChain<'a> {
     /// failed; for per-cert failures the variant carries `cert_index`
     /// (0 = leaf). [`Error::UntrustedRoot`] is returned for empty chains,
     /// no matching anchor, or anchor signature failure.
+    /// [`Error::MissingKeyCertSign`] is returned when a non-leaf CA cert
+    /// lacks the `keyCertSign` `KeyUsage` bit, and [`Error::LeafIsCa`] when
+    /// the end-entity leaf asserts `basic_constraints.is_ca = true`.
     pub fn validate(&self, roots: &TrustedRoots, at: MatterTime) -> Result<()> {
         if self.certs.is_empty() {
             return Err(Error::UntrustedRoot);
@@ -186,7 +189,7 @@ impl<'a> CertificateChain<'a> {
                 });
             }
 
-            // ---- CA bit (above the leaf) ----
+            // ---- CA bit + keyCertSign (above the leaf) ----
             if i > 0 {
                 let is_ca = cert
                     .extensions()
@@ -195,6 +198,30 @@ impl<'a> CertificateChain<'a> {
                     .is_some_and(|bc| bc.is_ca);
                 if !is_ca {
                     return Err(Error::NotACa { cert_index: i_u8 });
+                }
+                // RFC 5280 §4.2.1.3 / Matter §6.5.5: a cert that signs other
+                // certs MUST carry a KeyUsage extension asserting keyCertSign.
+                // An absent KeyUsage, or one without the bit, is not a valid
+                // signing CA.
+                let has_key_cert_sign = cert
+                    .extensions()
+                    .key_usage
+                    .is_some_and(|ku| ku.contains(crate::extensions::KeyUsage::KEY_CERT_SIGN));
+                if !has_key_cert_sign {
+                    return Err(Error::MissingKeyCertSign { cert_index: i_u8 });
+                }
+            } else {
+                // ---- Leaf (index 0): must NOT assert the CA bit ----
+                // RFC 5280 forbids an end-entity cert from asserting is_ca.
+                // An absent basic_constraints extension is permitted; only an
+                // explicit is_ca = true is a violation.
+                let leaf_is_ca = cert
+                    .extensions()
+                    .basic_constraints
+                    .as_ref()
+                    .is_some_and(|bc| bc.is_ca);
+                if leaf_is_ca {
+                    return Err(Error::LeafIsCa);
                 }
             }
 

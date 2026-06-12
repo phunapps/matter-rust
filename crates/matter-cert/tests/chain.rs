@@ -10,7 +10,7 @@ mod common;
 
 use matter_cert::{
     BasicConstraints, CertificateChain, DistinguishedName, DnAttribute, Error, KeyIdentifier,
-    MatterCertificate, MatterTime, Signature, TrustAnchor, TrustedRoots,
+    KeyUsage, MatterCertificate, MatterTime, Signature, TrustAnchor, TrustedRoots,
 };
 
 // ------- helpers ---------------------------------------------------------
@@ -210,6 +210,177 @@ fn non_ca_intermediate_returns_not_a_ca_at_index_1() {
         .validate(&roots, MatterTime::from_unix_secs(1_750_000_000))
         .unwrap_err();
     assert!(matches!(err, Error::NotACa { cert_index: 1 }));
+}
+
+#[test]
+fn ca_without_key_cert_sign_returns_missing_key_cert_sign_at_index_1() {
+    // ICA with is_ca = true but NO keyCertSign bit (key_usage = None).
+    // RFC 5280 §4.2.1.3 / Matter §6.5.5: a signing CA must carry keyCertSign.
+    let rng = ring::rand::SystemRandom::new();
+    let root_key = common::TestKey::generate(&rng);
+    let ica_key = common::TestKey::generate(&rng);
+    let leaf_key = common::TestKey::generate(&rng);
+
+    let root_dn = common::ca_dn("test-root");
+    let ica_dn = common::ca_dn("test-ica");
+
+    let mut ica_fields = common::ca_template(ica_key.public_key.clone(), None);
+    // is_ca stays true (from ca_template); strip the keyCertSign bit.
+    ica_fields.extensions.key_usage = None;
+    ica_fields.subject = ica_dn.clone();
+    ica_fields.issuer = root_dn.clone();
+    let ica = common::build_signed_cert(ica_fields, &root_key);
+
+    let mut leaf_fields = common::leaf_template(leaf_key.public_key.clone());
+    leaf_fields.issuer = ica_dn;
+    let leaf = common::build_signed_cert(leaf_fields, &ica_key);
+
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_raw(root_dn, root_key.public_key, None));
+
+    let chain_certs = vec![leaf, ica];
+    let chain = CertificateChain::new(&chain_certs);
+    let err = chain
+        .validate(&roots, MatterTime::from_unix_secs(1_750_000_000))
+        .unwrap_err();
+    assert!(matches!(err, Error::MissingKeyCertSign { cert_index: 1 }));
+}
+
+#[test]
+fn ca_with_key_usage_but_no_key_cert_sign_is_rejected() {
+    // ICA with is_ca = true and a KeyUsage extension present, but the
+    // keyCertSign bit is absent (only CRL_SIGN set). Still rejected.
+    let rng = ring::rand::SystemRandom::new();
+    let root_key = common::TestKey::generate(&rng);
+    let ica_key = common::TestKey::generate(&rng);
+    let leaf_key = common::TestKey::generate(&rng);
+
+    let root_dn = common::ca_dn("test-root");
+    let ica_dn = common::ca_dn("test-ica");
+
+    let mut ica_fields = common::ca_template(ica_key.public_key.clone(), None);
+    ica_fields.extensions.key_usage = Some(KeyUsage::CRL_SIGN);
+    ica_fields.subject = ica_dn.clone();
+    ica_fields.issuer = root_dn.clone();
+    let ica = common::build_signed_cert(ica_fields, &root_key);
+
+    let mut leaf_fields = common::leaf_template(leaf_key.public_key.clone());
+    leaf_fields.issuer = ica_dn;
+    let leaf = common::build_signed_cert(leaf_fields, &ica_key);
+
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_raw(root_dn, root_key.public_key, None));
+
+    let chain_certs = vec![leaf, ica];
+    let chain = CertificateChain::new(&chain_certs);
+    let err = chain
+        .validate(&roots, MatterTime::from_unix_secs(1_750_000_000))
+        .unwrap_err();
+    assert!(matches!(err, Error::MissingKeyCertSign { cert_index: 1 }));
+}
+
+#[test]
+fn ca_with_key_cert_sign_is_accepted() {
+    // Normal valid path: ICA with is_ca = true AND keyCertSign present.
+    // ca_template already sets KeyUsage::KEY_CERT_SIGN.
+    let rng = ring::rand::SystemRandom::new();
+    let root_key = common::TestKey::generate(&rng);
+    let ica_key = common::TestKey::generate(&rng);
+    let leaf_key = common::TestKey::generate(&rng);
+
+    let root_dn = common::ca_dn("test-root");
+    let ica_dn = common::ca_dn("test-ica");
+
+    let mut ica_fields = common::ca_template(ica_key.public_key.clone(), None);
+    assert!(ica_fields
+        .extensions
+        .key_usage
+        .is_some_and(|ku| ku.contains(KeyUsage::KEY_CERT_SIGN)));
+    ica_fields.subject = ica_dn.clone();
+    ica_fields.issuer = root_dn.clone();
+    let ica = common::build_signed_cert(ica_fields, &root_key);
+
+    let mut leaf_fields = common::leaf_template(leaf_key.public_key.clone());
+    leaf_fields.issuer = ica_dn;
+    let leaf = common::build_signed_cert(leaf_fields, &ica_key);
+
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_raw(root_dn, root_key.public_key, None));
+
+    let chain_certs = vec![leaf, ica];
+    let chain = CertificateChain::new(&chain_certs);
+    chain
+        .validate(&roots, MatterTime::from_unix_secs(1_750_000_000))
+        .expect("CA with keyCertSign must validate");
+}
+
+#[test]
+fn leaf_asserting_is_ca_true_is_rejected() {
+    // End-entity leaf at index 0 with basic_constraints.is_ca = true.
+    // RFC 5280 forbids this; must be rejected with Error::LeafIsCa.
+    let rng = ring::rand::SystemRandom::new();
+    let root_key = common::TestKey::generate(&rng);
+    let ica_key = common::TestKey::generate(&rng);
+    let leaf_key = common::TestKey::generate(&rng);
+
+    let root_dn = common::ca_dn("test-root");
+    let ica_dn = common::ca_dn("test-ica");
+
+    let mut ica_fields = common::ca_template(ica_key.public_key.clone(), None);
+    ica_fields.subject = ica_dn.clone();
+    ica_fields.issuer = root_dn.clone();
+    let ica = common::build_signed_cert(ica_fields, &root_key);
+
+    let mut leaf_fields = common::leaf_template(leaf_key.public_key.clone());
+    leaf_fields.issuer = ica_dn;
+    // Force the leaf to (illegally) assert the CA bit.
+    leaf_fields.extensions.basic_constraints = Some(BasicConstraints {
+        is_ca: true,
+        path_len_constraint: None,
+    });
+    let leaf = common::build_signed_cert(leaf_fields, &ica_key);
+
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_raw(root_dn, root_key.public_key, None));
+
+    let chain_certs = vec![leaf, ica];
+    let chain = CertificateChain::new(&chain_certs);
+    let err = chain
+        .validate(&roots, MatterTime::from_unix_secs(1_750_000_000))
+        .unwrap_err();
+    assert!(matches!(err, Error::LeafIsCa));
+}
+
+#[test]
+fn leaf_without_basic_constraints_is_accepted() {
+    // A leaf with NO basic_constraints extension is permitted (absent is
+    // not a violation; only an explicit is_ca=true is).
+    let rng = ring::rand::SystemRandom::new();
+    let root_key = common::TestKey::generate(&rng);
+    let ica_key = common::TestKey::generate(&rng);
+    let leaf_key = common::TestKey::generate(&rng);
+
+    let root_dn = common::ca_dn("test-root");
+    let ica_dn = common::ca_dn("test-ica");
+
+    let mut ica_fields = common::ca_template(ica_key.public_key.clone(), None);
+    ica_fields.subject = ica_dn.clone();
+    ica_fields.issuer = root_dn.clone();
+    let ica = common::build_signed_cert(ica_fields, &root_key);
+
+    let mut leaf_fields = common::leaf_template(leaf_key.public_key.clone());
+    leaf_fields.issuer = ica_dn;
+    leaf_fields.extensions.basic_constraints = None;
+    let leaf = common::build_signed_cert(leaf_fields, &ica_key);
+
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_raw(root_dn, root_key.public_key, None));
+
+    let chain_certs = vec![leaf, ica];
+    let chain = CertificateChain::new(&chain_certs);
+    chain
+        .validate(&roots, MatterTime::from_unix_secs(1_750_000_000))
+        .expect("leaf without basic_constraints must validate");
 }
 
 #[test]
