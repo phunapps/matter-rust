@@ -573,8 +573,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
         // Evict any prior session for this node from the SessionManager so its
         // dead MRP retransmits stop; we keep only the freshly-established one.
-        if let Some(old) = self.cache.get(&(fabric_id, node_id)) {
-            self.sessions.remove(old.session_id);
+        let old_session = self.cache.get(&(fabric_id, node_id)).map(|c| c.session_id);
+        if let Some(old) = old_session {
+            self.sessions.remove(old);
         }
         self.upsert_device(fabric_id, node_id, peer);
         self.cache.insert(
@@ -584,7 +585,31 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 peer,
             },
         );
+        // Any subscription still on the now-replaced session is stranded (its
+        // reports arrive on a session we just evicted). Proactively resubscribe
+        // it onto the fresh session instead of waiting for its liveness deadline,
+        // so a round-trip reconnect transparently re-establishes the subscription
+        // too.
+        if let Some(old) = old_session {
+            self.resubscribe_stranded(old);
+        }
         Ok((sid, peer))
+    }
+
+    /// Resubscribe every subscription still bound to `old_session` — its reports
+    /// would otherwise be lost (that session was just evicted) until its own
+    /// liveness deadline fires. A subscription mid-resubscribe is not in
+    /// `subscriptions`, so it is not re-triggered here.
+    fn resubscribe_stranded(&mut self, old_session: SessionId) {
+        let stranded: Vec<SubId> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, e)| e.session_id == old_session)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in stranded {
+            self.begin_resubscribe(id, Error::Operational("session replaced".into()));
+        }
     }
 
     /// Record/refresh the device's last-known address in persisted state.
@@ -2845,5 +2870,61 @@ mod tests {
 
         let _ = device.await;
         sub.cancel().await.ok();
+    }
+
+    /// A reconnect that replaces a node's session must proactively resubscribe
+    /// any subscription stranded on the old session (and leave subscriptions on
+    /// other sessions untouched), rather than waiting for their liveness deadline.
+    #[test]
+    fn resubscribe_stranded_moves_only_subs_on_the_replaced_session() {
+        let (io, _peer) = InMemoryDatagram::pair();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(matter_commissioning::SystemNocRng),
+            ControllerState { fabrics: vec![] },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        let peer: SocketAddr = "127.0.0.1:5540".parse().unwrap();
+        let mk = |tx, session_id| SubEntry {
+            tx,
+            peer,
+            reassembler: ReportReassembler::default(),
+            session_id,
+            wire_sub_id: 0x1234,
+            node_id: 2,
+            paths: vec![matter_interaction::ReadPath::all()],
+            min_interval: 1,
+            max_interval: 30,
+            liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
+        };
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel::<SubscriptionEvent>();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel::<SubscriptionEvent>();
+        actor.subscriptions.insert(SubId(1), mk(tx_a, SessionId(7)));
+        actor.subscriptions.insert(SubId(2), mk(tx_b, SessionId(9)));
+
+        // Session 7 was replaced → only SubId(1) is resubscribed.
+        actor.resubscribe_stranded(SessionId(7));
+
+        assert!(
+            !actor.subscriptions.contains_key(&SubId(1)),
+            "stranded sub removed from the active map"
+        );
+        assert!(
+            actor.resubscribes.iter().any(|pr| pr.sub_id == SubId(1)),
+            "stranded sub scheduled for resubscribe"
+        );
+        assert!(
+            matches!(rx_a.try_recv(), Ok(SubscriptionEvent::Resubscribing { .. })),
+            "consumer notified with Resubscribing"
+        );
+
+        // SubId(2) on a different session is untouched.
+        assert!(actor.subscriptions.contains_key(&SubId(2)));
+        assert!(!actor.resubscribes.iter().any(|pr| pr.sub_id == SubId(2)));
+        assert!(rx_b.try_recv().is_err(), "unaffected sub gets no event");
     }
 }
