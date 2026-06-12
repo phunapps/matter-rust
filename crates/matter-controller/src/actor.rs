@@ -1056,9 +1056,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     // Signal (re-)establishment to the consumer (chip's
                     // OnSubscriptionEstablished). Any priming Reports already
                     // flowed — they precede the SubscribeResponse on the wire.
-                    let _ = report_tx.send(SubscriptionEvent::Established {
-                        subscription_id: resp.subscription_id,
-                    });
+                    // If the consumer's receiver is already gone (a resubscribe
+                    // raced a cancel/Drop), reap the entry rather than leaving a
+                    // zombie that resubscribes forever.
+                    if report_tx
+                        .send(SubscriptionEvent::Established {
+                            subscription_id: resp.subscription_id,
+                        })
+                        .is_err()
+                    {
+                        self.subscriptions.remove(&sub_id);
+                        return;
+                    }
                     // Initial subscribe hands the receiver back; a resubscribe
                     // (reply/report_rx None) reuses the consumer's existing rx.
                     if let (Some(reply), Some(rx)) = (reply, report_rx) {
@@ -1148,6 +1157,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 ..
             } = p.reply
             {
+                // The attempt timed out — the cached session is likely dead (most
+                // commonly a device reboot, which invalidates CASE). Evict it so
+                // the next attempt forces a fresh handshake; otherwise we would
+                // retry forever on a session the device can no longer decrypt.
+                if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
+                    if let Some(old) = self.cache.remove(&(fabric_id, node_id)) {
+                        self.sessions.remove(old.session_id);
+                    }
+                }
                 self.reschedule_resubscribe(PendingResubscribe {
                     sub_id,
                     attempt_at: Instant::now(),
@@ -1250,7 +1268,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let Some(entry) = self.subscriptions.remove(&sub_id) else {
             return;
         };
-        let _ = entry.tx.send(SubscriptionEvent::Resubscribing { cause });
+        // If the consumer dropped its receiver, reap the subscription instead of
+        // resubscribing forever (closes the zombie-SubEntry window when a cancel
+        // races an in-flight resubscribe, or the Drop cancel was lost).
+        if entry
+            .tx
+            .send(SubscriptionEvent::Resubscribing { cause })
+            .is_err()
+        {
+            return;
+        }
         let wait = resubscribe_backoff(self.rng.as_ref(), 0);
         self.resubscribes.push(PendingResubscribe {
             sub_id,
