@@ -1630,6 +1630,137 @@ mod tests {
         }
     }
 
+    /// Device that establishes a subscription, then — when a round-trip request
+    /// arrives — sends a steady-state `ReportData` (on the subscription
+    /// exchange, carrying the `subscriptionId`) *before* replying to the
+    /// round-trip. This is the concurrent window the pre-SH.1 controller
+    /// dropped the report in (consumed inside `secured_round_trip`'s recv loop).
+    #[allow(clippy::too_many_lines)] // CASE-handshake boilerplate, as the sibling mocks.
+    async fn run_concurrent_sub_roundtrip_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+    ) {
+        let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
+        // --- CASE handshake (identical to run_subscription_device) ---
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        // 1. SubscribeRequest -> SubscribeResponse (subscriptionId 0x1234_5678).
+        let (wire, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id: sub_exchange,
+            opcode,
+            ..
+        } = sessions.decode_inbound(&wire, Instant::now()).unwrap()
+        else {
+            panic!("expected SubscribeRequest");
+        };
+        assert_eq!(opcode, 0x03, "expected SubscribeRequest opcode");
+        let sub_resp = build_subscribe_response(0x1234_5678, 30);
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(sub_exchange),
+                0x04,
+                ProtocolId::INTERACTION_MODEL,
+                &sub_resp,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        // 2. Wait for the round-trip request (opcode 0x02 on a fresh exchange).
+        let (wire, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id: rt_exchange,
+            opcode: rt_opcode,
+            ..
+        } = sessions.decode_inbound(&wire, Instant::now()).unwrap()
+        else {
+            panic!("expected round-trip request");
+        };
+        assert_eq!(rt_opcode, 0x02, "expected the round-trip request opcode");
+
+        // 3. CONCURRENT WINDOW: send a steady-state report on the subscription
+        //    exchange (carrying subscriptionId 0x1234_5678) BEFORE replying to
+        //    the round-trip.
+        let steady = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(sub_exchange),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                &steady,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        // 4. Now reply to the round-trip on its own exchange.
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(rt_exchange),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"pong",
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        // 5. Drain the controller's StatusResponse ack for the steady report.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
+    }
+
     /// Shared loopback setup: one fabric in the store, a device NOC under its
     /// RCAC, a paired datagram, and a discovery pinned to the device end.
     struct Harness {
@@ -2047,6 +2178,77 @@ mod tests {
             matter_codec::Value::Array(vec![matter_codec::Value::Uint(7)]),
             "list-append must reassemble into the full list"
         );
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
+    }
+
+    /// SH.1 discriminating guard for the concurrent-round-trip report-loss
+    /// (M8.5 known limitation #1): a steady-state report that arrives while a
+    /// round-trip is in flight on the same node must be DELIVERED, not dropped.
+    /// Under the pre-SH.1 code the report was consumed inside
+    /// `secured_round_trip`'s owned recv loop and silently discarded (so
+    /// `sub.next()` below would hang); the always-listening demux delivers it.
+    #[tokio::test]
+    async fn concurrent_round_trip_does_not_drop_subscription_report() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_concurrent_sub_roundtrip_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+
+        // 1. Establish the subscription.
+        let mut sub = node
+            .subscribe(
+                &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                1,
+                30,
+            )
+            .await
+            .expect("subscribe");
+
+        // 2. Issue a round-trip; the device sends a steady report DURING it
+        //    (before replying). The round-trip itself must still complete.
+        let resp = node
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("round-trip completes");
+        assert_eq!(resp, b"pong");
+
+        // 3. The steady report sent during the round-trip must have been
+        //    delivered — bounded by a timeout so a regression fails fast.
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), sub.next())
+            .await
+            .expect("steady report must arrive (not dropped by the concurrent round-trip)")
+            .expect("subscription still live");
+        assert_eq!(report.path.endpoint, 1);
+        assert_eq!(report.path.cluster, 0x06);
+        assert_eq!(report.value, matter_codec::Value::Bool(true));
 
         device.await.unwrap();
         sub.cancel().await.expect("cancel");
