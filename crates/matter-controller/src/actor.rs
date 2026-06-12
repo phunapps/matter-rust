@@ -1021,6 +1021,23 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         let mut np = p;
                         np.peer = peer;
                         np.retried = true;
+                        // The retry re-sends the original request, so any
+                        // partial accumulation from the first attempt must be
+                        // discarded (matches the old fresh-`secured_read` retry).
+                        match &mut np.reply {
+                            PendingReply::Read {
+                                chunks,
+                                total_bytes,
+                                ..
+                            } => {
+                                chunks.clear();
+                                *total_bytes = 0;
+                            }
+                            PendingReply::Subscribe { priming, .. } => {
+                                *priming = ReportReassembler::default();
+                            }
+                            PendingReply::RoundTrip(_) => {}
+                        }
                         self.pending.insert((sid, exchange), np);
                         return;
                     }
