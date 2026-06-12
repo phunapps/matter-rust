@@ -298,10 +298,21 @@ mod secret_hygiene_tests {
             attestation_challenge: [0xCC; 16],
         };
         let s = format!("{keys:?}");
-        // The redacting Debug must not leak any key byte pattern.
-        assert!(!s.contains("aa"), "i2r_key bytes leaked: {s}");
-        assert!(!s.contains("bb"), "r2i_key bytes leaked: {s}");
-        assert!(!s.contains("cc"), "attestation bytes leaked: {s}");
+        // The redacting Debug must not leak any key field's bytes. Check for the
+        // exact way each `[u8; 16]` would render if it leaked via a derived Debug
+        // (decimal, e.g. `[170, 170, ...]`) — a precise, collision-free signature.
+        assert!(
+            !s.contains(&format!("{:?}", [0xAAu8; 16])),
+            "i2r_key leaked: {s}"
+        );
+        assert!(
+            !s.contains(&format!("{:?}", [0xBBu8; 16])),
+            "r2i_key leaked: {s}"
+        );
+        assert!(
+            !s.contains(&format!("{:?}", [0xCCu8; 16])),
+            "attestation_challenge leaked: {s}"
+        );
         assert!(s.contains("CaseSessionKeys"));
     }
 
@@ -319,7 +330,10 @@ mod secret_hygiene_tests {
             expires_at: None,
         };
         let s = format!("{record:?}");
-        assert!(!s.contains("dd"), "shared_secret leaked: {s}");
+        assert!(
+            !s.contains(&format!("{:?}", [0xDDu8; 16])),
+            "shared_secret leaked: {s}"
+        );
         assert!(s.contains("<redacted>"));
         assert!(s.contains("ResumptionRecord"));
     }
@@ -338,7 +352,13 @@ mod secret_hygiene_tests {
             rcac_public_key: [0x04; 65],
         };
         let s = format!("{creds:?}");
-        assert!(!s.contains("ee"), "ipk bytes leaked: {s}");
+        // Use the exact decimal rendering of the ipk array, not a 2-char hex
+        // substring: a random signer public key's Debug can incidentally contain
+        // short hex like "ee", which made the old assertion flaky.
+        assert!(
+            !s.contains(&format!("{:?}", [0xEEu8; 16])),
+            "ipk leaked: {s}"
+        );
         assert!(s.contains("<redacted>"));
         assert!(s.contains("CaseCredentials"));
     }
