@@ -37,12 +37,74 @@ struct SubEntry {
     tx: mpsc::Sender<AttributeReport>,
     /// Operational peer address (for `StatusResponse` acks).
     peer: SocketAddr,
+    /// Reassembles a chunked steady-state notification before delivery.
+    reassembler: ReportReassembler,
 }
 
 /// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
 /// and the `(session, exchange)` key (the `Node` adds the command sender to
 /// build the public [`Subscription`]).
 pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u16));
+
+/// Maximum non-final chunks a single subscription notification may span before
+/// [`ReportReassembler`] drops the partial accumulation. Bounds memory against a
+/// device that streams `MoreChunkedMessages=true` without ever finalising; far
+/// above any conformant notification (a handful of chunks at most).
+const MAX_SUB_CHUNKS: usize = 64;
+
+/// Accumulates a chunked `ReportData` *sequence* (one logical notification) and
+/// yields the merged attributes only when the final chunk arrives
+/// (`MoreChunkedMessages` clear). A single-message report flushes immediately.
+/// This is the streaming-subscription analogue of the read path's per-call
+/// [`ReportAccumulator`](matter_interaction::ReportAccumulator) use: it merges
+/// `Replace`/`Append` (`ListIndex`=null) items across a notification's chunks
+/// before delivery, so list attributes and list-appends are not lost.
+///
+/// LIMITATION: there is no on-the-wire marker for a notification boundary, so a
+/// chunked sequence whose final chunk never arrives (a device that dies
+/// mid-notification) leaves a partial accumulation that would merge into the
+/// *next* notification's flush. The [`MAX_SUB_CHUNKS`] cap bounds the memory of
+/// such a runaway sequence; the stale-merge window itself is only fully closed
+/// by the always-listening demux of the subscription-hardening follow-up (which
+/// tracks liveness and re-subscribes). Conformant devices do not start a new
+/// notification before the prior chunked sequence completes, so this requires
+/// non-conformant behaviour. See the `run` KNOWN LIMITATION note.
+#[derive(Default)]
+struct ReportReassembler {
+    acc: matter_interaction::ReportAccumulator,
+    /// Non-final chunks accumulated since the last flush.
+    pending_chunks: usize,
+}
+
+impl ReportReassembler {
+    /// Push one `ReportData` chunk payload. Returns `Some(merged attributes)`
+    /// when this payload is the final chunk (`more_chunked_messages == false`),
+    /// resetting for the next notification; returns `None` while more chunks are
+    /// pending, the payload failed to parse, or the chunk cap was exceeded
+    /// (partial dropped).
+    fn push(
+        &mut self,
+        payload: &[u8],
+    ) -> Option<Vec<(matter_interaction::AttributePath, matter_codec::Value)>> {
+        // Drop a malformed chunk; keep prior accumulation.
+        let Ok(rd) = matter_interaction::parse_report_data(payload) else {
+            return None;
+        };
+        let more = rd.more_chunked_messages;
+        self.acc.push(rd);
+        if !more {
+            self.pending_chunks = 0;
+            return Some(std::mem::take(&mut self.acc).finish());
+        }
+        self.pending_chunks += 1;
+        if self.pending_chunks > MAX_SUB_CHUNKS {
+            // Runaway non-finalising sequence — drop the partial to bound memory.
+            self.acc = matter_interaction::ReportAccumulator::default();
+            self.pending_chunks = 0;
+        }
+        None
+    }
+}
 
 /// Messages the handles send to the owning task. Each carries a `oneshot`
 /// reply sender; a dropped reply sender means the caller gave up.
@@ -153,6 +215,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// subscription stream loses nothing). A full fix routes off-exchange
     /// subscription reports out of `secured_round_trip` (deferred with
     /// auto-resubscribe to the subscription-hardening follow-up).
+    ///
+    /// KNOWN LIMITATION (chunked subscription reports, CR.3): a chunked
+    /// steady-state notification is reassembled per-subscription by
+    /// [`ReportReassembler`], which flushes only on the final chunk. If a device
+    /// abandons a chunked notification mid-sequence (never sends the final
+    /// chunk) and later starts a new one, the stale partial would merge into the
+    /// next flush. Conformant devices do not do this, the chunk count is capped
+    /// (memory bound), and the same subscription-hardening follow-up closes the
+    /// window via liveness tracking + re-subscribe.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
             if self.subscriptions.is_empty() {
@@ -512,7 +583,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Establish a subscription: send a `SubscribeRequest`, absorb the priming
-    /// `ReportData`(s) (forwarding their attributes + acking), and register the
+    /// `ReportData`(s) — reassembling any chunked sequence through a
+    /// [`ReportReassembler`] and acking each chunk — then register the
     /// subscription on the `SubscribeResponse`. Steady-state reports then arrive
     /// via the run loop's `demux_subscription_inbound`.
     async fn handle_subscribe(
@@ -551,6 +623,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .map_err(|e| Error::Operational(format!("subscribe send: {e}")))?;
 
         let (tx, rx) = mpsc::channel::<AttributeReport>(64);
+        let mut priming = ReportReassembler::default();
 
         // Bounded handshake: collect priming reports + ack them until the
         // SubscribeResponse arrives (or MRP gives up).
@@ -577,10 +650,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             if exchange_id == exchange =>
                         {
                             if opcode == OP_REPORT_DATA {
-                                Self::forward_report(&payload, &tx);
+                                // Ack first (solicits the next chunk), then merge.
                                 self.send_status_ack(session_id, exchange_id, peer).await?;
+                                if let Some(merged) = priming.push(&payload) {
+                                    for (path, value) in merged {
+                                        let _ = tx.try_send(AttributeReport { path, value });
+                                    }
+                                }
                             } else if opcode == OP_SUBSCRIBE_RESPONSE {
-                                self.subscriptions.insert((session_id, exchange_id), SubEntry { tx, peer });
+                                self.subscriptions.insert(
+                                    (session_id, exchange_id),
+                                    SubEntry { tx, peer, reassembler: ReportReassembler::default() },
+                                );
                                 return Ok((rx, (session_id, exchange_id)));
                             }
                         }
@@ -602,22 +683,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    /// Parse a `ReportData` payload and push each attribute to the subscription.
-    ///
-    // TODO(CR.3 subscription chunking): this forwards only `rd.attributes`
-    // (Replace-only, single message). A chunked or list-append subscription
-    // report (`more_chunked_messages` / `ReportOp::Append`) loses data here —
-    // it must be reassembled through `matter_interaction::ReportAccumulator`
-    // across the chunk sequence before forwarding. Tracked as the CR.3 / the
-    // subscription-hardening follow-up.
-    fn forward_report(payload: &[u8], tx: &mpsc::Sender<AttributeReport>) {
-        if let Ok(rd) = matter_interaction::parse_report_data(payload) {
-            for (path, value) in rd.attributes {
-                let _ = tx.try_send(AttributeReport { path, value });
             }
         }
     }
@@ -666,10 +731,26 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 ..
             } => {
                 if opcode == OP_REPORT_DATA {
-                    if let Some(entry) = self.subscriptions.get(&(session_id, exchange_id)) {
-                        let tx = entry.tx.clone();
-                        let peer = entry.peer;
-                        Self::forward_report(&payload, &tx);
+                    // Reassemble the (possibly chunked) notification, then ack.
+                    // Extract everything from the entry before the ack await so
+                    // the `&mut self.subscriptions` borrow does not overlap the
+                    // `&mut self.sessions` borrow inside `send_status_ack`.
+                    let forwarded =
+                        self.subscriptions
+                            .get_mut(&(session_id, exchange_id))
+                            .map(|entry| {
+                                (
+                                    entry.tx.clone(),
+                                    entry.peer,
+                                    entry.reassembler.push(&payload),
+                                )
+                            });
+                    if let Some((tx, peer, merged)) = forwarded {
+                        if let Some(attrs) = merged {
+                            for (path, value) in attrs {
+                                let _ = tx.try_send(AttributeReport { path, value });
+                            }
+                        }
                         let _ = self.send_status_ack(session_id, exchange_id, peer).await;
                     }
                 }
@@ -906,6 +987,41 @@ mod tests {
         buf
     }
 
+    /// Build a `ReportData` whose single attribute is a list **append**
+    /// (`AttributePathIB` carries `ListIndex` = null, context tag 5) — the
+    /// list-chunking append form — with the given `MoreChunkedMessages` flag.
+    fn build_report_data_append(
+        ep: u16,
+        cl: u32,
+        at: u32,
+        value: &matter_codec::Value,
+        more: bool,
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.start_list(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), u64::from(ep)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(cl)).unwrap();
+        w.put_uint(Tag::Context(4), u64::from(at)).unwrap();
+        w.put_null(Tag::Context(5)).unwrap(); // ListIndex = null ⇒ append
+        w.end_container().unwrap();
+        w.write_value(Tag::Context(2), value).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        if more {
+            w.put_bool(Tag::Context(3), true).unwrap();
+        }
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
     /// Loopback device that completes CASE, then answers ONE `Node::read` with a
     /// two-chunk `ReportData` sequence: chunk 0 (`MoreChunkedMessages=true`),
     /// then — after the controller's `StatusResponse` ack — the final chunk.
@@ -1132,7 +1248,7 @@ mod tests {
         creds: CaseCredentials,
         roots: TrustedRoots,
         responder_session_id: u16,
-        num_reports: usize,
+        reports: Vec<Vec<u8>>,
     ) {
         let mut responder = CaseResponder::new(creds, roots, responder_session_id).unwrap();
         // Sigma1 -> Sigma2
@@ -1208,17 +1324,18 @@ mod tests {
             .unwrap();
         io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
 
-        // Stream steady-state reports on the same exchange; drain the
-        // controller's StatusResponse acks between sends.
-        let report_blob = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
-        for _ in 0..num_reports {
+        // Stream the given `ReportData` payloads on the same exchange (chunked
+        // notifications just pass multiple payloads, the non-final ones with
+        // MoreChunkedMessages set); drain the controller's StatusResponse acks
+        // between sends.
+        for report in &reports {
             let out = sessions
                 .encode_outbound(
                     sid,
                     Some(exchange_id),
                     0x05,
                     ProtocolId::INTERACTION_MODEL,
-                    &report_blob,
+                    report,
                     MrpFlags { reliable: false },
                     Instant::now(),
                 )
@@ -1483,6 +1600,48 @@ mod tests {
         device.await.unwrap();
     }
 
+    #[test]
+    fn reassembler_flushes_only_on_final_chunk() {
+        let mut r = ReportReassembler::default();
+        // chunk 0: ep0/0x28/0x0002 = 5010, MoreChunkedMessages=true → no flush.
+        let c0 = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(5010), true);
+        assert!(r.push(&c0).is_none(), "non-final chunk must not flush");
+        // chunk 1: ep1/0x06/0x0000 = true, final → flush both.
+        let c1 = build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+        let merged = r.push(&c1).expect("final chunk flushes");
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].0.endpoint, 0);
+        assert_eq!(merged[1].0.endpoint, 1);
+    }
+
+    #[test]
+    fn reassembler_single_message_flushes_immediately() {
+        let mut r = ReportReassembler::default();
+        let only = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
+        let merged = r
+            .push(&only)
+            .expect("single-message report flushes at once");
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.cluster, 0x06);
+    }
+
+    #[test]
+    fn reassembler_drops_runaway_sequence() {
+        // A device that streams MoreChunkedMessages=true forever: past the cap
+        // the partial is dropped, so a later final chunk flushes only itself —
+        // the runaway accumulation does not bleed in.
+        let mut r = ReportReassembler::default();
+        let runaway = build_report_data_chunk(0, 0x28, 0x0002, &matter_codec::Value::Uint(1), true);
+        for _ in 0..=MAX_SUB_CHUNKS {
+            assert!(r.push(&runaway).is_none(), "non-final chunk never flushes");
+        }
+        let last =
+            build_report_data_chunk(1, 0x06, 0x0000, &matter_codec::Value::Bool(true), false);
+        let merged = r.push(&last).expect("final chunk flushes");
+        assert_eq!(merged.len(), 1, "runaway partial was dropped, not merged");
+        assert_eq!(merged[0].0.cluster, 0x06);
+    }
+
     #[tokio::test]
     async fn subscribe_streams_reports_over_loopback() {
         let Harness {
@@ -1502,7 +1661,7 @@ mod tests {
             device_creds,
             device_roots,
             0x00D2,
-            3,
+            vec![build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true)); 3],
         ));
 
         let controller = crate::controller::MatterController::with_components(
@@ -1532,6 +1691,78 @@ mod tests {
             assert_eq!(report.path.cluster, 0x06);
             assert_eq!(report.value, matter_codec::Value::Bool(true));
         }
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
+    }
+
+    // Note: a message-level chunked steady-state notification (whole attributes
+    // spread across chunks) was already delivered correctly by the pre-CR.3
+    // streaming code (each ReportData forwarded + acked), so it is not a
+    // regression guard. The list-append test below is the discriminating guard:
+    // the dropped `ListIndex=null` append is exactly what CR.3 fixes, and it
+    // also exercises the `MoreChunkedMessages=true` accumulate-then-flush path.
+
+    #[tokio::test]
+    async fn subscribe_reassembles_list_append_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // List-chunked notification: chunk 0 replaces Descriptor.PartsList with
+        // an empty list (MoreChunkedMessages=true); the final chunk appends one
+        // element (ListIndex=null). The consumer must receive ONE merged report
+        // whose value is the reassembled list.
+        let chunk0 = build_report_data_chunk(
+            1,
+            0x1d,
+            0x0003,
+            &matter_codec::Value::Array(Vec::new()),
+            true,
+        );
+        let chunk1 =
+            build_report_data_append(1, 0x1d, 0x0003, &matter_codec::Value::Uint(7), false);
+        let device = tokio::spawn(run_subscription_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D6,
+            vec![chunk0, chunk1],
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let mut sub = node
+            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x1d)], 1, 30)
+            .await
+            .expect("subscribe");
+
+        let report = sub.next().await.expect("merged list report");
+        assert_eq!(report.path.endpoint, 1);
+        assert_eq!(report.path.cluster, 0x1d);
+        assert_eq!(report.path.attribute, 0x0003);
+        assert_eq!(
+            report.value,
+            matter_codec::Value::Array(vec![matter_codec::Value::Uint(7)]),
+            "list-append must reassemble into the full list"
+        );
 
         device.await.unwrap();
         sub.cancel().await.expect("cancel");
