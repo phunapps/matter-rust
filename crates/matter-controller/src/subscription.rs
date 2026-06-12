@@ -17,19 +17,42 @@ pub struct AttributeReport {
     pub value: Value,
 }
 
-/// A live attribute subscription. Await reports with [`Self::next`]; dropping
+/// An event from a live [`Subscription`].
+#[derive(Debug)]
+pub enum SubscriptionEvent {
+    /// A reported attribute value (a priming value or a steady-state change).
+    Report(AttributeReport),
+    /// The subscription was (re-)established by the device; carries the
+    /// device-assigned subscription id. Fired after each successful
+    /// `SubscribeResponse`, including after an auto-resubscribe (SH.2b). Priming
+    /// [`Self::Report`]s, if any, precede it (they arrive before the
+    /// `SubscribeResponse` on the wire).
+    Established {
+        /// The device-assigned subscription id.
+        subscription_id: u32,
+    },
+    /// The subscription went stale (liveness timeout or session loss) and is
+    /// being transparently re-established; `cause` is why. Reports resume after
+    /// the next [`Self::Established`]. Emitted by the SH.2b resubscribe engine.
+    Resubscribing {
+        /// Why the subscription is being re-established.
+        cause: Error,
+    },
+}
+
+/// A live attribute subscription. Await events with [`Self::next`]; dropping
 /// the handle cancels the subscription (best-effort).
 pub struct Subscription {
-    pub(crate) rx: mpsc::Receiver<AttributeReport>,
+    pub(crate) rx: mpsc::Receiver<SubscriptionEvent>,
     pub(crate) tx: mpsc::Sender<Command>,
     pub(crate) key: (SessionId, u32),
     pub(crate) cancelled: bool,
 }
 
 impl Subscription {
-    /// Await the next attribute report, or `None` once the subscription has
+    /// Await the next subscription event, or `None` once the subscription has
     /// ended (cancelled, or the controller task stopped).
-    pub async fn next(&mut self) -> Option<AttributeReport> {
+    pub async fn next(&mut self) -> Option<SubscriptionEvent> {
         self.rx.recv().await
     }
 

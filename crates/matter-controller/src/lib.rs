@@ -18,7 +18,8 @@
 //!   over raw [`Value`]s and support **wildcard reads** ([`ReadPath::cluster`],
 //!   [`ReadPath::all`]) for reading every attribute off a device.
 //! - **Subscriptions** — [`Node::subscribe`] returns a [`Subscription`] stream
-//!   of [`AttributeReport`]s (`next().await` + `cancel()`).
+//!   of [`SubscriptionEvent`]s (`Report` / `Established` / `Resubscribing`;
+//!   `next().await` + `cancel()`).
 //!
 //! # Quickstart
 //!
@@ -26,6 +27,7 @@
 //! use std::sync::Arc;
 //! use matter_controller::{
 //!     AttestationTrust, FabricConfig, FileStore, MatterController, MatterTime, ReadPath,
+//!     SubscriptionEvent,
 //! };
 //!
 //! # async fn run() -> Result<(), matter_controller::Error> {
@@ -60,8 +62,10 @@
 //!
 //! // Subscribe to live changes.
 //! let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
-//! while let Some(change) = sub.next().await {
-//!     println!("changed: {:?} = {:?}", change.path, change.value);
+//! while let Some(event) = sub.next().await {
+//!     if let SubscriptionEvent::Report(change) = event {
+//!         println!("changed: {:?} = {:?}", change.path, change.value);
+//!     }
 //! }
 //! # Ok(())
 //! # }
@@ -95,5 +99,5 @@ pub use matter_interaction::{AttributePath, CommandPath, ImStatus, ReadPath};
 pub use node::{InvokeResult, Node};
 pub use state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
 pub use store::{ControllerStore, FileStore, StoreError};
-pub use subscription::{AttributeReport, Subscription};
+pub use subscription::{AttributeReport, Subscription, SubscriptionEvent};
 pub use trust::AttestationTrust;

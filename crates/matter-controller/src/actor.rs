@@ -19,7 +19,7 @@ use crate::fabric::FabricConfig;
 use crate::snapshot;
 use crate::state::ControllerState;
 use crate::store::ControllerStore;
-use crate::subscription::AttributeReport;
+use crate::subscription::{AttributeReport, SubscriptionEvent};
 
 /// IM opcodes used by the subscription flow.
 const OP_SUBSCRIBE_REQUEST: u8 = 0x03;
@@ -40,7 +40,7 @@ const MAX_READ_BYTES: usize = 256 * 1024;
 /// Per-subscription routing state held by the actor.
 struct SubEntry {
     /// Channel to the consumer's [`Subscription`].
-    tx: mpsc::Sender<AttributeReport>,
+    tx: mpsc::Sender<SubscriptionEvent>,
     /// Operational peer address (for `StatusResponse` acks).
     peer: SocketAddr,
     /// Reassembles a chunked steady-state notification before delivery.
@@ -87,8 +87,8 @@ enum PendingReply {
     /// Subscribe handshake: buffer/ack priming reports until `SubscribeResponse`.
     Subscribe {
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
-        report_tx: mpsc::Sender<AttributeReport>,
-        report_rx: Option<mpsc::Receiver<AttributeReport>>,
+        report_tx: mpsc::Sender<SubscriptionEvent>,
+        report_rx: Option<mpsc::Receiver<SubscriptionEvent>>,
         priming: ReportReassembler,
     },
 }
@@ -96,7 +96,7 @@ enum PendingReply {
 /// What `handle_subscribe` returns to `Node::subscribe`: the report receiver
 /// and the `(session, subscription_id)` key (the `Node` adds the command sender
 /// to build the public [`Subscription`]).
-pub(crate) type SubEstablished = (mpsc::Receiver<AttributeReport>, (SessionId, u32));
+pub(crate) type SubEstablished = (mpsc::Receiver<SubscriptionEvent>, (SessionId, u32));
 
 /// Maximum non-final chunks a single subscription notification may span before
 /// [`ReportReassembler`] drops the partial accumulation. Bounds memory against a
@@ -804,7 +804,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if let Some((tx, peer, merged)) = forwarded {
             if let Some(attrs) = merged {
                 for (path, value) in attrs {
-                    let _ = tx.try_send(AttributeReport { path, value });
+                    let _ = tx.try_send(SubscriptionEvent::Report(AttributeReport { path, value }));
                 }
             }
             let _ = self.send_status_ack(session_id, exchange_id, peer).await;
@@ -848,7 +848,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .await
         {
             Ok(exchange) => {
-                let (report_tx, report_rx) = mpsc::channel::<AttributeReport>(64);
+                let (report_tx, report_rx) = mpsc::channel::<SubscriptionEvent>(64);
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
@@ -902,7 +902,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             {
                 if let Some(attrs) = priming.push(&payload) {
                     for (path, value) in attrs {
-                        let _ = report_tx.try_send(AttributeReport { path, value });
+                        let _ = report_tx
+                            .try_send(SubscriptionEvent::Report(AttributeReport { path, value }));
                     }
                 }
             }
@@ -928,11 +929,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.subscriptions.insert(
                         sub_key,
                         SubEntry {
-                            tx: report_tx,
+                            tx: report_tx.clone(),
                             peer: p.peer,
                             reassembler: ReportReassembler::default(),
                         },
                     );
+                    // Signal (re-)establishment to the consumer (chip's
+                    // OnSubscriptionEstablished). Any priming Reports already
+                    // flowed — they precede the SubscribeResponse on the wire.
+                    let _ = report_tx.try_send(SubscriptionEvent::Established {
+                        subscription_id: resp.subscription_id,
+                    });
                     let _ = reply.send(Ok((rx, sub_key)));
                 }
                 Err(e) => {
@@ -2116,9 +2123,18 @@ mod tests {
             .await
             .expect("subscribe");
 
+        // First event: Established (from the SubscribeResponse).
+        match sub.next().await {
+            Some(SubscriptionEvent::Established { subscription_id }) => {
+                assert_eq!(subscription_id, 0x1234_5678);
+            }
+            other => panic!("expected Established, got {other:?}"),
+        }
         // The device streams 3 steady-state reports; the consumer receives them.
         for _ in 0..3 {
-            let report = sub.next().await.expect("subscription report");
+            let Some(SubscriptionEvent::Report(report)) = sub.next().await else {
+                panic!("expected a Report event");
+            };
             assert_eq!(report.path.endpoint, 1);
             assert_eq!(report.path.cluster, 0x06);
             assert_eq!(report.value, matter_codec::Value::Bool(true));
@@ -2186,7 +2202,13 @@ mod tests {
             .await
             .expect("subscribe");
 
-        let report = sub.next().await.expect("merged list report");
+        match sub.next().await {
+            Some(SubscriptionEvent::Established { .. }) => {}
+            other => panic!("expected Established, got {other:?}"),
+        }
+        let Some(SubscriptionEvent::Report(report)) = sub.next().await else {
+            panic!("expected the merged list Report");
+        };
         assert_eq!(report.path.endpoint, 1);
         assert_eq!(report.path.cluster, 0x1d);
         assert_eq!(report.path.attribute, 0x0003);
@@ -2249,6 +2271,12 @@ mod tests {
             .await
             .expect("subscribe");
 
+        // First event: Established (from the SubscribeResponse).
+        match sub.next().await {
+            Some(SubscriptionEvent::Established { .. }) => {}
+            other => panic!("expected Established, got {other:?}"),
+        }
+
         // 2. Issue a round-trip; the device sends a steady report DURING it
         //    (before replying). The round-trip itself must still complete.
         let resp = node
@@ -2259,10 +2287,13 @@ mod tests {
 
         // 3. The steady report sent during the round-trip must have been
         //    delivered — bounded by a timeout so a regression fails fast.
-        let report = tokio::time::timeout(std::time::Duration::from_secs(5), sub.next())
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), sub.next())
             .await
             .expect("steady report must arrive (not dropped by the concurrent round-trip)")
             .expect("subscription still live");
+        let SubscriptionEvent::Report(report) = event else {
+            panic!("expected a Report event, got {event:?}");
+        };
         assert_eq!(report.path.endpoint, 1);
         assert_eq!(report.path.cluster, 0x06);
         assert_eq!(report.value, matter_codec::Value::Bool(true));
