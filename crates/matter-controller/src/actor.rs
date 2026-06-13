@@ -471,13 +471,85 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// handlers that briefly pause the loop; a report arriving during a connect
     /// is handled by `run_case`'s own recv. This residual window is far narrower
     /// than the pre-SH.1 per-round-trip window.
+    ///
+    /// ## Residual limitation: long command handlers serialize with MRP
+    ///
+    /// [`Self::handle_commission`] and the CASE-connect path ([`Self::run_case`],
+    /// reached via [`Self::dispatch`]) run to completion *on this single actor
+    /// task*. While one is in flight the `select!` does not loop, so the timer
+    /// arm below cannot fire and inbound datagrams for OTHER sessions are not
+    /// demuxed until the handler returns. For the duration of a commission/connect
+    /// that means every other live session's MRP retransmits and subscription
+    /// liveness checks are paused. (Best-effort store fsyncs were already moved
+    /// off this task via `spawn_blocking`/offload, so the remaining stall is the
+    /// protocol handshake itself, not disk I/O.) Fully decoupling these handlers
+    /// so they run concurrently with the actor's recv/MRP loop is a larger async
+    /// re-architecture deferred to a future milestone; it is intentionally out of
+    /// scope here.
+    ///
+    /// ## Timer fairness under sustained inbound load
+    ///
+    /// The `select!` is `biased`, so its arms are polled top-to-bottom and the
+    /// future completes on the first ready arm. A device flooding `ReportData`
+    /// keeps `recv_from()` perpetually ready. To stop that flood from starving
+    /// the timer arm (which would delay MRP retransmits and subscription-liveness
+    /// checks past their deadlines), the timer work is gated on an *explicit
+    /// overdue check* evaluated at the top of every iteration BEFORE the
+    /// `select!`: we compute the earliest moment timer work is due (the min of
+    /// the next MRP deadline and the periodic liveness tick — subscription
+    /// liveness is not part of `sessions.poll_timeout()`, so it is tracked
+    /// separately), and whenever that moment has already passed we run
+    /// [`Self::drive_mrp`]/[`Self::check_liveness`]/[`Self::drive_resubscribes`]
+    /// immediately, then `continue`, regardless of how much inbound is pending.
+    ///
+    /// This guarantees deadlines are honoured under continuous inbound: each
+    /// inbound packet costs one loop iteration, and at the start of the next
+    /// iteration any deadline that came due is serviced before the next recv.
+    /// It does not starve recv — the overdue path only fires when a timer is
+    /// actually due (bounded by how many deadlines elapse, not by inbound rate),
+    /// and otherwise we fall through to the `select!` where a ready recv is
+    /// served. It does not busy-loop when idle — with no inbound and no due
+    /// deadline the `select!` parks on the `sleep` until the next deadline (or
+    /// `LIVENESS_TICK`). The trade-off versus simply dropping `biased` (letting
+    /// tokio randomize) is determinism: the explicit check gives a hard "timers
+    /// fire within one inbound-packet of their deadline" bound rather than a
+    /// probabilistic one, which matters for MRP retransmit timing.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
+        // The next time the timer work is guaranteed to run even if no MRP
+        // deadline is pending. Subscription-liveness deadlines and due
+        // resubscribes are NOT reflected in `sessions.poll_timeout()` (that only
+        // covers MRP/session timers), so the loop must wake at least every
+        // `LIVENESS_TICK` to service them. We track this explicitly rather than
+        // recomputing a sleep duration so the overdue guard below can also cover
+        // the liveness tick under inbound pressure.
+        let mut next_liveness_tick = Instant::now() + LIVENESS_TICK;
         loop {
             let now = Instant::now();
-            let sleep_for = self
-                .sessions
-                .poll_timeout()
-                .map_or(LIVENESS_TICK, |d| d.saturating_duration_since(now));
+            // Earliest moment any timer work (MRP retransmit/expiry, or the
+            // periodic liveness/resubscribe tick) must run.
+            let next_deadline = match self.sessions.poll_timeout() {
+                Some(mrp) => mrp.min(next_liveness_tick),
+                None => next_liveness_tick,
+            };
+
+            // Fairness guard: if timer work is already due, service it before
+            // draining any more inbound. This is what prevents a sustained
+            // inbound flood (which keeps `recv_from()` perpetually ready) from
+            // starving the timer arm and pushing MRP retransmits / subscription
+            // liveness past their deadlines. It only fires when a deadline has
+            // actually elapsed, so it cannot starve recv or busy-loop: each pass
+            // either advances every MRP deadline forward (handle_timeout
+            // reschedules or drops) or advances `next_liveness_tick`, so the
+            // guard yields back to recv on the next iteration.
+            if next_deadline <= now {
+                self.drive_mrp().await;
+                self.check_liveness();
+                self.drive_resubscribes().await;
+                next_liveness_tick = Instant::now() + LIVENESS_TICK;
+                continue;
+            }
+
+            let sleep_for = next_deadline.saturating_duration_since(now);
             tokio::select! {
                 biased;
                 maybe = rx.recv() => match maybe {
@@ -493,6 +565,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.drive_mrp().await;
                     self.check_liveness();
                     self.drive_resubscribes().await;
+                    next_liveness_tick = Instant::now() + LIVENESS_TICK;
                 }
             }
         }
@@ -3700,6 +3773,85 @@ mod tests {
             format!("{err}").to_lowercase().contains("disk full")
                 || format!("{err}").to_lowercase().contains("i/o"),
             "expected the store error to propagate, got: {err}"
+        );
+    }
+
+    /// Timer-fairness regression: under a sustained inbound flood (which keeps
+    /// `recv_from()` perpetually ready and, under the old `biased` select!,
+    /// starved the timer arm), the subscription-liveness check must still fire
+    /// within its deadline. We install a subscription whose `liveness_deadline`
+    /// is already in the past, spawn the actor loop, and continuously feed the
+    /// actor junk datagrams from the peer endpoint. The actor must reach
+    /// `check_liveness` and emit `Resubscribing` despite recv always being
+    /// ready. Pre-fix this test would hang (the timer arm never gets polled).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn liveness_timer_fires_under_inbound_flood() {
+        let (io, peer) = InMemoryDatagram::pair();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(SystemNocRng),
+            ControllerState { fabrics: vec![] },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        // A subscription that is ALREADY past its liveness deadline: the very
+        // next `check_liveness` must mark it stale and emit `Resubscribing`.
+        let (sink, _report_rx, mut ctrl_rx) = test_report_sink();
+        actor.subscriptions.insert(
+            SubId(1),
+            SubEntry {
+                tx: sink,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+                reassembler: ReportReassembler::default(),
+                session_id: SessionId(7),
+                wire_sub_id: 0x1234,
+                node_id: 2,
+                paths: vec![matter_interaction::ReadPath::all()],
+                min_interval: 1,
+                max_interval: 30,
+                // Already overdue at spawn time.
+                liveness_deadline: Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(1))
+                    .expect("instant minus 1s is representable"),
+            },
+        );
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(8);
+        let loop_handle = tokio::spawn(actor.run(cmd_rx));
+
+        // Flood the actor's inbound queue with junk datagrams so `recv_from()`
+        // is continuously ready. `handle_inbound` discards anything that does
+        // not decode to a known secured session, so this is pure recv pressure.
+        // Keep `peer` (and `cmd_tx`) alive for the whole test.
+        let flood = tokio::spawn(async move {
+            loop {
+                if peer
+                    .send_to(b"junk-datagram-pressure", peer.local_addr())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                // Yield so the flood does not monopolise the runtime; the actor
+                // still sees a perpetually non-empty inbound queue.
+                tokio::task::yield_now().await;
+            }
+        });
+
+        // Despite the flood, the liveness timer must fire and notify the
+        // consumer well within a generous bound.
+        let got = tokio::time::timeout(std::time::Duration::from_secs(2), ctrl_rx.recv()).await;
+
+        flood.abort();
+        drop(cmd_tx); // closes the command channel → actor loop returns
+        let _ = loop_handle.await;
+
+        assert!(
+            matches!(got, Ok(Some(SubscriptionEvent::Resubscribing { .. }))),
+            "liveness timer must fire under inbound flood (got {got:?})"
         );
     }
 }
