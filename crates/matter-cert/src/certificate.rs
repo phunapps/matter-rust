@@ -16,6 +16,29 @@ use crate::signature::Signature;
 use crate::time::MatterTime;
 use crate::tlv_tags as tags;
 
+/// Maximum certificate serial-number length, in bytes.
+///
+/// X.509 (RFC 5280 §4.1.2.2), inherited by the Matter operational-certificate
+/// profile (§6.5), caps the `CertificateSerialNumber` INTEGER at 20 octets.
+const MAX_SERIAL_LEN: usize = 20;
+
+/// Reject a serial-number length outside the spec-allowed range `1..=20`.
+///
+/// A zero-length serial is not a valid DER INTEGER, and a serial longer than
+/// [`MAX_SERIAL_LEN`] violates RFC 5280 §4.1.2.2. Both bounds are enforced at
+/// parse time so a malformed serial cannot reach the X.509 TBS encoder.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidSerialLength`] if `len` is `0` or greater than
+/// [`MAX_SERIAL_LEN`].
+fn validate_serial_len(len: usize) -> Result<()> {
+    if len == 0 || len > MAX_SERIAL_LEN {
+        return Err(Error::InvalidSerialLength { len });
+    }
+    Ok(())
+}
+
 /// A parsed Matter certificate.
 ///
 /// Holds every spec §6.5 field. The algorithm identifiers (signature
@@ -89,6 +112,7 @@ impl MatterCertificate {
                     match (t, value) {
                         (tags::CERT_SERIAL_NUMBER, Value::Bytes(b)) => {
                             ensure_first_seen(t, serial.as_ref())?;
+                            validate_serial_len(b.len())?;
                             serial = Some(b);
                         }
                         (tags::CERT_SIG_ALGORITHM, Value::Uint(v)) => {
@@ -431,6 +455,44 @@ mod tests {
         let bytes = cert.to_tlv().unwrap();
         let parsed = MatterCertificate::from_tlv(&bytes).unwrap();
         assert_eq!(parsed, cert);
+    }
+
+    /// Build the TLV bytes for `sample_cert()` with its serial replaced by a
+    /// serial of the given length (filled with `0x01`). `to_tlv` itself has no
+    /// length guard, so this is the way to manufacture an out-of-range serial
+    /// on the wire and exercise the `from_tlv` parse-time check.
+    fn cert_tlv_with_serial_len(len: usize) -> Vec<u8> {
+        let mut cert = sample_cert();
+        cert.serial = vec![0x01; len];
+        cert.to_tlv().unwrap()
+    }
+
+    #[test]
+    fn from_tlv_accepts_one_byte_serial() {
+        let bytes = cert_tlv_with_serial_len(1);
+        let parsed = MatterCertificate::from_tlv(&bytes).unwrap();
+        assert_eq!(parsed.serial(), &[0x01]);
+    }
+
+    #[test]
+    fn from_tlv_accepts_twenty_byte_serial() {
+        let bytes = cert_tlv_with_serial_len(20);
+        let parsed = MatterCertificate::from_tlv(&bytes).unwrap();
+        assert_eq!(parsed.serial().len(), 20);
+    }
+
+    #[test]
+    fn from_tlv_rejects_zero_byte_serial() {
+        let bytes = cert_tlv_with_serial_len(0);
+        let err = MatterCertificate::from_tlv(&bytes).unwrap_err();
+        assert!(matches!(err, Error::InvalidSerialLength { len: 0 }));
+    }
+
+    #[test]
+    fn from_tlv_rejects_twenty_one_byte_serial() {
+        let bytes = cert_tlv_with_serial_len(21);
+        let err = MatterCertificate::from_tlv(&bytes).unwrap_err();
+        assert!(matches!(err, Error::InvalidSerialLength { len: 21 }));
     }
 
     #[test]

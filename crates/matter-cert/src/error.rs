@@ -31,6 +31,20 @@ pub enum Error {
         tag: u8,
     },
 
+    /// The certificate serial number had a length outside the spec-allowed
+    /// range of 1..=20 bytes.
+    ///
+    /// The Matter operational-certificate profile (§6.5) inherits the X.509
+    /// `CertificateSerialNumber` constraint (RFC 5280 §4.1.2.2): a serial is
+    /// at most 20 octets, and a zero-length serial is not a valid INTEGER.
+    /// We reject both bounds at parse time so a malformed serial cannot
+    /// propagate into the X.509 TBS encoder or signature verification.
+    #[error("certificate serial number length {len} is outside the spec range 1..=20")]
+    InvalidSerialLength {
+        /// The offending serial-number length, in bytes.
+        len: usize,
+    },
+
     /// Signature algorithm identifier was not `ecdsa-with-sha256` (1).
     #[error("certificate signature algorithm {0} is not supported")]
     UnsupportedSignatureAlgorithm(u8),

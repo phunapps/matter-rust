@@ -135,34 +135,58 @@ const OID_ECDSA_WITH_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.
 /// same input. Used internally by `MatterCertificate::verify_signed_by`
 /// and exposed publicly via `MatterCertificate::to_x509_tbs_der`.
 pub(crate) fn matter_cert_to_x509_tbs_der(cert: &MatterCertificate) -> Result<Vec<u8>> {
-    let mut tbs = Vec::with_capacity(256);
+    // Single reused output buffer. Every field is written directly into `out`
+    // via the write-in-place encoders below, instead of building a tree of
+    // short-lived `Vec`s and concatenating. The encoded bytes are identical;
+    // only the assembly strategy changed (verified by the byte-parity test
+    // against matter.js's `asUnsignedDer()`).
+    let mut out = Vec::with_capacity(512);
 
-    // version [0] EXPLICIT INTEGER (2)  — v3, always emitted.
-    // [0] EXPLICIT context tag is 0xA0 (constructed).
-    tbs.extend_from_slice(&[0xA0, 0x03, 0x02, 0x01, 0x02]);
+    // The whole TBSCertificate is a SEQUENCE; build its body in place, then
+    // splice the SEQUENCE tag + length prefix in front. The closure cannot
+    // return a `Result`, so fallible field encoders that may reject input
+    // (serial length, DN attributes) record their error here for the caller.
+    let mut field_err: Option<Error> = None;
+    wrap_sequence_into(&mut out, |tbs| {
+        // version [0] EXPLICIT INTEGER (2) — v3, always emitted.
+        // [0] EXPLICIT context tag is 0xA0 (constructed).
+        tbs.extend_from_slice(&[0xA0, 0x03, 0x02, 0x01, 0x02]);
 
-    // serialNumber INTEGER (fallible — empty serials rejected).
-    tbs.extend_from_slice(&encode_serial_number(cert.serial())?);
+        // serialNumber INTEGER (fallible — empty serials rejected).
+        if let Err(e) = encode_serial_number_into(tbs, cert.serial()) {
+            field_err = Some(e);
+            return;
+        }
 
-    // signature AlgorithmIdentifier (infallible).
-    tbs.extend_from_slice(&encode_algorithm_identifier_ecdsa_sha256());
+        // signature AlgorithmIdentifier (infallible).
+        encode_algorithm_identifier_ecdsa_sha256_into(tbs);
 
-    // issuer Name (fallible — Other DN attributes / bad CountryName).
-    tbs.extend_from_slice(&encode_dn(cert.issuer())?);
+        // issuer Name (fallible — Other DN attributes / bad CountryName).
+        if let Err(e) = encode_dn_into(tbs, cert.issuer()) {
+            field_err = Some(e);
+            return;
+        }
 
-    // validity SEQUENCE { notBefore, notAfter } (infallible — Vec<u8>).
-    tbs.extend_from_slice(&encode_validity(cert.not_before(), cert.not_after()));
+        // validity SEQUENCE { notBefore, notAfter } (infallible).
+        encode_validity_into(tbs, cert.not_before(), cert.not_after());
 
-    // subject Name (fallible).
-    tbs.extend_from_slice(&encode_dn(cert.subject())?);
+        // subject Name (fallible).
+        if let Err(e) = encode_dn_into(tbs, cert.subject()) {
+            field_err = Some(e);
+            return;
+        }
 
-    // subjectPublicKeyInfo (infallible).
-    tbs.extend_from_slice(&encode_subject_public_key_info(cert.public_key()));
+        // subjectPublicKeyInfo (infallible).
+        encode_subject_public_key_info_into(tbs, cert.public_key());
 
-    // extensions [3] EXPLICIT SEQUENCE OF Extension OPTIONAL (infallible at this layer).
-    tbs.extend_from_slice(&encode_extensions_block(cert.extensions()));
+        // extensions [3] EXPLICIT SEQUENCE OF Extension OPTIONAL (infallible).
+        encode_extensions_block_into(tbs, cert.extensions());
+    });
 
-    Ok(wrap_sequence(&tbs))
+    if let Some(e) = field_err {
+        return Err(e);
+    }
+    Ok(out)
 }
 
 // =============================================================================
@@ -177,24 +201,35 @@ const X509_UTCTIME_CUTOFF_UNIX_SECS: u64 = 2_524_608_000;
 ///
 /// `MatterTime(0)` is the Matter "no expiry" sentinel; it maps to the
 /// RFC 5280 §4.1.2.5 `GeneralizedTime` sentinel `99991231235959Z`.
+fn encode_validity_into(
+    out: &mut Vec<u8>,
+    not_before: crate::time::MatterTime,
+    not_after: crate::time::MatterTime,
+) {
+    wrap_sequence_into(out, |inner| {
+        encode_one_time_into(inner, not_before, /* is_not_after = */ false);
+        encode_one_time_into(inner, not_after, /* is_not_after = */ true);
+    });
+}
+
+/// Encode an X.509 `Validity` SEQUENCE to a standalone `Vec`. See
+/// [`encode_validity_into`].
+#[cfg(test)]
 fn encode_validity(
     not_before: crate::time::MatterTime,
     not_after: crate::time::MatterTime,
 ) -> Vec<u8> {
-    let nb = encode_one_time(not_before, /* is_not_after = */ false);
-    let na = encode_one_time(not_after, /* is_not_after = */ true);
-
-    let mut inner = Vec::with_capacity(nb.len() + na.len());
-    inner.extend_from_slice(&nb);
-    inner.extend_from_slice(&na);
-    wrap_sequence(&inner)
+    let mut out = Vec::new();
+    encode_validity_into(&mut out, not_before, not_after);
+    out
 }
 
-fn encode_one_time(t: crate::time::MatterTime, is_not_after: bool) -> Vec<u8> {
+fn encode_one_time_into(out: &mut Vec<u8>, t: crate::time::MatterTime, is_not_after: bool) {
     // Matter "no expiry" only applies to not_after.
     if t == crate::time::MatterTime::NO_EXPIRY && is_not_after {
         // `GeneralizedTime` sentinel per RFC 5280 §4.1.2.5
-        return encode_generalized_time_literal(b"99991231235959Z");
+        encode_generalized_time_literal_into(out, b"99991231235959Z");
+        return;
     }
     let unix = t.to_unix_secs();
     let (year, month, day, hour, minute, second) = unix_to_ymdhms(unix);
@@ -203,37 +238,33 @@ fn encode_one_time(t: crate::time::MatterTime, is_not_after: bool) -> Vec<u8> {
         #[allow(clippy::cast_possible_truncation)]
         let yy = (year % 100) as u8;
         let s = format!("{yy:02}{month:02}{day:02}{hour:02}{minute:02}{second:02}Z");
-        encode_utc_time_literal(s.as_bytes())
+        encode_utc_time_literal_into(out, s.as_bytes());
     } else {
         let s = format!("{year:04}{month:02}{day:02}{hour:02}{minute:02}{second:02}Z");
-        encode_generalized_time_literal(s.as_bytes())
+        encode_generalized_time_literal_into(out, s.as_bytes());
     }
 }
 
 /// `UTCTime` DER: tag 0x17, length, value.
-fn encode_utc_time_literal(s: &[u8]) -> Vec<u8> {
+fn encode_utc_time_literal_into(out: &mut Vec<u8>, s: &[u8]) {
     debug_assert_eq!(s.len(), 13);
     // s.len() == 13, which fits in u8 without truncation.
     #[allow(clippy::cast_possible_truncation)]
     let len_byte = s.len() as u8;
-    let mut out = Vec::with_capacity(15);
     out.push(0x17);
     out.push(len_byte);
     out.extend_from_slice(s);
-    out
 }
 
 /// `GeneralizedTime` DER: tag 0x18, length, value.
-fn encode_generalized_time_literal(s: &[u8]) -> Vec<u8> {
+fn encode_generalized_time_literal_into(out: &mut Vec<u8>, s: &[u8]) {
     debug_assert_eq!(s.len(), 15);
     // s.len() == 15, which fits in u8 without truncation.
     #[allow(clippy::cast_possible_truncation)]
     let len_byte = s.len() as u8;
-    let mut out = Vec::with_capacity(17);
     out.push(0x18);
     out.push(len_byte);
     out.extend_from_slice(s);
-    out
 }
 
 // =============================================================================
@@ -244,7 +275,7 @@ fn encode_generalized_time_literal(s: &[u8]) -> Vec<u8> {
 ///
 /// DER INTEGER rules require prepending `0x00` if the high bit of the
 /// first content byte is set, to keep the integer non-negative.
-fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
+fn encode_serial_number_into(out: &mut Vec<u8>, serial_bytes: &[u8]) -> Result<()> {
     if serial_bytes.is_empty() {
         return Err(Error::FieldValueOutOfRange {
             tag: crate::tlv_tags::CERT_SERIAL_NUMBER,
@@ -252,15 +283,23 @@ fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
     }
 
     let needs_leading_zero = (serial_bytes[0] & 0x80) != 0;
-    let content_len = serial_bytes.len() + usize::from(needs_leading_zero);
 
-    let mut out = Vec::with_capacity(content_len + 2);
     out.push(0x02); // INTEGER tag
-    encode_definite_length(&mut out, content_len);
+    let content_len = serial_bytes.len() + usize::from(needs_leading_zero);
+    encode_definite_length(out, content_len);
     if needs_leading_zero {
         out.push(0x00);
     }
     out.extend_from_slice(serial_bytes);
+    Ok(())
+}
+
+/// Encode a Matter serial number as an X.509 INTEGER to a standalone `Vec`.
+/// See [`encode_serial_number_into`].
+#[cfg(test)]
+fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    encode_serial_number_into(&mut out, serial_bytes)?;
     Ok(out)
 }
 
@@ -273,49 +312,59 @@ fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
 /// Per RFC 5758 §3.2, this OID has no parameters — the SEQUENCE
 /// contains only the OID itself.
 pub(crate) fn encode_algorithm_identifier_ecdsa_sha256() -> Vec<u8> {
-    let oid = encode_oid(&OID_ECDSA_WITH_SHA256);
-    wrap_sequence(&oid)
+    let mut out = Vec::new();
+    encode_algorithm_identifier_ecdsa_sha256_into(&mut out);
+    out
+}
+
+/// Write the ecdsa-with-SHA256 `AlgorithmIdentifier` into `out` in place.
+fn encode_algorithm_identifier_ecdsa_sha256_into(out: &mut Vec<u8>) {
+    wrap_sequence_into(out, |inner| encode_oid_into(inner, &OID_ECDSA_WITH_SHA256));
 }
 
 // =============================================================================
 // SubjectPublicKeyInfo encoder
 // =============================================================================
 
-/// Encode an X.509 `SubjectPublicKeyInfo` for a P-256 uncompressed point.
-fn encode_subject_public_key_info(key: &crate::PublicKey) -> Vec<u8> {
-    // Inner AlgorithmIdentifier: SEQUENCE { OID(id-ecPublicKey), OID(prime256v1) }
-    let mut alg = Vec::new();
-    alg.extend_from_slice(&encode_oid(&OID_EC_PUBLIC_KEY));
-    alg.extend_from_slice(&encode_oid(&OID_EC_CURVE_P256));
-    let alg_seq = wrap_sequence(&alg);
+/// Write an X.509 `SubjectPublicKeyInfo` for a P-256 uncompressed point into
+/// `out` in place.
+fn encode_subject_public_key_info_into(out: &mut Vec<u8>, key: &crate::PublicKey) {
+    wrap_sequence_into(out, |inner| {
+        // Inner AlgorithmIdentifier: SEQUENCE { OID(id-ecPublicKey), OID(prime256v1) }
+        wrap_sequence_into(inner, |alg| {
+            encode_oid_into(alg, &OID_EC_PUBLIC_KEY);
+            encode_oid_into(alg, &OID_EC_CURVE_P256);
+        });
 
-    // BIT STRING: 0x03 || length || 0x00 (unused bits) || 65-byte point
-    let point = key.as_bytes();
-    let mut bit_string = Vec::with_capacity(point.len() + 3);
-    bit_string.push(0x03);
-    encode_definite_length(&mut bit_string, point.len() + 1);
-    bit_string.push(0x00); // unused-bits prefix
-    bit_string.extend_from_slice(point);
-
-    let mut inner = Vec::with_capacity(alg_seq.len() + bit_string.len());
-    inner.extend_from_slice(&alg_seq);
-    inner.extend_from_slice(&bit_string);
-    wrap_sequence(&inner)
+        // BIT STRING: 0x03 || length || 0x00 (unused bits) || 65-byte point
+        let point = key.as_bytes();
+        inner.push(0x03);
+        encode_definite_length(inner, point.len() + 1);
+        inner.push(0x00); // unused-bits prefix
+        inner.extend_from_slice(point);
+    });
 }
 
-/// Encode a `der::asn1::ObjectIdentifier` as a complete TLV element
-/// (tag 0x06, length, content).
+/// Encode an X.509 `SubjectPublicKeyInfo` to a standalone `Vec`. See
+/// [`encode_subject_public_key_info_into`].
+#[cfg(test)]
+fn encode_subject_public_key_info(key: &crate::PublicKey) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_subject_public_key_info_into(&mut out, key);
+    out
+}
+
+/// Write a `der::asn1::ObjectIdentifier` as a complete TLV element
+/// (tag 0x06, length, content) into `out` in place.
 #[allow(clippy::expect_used)] // see note inside.
-fn encode_oid(oid: &ObjectIdentifier) -> Vec<u8> {
+fn encode_oid_into(out: &mut Vec<u8>, oid: &ObjectIdentifier) {
     // der's encoder writes tag+length+content for us via `Encode`. The
     // expect is safe: ObjectIdentifier::new_unwrap (used at module load
     // for every OID constant) has already validated the OID; der's
     // encode_to_vec cannot fail for a validated OID.
     use der::Encode;
-    let mut buf = Vec::new();
-    oid.encode_to_vec(&mut buf)
+    oid.encode_to_vec(out)
         .expect("internal: der OID encoder rejected a validated ObjectIdentifier");
-    buf
 }
 
 // =============================================================================
@@ -333,8 +382,19 @@ const TAG_IA5_STRING: u8 = 0x16;
 /// `SEQUENCE { type OID, value DirectoryString }`.
 // One match arm per DN attribute kind; kept as a single table for
 // auditability against the spec's attribute list (§6.5.6).
-#[allow(clippy::too_many_lines)]
+/// Encode a single `DnAttribute` to a standalone `Vec`. See
+/// [`encode_dn_attribute_into`].
+#[cfg(test)]
 fn encode_dn_attribute(attr: &DnAttribute) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    encode_dn_attribute_into(&mut out, attr)?;
+    Ok(out)
+}
+
+/// Write a single `DnAttribute` as an X.509 `AttributeTypeAndValue`
+/// (`SEQUENCE { type OID, value DirectoryString }`) into `out` in place.
+#[allow(clippy::too_many_lines)]
+fn encode_dn_attribute_into(out: &mut Vec<u8>, attr: &DnAttribute) -> Result<()> {
     let (oid, string_tag, value_bytes) = match attr {
         // Matter-specific attributes: UTF8String of uppercase zero-padded hex.
         DnAttribute::NodeId(v) => (
@@ -451,13 +511,11 @@ fn encode_dn_attribute(attr: &DnAttribute) -> Result<Vec<u8>> {
     };
 
     // Outer: SEQUENCE { OID, <string-type> { value } }
-    let oid_bytes = encode_oid(oid);
-    let string_bytes = wrap_primitive(string_tag, &value_bytes);
-
-    let mut inner = Vec::with_capacity(oid_bytes.len() + string_bytes.len());
-    inner.extend_from_slice(&oid_bytes);
-    inner.extend_from_slice(&string_bytes);
-    Ok(wrap_sequence(&inner))
+    wrap_sequence_into(out, |inner| {
+        encode_oid_into(inner, oid);
+        wrap_primitive_into(inner, string_tag, &value_bytes);
+    });
+    Ok(())
 }
 
 /// Verify that all bytes are in the X.509 `PrintableString` character set
@@ -493,14 +551,12 @@ fn verify_ia5(s: &[u8], asn1_type: &'static str) -> Result<()> {
     Ok(())
 }
 
-/// Wrap value bytes in a primitive TLV with the given tag (`UTF8String`,
-/// `PrintableString`, `IA5String`, etc.).
-fn wrap_primitive(tag: u8, value: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(value.len() + 4);
+/// Write a primitive TLV with the given tag (`UTF8String`, `PrintableString`,
+/// `IA5String`, `OCTET STRING`, etc.) into `out` in place.
+fn wrap_primitive_into(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
     out.push(tag);
-    encode_definite_length(&mut out, value.len());
+    encode_definite_length(out, value.len());
     out.extend_from_slice(value);
-    out
 }
 
 // =============================================================================
@@ -511,24 +567,49 @@ fn wrap_primitive(tag: u8, value: &[u8]) -> Vec<u8> {
 /// where each RDN is `SET OF AttributeTypeAndValue`.
 ///
 /// Matter DNs use one attribute per RDN — we mirror matter.js's output.
+#[cfg(test)]
 fn encode_dn(dn: &DistinguishedName) -> Result<Vec<u8>> {
-    let mut rdns_concat = Vec::new();
-    for attr in dn {
-        let atv = encode_dn_attribute(attr)?;
-        // Each RDN: SET { AttributeTypeAndValue }
-        let rdn = wrap_set(&atv);
-        rdns_concat.extend_from_slice(&rdn);
-    }
-    Ok(wrap_sequence(&rdns_concat))
+    let mut out = Vec::new();
+    encode_dn_into(&mut out, dn)?;
+    Ok(out)
 }
 
-/// Wrap content bytes in a DER SET (tag 0x31, constructed).
-fn wrap_set(content: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(content.len() + 4);
-    out.push(0x31); // SET tag (constructed)
-    encode_definite_length(&mut out, content.len());
-    out.extend_from_slice(content);
-    out
+/// Write an X.509 `Name` into `out` in place. See [`encode_dn`].
+fn encode_dn_into(out: &mut Vec<u8>, dn: &DistinguishedName) -> Result<()> {
+    let mut attr_err: Option<Error> = None;
+    wrap_sequence_into(out, |seq| {
+        for attr in dn {
+            // Each RDN: SET { AttributeTypeAndValue }
+            if let Err(e) = wrap_set_into(seq, |set| encode_dn_attribute_into(set, attr)) {
+                attr_err = Some(e);
+                return;
+            }
+        }
+    });
+    match attr_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// Write a DER SET (tag 0x31, constructed) into `out`, content from `build`.
+///
+/// `build` is fallible (a DN attribute may be unconvertible); its error is
+/// propagated through the helper's return.
+fn wrap_set_into<F>(out: &mut Vec<u8>, build: F) -> Result<()>
+where
+    F: FnOnce(&mut Vec<u8>) -> Result<()>,
+{
+    let mut build_err: Option<Error> = None;
+    wrap_tagged_into(out, 0x31, |set| {
+        if let Err(e) = build(set) {
+            build_err = Some(e);
+        }
+    });
+    match build_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Wrap content bytes in a DER SEQUENCE.
@@ -538,6 +619,71 @@ pub(crate) fn wrap_sequence(content: &[u8]) -> Vec<u8> {
     encode_definite_length(&mut out, content.len());
     out.extend_from_slice(content);
     out
+}
+
+/// Compute the DER definite-length prefix bytes for a content of length `len`.
+///
+/// Short form (a single byte) when `len < 128`, long form otherwise. This is
+/// the allocation-free sibling of [`encode_definite_length`]: it is used by
+/// the write-in-place wrappers, which build a node's content directly into the
+/// shared output buffer and then need the length prefix *after* the content
+/// length is known, to splice it in ahead of the content.
+fn definite_length_prefix(len: usize) -> ([u8; 9], usize) {
+    let mut buf = [0u8; 9];
+    if len < 0x80 {
+        // len < 128, fits in u8.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            buf[0] = len as u8;
+        }
+        (buf, 1)
+    } else {
+        let bytes = len.to_be_bytes();
+        let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
+        let used = &bytes[leading_zeros..];
+        // used.len() is at most 8 (usize width on 64-bit), so the 0x80 OR and
+        // cast to u8 is safe — the high bit encodes the long-form marker.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            buf[0] = 0x80 | (used.len() as u8);
+        }
+        buf[1..=used.len()].copy_from_slice(used);
+        (buf, 1 + used.len())
+    }
+}
+
+/// Write a DER tag-length-value element into `out` in place, with the content
+/// produced by `build`.
+///
+/// `build` appends the element's content bytes directly onto `out`; this helper
+/// then splices the `tag` byte and the matching definite-length prefix in front
+/// of that content. The resulting bytes are byte-identical to the older
+/// "build a fresh `Vec` per node and concatenate" approach — only the assembly
+/// strategy differs. Routing every wrapper through a single reused buffer avoids
+/// the tree of dozens of short-lived `Vec` allocations the encoder used to make
+/// on every signature verification.
+fn wrap_tagged_into<F>(out: &mut Vec<u8>, tag: u8, build: F)
+where
+    F: FnOnce(&mut Vec<u8>),
+{
+    let content_start = out.len();
+    build(out);
+    let content_len = out.len() - content_start;
+
+    let (prefix, prefix_len) = definite_length_prefix(content_len);
+    // Splice `tag || length-prefix` in ahead of the freshly written content.
+    // `splice` shifts the content right by (1 + prefix_len) bytes in place; no
+    // intermediate allocation occurs (the shared buffer was pre-reserved).
+    let header = core::iter::once(tag).chain(prefix[..prefix_len].iter().copied());
+    out.splice(content_start..content_start, header);
+}
+
+/// Write a DER SEQUENCE (tag `0x30`) into `out`, content produced by `build`.
+fn wrap_sequence_into<F>(out: &mut Vec<u8>, build: F)
+where
+    F: FnOnce(&mut Vec<u8>),
+{
+    wrap_tagged_into(out, 0x30, build);
 }
 
 /// Encode a DER definite-length prefix (short form ≤ 127, long form otherwise).
@@ -610,19 +756,21 @@ use crate::extensions::{BasicConstraints, Extensions, KeyIdentifier, KeyUsage};
 /// When `true`, it is encoded as `BOOLEAN TRUE` (`01 01 FF`).
 /// `extn_value` is the pre-encoded content of the extension — it is wrapped in an
 /// outer `OCTET STRING` here, as RFC 5280 §4.1 requires.
-fn encode_extension(oid: &ObjectIdentifier, critical: bool, extn_value: &[u8]) -> Vec<u8> {
-    let oid_bytes = encode_oid(oid);
-    // extnValue OCTET STRING wraps the already-DER-encoded extension value.
-    let octet_string = wrap_primitive(0x04, extn_value);
-
-    let mut inner = Vec::with_capacity(oid_bytes.len() + 3 + octet_string.len());
-    inner.extend_from_slice(&oid_bytes);
-    if critical {
-        // BOOLEAN TRUE: tag 0x01, length 0x01, value 0xFF.
-        inner.extend_from_slice(&[0x01, 0x01, 0xFF]);
-    }
-    inner.extend_from_slice(&octet_string);
-    wrap_sequence(&inner)
+fn encode_extension_into(
+    out: &mut Vec<u8>,
+    oid: &ObjectIdentifier,
+    critical: bool,
+    extn_value: &[u8],
+) {
+    wrap_sequence_into(out, |inner| {
+        encode_oid_into(inner, oid);
+        if critical {
+            // BOOLEAN TRUE: tag 0x01, length 0x01, value 0xFF.
+            inner.extend_from_slice(&[0x01, 0x01, 0xFF]);
+        }
+        // extnValue OCTET STRING wraps the already-DER-encoded extension value.
+        wrap_primitive_into(inner, 0x04, extn_value);
+    });
 }
 
 /// Encode the `BasicConstraints` extension.
@@ -632,22 +780,36 @@ fn encode_extension(oid: &ObjectIdentifier, critical: bool, extn_value: &[u8]) -
 /// `SEQUENCE` contains `BOOLEAN TRUE` only when `is_ca = true`; omitting the
 /// BOOLEAN when `false` follows the DER DEFAULT encoding rule. `path_len` is
 /// encoded as `INTEGER` only when `is_ca = true` and the constraint is set.
-fn encode_basic_constraints(bc: BasicConstraints) -> Vec<u8> {
+fn encode_basic_constraints_into(out: &mut Vec<u8>, bc: BasicConstraints) {
     // Inner BasicConstraints SEQUENCE:
     // { BOOLEAN(is_ca) OPTIONAL DEFAULT FALSE, INTEGER(path_len) OPTIONAL }
-    let mut inner = Vec::new();
-    if bc.is_ca {
-        inner.extend_from_slice(&[0x01, 0x01, 0xFF]); // BOOLEAN TRUE
-        if let Some(path_len) = bc.path_len_constraint {
-            // INTEGER: tag 0x02, length 0x01, value = path_len (fits in one byte).
-            inner.push(0x02);
-            inner.push(0x01);
-            inner.push(path_len);
+    let mut value = Vec::new();
+    wrap_sequence_into(&mut value, |inner| {
+        if bc.is_ca {
+            inner.extend_from_slice(&[0x01, 0x01, 0xFF]); // BOOLEAN TRUE
+            if let Some(path_len) = bc.path_len_constraint {
+                // INTEGER: tag 0x02, length 0x01, value = path_len (fits in one byte).
+                inner.push(0x02);
+                inner.push(0x01);
+                inner.push(path_len);
+            }
         }
-    }
-    let value = wrap_sequence(&inner);
+    });
     // matter.js always emits BasicConstraints as critical.
-    encode_extension(&OID_EXT_BASIC_CONSTRAINTS, /* critical */ true, &value)
+    encode_extension_into(
+        out,
+        &OID_EXT_BASIC_CONSTRAINTS,
+        /* critical */ true,
+        &value,
+    );
+}
+
+/// Encode the `BasicConstraints` extension to a standalone `Vec`.
+#[cfg(test)]
+fn encode_basic_constraints(bc: BasicConstraints) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_basic_constraints_into(&mut out, bc);
+    out
 }
 
 /// Encode the `KeyUsage` extension.
@@ -669,7 +831,7 @@ fn encode_basic_constraints(bc: BasicConstraints) -> Vec<u8> {
 /// number of bytes needed to represent the set bits is emitted; trailing zero bytes
 /// are dropped and the unused-bit count is set to the trailing-zero count of the
 /// last emitted byte.
-fn encode_key_usage(ku: KeyUsage) -> Vec<u8> {
+fn encode_key_usage_into(out: &mut Vec<u8>, ku: KeyUsage) {
     let raw = ku.bits(); // u16, LSB = digitalSignature
 
     // Split into low byte (bits 0–7) and high byte (bits 8–15).
@@ -703,7 +865,20 @@ fn encode_key_usage(ku: KeyUsage) -> Vec<u8> {
     encode_definite_length(&mut bit_string, bit_string_content.len());
     bit_string.extend_from_slice(&bit_string_content);
 
-    encode_extension(&OID_EXT_KEY_USAGE, /* critical */ true, &bit_string)
+    encode_extension_into(
+        out,
+        &OID_EXT_KEY_USAGE,
+        /* critical */ true,
+        &bit_string,
+    );
+}
+
+/// Encode the `KeyUsage` extension to a standalone `Vec`.
+#[cfg(test)]
+fn encode_key_usage(ku: KeyUsage) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_key_usage_into(&mut out, ku);
+    out
 }
 
 // Extended key usage OIDs, encoded once as constants.
@@ -738,22 +913,23 @@ const OID_KP_OCSP_SIGNING: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.
 /// Currently infallible — returns an empty extension body for unknown values
 /// rather than failing, because the task-7 scope does not include error variants
 /// for unknown EKU values.
-fn encode_extended_key_usage(eku: &[u32], critical: bool) -> Vec<u8> {
-    let mut inner = Vec::new();
-    for &val in eku {
-        let oid = match val {
-            1 => &OID_KP_SERVER_AUTH,
-            2 => &OID_KP_CLIENT_AUTH,
-            3 => &OID_KP_CODE_SIGNING,
-            4 => &OID_KP_EMAIL_PROTECTION,
-            5 => &OID_KP_TIME_STAMPING,
-            6 => &OID_KP_OCSP_SIGNING,
-            _ => continue,
-        };
-        inner.extend_from_slice(&encode_oid(oid));
-    }
-    let value = wrap_sequence(&inner);
-    encode_extension(&OID_EXT_EXTENDED_KEY_USAGE, critical, &value)
+fn encode_extended_key_usage_into(out: &mut Vec<u8>, eku: &[u32], critical: bool) {
+    let mut value = Vec::new();
+    wrap_sequence_into(&mut value, |inner| {
+        for &val in eku {
+            let oid = match val {
+                1 => &OID_KP_SERVER_AUTH,
+                2 => &OID_KP_CLIENT_AUTH,
+                3 => &OID_KP_CODE_SIGNING,
+                4 => &OID_KP_EMAIL_PROTECTION,
+                5 => &OID_KP_TIME_STAMPING,
+                6 => &OID_KP_OCSP_SIGNING,
+                _ => continue,
+            };
+            encode_oid_into(inner, oid);
+        }
+    });
+    encode_extension_into(out, &OID_EXT_EXTENDED_KEY_USAGE, critical, &value);
 }
 
 /// Encode the `SubjectKeyIdentifier` extension.
@@ -763,14 +939,24 @@ fn encode_extended_key_usage(eku: &[u32], critical: bool) -> Vec<u8> {
 /// field itself is also an OCTET STRING per RFC 5280, so the 20 bytes end up
 /// doubly-wrapped: outer OCTET STRING from `encode_extension`, inner OCTET STRING
 /// encoding the key identifier).
-fn encode_subject_key_identifier(ski: &KeyIdentifier) -> Vec<u8> {
+fn encode_subject_key_identifier_into(out: &mut Vec<u8>, ski: &KeyIdentifier) {
     // Inner: OCTET STRING containing the 20-byte key identifier.
-    let inner = wrap_primitive(0x04, &ski.0);
-    encode_extension(
+    let mut inner = Vec::new();
+    wrap_primitive_into(&mut inner, 0x04, &ski.0);
+    encode_extension_into(
+        out,
         &OID_EXT_SUBJECT_KEY_IDENTIFIER,
         /* critical */ false,
         &inner,
-    )
+    );
+}
+
+/// Encode the `SubjectKeyIdentifier` extension to a standalone `Vec`.
+#[cfg(test)]
+fn encode_subject_key_identifier(ski: &KeyIdentifier) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_subject_key_identifier_into(&mut out, ski);
+    out
 }
 
 /// Encode the `AuthorityKeyIdentifier` extension.
@@ -780,18 +966,20 @@ fn encode_subject_key_identifier(ski: &KeyIdentifier) -> Vec<u8> {
 ///
 /// Only the `keyIdentifier` field is populated (matter.js does the same).
 /// `[0] IMPLICIT OCTET STRING` has tag `0x80` (context-class primitive, tag 0).
-fn encode_authority_key_identifier(aki: &KeyIdentifier) -> Vec<u8> {
-    // [0] IMPLICIT OCTET STRING: tag 0x80, length 20, 20 bytes.
-    let mut inner = Vec::with_capacity(2 + 20);
-    inner.push(0x80);
-    encode_definite_length(&mut inner, 20);
-    inner.extend_from_slice(&aki.0);
-    let value = wrap_sequence(&inner);
-    encode_extension(
+fn encode_authority_key_identifier_into(out: &mut Vec<u8>, aki: &KeyIdentifier) {
+    let mut value = Vec::new();
+    wrap_sequence_into(&mut value, |inner| {
+        // [0] IMPLICIT OCTET STRING: tag 0x80, length 20, 20 bytes.
+        inner.push(0x80);
+        encode_definite_length(inner, 20);
+        inner.extend_from_slice(&aki.0);
+    });
+    encode_extension_into(
+        out,
         &OID_EXT_AUTHORITY_KEY_IDENTIFIER,
         /* critical */ false,
         &value,
-    )
+    );
 }
 
 /// Encode the X.509 `extensions [3] EXPLICIT SEQUENCE OF Extension OPTIONAL`.
@@ -800,32 +988,29 @@ fn encode_authority_key_identifier(aki: &KeyIdentifier) -> Vec<u8> {
 /// key-usage, extended-key-usage, subject-key-identifier, authority-key-identifier).
 /// This order matches matter.js's `matterToX509` / `extensionsToAst` order
 /// and is verified by the byte-parity test in Task 10.
-pub(crate) fn encode_extensions_block(ext: &Extensions) -> Vec<u8> {
-    let mut inner = Vec::new();
-    if let Some(bc) = &ext.basic_constraints {
-        inner.extend_from_slice(&encode_basic_constraints(*bc));
-    }
-    if let Some(ku) = ext.key_usage {
-        inner.extend_from_slice(&encode_key_usage(ku));
-    }
-    if let Some(eku) = &ext.extended_key_usage {
-        // matter.js always marks ExtendedKeyUsage as critical.
-        inner.extend_from_slice(&encode_extended_key_usage(eku, /* critical */ true));
-    }
-    if let Some(ski) = &ext.subject_key_identifier {
-        inner.extend_from_slice(&encode_subject_key_identifier(ski));
-    }
-    if let Some(aki) = &ext.authority_key_identifier {
-        inner.extend_from_slice(&encode_authority_key_identifier(aki));
-    }
-    let extensions_seq = wrap_sequence(&inner);
-
-    // Wrap in [3] EXPLICIT: context-class constructed tag = 0xA3.
-    let mut out = Vec::with_capacity(extensions_seq.len() + 4);
-    out.push(0xA3);
-    encode_definite_length(&mut out, extensions_seq.len());
-    out.extend_from_slice(&extensions_seq);
-    out
+fn encode_extensions_block_into(out: &mut Vec<u8>, ext: &Extensions) {
+    // Wrap in [3] EXPLICIT: context-class constructed tag = 0xA3, around the
+    // inner `SEQUENCE OF Extension`.
+    wrap_tagged_into(out, 0xA3, |explicit| {
+        wrap_sequence_into(explicit, |inner| {
+            if let Some(bc) = &ext.basic_constraints {
+                encode_basic_constraints_into(inner, *bc);
+            }
+            if let Some(ku) = ext.key_usage {
+                encode_key_usage_into(inner, ku);
+            }
+            if let Some(eku) = &ext.extended_key_usage {
+                // matter.js always marks ExtendedKeyUsage as critical.
+                encode_extended_key_usage_into(inner, eku, /* critical */ true);
+            }
+            if let Some(ski) = &ext.subject_key_identifier {
+                encode_subject_key_identifier_into(inner, ski);
+            }
+            if let Some(aki) = &ext.authority_key_identifier {
+                encode_authority_key_identifier_into(inner, aki);
+            }
+        });
+    });
 }
 
 #[cfg(test)]
