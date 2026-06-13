@@ -538,8 +538,6 @@ where
     T: AsyncDatagram,
     D: matter_transport::Discovery,
 {
-    use crate::{Action, SessionContext};
-    use matter_cert::{TrustAnchor, TrustedRoots};
     use matter_crypto::RingSigner;
 
     // Bind the persisted identity fields BEFORE the partial move of
@@ -606,8 +604,143 @@ where
     let mut sm = crate::Commissioner::new(commissioner_cfg)?;
 
     // 5. Poll loop.
+    //
+    // Run the loop in `run_poll_loop` so EVERY exit path — a `?`-propagated
+    // error, an `Action::Abort`, or `Action::Done` — funnels through one
+    // return below. Once PASE is up the device has (or is about to have) its
+    // failsafe armed; any FAILED exit must best-effort DISARM it so a
+    // half-finished or failed commission does not leave the device stuck in a
+    // failsafe-armed state until its own timer expires.
+    //
+    // `Action::Abort` carries `send_disarm_failsafe`: when the state machine
+    // says the device's failsafe was never armed (or already rolled back) it
+    // returns `LoopExit::Aborted { disarm: false }` and we skip the disarm.
+    // Every other error path disarms unconditionally (best-effort).
+    //
+    // RESIDUAL GAP (documented, low severity): this disarms on explicit error
+    // RETURN paths only. If the `commission()` future is *dropped* (cancelled)
+    // mid-flight, no disarm is sent — running async IO from `Drop` is not
+    // possible here, and a Drop-based guard would need a separate runtime
+    // handle. Callers that cancel a commission must rely on the device's own
+    // failsafe timer to expire, or re-arm-then-disarm on a fresh session.
+    let outcome = run_poll_loop(
+        &mut sm,
+        transport,
+        discovery,
+        &mut sessions,
+        pase_sid,
+        peer,
+        &mut case_sid,
+        &mut commissioner_signer,
+        &commissioner_noc,
+        commissioner_node_id,
+        &ipk_epoch_key,
+        fabric,
+        validation_time,
+    )
+    .await;
+
+    match outcome {
+        Ok(fabric) => Ok(fabric),
+        Err(exit) => {
+            // Best-effort disarm before surfacing the error: once PASE is up the
+            // device may have an armed failsafe from an earlier successful
+            // ArmFailSafe. `disarm_on_exit` honors an abort that asked to skip it.
+            if disarm_on_exit(&exit) {
+                rollback(transport, &mut sessions, pase_sid, peer).await;
+            }
+            Err(exit.into_driver_error())
+        }
+    }
+}
+
+/// Whether a failed [`run_poll_loop`] exit should trigger a best-effort failsafe
+/// disarm before the error is surfaced.
+///
+/// `true` for any [`LoopExit::Failed`] (the device may have an armed failsafe),
+/// and for an [`LoopExit::Aborted`] whose `disarm` flag is set; `false` only for
+/// an abort the state machine marked as not needing a disarm (failsafe never
+/// armed / already rolled back).
+fn disarm_on_exit(exit: &LoopExit) -> bool {
+    match exit {
+        LoopExit::Failed(_) => true,
+        LoopExit::Aborted { disarm, .. } => *disarm,
+    }
+}
+
+/// How the commissioning poll loop ([`run_poll_loop`]) terminated abnormally.
+///
+/// `Ok` from the loop is the success case ([`Action::Done`]); these are the two
+/// failure shapes, kept distinct so the caller knows whether the state machine
+/// asked to suppress the failsafe disarm.
+enum LoopExit {
+    /// The state machine emitted [`crate::Action::Abort`]. `disarm` mirrors its
+    /// `send_disarm_failsafe` flag; `reason` is the human-readable summary.
+    Aborted {
+        /// Whether the caller should best-effort disarm the failsafe.
+        disarm: bool,
+        /// Human-readable abort reason from the state machine.
+        reason: String,
+    },
+    /// Any other error (`?`-propagated). The caller disarms best-effort then
+    /// surfaces this error.
+    Failed(DriverError),
+}
+
+impl LoopExit {
+    /// Convert this loop exit into the public [`DriverError`] surfaced by
+    /// [`commission`].
+    fn into_driver_error(self) -> DriverError {
+        match self {
+            LoopExit::Aborted { reason, .. } => DriverError::Aborted(reason),
+            LoopExit::Failed(e) => e,
+        }
+    }
+}
+
+impl From<DriverError> for LoopExit {
+    fn from(e: DriverError) -> Self {
+        LoopExit::Failed(e)
+    }
+}
+
+impl From<crate::CommissioningError> for LoopExit {
+    fn from(e: crate::CommissioningError) -> Self {
+        LoopExit::Failed(DriverError::from(e))
+    }
+}
+
+/// The commissioning command loop, factored out of [`commission`] so every exit
+/// path returns through one place (letting the caller best-effort disarm the
+/// device failsafe on failure — see the call site).
+///
+/// Returns the [`CommissionedFabric`] on `Action::Done`, or a [`LoopExit`]
+/// describing the failure otherwise.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn run_poll_loop<T, D>(
+    sm: &mut crate::Commissioner,
+    transport: &T,
+    discovery: &mut D,
+    sessions: &mut SessionManager,
+    pase_sid: SessionId,
+    peer: SocketAddr,
+    case_sid: &mut Option<SessionId>,
+    commissioner_signer: &mut Option<matter_crypto::RingSigner>,
+    commissioner_noc: &matter_cert::MatterCertificate,
+    commissioner_node_id: u64,
+    ipk_epoch_key: &[u8; 16],
+    fabric: &crate::FabricRecord,
+    validation_time: MatterTime,
+) -> Result<CommissionedFabric, LoopExit>
+where
+    T: AsyncDatagram,
+    D: matter_transport::Discovery,
+{
+    use crate::{Action, SessionContext};
+    use matter_cert::{TrustAnchor, TrustedRoots};
+
     loop {
-        let action = sm.poll()?;
+        let action = sm.poll().map_err(DriverError::from)?;
         match action {
             Action::Invoke {
                 session,
@@ -629,7 +762,7 @@ where
                     command,
                 };
                 let outcome =
-                    dispatch_invoke(transport, &mut sessions, sid, peer, path, &payload).await?;
+                    dispatch_invoke(transport, sessions, sid, peer, path, &payload).await?;
                 // Map InvokeOutcome → the byte slice on_response expects:
                 //   Command(fields) → the response-command TLV bytes verbatim.
                 //   Status(Success) → [0x00] (single byte; state machine checks first byte).
@@ -667,7 +800,7 @@ where
                         attribute: attr,
                     })
                     .collect();
-                let report = dispatch_read(transport, &mut sessions, sid, peer, &paths).await?;
+                let report = dispatch_read(transport, sessions, sid, peer, &paths).await?;
                 let read_payload = extract_read_payload(expect, &report)?;
                 sm.on_response(expect, &read_payload)?;
             }
@@ -682,7 +815,7 @@ where
                 // response into the Sigma handshake (exchange.rs documents
                 // the deferred ack; observed on a real device: Tapo P110M,
                 // M6.6.5 validation).
-                flush_pending_acks(transport, &mut sessions, peer).await?;
+                flush_pending_acks(transport, sessions, peer).await?;
                 // Build CASE credentials for the commissioner's own identity.
                 // commissioner_signer is moved out of the Option here — it can
                 // only be taken once; a second EstablishCase would return an
@@ -702,7 +835,7 @@ where
                 )
                 .map_err(DriverError::Crypto)?;
                 let operational_ipk = matter_crypto::operational::derive_operational_ipk(
-                    &ipk_epoch_key,
+                    ipk_epoch_key,
                     &compressed_fabric_id,
                 )
                 .map_err(DriverError::Crypto)?;
@@ -721,7 +854,7 @@ where
 
                 match establish_case_session(
                     transport,
-                    &mut sessions,
+                    sessions,
                     discovery,
                     fabric.root_public_key.as_bytes(),
                     fabric_id,
@@ -733,7 +866,7 @@ where
                 .await
                 {
                     Ok(sid) => {
-                        case_sid = Some(sid);
+                        *case_sid = Some(sid);
                         sm.on_case_established()?;
                     }
                     Err(e) => {
@@ -754,16 +887,19 @@ where
                 send_disarm_failsafe,
                 reason,
             } => {
-                if send_disarm_failsafe {
-                    rollback(transport, &mut sessions, pase_sid, peer).await;
-                }
-                return Err(DriverError::Aborted(reason));
+                // The caller best-effort disarms after we return — pass the
+                // state machine's `send_disarm_failsafe` flag through so an
+                // abort that knows the failsafe was never armed skips it.
+                return Err(LoopExit::Aborted {
+                    disarm: send_disarm_failsafe,
+                    reason,
+                });
             }
 
             Action::EvictCase { .. } => {
-                return Err(DriverError::Handshake(
+                return Err(LoopExit::Failed(DriverError::Handshake(
                     "unexpected Action::EvictCase in M6 commission() loop (multi-fabric not implemented)",
-                ));
+                )));
             }
         }
     }
@@ -1491,6 +1627,53 @@ mod tests {
     /// PASE session and swallows any error. The device side asserts it received
     /// cluster 0x0030 / command 0x00 and that the decoded `expiry_length_seconds`
     /// field is 0.
+    /// The disarm decision (Finding #3): a `?`-propagated mid-flight failure
+    /// must trigger a best-effort failsafe disarm, an abort that asks to disarm
+    /// must disarm, and an abort that says the failsafe was never armed must
+    /// NOT disarm. Combined with `rollback_sends_arm_fail_safe_zero_over_pase`
+    /// (which proves the disarm wire form is `ArmFailSafe` with expiry 0), this
+    /// covers the failure-path disarm without driving a full RNG-backed PASE.
+    #[test]
+    fn disarm_on_exit_decision() {
+        assert!(
+            disarm_on_exit(&LoopExit::Failed(DriverError::Handshake(
+                "mid-flight failure"
+            ))),
+            "a propagated failure must disarm the failsafe best-effort"
+        );
+        assert!(
+            disarm_on_exit(&LoopExit::Aborted {
+                disarm: true,
+                reason: "device rejected".to_string(),
+            }),
+            "an abort that requests disarm must disarm"
+        );
+        assert!(
+            !disarm_on_exit(&LoopExit::Aborted {
+                disarm: false,
+                reason: "failsafe never armed".to_string(),
+            }),
+            "an abort that says not to disarm must be honored"
+        );
+    }
+
+    /// `into_driver_error` maps each `LoopExit` to the right public error.
+    #[test]
+    fn loop_exit_maps_to_driver_error() {
+        let aborted = LoopExit::Aborted {
+            disarm: true,
+            reason: "boom".to_string(),
+        };
+        match aborted.into_driver_error() {
+            DriverError::Aborted(r) => assert_eq!(r, "boom"),
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        match LoopExit::Failed(DriverError::Handshake("h")).into_driver_error() {
+            DriverError::Handshake("h") => {}
+            other => panic!("expected Handshake, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn rollback_sends_arm_fail_safe_zero_over_pase() {
         use crate::im::CommandPath;

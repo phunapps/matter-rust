@@ -59,6 +59,18 @@ pub enum NocError {
     /// An `OpCreds` cluster command codec failed.
     #[error("OpCreds cluster payload codec error")]
     ClusterCodec(#[source] matter_codec::Error),
+
+    /// An `OpCreds` cluster response was *structurally* malformed — the TLV
+    /// itself decoded, but its shape violated the expected schema (wrong
+    /// container kind / tag, duplicate field, a fixed-width field with the
+    /// wrong length, or a required field absent).
+    ///
+    /// Distinct from [`NocError::ClusterCodec`], which wraps a low-level codec
+    /// failure (e.g. a truncated buffer). A structural mismatch must not be
+    /// reported as a codec EOF — the carried `&'static str` names what was
+    /// expected so callers and logs get an accurate label.
+    #[error("OpCreds cluster response is structurally malformed: {0}")]
+    MalformedResponse(&'static str),
 }
 
 impl From<matter_codec::Error> for NocError {

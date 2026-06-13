@@ -190,9 +190,60 @@ pub const MAX_READ_CHUNKS: usize = 64;
 /// [`secured_read`] aborts (256 `KiB`).
 pub const MAX_READ_BYTES: usize = 256 * 1024;
 
+/// Maximum decoded payload bytes a *single* `ReportData` chunk may carry
+/// before [`secured_read`] aborts (64 `KiB`).
+///
+/// A Matter chunk rides inside one secured UDP datagram, so a single chunk is
+/// far smaller than this in practice. Bounding each chunk *before* it is parsed
+/// stops a buggy or hostile peer from forcing a parse of one oversized blob
+/// (the cumulative [`MAX_READ_BYTES`] cap alone would let a single chunk up to
+/// that size through to the parser first).
+pub const MAX_READ_CHUNK_BYTES: usize = 64 * 1024;
+
 /// IM `StatusResponse` opcode (Matter §8.7) — the per-chunk ack the reader
 /// sends to solicit the next chunk.
 const OP_STATUS_RESPONSE: u8 = 0x01;
+
+/// Enforce the three chunked-read safety caps for one inbound chunk, returning
+/// the updated cumulative byte total on success.
+///
+/// Checked in order, all *before* the chunk is parsed:
+///
+/// 1. **Per-chunk** ([`MAX_READ_CHUNK_BYTES`]): reject a single oversized blob
+///    up front, so it is never handed to the parser.
+/// 2. **Chunk count** ([`MAX_READ_CHUNKS`]): bound the number of chunks.
+/// 3. **Cumulative bytes** ([`MAX_READ_BYTES`]): bound the running total.
+///
+/// `existing_chunks` is the number of chunks already accepted, `chunk_len` the
+/// length of the new chunk's decoded payload, and `total_bytes` the running
+/// cumulative total before this chunk.
+///
+/// # Errors
+///
+/// - [`DriverError::ReadTooLarge`] if any cap is exceeded, naming the cap hit.
+fn enforce_read_caps(
+    existing_chunks: usize,
+    chunk_len: usize,
+    total_bytes: usize,
+) -> Result<usize, DriverError> {
+    if chunk_len > MAX_READ_CHUNK_BYTES {
+        return Err(DriverError::ReadTooLarge {
+            limit: "MAX_READ_CHUNK_BYTES",
+        });
+    }
+    if existing_chunks + 1 > MAX_READ_CHUNKS {
+        return Err(DriverError::ReadTooLarge {
+            limit: "MAX_READ_CHUNKS",
+        });
+    }
+    let total = total_bytes.saturating_add(chunk_len);
+    if total > MAX_READ_BYTES {
+        return Err(DriverError::ReadTooLarge {
+            limit: "MAX_READ_BYTES",
+        });
+    }
+    Ok(total)
+}
 
 /// Send a `ReadRequest` (`app_payload`) as a reliable secured message, then
 /// drive the Matter chunked-read transaction: for every inbound `ReportData`
@@ -210,8 +261,8 @@ const OP_STATUS_RESPONSE: u8 = 0x01;
 ///
 /// # Errors
 ///
-/// - [`DriverError::ReadTooLarge`] if the read exceeds [`MAX_READ_CHUNKS`] or
-///   [`MAX_READ_BYTES`].
+/// - [`DriverError::ReadTooLarge`] if the read exceeds [`MAX_READ_CHUNKS`],
+///   [`MAX_READ_BYTES`], or any single chunk exceeds [`MAX_READ_CHUNK_BYTES`].
 /// - [`DriverError::Im`] if a chunk is not a parseable `ReportData`.
 /// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
 ///   as for [`secured_round_trip`].
@@ -267,13 +318,10 @@ pub async fn secured_read<T: AsyncDatagram>(
                     DecodeInboundOutput::AppMessage { exchange_id, payload, .. }
                         if exchange_id == our_exchange =>
                     {
-                        total_bytes = total_bytes.saturating_add(payload.len());
-                        if chunks.len() + 1 > MAX_READ_CHUNKS {
-                            return Err(DriverError::ReadTooLarge { limit: "MAX_READ_CHUNKS" });
-                        }
-                        if total_bytes > MAX_READ_BYTES {
-                            return Err(DriverError::ReadTooLarge { limit: "MAX_READ_BYTES" });
-                        }
+                        // Enforce all three read caps BEFORE parsing the chunk —
+                        // in particular the per-chunk cap bounds a lone oversized
+                        // blob up front rather than parsing it first.
+                        total_bytes = enforce_read_caps(chunks.len(), payload.len(), total_bytes)?;
                         let more = crate::im::parse_report_data(&payload)?.more_chunked_messages;
                         chunks.push(payload);
                         if !more {
@@ -629,6 +677,47 @@ mod tests {
         w.put_uint(Tag::Context(0xFF), 11).unwrap();
         w.end_container().unwrap();
         buf
+    }
+
+    #[test]
+    fn enforce_read_caps_rejects_oversized_single_chunk() {
+        // A lone chunk larger than the per-chunk cap is rejected up front
+        // (before any parse), even though it alone is under the cumulative cap.
+        let err = enforce_read_caps(0, MAX_READ_CHUNK_BYTES + 1, 0).unwrap_err();
+        match err {
+            DriverError::ReadTooLarge { limit } => assert_eq!(limit, "MAX_READ_CHUNK_BYTES"),
+            other => panic!("expected ReadTooLarge(MAX_READ_CHUNK_BYTES), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enforce_read_caps_accepts_normal_chunk() {
+        // A normally sized chunk passes and returns the updated cumulative total.
+        let total = enforce_read_caps(0, 1024, 0).unwrap();
+        assert_eq!(total, 1024);
+        // A second normal chunk accumulates.
+        let total = enforce_read_caps(1, 512, total).unwrap();
+        assert_eq!(total, 1536);
+    }
+
+    #[test]
+    fn enforce_read_caps_rejects_too_many_chunks() {
+        let err = enforce_read_caps(MAX_READ_CHUNKS, 1, 0).unwrap_err();
+        match err {
+            DriverError::ReadTooLarge { limit } => assert_eq!(limit, "MAX_READ_CHUNKS"),
+            other => panic!("expected MAX_READ_CHUNKS, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn enforce_read_caps_rejects_cumulative_overflow() {
+        // Each chunk is within the per-chunk cap, but together they exceed the
+        // cumulative cap.
+        let err = enforce_read_caps(1, 1, MAX_READ_BYTES).unwrap_err();
+        match err {
+            DriverError::ReadTooLarge { limit } => assert_eq!(limit, "MAX_READ_BYTES"),
+            other => panic!("expected MAX_READ_BYTES, got {other:?}"),
+        }
     }
 
     #[tokio::test]

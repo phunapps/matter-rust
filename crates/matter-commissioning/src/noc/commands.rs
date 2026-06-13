@@ -70,7 +70,11 @@ pub fn decode_attestation_response(
             tag: Tag::Anonymous,
             kind: ContainerKind::Structure,
         }) => {}
-        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        _ => {
+            return Err(NocError::MalformedResponse(
+                "AttestationResponse: expected an anonymous structure",
+            ))
+        }
     }
     let mut elements: Option<Vec<u8>> = None;
     let mut sig: Option<[u8; 64]> = None;
@@ -87,7 +91,9 @@ pub fn decode_attestation_response(
                 value: Value::Bytes(b),
             }) => {
                 if elements.is_some() {
-                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                    return Err(NocError::MalformedResponse(
+                        "AttestationResponse: duplicate AttestationElements field",
+                    ));
                 }
                 elements = Some(b);
             }
@@ -96,23 +102,33 @@ pub fn decode_attestation_response(
                 value: Value::Bytes(b),
             }) => {
                 if sig.is_some() {
-                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                    return Err(NocError::MalformedResponse(
+                        "AttestationResponse: duplicate Signature field",
+                    ));
                 }
-                let arr: [u8; 64] = b
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                let arr: [u8; 64] = b.as_slice().try_into().map_err(|_| {
+                    NocError::MalformedResponse(
+                        "AttestationResponse: Signature is not exactly 64 bytes",
+                    )
+                })?;
                 sig = Some(arr);
             }
             // Forward-compat: ignore unknown future fields.
             Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
-            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+            Some(_) => {
+                return Err(NocError::MalformedResponse(
+                    "AttestationResponse: unexpected element",
+                ))
+            }
         }
     }
     Ok(crate::attestation::AttestationResponse {
-        attestation_elements: elements
-            .ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
-        signature: sig.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        attestation_elements: elements.ok_or(NocError::MalformedResponse(
+            "AttestationResponse: missing AttestationElements field",
+        ))?,
+        signature: sig.ok_or(NocError::MalformedResponse(
+            "AttestationResponse: missing Signature field",
+        ))?,
     })
 }
 
@@ -163,7 +179,11 @@ pub fn decode_certificate_chain_response(tlv: &[u8]) -> Result<CertificateChainR
             tag: Tag::Anonymous,
             kind: ContainerKind::Structure,
         }) => {}
-        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        _ => {
+            return Err(NocError::MalformedResponse(
+                "CertificateChainResponse: expected an anonymous structure",
+            ))
+        }
     }
     let mut cert: Option<Vec<u8>> = None;
     loop {
@@ -179,17 +199,25 @@ pub fn decode_certificate_chain_response(tlv: &[u8]) -> Result<CertificateChainR
                 value: Value::Bytes(b),
             }) => {
                 if cert.is_some() {
-                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                    return Err(NocError::MalformedResponse(
+                        "CertificateChainResponse: duplicate Certificate field",
+                    ));
                 }
                 cert = Some(b);
             }
             // Forward-compat: ignore unknown future fields.
             Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
-            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+            Some(_) => {
+                return Err(NocError::MalformedResponse(
+                    "CertificateChainResponse: unexpected element",
+                ))
+            }
         }
     }
     Ok(CertificateChainResponse {
-        certificate: cert.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        certificate: cert.ok_or(NocError::MalformedResponse(
+            "CertificateChainResponse: missing Certificate field",
+        ))?,
     })
 }
 
@@ -228,7 +256,11 @@ pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
             tag: Tag::Anonymous,
             kind: ContainerKind::Structure,
         }) => {}
-        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        _ => {
+            return Err(NocError::MalformedResponse(
+                "CSRResponse: expected an anonymous structure",
+            ))
+        }
     }
 
     let mut nocsr: Option<Vec<u8>> = None;
@@ -247,7 +279,9 @@ pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
                 value: Value::Bytes(b),
             }) => {
                 if nocsr.is_some() {
-                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                    return Err(NocError::MalformedResponse(
+                        "CSRResponse: duplicate NOCSRElements field",
+                    ));
                 }
                 nocsr = Some(b);
             }
@@ -256,24 +290,34 @@ pub fn decode_csr_response(tlv: &[u8]) -> Result<CsrResponse, NocError> {
                 value: Value::Bytes(b),
             }) => {
                 if sig.is_some() {
-                    return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof));
+                    return Err(NocError::MalformedResponse(
+                        "CSRResponse: duplicate AttestationSignature field",
+                    ));
                 }
-                let arr: [u8; 64] = b
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                let arr: [u8; 64] = b.as_slice().try_into().map_err(|_| {
+                    NocError::MalformedResponse(
+                        "CSRResponse: AttestationSignature is not exactly 64 bytes",
+                    )
+                })?;
                 sig = Some(arr);
             }
             // Forward-compat: future-tag tolerance per the interaction-model rules.
             Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
-            Some(_) => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+            Some(_) => {
+                return Err(NocError::MalformedResponse(
+                    "CSRResponse: unexpected element",
+                ))
+            }
         }
     }
 
     Ok(CsrResponse {
-        nocsr_elements: nocsr.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
-        attestation_signature: sig
-            .ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        nocsr_elements: nocsr.ok_or(NocError::MalformedResponse(
+            "CSRResponse: missing NOCSRElements field",
+        ))?,
+        attestation_signature: sig.ok_or(NocError::MalformedResponse(
+            "CSRResponse: missing AttestationSignature field",
+        ))?,
     })
 }
 
@@ -372,7 +416,11 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
             tag: Tag::Anonymous,
             kind: ContainerKind::Structure,
         }) => {}
-        _ => return Err(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof)),
+        _ => {
+            return Err(NocError::MalformedResponse(
+                "NOCResponse: expected an anonymous structure",
+            ))
+        }
     }
 
     let mut status: Option<u8> = None;
@@ -391,16 +439,18 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
                 tag: Tag::Context(0),
                 value: Value::Uint(v),
             }) => {
-                let n = u8::try_from(v)
-                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                let n = u8::try_from(v).map_err(|_| {
+                    NocError::MalformedResponse("NOCResponse: StatusCode exceeds u8")
+                })?;
                 status = Some(n);
             }
             Some(Element::Scalar {
                 tag: Tag::Context(1),
                 value: Value::Uint(v),
             }) => {
-                let n = u8::try_from(v)
-                    .map_err(|_| NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?;
+                let n = u8::try_from(v).map_err(|_| {
+                    NocError::MalformedResponse("NOCResponse: FabricIndex exceeds u8")
+                })?;
                 fabric_index = Some(n);
             }
             Some(Element::Scalar {
@@ -415,7 +465,9 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
     }
 
     Ok(NocResponse {
-        status: status.ok_or(NocError::ClusterCodec(matter_codec::Error::UnexpectedEof))?,
+        status: status.ok_or(NocError::MalformedResponse(
+            "NOCResponse: missing StatusCode field",
+        ))?,
         fabric_index,
         debug_text,
     })
@@ -458,9 +510,10 @@ mod tests {
         w.start_structure(Tag::Anonymous).unwrap();
         w.put_bytes(Tag::Context(0), b"some nocsr").unwrap();
         w.end_container().unwrap();
+        // A missing required field is a STRUCTURAL malformation, not a codec EOF.
         assert!(matches!(
             decode_csr_response(&buf),
-            Err(NocError::ClusterCodec(_))
+            Err(NocError::MalformedResponse(_))
         ));
     }
 
@@ -474,8 +527,33 @@ mod tests {
         w.end_container().unwrap();
         assert!(matches!(
             decode_csr_response(&buf),
-            Err(NocError::ClusterCodec(_))
+            Err(NocError::MalformedResponse(_))
         ));
+    }
+
+    #[test]
+    fn decode_csr_response_rejects_non_struct_outer() {
+        // A well-formed TLV that is NOT the expected anonymous struct (here a
+        // bare unsigned integer) must surface a structural error — NOT the
+        // misleading codec `UnexpectedEof`. (Finding #2.)
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_uint(Tag::Anonymous, 7).unwrap();
+        match decode_csr_response(&buf) {
+            Err(NocError::MalformedResponse(_)) => {}
+            other => panic!("expected MalformedResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_noc_response_rejects_non_struct_outer() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_uint(Tag::Anonymous, 7).unwrap();
+        match decode_noc_response(&buf) {
+            Err(NocError::MalformedResponse(_)) => {}
+            other => panic!("expected MalformedResponse, got {other:?}"),
+        }
     }
 
     fn write_noc_response(
@@ -528,9 +606,10 @@ mod tests {
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
         w.end_container().unwrap();
+        // Missing required StatusCode field is structural, not a codec EOF.
         assert!(matches!(
             decode_noc_response(&buf),
-            Err(NocError::ClusterCodec(_))
+            Err(NocError::MalformedResponse(_))
         ));
     }
 

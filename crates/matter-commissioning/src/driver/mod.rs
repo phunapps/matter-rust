@@ -21,6 +21,7 @@ pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
 pub use exchange::{
     secured_read, secured_round_trip, SecuredResponse, MAX_READ_BYTES, MAX_READ_CHUNKS,
+    MAX_READ_CHUNK_BYTES,
 };
 pub use pase::run_pase;
 pub use unsecured::{

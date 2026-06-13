@@ -257,6 +257,20 @@ pub enum Error {
     #[error("manual code Verhoeff check digit failed")]
     ManualCodeBadChecksum,
 
+    /// A manual-code VID or PID field decoded to a 5-digit decimal value
+    /// that does not fit in the 16-bit field it maps to (i.e. `> 65535`).
+    ///
+    /// A manual pairing code carries VID and PID as 5-digit decimals, whose
+    /// maximum (`99999`) exceeds `u16::MAX` (`65535`). Rather than silently
+    /// truncating an out-of-range value to `u16`, the parser rejects it.
+    #[error("manual code {field} value {value} exceeds the 16-bit field width")]
+    FieldOutOfRange {
+        /// Which field overflowed: `"vendor_id"` or `"product_id"`.
+        field: &'static str,
+        /// The out-of-range decimal value parsed from the code.
+        value: u32,
+    },
+
     /// The 12-bit Long Discriminator field is out of range.
     #[error("discriminator {0} exceeds the 12-bit field width")]
     DiscriminatorOutOfRange(u16),

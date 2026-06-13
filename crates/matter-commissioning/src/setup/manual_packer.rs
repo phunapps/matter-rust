@@ -108,9 +108,18 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
         let pid: u32 = s[15..20]
             .parse()
             .map_err(|_| Error::ManualCodeNonDigit('?', 15))?;
-        #[allow(clippy::cast_possible_truncation)]
-        // VID/PID are 5-digit decimals; max 99_999 fits u16.
-        (Some(vid as u16), Some(pid as u16))
+        // VID/PID are 5-digit decimals (max 99_999), which exceeds u16::MAX
+        // (65_535). Range-check BEFORE narrowing so an out-of-range value is
+        // rejected with a typed error rather than silently truncated/wrapped.
+        let vid = u16::try_from(vid).map_err(|_| Error::FieldOutOfRange {
+            field: "vendor_id",
+            value: vid,
+        })?;
+        let pid = u16::try_from(pid).map_err(|_| Error::FieldOutOfRange {
+            field: "product_id",
+            value: pid,
+        })?;
+        (Some(vid), Some(pid))
     } else {
         if s.len() != 11 {
             return Err(Error::ManualCodeWrongLength(s.len()));
@@ -225,6 +234,48 @@ mod tests {
             unpack(&s).unwrap_err(),
             Error::ManualCodeBadChecksum
         ));
+    }
+
+    #[test]
+    fn unpack_rejects_out_of_range_vid() {
+        // Build a valid 21-digit code, then overwrite the VID digits (positions
+        // 10..15) with 99999 (> u16::MAX) and re-append the correct Verhoeff
+        // check digit so the failure is the range check, not the checksum.
+        let mut s = pack(&payload_21(0xA, 20_202_021, 0x1234, 0x5678));
+        s.truncate(20); // drop existing check digit
+        s.replace_range(10..15, "99999"); // VID = 99999, out of u16 range
+        s.push((super::verhoeff::check_digit(&s) + b'0') as char);
+        match unpack(&s).unwrap_err() {
+            Error::FieldOutOfRange { field, value } => {
+                assert_eq!(field, "vendor_id");
+                assert_eq!(value, 99999);
+            }
+            other => panic!("expected FieldOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unpack_rejects_out_of_range_pid() {
+        let mut s = pack(&payload_21(0xA, 20_202_021, 0x1234, 0x5678));
+        s.truncate(20);
+        s.replace_range(15..20, "70000"); // PID = 70000, out of u16 range
+        s.push((super::verhoeff::check_digit(&s) + b'0') as char);
+        match unpack(&s).unwrap_err() {
+            Error::FieldOutOfRange { field, value } => {
+                assert_eq!(field, "product_id");
+                assert_eq!(value, 70000);
+            }
+            other => panic!("expected FieldOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unpack_accepts_in_range_vid_pid_boundary() {
+        // 65535 is the largest u16; must parse cleanly.
+        let p = payload_21(0xA, 20_202_021, 0xFFFF, 0xFFFF);
+        let s = pack(&p);
+        let back = unpack(&s).unwrap();
+        assert_eq!(back, p);
     }
 
     #[test]

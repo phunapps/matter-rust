@@ -82,7 +82,8 @@ pub enum DriverError {
     /// peer. Carries the name of the cap that was hit.
     #[error("chunked read exceeded its bound: {limit}")]
     ReadTooLarge {
-        /// Which cap was hit (`"MAX_READ_CHUNKS"` or `"MAX_READ_BYTES"`).
+        /// Which cap was hit (`"MAX_READ_CHUNKS"`, `"MAX_READ_BYTES"`, or
+        /// `"MAX_READ_CHUNK_BYTES"`).
         limit: &'static str,
     },
 }
