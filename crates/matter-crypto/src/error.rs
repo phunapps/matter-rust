@@ -127,6 +127,12 @@ pub enum Error {
     #[error("CASE: AEAD decryption of encrypted blob failed")]
     EncryptedBlobDecryptionFailed,
 
+    /// AEAD encryption failed — cipher initialisation rejected the key, or
+    /// the underlying AES-CCM encrypt call failed. Not expected in practice
+    /// for the spec-bounded key and message sizes.
+    #[error("AEAD encryption failed")]
+    EncryptionFailed,
+
     /// Peer's ECDSA signature over the SIGMA transcript did not verify.
     #[error("CASE: peer signature did not verify")]
     PeerSignatureInvalid,

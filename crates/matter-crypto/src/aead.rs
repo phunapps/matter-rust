@@ -38,16 +38,16 @@ pub const AEAD_TAG_LEN: usize = 16;
 ///
 /// # Errors
 ///
-/// Returns [`Error::EphemeralKeyGenerationFailed`] on key initialisation
-/// failure (impossible with a fixed-length array key) or encryption
-/// failure (not expected in practice for the spec-bounded message sizes).
+/// Returns [`Error::EncryptionFailed`] on key initialisation failure
+/// (impossible with a fixed-length array key) or encryption failure (not
+/// expected in practice for the spec-bounded message sizes).
 pub fn encrypt(
     key: &[u8; AEAD_KEY_LEN],
     nonce: &[u8; AEAD_NONCE_LEN],
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>> {
-    let cipher = Aes128Ccm::new_from_slice(key).map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+    let cipher = Aes128Ccm::new_from_slice(key).map_err(|_| Error::EncryptionFailed)?;
     let nonce_arr: Nonce<U13> = (*nonce).into();
     cipher
         .encrypt(
@@ -57,7 +57,7 @@ pub fn encrypt(
                 aad,
             },
         )
-        .map_err(|_| Error::EphemeralKeyGenerationFailed)
+        .map_err(|_| Error::EncryptionFailed)
 }
 
 /// AES-128-CCM-128 decrypt: input is `ciphertext || tag` (so
