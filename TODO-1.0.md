@@ -4,6 +4,57 @@ This file tracks gaps deliberately deferred during M0–M2. Each item
 must be resolved before claiming production readiness for the affected
 crate.
 
+## Deferred from the 2026-06-12 full-codebase audit → fold into M9
+
+The 2026-06-12 audit (29 fixes landed on `main`, commits `3d1bb405`..`34457ecc`)
+deferred three items because they all touch the matter-clusters **code-generation
+emitter** (which M9 rewrites) or a large async re-architecture M9 will undertake.
+**When M9 starts, pull these into its plan.** Audit backlog (uncommitted, local):
+`docs/audit/2026-06-12-backlog.md` + `2026-06-12-findings.json`.
+
+### 1. matter-clusters codegen forward-compatibility bugs (2 medium findings)
+
+**Status:** open, deferred to M9 codegen rewrite.
+
+**Why it matters:** the generated cluster decoders break the crate's documented
+forward-compatibility guarantee against devices on newer Matter revisions.
+
+- **Unknown nested container skip (silent early-termination):** generated
+  `decode_from` / list decoders loop over `TlvReader::next()` with a
+  `Some(_) => {}` catch-all that does NOT consume an unknown nested
+  struct/array/list body. The nested container's `ContainerEnd` is then mistaken
+  for the end of the struct being decoded, so the loop exits early and required
+  fields after the unknown one are dropped (→ spurious `MissingField` / truncated
+  list). **Fix:** add `TlvReader::skip_container()` to matter-codec and make the
+  codegen emitter (`xtask/src/codegen/`) match `ContainerStart` explicitly and
+  drain the sub-tree. (Sites incl. `src/gen/descriptor.rs`, `door_lock.rs`,
+  `basic_information.rs`, `occupancy_sensing.rs`, hand-written
+  `SemanticTagStruct::decode_from`.)
+- **Bitmap `from_bits_truncate` drops unknown bits:** generated bitmap decoders
+  (`color_control.rs`, `level_control.rs`, `occupancy_sensing.rs`) use
+  `from_bits_truncate`, silently zeroing bits a newer device sets. **Fix:** emit
+  `from_bits_retain` so unknown bits round-trip.
+
+### 2. matter-clusters `#[non_exhaustive]` on generated public structs
+
+**Status:** open, deferred to M9. The 2026-06-12 `#[non_exhaustive]` sweep covered
+all hand-written public types but intentionally skipped matter-clusters because its
+structs are emitted by `xtask` codegen — adding the attribute means changing the
+emitter (and `cargo xtask codegen --check` must stay in sync). Fold into the M9
+codegen rewrite.
+
+### 3. Controller actor serializes long commission/connect handlers (documented residual)
+
+**Status:** documented limitation (rustdoc on `Actor::run` in
+`crates/matter-controller/src/actor.rs`), full fix deferred.
+
+`handle_commission` and the CASE-connect path run to completion on the single
+actor task, pausing all other sessions' MRP retransmits + liveness for the
+handshake duration. The audit's timer-fairness fix (`34457ecc`) stops *inbound
+floods* from starving timers, and the fsync offload (`fddff6d0`) removed the only
+gratuitous blocking call — but fully decoupling long protocol handlers from the
+recv/MRP loop is a significant async re-architecture left for a future milestone.
+
 ## matter-cert
 
 ### Cross-verification against `project-chip/connectedhomeip`
