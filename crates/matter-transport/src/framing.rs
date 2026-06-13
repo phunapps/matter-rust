@@ -425,7 +425,15 @@ pub fn decode_secured(
     // unauthenticated at this point.
     replay_window.would_reject(header.message_counter.0)?;
 
-    let aad = encode_header(&header);
+    // The AAD is the on-the-wire header — the leading bytes of `bytes` up to
+    // where the encrypted payload (`rest`) begins. `decode_header` returns
+    // `rest = &bytes[header_len..]`, so `&bytes[..header_len]` is byte-for-byte
+    // the header the sender authenticated. We slice it directly rather than
+    // re-encoding via `encode_header(&header)` — the slice and the re-encode
+    // are identical bytes (the framing roundtrip tests pin this), and the
+    // slice avoids an allocation + re-serialisation on every inbound packet.
+    let header_len = bytes.len() - rest.len();
+    let aad = &bytes[..header_len];
     let nonce = build_nonce(&header, nonce_source_node_id);
     // We're decoding inbound from the peer; the peer's outbound key is
     // the opposite of ours.
@@ -434,7 +442,7 @@ pub fn decode_secured(
         crate::session::SessionRole::Responder => &keys.i2r_key,
     };
 
-    let plaintext = matter_crypto::aead::decrypt(key, &nonce, &aad, rest)
+    let plaintext = matter_crypto::aead::decrypt(key, &nonce, aad, rest)
         .map_err(|_| Error::DecryptionFailed)?;
 
     // Authenticated: now it is safe to COMMIT the counter to the replay
@@ -606,6 +614,35 @@ mod tests {
         let bytes = [0b0000_0011, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         let err = decode_header(&bytes).unwrap_err();
         assert!(matches!(err, Error::MalformedHeader(_)));
+    }
+
+    /// Load-bearing invariant for the `decode_secured` AAD optimisation:
+    /// the leading header bytes of the input (`&bytes[..header_len]`, where
+    /// `header_len = bytes.len() - rest.len()`) are byte-for-byte identical to
+    /// `encode_header(&decoded_header)`. If this ever drifts — e.g. a header
+    /// field that doesn't round-trip exactly — `decode_secured` would feed the
+    /// AES-CCM verifier the wrong AAD and silently fail ALL decryption. We pin
+    /// it here across the maximal header shape (S=1, DSIZ=unicast) plus a
+    /// trailing payload so `rest` is non-empty.
+    #[test]
+    fn aad_slice_equals_reencoded_header() {
+        let header = SecuredMessageHeader {
+            flags: SecuredMessageFlags::SOURCE_PRESENT | SecuredMessageFlags::DEST_UNICAST,
+            session_id: SessionId(0x4242),
+            security_flags: SecurityFlags::empty(),
+            message_counter: MessageCounter(0x1234_5678),
+            source_node_id: Some(NodeId(0x1111_2222_3333_4444)),
+            destination_node_id: Some(DestNodeId::Node(NodeId(0x5555_6666_7777_8888))),
+        };
+        let mut bytes = encode_header(&header);
+        bytes.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]); // pretend payload+tag
+        let (decoded, rest) = decode_header(&bytes).unwrap();
+        let header_len = bytes.len() - rest.len();
+        assert_eq!(
+            &bytes[..header_len],
+            encode_header(&decoded).as_slice(),
+            "AAD slice must equal the re-encoded header byte-for-byte"
+        );
     }
 
     /// Build a minimal secured header at `counter` for the secured-message

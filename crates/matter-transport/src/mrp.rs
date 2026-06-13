@@ -564,8 +564,13 @@ impl MrpState {
             let header_len = decrypted_payload.len() - tail.len();
             (h, header_len)
         };
-        let mut bytes = decrypted_payload;
-        let app_payload: Vec<u8> = bytes.drain(header_len..).collect();
+        // Drop the (small) protocol header in place and reuse the existing
+        // allocation as the app payload. `drain(..header_len)` shifts the
+        // body down within the same buffer (a memmove of the body, no second
+        // heap allocation) — cheaper than collecting the tail into a fresh
+        // Vec and leaving the original allocation as garbage.
+        let mut app_payload = decrypted_payload;
+        app_payload.drain(..header_len);
 
         let exchange_id = header.exchange_id;
         let peer_is_initiator = header.exchange_flags.contains(ExchangeFlags::INITIATOR);

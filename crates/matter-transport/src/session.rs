@@ -445,11 +445,20 @@ impl SessionManager {
 
         // 3. Record the send. mark_packet_sent always updates the
         //    idle/active timing baseline; pending-ack registration is gated
-        //    internally by the `reliable` flag.
+        //    internally by the `reliable` flag. The retransmit buffer is only
+        //    retained for reliable messages, so we clone the wire bytes ONLY
+        //    when `reliable` is set — an unreliable send hands `mark_packet_sent`
+        //    an empty Vec (which it drops without copying), avoiding a full
+        //    packet copy on every fire-and-forget datagram.
+        let retransmit_copy = if mrp_flags.reliable {
+            wire_bytes.clone()
+        } else {
+            Vec::new()
+        };
         session.mrp.mark_packet_sent(
             counter,
             prepared.exchange_id,
-            wire_bytes.clone(),
+            retransmit_copy,
             mrp_flags.reliable,
             now,
         );
@@ -754,5 +763,62 @@ mod tests {
         assert_eq!(protocol_id, ProtocolId::INTERACTION_MODEL);
         assert_eq!(opcode, 0x08);
         assert_eq!(payload, b"payload");
+    }
+
+    /// An UNRELIABLE outbound must NOT register a retransmit entry — there is
+    /// no pending deadline afterwards. This pins the perf fix that skips the
+    /// retransmit-buffer clone for fire-and-forget datagrams: a clone is only
+    /// worthwhile if MRP will actually hold the bytes for re-send.
+    #[test]
+    fn unreliable_outbound_registers_no_retransmit() {
+        let (mut a, _b) = paired_sessions();
+        let now = Instant::now();
+        a.encode_outbound(
+            SessionId(1),
+            None,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"fire-and-forget",
+            MrpFlags { reliable: false },
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            a.poll_timeout(),
+            None,
+            "an unreliable send must not schedule a retransmit"
+        );
+    }
+
+    /// An unreliable round-trip still decodes correctly. This exercises the
+    /// AAD-slice path in `decode_secured` (the AAD is sliced from the input
+    /// header bytes rather than re-encoded) and the in-place payload split in
+    /// MRP `process_inbound` on a non-reliable packet.
+    #[test]
+    fn unreliable_roundtrip_decodes() {
+        let (mut a, mut b) = paired_sessions();
+        let out = a
+            .encode_outbound(
+                SessionId(1),
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"unreliable payload",
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        let DecodeInboundOutput::AppMessage {
+            protocol_id,
+            opcode,
+            payload,
+            ..
+        } = b.decode_inbound(&out.wire_bytes, Instant::now()).unwrap()
+        else {
+            panic!("expected AppMessage");
+        };
+        assert_eq!(protocol_id, ProtocolId::INTERACTION_MODEL);
+        assert_eq!(opcode, 0x08);
+        assert_eq!(payload, b"unreliable payload");
     }
 }
