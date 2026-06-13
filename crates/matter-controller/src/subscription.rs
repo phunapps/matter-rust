@@ -75,7 +75,7 @@ pub(crate) const SUBSCRIPTION_CHANNEL_CAP: usize = 256;
 /// the handle cancels the subscription (best-effort).
 ///
 /// Steady-state [`SubscriptionEvent::Report`]s are buffered in a **bounded**
-/// channel (capacity [`SUBSCRIPTION_CHANNEL_CAP`]) so a device — whose reporting
+/// channel (capacity `SUBSCRIPTION_CHANNEL_CAP`, 256) so a device — whose reporting
 /// cadence and per-report size are attacker-controlled — cannot drive unbounded
 /// controller memory growth. If the consumer does not call [`Self::next`]
 /// promptly and the buffer fills, excess reports are dropped and a
