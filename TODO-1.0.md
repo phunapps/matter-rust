@@ -55,6 +55,22 @@ floods* from starving timers, and the fsync offload (`fddff6d0`) removed the onl
 gratuitous blocking call — but fully decoupling long protocol handlers from the
 recv/MRP loop is a significant async re-architecture left for a future milestone.
 
+### 4. matter-codec per-element budget check has a measurable decode cost
+
+**Status:** open perf follow-up; not blocking.
+
+The element-budget DoS defense added in the audit (`b4ab6a65`, `charge_element`
+in `read_container_body`) is charged once per materialised `Value`, including
+struct/scalar fields. Benchmarking audit-HEAD vs pre-audit (`f362533a`) showed
+report parsing **-22%** and array decode **-9%** (faster), but a
+`struct_500_uint` micro-bench **+10% slower** — the per-element charge with no
+offsetting array-alloc win. Only bites pathological tiny-scalar-heavy containers
+(atypical for Matter). If a real profile flags it: charge the budget per
+*container* rather than per *scalar*, or skip fixed-width scalars. The criterion
+benches live in `crates/matter-codec/benches/decode.rs` and
+`crates/matter-interaction/benches/report_parse.rs` (added during the audit;
+partially closes the "Benchmark suite" cross-cutting item below).
+
 ## matter-cert
 
 ### Cross-verification against `project-chip/connectedhomeip`
