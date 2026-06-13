@@ -226,7 +226,10 @@ enum PendingReply {
         /// The consumer's receivers, handed back on the initial `Established`.
         /// `None` for a resubscribe (the consumer keeps its existing receivers).
         report_rx: Option<SubReceivers>,
-        priming: ReportReassembler,
+        // Boxed to keep the `Command` enum compact: the reassembler embeds a
+        // `ReportAccumulator` (HashMaps + size-cap bookkeeping) that would
+        // otherwise dominate every other variant's footprint.
+        priming: Box<ReportReassembler>,
         node_id: u64,
         paths: Vec<matter_interaction::ReadPath>,
         min_interval: u16,
@@ -284,8 +287,9 @@ impl ReportReassembler {
     /// Push one already-parsed `ReportData` chunk. Returns `Some(merged
     /// attributes)` when this chunk is the final one
     /// (`more_chunked_messages == false`), resetting for the next notification;
-    /// returns `None` while more chunks are pending or the chunk cap was
-    /// exceeded (partial dropped).
+    /// returns `None` while more chunks are pending, the chunk cap was
+    /// exceeded, or the accumulator's in-crate total-size ceiling was exceeded
+    /// (partial dropped in all three cases).
     ///
     /// This is the single-parse entry point: the caller (`deliver_report` /
     /// the priming path) parses the inbound datagram exactly once and hands the
@@ -296,7 +300,15 @@ impl ReportReassembler {
         rd: matter_interaction::ReportData,
     ) -> Option<Vec<(matter_interaction::AttributePath, matter_codec::Value)>> {
         let more = rd.more_chunked_messages;
-        self.acc.push(rd);
+        if self.acc.push(rd).is_err() {
+            // The accumulator's total-size ceiling was hit (a peer streaming an
+            // unbounded report set). Drop the partial — same posture as the
+            // chunk-count cap below — and wait for liveness/resubscribe to
+            // recover a clean snapshot.
+            self.acc = matter_interaction::ReportAccumulator::default();
+            self.pending_chunks = 0;
+            return None;
+        }
         if !more {
             self.pending_chunks = 0;
             return Some(std::mem::take(&mut self.acc).finish());
@@ -1206,7 +1218,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             reply: Some(reply),
                             report_tx,
                             report_rx: Some(report_rx),
-                            priming: ReportReassembler::default(),
+                            priming: Box::new(ReportReassembler::default()),
                             node_id,
                             paths,
                             min_interval,
@@ -1481,7 +1493,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                                 *total_bytes = 0;
                             }
                             PendingReply::Subscribe { priming, .. } => {
-                                *priming = ReportReassembler::default();
+                                **priming = ReportReassembler::default();
                             }
                             PendingReply::RoundTrip(_) => {}
                         }
@@ -1622,7 +1634,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             reply: None,
                             report_tx: pr.tx,
                             report_rx: None,
-                            priming: ReportReassembler::default(),
+                            priming: Box::new(ReportReassembler::default()),
                             node_id: pr.node_id,
                             paths: pr.paths,
                             min_interval: pr.min_interval,

@@ -8,8 +8,51 @@ use std::collections::HashMap;
 
 use matter_codec::Value;
 
+use crate::error::ImError;
 use crate::path::AttributePath;
 use crate::read::{ReportData, ReportOp};
+
+/// Default ceiling on the number of distinct accumulated attribute elements.
+///
+/// Sized far above any realistic single-device read (project history records a
+/// 170-attribute dump; a busy multi-endpoint device is still only thousands of
+/// attributes), so legitimate large reads never trip it, while a peer cannot
+/// stream an unbounded count of distinct paths.
+pub const DEFAULT_MAX_ELEMENTS: usize = 100_000;
+
+/// Default ceiling on the estimated total in-memory byte size of accumulated
+/// values.
+///
+/// The controller's pre-parse chunk gate caps raw chunked-read input at
+/// 256 KiB (`MAX_READ_BYTES`). The parsed-`Value` tree this accumulator holds
+/// can be somewhat larger than its wire encoding (per-value enum/heap
+/// overhead), so this in-crate ceiling is set to 4 MiB — a generous multiple
+/// of the wire cap that still bounds memory as defense-in-depth when the
+/// accumulator is driven directly (e.g. without the controller's gate).
+pub const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+/// Rough estimate of a [`Value`]'s in-memory byte footprint, used only to
+/// bound accumulator growth (not a precise allocation count). Heap-bearing
+/// variants are walked recursively; scalars count as a small fixed size.
+fn estimate_value_bytes(v: &Value) -> usize {
+    const SCALAR: usize = 8;
+    match v {
+        Value::Utf8(s) => s.len(),
+        Value::Bytes(b) => b.len(),
+        Value::Array(items) => items.iter().map(estimate_value_bytes).sum::<usize>() + SCALAR,
+        Value::Structure(members) | Value::List(members) => {
+            members
+                .iter()
+                .map(|(_, mv)| estimate_value_bytes(mv))
+                .sum::<usize>()
+                + SCALAR
+        }
+        // Scalars (`Bool`/`Uint`/`Int`/`Float`/`Double`/`Null`) and — since
+        // `Value` is `#[non_exhaustive]` — any future scalar-ish variant charge
+        // a small fixed size so the ceiling still bounds them.
+        _ => SCALAR,
+    }
+}
 
 /// Accumulates attribute reports across chunked `ReportData` messages and
 /// produces the final concrete `(path, value)` set.
@@ -21,11 +64,15 @@ use crate::read::{ReportData, ReportOp};
 ///
 /// First-seen attribute order is preserved by [`finish`](Self::finish).
 ///
-/// This accumulator is **unbounded** — it has no view of how many chunks a
-/// transport has received. A caller driving it from an untrusted peer must
-/// enforce its own chunk / total-size cap before pushing (the read-transaction
-/// layer does this); do not feed it directly from a hostile device assuming it
-/// self-limits.
+/// This accumulator enforces an in-crate **total-size ceiling** as
+/// defense-in-depth: [`push`](Self::push) returns
+/// [`ImError::AccumulatorOverflow`] once the number of distinct accumulated
+/// elements or the estimated total byte size would exceed the configured caps
+/// ([`DEFAULT_MAX_ELEMENTS`] / [`DEFAULT_MAX_BYTES`], or the values given to
+/// [`with_limits`](Self::with_limits)). This bounds memory even when the
+/// accumulator is driven directly from an untrusted peer streaming an
+/// unbounded chunked read/report set; a caller may still layer its own
+/// chunk-count / wire-byte cap on top (the read-transaction layer does).
 ///
 /// # Examples
 ///
@@ -35,31 +82,90 @@ use crate::read::{ReportData, ReportOp};
 /// # fn demo(chunk_bytes: &[Vec<u8>]) -> Result<(), matter_interaction::ImError> {
 /// let mut acc = ReportAccumulator::new();
 /// for chunk in chunk_bytes {
-///     acc.push(parse_report_data(chunk)?);
+///     acc.push(parse_report_data(chunk)?)?; // errors if the ceiling is exceeded
 /// }
 /// let attributes = acc.finish(); // every attribute across all chunks
 /// # let _ = attributes;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Default)]
 pub struct ReportAccumulator {
     order: Vec<AttributePath>,
     values: HashMap<(u16, u32, u32), Value>,
     versions: HashMap<(u16, u32, u32), Option<u32>>,
+    /// Estimated total byte size of every currently-stored value.
+    bytes: usize,
+    max_elements: usize,
+    max_bytes: usize,
+}
+
+impl Default for ReportAccumulator {
+    fn default() -> Self {
+        Self::with_limits(DEFAULT_MAX_ELEMENTS, DEFAULT_MAX_BYTES)
+    }
 }
 
 impl ReportAccumulator {
-    /// Create an empty accumulator.
+    /// Create an empty accumulator with the default total-size ceiling
+    /// ([`DEFAULT_MAX_ELEMENTS`] / [`DEFAULT_MAX_BYTES`]).
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Create an empty accumulator with explicit caps on the number of
+    /// distinct accumulated elements and the estimated total byte size.
+    ///
+    /// Use this to tighten the ceiling for a constrained transport, or to
+    /// loosen it for an unusually large device. Prefer [`new`](Self::new)
+    /// unless you have a concrete reason to override the defaults.
+    #[must_use]
+    pub fn with_limits(max_elements: usize, max_bytes: usize) -> Self {
+        Self {
+            order: Vec::new(),
+            values: HashMap::new(),
+            versions: HashMap::new(),
+            bytes: 0,
+            max_elements,
+            max_bytes,
+        }
+    }
+
+    /// Build the [`ImError::AccumulatorOverflow`] describing the current state
+    /// against the configured caps.
+    fn overflow(&self) -> ImError {
+        ImError::AccumulatorOverflow {
+            elements: self.order.len(),
+            bytes: self.bytes,
+            max_elements: self.max_elements,
+            max_bytes: self.max_bytes,
+        }
+    }
+
     /// Merge one parsed `ReportData` chunk's items into the accumulated state.
-    pub fn push(&mut self, report: ReportData) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ImError::AccumulatorOverflow`] if merging would push the
+    /// number of distinct accumulated elements above the configured element
+    /// cap, or the estimated total accumulated byte size above the configured
+    /// byte cap. On overflow the offending item is not merged and the
+    /// accumulator is left holding only the items accepted before the cap was
+    /// reached; the caller should treat the report set as truncated and
+    /// discard the transaction.
+    pub fn push(&mut self, report: ReportData) -> Result<(), ImError> {
         for item in report.items {
             let key = (item.path.endpoint, item.path.cluster, item.path.attribute);
+            let item_bytes = estimate_value_bytes(&item.value);
+            // A genuinely new key would add one element; reject before inserting
+            // so the element count never exceeds the cap.
+            if !self.values.contains_key(&key) && self.order.len() >= self.max_elements {
+                return Err(self.overflow());
+            }
+            // Adding this value's bytes must not exceed the byte cap.
+            if self.bytes.saturating_add(item_bytes) > self.max_bytes {
+                return Err(self.overflow());
+            }
             match item.op {
                 ReportOp::Replace => {
                     let newer = match (self.versions.get(&key), item.data_version) {
@@ -69,7 +175,13 @@ impl ReportAccumulator {
                     if newer {
                         if !self.values.contains_key(&key) {
                             self.order.push(item.path);
+                        } else if let Some(prev) = self.values.get(&key) {
+                            // Replacing an existing value: drop its byte charge
+                            // before adding the new one so the running total
+                            // tracks what is actually held.
+                            self.bytes = self.bytes.saturating_sub(estimate_value_bytes(prev));
                         }
+                        self.bytes = self.bytes.saturating_add(item_bytes);
                         self.values.insert(key, item.value);
                         self.versions.insert(key, item.data_version);
                     }
@@ -80,6 +192,7 @@ impl ReportAccumulator {
                         self.values.insert(key, Value::Array(Vec::new()));
                         self.versions.insert(key, item.data_version);
                     }
+                    self.bytes = self.bytes.saturating_add(item_bytes);
                     match self.values.get_mut(&key) {
                         Some(Value::Array(list)) => list.push(item.value),
                         // Malformed: an append targeting a non-list value (e.g.
@@ -93,6 +206,7 @@ impl ReportAccumulator {
                 }
             }
         }
+        Ok(())
     }
 
     /// Consume the accumulator, yielding `(path, value)` in first-seen order.
@@ -163,11 +277,13 @@ mod tests {
         acc.push(report(vec![replace(
             ap(0, 0x28, 0x0002),
             Value::Uint(5010),
-        )]));
+        )]))
+        .unwrap();
         acc.push(report(vec![replace(
             ap(1, 0x06, 0x0000),
             Value::Bool(true),
-        )]));
+        )]))
+        .unwrap();
         let out = acc.finish();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].0, ap(0, 0x28, 0x0002));
@@ -180,9 +296,10 @@ mod tests {
     fn list_append_after_empty_replace() {
         let mut acc = ReportAccumulator::new();
         let p = ap(0, 0x1d, 0x0003);
-        acc.push(report(vec![replace(p, Value::Array(Vec::new()))]));
-        acc.push(report(vec![append(p, Value::Uint(1))]));
-        acc.push(report(vec![append(p, Value::Uint(2))]));
+        acc.push(report(vec![replace(p, Value::Array(Vec::new()))]))
+            .unwrap();
+        acc.push(report(vec![append(p, Value::Uint(1))])).unwrap();
+        acc.push(report(vec![append(p, Value::Uint(2))])).unwrap();
         let out = acc.finish();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].1, Value::Array(vec![Value::Uint(1), Value::Uint(2)]));
@@ -192,7 +309,7 @@ mod tests {
     fn append_without_base_starts_empty() {
         let mut acc = ReportAccumulator::new();
         let p = ap(0, 0x1d, 0x0003);
-        acc.push(report(vec![append(p, Value::Uint(9))]));
+        acc.push(report(vec![append(p, Value::Uint(9))])).unwrap();
         assert_eq!(acc.finish()[0].1, Value::Array(vec![Value::Uint(9)]));
     }
 
@@ -202,8 +319,8 @@ mod tests {
         // The element must not vanish — the slot coerces to a fresh list.
         let mut acc = ReportAccumulator::new();
         let p = ap(0, 0x1d, 0x0003);
-        acc.push(report(vec![replace(p, Value::Uint(1))]));
-        acc.push(report(vec![append(p, Value::Uint(2))]));
+        acc.push(report(vec![replace(p, Value::Uint(1))])).unwrap();
+        acc.push(report(vec![append(p, Value::Uint(2))])).unwrap();
         assert_eq!(acc.finish()[0].1, Value::Array(vec![Value::Uint(2)]));
     }
 
@@ -216,13 +333,15 @@ mod tests {
             op: ReportOp::Replace,
             value: Value::Uint(1),
             data_version: Some(5),
-        }]));
+        }]))
+        .unwrap();
         acc.push(report(vec![AttributeReportItem {
             path: p,
             op: ReportOp::Replace,
             value: Value::Uint(2),
             data_version: Some(3),
-        }]));
+        }]))
+        .unwrap();
         assert_eq!(
             acc.finish()[0].1,
             Value::Uint(1),
@@ -248,7 +367,8 @@ mod tests {
             replace(p0, v0.clone()),
             replace(p1, v1.clone()),
             replace(p2, v2.clone()),
-        ]));
+        ]))
+        .unwrap();
 
         let out = acc.finish();
         assert_eq!(
@@ -259,6 +379,66 @@ mod tests {
     }
 
     use proptest::prelude::*;
+
+    #[test]
+    fn element_ceiling_is_enforced() {
+        // A tiny element cap; feeding past it must error rather than grow.
+        let mut acc = ReportAccumulator::with_limits(3, usize::MAX);
+        // 3 distinct attributes fit.
+        for i in 0..3u32 {
+            acc.push(report(vec![replace(
+                ap(0, 0x06, i),
+                Value::Uint(u64::from(i)),
+            )]))
+            .expect("within element cap");
+        }
+        // The 4th distinct attribute crosses the ceiling.
+        let err = acc
+            .push(report(vec![replace(ap(0, 0x06, 99), Value::Uint(1))]))
+            .expect_err("4th distinct element must exceed the cap");
+        assert!(
+            matches!(
+                err,
+                ImError::AccumulatorOverflow {
+                    max_elements: 3,
+                    ..
+                }
+            ),
+            "expected AccumulatorOverflow, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn byte_ceiling_is_enforced() {
+        // Generous element cap, tiny byte cap. A large byte string trips it.
+        let mut acc = ReportAccumulator::with_limits(usize::MAX, 16);
+        let err = acc
+            .push(report(vec![replace(
+                ap(0, 0x28, 0x0001),
+                Value::Bytes(vec![0u8; 1024]),
+            )]))
+            .expect_err("1 KiB value must exceed a 16-byte cap");
+        assert!(
+            matches!(err, ImError::AccumulatorOverflow { max_bytes: 16, .. }),
+            "expected AccumulatorOverflow, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn normal_sized_report_set_is_ok() {
+        // The default cap must comfortably admit a realistic large dump
+        // (project history: a 170-attribute device read). Simulate 200
+        // attributes carrying small values; all must accumulate without error.
+        let mut acc = ReportAccumulator::new();
+        for i in 0..200u32 {
+            acc.push(report(vec![replace(
+                ap(0, 0x28, i),
+                Value::Utf8(String::from("a-realistic-attribute-value")),
+            )]))
+            .expect("200 small attributes are well within the default ceiling");
+        }
+        assert_eq!(acc.finish().len(), 200);
+    }
 
     proptest! {
         // Splitting a set of whole-attribute Replace items across N chunks
@@ -278,13 +458,13 @@ mod tests {
             let mut whole = ReportAccumulator::new();
             whole.push(report(
                 unique.iter().map(|&(e, c, a, v)| replace(ap(e, c, a), Value::Uint(v))).collect(),
-            ));
+            )).unwrap();
             let whole_out = whole.finish();
 
             // Same items, one per chunk.
             let mut split = ReportAccumulator::new();
             for &(e, c, a, v) in &unique {
-                split.push(report(vec![replace(ap(e, c, a), Value::Uint(v))]));
+                split.push(report(vec![replace(ap(e, c, a), Value::Uint(v))])).unwrap();
             }
             let split_out = split.finish();
 
@@ -300,9 +480,9 @@ mod tests {
         fn appends_build_list_in_order(elems in proptest::collection::vec(0u64..1000, 0..30)) {
             let p = ap(0, 0x1d, 0x0003);
             let mut acc = ReportAccumulator::new();
-            acc.push(report(vec![replace(p, Value::Array(Vec::new()))]));
+            acc.push(report(vec![replace(p, Value::Array(Vec::new()))])).unwrap();
             for &v in &elems {
-                acc.push(report(vec![append(p, Value::Uint(v))]));
+                acc.push(report(vec![append(p, Value::Uint(v))])).unwrap();
             }
             let out = acc.finish();
             let want: Vec<Value> = elems.iter().map(|&v| Value::Uint(v)).collect();

@@ -141,7 +141,7 @@ impl Node {
         let chunks = self.round_trip_chunked(req).await?;
         let mut acc = ReportAccumulator::new();
         for chunk in chunks {
-            acc.push(chunk);
+            acc.push(chunk)?;
         }
         Ok(acc.finish())
     }

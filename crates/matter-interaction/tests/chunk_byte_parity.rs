@@ -57,7 +57,8 @@ fn message_chunked_reassembles_all_attributes() {
 
     let mut acc = ReportAccumulator::new();
     for c in &f.chunks_b64 {
-        acc.push(parse_report_data(&B64.decode(c).unwrap()).unwrap());
+        acc.push(parse_report_data(&B64.decode(c).unwrap()).unwrap())
+            .unwrap();
     }
     let out = acc.finish();
     assert_eq!(out.len(), f.expected.len(), "reassembled attribute count");
@@ -79,7 +80,8 @@ fn list_chunked_reassembles_appended_elements() {
 
     let mut acc = ReportAccumulator::new();
     for c in &f.chunks_b64 {
-        acc.push(parse_report_data(&B64.decode(c).unwrap()).unwrap());
+        acc.push(parse_report_data(&B64.decode(c).unwrap()).unwrap())
+            .unwrap();
     }
     let out = acc.finish();
     assert_eq!(out.len(), 1, "one list attribute");

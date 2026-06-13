@@ -139,7 +139,7 @@ fn parse_attribute_status_ib(r: &mut TlvReader<'_>) -> Result<(AttributePath, Im
                 for (tag, v) in &members {
                     if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
                         let code = u8::try_from(*n)
-                            .map_err(|_| ImError::UnexpectedValue("StatusIB.Status exceeds u8"))?;
+                            .map_err(|_| ImError::InvalidStatusCode { code: *n })?;
                         status = Some(ImStatus::from_u8(code));
                     }
                 }

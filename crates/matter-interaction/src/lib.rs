@@ -28,7 +28,7 @@ pub mod status;
 pub mod subscription;
 pub mod write;
 
-pub use accumulator::ReportAccumulator;
+pub use accumulator::{ReportAccumulator, DEFAULT_MAX_BYTES, DEFAULT_MAX_ELEMENTS};
 pub use error::ImError;
 pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 pub use path::{AttributePath, CommandPath, ReadPath};

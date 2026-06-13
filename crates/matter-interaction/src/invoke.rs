@@ -236,7 +236,11 @@ fn parse_command_data(r: &mut TlvReader<'_>) -> Result<(CommandPath, Vec<u8>), I
 /// Parse a `CommandStatusIB` body, returning the `StatusIB.Status` mapped
 /// to [`ImStatus`].
 fn parse_command_status(r: &mut TlvReader<'_>) -> Result<ImStatus, ImError> {
-    let mut status = None;
+    // `None` ⇒ the Status member was never seen (genuinely missing).
+    // `Some(raw)` ⇒ the member was present; `raw` is the verbatim wire value,
+    // which we range-check to a `u8` only after the parse loop so an
+    // out-of-range value reports as `InvalidStatusCode`, not `MissingField`.
+    let mut status: Option<u64> = None;
     loop {
         match r.next()? {
             None => return Err(ImError::MissingField("CommandStatusIB.body")),
@@ -249,7 +253,7 @@ fn parse_command_status(r: &mut TlvReader<'_>) -> Result<ImStatus, ImError> {
                 // Last value wins for duplicate tags (lenient parsing); real devices never duplicate Status.
                 for (tag, v) in &members {
                     if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
-                        status = u8::try_from(*n).ok();
+                        status = Some(*n);
                     }
                 }
             }
@@ -257,9 +261,9 @@ fn parse_command_status(r: &mut TlvReader<'_>) -> Result<ImStatus, ImError> {
             Some(_) => {}
         }
     }
-    Ok(ImStatus::from_u8(
-        status.ok_or(ImError::MissingField("StatusIB.Status"))?,
-    ))
+    let raw = status.ok_or(ImError::MissingField("StatusIB.Status"))?;
+    let code = u8::try_from(raw).map_err(|_| ImError::InvalidStatusCode { code: raw })?;
+    Ok(ImStatus::from_u8(code))
 }
 
 #[cfg(test)]
@@ -583,6 +587,67 @@ mod tests {
         assert!(matches!(
             parsed,
             InvokeResponse::Status(ImStatus::Failure(0x01))
+        ));
+    }
+
+    /// Build an `InvokeResponseMessage` whose single `InvokeResponseIB` carries
+    /// a `CommandStatusIB`. `status` controls the `StatusIB.Status` member:
+    /// `Some(v)` writes that raw uint, `None` omits the member entirely.
+    fn invoke_status_response(status: Option<u64>) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+        w.start_structure(Tag::Context(1)).unwrap(); // Status = CommandStatusIB
+        w.start_list(Tag::Context(0)).unwrap(); // CommandPath
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0x0030).unwrap();
+        w.put_uint(Tag::Context(2), 0x00).unwrap();
+        w.end_container().unwrap();
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        if let Some(v) = status {
+            w.put_uint(Tag::Context(0), v).unwrap();
+        }
+        w.end_container().unwrap();
+        w.end_container().unwrap(); // CommandStatusIB
+        w.end_container().unwrap(); // InvokeResponseIB
+        w.end_container().unwrap(); // array
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[test]
+    fn command_status_out_of_range_is_invalid_status_code() {
+        // StatusIB.Status = 0x100 — present on the wire but exceeds the single
+        // octet a Matter status code occupies. Must surface as the distinct
+        // InvalidStatusCode error, NOT MissingField.
+        let buf = invoke_status_response(Some(0x100));
+        match parse_invoke_response(&buf) {
+            Err(ImError::InvalidStatusCode { code }) => assert_eq!(code, 0x100),
+            other => panic!("expected InvalidStatusCode {{ code: 0x100 }}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_status_valid_code_still_parses() {
+        let buf = invoke_status_response(Some(0x88));
+        assert!(matches!(
+            parse_invoke_response(&buf),
+            Ok(InvokeResponse::Status(ImStatus::Failure(0x88)))
+        ));
+    }
+
+    #[test]
+    fn command_status_missing_field_still_missing_field() {
+        // No Status member at all — genuinely missing, so MissingField is right.
+        let buf = invoke_status_response(None);
+        assert!(matches!(
+            parse_invoke_response(&buf),
+            Err(ImError::MissingField("StatusIB.Status"))
         ));
     }
 

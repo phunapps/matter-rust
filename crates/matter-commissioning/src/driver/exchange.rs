@@ -713,7 +713,7 @@ mod tests {
         // Reassemble through the CR.1 accumulator.
         let mut acc = crate::im::ReportAccumulator::new();
         for c in &chunks {
-            acc.push(crate::im::parse_report_data(c).unwrap());
+            acc.push(crate::im::parse_report_data(c).unwrap()).unwrap();
         }
         let attrs = acc.finish();
         assert_eq!(attrs.len(), 2);
