@@ -61,6 +61,12 @@ const DSIZ_UNICAST: u8 = 0b0000_0001;
 const DSIZ_GROUP: u8 = 0b0000_0010;
 const DSIZ_RESERVED: u8 = 0b0000_0011;
 
+/// Bits of the first header byte that MUST be zero on the wire: bit 3
+/// (reserved) and bits 4..=7 (the message-format version, which is `0` for
+/// the current Matter Core Spec §4.4.1). Only bits 0..=2 (DSIZ + `S`) carry
+/// meaning; any set bit in this mask marks an unsupported/malformed header.
+const FLAGS_MUST_BE_ZERO_MASK: u8 = 0b1111_1000;
+
 /// Peer-allocated session identifier carried at byte offset 1 of the
 /// header (little-endian).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -140,6 +146,8 @@ pub fn encode_header(header: &SecuredMessageHeader) -> Vec<u8> {
 ///
 /// Returns [`Error::MalformedHeader`] if:
 /// - the fixed 8-byte portion is truncated;
+/// - the version field (bits 4..=7 of byte 0) is non-zero, or the reserved
+///   bit 3 is set (both must be `0` per Matter Core Spec §4.4.1);
 /// - the `S` bit is set but only a partial source Node ID is present;
 /// - `DSIZ` is set but only a partial destination is present;
 /// - `DSIZ` has the reserved `0b11` value.
@@ -148,6 +156,14 @@ pub fn decode_header(bytes: &[u8]) -> Result<(SecuredMessageHeader, &[u8])> {
         return Err(Error::MalformedHeader(bytes.len()));
     }
     let flags = SecuredMessageFlags::from_bits_retain(bytes[0]);
+
+    // The message-format version (bits 4..=7) must be the supported value
+    // (`0`) and the reserved bit 3 must be clear — Matter Core Spec §4.4.1.
+    // Rejecting here keeps a future-version or corrupt datagram from being
+    // silently mis-parsed as a current-spec message.
+    if (bytes[0] & FLAGS_MUST_BE_ZERO_MASK) != 0 {
+        return Err(Error::MalformedHeader(0));
+    }
 
     if (bytes[0] & DSIZ_MASK) == DSIZ_RESERVED {
         return Err(Error::MalformedHeader(0));
@@ -614,6 +630,56 @@ mod tests {
         let bytes = [0b0000_0011, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
         let err = decode_header(&bytes).unwrap_err();
         assert!(matches!(err, Error::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn header_decode_rejects_nonzero_version() {
+        // Version field (bits 4..=7 of byte 0) must be 0 for the current
+        // spec. A header advertising version=1 (bit 4 set) must be rejected.
+        let bytes = [0b0001_0000, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        let err = decode_header(&bytes).unwrap_err();
+        assert!(matches!(err, Error::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn header_decode_rejects_set_reserved_bit() {
+        // Bit 3 of byte 0 is reserved and must be 0.
+        let bytes = [0b0000_1000, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
+        let err = decode_header(&bytes).unwrap_err();
+        assert!(matches!(err, Error::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn header_decode_accepts_all_legitimate_flag_bits() {
+        // S + DSIZ=unicast set, version/reserved clear — must still decode.
+        let bytes = [
+            SecuredMessageFlags::SOURCE_PRESENT.bits() | SecuredMessageFlags::DEST_UNICAST.bits(),
+            0x01,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            // 8-byte source node id + 8-byte dest node id.
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ];
+        assert!(decode_header(&bytes).is_ok());
     }
 
     /// Load-bearing invariant for the `decode_secured` AAD optimisation:

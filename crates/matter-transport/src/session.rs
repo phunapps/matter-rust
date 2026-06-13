@@ -591,10 +591,13 @@ impl SessionManager {
     /// materialised into encrypted ack packets here (consuming a session
     /// outbound counter slot) so the caller only sees ready-to-send bytes.
     ///
-    /// If building a standalone-ack packet for a session fails (e.g.
-    /// counter overflow), the event is silently dropped — the caller will
-    /// observe `Session::outbound_counter == u32::MAX` on the next
-    /// `encode_outbound` and tear the session down.
+    /// If building a standalone-ack packet fails because the session's
+    /// outbound counter is exhausted, a [`MrpEvent::SessionCounterExhausted`]
+    /// is emitted instead of the ack: the counter cannot wrap (Matter Core
+    /// Spec §4.4.3), so the session must be re-keyed. Surfacing the event
+    /// (rather than silently dropping the ack) lets the caller tear the
+    /// session down promptly instead of leaving the peer un-acked with no
+    /// signal.
     pub fn handle_timeout(&mut self, now: Instant) -> Vec<MrpEvent> {
         let mut out = Vec::new();
         let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
@@ -638,21 +641,39 @@ impl SessionManager {
                         // mid-iteration session removal, even though we
                         // just listed the IDs from the same HashMap.
                         if let Some(session) = self.sessions.get_mut(&sid) {
-                            if let Ok(packet) = Self::build_standalone_ack_packet(
+                            match Self::build_standalone_ack_packet(
                                 session,
                                 exchange_id,
                                 ack_counter,
                                 is_local_initiator,
                             ) {
-                                out.push(MrpEvent::SendStandaloneAck {
+                                Ok(packet) => out.push(MrpEvent::SendStandaloneAck {
                                     session_id: sid,
                                     exchange_id,
                                     packet,
-                                });
+                                }),
+                                Err(Error::CounterOverflow) => {
+                                    // The outbound counter is exhausted, so the
+                                    // ack cannot be sent without an illegal
+                                    // counter wrap (Matter Core Spec §4.4.3).
+                                    // Surface it rather than silently dropping
+                                    // the ack: the caller must re-key the
+                                    // session, and emitting the event lets it
+                                    // tear the session down promptly instead of
+                                    // leaving the peer un-acked with no signal.
+                                    out.push(MrpEvent::SessionCounterExhausted {
+                                        session_id: sid,
+                                        exchange_id,
+                                        ack_counter,
+                                    });
+                                }
+                                Err(_) => {
+                                    // Any other build failure (e.g.
+                                    // PayloadTooLarge) cannot occur for a
+                                    // standalone-ack header in practice; drop
+                                    // the event defensively.
+                                }
                             }
-                            // If build fails (CounterOverflow), drop the
-                            // ack — caller will see outbound_counter at
-                            // MAX and tear the session down.
                         }
                     }
                 }
@@ -820,5 +841,54 @@ mod tests {
         assert_eq!(protocol_id, ProtocolId::INTERACTION_MODEL);
         assert_eq!(opcode, 0x08);
         assert_eq!(payload, b"unreliable payload");
+    }
+
+    /// When a standalone-ack is due but the session's outbound counter is
+    /// exhausted (`u32::MAX`), `handle_timeout` must SURFACE the condition
+    /// (via `MrpEvent::SessionCounterExhausted`) rather than silently
+    /// dropping the ack and leaving the peer un-acked with no signal.
+    #[test]
+    fn standalone_ack_counter_overflow_surfaces_event() {
+        let (_a, mut b) = paired_sessions();
+        let session_id = SessionId(1);
+        let now = Instant::now();
+
+        // Buffer a reliable inbound on `b` so a standalone-ack becomes due.
+        // We hand-build a reliable inbound payload directly through MRP so we
+        // don't need a real encrypted frame from `a`.
+        {
+            let session = b.sessions.get_mut(&session_id).unwrap();
+            let header = crate::protocol_header::ProtocolHeader {
+                exchange_flags: crate::protocol_header::ExchangeFlags::INITIATOR
+                    | crate::protocol_header::ExchangeFlags::RELIABLE,
+                opcode: 0x02,
+                exchange_id: 0x4242,
+                protocol_id: ProtocolId::INTERACTION_MODEL,
+                ack_counter: None,
+            };
+            let mut payload = Vec::new();
+            encode_protocol_header(&header, &mut payload);
+            session
+                .mrp
+                .process_inbound(payload, MessageCounter(100), now)
+                .unwrap();
+            // Force the outbound counter to the exhaustion point.
+            session.outbound_counter = u32::MAX;
+        }
+
+        // Fire the standalone-ack deadline. The ack cannot be built (counter
+        // exhausted), so we must see a SessionCounterExhausted event.
+        let events = b.handle_timeout(now + std::time::Duration::from_millis(200));
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                MrpEvent::SessionCounterExhausted {
+                    session_id: s,
+                    exchange_id: 0x4242,
+                    ack_counter,
+                } if *s == session_id && *ack_counter == MessageCounter(100)
+            )),
+            "counter-overflow standalone-ack must surface SessionCounterExhausted, got {events:?}"
+        );
     }
 }

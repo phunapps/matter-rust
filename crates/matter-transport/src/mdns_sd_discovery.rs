@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-use mdns_sd::{Receiver, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{Receiver, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo, TxtProperty};
 
 use crate::discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
 use crate::error::{Error, Result};
@@ -97,13 +97,22 @@ impl Discovery for MdnsSdDiscovery {
         // instance_name (mdns-sd appends .local. automatically).
         let host = format!("{}.local.", service.instance_name);
         let addrs: Vec<IpAddr> = service.addresses.clone();
+        // TXT values are raw bytes; build `TxtProperty` entries that carry
+        // them verbatim (mdns-sd's `From<(K, V: AsRef<[u8]>)>`) rather than
+        // the `HashMap<String, String>` path, which would force a UTF-8
+        // value and drop binary-valued keys.
+        let props: Vec<TxtProperty> = service
+            .txt_records
+            .iter()
+            .map(|(k, v)| TxtProperty::from((k.clone(), v.clone())))
+            .collect();
         let info = ServiceInfo::new(
             service.kind.service_type(),
             &service.instance_name,
             &host,
             &addrs[..],
             service.port,
-            Some(service.txt_records.clone()),
+            props,
         )?;
         self.daemon.register(info)?;
         Ok(())
@@ -159,9 +168,16 @@ impl Discovery for MdnsSdDiscovery {
 }
 
 /// Translate an mdns-sd `ResolvedService` into our `MatterService`.
-/// Returns `None` if the service has no resolved addresses (the spec
-/// guarantees `ServiceResolved` only fires once at least one address
-/// is known, but we double-check defensively).
+/// Returns `None` (skipping the record) if:
+/// - the service has no resolved addresses (the spec guarantees
+///   `ServiceResolved` only fires once at least one address is known, but
+///   we double-check defensively);
+/// - the service type is not one we recognise;
+/// - the `fullname` has no dot, so the leading instance label cannot be
+///   split off. A well-formed DNS-SD fullname is
+///   `<instance>.<service-type>.local.`, so a dotless name is malformed —
+///   we skip it rather than fabricate a service with an empty
+///   `instance_name` (which would later fail to commission/resolve).
 ///
 /// `ResolvedService` replaced `ServiceInfo` here in mdns-sd 0.20: the
 /// resolver now emits a plain data struct rather than the
@@ -181,17 +197,48 @@ fn service_info_to_matter(info: &ResolvedService) -> Option<MatterService> {
         return None;
     }
     let kind = kind_from_service_type(&info.ty_domain)?;
-    let mut txt = HashMap::new();
-    for prop in info.txt_properties.iter() {
-        txt.insert(prop.key().to_string(), prop.val_str().to_string());
-    }
+    // Skip malformed records whose fullname has no instance label (see the
+    // helper). Surfacing as `None` is the adapter's "skip this record" path.
+    let instance_name = instance_name_from_fullname(&info.fullname)?;
+    let txt = txt_properties_to_records(&info.txt_properties);
     Some(MatterService {
-        instance_name: info.fullname.split('.').next().unwrap_or("").to_string(),
+        instance_name,
         kind,
         addresses,
         port: info.port,
         txt_records: txt,
     })
+}
+
+/// Split the leading DNS-SD instance label off a service fullname.
+///
+/// A well-formed fullname is `<instance>.<service-type>.local.`, so the
+/// instance label is everything before the first dot. Returns `None` when
+/// the fullname has no dot (cannot be split) or the leading label is empty
+/// — both malformed — so the caller skips the record rather than
+/// fabricating a service with an empty `instance_name`.
+fn instance_name_from_fullname(fullname: &str) -> Option<String> {
+    match fullname.split_once('.') {
+        Some((instance, _rest)) if !instance.is_empty() => Some(instance.to_string()),
+        _ => None,
+    }
+}
+
+/// Translate mdns-sd `TxtProperties` into our raw-byte TXT map.
+///
+/// DNS-SD TXT values are arbitrary octet strings (RFC 6763 §6.5); we keep
+/// them as `Vec<u8>` rather than lossily UTF-8-decoding, so a binary-valued
+/// or vendor-specific Matter key is preserved byte-for-byte. A value-less
+/// boolean key maps to an empty value.
+fn txt_properties_to_records(props: &mdns_sd::TxtProperties) -> HashMap<String, Vec<u8>> {
+    let mut txt = HashMap::new();
+    for prop in props.iter() {
+        txt.insert(
+            prop.key().to_string(),
+            prop.val().map(<[u8]>::to_vec).unwrap_or_default(),
+        );
+    }
+    txt
 }
 
 fn kind_from_service_type(service_type: &str) -> Option<ServiceKind> {
@@ -213,7 +260,7 @@ mod tests {
 
     fn sample_service(instance: &str, kind: ServiceKind) -> MatterService {
         let mut txt = HashMap::new();
-        txt.insert("D".to_string(), "3840".to_string());
+        txt.insert("D".to_string(), b"3840".to_vec());
         MatterService {
             instance_name: instance.to_string(),
             kind,
@@ -221,6 +268,51 @@ mod tests {
             port: 5540,
             txt_records: txt,
         }
+    }
+
+    #[test]
+    fn dotless_fullname_is_skipped() {
+        // A fullname with no dot cannot be split into instance + service —
+        // it must be skipped (None), not yield an empty instance_name.
+        assert_eq!(instance_name_from_fullname("nodothere"), None);
+        // An empty leading label is also malformed.
+        assert_eq!(instance_name_from_fullname("._matterc._udp.local."), None);
+        // A well-formed fullname yields just the instance label.
+        assert_eq!(
+            instance_name_from_fullname("INSTANCE._matterc._udp.local."),
+            Some("INSTANCE".to_string()),
+        );
+    }
+
+    #[test]
+    fn binary_txt_value_preserved_and_ascii_parses() {
+        use mdns_sd::IntoTxtProperties;
+        // A binary TXT value must survive the parse verbatim; an ASCII
+        // discriminator key must still parse.
+        let binary = vec![0x00u8, 0xFF, 0x80, 0x01];
+        assert!(std::str::from_utf8(&binary).is_err());
+        let props: mdns_sd::TxtProperties = vec![
+            mdns_sd::TxtProperty::from(("BIN".to_string(), binary.clone())),
+            mdns_sd::TxtProperty::from(("D".to_string(), b"3840".to_vec())),
+        ]
+        .into_txt_properties();
+
+        let records = txt_properties_to_records(&props);
+        assert_eq!(records.get("BIN"), Some(&binary), "binary value verbatim");
+
+        // Wrap in a service to exercise the ASCII accessor.
+        let svc = MatterService::new(
+            "INSTANCE".to_string(),
+            ServiceKind::Commissionable,
+            vec![std::net::IpAddr::V6(Ipv6Addr::LOCALHOST)],
+            5540,
+            records,
+        );
+        assert_eq!(svc.txt_str("BIN"), None, "non-UTF-8 value is not a str");
+        assert_eq!(
+            svc.txt_str("D").and_then(|d| d.parse::<u16>().ok()),
+            Some(3840),
+        );
     }
 
     #[test]

@@ -353,14 +353,14 @@ pub async fn resolve_commissionable<D: Discovery>(
     // `CM=0` once it closes. Skip closed windows so a stale advertisement is not
     // matched (which would then fail PASE). Absent `CM` is treated as open.
     let window_open =
-        |svc: &matter_transport::MatterService| svc.txt_records.get("CM").is_none_or(|v| v != "0");
+        |svc: &matter_transport::MatterService| svc.txt_str("CM").is_none_or(|v| v != "0");
 
     for _ in 0..RESOLVE_POLL_ATTEMPTS {
         let results = discovery.poll_results(handle);
 
         // Prefer an exact long-discriminator match (QR codes).
         for svc in results.iter().filter(|s| window_open(s)) {
-            if svc.txt_records.get("D").and_then(|d| d.parse::<u16>().ok()) == Some(discriminator) {
+            if svc.txt_str("D").and_then(|d| d.parse::<u16>().ok()) == Some(discriminator) {
                 if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
                     discovery.stop_query(handle);
                     return Ok(SocketAddr::new(addr, svc.port));
@@ -370,7 +370,7 @@ pub async fn resolve_commissionable<D: Discovery>(
 
         // Fall back to the upper-4-bit short discriminator (manual codes).
         for svc in results.iter().filter(|s| window_open(s)) {
-            let advertised = svc.txt_records.get("D").and_then(|d| d.parse::<u16>().ok());
+            let advertised = svc.txt_str("D").and_then(|d| d.parse::<u16>().ok());
             if let Some(adv) = advertised {
                 if ((adv >> 8) & 0x0F) as u8 == short {
                     if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
@@ -1000,7 +1000,7 @@ mod tests {
     async fn resolve_commissionable_matches_discriminator() {
         const DISCRIMINATOR: u16 = 0xF00;
         let mut txt = HashMap::new();
-        txt.insert("D".to_string(), DISCRIMINATOR.to_string());
+        txt.insert("D".to_string(), DISCRIMINATOR.to_string().into_bytes());
         let mut disc = FakeDiscovery {
             service: MatterService::new(
                 "AABBCCDDEEFF1122".to_string(),
@@ -1029,7 +1029,7 @@ mod tests {
         const DEVICE_LONG: u16 = 0x4B4;
         const MANUAL_SHORT_PACKED: u16 = 0x0400;
         let mut txt = HashMap::new();
-        txt.insert("D".to_string(), DEVICE_LONG.to_string());
+        txt.insert("D".to_string(), DEVICE_LONG.to_string().into_bytes());
         let mut disc = FakeDiscovery {
             service: MatterService::new(
                 "3C64CF0B1D42".to_string(),

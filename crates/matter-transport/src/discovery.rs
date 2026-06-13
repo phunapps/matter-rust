@@ -63,7 +63,14 @@ pub struct MatterService {
     /// UDP/TCP port.
     pub port: u16,
     /// TXT records (vendor/product IDs, discriminator, etc.).
-    pub txt_records: HashMap<String, String>,
+    ///
+    /// Values are kept as raw bytes rather than `String`: DNS-SD TXT values
+    /// are arbitrary octet strings, and while the Matter-defined keys
+    /// (`D`, `CM`, `VP`, `PI`, …) carry ASCII, a lossy UTF-8 decode would
+    /// silently corrupt any binary-valued or vendor-specific key. Callers
+    /// that expect an ASCII/UTF-8 value decode the bytes themselves (see
+    /// [`Self::txt_str`]).
+    pub txt_records: HashMap<String, Vec<u8>>,
 }
 
 impl MatterService {
@@ -79,7 +86,7 @@ impl MatterService {
         kind: ServiceKind,
         addresses: Vec<IpAddr>,
         port: u16,
-        txt_records: HashMap<String, String>,
+        txt_records: HashMap<String, Vec<u8>>,
     ) -> Self {
         Self {
             instance_name,
@@ -88,6 +95,21 @@ impl MatterService {
             port,
             txt_records,
         }
+    }
+
+    /// Look up a TXT key and return its value decoded as UTF-8, or `None`
+    /// if the key is absent OR the value is not valid UTF-8.
+    ///
+    /// All Matter-defined TXT keys (discriminator `D`, commissioning mode
+    /// `CM`, vendor/product `VP`, pairing instruction `PI`, …) carry ASCII
+    /// values, so this is the right accessor for them. Binary or
+    /// vendor-specific values that aren't valid UTF-8 are available raw via
+    /// [`Self::txt_records`].
+    #[must_use]
+    pub fn txt_str(&self, key: &str) -> Option<&str> {
+        self.txt_records
+            .get(key)
+            .and_then(|v| std::str::from_utf8(v).ok())
     }
 }
 
@@ -192,8 +214,8 @@ mod tests {
     #[test]
     fn matter_service_roundtrip_equality() {
         let mut txt = HashMap::new();
-        txt.insert("VP".to_string(), "65521+32768".to_string());
-        txt.insert("D".to_string(), "3840".to_string());
+        txt.insert("VP".to_string(), b"65521+32768".to_vec());
+        txt.insert("D".to_string(), b"3840".to_vec());
         let svc = MatterService {
             instance_name: "DEADBEEFCAFEBABE-0000000000000001".to_string(),
             kind: ServiceKind::Commissionable,
@@ -202,6 +224,39 @@ mod tests {
             txt_records: txt,
         };
         assert_eq!(svc.clone(), svc);
+    }
+
+    #[test]
+    fn txt_values_preserve_binary_bytes_and_parse_ascii() {
+        // A binary (non-UTF-8) TXT value must survive verbatim, while an
+        // ASCII key like the discriminator still parses cleanly.
+        let mut txt = HashMap::new();
+        let binary = vec![0x00u8, 0xFF, 0xFE, 0x80, 0x01];
+        assert!(
+            std::str::from_utf8(&binary).is_err(),
+            "test fixture must be non-UTF-8 to be meaningful"
+        );
+        txt.insert("BIN".to_string(), binary.clone());
+        txt.insert("D".to_string(), b"3840".to_vec());
+
+        let svc = MatterService::new(
+            "INSTANCE".to_string(),
+            ServiceKind::Commissionable,
+            vec![std::net::IpAddr::V6(Ipv6Addr::LOCALHOST)],
+            5540,
+            txt,
+        );
+
+        // Binary value round-trips with no corruption.
+        assert_eq!(svc.txt_records.get("BIN"), Some(&binary));
+        // The non-UTF-8 value yields None from the str accessor (not garbage).
+        assert_eq!(svc.txt_str("BIN"), None);
+        // ASCII discriminator parses normally.
+        assert_eq!(svc.txt_str("D"), Some("3840"));
+        assert_eq!(
+            svc.txt_str("D").and_then(|d| d.parse::<u16>().ok()),
+            Some(3840)
+        );
     }
 
     #[test]
