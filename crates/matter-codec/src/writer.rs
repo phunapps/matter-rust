@@ -1,6 +1,7 @@
 //! Streaming TLV encoder. Appends to a caller-provided `Vec<u8>`.
 
 use crate::error::{Error, Result};
+use crate::reader::MAX_DEPTH;
 use crate::tag::Tag;
 use crate::value::Value;
 use crate::{element_type as et, tag_control as tc};
@@ -317,12 +318,24 @@ impl<'a> TlvWriter<'a> {
     /// what tag is stored in the `Value`, enforcing the Matter spec requirement
     /// that array elements carry no tag.
     ///
+    /// Container nesting is bounded by [`MAX_DEPTH`], mirroring the reader's
+    /// limit. A `Value` tree nested deeper than that is rejected with
+    /// [`Error::ContainerTooDeep`] rather than risking a stack overflow on a
+    /// hostile or buggy input tree.
+    ///
     /// # Errors
     ///
-    /// Propagates any error returned by the underlying `put_*` or container
-    /// method. Currently all paths are infallible; the `Result` return type is
-    /// reserved for future I/O-backed writers.
+    /// - [`Error::ContainerTooDeep`] — the `value` tree nests containers more
+    ///   than [`MAX_DEPTH`] levels deep.
+    /// - Any error returned by the underlying `put_*` or container method.
     pub fn write_value(&mut self, tag: Tag, value: &Value) -> Result<()> {
+        self.write_value_at_depth(tag, value, 0)
+    }
+
+    /// Recursive worker for [`Self::write_value`] that carries the current
+    /// container nesting depth so it can fail closed before the native call
+    /// stack is at risk.
+    fn write_value_at_depth(&mut self, tag: Tag, value: &Value, depth: usize) -> Result<()> {
         match value {
             Value::Bool(v) => self.put_bool(tag, *v),
             Value::Null => self.put_null(tag),
@@ -333,23 +346,32 @@ impl<'a> TlvWriter<'a> {
             Value::Utf8(v) => self.put_utf8(tag, v),
             Value::Bytes(v) => self.put_bytes(tag, v),
             Value::Structure(members) => {
+                if depth >= MAX_DEPTH {
+                    return Err(Error::ContainerTooDeep);
+                }
                 self.start_structure(tag)?;
                 for (member_tag, member_value) in members {
-                    self.write_value(*member_tag, member_value)?;
+                    self.write_value_at_depth(*member_tag, member_value, depth + 1)?;
                 }
                 self.end_container()
             }
             Value::Array(elements) => {
+                if depth >= MAX_DEPTH {
+                    return Err(Error::ContainerTooDeep);
+                }
                 self.start_array(tag)?;
                 for element in elements {
-                    self.write_value(Tag::Anonymous, element)?;
+                    self.write_value_at_depth(Tag::Anonymous, element, depth + 1)?;
                 }
                 self.end_container()
             }
             Value::List(members) => {
+                if depth >= MAX_DEPTH {
+                    return Err(Error::ContainerTooDeep);
+                }
                 self.start_list(tag)?;
                 for (member_tag, member_value) in members {
-                    self.write_value(*member_tag, member_value)?;
+                    self.write_value_at_depth(*member_tag, member_value, depth + 1)?;
                 }
                 self.end_container()
             }
@@ -925,5 +947,53 @@ mod tests {
         //   0x18 = inner end
         // 0x18 = outer end
         assert_eq!(buf, [0x15, 0x35, 0x00, 0x24, 0x00, 0x2A, 0x18, 0x18]);
+    }
+
+    // --- Task 19: write-side depth guard ---
+
+    /// Build a `Value` tree of `levels` nested structures, innermost holding a
+    /// single uint. `levels == 1` is one structure wrapping the scalar.
+    fn nested_structure(levels: usize) -> Value {
+        let mut v = Value::Uint(0);
+        for _ in 0..levels {
+            v = Value::Structure(vec![(Tag::Anonymous, v)]);
+        }
+        v
+    }
+
+    #[test]
+    fn write_value_accepts_tree_at_max_depth() {
+        // MAX_DEPTH nested containers is the deepest the reader accepts, so the
+        // writer must accept it too (symmetric limits).
+        let value = nested_structure(MAX_DEPTH);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        assert!(w.write_value(Tag::Anonymous, &value).is_ok());
+    }
+
+    #[test]
+    fn write_value_rejects_over_deep_tree() {
+        // One container deeper than the reader's limit must error (rather than
+        // recurse far enough to risk a native stack overflow).
+        let value = nested_structure(MAX_DEPTH + 1);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        assert!(matches!(
+            w.write_value(Tag::Anonymous, &value),
+            Err(Error::ContainerTooDeep)
+        ));
+    }
+
+    #[test]
+    fn write_value_over_deep_tree_roundtrips_with_reader_limit() {
+        // A tree the writer accepts (== MAX_DEPTH) must also decode back, and a
+        // tree one deeper that the writer rejects matches the reader's own cap.
+        let ok = nested_structure(MAX_DEPTH);
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf)
+            .write_value(Tag::Anonymous, &ok)
+            .unwrap();
+        let (_, decoded) = crate::reader::TlvReader::new(&buf).read_value().unwrap();
+        assert_eq!(decoded, ok);
     }
 }

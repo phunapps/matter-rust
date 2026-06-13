@@ -55,20 +55,60 @@ pub enum Element {
 /// input.
 pub const MAX_DEPTH: usize = 32;
 
+/// Default ceiling on the total number of [`Value`] elements a single
+/// [`TlvReader::read_value`] call may materialise.
+///
+/// Tree-builder decoding allocates one `Value` (and, inside containers, one
+/// `(Tag, Value)` pair) per element. A tiny scalar such as a boolean costs a
+/// single wire byte but expands to a heap-resident `Value`, so an input packed
+/// with millions of one-byte scalars can amplify into a large allocation. This
+/// budget bounds that amplification: a decode that would produce more than this
+/// many elements fails with [`Error::ElementBudgetExceeded`].
+///
+/// The default is deliberately generous (1,048,576 elements) — far above any
+/// legitimate Matter payload, which is itself bounded by the protocol's
+/// message-size limits — so it only ever trips on adversarial input. Callers
+/// that need a tighter or looser bound can set their own via
+/// [`TlvReader::with_element_budget`].
+pub const DEFAULT_ELEMENT_BUDGET: usize = 1 << 20;
+
 /// A streaming TLV decoder over a borrowed byte slice.
 pub struct TlvReader<'a> {
     bytes: &'a [u8],
     pos: usize,
     depth: usize,
+    /// Remaining element budget for a tree-builder decode. Decremented once
+    /// per materialised [`Value`] in [`Self::read_container_body`] /
+    /// [`Self::read_value`]; the streaming [`Self::next`] path does not touch
+    /// it because it allocates nothing per element.
+    element_budget: usize,
 }
 
 impl<'a> TlvReader<'a> {
-    /// Construct a reader that walks `bytes` from the start.
+    /// Construct a reader that walks `bytes` from the start, using the
+    /// [`DEFAULT_ELEMENT_BUDGET`] for tree-builder decodes.
     pub fn new(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
             pos: 0,
             depth: 0,
+            element_budget: DEFAULT_ELEMENT_BUDGET,
+        }
+    }
+
+    /// Construct a reader with a custom total-element budget for tree-builder
+    /// decoding (see [`DEFAULT_ELEMENT_BUDGET`]).
+    ///
+    /// A [`Self::read_value`] call that would materialise more than `budget`
+    /// [`Value`] elements fails with [`Error::ElementBudgetExceeded`]. The
+    /// budget only affects the tree-builder path; the streaming [`Self::next`]
+    /// API is unaffected because it allocates nothing per element.
+    pub fn with_element_budget(bytes: &'a [u8], budget: usize) -> Self {
+        Self {
+            bytes,
+            pos: 0,
+            depth: 0,
+            element_budget: budget,
         }
     }
 
@@ -150,11 +190,19 @@ impl<'a> TlvReader<'a> {
     ///   end-of-container marker.
     /// - [`Error::UnclosedContainer`] — end of input was reached before the
     ///   container's closing marker.
+    /// - [`Error::NonAnonymousArrayTag`] — an array child carried a
+    ///   non-anonymous tag (the spec requires array elements to be anonymous).
+    /// - [`Error::ElementBudgetExceeded`] — the decode would materialise more
+    ///   than the configured element budget (see [`DEFAULT_ELEMENT_BUDGET`]).
     /// - Any error returned by [`Self::next`].
     pub fn read_value(&mut self) -> Result<(Tag, Value)> {
         match self.next()? {
-            Some(Element::Scalar { tag, value }) => Ok((tag, value)),
+            Some(Element::Scalar { tag, value }) => {
+                self.charge_element()?;
+                Ok((tag, value))
+            }
             Some(Element::ContainerStart { tag, kind }) => {
+                self.charge_element()?;
                 let value = self.read_container_body(kind)?;
                 Ok((tag, value))
             }
@@ -163,30 +211,78 @@ impl<'a> TlvReader<'a> {
         }
     }
 
+    /// Charge one element against the tree-builder budget. Returns
+    /// [`Error::ElementBudgetExceeded`] once the budget is exhausted.
+    fn charge_element(&mut self) -> Result<()> {
+        self.element_budget = self
+            .element_budget
+            .checked_sub(1)
+            .ok_or(Error::ElementBudgetExceeded)?;
+        Ok(())
+    }
+
     fn read_container_body(&mut self, kind: ContainerKind) -> Result<Value> {
-        let mut members: Vec<(Tag, Value)> = Vec::new();
-        loop {
-            match self.next()? {
-                None => return Err(Error::UnclosedContainer),
-                Some(Element::ContainerEnd) => break,
-                Some(Element::Scalar { tag, value }) => members.push((tag, value)),
-                Some(Element::ContainerStart {
-                    tag,
-                    kind: inner_kind,
-                }) => {
-                    let inner = self.read_container_body(inner_kind)?;
-                    members.push((tag, inner));
+        // Branch on the container kind once, before the loop, so arrays decode
+        // straight into a `Vec<Value>` without first building a `Vec<(Tag,
+        // Value)>` and re-collecting. Structures and lists keep their members'
+        // tags.
+        match kind {
+            ContainerKind::Array => {
+                let mut elements: Vec<Value> = Vec::new();
+                loop {
+                    match self.next()? {
+                        None => return Err(Error::UnclosedContainer),
+                        Some(Element::ContainerEnd) => break,
+                        Some(Element::Scalar { tag, value }) => {
+                            // Spec: every array element must be anonymous. Fail
+                            // closed on any other tag rather than discarding it.
+                            if tag != Tag::Anonymous {
+                                return Err(Error::NonAnonymousArrayTag);
+                            }
+                            self.charge_element()?;
+                            elements.push(value);
+                        }
+                        Some(Element::ContainerStart {
+                            tag,
+                            kind: inner_kind,
+                        }) => {
+                            if tag != Tag::Anonymous {
+                                return Err(Error::NonAnonymousArrayTag);
+                            }
+                            self.charge_element()?;
+                            elements.push(self.read_container_body(inner_kind)?);
+                        }
+                    }
                 }
+                Ok(Value::Array(elements))
+            }
+            ContainerKind::Structure | ContainerKind::List => {
+                let mut members: Vec<(Tag, Value)> = Vec::new();
+                loop {
+                    match self.next()? {
+                        None => return Err(Error::UnclosedContainer),
+                        Some(Element::ContainerEnd) => break,
+                        Some(Element::Scalar { tag, value }) => {
+                            self.charge_element()?;
+                            members.push((tag, value));
+                        }
+                        Some(Element::ContainerStart {
+                            tag,
+                            kind: inner_kind,
+                        }) => {
+                            self.charge_element()?;
+                            let inner = self.read_container_body(inner_kind)?;
+                            members.push((tag, inner));
+                        }
+                    }
+                }
+                Ok(match kind {
+                    ContainerKind::List => Value::List(members),
+                    // The outer match guarantees this arm is Structure.
+                    _ => Value::Structure(members),
+                })
             }
         }
-        Ok(match kind {
-            ContainerKind::Structure => Value::Structure(members),
-            ContainerKind::List => Value::List(members),
-            ContainerKind::Array => {
-                // Arrays discard child tags (spec requires them to be anonymous).
-                Value::Array(members.into_iter().map(|(_, v)| v).collect())
-            }
-        })
     }
 
     fn next_byte(&mut self) -> Result<u8> {
@@ -213,28 +309,28 @@ impl<'a> TlvReader<'a> {
                 let raw: [u8; 2] = self
                     .next_bytes(2)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Tag::CommonProfile(u32::from(u16::from_le_bytes(raw))))
             }
             tc::COMMON_PROFILE_4 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Tag::CommonProfile(u32::from_le_bytes(raw)))
             }
             tc::IMPLICIT_PROFILE_2 => {
                 let raw: [u8; 2] = self
                     .next_bytes(2)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Tag::ImplicitProfile(u32::from(u16::from_le_bytes(raw))))
             }
             tc::IMPLICIT_PROFILE_4 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Tag::ImplicitProfile(u32::from_le_bytes(raw)))
             }
             tc::FULLY_QUALIFIED_6 => {
@@ -268,7 +364,7 @@ impl<'a> TlvReader<'a> {
         let raw: [u8; 2] = self
             .next_bytes(2)?
             .try_into()
-            .map_err(|_| Error::UnexpectedEof)?;
+            .map_err(|_| Error::InternalSliceConversion)?;
         Ok(u16::from_le_bytes(raw))
     }
 
@@ -276,7 +372,7 @@ impl<'a> TlvReader<'a> {
         let raw: [u8; 4] = self
             .next_bytes(4)?
             .try_into()
-            .map_err(|_| Error::UnexpectedEof)?;
+            .map_err(|_| Error::InternalSliceConversion)?;
         Ok(u32::from_le_bytes(raw))
     }
 
@@ -291,21 +387,21 @@ impl<'a> TlvReader<'a> {
                 let raw: [u8; 2] = self
                     .next_bytes(2)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Uint(u64::from(u16::from_le_bytes(raw))))
             }
             et::UINT32 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Uint(u64::from(u32::from_le_bytes(raw))))
             }
             et::UINT64 => {
                 let raw: [u8; 8] = self
                     .next_bytes(8)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Uint(u64::from_le_bytes(raw)))
             }
             et::INT8 => {
@@ -316,35 +412,35 @@ impl<'a> TlvReader<'a> {
                 let raw: [u8; 2] = self
                     .next_bytes(2)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Int(i64::from(i16::from_le_bytes(raw))))
             }
             et::INT32 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Int(i64::from(i32::from_le_bytes(raw))))
             }
             et::INT64 => {
                 let raw: [u8; 8] = self
                     .next_bytes(8)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Int(i64::from_le_bytes(raw)))
             }
             et::FLOAT32 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Float(f32::from_le_bytes(raw)))
             }
             et::FLOAT64 => {
                 let raw: [u8; 8] = self
                     .next_bytes(8)?
                     .try_into()
-                    .map_err(|_| Error::UnexpectedEof)?;
+                    .map_err(|_| Error::InternalSliceConversion)?;
                 Ok(Value::Double(f64::from_le_bytes(raw)))
             }
             et::UTF8_LEN8 | et::UTF8_LEN16 | et::UTF8_LEN32 | et::UTF8_LEN64 => {
@@ -375,7 +471,7 @@ impl<'a> TlvReader<'a> {
         let raw: [u8; 8] = self
             .next_bytes(8)?
             .try_into()
-            .map_err(|_| Error::UnexpectedEof)?;
+            .map_err(|_| Error::InternalSliceConversion)?;
         Ok(u64::from_le_bytes(raw))
     }
 
@@ -971,5 +1067,80 @@ mod tests {
             r.read_value(),
             Err(Error::UnexpectedEndOfContainer)
         ));
+    }
+
+    // --- Task 19: fail-closed array tags, budget, conversion error ---
+
+    #[test]
+    fn read_value_rejects_array_with_context_tagged_child() {
+        // 0x16 array-start, 0x24 0x00 0x2A = ctx(0) uint8=42, 0x18 end.
+        // The child carries a context tag, which the spec forbids inside an
+        // array. Pre-fix the decoder silently dropped the tag; now it errors.
+        let mut r = TlvReader::new(&[0x16, 0x24, 0x00, 0x2A, 0x18]);
+        assert!(matches!(r.read_value(), Err(Error::NonAnonymousArrayTag)));
+    }
+
+    #[test]
+    fn read_value_rejects_array_with_context_tagged_container_child() {
+        // 0x16 array-start, 0x35 0x00 = ctx(0) struct-start, 0x18 inner end,
+        // 0x18 outer end. The nested container child is context-tagged.
+        let mut r = TlvReader::new(&[0x16, 0x35, 0x00, 0x18, 0x18]);
+        assert!(matches!(r.read_value(), Err(Error::NonAnonymousArrayTag)));
+    }
+
+    #[test]
+    fn read_value_accepts_array_with_anonymous_children() {
+        // Sanity: a well-formed array still decodes (regression guard for the
+        // fail-closed change).
+        let mut r = TlvReader::new(&[0x16, 0x04, 0x01, 0x04, 0x02, 0x18]);
+        let (tag, value) = r.read_value().unwrap();
+        assert_eq!(tag, Tag::Anonymous);
+        assert_eq!(value, Value::Array(vec![Value::Uint(1), Value::Uint(2)]));
+    }
+
+    #[test]
+    fn read_value_errors_when_element_budget_is_exceeded() {
+        // Array of three uint8 children = 4 elements total (array + 3 scalars).
+        // A budget of 3 cannot fit them.
+        let bytes = [0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18];
+        let mut r = TlvReader::with_element_budget(&bytes, 3);
+        assert!(matches!(r.read_value(), Err(Error::ElementBudgetExceeded)));
+    }
+
+    #[test]
+    fn read_value_succeeds_at_exactly_the_element_budget() {
+        // Same input, budget of exactly 4, decodes fine.
+        let bytes = [0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18];
+        let mut r = TlvReader::with_element_budget(&bytes, 4);
+        let (_, value) = r.read_value().unwrap();
+        assert_eq!(
+            value,
+            Value::Array(vec![Value::Uint(1), Value::Uint(2), Value::Uint(3)])
+        );
+    }
+
+    #[test]
+    fn read_value_budget_counts_a_single_scalar() {
+        // A lone scalar costs one element; a zero budget rejects it.
+        let mut r = TlvReader::with_element_budget(&[0x04, 0x2A], 0);
+        assert!(matches!(r.read_value(), Err(Error::ElementBudgetExceeded)));
+        let mut r = TlvReader::with_element_budget(&[0x04, 0x2A], 1);
+        assert_eq!(r.read_value().unwrap(), (Tag::Anonymous, Value::Uint(42)));
+    }
+
+    #[test]
+    fn fixed_width_int_decode_still_works() {
+        // Guard that the InternalSliceConversion relabel did not change the
+        // happy path for a fixed-width int. The conversion branch itself is
+        // unreachable: `next_bytes(N)` returns exactly N bytes or `UnexpectedEof`
+        // first, so the `try_into::<[u8; N]>` can never fail.
+        let mut r = TlvReader::new(&[0x05, 0x34, 0x12]);
+        assert_eq!(
+            r.next().unwrap().unwrap(),
+            Element::Scalar {
+                tag: Tag::Anonymous,
+                value: Value::Uint(0x1234),
+            }
+        );
     }
 }

@@ -59,6 +59,25 @@ pub enum Error {
     /// limit (32 levels per the Matter spec recommendation).
     #[error("container nesting exceeds depth limit")]
     ContainerTooDeep,
+
+    /// An array child carried a non-anonymous tag. The Matter spec requires
+    /// every array element to be anonymous; the decoder fails closed rather
+    /// than silently discarding the offending tag.
+    #[error("array element carried a non-anonymous tag")]
+    NonAnonymousArrayTag,
+
+    /// A single tree-builder decode produced more elements than the
+    /// configured budget allows. This bounds memory amplification from
+    /// inputs packed with many tiny scalars.
+    #[error("decoded element count exceeds the per-decode budget")]
+    ElementBudgetExceeded,
+
+    /// An internal fixed-width byte-slice conversion failed. The preceding
+    /// bounds check guarantees the slice length, so this branch is
+    /// effectively unreachable; it exists so the conversion is never
+    /// mislabeled as a different failure mode.
+    #[error("internal fixed-width conversion failure")]
+    InternalSliceConversion,
 }
 
 /// `Result<T, Error>` for convenience.
