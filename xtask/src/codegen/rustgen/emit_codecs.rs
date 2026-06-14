@@ -528,6 +528,7 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     if decl {
         line!(s, "/// Decoded `{}` payload.", d.name);
         line!(s, "#[derive(Clone, Debug, PartialEq)]");
+        line!(s, "#[non_exhaustive]");
         line!(s, "pub struct {} {{", d.name);
         for f in &d.fields {
             let ty = rust_type(

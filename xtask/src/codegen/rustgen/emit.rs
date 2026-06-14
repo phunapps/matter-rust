@@ -219,6 +219,7 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
 fn emit_struct(s: &mut String, d: &Datatype) {
     line!(s, "/// `{}` struct.", d.name);
     line!(s, "#[derive(Clone, Debug, PartialEq)]");
+    line!(s, "#[non_exhaustive]");
     line!(s, "pub struct {} {{", d.name);
     for f in &d.fields {
         let ty = rust_type(

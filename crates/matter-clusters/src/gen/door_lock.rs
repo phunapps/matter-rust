@@ -327,6 +327,7 @@ bitflags::bitflags! {
 
 /// `CredentialStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct CredentialStruct {
     /// Field CredentialType (tag 0).
     pub credential_type: CredentialTypeEnum,
@@ -2207,6 +2208,7 @@ pub fn encode_get_week_day_schedule(week_day_index: u8, user_index: u16) -> Vec<
 
 /// Decoded `GetWeekDayScheduleResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GetWeekDayScheduleResponse {
     /// Field WeekDayIndex (tag 0).
     pub week_day_index: u8,
@@ -2402,6 +2404,7 @@ pub fn encode_get_year_day_schedule(year_day_index: u8, user_index: u16) -> Vec<
 
 /// Decoded `GetYearDayScheduleResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GetYearDayScheduleResponse {
     /// Field YearDayIndex (tag 0).
     pub year_day_index: u8,
@@ -2562,6 +2565,7 @@ pub fn encode_get_holiday_schedule(holiday_index: u8) -> Vec<u8> {
 
 /// Decoded `GetHolidayScheduleResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GetHolidayScheduleResponse {
     /// Field HolidayIndex (tag 0).
     pub holiday_index: u8,
@@ -2767,6 +2771,7 @@ pub fn encode_get_user(user_index: u16) -> Vec<u8> {
 
 /// Decoded `GetUserResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GetUserResponse {
     /// Field UserIndex (tag 0).
     pub user_index: u16,
@@ -3051,6 +3056,7 @@ pub fn encode_set_credential(
 
 /// Decoded `SetCredentialResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SetCredentialResponse {
     /// Field Status (tag 0).
     pub status: u8,
@@ -3155,6 +3161,7 @@ pub fn encode_get_credential_status(credential: CredentialStruct) -> Vec<u8> {
 
 /// Decoded `GetCredentialStatusResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct GetCredentialStatusResponse {
     /// Field CredentialExists (tag 0).
     pub credential_exists: bool,

@@ -11,6 +11,7 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 /// Fields per the spec: `MfgCode` (0, nullable vendor-id), `NamespaceID`
 /// (1, enum8), `Tag` (2, enum8), `Label` (3, optional nullable string).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SemanticTagStruct {
     /// Manufacturer code (`null` for standard namespaces).
     pub mfg_code: Nullable<u16>,

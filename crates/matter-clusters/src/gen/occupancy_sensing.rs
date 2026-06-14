@@ -79,6 +79,7 @@ bitflags::bitflags! {
 
 /// `HoldTimeLimitsStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct HoldTimeLimitsStruct {
     /// Field HoldTimeMin (tag 0).
     pub hold_time_min: u16,

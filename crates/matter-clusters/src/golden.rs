@@ -124,6 +124,7 @@ bitflags::bitflags! {
 
 /// `PointStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PointStruct {
     /// Field X (tag 0).
     pub x: u16,
@@ -484,6 +485,7 @@ pub fn encode_set_level(target: u16, mode: Option<ModeEnum>) -> Vec<u8> {
 
 /// Decoded `SetLevelResponse` payload.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SetLevelResponse {
     /// Field Status (tag 0).
     pub status: u8,

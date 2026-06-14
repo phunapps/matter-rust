@@ -76,6 +76,7 @@ pub mod attribute_id {
 
 /// `CapabilityMinimaStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct CapabilityMinimaStruct {
     /// Field CaseSessionsPerFabric (tag 0).
     pub case_sessions_per_fabric: u16,
@@ -193,6 +194,7 @@ impl ColorEnum {
 
 /// `ProductAppearanceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ProductAppearanceStruct {
     /// Field Finish (tag 0).
     pub finish: ProductFinishEnum,

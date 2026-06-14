@@ -49,6 +49,7 @@ bitflags::bitflags! {
 
 /// `DeviceTypeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DeviceTypeStruct {
     /// Field DeviceType (tag 0).
     pub device_type: u32,
