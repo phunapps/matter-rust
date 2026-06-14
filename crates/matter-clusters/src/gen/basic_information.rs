@@ -279,7 +279,8 @@ impl CapabilityMinimaStruct {
                     )
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -363,7 +364,8 @@ impl ProductAppearanceStruct {
                     )))
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {

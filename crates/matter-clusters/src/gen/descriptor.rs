@@ -85,7 +85,8 @@ impl DeviceTypeStruct {
                     )
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -163,7 +164,8 @@ pub fn decode_device_type_list(tlv: &[u8]) -> Result<Vec<DeviceTypeStruct>, Clus
                 out.push(DeviceTypeStruct::decode_from(r)?);
             }
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)
@@ -198,7 +200,8 @@ pub fn decode_server_list(tlv: &[u8]) -> Result<Vec<u32>, ClusterError> {
                 out.push(u32::try_from(v).map_err(|_| ClusterError::InvalidLength("ServerList"))?)
             }
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)
@@ -233,7 +236,8 @@ pub fn decode_client_list(tlv: &[u8]) -> Result<Vec<u32>, ClusterError> {
                 out.push(u32::try_from(v).map_err(|_| ClusterError::InvalidLength("ClientList"))?)
             }
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)
@@ -266,7 +270,8 @@ pub fn decode_parts_list(tlv: &[u8]) -> Result<Vec<u16>, ClusterError> {
                 ..
             }) => out.push(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("PartsList"))?),
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)
@@ -297,7 +302,8 @@ pub fn decode_tag_list(tlv: &[u8]) -> Result<Vec<SemanticTagStruct>, ClusterErro
                 out.push(SemanticTagStruct::decode_from(r)?);
             }
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)

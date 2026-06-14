@@ -152,7 +152,8 @@ impl PointStruct {
                     value: Value::Uint(v),
                 }) => f_y = Some(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Y"))?),
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -412,7 +413,8 @@ pub fn decode_ids(tlv: &[u8]) -> Result<Vec<u32>, ClusterError> {
                 ..
             }) => out.push(u32::try_from(v).map_err(|_| ClusterError::InvalidLength("Ids"))?),
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)
@@ -443,7 +445,8 @@ pub fn decode_points(tlv: &[u8]) -> Result<Vec<PointStruct>, ClusterError> {
                 out.push(PointStruct::decode_from(r)?);
             }
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-            Some(_) => {} // skip
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
         }
     }
     Ok(out)
@@ -515,7 +518,8 @@ impl SetLevelResponse {
                         Some(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Reached"))?)
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {

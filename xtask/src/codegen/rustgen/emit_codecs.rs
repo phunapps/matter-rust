@@ -198,7 +198,11 @@ fn emit_list_read_into(
         );
     }
     line!(s, "{indent}        None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),");
-    line!(s, "{indent}        Some(_) => {{}} // skip");
+    line!(
+        s,
+        "{indent}        Some(Element::ContainerStart {{ .. }}) => r.skip_container()?,"
+    );
+    line!(s, "{indent}        Some(_) => {{}} // skip unknown scalar");
     line!(s, "{indent}    }}");
     line!(s, "{indent}}}");
 }
@@ -583,7 +587,11 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     line!(s, "                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),");
     line!(
         s,
-        "                Some(_) => {{}} // unknown/future element — skip"
+        "                Some(Element::ContainerStart {{ .. }}) => r.skip_container()?,"
+    );
+    line!(
+        s,
+        "                Some(_) => {{}} // unknown/future scalar — skip"
     );
     line!(s, "            }}");
     line!(s, "        }}");

@@ -1198,7 +1198,8 @@ impl CredentialStruct {
                     )
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -2306,7 +2307,8 @@ impl GetWeekDayScheduleResponse {
                     )
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -2470,7 +2472,8 @@ impl GetYearDayScheduleResponse {
                     )
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -2642,7 +2645,8 @@ impl GetHolidayScheduleResponse {
                     )))
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -2895,7 +2899,8 @@ impl GetUserResponse {
                                     matter_codec::Error::UnclosedContainer,
                                 ))
                             }
-                            Some(_) => {} // skip
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
                         }
                     }
                     f_credentials = Some(Nullable::Value(out));
@@ -2940,7 +2945,8 @@ impl GetUserResponse {
                     ))
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -3100,7 +3106,8 @@ impl SetCredentialResponse {
                         })?))
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {
@@ -3243,7 +3250,8 @@ impl GetCredentialStatusResponse {
                     value: Value::Bytes(v),
                 }) => f_credential_data = Some(Nullable::Value(v)),
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(_) => {} // unknown/future element — skip
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
             }
         }
         Ok(Self {

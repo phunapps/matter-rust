@@ -84,6 +84,7 @@ impl SemanticTagStruct {
                     label = Some(Nullable::Value(s));
                 }
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
                 Some(_) => {}
             }
         }
