@@ -9,9 +9,14 @@
       "LevelControl",
       "Descriptor",
       "BasicInformation",
+      "Switch",
+      "BooleanState",
       "DoorLock",
       "ColorControl",
+      "IlluminanceMeasurement",
       "TemperatureMeasurement",
+      "PressureMeasurement",
+      "FlowMeasurement",
       "RelativeHumidityMeasurement",
       "OccupancySensing"
     ],
@@ -19,6 +24,12 @@
       {
         "cluster": "BasicInformation",
         "element": "4 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
+        "cluster": "BooleanState",
+        "element": "1 event(s)",
         "kind": "events",
         "reason": "no IM event support until M8"
       },
@@ -109,6 +120,12 @@
       {
         "cluster": "OccupancySensing",
         "element": "1 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
+        "cluster": "Switch",
+        "element": "7 event(s)",
         "kind": "events",
         "reason": "no IM event support until M8"
       }
@@ -1538,6 +1555,103 @@
           ]
         }
       ]
+    },
+    {
+      "id": 59,
+      "name": "Switch",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "LS",
+          "name": "LatchingSwitch",
+          "description": "This feature flag is for a switch that maintains its position after being pressed (or turned)."
+        },
+        {
+          "bit": 1,
+          "code": "MS",
+          "name": "MomentarySwitch",
+          "description": "This feature flag is for a switch that does not maintain its position after being pressed (or turned). After releasing, it goes back to its idle position."
+        },
+        {
+          "bit": 2,
+          "code": "MSR",
+          "name": "MomentarySwitchRelease",
+          "description": "This feature flag is for a momentary switch that can distinguish and report release events."
+        },
+        {
+          "bit": 3,
+          "code": "MSL",
+          "name": "MomentarySwitchLongPress",
+          "description": "This feature flag is for a momentary switch that can distinguish and report long presses from short presses."
+        },
+        {
+          "bit": 4,
+          "code": "MSM",
+          "name": "MomentarySwitchMultiPress",
+          "description": "This feature flag is for a momentary switch that can distinguish and report double press and potentially multiple presses with more events, such as triple press, etc."
+        },
+        {
+          "bit": 5,
+          "code": "AS",
+          "name": "ActionSwitch",
+          "description": "This feature flag indicates simplified handling of events for multi-press-capable switches. See Section 1.13.8, \"Sequence of events for MultiPress\"."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "NumberOfPositions",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum number of positions the switch has. Any kind of switch has a minimum of 2 positions. Also see Section 1.13.10, \"Multi Position Details\" for the case NumberOfPositions>2."
+        },
+        {
+          "id": 1,
+          "name": "CurrentPosition",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the position of the switch.\nThe valid range is zero to NumberOfPositions - 1.\nCurrentPosition value 0 shall be assigned to the default position of the switch: for example the \"open\" state of a rocker switch, or the \"idle\" state of a push button switch."
+        },
+        {
+          "id": 2,
+          "name": "MultiPressMax",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates how many consecutive presses can be detected and reported by a momentary switch which supports multi-press (MSM feature flag set).\nFor example, a momentary switch supporting single press, double press and triple press, but not quad press and beyond, would return the value 3.\nWhen more than MultiPressMax presses are detected within a multi-press sequence:\n  - The server for cluster revision $<$ 2 SHOULD generate a MultiPressComplete event with the TotalNumberOfPressesCounted field set to the value of the MultiPressMax attribute, and avoid generating any further InitialPress and MultiPressOngoing events until the switch has become fully idle (i.e. no longer in the process of counting presses within the multipress).\n  - The server for cluster revision $>=$ 2 shall generate a MultiPressComplete event with the TotalNumberOfPressesCounted field set to zero (indicating an aborted sequence), and shall NOT generate any further InitialPress and MultiPressOngoing events until the switch has become fully idle (i.e. no longer in the process of counting presses within the multipress).\nThis approach avoids unintentionally causing intermediate actions where there is a very long sequence of presses beyond MultiPressMax that may be taken in account specially by switches (e.g. to trigger special behavior such as factory reset for which generating events towards the client is not appropriate)."
+        }
+      ],
+      "commands": [],
+      "datatypes": []
+    },
+    {
+      "id": 69,
+      "name": "BooleanState",
+      "revision": 2,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "StateValue",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This represents a boolean state.\nThe semantics of this boolean state are defined by the device type using this cluster. For example, in a Contact Sensor device type, FALSE=open or no contact, TRUE=closed or contact."
+        }
+      ],
+      "commands": [],
+      "datatypes": []
     },
     {
       "id": 257,
@@ -5677,6 +5791,85 @@
       ]
     },
     {
+      "id": 1024,
+      "name": "IlluminanceMeasurement",
+      "revision": 4,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the illuminance in Lux (symbol lx) as follows:\n  - MeasuredValue = 10,000 x log10(illuminance) + 1,\nwhere 1 lx $<=$ illuminance $<=$ 3.576 Mlx, corresponding to a MeasuredValue in the range 1 to 0xFFFE.\nThe MeasuredValue attribute can take the following values:\n  - 0 indicates a value of illuminance that is too low to be measured,\n  - MinMeasuredValue $<=$ MeasuredValue $<=$ MaxMeasuredValue under normal circumstances,\n  - null indicates that the illuminance measurement is invalid.\nThe MeasuredValue attribute is updated continuously as new measurements are made."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that can be measured. A value of null indicates that this attribute is not defined. See Measured Value for more details."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that can be measured. A value of null indicates that this attribute is not defined. See Measured Value for more details."
+        },
+        {
+          "id": 3,
+          "name": "Tolerance",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "See Measured Value."
+        },
+        {
+          "id": 4,
+          "name": "LightSensorType",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the electronic type of the light sensor. This attribute shall be set to one of the non-reserved values listed in LightSensorTypeEnum or null in case the sensor type is unknown."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LightSensorTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Photodiode",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Cmos",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 1026,
       "name": "TemperatureMeasurement",
       "revision": 5,
@@ -5711,6 +5904,163 @@
           "optional": false,
           "writable": false,
           "description": "This attribute indicates the maximum value of MeasuredValue that is capable of being measured. See Measured Value for more details.\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 3,
+          "name": "Tolerance",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "See Measured Value."
+        }
+      ],
+      "commands": [],
+      "datatypes": []
+    },
+    {
+      "id": 1027,
+      "name": "PressureMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "EXT",
+          "name": "Extended",
+          "description": "Extended range and resolution"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the pressure in kPa as follows:\nMeasuredValue = 10 x Pressure [kPa]\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that can be measured. See Measured Value for more details.\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that can be measured. See Measured Value for more details.\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 3,
+          "name": "Tolerance",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "See Measured Value."
+        },
+        {
+          "id": 16,
+          "name": "ScaledValue",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the pressure in Pascals as follows:\nScaledValue = 10^Scale x Pressure [Pa]\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 17,
+          "name": "MinScaledValue",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of ScaledValue that can be measured.\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 18,
+          "name": "MaxScaledValue",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of ScaledValue that can be measured.\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 19,
+          "name": "ScaledTolerance",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the magnitude of the possible error that is associated with ScaledValue. The true value is located in the range\n(ScaledValue – ScaledTolerance) to (ScaledValue + ScaledTolerance)."
+        },
+        {
+          "id": 20,
+          "name": "Scale",
+          "type": "int8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the base 10 exponent used to obtain ScaledValue (see ScaledValue)."
+        }
+      ],
+      "commands": [],
+      "datatypes": []
+    },
+    {
+      "id": 1028,
+      "name": "FlowMeasurement",
+      "revision": 4,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the flow in m^3/h as follows:\nMeasuredValue = 10 x Flow\nThe null value indicates that the flow measurement is unknown, otherwise the range shall be as described in Measured Value."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that can be measured. See Measured Value for more details.\nThe null value indicates that the value is not available."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that can be measured. See Measured Value for more details.\nThe null value indicates that the value is not available."
         },
         {
           "id": 3,

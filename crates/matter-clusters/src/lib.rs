@@ -21,9 +21,12 @@
 //!
 //! # Clusters
 //!
-//! `BasicInformation`, `Descriptor`, `Identify`, `OnOff`, `LevelControl`,
-//! `ColorControl`, `OccupancySensing`, `TemperatureMeasurement`,
-//! `RelativeHumidityMeasurement`, and `DoorLock` (Aliro features excluded).
+//! M7 (byte-parity tested): `BasicInformation`, `Descriptor`, `Identify`,
+//! `OnOff`, `LevelControl`, `ColorControl`, `OccupancySensing`,
+//! `TemperatureMeasurement`, `RelativeHumidityMeasurement`, and `DoorLock`
+//! (Aliro features excluded). M9-A2.1 pilot (decode-smoke tested):
+//! `IlluminanceMeasurement`, `PressureMeasurement`, `FlowMeasurement`,
+//! `BooleanState`, and `Switch`.
 //!
 //! # Usage
 //!

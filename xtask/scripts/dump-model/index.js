@@ -43,7 +43,7 @@ const DUMP_SCRIPT_VERSION = 1;
 // later does not break the gate.
 const SPEC_REVISION = '1.5.1';
 
-// The 10 M7 target clusters (Section 8 of the spec / CLAUDE.md milestone).
+// The M7 clusters plus the M9-A2.1 pilot batch (read-only sensors + Switch).
 const ALLOWLIST = [
   { id: 0x0028, name: 'BasicInformation' },
   { id: 0x001d, name: 'Descriptor' },
@@ -55,6 +55,12 @@ const ALLOWLIST = [
   { id: 0x0402, name: 'TemperatureMeasurement' },
   { id: 0x0405, name: 'RelativeHumidityMeasurement' },
   { id: 0x0101, name: 'DoorLock' },
+  // M9-A2.1 pilot batch:
+  { id: 0x0400, name: 'IlluminanceMeasurement' },
+  { id: 0x0403, name: 'PressureMeasurement' },
+  { id: 0x0404, name: 'FlowMeasurement' },
+  { id: 0x0045, name: 'BooleanState' },
+  { id: 0x003b, name: 'Switch' },
 ];
 
 const excluded = [];

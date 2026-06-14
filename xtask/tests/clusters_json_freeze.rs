@@ -11,8 +11,9 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
-/// The 10 M7 target clusters (CLAUDE.md milestone / spec §8).
-const TARGET_CLUSTERS: [&str; 10] = [
+/// The M7 target clusters (CLAUDE.md milestone / spec §8) plus the M9-A2.1
+/// pilot batch (read-only sensors + Switch).
+const TARGET_CLUSTERS: [&str; 15] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -23,6 +24,12 @@ const TARGET_CLUSTERS: [&str; 10] = [
     "TemperatureMeasurement",
     "RelativeHumidityMeasurement",
     "DoorLock",
+    // M9-A2.1 pilot batch:
+    "IlluminanceMeasurement",
+    "PressureMeasurement",
+    "FlowMeasurement",
+    "BooleanState",
+    "Switch",
 ];
 
 fn load() -> Value {

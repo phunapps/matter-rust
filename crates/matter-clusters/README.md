@@ -10,7 +10,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  10 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  15 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -18,8 +18,8 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 
 ## What this crate does not do
 
-- It is **not** a full cluster set — only the 10 clusters below today. More
-  arrive in a later sub-plan.
+- It is **not** a full cluster set — only the 15 clusters below today. More
+  arrive in later M9-A2 batches.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
   publishes is the Interaction Model layer / high-level controller (see *Reading
@@ -29,11 +29,14 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 
 ## Status
 
-Pre-release (`0.0.0`). The 10 initial clusters are generated and **byte-parity
+Pre-release (`0.0.0`). The 10 M7 clusters are generated and **byte-parity
 tested against matter.js 0.16.11** (`test-vectors/clusters/`): BasicInformation,
 Descriptor, Identify, OnOff, LevelControl, ColorControl, OccupancySensing,
 TemperatureMeasurement, RelativeHumidityMeasurement, and DoorLock (Aliro
-features excluded). Hand-written support lives in `types` (`Nullable<T>`),
+features excluded). The M9-A2.1 pilot batch adds 5 read-only clusters —
+IlluminanceMeasurement, PressureMeasurement, FlowMeasurement, BooleanState, and
+Switch — decode-smoke tested (they reuse datatype shapes already byte-parity
+proven by the M7 set). Hand-written support lives in `types` (`Nullable<T>`),
 `error` (`ClusterError`), and `datatypes` (`SemanticTagStruct`).
 
 ## Usage

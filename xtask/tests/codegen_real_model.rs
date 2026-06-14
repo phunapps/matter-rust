@@ -15,7 +15,11 @@ fn all_real_clusters_generate_and_format() {
         .to_path_buf();
     let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
         .expect("real model loads + validates");
-    assert_eq!(model.clusters.len(), 10, "expected the 10 M7 clusters");
+    assert_eq!(
+        model.clusters.len(),
+        15,
+        "expected the 10 M7 clusters + 5 M9-A2.1 pilot clusters"
+    );
     for c in &model.clusters {
         let src = xtask::codegen::rustgen::emit::generate_cluster(c);
         let formatted = xtask::codegen::rustfmt_source(&src)
