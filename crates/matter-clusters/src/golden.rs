@@ -291,7 +291,7 @@ pub fn decode_flags(tlv: &[u8]) -> Result<FlagsBitmap, ClusterError> {
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(FlagsBitmap::from_bits_truncate(
+        }) => Ok(FlagsBitmap::from_bits_retain(
             u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Flags"))?,
         )),
         _ => Err(ClusterError::UnexpectedType { context: "Flags" }),
@@ -375,7 +375,7 @@ pub fn decode_caps(tlv: &[u8]) -> Result<WideFlags, ClusterError> {
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(WideFlags::from_bits_truncate(
+        }) => Ok(WideFlags::from_bits_retain(
             u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Caps"))?,
         )),
         _ => Err(ClusterError::UnexpectedType { context: "Caps" }),

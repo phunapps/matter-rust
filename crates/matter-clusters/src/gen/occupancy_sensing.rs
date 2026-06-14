@@ -253,7 +253,7 @@ pub fn decode_occupancy(tlv: &[u8]) -> Result<OccupancyBitmap, ClusterError> {
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(OccupancyBitmap::from_bits_truncate(
+        }) => Ok(OccupancyBitmap::from_bits_retain(
             u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Occupancy"))?,
         )),
         _ => Err(ClusterError::UnexpectedType {
@@ -293,7 +293,7 @@ pub fn decode_occupancy_sensor_type_bitmap(
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(OccupancySensorTypeBitmap::from_bits_truncate(
+        }) => Ok(OccupancySensorTypeBitmap::from_bits_retain(
             u8::try_from(v)
                 .map_err(|_| ClusterError::InvalidLength("OccupancySensorTypeBitmap"))?,
         )),

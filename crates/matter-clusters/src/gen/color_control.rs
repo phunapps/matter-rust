@@ -693,7 +693,7 @@ pub fn decode_options(tlv: &[u8]) -> Result<OptionsBitmap, ClusterError> {
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(OptionsBitmap::from_bits_truncate(
+        }) => Ok(OptionsBitmap::from_bits_retain(
             u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Options"))?,
         )),
         _ => Err(ClusterError::UnexpectedType { context: "Options" }),
@@ -1420,7 +1420,7 @@ pub fn decode_color_capabilities(tlv: &[u8]) -> Result<ColorCapabilitiesBitmap, 
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(ColorCapabilitiesBitmap::from_bits_truncate(
+        }) => Ok(ColorCapabilitiesBitmap::from_bits_retain(
             u16::try_from(v).map_err(|_| ClusterError::InvalidLength("ColorCapabilities"))?,
         )),
         _ => Err(ClusterError::UnexpectedType {

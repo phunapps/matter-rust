@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use matter_clusters::gen::descriptor::{decode_device_type_list, DeviceTypeStruct};
+use matter_clusters::gen::occupancy_sensing::decode_occupancy;
 use matter_codec::{Tag, TlvWriter};
 
 /// `{ ctx0=u(0x1234_5678), <unknown ctx99 struct{ctx0=u(1)}>, ctx1=u(7) }`
@@ -59,4 +60,22 @@ fn list_decode_skips_unknown_container_element() {
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].device_type, 10);
     assert_eq!(list[1].device_type, 20);
+}
+
+#[test]
+fn bitmap_decode_retains_unknown_bits() {
+    // OccupancyBitmap defines bit0 (Occupied). 0b1000_0001 sets bit0 plus an
+    // unknown reserved bit7 a newer revision might define.
+    let raw: u8 = 0b1000_0001;
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_uint(Tag::Anonymous, u64::from(raw)).unwrap();
+    }
+    let bm = decode_occupancy(&buf).expect("decodes");
+    assert_eq!(
+        bm.bits(),
+        raw,
+        "the unknown bit7 must survive the round-trip"
+    );
 }

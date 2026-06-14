@@ -1606,7 +1606,7 @@ pub fn decode_credential_rules_support(tlv: &[u8]) -> Result<CredentialRulesBitm
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(CredentialRulesBitmap::from_bits_truncate(
+        }) => Ok(CredentialRulesBitmap::from_bits_retain(
             u8::try_from(v).map_err(|_| ClusterError::InvalidLength("CredentialRulesSupport"))?,
         )),
         _ => Err(ClusterError::UnexpectedType {
@@ -1789,7 +1789,7 @@ pub fn decode_supported_operating_modes(tlv: &[u8]) -> Result<OperatingModesBitm
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(OperatingModesBitmap::from_bits_truncate(
+        }) => Ok(OperatingModesBitmap::from_bits_retain(
             u16::try_from(v).map_err(|_| ClusterError::InvalidLength("SupportedOperatingModes"))?,
         )),
         _ => Err(ClusterError::UnexpectedType {
@@ -1810,7 +1810,7 @@ pub fn decode_default_configuration_register(
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(ConfigurationRegisterBitmap::from_bits_truncate(
+        }) => Ok(ConfigurationRegisterBitmap::from_bits_retain(
             u16::try_from(v)
                 .map_err(|_| ClusterError::InvalidLength("DefaultConfigurationRegister"))?,
         )),
@@ -1944,7 +1944,7 @@ pub fn decode_local_programming_features(
         Some(Element::Scalar {
             value: Value::Uint(v),
             ..
-        }) => Ok(LocalProgrammingFeaturesBitmap::from_bits_truncate(
+        }) => Ok(LocalProgrammingFeaturesBitmap::from_bits_retain(
             u8::try_from(v).map_err(|_| ClusterError::InvalidLength("LocalProgrammingFeatures"))?,
         )),
         _ => Err(ClusterError::UnexpectedType {
@@ -2271,7 +2271,7 @@ impl GetWeekDayScheduleResponse {
                     tag: Tag::Context(3),
                     value: Value::Uint(v),
                 }) => {
-                    f_days_mask = Some(DaysMaskBitmap::from_bits_truncate(
+                    f_days_mask = Some(DaysMaskBitmap::from_bits_retain(
                         u8::try_from(v).map_err(|_| ClusterError::InvalidLength("DaysMask"))?,
                     ))
                 }

@@ -95,7 +95,7 @@ fn read_scalar(
             if let Some(backing) = named_backing(ty, dts) {
                 (
                     "Value::Uint(v)".into(),
-                    format!("{ty}::from_bits_truncate({backing}::try_from(v).map_err(|_| ClusterError::InvalidLength(\"{context}\"))?)"),
+                    format!("{ty}::from_bits_retain({backing}::try_from(v).map_err(|_| ClusterError::InvalidLength(\"{context}\"))?)"),
                 )
             } else {
                 // bare map8/map16/map32 — a plain integer on the wire.
