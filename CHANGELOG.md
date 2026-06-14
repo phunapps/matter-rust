@@ -5,6 +5,17 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## matter-codec
+
+### [0.1.1] — M9-A
+
+#### Added
+
+- `TlvReader::skip_container()` — drains the body of an already-opened
+  container through its matching end. Enables forward-compatible decoders
+  that skip unknown nested containers from newer Matter revisions. Additive
+  (non-breaking); satisfies dependents' existing `^0.1.0` requirement.
+
 ## matter-clusters
 
 ### [Unreleased] — M7.4b generated clusters, M7.3 foundation

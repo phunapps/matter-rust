@@ -15,4 +15,12 @@ fuzz_target!(|data: &[u8]| {
     // (including arithmetic overflow, slice bounds, unwrap-on-None) as a
     // crash and saves the input under `artifacts/`.
     let _ = reader.read_value();
+
+    // Also exercise skip_container: open the first element; if it is a
+    // container, draining it must not panic or loop forever on adversarial
+    // input. (depth/budget are enforced by next().)
+    let mut sr = matter_codec::TlvReader::new(data);
+    if let Ok(Some(matter_codec::Element::ContainerStart { .. })) = sr.next() {
+        let _ = sr.skip_container();
+    }
 });

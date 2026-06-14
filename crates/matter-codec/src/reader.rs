@@ -179,6 +179,62 @@ impl<'a> TlvReader<'a> {
         Ok(Some(Element::Scalar { tag, value }))
     }
 
+    /// Skip the remaining body of the container whose
+    /// [`ContainerStart`](Element::ContainerStart) was just returned by
+    /// [`Self::next`], consuming through its matching
+    /// [`ContainerEnd`](Element::ContainerEnd).
+    ///
+    /// Call this immediately after `next()` yields a `ContainerStart` you
+    /// want to discard — for example an unknown field carried by a struct
+    /// from a newer Matter revision. On return the reader is positioned at
+    /// the first element *after* the skipped container. Scalars inside the
+    /// container are walked but not materialised, so cost is bounded by the
+    /// input size and nesting by [`MAX_DEPTH`] (both enforced by `next()`).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::UnclosedContainer`] — end of input before the container's
+    ///   closing marker.
+    /// - Any error returned by [`Self::next`] (malformed body, over-deep
+    ///   nesting, or element-budget exhaustion).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter};
+    /// let mut buf = Vec::new();
+    /// let mut w = TlvWriter::new(&mut buf);
+    /// w.start_structure(Tag::Anonymous)?;
+    /// w.start_structure(Tag::Context(9))?; // an unknown nested field
+    /// w.end_container()?;
+    /// w.put_uint(Tag::Context(1), 42)?;
+    /// w.end_container()?;
+    ///
+    /// let mut r = TlvReader::new(&buf);
+    /// r.next()?; // open the outer struct
+    /// // next() returns the nested ctx9 ContainerStart we want to discard:
+    /// assert!(matches!(
+    ///     r.next()?,
+    ///     Some(Element::ContainerStart { kind: ContainerKind::Structure, .. })
+    /// ));
+    /// r.skip_container()?; // drain the nested struct
+    /// // the field after the unknown container is still readable:
+    /// assert!(matches!(r.next()?, Some(Element::Scalar { tag: Tag::Context(1), .. })));
+    /// # Ok::<(), matter_codec::Error>(())
+    /// ```
+    pub fn skip_container(&mut self) -> Result<()> {
+        let mut depth = 1usize;
+        while depth > 0 {
+            match self.next()? {
+                Some(Element::ContainerStart { .. }) => depth += 1,
+                Some(Element::ContainerEnd) => depth -= 1,
+                Some(Element::Scalar { .. }) => {}
+                None => return Err(Error::UnclosedContainer),
+            }
+        }
+        Ok(())
+    }
+
     /// Materialise one full TLV element as a `(Tag, Value)`. Scalars are
     /// returned directly; containers are read recursively up to
     /// [`MAX_DEPTH`] levels (enforced by [`Self::next`]'s depth counter).
@@ -1142,5 +1198,131 @@ mod tests {
                 value: Value::Uint(0x1234),
             }
         );
+    }
+
+    // --- skip_container ----------------------------------------------------
+
+    /// Build an anonymous structure: ctx0=u(7), then a nested ctx9 struct
+    /// {ctx0=u(1)}, then ctx1=u(42). Returns the encoded bytes.
+    fn struct_with_nested() -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = crate::writer::TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 7).unwrap();
+        w.start_structure(Tag::Context(9)).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(1), 42).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[test]
+    fn skip_container_drains_nested_struct_and_positions_after() {
+        let buf = struct_with_nested();
+        let mut r = TlvReader::new(&buf);
+        // open the outer struct
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            })
+        ));
+        // consume ctx0=7
+        assert!(matches!(r.next().unwrap(), Some(Element::Scalar { .. })));
+        // the next element is the nested ctx9 struct — open then skip it
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            })
+        ));
+        r.skip_container().unwrap();
+        // reader must now be positioned at ctx1=42, NOT at the outer end
+        match r.next().unwrap() {
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(v),
+            }) => {
+                assert_eq!(v, 42);
+            }
+            other => panic!("expected ctx1=42 after skip, got {other:?}"),
+        }
+        // then the outer ContainerEnd, then None
+        assert!(matches!(r.next().unwrap(), Some(Element::ContainerEnd)));
+        assert!(r.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn skip_container_handles_array_and_list_and_empty() {
+        for kind_byte in ["array", "list", "empty"] {
+            let mut buf = Vec::new();
+            let mut w = crate::writer::TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            match kind_byte {
+                "array" => {
+                    w.start_array(Tag::Context(0)).unwrap();
+                    w.put_uint(Tag::Anonymous, 1).unwrap();
+                    w.put_uint(Tag::Anonymous, 2).unwrap();
+                    w.end_container().unwrap();
+                }
+                "list" => {
+                    w.start_list(Tag::Context(0)).unwrap();
+                    w.put_uint(Tag::Context(5), 9).unwrap();
+                    w.end_container().unwrap();
+                }
+                _ => {
+                    w.start_structure(Tag::Context(0)).unwrap();
+                    w.end_container().unwrap();
+                }
+            }
+            w.put_uint(Tag::Context(1), 99).unwrap();
+            w.end_container().unwrap();
+
+            let mut r = TlvReader::new(&buf);
+            assert!(matches!(
+                r.next().unwrap(),
+                Some(Element::ContainerStart { .. })
+            ));
+            assert!(matches!(
+                r.next().unwrap(),
+                Some(Element::ContainerStart { .. })
+            ));
+            r.skip_container().unwrap();
+            match r.next().unwrap() {
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    assert_eq!(v, 99, "kind {kind_byte}");
+                }
+                other => panic!("kind {kind_byte}: expected ctx1=99, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn skip_container_unclosed_is_error() {
+        // outer struct opened, nested struct opened but never closed (truncated)
+        let mut buf = Vec::new();
+        {
+            let mut w = crate::writer::TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_structure(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Anonymous, 1).unwrap();
+            // deliberately do NOT close either container
+        }
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        assert!(matches!(r.skip_container(), Err(Error::UnclosedContainer)));
     }
 }

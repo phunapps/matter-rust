@@ -11,7 +11,7 @@
 // CLAUDE.md test-code carve-out: unwrap / expect with documented justification.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use matter_codec::{Tag, TlvReader, TlvWriter, Value};
+use matter_codec::{Element, Tag, TlvReader, TlvWriter, Value};
 use proptest::prelude::*;
 
 fn arb_tag() -> impl Strategy<Value = Tag> {
@@ -96,5 +96,45 @@ proptest! {
         // (scalars carry no tag of their own — the tag belongs to the
         // element slot, supplied by the container parent).
         prop_assert_eq!(decoded_value, value);
+    }
+
+    /// `skip_container` stops exactly at the container boundary: encode an
+    /// anonymous struct (arbitrary uint fields + one nested struct) followed
+    /// by a sentinel scalar; opening the struct and skipping it must leave
+    /// the reader precisely at the sentinel. Public-API only (no internal
+    /// cursor access).
+    #[test]
+    fn skip_container_stops_at_boundary(fields in proptest::collection::vec(any::<u64>(), 0..16)) {
+        let mut buf = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut buf);
+            // the container to skip:
+            w.start_structure(Tag::Anonymous).unwrap();
+            for (i, v) in fields.iter().enumerate() {
+                let ctx = u8::try_from(i % 200).unwrap();
+                w.put_uint(Tag::Context(ctx), *v).unwrap();
+            }
+            w.start_structure(Tag::Context(200)).unwrap();
+            w.put_uint(Tag::Anonymous, 1).unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+            // the sentinel that must come next:
+            w.put_uint(Tag::Context(7), 0xDEAD).unwrap();
+        }
+        let mut r = TlvReader::new(&buf);
+        let opened_container = matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        );
+        prop_assert!(opened_container);
+        r.skip_container().unwrap();
+        let at_sentinel = matches!(
+            r.next().unwrap(),
+            Some(Element::Scalar {
+                tag: Tag::Context(7),
+                value: Value::Uint(0xDEAD)
+            })
+        );
+        prop_assert!(at_sentinel);
     }
 }
