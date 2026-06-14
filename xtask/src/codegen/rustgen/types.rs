@@ -24,7 +24,9 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         "int8" => "i8",
         "int16" | "temperature" => "i16",
         "int24" | "int32" => "i32",
-        "int40" | "int48" | "int56" | "int64" => "i64",
+        // i64: signed primitives + energy/electrical semantic globals
+        "int40" | "int48" | "int56" | "int64" | "voltage-mV" | "amperage-mA" | "power-mW"
+        | "power-mVAR" | "power-mVA" | "energy-mWh" | "energy-mVAh" | "energy-mVARh" => "i64",
         "single" => "f32",
         "double" => "f64",
         "string" => "String",
@@ -34,7 +36,7 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         | "devtype-id" | "epoch-s" | "elapsed-s" | "map32" | "fabric-id" => "u32",
         // u64: primitive + semantic globals
         "uint40" | "uint48" | "uint56" | "uint64" | "node-id" | "epoch-us" | "posix-ms"
-        | "systime-us" | "fabric-id64" => "u64",
+        | "systime-us" | "systime-ms" | "fabric-id64" => "u64",
         _ => return None,
     })
 }
@@ -185,6 +187,17 @@ mod tests {
         assert_eq!(base_type("fabric-idx", None), "u8");
         assert_eq!(base_type("epoch-s", None), "u32");
         assert_eq!(base_type("enum8", None), "u8");
+        // M9-A2.2 energy/electrical semantic globals (all int64-based)…
+        assert_eq!(base_type("voltage-mV", None), "i64");
+        assert_eq!(base_type("amperage-mA", None), "i64");
+        assert_eq!(base_type("power-mW", None), "i64");
+        assert_eq!(base_type("power-mVAR", None), "i64");
+        assert_eq!(base_type("power-mVA", None), "i64");
+        assert_eq!(base_type("energy-mWh", None), "i64");
+        assert_eq!(base_type("energy-mVAh", None), "i64");
+        assert_eq!(base_type("energy-mVARh", None), "i64");
+        // …and the millisecond system-time global (uint64-based).
+        assert_eq!(base_type("systime-ms", None), "u64");
     }
 
     #[test]

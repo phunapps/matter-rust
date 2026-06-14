@@ -156,8 +156,30 @@ fn enum_backing(base: &str) -> &'static str {
     }
 }
 
+/// The catch-all "unknown discriminant" variant name for a generated enum.
+///
+/// Normally `Unknown`, but some Matter enums (`AirQualityEnum`, `PowerModeEnum`,
+/// `BatChargeStateEnum`, …) define a member literally named `Unknown`; for those
+/// the catch-all becomes `Unrecognized` so the two do not collide. Panics only
+/// if a model defines BOTH `Unknown` and `Unrecognized` members (no known Matter
+/// enum does) — a loud failure, never a silent miscompile.
+fn catch_all_variant(d: &Datatype) -> &'static str {
+    let has = |n: &str| d.values.iter().any(|v| v.name == n);
+    if !has("Unknown") {
+        "Unknown"
+    } else if !has("Unrecognized") {
+        "Unrecognized"
+    } else {
+        panic!(
+            "enum {} defines both Unknown and Unrecognized members",
+            d.name
+        )
+    }
+}
+
 fn emit_enum(s: &mut String, d: &Datatype) {
     let backing = enum_backing(&d.base);
+    let catch_all = catch_all_variant(d);
     line!(s, "/// `{}` ({}).", d.name, d.base);
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
     line!(s, "pub enum {} {{", d.name);
@@ -166,13 +188,13 @@ fn emit_enum(s: &mut String, d: &Datatype) {
         line!(s, "    {},", ident(&v.name));
     }
     line!(s, "    /// A value not known to this codegen revision.");
-    line!(s, "    Unknown({backing}),");
+    line!(s, "    {catch_all}({backing}),");
     line!(s, "}}\n");
 
     line!(s, "impl {} {{", d.name);
     line!(
         s,
-        "    /// Decode from its raw discriminant (unknown → `Unknown`)."
+        "    /// Decode from its raw discriminant (unknown → `{catch_all}`)."
     );
     line!(s, "    #[must_use]");
     line!(s, "    pub fn from_raw(v: {backing}) -> Self {{");
@@ -180,7 +202,7 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     for v in &d.values {
         line!(s, "            {} => Self::{},", v.value, ident(&v.name));
     }
-    line!(s, "            other => Self::Unknown(other),");
+    line!(s, "            other => Self::{catch_all}(other),");
     line!(s, "        }}");
     line!(s, "    }}");
     line!(s, "    /// The raw discriminant.");
@@ -190,7 +212,7 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     for v in &d.values {
         line!(s, "            Self::{} => {},", ident(&v.name), v.value);
     }
-    line!(s, "            Self::Unknown(v) => v,");
+    line!(s, "            Self::{catch_all}(v) => v,");
     line!(s, "        }}");
     line!(s, "    }}");
     line!(s, "}}\n");
@@ -236,4 +258,67 @@ fn emit_struct(s: &mut String, d: &Datatype) {
     // The struct's encode/decode impls are emitted by the codec pass (next
     // task), since they share the scalar read/write helpers.
     let _ = (base_type, ident); // keep imports used regardless of branch
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::model::{Datatype, EnumValue};
+
+    fn enum_dt(name: &str, base: &str, values: &[(u32, &str)]) -> Datatype {
+        Datatype {
+            name: name.to_string(),
+            base: base.to_string(),
+            kind: "enum".to_string(),
+            values: values
+                .iter()
+                .map(|(v, n)| EnumValue {
+                    value: *v,
+                    name: (*n).to_string(),
+                })
+                .collect(),
+            bits: vec![],
+            fields: vec![],
+        }
+    }
+
+    #[test]
+    fn enum_without_unknown_member_keeps_unknown_catch_all() {
+        let mut s = String::new();
+        emit_enum(
+            &mut s,
+            &enum_dt("StartUpOnOffEnum", "enum8", &[(0, "Off"), (1, "On")]),
+        );
+        assert!(
+            s.contains("Unknown(u8),"),
+            "expected Unknown catch-all:\n{s}"
+        );
+        assert!(s.contains("other => Self::Unknown(other),"), "{s}");
+        assert!(s.contains("Self::Unknown(v) => v,"), "{s}");
+    }
+
+    #[test]
+    fn enum_with_unknown_member_uses_unrecognized_catch_all() {
+        let mut s = String::new();
+        emit_enum(
+            &mut s,
+            &enum_dt("AirQualityEnum", "enum8", &[(0, "Unknown"), (1, "Good")]),
+        );
+        // The model member stays `Unknown` (a fieldless variant); the catch-all
+        // is renamed to `Unrecognized` to avoid a duplicate-variant collision.
+        assert!(
+            s.contains("    Unknown,\n"),
+            "model member Unknown missing:\n{s}"
+        );
+        assert!(
+            s.contains("Unrecognized(u8),"),
+            "catch-all not renamed:\n{s}"
+        );
+        assert!(
+            !s.contains("Unknown(u8)"),
+            "colliding catch-all present:\n{s}"
+        );
+        assert!(s.contains("other => Self::Unrecognized(other),"), "{s}");
+        assert!(s.contains("Self::Unrecognized(v) => v,"), "{s}");
+    }
 }

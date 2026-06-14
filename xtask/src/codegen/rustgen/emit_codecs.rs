@@ -513,6 +513,21 @@ fn clone_field(f: &FieldDef) -> FieldDef {
     }
 }
 
+/// A generated datatype struct is write-capable iff every field is a scalar
+/// (the only shape `write_fields`/`emit_field_write_self` can encode). Structs
+/// with a composite field (`object`/`array`) — e.g. `MeasurementAccuracyStruct`,
+/// whose `AccuracyRanges` is a list-of-struct — are emitted **decode-only**,
+/// like response-payload structs. (Composite-field *encode* is YAGNI until a
+/// future batch has a writable composite attribute.)
+fn struct_is_write_capable(d: &Datatype) -> bool {
+    d.fields.iter().all(|f| {
+        matches!(
+            f.metatype.as_str(),
+            "boolean" | "integer" | "string" | "bytes" | "enum" | "bitmap"
+        )
+    })
+}
+
 fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
     // Struct *decl* was already emitted by emit.rs::emit_struct; emit only the
     // codec here.
@@ -640,7 +655,7 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     // clusters guarantee have scalar-only fields, so write_fields compiles).
     // Response-payload structs (`decl`) are decode-only — they may carry
     // composite fields (e.g. list[struct]) that we never re-encode.
-    if !decl {
+    if !decl && struct_is_write_capable(d) {
         line!(
             s,
             "    /// Write this struct's fields into an already-open container."
@@ -772,4 +787,71 @@ fn emit_struct_field_read_arm(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_
     };
     line!(s, "                    f_{} = Some({});", var, wrapped);
     line!(s, "                }}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn field(id: u32, name: &str, ty: &str, metatype: &str, entry: Option<&str>) -> FieldDef {
+        FieldDef {
+            id,
+            name: name.to_string(),
+            ty: ty.to_string(),
+            metatype: metatype.to_string(),
+            entry_type: entry.map(str::to_string),
+            nullable: false,
+            optional: false,
+        }
+    }
+
+    fn struct_dt(name: &str, fields: Vec<FieldDef>) -> Datatype {
+        Datatype {
+            name: name.to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields,
+        }
+    }
+
+    #[test]
+    fn scalar_only_struct_is_write_capable() {
+        let d = struct_dt(
+            "EnergyMeasurementStruct",
+            vec![
+                field(0, "Energy", "energy-mWh", "integer", None),
+                field(1, "StartTimestamp", "epoch-s", "integer", None),
+            ],
+        );
+        assert!(struct_is_write_capable(&d));
+    }
+
+    #[test]
+    fn struct_with_array_field_is_not_write_capable() {
+        let d = struct_dt(
+            "MeasurementAccuracyStruct",
+            vec![
+                field(1, "Measured", "bool", "boolean", None),
+                field(
+                    4,
+                    "AccuracyRanges",
+                    "list",
+                    "array",
+                    Some("MeasurementAccuracyRangeStruct"),
+                ),
+            ],
+        );
+        assert!(!struct_is_write_capable(&d));
+    }
+
+    #[test]
+    fn struct_with_object_field_is_not_write_capable() {
+        let d = struct_dt(
+            "Outer",
+            vec![field(0, "Inner", "InnerStruct", "object", None)],
+        );
+        assert!(!struct_is_write_capable(&d));
+    }
 }
