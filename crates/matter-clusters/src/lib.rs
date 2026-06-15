@@ -26,7 +26,9 @@
 //! `TemperatureMeasurement`, `RelativeHumidityMeasurement`, and `DoorLock`
 //! (Aliro features excluded). M9-A2.1 pilot (decode-smoke tested):
 //! `IlluminanceMeasurement`, `PressureMeasurement`, `FlowMeasurement`,
-//! `BooleanState`, and `Switch`.
+//! `BooleanState`, and `Switch`. M9-A2.2 energy (decode-smoke + one nested
+//! byte-parity vector): `PowerSource`, `ElectricalPowerMeasurement`,
+//! `ElectricalEnergyMeasurement`, and `AirQuality`.
 //!
 //! # Usage
 //!

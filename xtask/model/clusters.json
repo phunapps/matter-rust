@@ -9,8 +9,12 @@
       "LevelControl",
       "Descriptor",
       "BasicInformation",
+      "PowerSource",
       "Switch",
       "BooleanState",
+      "AirQuality",
+      "ElectricalPowerMeasurement",
+      "ElectricalEnergyMeasurement",
       "DoorLock",
       "ColorControl",
       "IlluminanceMeasurement",
@@ -118,8 +122,26 @@
         "reason": "no IM event support until M8"
       },
       {
+        "cluster": "ElectricalEnergyMeasurement",
+        "element": "2 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
+        "cluster": "ElectricalPowerMeasurement",
+        "element": "1 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
         "cluster": "OccupancySensing",
         "element": "1 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
+        "cluster": "PowerSource",
+        "element": "3 event(s)",
         "kind": "events",
         "reason": "no IM event support until M8"
       },
@@ -1557,6 +1579,1186 @@
       ]
     },
     {
+      "id": 47,
+      "name": "PowerSource",
+      "revision": 3,
+      "features": [
+        {
+          "bit": 0,
+          "code": "WIRED",
+          "name": "Wired",
+          "description": "A wired power source"
+        },
+        {
+          "bit": 1,
+          "code": "BAT",
+          "name": "Battery",
+          "description": "A battery power source"
+        },
+        {
+          "bit": 2,
+          "code": "RECHG",
+          "name": "Rechargeable",
+          "description": "A rechargeable battery power source"
+        },
+        {
+          "bit": 3,
+          "code": "REPLC",
+          "name": "Replaceable",
+          "description": "A replaceable battery power source"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Status",
+          "type": "PowerSourceStatusEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the participation of this power source in providing power to the Node as specified in PowerSourceStatusEnum."
+        },
+        {
+          "id": 1,
+          "name": "Order",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the relative preference with which the Node will select this source to provide power. A source with a lower order shall be selected by the Node to provide power before any other source with a higher order, if the lower order source is available (see Section 11.7.7.1, \"Status Attribute\").\nNote, Order is read-only and therefore NOT intended to allow clients control over power source selection."
+        },
+        {
+          "id": 2,
+          "name": "Description",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall provide a user-facing description of this source, used to distinguish it from other power sources, e.g. \"DC Power\", \"Primary Battery\" or \"Battery back-up\". This attribute shall NOT be used to convey information such as battery form factor, or chemistry."
+        },
+        {
+          "id": 3,
+          "name": "WiredAssessedInputVoltage",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the assessed RMS or DC voltage currently provided by the hard-wired source, in mV (millivolts). A value of NULL shall indicate the Node is currently unable to assess the value. If the wired source is not connected, but the Node is still able to assess a value, then the assessed value may be reported."
+        },
+        {
+          "id": 4,
+          "name": "WiredAssessedInputFrequency",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the assessed frequency of the voltage, currently provided by the hard-wired source, in Hz. A value of NULL shall indicate the Node is currently unable to assess the value. If the wired source is not connected, but the Node is still able to assess a value, then the assessed value may be reported."
+        },
+        {
+          "id": 5,
+          "name": "WiredCurrentType",
+          "type": "WiredCurrentTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the type of current the Node expects to be provided by the hard-wired source as specified in WiredCurrentTypeEnum."
+        },
+        {
+          "id": 6,
+          "name": "WiredAssessedCurrent",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the assessed instantaneous current draw of the Node on the hard-wired source, in mA (milliamps). A value of NULL shall indicate the Node is currently unable to assess the value. If the wired source is not connected, but the Node is still able to assess a value, then the assessed value may be reported."
+        },
+        {
+          "id": 7,
+          "name": "WiredNominalVoltage",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the nominal voltage, printed as part of the Node's regulatory compliance label in mV (millivolts), expected to be provided by the hard-wired source."
+        },
+        {
+          "id": 8,
+          "name": "WiredMaximumCurrent",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum current, printed as part of the Node's regulatory compliance label in mA (milliamps), expected to be provided by the hard-wired source."
+        },
+        {
+          "id": 9,
+          "name": "WiredPresent",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates if the Node detects that the hard-wired power source is properly connected."
+        },
+        {
+          "id": 10,
+          "name": "ActiveWiredFaults",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "WiredFaultEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the set of wired faults currently detected by the Node on this power source. This set is represented as a list of WiredFaultEnum. When the Node detects a fault has been raised, the appropriate WiredFaultEnum value shall be added to this list, provided it is not already present. This list shall NOT contain more than one instance of a specific WiredFaultEnum value. When the Node detects all conditions contributing to a fault have been cleared, the corresponding WiredFaultEnum value shall be removed from this list. An empty list shall indicate there are currently no active faults. The order of this list SHOULD have no significance. Clients interested in monitoring changes in active faults may subscribe to this attribute, or they may subscribe to WiredFaultChange."
+        },
+        {
+          "id": 11,
+          "name": "BatVoltage",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the currently measured output voltage of the battery in mV (millivolts). A value of NULL shall indicate the Node is currently unable to assess the value."
+        },
+        {
+          "id": 12,
+          "name": "BatPercentRemaining",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the estimated percentage of battery charge remaining until the battery will no longer be able to provide power to the Node. Values are expressed in half percent units, ranging from 0 to 200. E.g. a value of 48 is equivalent to 24%. A value of NULL shall indicate the Node is currently unable to assess the value.\nChanges to this attribute shall only be marked as reportable in the following cases:\n  - At most once every 10 seconds, or\n  - When it changes from null to any other value and vice versa.\nSince reporting consumes power, devices SHOULD be careful not to over-report."
+        },
+        {
+          "id": 13,
+          "name": "BatTimeRemaining",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the estimated time in seconds before the battery will no longer be able to provide power to the Node. A value of NULL shall indicate the Node is currently unable to assess the value.\nChanges to this attribute shall only be marked as reportable in the following cases:\n  - At most once every 10 seconds, or\n  - When it changes from null to any other value and vice versa.\nSince reporting consumes power, devices SHOULD be careful not to over-report."
+        },
+        {
+          "id": 14,
+          "name": "BatChargeLevel",
+          "type": "BatChargeLevelEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a coarse ranking of the charge level of the battery, used to indicate when intervention is required as specified in BatChargeLevelEnum."
+        },
+        {
+          "id": 15,
+          "name": "BatReplacementNeeded",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates if the battery needs to be replaced. Replacement may be simple routine maintenance, such as with a single use, non-rechargeable cell. Replacement, however, may also indicate end of life, or serious fault with a rechargeable or even non-replaceable cell."
+        },
+        {
+          "id": 16,
+          "name": "BatReplaceability",
+          "type": "BatReplaceabilityEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the replaceability of the battery as specified in BatReplaceabilityEnum."
+        },
+        {
+          "id": 17,
+          "name": "BatPresent",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the Node detects that the batteries are properly installed."
+        },
+        {
+          "id": 18,
+          "name": "ActiveBatFaults",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "BatFaultEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the set of battery faults currently detected by the Node on this power source. This set is represented as a list of BatFaultEnum. When the Node detects a fault has been raised, the appropriate BatFaultEnum value shall be added to this list, provided it is not already present. This list shall NOT contain more than one instance of a specific BatFaultEnum value. When the Node detects all conditions contributing to a fault have been cleared, the corresponding BatFaultEnum value shall be removed from this list. An empty list shall indicate there are currently no active faults. The order of this list SHOULD have no significance. Clients interested in monitoring changes in active faults may subscribe to this attribute, or they may subscribe to BatFaultChange."
+        },
+        {
+          "id": 19,
+          "name": "BatReplacementDescription",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall provide a user-facing description of this battery, which SHOULD contain information required to identify a replacement, such as form factor, chemistry or preferred manufacturer."
+        },
+        {
+          "id": 20,
+          "name": "BatCommonDesignation",
+          "type": "BatCommonDesignationEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the ID of the common or colloquial designation of the battery, as specified in BatCommonDesignationEnum."
+        },
+        {
+          "id": 21,
+          "name": "BatAnsiDesignation",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the string representing the ANSI designation for the battery as specified in ANSI C18."
+        },
+        {
+          "id": 22,
+          "name": "BatIecDesignation",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the string representing the IEC designation for the battery as specified in IEC 60086."
+        },
+        {
+          "id": 23,
+          "name": "BatApprovedChemistry",
+          "type": "BatApprovedChemistryEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the ID of the preferred chemistry of the battery source as specified in BatApprovedChemistryEnum."
+        },
+        {
+          "id": 24,
+          "name": "BatCapacity",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the preferred minimum charge capacity rating in mAh of individual, user- or factory-serviceable battery cells or packs in the battery source."
+        },
+        {
+          "id": 25,
+          "name": "BatQuantity",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the quantity of individual, user- or factory-serviceable battery cells or packs in the battery source."
+        },
+        {
+          "id": 26,
+          "name": "BatChargeState",
+          "type": "BatChargeStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current state of the battery source with respect to charging as specified in BatChargeStateEnum."
+        },
+        {
+          "id": 27,
+          "name": "BatTimeToFullCharge",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the estimated time in seconds before the battery source will be at full charge. A value of NULL shall indicate the Node is currently unable to assess the value.\nChanges to this attribute shall only be marked as reportable in the following cases:\n  - At most once every 10 seconds, or\n  - When it changes from null to any other value and vice versa.\nSince reporting consumes power, devices SHOULD be careful not to over-report."
+        },
+        {
+          "id": 28,
+          "name": "BatFunctionalWhileCharging",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the Node can remain operational while the battery source is charging."
+        },
+        {
+          "id": 29,
+          "name": "BatChargingCurrent",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates assessed current in mA (milliamps) presently supplied to charge the battery source. A value of NULL shall indicate the Node is currently unable to assess the value."
+        },
+        {
+          "id": 30,
+          "name": "ActiveBatChargeFaults",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "BatChargeFaultEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the set of charge faults currently detected by the Node on this power source. This set is represented as a list of BatChargeFaultEnum. When the Node detects a fault has been raised, the appropriate BatChargeFaultEnum value shall be added to this list, provided it is not already present. This list shall NOT contain more than one instance of a specific BatChargeFaultEnum value. When the Node detects all conditions contributing to a fault have been cleared, the corresponding BatChargeFaultEnum value shall be removed from this list. An empty list shall indicate there are currently no active faults. The order of this list SHOULD have no significance. Clients interested in monitoring changes in active faults may subscribe to this attribute, or they may subscribe to the BatFaultChange event."
+        },
+        {
+          "id": 31,
+          "name": "EndpointList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "endpoint-no",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a list of endpoints that are powered by the source defined by this cluster. Multiple instances of this cluster may list the same endpoint, because it is possible for power for an endpoint to come from multiple sources. In that case the Order attribute indicates their priority.\nFor each power source on a node, there shall only be one instance of this cluster.\nA cluster instance with an empty list shall indicate that the power source is for the entire node, which includes all endpoints.\nA cluster instance with a non-empty list shall include the endpoint, upon which the cluster instance resides.\nThe above rules allow that some endpoints can have an unknown power source, and therefore would not be indicated by any instance of this cluster.\n> [!NOTE]\n> Legacy Implementations Legacy implementations of this cluster before revision 2, before this attribute was defined, would have implemented this cluster on an application endpoint without indicating it in EndpointList (since that attribute did not exist in revision 1), because it represented a power source for the endpoint, not the entire node. For example: Bridge implementations support endpoints for bridged devices that have different power sources. Such implementations followed device type requirements and semantics outside of this cluster, because this attribute did not exist. Future updates of such a cluster instance on the same endpoint, would allow that same endpoint to be an entry in the EndpointList attribute. Therefore it is valid to list the endpoint upon which the cluster instance exists.\n### Empty list examples\n: Typically, there is one power source for the node.\nAlso common is mains power for the node with battery backup power for the node.\nIn both these common cases, for each cluster instance described, the list is empty.\n### Populated list example\n: A node has a mains power source with Order as 0 (zero), but some application endpoints (not all) have a battery back up source with Order as 1,\nwhich means this list is empty for the Power Source cluster associated with the mains power,\nbecause it indicates the entire node,\nbut the Power Source cluster instance associated with the battery backup would list the endpoints that have a battery backup."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "BatApprovedChemistryEnum",
+          "base": "enum16",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Alkaline",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "LithiumCarbonFluoride",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "LithiumChromiumOxide",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "LithiumCopperOxide",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "LithiumIronDisulfide",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "LithiumManganeseDioxide",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "LithiumThionylChloride",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Magnesium",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "MercuryOxide",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "NickelOxyhydride",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "SilverOxide",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "ZincAir",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "ZincCarbon",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "ZincChloride",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "ZincManganeseDioxide",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "LeadAcid",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "LithiumCobaltOxide",
+              "description": null
+            },
+            {
+              "value": 18,
+              "name": "LithiumIon",
+              "description": null
+            },
+            {
+              "value": 19,
+              "name": "LithiumIonPolymer",
+              "description": null
+            },
+            {
+              "value": 20,
+              "name": "LithiumIronPhosphate",
+              "description": null
+            },
+            {
+              "value": 21,
+              "name": "LithiumSulfur",
+              "description": null
+            },
+            {
+              "value": 22,
+              "name": "LithiumTitanate",
+              "description": null
+            },
+            {
+              "value": 23,
+              "name": "NickelCadmium",
+              "description": null
+            },
+            {
+              "value": 24,
+              "name": "NickelHydrogen",
+              "description": null
+            },
+            {
+              "value": 25,
+              "name": "NickelIron",
+              "description": null
+            },
+            {
+              "value": 26,
+              "name": "NickelMetalHydride",
+              "description": null
+            },
+            {
+              "value": 27,
+              "name": "NickelZinc",
+              "description": null
+            },
+            {
+              "value": 28,
+              "name": "SilverZinc",
+              "description": null
+            },
+            {
+              "value": 29,
+              "name": "SodiumIon",
+              "description": null
+            },
+            {
+              "value": 30,
+              "name": "SodiumSulfur",
+              "description": null
+            },
+            {
+              "value": 31,
+              "name": "ZincBromide",
+              "description": null
+            },
+            {
+              "value": 32,
+              "name": "ZincCerium",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "BatChargeFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "AmbientTooHot",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "AmbientTooCold",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "BatteryTooHot",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "BatteryTooCold",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "BatteryAbsent",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "BatteryOverVoltage",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "BatteryUnderVoltage",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "ChargerOverVoltage",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "ChargerUnderVoltage",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "SafetyTimeout",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "BatChargeLevelEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Ok",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Warning",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "BatChargeStateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "IsCharging",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "IsAtFullCharge",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "IsNotCharging",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "BatCommonDesignationEnum",
+          "base": "enum16",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Aaa",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Aa",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "C",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "D",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "4V5",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "6V0",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "9V0",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "12Aa",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Aaaa",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "A",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "B",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "F",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "N",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "No6",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "SubC",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "A23",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "A27",
+              "description": null
+            },
+            {
+              "value": 18,
+              "name": "Ba5800",
+              "description": null
+            },
+            {
+              "value": 19,
+              "name": "Duplex",
+              "description": null
+            },
+            {
+              "value": 20,
+              "name": "4Sr44",
+              "description": null
+            },
+            {
+              "value": 21,
+              "name": "523",
+              "description": null
+            },
+            {
+              "value": 22,
+              "name": "531",
+              "description": null
+            },
+            {
+              "value": 23,
+              "name": "15V0",
+              "description": null
+            },
+            {
+              "value": 24,
+              "name": "22V5",
+              "description": null
+            },
+            {
+              "value": 25,
+              "name": "30V0",
+              "description": null
+            },
+            {
+              "value": 26,
+              "name": "45V0",
+              "description": null
+            },
+            {
+              "value": 27,
+              "name": "67V5",
+              "description": null
+            },
+            {
+              "value": 28,
+              "name": "J",
+              "description": null
+            },
+            {
+              "value": 29,
+              "name": "Cr123A",
+              "description": null
+            },
+            {
+              "value": 30,
+              "name": "Cr2",
+              "description": null
+            },
+            {
+              "value": 31,
+              "name": "2Cr5",
+              "description": null
+            },
+            {
+              "value": 32,
+              "name": "CrP2",
+              "description": null
+            },
+            {
+              "value": 33,
+              "name": "CrV3",
+              "description": null
+            },
+            {
+              "value": 34,
+              "name": "Sr41",
+              "description": null
+            },
+            {
+              "value": 35,
+              "name": "Sr43",
+              "description": null
+            },
+            {
+              "value": 36,
+              "name": "Sr44",
+              "description": null
+            },
+            {
+              "value": 37,
+              "name": "Sr45",
+              "description": null
+            },
+            {
+              "value": 38,
+              "name": "Sr48",
+              "description": null
+            },
+            {
+              "value": 39,
+              "name": "Sr54",
+              "description": null
+            },
+            {
+              "value": 40,
+              "name": "Sr55",
+              "description": null
+            },
+            {
+              "value": 41,
+              "name": "Sr57",
+              "description": null
+            },
+            {
+              "value": 42,
+              "name": "Sr58",
+              "description": null
+            },
+            {
+              "value": 43,
+              "name": "Sr59",
+              "description": null
+            },
+            {
+              "value": 44,
+              "name": "Sr60",
+              "description": null
+            },
+            {
+              "value": 45,
+              "name": "Sr63",
+              "description": null
+            },
+            {
+              "value": 46,
+              "name": "Sr64",
+              "description": null
+            },
+            {
+              "value": 47,
+              "name": "Sr65",
+              "description": null
+            },
+            {
+              "value": 48,
+              "name": "Sr66",
+              "description": null
+            },
+            {
+              "value": 49,
+              "name": "Sr67",
+              "description": null
+            },
+            {
+              "value": 50,
+              "name": "Sr68",
+              "description": null
+            },
+            {
+              "value": 51,
+              "name": "Sr69",
+              "description": null
+            },
+            {
+              "value": 52,
+              "name": "Sr516",
+              "description": null
+            },
+            {
+              "value": 53,
+              "name": "Sr731",
+              "description": null
+            },
+            {
+              "value": 54,
+              "name": "Sr712",
+              "description": null
+            },
+            {
+              "value": 55,
+              "name": "Lr932",
+              "description": null
+            },
+            {
+              "value": 56,
+              "name": "A5",
+              "description": null
+            },
+            {
+              "value": 57,
+              "name": "A10",
+              "description": null
+            },
+            {
+              "value": 58,
+              "name": "A13",
+              "description": null
+            },
+            {
+              "value": 59,
+              "name": "A312",
+              "description": null
+            },
+            {
+              "value": 60,
+              "name": "A675",
+              "description": null
+            },
+            {
+              "value": 61,
+              "name": "Ac41E",
+              "description": null
+            },
+            {
+              "value": 62,
+              "name": "10180",
+              "description": null
+            },
+            {
+              "value": 63,
+              "name": "10280",
+              "description": null
+            },
+            {
+              "value": 64,
+              "name": "10440",
+              "description": null
+            },
+            {
+              "value": 65,
+              "name": "14250",
+              "description": null
+            },
+            {
+              "value": 66,
+              "name": "14430",
+              "description": null
+            },
+            {
+              "value": 67,
+              "name": "14500",
+              "description": null
+            },
+            {
+              "value": 68,
+              "name": "14650",
+              "description": null
+            },
+            {
+              "value": 69,
+              "name": "15270",
+              "description": null
+            },
+            {
+              "value": 70,
+              "name": "16340",
+              "description": null
+            },
+            {
+              "value": 71,
+              "name": "Rcr123A",
+              "description": null
+            },
+            {
+              "value": 72,
+              "name": "17500",
+              "description": null
+            },
+            {
+              "value": 73,
+              "name": "17670",
+              "description": null
+            },
+            {
+              "value": 74,
+              "name": "18350",
+              "description": null
+            },
+            {
+              "value": 75,
+              "name": "18500",
+              "description": null
+            },
+            {
+              "value": 76,
+              "name": "18650",
+              "description": null
+            },
+            {
+              "value": 77,
+              "name": "19670",
+              "description": null
+            },
+            {
+              "value": 78,
+              "name": "25500",
+              "description": null
+            },
+            {
+              "value": 79,
+              "name": "26650",
+              "description": null
+            },
+            {
+              "value": 80,
+              "name": "32600",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "BatFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "OverTemp",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "UnderTemp",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "BatReplaceabilityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "NotReplaceable",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "UserReplaceable",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "FactoryReplaceable",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "PowerSourceStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Active",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Standby",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Unavailable",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "WiredCurrentTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Ac",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Dc",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "WiredFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "OverVoltage",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "UnderVoltage",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 59,
       "name": "Switch",
       "revision": 2,
@@ -1652,6 +2854,1164 @@
       ],
       "commands": [],
       "datatypes": []
+    },
+    {
+      "id": 91,
+      "name": "AirQuality",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "FAIR",
+          "name": "Fair",
+          "description": "Cluster supports the Fair air quality level"
+        },
+        {
+          "bit": 1,
+          "code": "MOD",
+          "name": "Moderate",
+          "description": "Cluster supports the Moderate air quality level"
+        },
+        {
+          "bit": 2,
+          "code": "VPOOR",
+          "name": "VeryPoor",
+          "description": "Cluster supports the Very poor air quality level"
+        },
+        {
+          "bit": 3,
+          "code": "XPOOR",
+          "name": "ExtremelyPoor",
+          "description": "Cluster supports the Extremely poor air quality level"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "AirQuality",
+          "type": "AirQualityEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a value from AirQualityEnum that is indicative of the currently measured air quality."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "AirQualityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "The AirQualityEnum provides a representation of the quality of the analyzed air. It is up to the device manufacturer to determine the mapping between the measured values and their corresponding enumeration values.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Good",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Fair",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Moderate",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Poor",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "VeryPoor",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "ExtremelyPoor",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 144,
+      "name": "ElectricalPowerMeasurement",
+      "revision": 3,
+      "features": [
+        {
+          "bit": 0,
+          "code": "DIRC",
+          "name": "DirectCurrent",
+          "description": "This feature indicates the cluster can measure a direct current."
+        },
+        {
+          "bit": 1,
+          "code": "ALTC",
+          "name": "AlternatingCurrent",
+          "description": "This feature indicates the cluster can measure an alternating current."
+        },
+        {
+          "bit": 2,
+          "code": "POLY",
+          "name": "PolyphasePower",
+          "description": "This feature indicates the cluster represents the collective measurements for a Polyphase power supply."
+        },
+        {
+          "bit": 3,
+          "code": "HARM",
+          "name": "Harmonics",
+          "description": "This feature indicates the cluster can measure the harmonics of an alternating current."
+        },
+        {
+          "bit": 4,
+          "code": "PWRQ",
+          "name": "PowerQuality",
+          "description": "This feature indicates the cluster can measure the harmonic phases of an alternating current."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "PowerMode",
+          "type": "PowerModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This shall indicate the current mode of the server. For some servers, such as an EV, this may change depending on the mode of charging or discharging."
+        },
+        {
+          "id": 1,
+          "name": "NumberOfMeasurementTypes",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This shall indicate the maximum number of measurement types the server is capable of reporting."
+        },
+        {
+          "id": 2,
+          "name": "Accuracy",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "MeasurementAccuracyStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This shall indicate a list of accuracy specifications for the measurement types supported by the server. There shall be an entry for ActivePower, as well as any other measurement types implemented by this server."
+        },
+        {
+          "id": 3,
+          "name": "Ranges",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "MeasurementRangeStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate a list of measured ranges for different measurement types. Each measurement type shall have at most one entry in this list, representing the range of measurements in the most recent measurement period.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds."
+        },
+        {
+          "id": 4,
+          "name": "Voltage",
+          "type": "voltage-mV",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent Voltage reading in millivolts (mV).\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the voltage cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 5,
+          "name": "ActiveCurrent",
+          "type": "amperage-mA",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent ActiveCurrent reading in milliamps (mA).\nA positive value represents current flowing into the server, while a negative value represents current flowing out of the server.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the current cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 6,
+          "name": "ReactiveCurrent",
+          "type": "amperage-mA",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent ReactiveCurrent reading in milliamps (mA).\nA positive value represents current flowing into the server, while a negative value represents current flowing out of the server.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the current cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 7,
+          "name": "ApparentCurrent",
+          "type": "amperage-mA",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent ApparentCurrent (square root sum of the squares of active and reactive currents) reading in milliamps (mA).\nA positive value represents current flowing into the server, while a negative value represents current flowing out of the server.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the active or reactive currents cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 8,
+          "name": "ActivePower",
+          "type": "power-mW",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "This shall indicate the most recent ActivePower reading in milliwatts (mW). If the power cannot be measured, a value of null shall be returned.\nA positive value represents power imported, while a negative value represents power exported.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the Polyphase Power feature is set, this value represents the combined active power imported or exported."
+        },
+        {
+          "id": 9,
+          "name": "ReactivePower",
+          "type": "power-mVAR",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent ReactivePower reading in millivolt-amps reactive (mVAR).\nA positive value represents power imported, while a negative value represents power exported.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the reactive power cannot be measured, a value of null shall be returned.\nIf the Polyphase Power feature is supported, this value represents the combined reactive power imported or exported."
+        },
+        {
+          "id": 10,
+          "name": "ApparentPower",
+          "type": "power-mVA",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent ApparentPower reading in millivolt-amps (mVA).\nA positive value represents power imported, while a negative value represents power exported.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the apparent power cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 11,
+          "name": "RmsVoltage",
+          "type": "voltage-mV",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent RMSVoltage reading in millivolts (mV).\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the RMS voltage cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 12,
+          "name": "RmsCurrent",
+          "type": "amperage-mA",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent RMSCurrent reading in milliamps (mA).\nA positive value represents current flowing into the server, while a negative value represents current flowing out of the server.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the RMS current cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 13,
+          "name": "RmsPower",
+          "type": "power-mW",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent RMSPower reading in milliwatts (mW).\nA positive value represents power imported, while a negative value represents power exported.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the RMS power cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 14,
+          "name": "Frequency",
+          "type": "int64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent Frequency reading in millihertz (mHz).\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the frequency cannot be measured, a value of null shall be returned."
+        },
+        {
+          "id": 15,
+          "name": "HarmonicCurrents",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "HarmonicMeasurementStruct",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate a list of HarmonicMeasurementStruct values, with each HarmonicMeasurementStruct representing the harmonic current reading for the harmonic order specified by Order.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds."
+        },
+        {
+          "id": 16,
+          "name": "HarmonicPhases",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "HarmonicMeasurementStruct",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate a list of HarmonicMeasurementStruct values, with each HarmonicMeasurementStruct representing the most recent phase of the harmonic current reading for the harmonic order specified by Order.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds."
+        },
+        {
+          "id": 17,
+          "name": "PowerFactor",
+          "type": "int64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the Power Factor ratio in +/- 1/100ths of a percent.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds."
+        },
+        {
+          "id": 18,
+          "name": "NeutralCurrent",
+          "type": "amperage-mA",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This shall indicate the most recent NeutralCurrent reading in milliamps (mA). Typically this is a derived value, taking the magnitude of the vector sum of phase currents.\nIf the neutral current cannot be measured or derived, a value of null shall be returned.\nA positive value represents an imbalance between the phase currents when power is imported.\nA negative value represents an imbalance between the phase currents when power is exported.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "HarmonicMeasurementStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Order",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be the order of the harmonic being measured. Typically this is an odd number, but servers may choose to report even harmonics."
+            },
+            {
+              "id": 1,
+              "name": "Measurement",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall be the measured value for the given harmonic order.\nFor the Harmonic Currents attribute, this value is the most recently measured harmonic current reading in milliamps (mA). A positive value indicates that the measured harmonic current is positive, and a negative value indicates that the measured harmonic current is negative.\nFor the Harmonic Phases attribute, this value is the most recent phase of the given harmonic order in millidegrees (mDeg). A positive value indicates that the measured phase is leading, and a negative value indicates that the measured phase is lagging.\nIf this measurement is not currently available, a value of null shall be returned."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementAccuracyRangeStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct represents the accuracy of a measurement for a range of measurement values. Accuracy shall be expressed as a maximum +/- percentage of the true value, a maximum +/- fixed value of the true value, or both.\n  - If both PercentMax and FixedMax are indicated, then for a given true value in the range between RangeMin and RangeMax,\n  - the reported value shall be less than or equal to the sum of the true value, FixedMax and PercentMax percent of the true value.\n  - the reported value shall be greater than or equal to the true value minus the sum of FixedMax and PercentMax percent of the true value.\n  - If only PercentMax is indicated, then for a given true value in the range between RangeMin and RangeMax,\n  - the reported value shall be less than or equal to the sum of the true value and PercentMax percent of the true value.\n  - the reported value shall be greater than or equal to the true value minus PercentMax percent of the true value.\n  - If only FixedMax is indicated, then for a given true value in the range between RangeMin and RangeMax,\n  - the reported value shall be less than or equal to the sum of the true value and FixedMax.\n  - the reported value shall be greater than or equal to the true value minus FixedMax.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "RangeMin",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the minimum measurement value for the specified level of accuracy.\nThe value of this field shall be greater than or equal to the value of the MinMeasuredValue field on the encompassing MeasurementAccuracyStruct.\nThe value of this field shall be less than or equal to the value of the MaxMeasuredValue field on the encompassing MeasurementAccuracyStruct."
+            },
+            {
+              "id": 1,
+              "name": "RangeMax",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the maximum measurement value for the specified level of accuracy.\nThe value of this field shall be greater than the value of the RangeMin field.\nThe value of this field shall be greater than or equal to the value of the MinMeasuredValue field on the encompassing MeasurementAccuracyStruct.\nThe value of this field shall be less than or equal to the value of the MaxMeasuredValue field on the encompassing MeasurementAccuracyStruct."
+            },
+            {
+              "id": 2,
+              "name": "PercentMax",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the maximum +/- percentage accuracy for the associated measurement."
+            },
+            {
+              "id": 3,
+              "name": "PercentMin",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the minimum +/- percentage accuracy for the associated measurement."
+            },
+            {
+              "id": 4,
+              "name": "PercentTypical",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the typical +/- percentage accuracy for the associated measurement."
+            },
+            {
+              "id": 5,
+              "name": "FixedMax",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the maximum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+            },
+            {
+              "id": 6,
+              "name": "FixedMin",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the minimum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+            },
+            {
+              "id": 7,
+              "name": "FixedTypical",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the typical +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementAccuracyStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct represents the set of accuracy ranges for a given measurement, the maximum and minimum values for the measurement, and whether the measurement is directly measured or just estimated from other information.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MeasurementType",
+              "type": "MeasurementTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of measurement for the accuracy provided."
+            },
+            {
+              "id": 1,
+              "name": "Measured",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate whether the associated measurement was directly measured. If this field is not set to true, then the associated measurement was estimated."
+            },
+            {
+              "id": 2,
+              "name": "MinMeasuredValue",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "MaxMeasuredValue",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 4,
+              "name": "AccuracyRanges",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "MeasurementAccuracyRangeStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a list of measurement ranges and their associated accuracies.\nThe value of the RangeMin field on the first MeasurementAccuracyRangeStruct in this list shall be equal to the value of the MinMeasuredValue field.\nThe value of the RangeMax field on the last MeasurementAccuracyRangeStruct in this list shall be less than or equal to the value of the MaxMeasuredValue field.\nThe value of the RangeMin field on each MeasurementAccuracyRangeStruct in this list other than the first shall be one more the value of the RangeMax field on the previous MeasurementAccuracyRangeStruct in this list (i.e. there shall be no gaps in the accuracy ranges, and the ranges shall be in increasing order)."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementRangeStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct shall indicate the maximum and minimum values of a given measurement type during a measurement period, along with the observation times of these values.\nA server which does not have the ability to determine the time in UTC, or has not yet done so, shall use the system time fields to specify the measurement period and observation times.\nA server which has determined the time in UTC shall use the timestamp fields to specify the measurement period and observation times. Such a server may also include the systime fields to indicate how many seconds had passed since boot for a given timestamp; this allows for client-side resolution of UTC time for previous reports that only included systime.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MeasurementType",
+              "type": "MeasurementTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be the type of measurement for the range provided."
+            },
+            {
+              "id": 1,
+              "name": "Min",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be the smallest measured value for the associated measurement over either the period between StartTimestamp and EndTimestamp, or the period between StartSystime and EndSystime, or both."
+            },
+            {
+              "id": 2,
+              "name": "Max",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be the largest measured value for the associated measurement over the period between either StartTimestamp and EndTimestamp or the period between StartSystime and EndSystime, or both."
+            },
+            {
+              "id": 3,
+              "name": "StartTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the timestamp in UTC of the beginning of the measurement period.\nIf the server had not yet determined the time in UTC at or before the beginning of the measurement period, or does not have the capability of determining the time in UTC, this field shall be omitted."
+            },
+            {
+              "id": 4,
+              "name": "EndTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the timestamp in UTC of the end of the measurement period.\nIf the server had not yet determined the time in UTC at or before the beginning of the measurement period, or does not have the capability of determining the time in UTC, this field shall be omitted."
+            },
+            {
+              "id": 5,
+              "name": "MinTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the most recent timestamp in UTC that the value in the Min field was measured.\nThis field shall be greater than or equal to the value of the StartTimestamp field.\nThis field shall be less than or equal to the value of the EndTimestamp field."
+            },
+            {
+              "id": 6,
+              "name": "MaxTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the most recent timestamp in UTC of the value in the Max field.\nThis field shall be greater than or equal to the value of the StartTimestamp field.\nThis field shall be less than or equal to the value of the EndTimestamp field."
+            },
+            {
+              "id": 7,
+              "name": "StartSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the time since boot of the beginning of the measurement period.\nIf the server had determined the time in UTC at or before the start of the measurement period, this field may be omitted along with the EndSystime, MinSystime, and MaxSystime fields."
+            },
+            {
+              "id": 8,
+              "name": "EndSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the time since boot of the end of the measurement period.\nIf the server had determined the time in UTC at the end of the measurement period, this field may be omitted along with the StartSystime field, MinSystime, and MaxSystime fields."
+            },
+            {
+              "id": 9,
+              "name": "MinSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the measurement time since boot of the value in the Min field was measured.\nThis field shall be greater than or equal to the value of the StartSystime field.\nThis field shall be less than or equal to the value of the EndSystime field."
+            },
+            {
+              "id": 10,
+              "name": "MaxSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the measurement time since boot of the value in the Max field.\nThis field shall be greater than or equal to the value of the StartSystime field.\nThis field shall be less than or equal to the value of the EndSystime field."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementTypeEnum",
+          "base": "enum16",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Voltage",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "ActiveCurrent",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "ReactiveCurrent",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "ApparentCurrent",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "ActivePower",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "ReactivePower",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "ApparentPower",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "RmsVoltage",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "RmsCurrent",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "RmsPower",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Frequency",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "PowerFactor",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "NeutralCurrent",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "ElectricalEnergy",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "ReactiveEnergy",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "ApparentEnergy",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "PowerModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Dc",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ac",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 145,
+      "name": "ElectricalEnergyMeasurement",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "IMPE",
+          "name": "ImportedEnergy",
+          "description": "The feature indicates the server is capable of measuring how much energy is imported by the server."
+        },
+        {
+          "bit": 1,
+          "code": "EXPE",
+          "name": "ExportedEnergy",
+          "description": "The feature indicates the server is capable of measuring how much energy is exported by the server."
+        },
+        {
+          "bit": 2,
+          "code": "CUME",
+          "name": "CumulativeEnergy",
+          "description": "The feature indicates the server is capable of measuring how much energy has been imported or exported by the server over the device's lifetime. This measurement may start from when a device's firmware is updated to include this feature, when a device's firmware is updated to correct measurement errors, or when a device is factory reset."
+        },
+        {
+          "bit": 3,
+          "code": "PERE",
+          "name": "PeriodicEnergy",
+          "description": "The feature indicates the server is capable of measuring how much energy has been imported or exported by the server during a certain period of time. The start and end times for measurement periods shall be determined by the server, and may represent overlapping periods."
+        },
+        {
+          "bit": 4,
+          "code": "APPE",
+          "name": "ApparentEnergy",
+          "description": "Measurements report apparent energy"
+        },
+        {
+          "bit": 5,
+          "code": "REAE",
+          "name": "ReactiveEnergy",
+          "description": "Measurements report reactive energy"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Accuracy",
+          "type": "MeasurementAccuracyStruct",
+          "metatype": "object",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the accuracy of energy measurement by this server. The value of the MeasurementType field on this MeasurementAccuracyStruct shall be ElectricalEnergy."
+        },
+        {
+          "id": 1,
+          "name": "CumulativeEnergyImported",
+          "type": "EnergyMeasurementStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement of cumulative energy imported by the server over the lifetime of the device, and the timestamp of when the measurement was recorded.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the cumulative energy imported cannot currently be determined, a value of null shall be returned."
+        },
+        {
+          "id": 2,
+          "name": "CumulativeEnergyExported",
+          "type": "EnergyMeasurementStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement of cumulative energy exported by the server over the lifetime of the device, and the timestamp of when the measurement was recorded.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the cumulative energy exported cannot currently be determined, a value of null shall be returned."
+        },
+        {
+          "id": 3,
+          "name": "PeriodicEnergyImported",
+          "type": "EnergyMeasurementStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement of energy imported by the server and the period during which it was measured.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the periodic energy imported cannot currently be determined, a value of null shall be returned."
+        },
+        {
+          "id": 4,
+          "name": "PeriodicEnergyExported",
+          "type": "EnergyMeasurementStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement of energy exported by the server and the period during which it was measured.\nThe reporting interval of this attribute shall be manufacturer dependent. The server may choose to omit publication of deltas considered not meaningful.\nThe server shall NOT mark this attribute ready for report if the last time this was done was more recently than 1 second ago.\nThe server may delay marking this attribute ready for report for longer periods if needed, however the server shall NOT delay marking this attribute as ready for report for longer than 60 seconds.\nIf the periodic energy exported cannot currently be determined, a value of null shall be returned."
+        },
+        {
+          "id": 5,
+          "name": "CumulativeEnergyReset",
+          "type": "CumulativeEnergyResetStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates when cumulative measurements were most recently zero."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "CumulativeEnergyResetStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct shall represent the times at which cumulative measurements were last zero, either due to initialization of the device, or an internal reset of the cumulative value.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ImportedResetTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the timestamp in UTC when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero.\nIf the server had determined the time in UTC when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero, this field shall be indicated.\nOtherwise, if the server had not yet determined the time in UTC when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero, or does not have the capability of determining the time in UTC, this field shall be omitted.\nIf the timestamp in UTC when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero cannot currently be determined, a value of null shall be returned."
+            },
+            {
+              "id": 1,
+              "name": "ExportedResetTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the timestamp in UTC when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero.\nIf the server had determined the time in UTC when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero, this field shall be indicated.\nOtherwise, if the server had not yet determined the time in UTC when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero, or does not have the capability of determining the time in UTC, this field shall be omitted.\nIf the timestamp in UTC when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero cannot currently be determined, a value of null shall be returned."
+            },
+            {
+              "id": 2,
+              "name": "ImportedResetSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the time elapsed since boot when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero.\nIf the server had not yet determined the time in UTC when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero, or does not have the capability of determining the time in UTC, this field shall be indicated.\nOtherwise, if the server had determined the time in UTC when the value of the Energy field on the CumulativeEnergyImported attribute was most recently zero, this field may be omitted; if it is indicated, its value shall be the time elapsed since boot at the UTC time indicated in ImportedResetTimestamp."
+            },
+            {
+              "id": 3,
+              "name": "ExportedResetSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the time elapsed since boot when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero.\nIf the server had not yet determined the time in UTC when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero, or does not have the capability of determining the time in UTC, this field shall be indicated.\nOtherwise, if the server had determined the time in UTC when the value of the Energy field on the CumulativeEnergyExported attribute was most recently zero, this field may be omitted; if it is indicated, its value shall be the time elapsed since boot at the UTC time indicated in ImportedResetTimestamp."
+            }
+          ]
+        },
+        {
+          "name": "EnergyMeasurementStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct shall indicate the amount of energy measured during a given measurement period.\nA server which does not have the ability to determine the time in UTC, or has not yet done so, shall use the system time fields to specify the measurement period and observation times.\nA server which has determined the time in UTC shall use the timestamp fields to specify the measurement period. Such a server may also include the systime fields to indicate how many seconds had passed since boot for a given timestamp; this allows for client-side resolution of UTC time for previous reports that only included systime.\nElements using this data type shall indicate whether it represents cumulative or periodic energy, e.g. in the name or in the element description.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Energy",
+              "type": "energy-mWh",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be the reported energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both."
+            },
+            {
+              "id": 1,
+              "name": "StartTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the timestamp in UTC of the beginning of the period during which the value of the Energy field was measured.\nIf this EnergyMeasurementStruct represents cumulative energy, this field shall be omitted.\nOtherwise, if the server had determined the time in UTC at or before the beginning of the measurement period, this field shall be indicated.\nOtherwise, if the server had not yet determined the time in UTC at or before the beginning of the measurement period, or does not have the capability of determining the time in UTC, this field shall be omitted."
+            },
+            {
+              "id": 2,
+              "name": "EndTimestamp",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the timestamp in UTC of the end of the period during which the value of the Energy field was measured.\nIf the server had determined the time in UTC by the end of the measurement period, this field shall be indicated.\nOtherwise, if the server had not yet determined the time in UTC by the end of the measurement period, or does not have the capability of determining the time in UTC, this field shall be omitted."
+            },
+            {
+              "id": 3,
+              "name": "StartSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the time elapsed since boot at the beginning of the period during which the value of the Energy field was measured.\nIf this EnergyMeasurementStruct represents cumulative energy, this field shall be omitted.\nOtherwise, if the server had not yet determined the time in UTC at the start of the measurement period, or does not have the capability of determining the time in UTC, this field shall be indicated.\nOtherwise, if the server had determined the time in UTC at or before the beginning of the measurement period, this field may be omitted; if it is indicated, its value shall be the time elapsed since boot at the UTC time indicated in StartTimestamp."
+            },
+            {
+              "id": 4,
+              "name": "EndSystime",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the time elapsed since boot at the end of the period during which the value of the Energy field was measured.\nIf the server had not yet determined the time in UTC by the end of the measurement period, or does not have the capability of determining the time in UTC, this field shall be indicated.\nOtherwise, if the server had determined the time in UTC by the end of the measurement period, this field may be omitted; if it is indicated, its value shall be the time elapsed since boot at the UTC time indicated in EndTimestamp."
+            },
+            {
+              "id": 5,
+              "name": "ApparentEnergy",
+              "type": "energy-mVAh",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the reported apparent energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative apparent energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the apparent energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both."
+            },
+            {
+              "id": 6,
+              "name": "ReactiveEnergy",
+              "type": "energy-mVARh",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the reported reactive energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative reactive energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the reactive energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementAccuracyRangeStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct represents the accuracy of a measurement for a range of measurement values. Accuracy shall be expressed as a maximum +/- percentage of the true value, a maximum +/- fixed value of the true value, or both.\n  - If both PercentMax and FixedMax are indicated, then for a given true value in the range between RangeMin and RangeMax,\n  - the reported value shall be less than or equal to the sum of the true value, FixedMax and PercentMax percent of the true value.\n  - the reported value shall be greater than or equal to the true value minus the sum of FixedMax and PercentMax percent of the true value.\n  - If only PercentMax is indicated, then for a given true value in the range between RangeMin and RangeMax,\n  - the reported value shall be less than or equal to the sum of the true value and PercentMax percent of the true value.\n  - the reported value shall be greater than or equal to the true value minus PercentMax percent of the true value.\n  - If only FixedMax is indicated, then for a given true value in the range between RangeMin and RangeMax,\n  - the reported value shall be less than or equal to the sum of the true value and FixedMax.\n  - the reported value shall be greater than or equal to the true value minus FixedMax.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "RangeMin",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the minimum measurement value for the specified level of accuracy.\nThe value of this field shall be greater than or equal to the value of the MinMeasuredValue field on the encompassing MeasurementAccuracyStruct.\nThe value of this field shall be less than or equal to the value of the MaxMeasuredValue field on the encompassing MeasurementAccuracyStruct."
+            },
+            {
+              "id": 1,
+              "name": "RangeMax",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the maximum measurement value for the specified level of accuracy.\nThe value of this field shall be greater than the value of the RangeMin field.\nThe value of this field shall be greater than or equal to the value of the MinMeasuredValue field on the encompassing MeasurementAccuracyStruct.\nThe value of this field shall be less than or equal to the value of the MaxMeasuredValue field on the encompassing MeasurementAccuracyStruct."
+            },
+            {
+              "id": 2,
+              "name": "PercentMax",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the maximum +/- percentage accuracy for the associated measurement."
+            },
+            {
+              "id": 3,
+              "name": "PercentMin",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the minimum +/- percentage accuracy for the associated measurement."
+            },
+            {
+              "id": 4,
+              "name": "PercentTypical",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the typical +/- percentage accuracy for the associated measurement."
+            },
+            {
+              "id": 5,
+              "name": "FixedMax",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the maximum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+            },
+            {
+              "id": 6,
+              "name": "FixedMin",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the minimum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+            },
+            {
+              "id": 7,
+              "name": "FixedTypical",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the typical +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementAccuracyStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct represents the set of accuracy ranges for a given measurement, the maximum and minimum values for the measurement, and whether the measurement is directly measured or just estimated from other information.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MeasurementType",
+              "type": "MeasurementTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of measurement for the accuracy provided."
+            },
+            {
+              "id": 1,
+              "name": "Measured",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate whether the associated measurement was directly measured. If this field is not set to true, then the associated measurement was estimated."
+            },
+            {
+              "id": 2,
+              "name": "MinMeasuredValue",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "MaxMeasuredValue",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 4,
+              "name": "AccuracyRanges",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "MeasurementAccuracyRangeStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a list of measurement ranges and their associated accuracies.\nThe value of the RangeMin field on the first MeasurementAccuracyRangeStruct in this list shall be equal to the value of the MinMeasuredValue field.\nThe value of the RangeMax field on the last MeasurementAccuracyRangeStruct in this list shall be less than or equal to the value of the MaxMeasuredValue field.\nThe value of the RangeMin field on each MeasurementAccuracyRangeStruct in this list other than the first shall be one more the value of the RangeMax field on the previous MeasurementAccuracyRangeStruct in this list (i.e. there shall be no gaps in the accuracy ranges, and the ranges shall be in increasing order)."
+            }
+          ]
+        },
+        {
+          "name": "MeasurementTypeEnum",
+          "base": "enum16",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Voltage",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "ActiveCurrent",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "ReactiveCurrent",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "ApparentCurrent",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "ActivePower",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "ReactivePower",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "ApparentPower",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "RmsVoltage",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "RmsCurrent",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "RmsPower",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Frequency",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "PowerFactor",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "NeutralCurrent",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "ElectricalEnergy",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "ReactiveEnergy",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "ApparentEnergy",
+              "description": null
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 257,

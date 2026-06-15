@@ -10,7 +10,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  15 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  19 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -18,7 +18,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 
 ## What this crate does not do
 
-- It is **not** a full cluster set — only the 15 clusters below today. More
+- It is **not** a full cluster set — only the 19 clusters below today. More
   arrive in later M9-A2 batches.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -36,7 +36,11 @@ TemperatureMeasurement, RelativeHumidityMeasurement, and DoorLock (Aliro
 features excluded). The M9-A2.1 pilot batch adds 5 read-only clusters —
 IlluminanceMeasurement, PressureMeasurement, FlowMeasurement, BooleanState, and
 Switch — decode-smoke tested (they reuse datatype shapes already byte-parity
-proven by the M7 set). Hand-written support lives in `types` (`Nullable<T>`),
+proven by the M7 set). The M9-A2.2 energy batch adds 4 more read-only clusters —
+PowerSource, ElectricalPowerMeasurement, ElectricalEnergyMeasurement, and
+AirQuality — decode-smoke tested, with a byte-parity vector for the new nested
+`MeasurementAccuracyStruct` (a struct holding a list-of-struct with optional
+fields). Hand-written support lives in `types` (`Nullable<T>`),
 `error` (`ClusterError`), and `datatypes` (`SemanticTagStruct`).
 
 ## Usage

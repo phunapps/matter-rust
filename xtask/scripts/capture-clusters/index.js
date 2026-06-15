@@ -14,7 +14,7 @@
 //                fields: [{ name, id, value }], note, payload_tlv_b64 }
 
 import {
-  TlvUInt8, TlvUInt16, TlvUInt32, TlvInt16,
+  TlvUInt8, TlvUInt16, TlvUInt32, TlvUInt64, TlvInt16, TlvInt64,
   TlvBoolean, TlvString, TlvByteString,
   TlvArray, TlvNullable,
   TlvObject, TlvField, TlvOptionalField,
@@ -185,5 +185,46 @@ cmd('door_lock', 'cmd_lock_door_no_pin.json',
     fields: [],
     note: 'command with optional octstr field ABSENT (tag omitted)' },
   lockDoorSchema.encode({}));
+
+// ---------------------------------------------------------------------------
+// ElectricalEnergyMeasurement (0x0091) — MeasurementAccuracyStruct attribute:
+// a struct whose AccuracyRanges field is a list-of-struct WITH OPTIONAL fields
+// (some present, some absent). This is the genuinely-new nested shape M9-A2.2
+// introduces; M7 proves list-of-struct and object-struct only separately.
+// ---------------------------------------------------------------------------
+
+const accuracyRangeSchema = TlvObject({
+  rangeMin: TlvField(0, TlvInt64),
+  rangeMax: TlvField(1, TlvInt64),
+  percentMax: TlvOptionalField(2, TlvUInt16),
+  percentMin: TlvOptionalField(3, TlvUInt16),
+  percentTypical: TlvOptionalField(4, TlvUInt16),
+  fixedMax: TlvOptionalField(5, TlvUInt64),
+  fixedMin: TlvOptionalField(6, TlvUInt64),
+  fixedTypical: TlvOptionalField(7, TlvUInt64),
+});
+
+const accuracySchema = TlvObject({
+  measurementType: TlvField(0, TlvUInt16), // MeasurementTypeEnum (enum16)
+  measured: TlvField(1, TlvBoolean),
+  minMeasuredValue: TlvField(2, TlvInt64),
+  maxMeasuredValue: TlvField(3, TlvInt64),
+  accuracyRanges: TlvField(4, TlvArray(accuracyRangeSchema)),
+});
+
+attr('electrical_energy_measurement', 'attr_accuracy.json',
+  { cluster: 'ElectricalEnergyMeasurement', cluster_id: 0x91, attribute: 'Accuracy', attribute_id: 0x00,
+    type: 'MeasurementAccuracyStruct', writable: false,
+    note: 'struct with a list-of-struct field carrying optional members (present + absent)' },
+  accuracySchema.encode({
+    measurementType: 0,           // ActivePower (MeasurementTypeEnum=0)
+    measured: true,
+    minMeasuredValue: 1000n,
+    maxMeasuredValue: 50000n,
+    accuracyRanges: [
+      { rangeMin: 0n, rangeMax: 10000n, percentMax: 500 },   // optional percentMax PRESENT, fixed* absent
+      { rangeMin: 10001n, rangeMax: 50000n, fixedMax: 100n }, // optional fixedMax PRESENT, percent* absent
+    ],
+  }));
 
 console.log('capture-clusters: all vectors written.');

@@ -122,6 +122,33 @@ fn list_of_scalars_and_structs_decode() {
     assert_eq!(dts[0].revision, 1);
 }
 
+#[test]
+fn measurement_accuracy_struct_decodes() {
+    // M9-A2.2: EEM.Accuracy is a MeasurementAccuracyStruct whose AccuracyRanges
+    // is a list-of-struct with optional fields present/absent — the genuinely-new
+    // nested wire shape. Decode the matter.js-captured bytes and assert structure.
+    let acc = gen::electrical_energy_measurement::decode_accuracy(&attr(
+        "electrical_energy_measurement/attr_accuracy.json",
+    ))
+    .unwrap();
+    assert_eq!(acc.measurement_type.to_raw(), 0); // ActivePower
+    assert!(acc.measured);
+    assert_eq!(acc.min_measured_value, 1000);
+    assert_eq!(acc.max_measured_value, 50000);
+    assert_eq!(acc.accuracy_ranges.len(), 2);
+
+    let r0 = &acc.accuracy_ranges[0];
+    assert_eq!(r0.range_min, 0);
+    assert_eq!(r0.range_max, 10000);
+    assert_eq!(r0.percent_max, Some(500));
+    assert_eq!(r0.fixed_max, None);
+
+    let r1 = &acc.accuracy_ranges[1];
+    assert_eq!(r1.range_min, 10001);
+    assert_eq!(r1.fixed_max, Some(100));
+    assert_eq!(r1.percent_max, None);
+}
+
 // ---- commands: build typed args -> encode -> equal -----------------------
 
 #[test]

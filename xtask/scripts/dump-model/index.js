@@ -43,7 +43,7 @@ const DUMP_SCRIPT_VERSION = 1;
 // later does not break the gate.
 const SPEC_REVISION = '1.5.1';
 
-// The M7 clusters plus the M9-A2.1 pilot batch (read-only sensors + Switch).
+// The M7 clusters plus the M9-A2.1 pilot and M9-A2.2 energy batches.
 const ALLOWLIST = [
   { id: 0x0028, name: 'BasicInformation' },
   { id: 0x001d, name: 'Descriptor' },
@@ -61,6 +61,11 @@ const ALLOWLIST = [
   { id: 0x0404, name: 'FlowMeasurement' },
   { id: 0x0045, name: 'BooleanState' },
   { id: 0x003b, name: 'Switch' },
+  // M9-A2.2 energy batch:
+  { id: 0x002f, name: 'PowerSource' },
+  { id: 0x0090, name: 'ElectricalPowerMeasurement' },
+  { id: 0x0091, name: 'ElectricalEnergyMeasurement' },
+  { id: 0x005b, name: 'AirQuality' },
 ];
 
 const excluded = [];
@@ -191,6 +196,80 @@ function dumpDatatype(dt, where) {
   return out;
 }
 
+// --- global datatype inlining --------------------------------------------
+
+// Type-name tokens the Rust emitter already resolves on its own, even though
+// they resolve to a composite (enum/bitmap/object) model metatype — so they
+// must NOT be inlined as cluster datatypes (see xtask/src/codegen/rustgen/types.rs):
+//   - bare base metatypes (`enum8`/`enum16` → uN, `map8`/`map16`/`map32` → uN)
+//     and enum-based semantic globals Rust maps as plain integers (`status`,
+//     `priority`) — handled by `scalar_rust`.
+//   - `semtag` — handled by `global_type_rust` (a hand-written foundation struct).
+// Integer/string semantic globals (e.g. `voltage-mV`, `cluster-id`) never reach
+// here: the metatype gate in inlineGlobalDatatypes already skips them.
+const RUST_HANDLED_TYPE_TOKENS = new Set([
+  'semtag',
+  'enum8',
+  'enum16',
+  'map8',
+  'map16',
+  'map32',
+  'status',
+  'priority',
+]);
+
+// Resolve a datatype NAME to its @matter/model node at root (global) scope,
+// or null if no such named child exists (then it is a scalar/semantic/
+// primitive token the Rust scalar map handles, e.g. `voltage-mV`, `uint64`).
+function globalDatatypeNode(name) {
+  return [...Matter.children].find((c) => c.name === name) || null;
+}
+
+// Pull model-global composite datatypes (struct/enum/bitmap) referenced by a
+// cluster's attributes/commands/datatypes but defined at model ROOT scope
+// (not cluster-locally) into `datatypes`, transitively. The Rust emitter only
+// resolves a type reference to a cluster-local datatype or a known
+// scalar/semantic; a referenced global struct (e.g. MeasurementAccuracyStruct,
+// shared by ElectricalPowerMeasurement and ElectricalEnergyMeasurement) would
+// otherwise be an unresolved type. Inlining makes each referencing cluster
+// self-contained (its own copy of the struct), reusing the existing struct
+// emitter — cluster modules are independent by design.
+function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
+  const present = new Set(datatypes.map((d) => d.name));
+  const queue = [];
+  const addRef = (t) => {
+    if (t) queue.push(t);
+  };
+  for (const a of attributes) {
+    addRef(a.type);
+    addRef(a.entryType);
+  }
+  for (const cmd of commands) for (const f of cmd.fields) {
+    addRef(f.type);
+    addRef(f.entryType);
+  }
+  for (const dt of datatypes) for (const f of dt.fields || []) {
+    addRef(f.type);
+    addRef(f.entryType);
+  }
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (present.has(name)) continue;
+    if (RUST_HANDLED_TYPE_TOKENS.has(name)) continue;
+    const node = globalDatatypeNode(name);
+    if (!node) continue; // scalar/semantic/primitive — not an inlinable datatype
+    const meta = node.effectiveMetatype;
+    if (meta !== 'object' && meta !== 'enum' && meta !== 'bitmap') continue; // scalar global
+    const dt = dumpDatatype(node, `${clusterName}.global`);
+    datatypes.push(dt);
+    present.add(name);
+    for (const f of dt.fields || []) {
+      addRef(f.type);
+      addRef(f.entryType);
+    }
+  }
+}
+
 // --- cluster walk ---------------------------------------------------------
 
 function dumpCluster(entry) {
@@ -249,6 +328,10 @@ function dumpCluster(entry) {
   }
 
   const datatypes = [...cluster.datatypes].map((dt) => dumpDatatype(dt, `${cluster.name}.datatype`));
+
+  // Inline referenced model-global composite datatypes (transitive) so each
+  // cluster module is self-contained for the Rust emitter.
+  inlineGlobalDatatypes(cluster.name, attributes, commands, datatypes);
 
   // Deterministic ordering for a stable committed artifact.
   attributes.sort((x, y) => x.id - y.id);
