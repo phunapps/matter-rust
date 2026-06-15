@@ -482,13 +482,84 @@ fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'
         }
         return;
     }
-    // No request command has an `array` field in the 10 clusters; surface it
-    // rather than silently dropping if one ever appears.
+    if f.metatype == "array" {
+        emit_list_field_write(s, f, var, &tag, dts);
+        return;
+    }
     line!(
         s,
-        "    compile_error!(\"list-typed command field {} needs list-encode\");",
-        f.name
+        "    compile_error!(\"unhandled command field {} (metatype {})\");",
+        f.name,
+        f.metatype
     );
+}
+
+/// Emit the write for a list-typed command request field (e.g.
+/// `AtomicRequest.AttributeRequests = list<attrib-id>`): open an array
+/// container at the context tag, write each Copy scalar element at an anonymous
+/// tag, close. Struct-element lists are surfaced as a `compile_error!` (no A2.3
+/// case; deferred to a later batch).
+fn emit_list_field_write(
+    s: &mut String,
+    f: &FieldDef,
+    var: &str,
+    tag: &str,
+    dts: &DatatypeMap<'_>,
+) {
+    let entry = f.entry_type.as_deref().unwrap_or("octstr");
+    let entry_meta = entry_metatype(entry, dts);
+    if entry_meta == "object" {
+        line!(
+            s,
+            "    compile_error!(\"struct-list command field {} needs list-of-struct encode\");",
+            f.name
+        );
+        return;
+    }
+    let put = write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts);
+    let open = |s: &mut String, expr: &str| {
+        line!(
+            s,
+            "    w.start_array({tag}).expect(\"infallible: vec writer\");"
+        );
+        line!(s, "    for el in {expr}.iter().copied() {{");
+        line!(s, "        {put}");
+        line!(s, "    }}");
+        line!(
+            s,
+            "    w.end_container().expect(\"infallible: vec writer\");"
+        );
+    };
+    match (f.optional, f.nullable) {
+        (false, false) => open(s, var),
+        (false, true) => {
+            line!(s, "    match &{var} {{");
+            line!(
+                s,
+                "        Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),"
+            );
+            line!(s, "        Nullable::Value({var}) => {{");
+            open(s, var);
+            line!(s, "        }}");
+            line!(s, "    }}");
+        }
+        (true, false) => {
+            line!(s, "    if let Some({var}) = &{var} {{");
+            open(s, var);
+            line!(s, "    }}");
+        }
+        (true, true) => {
+            line!(s, "    if let Some({var}) = &{var} {{ match {var} {{");
+            line!(
+                s,
+                "        Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),"
+            );
+            line!(s, "        Nullable::Value({var}) => {{");
+            open(s, var);
+            line!(s, "        }}");
+            line!(s, "    }} }}");
+        }
+    }
 }
 
 /// The scalar field-write with nullable/optional guards.
@@ -926,5 +997,37 @@ mod tests {
         assert_eq!(entry_metatype("DeviceTypeStruct", &dts), "object");
         // A bare scalar id stays integer.
         assert_eq!(entry_metatype("endpoint-no", &dts), "integer");
+    }
+
+    #[test]
+    fn list_scalar_command_field_encodes_array() {
+        // AtomicRequest.AttributeRequests = list<attrib-id> (mandatory).
+        let f = field(1, "AttributeRequests", "list", "array", Some("attrib-id"));
+        let mut s = String::new();
+        emit_field_write(&mut s, &f, "attribute_requests", &HashMap::new());
+        assert!(s.contains("w.start_array(Tag::Context(1))"), "{s}");
+        assert!(
+            s.contains("for el in attribute_requests.iter().copied() {"),
+            "{s}"
+        );
+        assert!(
+            s.contains("w.put_uint(Tag::Anonymous, u64::from(el))"),
+            "{s}"
+        );
+        assert!(s.contains("w.end_container()"), "{s}");
+        assert!(!s.contains("compile_error!"), "no fallthrough:\n{s}");
+    }
+
+    #[test]
+    fn optional_list_scalar_command_field_guards_with_if_let() {
+        let mut f = field(1, "AttributeRequests", "list", "array", Some("attrib-id"));
+        f.optional = true;
+        let mut s = String::new();
+        emit_field_write(&mut s, &f, "attribute_requests", &HashMap::new());
+        assert!(
+            s.contains("if let Some(attribute_requests) = &attribute_requests {"),
+            "{s}"
+        );
+        assert!(s.contains("w.start_array(Tag::Context(1))"), "{s}");
     }
 }
