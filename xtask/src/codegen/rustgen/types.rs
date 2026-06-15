@@ -159,6 +159,14 @@ pub fn ident(name: &str) -> String {
         "await", "abstract", "become", "box", "do", "final", "macro", "override", "priv", "try",
         "typeof", "unsized", "virtual", "yield", "gen", "Self",
     ];
+    // A leading digit is not a valid Rust identifier start. Some Matter enum
+    // members are battery designations like `4V5` / `523` (PowerSource's
+    // `BatCommonDesignationEnum`); prefix `_` to make them valid. (The model
+    // already mixed-cases names, so none have the consecutive-uppercase that
+    // would trip `non_camel_case_types`.)
+    if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return format!("_{name}");
+    }
     if SUFFIX.contains(&name) {
         format!("{name}_")
     } else if RAW.contains(&name) {
@@ -257,6 +265,10 @@ mod tests {
         assert_eq!(ident("match"), "r#match");
         assert_eq!(ident("self"), "self_");
         assert_eq!(ident("normal"), "normal");
+        // Leading-digit enum members (e.g. PowerSource BatCommonDesignationEnum).
+        assert_eq!(ident("4V5"), "_4V5");
+        assert_eq!(ident("523"), "_523");
+        assert_eq!(ident("12Aa"), "_12Aa");
     }
 
     #[test]

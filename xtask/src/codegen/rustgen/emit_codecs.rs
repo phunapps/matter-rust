@@ -152,12 +152,18 @@ fn write_scalar(
 
 /// The `read_scalar` metatype of a list element, inferred from its Matter
 /// type string: a named struct datatype (or a global `*Struct`, e.g. `semtag`
-/// -> `SemanticTagStruct`) → "object"; every scalar list element in the 10
-/// clusters is an integer id (`cluster-id`/`endpoint-no`/`uint32`/...) → so
-/// the scalar case is "integer".
+/// -> `SemanticTagStruct`) → "object"; a named enum/bitmap datatype → "enum"/
+/// "bitmap" (so the element decodes via `from_raw`/`from_bits_retain`, not a
+/// bare integer); every other scalar list element is an integer id
+/// (`cluster-id`/`endpoint-no`/`uint32`/...) → "integer".
 fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
-    if matches!(dts.get(entry), Some(d) if d.kind == "struct") {
-        return "object";
+    if let Some(d) = dts.get(entry) {
+        match d.kind.as_str() {
+            "struct" => return "object",
+            "enum" => return "enum",
+            "bitmap" => return "bitmap",
+            _ => {}
+        }
     }
     if base_type(entry, None).ends_with("Struct") {
         return "object"; // a global struct (e.g. semtag -> SemanticTagStruct)
@@ -207,6 +213,7 @@ fn emit_list_read_into(
     line!(s, "{indent}}}");
 }
 
+#[allow(clippy::too_many_lines)] // a code emitter — long but linear.
 fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
     let ret = rust_type(
         &a.ty,
@@ -230,9 +237,32 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
     );
 
     if a.metatype == "object" {
-        // struct attribute (all read-only in scope; no composite attribute is
-        // nullable in the 10 clusters).
-        line!(s, "    {}::decode(tlv)", a.ty);
+        // struct attribute. Nullable struct attributes (e.g. EEM's energy
+        // measurement structs) must peek for a TLV null before opening the
+        // structure; non-nullable ones delegate to the struct's own `decode`.
+        if a.nullable {
+            line!(s, "    let mut r = TlvReader::new(tlv);");
+            line!(s, "    match r.next()? {{");
+            line!(
+                s,
+                "        Some(Element::Scalar {{ value: Value::Null, .. }}) => Ok(Nullable::Null),"
+            );
+            line!(s, "        Some(Element::ContainerStart {{ kind: ContainerKind::Structure, .. }}) => {{");
+            line!(
+                s,
+                "            Ok(Nullable::Value({}::decode_from(&mut r)?))",
+                a.ty
+            );
+            line!(s, "        }}");
+            line!(
+                s,
+                "        _ => Err(ClusterError::UnexpectedType {{ context: \"{}\" }}),",
+                a.name
+            );
+            line!(s, "    }}");
+        } else {
+            line!(s, "    {}::decode(tlv)", a.ty);
+        }
         line!(s, "}}\n");
         return;
     }
@@ -241,6 +271,12 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         let entry_meta = entry_metatype(entry, dts);
         line!(s, "    let mut r = TlvReader::new(tlv);");
         line!(s, "    match r.next()? {{");
+        if a.nullable {
+            line!(
+                s,
+                "        Some(Element::Scalar {{ value: Value::Null, .. }}) => return Ok(Nullable::Null),"
+            );
+        }
         line!(
             s,
             "        Some(Element::ContainerStart {{ kind: ContainerKind::Array, .. }}) => {{}}"
@@ -255,7 +291,11 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         // one code path with the struct-field call site.
         line!(s, "    let r = &mut r;");
         emit_list_read_into(s, "    ", entry, entry_meta, &a.name, dts);
-        line!(s, "    Ok(out)");
+        if a.nullable {
+            line!(s, "    Ok(Nullable::Value(out))");
+        } else {
+            line!(s, "    Ok(out)");
+        }
         line!(s, "}}\n");
         return;
     }
@@ -705,6 +745,17 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
     let tag = format!("Tag::Context({})", f.id);
     let inner =
         |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
+    // A bound `Nullable::Value`/`Some` field needs dereferencing. Named
+    // enum/bitmap writes append a method call (`.to_raw()`/`.bits()`), so the
+    // deref must be parenthesized; every other scalar write takes the bare
+    // `*var` (avoids an `unused_parens` warning under `-D warnings`).
+    let needs_method =
+        matches!(f.metatype.as_str(), "enum" | "bitmap") && named_backing(&f.ty, dts).is_some();
+    let deref = if needs_method {
+        format!("(*{var})")
+    } else {
+        format!("*{var}")
+    };
     match (f.optional, f.nullable) {
         (false, false) => line!(s, "        {}", inner(&format!("self.{var}"))),
         (false, true) => {
@@ -713,7 +764,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             line!(
                 s,
                 "            Nullable::Value({var}) => {{ {} }}",
-                inner(&format!("(*{var})"))
+                inner(&deref)
             );
             line!(s, "        }}");
         }
@@ -721,7 +772,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             line!(
                 s,
                 "        if let Some({var}) = &self.{var} {{ {} }}",
-                inner(&format!("(*{var})"))
+                inner(&deref)
             );
         }
         (true, true) => {
@@ -731,7 +782,7 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             line!(
                 s,
                 "                Nullable::Value({var}) => {{ {} }}",
-                inner(&format!("(*{var})"))
+                inner(&deref)
             );
             line!(s, "            }}");
             line!(s, "        }}");
@@ -853,5 +904,27 @@ mod tests {
             vec![field(0, "Inner", "InnerStruct", "object", None)],
         );
         assert!(!struct_is_write_capable(&d));
+    }
+
+    #[test]
+    fn entry_metatype_classifies_named_enum_and_struct_elements() {
+        let enum_d = struct_dt("WiredFaultEnum", vec![]);
+        let enum_d = Datatype {
+            base: "enum8".to_string(),
+            kind: "enum".to_string(),
+            ..enum_d
+        };
+        let struct_d = struct_dt("DeviceTypeStruct", vec![]);
+        let dts: DatatypeMap<'_> = [
+            (enum_d.name.as_str(), &enum_d),
+            (struct_d.name.as_str(), &struct_d),
+        ]
+        .into_iter()
+        .collect();
+        // A named enum element decodes via from_raw, not as a bare integer.
+        assert_eq!(entry_metatype("WiredFaultEnum", &dts), "enum");
+        assert_eq!(entry_metatype("DeviceTypeStruct", &dts), "object");
+        // A bare scalar id stays integer.
+        assert_eq!(entry_metatype("endpoint-no", &dts), "integer");
     }
 }

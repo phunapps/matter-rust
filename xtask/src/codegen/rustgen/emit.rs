@@ -182,6 +182,14 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     let catch_all = catch_all_variant(d);
     line!(s, "/// `{}` ({}).", d.name, d.base);
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
+    // Members like `4V5`/`523` (PowerSource BatCommonDesignationEnum) get an
+    // `_`-prefixed variant name (see `ident`), which is not upper-camel-case.
+    if d.values
+        .iter()
+        .any(|v| v.name.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    {
+        line!(s, "#[allow(non_camel_case_types)]");
+    }
     line!(s, "pub enum {} {{", d.name);
     for v in &d.values {
         line!(s, "    /// {} = {}.", v.name, v.value);
