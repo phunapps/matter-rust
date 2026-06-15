@@ -28,7 +28,15 @@
 //! `IlluminanceMeasurement`, `PressureMeasurement`, `FlowMeasurement`,
 //! `BooleanState`, and `Switch`. M9-A2.2 energy (decode-smoke + one nested
 //! byte-parity vector): `PowerSource`, `ElectricalPowerMeasurement`,
-//! `ElectricalEnergyMeasurement`, and `AirQuality`.
+//! `ElectricalEnergyMeasurement`, and `AirQuality`. M9-A2.3 actuators
+//! (roundtrip + decode-smoke, with a byte-parity vector for the list-typed
+//! `AtomicRequest` command): `Thermostat`, `FanControl`,
+//! `ThermostatUserInterfaceConfiguration`, `PumpConfigurationAndControl`, and
+//! `WindowCovering`.
+//!
+//! For any attribute not covered by these typed codecs — optional,
+//! manufacturer-specific, or a cluster not in this list — the generic `Value`
+//! path in `matter-controller` remains the universal answer.
 //!
 //! # Usage
 //!

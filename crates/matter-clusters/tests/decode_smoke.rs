@@ -179,3 +179,90 @@ fn electrical_energy_measurement_nullable_struct_attr_decodes() {
         Nullable::Null
     ));
 }
+
+// ---- M9-A2.3 actuator batch ----------------------------------------------
+
+#[test]
+fn thermostat_system_mode_decodes() {
+    use gen::thermostat::SystemModeEnum;
+    // SystemMode: enum8; raw 4 = Heat (spot-check a known member).
+    assert_eq!(
+        gen::thermostat::decode_system_mode(&uint_attr(4)).unwrap(),
+        SystemModeEnum::Heat
+    );
+}
+
+#[test]
+fn thermostat_atomic_response_decodes_synth_struct() {
+    use matter_codec::{ContainerKind, Element, TlvReader};
+    // Hand-build an AtomicResponse payload: anon struct {
+    //   ctx0 = StatusCode(0),
+    //   ctx1 = array[ struct{ ctx0=AttributeId(0x1234), ctx1=StatusCode(0) } ],
+    //   ctx2 = Timeout(1000) }.
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0x1234).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(2), 1000).unwrap();
+        w.end_container().unwrap();
+    }
+    let mut r = TlvReader::new(&buf);
+    // Consume the opening anonymous structure, then decode the fields.
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Structure,
+            ..
+        })
+    ));
+    let resp = gen::thermostat::AtomicResponse::decode_from(&mut r).unwrap();
+    assert_eq!(resp.status_code, 0);
+    assert_eq!(resp.attribute_status.len(), 1);
+    assert_eq!(resp.attribute_status[0].attribute_id, 0x1234);
+    assert_eq!(resp.attribute_status[0].status_code, 0);
+    assert_eq!(resp.timeout, Some(1000));
+}
+
+#[test]
+fn fan_control_fan_mode_decodes() {
+    use gen::fan_control::FanModeEnum;
+    // FanMode: enum8; raw 3 = High.
+    assert_eq!(
+        gen::fan_control::decode_fan_mode(&uint_attr(3)).unwrap(),
+        FanModeEnum::High
+    );
+}
+
+#[test]
+fn tuic_keypad_lockout_decodes() {
+    use gen::thermostat_user_interface_configuration::KeypadLockoutEnum;
+    // KeypadLockout: enum8; raw 0 = NoLockout.
+    assert_eq!(
+        gen::thermostat_user_interface_configuration::decode_keypad_lockout(&uint_attr(0)).unwrap(),
+        KeypadLockoutEnum::NoLockout
+    );
+}
+
+#[test]
+fn pump_operation_mode_decodes() {
+    use gen::pump_configuration_and_control::OperationModeEnum;
+    // OperationMode: enum8; raw 0 = Normal.
+    assert_eq!(
+        gen::pump_configuration_and_control::decode_operation_mode(&uint_attr(0)).unwrap(),
+        OperationModeEnum::Normal
+    );
+}
+
+#[test]
+fn window_covering_mode_decodes() {
+    // Mode: map8 bitmap; bit0 = MotorDirectionReversed (raw 1).
+    let m = gen::window_covering::decode_mode(&uint_attr(1)).unwrap();
+    assert_eq!(m.bits(), 1);
+}

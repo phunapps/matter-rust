@@ -16,6 +16,11 @@
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
       "DoorLock",
+      "WindowCovering",
+      "PumpConfigurationAndControl",
+      "Thermostat",
+      "FanControl",
+      "ThermostatUserInterfaceConfiguration",
       "ColorControl",
       "IlluminanceMeasurement",
       "TemperatureMeasurement",
@@ -146,10 +151,94 @@
         "reason": "no IM event support until M8"
       },
       {
+        "cluster": "PumpConfigurationAndControl",
+        "element": "AlarmMask",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "PumpConfigurationAndControl",
+        "element": "17 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
         "cluster": "Switch",
         "element": "7 event(s)",
         "kind": "events",
         "reason": "no IM event support until M8"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "HvacSystemTypeConfiguration",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "OccupiedSetback",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "OccupiedSetbackMax",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "OccupiedSetbackMin",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "PiCoolingDemand",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "PiHeatingDemand",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "ThermostatProgrammingOperationMode",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "UnoccupiedSetback",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "UnoccupiedSetbackMax",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "UnoccupiedSetbackMin",
+        "kind": "attribute",
+        "reason": "deprecated"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "GoToLiftPercentage.Ignored",
+        "kind": "command-field",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "GoToTiltPercentage.Ignored",
+        "kind": "command-field",
+        "reason": "disallowed"
       }
     ]
   },
@@ -6343,6 +6432,3122 @@
               "value": 9,
               "name": "RemoteOnlyUser",
               "description": "This value shall indicate the user access and PIN code is restricted to remote lock/unlock commands only. This type of user might be useful for regular delivery services or voice assistant unlocking operations to prevent a PIN code credential created for them from being used at the keypad. The PIN code credential would only be provided over-the-air for the lock/unlock commands."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 258,
+      "name": "WindowCovering",
+      "revision": 8,
+      "features": [
+        {
+          "bit": 0,
+          "code": "LF",
+          "name": "Lift",
+          "description": "The Lift feature applies to window coverings that lift up and down (e.g. for a roller shade, Up and Down is lift Open and Close) or slide left to right (e.g. for a sliding curtain, Left and Right is lift Open and Close)."
+        },
+        {
+          "bit": 1,
+          "code": "TL",
+          "name": "Tilt",
+          "description": "The Tilt feature applies to window coverings with vertical or horizontal strips."
+        },
+        {
+          "bit": 2,
+          "code": "PA_LF",
+          "name": "PositionAwareLift",
+          "description": "Position aware lift control is supported."
+        },
+        {
+          "bit": 4,
+          "code": "PA_TL",
+          "name": "PositionAwareTilt",
+          "description": "Position aware tilt control is supported."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Type",
+          "type": "TypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall identify the type of window covering.\nIf the window covering supports the LF feature and not the TL feature, the following types shall be used as the constraint for this attribute:\nIf the window covering supports the TL feature and not the LF feature, the following types shall be used as the constraint for this attribute:\nIf the window covering supports both the LF and TL features, the following types are allowed to be used:"
+        },
+        {
+          "id": 5,
+          "name": "NumberOfActuationsLift",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of lift/slide actuations applied to the window covering since the device was installed."
+        },
+        {
+          "id": 6,
+          "name": "NumberOfActuationsTilt",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of tilt actuations applied to the window covering since the device was installed."
+        },
+        {
+          "id": 7,
+          "name": "ConfigStatus",
+          "type": "ConfigStatusBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies the configuration and status information of the window covering.\nTo change settings, devices shall write to the Mode attribute. The behavior causing the setting or clearing of each bit is vendor specific."
+        },
+        {
+          "id": 8,
+          "name": "CurrentPositionLiftPercentage",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the actual position as a percentage from 0% to 100% with 1% default step. This attribute is equal to CurrentPositionLiftPercent100ths attribute divided by 100."
+        },
+        {
+          "id": 9,
+          "name": "CurrentPositionTiltPercentage",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the actual position as a percentage from 0% to 100% with 1% default step. This attribute is equal to CurrentPositionTiltPercent100ths attribute divided by 100."
+        },
+        {
+          "id": 10,
+          "name": "OperationalStatus",
+          "type": "OperationalStatusBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the currently ongoing operations and applies to all type of devices."
+        },
+        {
+          "id": 11,
+          "name": "TargetPositionLiftPercent100ths",
+          "type": "percent100ths",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the position where the window covering lift will go or is moving to as a percentage (Unit 0.01%)."
+        },
+        {
+          "id": 12,
+          "name": "TargetPositionTiltPercent100ths",
+          "type": "percent100ths",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the position where the window covering tilt will go or is moving to as a percentage (Unit 0.01%)."
+        },
+        {
+          "id": 13,
+          "name": "EndProductType",
+          "type": "EndProductTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute SHOULD provide more detail about the product type than can be determined from the main category indicated by the Type attribute.\nIf the window covering supports the LF feature and not the TL feature, the following types shall be used as the constraint for this attribute:\nIf the window covering supports the TL feature and not the LF feature, the following types shall be used as the constraint for this attribute:\nIf the window covering supports both the LF and TL features, the following types are allowed to be used:\nThe table below helps to match the EndProductType attribute with the Type attribute."
+        },
+        {
+          "id": 14,
+          "name": "CurrentPositionLiftPercent100ths",
+          "type": "percent100ths",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the actual position as a percentage with a minimal step of 0.01%. E.g Max 10000 equals 100.00%."
+        },
+        {
+          "id": 15,
+          "name": "CurrentPositionTiltPercent100ths",
+          "type": "percent100ths",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the actual position as a percentage with a minimal step of 0.01%. E.g Max 10000 equals 100.00%."
+        },
+        {
+          "id": 23,
+          "name": "Mode",
+          "type": "ModeBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "The Mode attribute allows configuration of the window covering, such as: reversing the motor direction, placing the window covering into calibration mode, placing the motor into maintenance mode, disabling the network, and disabling status LEDs.\nIn the case a device does not support or implement a specific mode, e.g. the device has a specific installation method and reversal is not relevant or the device does not include a maintenance mode, any write interaction to the Mode attribute, with an unsupported mode bit or any out of bounds bits set, must be ignored and a response containing the status of CONSTRAINT_ERROR will be returned."
+        },
+        {
+          "id": 26,
+          "name": "SafetyStatus",
+          "type": "SafetyStatusBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The SafetyStatus attribute reflects the state of the safety sensors and the common issues preventing movements. By default for nominal operation all flags are cleared (0). A device might support none, one or several bit flags from this attribute (all optional)."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "UpOrOpen",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "DownOrClose",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "StopMotion",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "GoToLiftPercentage",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "LiftPercent100thsValue",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "name": "GoToTiltPercentage",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TiltPercent100thsValue",
+              "type": "percent100ths",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "ConfigStatusBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Operational",
+              "description": "This bit shall indicate whether the window covering is operational for regular use:\n  - 0 = Not Operational\n  - 1 = Operational"
+            },
+            {
+              "bit": 1,
+              "name": "OnlineReserved",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "LiftMovementReversed",
+              "description": "This bit shall indicate whether the lift movement is reversed:\n  - 0 = Lift movement is normal\n  - 1 = Lift movement is reversed"
+            },
+            {
+              "bit": 3,
+              "name": "LiftPositionAware",
+              "description": "This bit shall indicate whether the window covering supports the PositionAwareLift feature:\n  - 0 = Lift control is not position aware\n  - 1 = Lift control is position aware (PA_LF)"
+            },
+            {
+              "bit": 4,
+              "name": "TiltPositionAware",
+              "description": "This bit shall indicate whether the window covering supports the PositionAwareTilt feature:\n  - 0 = Tilt control is not position aware\n  - 1 = Tilt control is position aware (PA_TL)"
+            },
+            {
+              "bit": 5,
+              "name": "LiftEncoderControlled",
+              "description": "This bit shall indicate whether a position aware controlled window covering is employing an encoder for positioning the height of the window covering:\n  - 0 = Timer Controlled\n  - 1 = Encoder Controlled"
+            },
+            {
+              "bit": 6,
+              "name": "TiltEncoderControlled",
+              "description": "This bit shall indicate whether a position aware controlled window covering is employing an encoder for tilting the window covering:\n  - 0 = Timer Controlled\n  - 1 = Encoder Controlled"
+            }
+          ]
+        },
+        {
+          "name": "EndProductTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "RollerShade",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "RomanShade",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "BalloonShade",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "WovenWood",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "PleatedShade",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "CellularShade",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "LayeredShade",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "LayeredShade2D",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "SheerShade",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "TiltOnlyInteriorBlind",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "InteriorBlind",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "VerticalBlindStripCurtain",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "InteriorVenetianBlind",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "ExteriorVenetianBlind",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "LateralLeftCurtain",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "LateralRightCurtain",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "CentralCurtain",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "RollerShutter",
+              "description": null
+            },
+            {
+              "value": 18,
+              "name": "ExteriorVerticalScreen",
+              "description": null
+            },
+            {
+              "value": 19,
+              "name": "AwningTerracePatio",
+              "description": null
+            },
+            {
+              "value": 20,
+              "name": "AwningVerticalScreen",
+              "description": null
+            },
+            {
+              "value": 21,
+              "name": "TiltOnlyPergola",
+              "description": null
+            },
+            {
+              "value": 22,
+              "name": "SwingingShutter",
+              "description": null
+            },
+            {
+              "value": 23,
+              "name": "SlidingShutter",
+              "description": null
+            },
+            {
+              "value": 255,
+              "name": "Unknown",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ModeBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "MotorDirectionReversed",
+              "description": "This bit shall control the motor direction:\n  - 0 = Lift movement is normal\n  - 1 = Lift movement is reversed"
+            },
+            {
+              "bit": 1,
+              "name": "CalibrationMode",
+              "description": "This bit shall set the window covering into calibration mode:\n  - 0 = Normal mode\n  - 1 = Calibration mode"
+            },
+            {
+              "bit": 2,
+              "name": "MaintenanceMode",
+              "description": "This bit shall set the window covering into maintenance mode:\n  - 0 = Normal mode\n  - 1 = Maintenance mode"
+            },
+            {
+              "bit": 3,
+              "name": "LedFeedback",
+              "description": "This bit shall control feedback LEDs:\n  - 0 = LEDs are off\n  - 1 = LEDs will display feedback"
+            }
+          ]
+        },
+        {
+          "name": "MovementStatus",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Values for OperationalStatus attribute fields.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Stopped",
+              "description": "Covering is not moving"
+            },
+            {
+              "value": 1,
+              "name": "Opening",
+              "description": "Covering is moving from closed to open"
+            },
+            {
+              "value": 2,
+              "name": "Closing",
+              "description": "Covering is moving from open to closed"
+            }
+          ]
+        },
+        {
+          "name": "OperationalStatusBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": "The OperationalStatusBitmap is using several internal operational state fields (composed of 2 bits) following this definition:\n  - 00b = Currently not moving\n  - 01b = Currently opening (e.g. moving from closed to open).\n  - 10b = Currently closing (e.g. moving from open to closed).\n  - 11b = Reserved",
+          "bits": [
+            {
+              "name": "Global",
+              "description": "These bits shall indicate in which direction the covering is currently moving or if it has stopped. Global operational state shall always reflect the overall motion of the device."
+            },
+            {
+              "name": "Lift",
+              "description": "These bits shall indicate in which direction the covering's lift is currently moving or if it has stopped."
+            },
+            {
+              "name": "Tilt",
+              "description": "These bits shall indicate in which direction the covering's tilt is currently moving or if it has stopped."
+            }
+          ]
+        },
+        {
+          "name": "SafetyStatusBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "RemoteLockout",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "TamperDetection",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "FailedCommunication",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "PositionFailure",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "ThermalProtection",
+              "description": null
+            },
+            {
+              "bit": 5,
+              "name": "ObstacleDetected",
+              "description": null
+            },
+            {
+              "bit": 6,
+              "name": "Power",
+              "description": null
+            },
+            {
+              "bit": 7,
+              "name": "StopInput",
+              "description": null
+            },
+            {
+              "bit": 8,
+              "name": "MotorJammed",
+              "description": null
+            },
+            {
+              "bit": 9,
+              "name": "HardwareFailure",
+              "description": null
+            },
+            {
+              "bit": 10,
+              "name": "ManualOperation",
+              "description": null
+            },
+            {
+              "bit": 11,
+              "name": "Protection",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Rollershade",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Rollershade2Motor",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "RollershadeExterior",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "RollershadeExterior2Motor",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Drapery",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Awning",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Shutter",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "TiltBlindTiltOnly",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "TiltBlindLift",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "ProjectorScreen",
+              "description": null
+            },
+            {
+              "value": 255,
+              "name": "Unknown",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 512,
+      "name": "PumpConfigurationAndControl",
+      "revision": 5,
+      "features": [
+        {
+          "bit": 0,
+          "code": "PRSCONST",
+          "name": "ConstantPressure",
+          "description": "Supports operating in constant pressure mode"
+        },
+        {
+          "bit": 1,
+          "code": "PRSCOMP",
+          "name": "CompensatedPressure",
+          "description": "Supports operating in compensated pressure mode"
+        },
+        {
+          "bit": 2,
+          "code": "FLW",
+          "name": "ConstantFlow",
+          "description": "Supports operating in constant flow mode"
+        },
+        {
+          "bit": 3,
+          "code": "SPD",
+          "name": "ConstantSpeed",
+          "description": "Supports operating in constant speed mode"
+        },
+        {
+          "bit": 4,
+          "code": "TEMP",
+          "name": "ConstantTemperature",
+          "description": "Supports operating in constant temperature mode"
+        },
+        {
+          "bit": 5,
+          "code": "AUTO",
+          "name": "Automatic",
+          "description": "Supports operating in automatic mode"
+        },
+        {
+          "bit": 6,
+          "code": "LOCAL",
+          "name": "LocalOperation",
+          "description": "Supports operating using local settings"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MaxPressure",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies the maximum pressure the pump can achieve. It is a physical limit, and does not apply to any specific control mode or operation mode.\nValid range is -3,276.7 kPa to 3,276.7 kPa (steps of 0.1 kPa). Null if the value is invalid."
+        },
+        {
+          "id": 1,
+          "name": "MaxSpeed",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies the maximum speed the pump can achieve. It is a physical limit, and does not apply to any specific control mode or operation mode.\nValid range is 0 to 65,534 RPM (steps of 1 RPM). Null if the value is invalid."
+        },
+        {
+          "id": 2,
+          "name": "MaxFlow",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies the maximum flow the pump can achieve. It is a physical limit, and does not apply to any specific control mode or operation mode.\nValid range is 0 m^3/h to 6,553.4 m^3/h (steps of 0.1 m^3/h). Null if the value is invalid."
+        },
+        {
+          "id": 3,
+          "name": "MinConstPressure",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the minimum pressure the pump can achieve when it is working with the ControlMode attribute set to ConstantPressure.\nValid range is –3,276.7 kPa to 3,276.7 kPa (steps of 0.1 kPa). Null if the value is invalid."
+        },
+        {
+          "id": 4,
+          "name": "MaxConstPressure",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the maximum pressure the pump can achieve when it is working with the ControlMode attribute set to ConstantPressure.\nValid range is –3,276.7 kPa to 3,276.7 kPa (steps of 0.1 kPa). Null if the value is invalid."
+        },
+        {
+          "id": 5,
+          "name": "MinCompPressure",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the minimum compensated pressure the pump can achieve when it is working with the ControlMode attribute set to ProportionalPressure.\nValid range is –3,276.7 kPa to 3,276.7 kPa (steps of 0.1 kPa). Null if the value is invalid."
+        },
+        {
+          "id": 6,
+          "name": "MaxCompPressure",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the maximum compensated pressure the pump can achieve when it is working with the ControlMode attribute set to ProportionalPressure.\nValid range is –3,276.7 kPa to 3,276.7 kPa (steps of 0.1 kPa). Null if the value is invalid."
+        },
+        {
+          "id": 7,
+          "name": "MinConstSpeed",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the minimum speed the pump can achieve when it is working with the ControlMode attribute set to ConstantSpeed.\nValid range is 0 to 65,534 RPM (steps of 1 RPM). Null if the value is invalid."
+        },
+        {
+          "id": 8,
+          "name": "MaxConstSpeed",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the maximum speed the pump can achieve when it is working with the ControlMode attribute set to ConstantSpeed.\nValid range is 0 to 65,534 RPM (steps of 1 RPM). Null if the value is invalid."
+        },
+        {
+          "id": 9,
+          "name": "MinConstFlow",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the minimum flow the pump can achieve when it is working with the ControlMode attribute set to ConstantFlow.\nValid range is 0 m^3/h to 6,553.4 m^3/h (steps of 0.1 m^3/h). Null if the value is invalid."
+        },
+        {
+          "id": 10,
+          "name": "MaxConstFlow",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the maximum flow the pump can achieve when it is working with the ControlMode attribute set to ConstantFlow.\nValid range is 0 m^3/h to 6,553.4 m^3/h (steps of 0.1 m^3/h). Null if the value is invalid."
+        },
+        {
+          "id": 11,
+          "name": "MinConstTemp",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the minimum temperature the pump can maintain in the system when it is working with the ControlMode attribute set to ConstantTemperature.\nValid range is –273.15 °C to 327.67 °C (steps of 0.01 °C). Null if the value is invalid."
+        },
+        {
+          "id": 12,
+          "name": "MaxConstTemp",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the maximum temperature the pump can maintain in the system when it is working with the ControlMode attribute set to ConstantTemperature.\nMaxConstTemp shall be greater than or equal to MinConstTemp Valid range is –273.15 °C to 327.67 °C (steps of 0.01 °C). Null if the value is invalid."
+        },
+        {
+          "id": 16,
+          "name": "PumpStatus",
+          "type": "PumpStatusBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the activity status of the pump functions as listed in PumpStatusBitmap. Where a pump controller function is active, the corresponding bit shall be set to 1. Where a pump controller function is not active, the corresponding bit shall be set to 0."
+        },
+        {
+          "id": 17,
+          "name": "EffectiveOperationMode",
+          "type": "OperationModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies current effective operation mode of the pump as defined in OperationModeEnum.\nThe value of the EffectiveOperationMode attribute is the same as the OperationMode attribute, unless one of the following points are true:\n  - The pump is physically set to run with the local settings\n  - The LocalOverride bit in the PumpStatus attribute is set,\nSee OperationMode Attribute and ControlMode Attribute for a detailed description of the operation and control of the pump."
+        },
+        {
+          "id": 18,
+          "name": "EffectiveControlMode",
+          "type": "ControlModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies the current effective control mode of the pump as defined in ControlModeEnum.\nThis attribute contains the control mode that currently applies to the pump. It will have the value of the ControlMode attribute, unless one of the following points are true:\n  - The ControlMode attribute is set to Automatic. In this case, the value of the EffectiveControlMode shall match the behavior of the pump.\n  - A remote sensor is used as the sensor for regulation of the pump. In this case, EffectiveControlMode will display ConstantPressure, ConstantFlow or ConstantTemperature if the remote sensor is a pressure sensor, a flow sensor or a temperature sensor respectively, regardless of the value of the ControlMode attribute.\nIn case the ControlMode attribute is not included on the device and no remote sensors are connected, the value of the EffectiveControlMode shall match the vendor-specific behavior of the pump.\nSee OperationMode Attribute and ControlMode Attribute for detailed a description of the operation and control of the pump."
+        },
+        {
+          "id": 19,
+          "name": "Capacity",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute specifies the actual capacity of the pump as a percentage of the effective maximum setpoint value. It is updated dynamically as the speed of the pump changes.\nIf the value is not available (the measurement or estimation of the speed is done in the pump), this attribute will indicate the null value.\nValid range is 0 % to 163.835% (0.005 % granularity). Although this attribute is a signed value, values of capacity less than zero have no physical meaning."
+        },
+        {
+          "id": 20,
+          "name": "Speed",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the actual speed of the pump measured in RPM. It is updated dynamically as the speed of the pump changes.\nIf the value is not available (the measurement or estimation of the speed is done in the pump), this attribute will indicate the null value.\nValid range is 0 to 65,534 RPM."
+        },
+        {
+          "id": 21,
+          "name": "LifetimeRunningHours",
+          "type": "uint24",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute specifies the accumulated number of hours that the pump has been powered and the motor has been running. It is updated dynamically as it increases. It is preserved over power cycles of the pump. If LifeTimeRunningHours rises above maximum value it “rolls over” and starts at 0 (zero).\nThis attribute is writeable, in order to allow setting to an appropriate value after maintenance. If the value is not available, this attribute will indicate the null value.\nValid range is 0 to 16,777,214 hrs."
+        },
+        {
+          "id": 22,
+          "name": "Power",
+          "type": "uint24",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute specifies the actual power consumption of the pump in Watts. The value of this attribute is updated dynamically as the power consumption of the pump changes.\nThis attribute is read only. If the value is not available (the measurement of power consumption is not done in the pump), this attribute will indicate the null value.\nValid range is 0 to 16,777,214 Watts."
+        },
+        {
+          "id": 23,
+          "name": "LifetimeEnergyConsumed",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute specifies the accumulated energy consumption of the pump through the entire lifetime of the pump in kWh. The value of the LifetimeEnergyConsumed attribute is updated dynamically as the energy consumption of the pump increases. If LifetimeEnergyConsumed rises above maximum value it “rolls over” and starts at 0 (zero).\nThis attribute is writeable, in order to allow setting to an appropriate value after maintenance.\nValid range is 0 kWh to 4,294,967,294 kWh. Null if the value is unknown."
+        },
+        {
+          "id": 32,
+          "name": "OperationMode",
+          "type": "OperationModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "This attribute specifies the operation mode of the pump as defined in OperationModeEnum.\nThe actual operating mode of the pump is a result of the setting of the attributes OperationMode, ControlMode and the optional connection of a remote sensor. The operation and control is prioritized as shown in the scheme below:\n!Priority Scheme of Pump Operation and Control.jpg\nIf this attribute is Maximum, Minimum or Local, the OperationMode attribute decides how the pump is operated.\nIf this attribute is Normal and a remote sensor is connected to the pump, the type of the remote sensor decides the control mode of the pump. A connected remote pressure sensor will make the pump run in control mode Constant pressure and vice versa for flow and temperature type sensors. This is regardless of the setting of the ControlMode attribute.\nIf this attribute is Normal and no remote sensor is connected, the control mode of the pump is decided by the ControlMode attribute.\nOperationMode may be changed at any time, even when the pump is running. The behavior of the pump at the point of changing the value of this attribute is vendor-specific.\nIn the case a device does not support a specific operation mode, the write interaction to this attribute with an unsupported operation mode value shall be ignored and a response containing the status of CONSTRAINT_ERROR shall be returned."
+        },
+        {
+          "id": 33,
+          "name": "ControlMode",
+          "type": "ControlModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute specifies the control mode of the pump as defined in ControlModeEnum.\nSee OperationMode Attribute for a detailed description of the operation and control of the pump.\nControlMode may be changed at any time, even when the pump is running. The behavior of the pump at the point of changing is vendor-specific.\nIn the case a device does not support a specific control mode, the write interaction to this attribute with an unsupported control mode value shall be ignored and a response containing the status of CONSTRAINT_ERROR shall be returned."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "ControlModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "ConstantSpeed",
+              "description": "The setpoint is interpreted as a percentage of the range derived from the [MinConstSpeed – MaxConstSpeed] attributes."
+            },
+            {
+              "value": 1,
+              "name": "ConstantPressure",
+              "description": "The setpoint is interpreted as a percentage of the range of the sensor used for this control mode. In case of the internal pressure sensor, this will be the range derived from the [MinConstPressure – MaxConstPressure] attributes. In case of a remote pressure sensor, this will be the range derived from the [MinMeasuredValue – MaxMeasuredValue] attributes of the remote pressure sensor."
+            },
+            {
+              "value": 2,
+              "name": "ProportionalPressure",
+              "description": "The setpoint is interpreted as a percentage of the range derived of the [MinCompPressure – MaxCompPressure] attributes. The internal setpoint will be lowered (compensated) dependent on the flow in the pump (lower flow => lower internal setpoint)."
+            },
+            {
+              "value": 3,
+              "name": "ConstantFlow",
+              "description": "The setpoint is interpreted as a percentage of the range of the sensor used for this control mode. In case of the internal flow sensor, this will be the range derived from the [MinConstFlow – MaxConstFlow] attributes. In case of a remote flow sensor, this will be the range derived from the [MinMeasuredValue – MaxMeasuredValue] attributes of the remote flow sensor."
+            },
+            {
+              "value": 5,
+              "name": "ConstantTemperature",
+              "description": "The setpoint is interpreted as a percentage of the range of the sensor used for this control mode. In case of the internal temperature sensor, this will be the range derived from the [MinConstTemp – MaxConstTemp] attributes. In case of a remote temperature sensor, this will be the range derived from the [MinMeasuredValue – MaxMeasuredValue] attributes of the remote temperature sensor."
+            },
+            {
+              "value": 7,
+              "name": "Automatic",
+              "description": "This behavior is manufacturer defined. The pump can be stopped by setting the setpoint of the level control cluster to 0, or by using the On/Off cluster. If the pump is started (at any setpoint), the speed of the pump is entirely determined by the pump."
+            }
+          ]
+        },
+        {
+          "name": "OperationModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Normal",
+              "description": "If the pump is running in this operation mode the setpoint is an internal variable which may be controlled between 0% and 100%, e.g., by means of the Level Control cluster"
+            },
+            {
+              "value": 1,
+              "name": "Minimum",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Maximum",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Local",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "PumpStatusBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "DeviceFault",
+              "description": "If this bit is set, it may correspond to an event in the range 2-16, see Events."
+            },
+            {
+              "bit": 1,
+              "name": "SupplyFault",
+              "description": "If this bit is set, it may correspond to an event in the range 0-1 or 13, see Events."
+            },
+            {
+              "bit": 2,
+              "name": "SpeedLow",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "SpeedHigh",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "LocalOverride",
+              "description": "While this bit is set, the EffectiveOperationMode is adjusted to Local. Any request changing OperationMode shall generate a FAILURE error status until LocalOverride is cleared on the physical device. When LocalOverride is cleared, the device shall return to the operation mode set in OperationMode."
+            },
+            {
+              "bit": 5,
+              "name": "Running",
+              "description": null
+            },
+            {
+              "bit": 6,
+              "name": "RemotePressure",
+              "description": "If this bit is set, EffectiveControlMode is ConstantPressure and the setpoint for the pump is interpreted as a percentage of the range of the remote sensor ([MinMeasuredValue – MaxMeasuredValue])."
+            },
+            {
+              "bit": 7,
+              "name": "RemoteFlow",
+              "description": "If this bit is set, EffectiveControlMode is ConstantFlow, and the setpoint for the pump is interpreted as a percentage of the range of the remote sensor ([MinMeasuredValue – MaxMeasuredValue])."
+            },
+            {
+              "bit": 8,
+              "name": "RemoteTemperature",
+              "description": "If this bit is set, EffectiveControlMode is ConstantTemperature, and the setpoint for the pump is interpreted as a percentage of the range of the remote sensor ([MinMeasuredValue – MaxMeasuredValue])"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 513,
+      "name": "Thermostat",
+      "revision": 10,
+      "features": [
+        {
+          "bit": 0,
+          "code": "HEAT",
+          "name": "Heating",
+          "description": "Thermostat is capable of managing a heating device"
+        },
+        {
+          "bit": 1,
+          "code": "COOL",
+          "name": "Cooling",
+          "description": "Thermostat is capable of managing a cooling device"
+        },
+        {
+          "bit": 2,
+          "code": "OCC",
+          "name": "Occupancy",
+          "description": "Supports Occupied and Unoccupied setpoints"
+        },
+        {
+          "bit": 4,
+          "code": "SB",
+          "name": "Setback",
+          "description": null
+        },
+        {
+          "bit": 5,
+          "code": "AUTO",
+          "name": "AutoMode",
+          "description": "Supports a System Mode of Auto"
+        },
+        {
+          "bit": 6,
+          "code": "LTNE",
+          "name": "LocalTemperatureNotExposed",
+          "description": "This feature indicates that the Calculated Local Temperature used internally is unavailable to report externally, for example due to the temperature control being done by a separate subsystem which does not offer a view into the currently measured temperature, but allows setpoints to be provided."
+        },
+        {
+          "bit": 7,
+          "code": "MSCH",
+          "name": "MatterScheduleConfiguration",
+          "description": "This feature indicates that the thermostat is capable of schedules. If this feature is supported, the thermostat shall support a mechanism to do time synchronization."
+        },
+        {
+          "bit": 8,
+          "code": "PRES",
+          "name": "Presets",
+          "description": "Thermostat supports setpoint presets"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "LocalTemperature",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current Calculated Local Temperature, when available.\n  - If the LTNE feature is not supported:\n  - If the LocalTemperatureCalibration is invalid or currently unavailable, the attribute shall report null.\n  - If the LocalTemperatureCalibration is valid, the attribute shall report that value.\n  - Otherwise, if the LTNE feature is supported, there is no feedback externally available for the     LocalTemperatureCalibration. In that case, the LocalTemperature attribute shall always report null."
+        },
+        {
+          "id": 1,
+          "name": "OutdoorTemperature",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the outdoor temperature, as measured locally or remotely (over the network)."
+        },
+        {
+          "id": 2,
+          "name": "Occupancy",
+          "type": "OccupancyBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the heated/cooled space is occupied or not, as measured locally or remotely (over the network)."
+        },
+        {
+          "id": 3,
+          "name": "AbsMinHeatSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the absolute minimum level that the heating setpoint may be set to. This is a limitation imposed by the manufacturer.\nRefer to Setpoint Limits for constraints"
+        },
+        {
+          "id": 4,
+          "name": "AbsMaxHeatSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 5,
+          "name": "AbsMinCoolSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 6,
+          "name": "AbsMaxCoolSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the absolute maximum level that the cooling setpoint may be set to. This is a limitation imposed by the manufacturer.\nRefer to Setpoint Limits for constraints"
+        },
+        {
+          "id": 16,
+          "name": "LocalTemperatureCalibration",
+          "type": "int8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the offset the Thermostat server shall make to the measured temperature (locally or remotely) to adjust the Calculated Local Temperature prior to using, displaying or reporting it.\nThe purpose of this attribute is to adjust the calibration of the Thermostat server per the user's preferences (e.g., to match if there are multiple servers displaying different values for the same HVAC area) or compensate for variability amongst temperature sensors.\nIf a Thermostat client attempts to write LocalTemperatureCalibration attribute to an unsupported value (e.g., out of the range supported by the Thermostat server), the Thermostat server shall respond with a status of SUCCESS and set the value of LocalTemperatureCalibration to the upper or lower limit reached.\n> [!NOTE]\n> NOTE: Prior to revision 8 of this cluster specification the value of this attribute was constrained to a range of -2.5°C to 2.5°C."
+        },
+        {
+          "id": 17,
+          "name": "OccupiedCoolingSetpoint",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the cooling mode setpoint when the room is occupied.\nRefer to Setpoint Limits for constraints.\nIf an attempt is made to set this attribute to a value greater than MaxCoolSetpointLimit or less than MinCoolSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.\nIf this attribute is set to a value that is less than (OccupiedHeatingSetpoint + MinSetpointDeadBand), the value of OccupiedHeatingSetpoint shall be adjusted to (OccupiedCoolingSetpoint - MinSetpointDeadBand).\nIf the occupancy status of the room is unknown, this attribute shall be used as the cooling mode setpoint.\nIf a client changes the value of this attribute, the server supports the PRES feature, and the server either does not support the OCC feature or the Occupied bit is set on the Occupancy attribute, the value of the ActivePresetHandle attribute shall be set to null."
+        },
+        {
+          "id": 18,
+          "name": "OccupiedHeatingSetpoint",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the heating mode setpoint when the room is occupied.\nRefer to Setpoint Limits for constraints.\nIf an attempt is made to set this attribute to a value greater than MaxHeatSetpointLimit or less than MinHeatSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.\nIf this attribute is set to a value that is greater than (OccupiedCoolingSetpoint - MinSetpointDeadBand), the value of OccupiedCoolingSetpoint shall be adjusted to (OccupiedHeatingSetpoint + MinSetpointDeadBand).\nIf the occupancy status of the room is unknown, this attribute shall be used as the heating mode setpoint.\nIf a client changes the value of this attribute, the server supports the PRES feature, and the server either does not support the OCC feature or the Occupied bit is set on the Occupancy attribute, the value of the ActivePresetHandle attribute shall be set to null."
+        },
+        {
+          "id": 19,
+          "name": "UnoccupiedCoolingSetpoint",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the cooling mode setpoint when the room is unoccupied.\nRefer to Setpoint Limits for constraints.\nIf an attempt is made to set this attribute to a value greater than MaxCoolSetpointLimit or less than MinCoolSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.\nIf this attribute is set to a value that is less than (UnoccupiedHeatingSetpoint + MinSetpointDeadBand), the value of UnoccupiedHeatingSetpoint shall be adjusted to (UnoccupiedCoolingSetpoint - MinSetpointDeadBand).\nIf the occupancy status of the room is unknown, this attribute shall NOT be used.\nIf a client changes the value of this attribute, the server supports the PRES and OCC features, and the Occupied bit is not set on the Occupancy attribute, the value of the ActivePresetHandle attribute shall be set to null."
+        },
+        {
+          "id": 20,
+          "name": "UnoccupiedHeatingSetpoint",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the heating mode setpoint when the room is unoccupied.\nRefer to Setpoint Limits for constraints.\nIf an attempt is made to set this attribute to a value greater than MaxHeatSetpointLimit or less than MinHeatSetpointLimit, a response with the status code CONSTRAINT_ERROR shall be returned.\nIf this attribute is set to a value that is greater than (UnoccupiedCoolingSetpoint - MinSetpointDeadBand), the value of UnoccupiedCoolingSetpoint shall be adjusted to (UnoccupiedHeatingSetpoint + MinSetpointDeadBand).\nIf the occupancy status of the room is unknown, this attribute shall NOT be used.\nIf a client changes the value of this attribute, the server supports the PRES and OCC features, and the Occupied bit is not set on the Occupancy attribute, the value of the ActivePresetHandle attribute shall be set to null."
+        },
+        {
+          "id": 21,
+          "name": "MinHeatSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the minimum level that the heating setpoint may be set to.\nThis attribute, and the following three attributes, allow the user to define setpoint limits more constrictive than the manufacturer imposed ones. Limiting users (e.g., in a commercial building) to such setpoint limits can help conserve power.\nRefer to Setpoint Limits for constraints. If an attempt is made to set this attribute to a value which conflicts with setpoint values then those setpoints shall be adjusted by the minimum amount to permit this attribute to be set to the desired value. If an attempt is made to set this attribute to a value which is not consistent with the constraints and cannot be resolved by modifying setpoints then a response with the status code CONSTRAINT_ERROR shall be returned."
+        },
+        {
+          "id": 22,
+          "name": "MaxHeatSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the maximum level that the heating setpoint may be set to.\nRefer to Setpoint Limits for constraints. If an attempt is made to set this attribute to a value which conflicts with setpoint values then those setpoints shall be adjusted by the minimum amount to permit this attribute to be set to the desired value. If an attempt is made to set this attribute to a value which is not consistent with the constraints and cannot be resolved by modifying setpoints then a response with the status code CONSTRAINT_ERROR shall be returned."
+        },
+        {
+          "id": 23,
+          "name": "MinCoolSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the minimum level that the cooling setpoint may be set to.\nRefer to Setpoint Limits for constraints. If an attempt is made to set this attribute to a value which conflicts with setpoint values then those setpoints shall be adjusted by the minimum amount to permit this attribute to be set to the desired value. If an attempt is made to set this attribute to a value which is not consistent with the constraints and cannot be resolved by modifying setpoints then a response with the status code CONSTRAINT_ERROR shall be returned."
+        },
+        {
+          "id": 24,
+          "name": "MaxCoolSetpointLimit",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the maximum level that the cooling setpoint may be set to.\nRefer to Setpoint Limits for constraints. If an attempt is made to set this attribute to a value which conflicts with setpoint values then those setpoints shall be adjusted by the minimum amount to permit this attribute to be set to the desired value. If an attempt is made to set this attribute to a value which is not consistent with the constraints and cannot be resolved by modifying setpoints then a response with the status code CONSTRAINT_ERROR shall be returned."
+        },
+        {
+          "id": 25,
+          "name": "MinSetpointDeadBand",
+          "type": "int8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "On devices which support the AUTO feature, this attribute shall indicate the minimum difference between the Heat Setpoint and the Cool Setpoint.\nRefer to Setpoint Limits for constraints.\n> [!NOTE]\n> NOTE: Prior to revision 8 of this cluster specification the value of this attribute was constrained to a range of 0°C to 2.5°C.\n> [!NOTE]\n> NOTE: For backwards compatibility, this attribute is optionally writeable. However any writes to this attribute shall be silently ignored."
+        },
+        {
+          "id": 26,
+          "name": "RemoteSensing",
+          "type": "RemoteSensingBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates when the local temperature, outdoor temperature and occupancy are being sensed by remote networked sensors, rather than internal sensors.\nIf the LTNE feature is present in the server, the LocalTemperature RemoteSensing bit value shall always report a value of 0.\nIf the LocalTemperature RemoteSensing bit is written with a value of 1 when the LTNE feature is present, the write shall fail and the server shall report a CONSTRAINT_ERROR."
+        },
+        {
+          "id": 27,
+          "name": "ControlSequenceOfOperation",
+          "type": "ControlSequenceOfOperationEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the overall operating environment of the thermostat, and thus the possible system modes that the thermostat can operate in.\nIf an attempt is made to write to this attribute, the server shall silently ignore the write and the value of this attribute shall remain unchanged. This behavior is in place for backwards compatibility with existing thermostats."
+        },
+        {
+          "id": 28,
+          "name": "SystemMode",
+          "type": "SystemModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the current operating mode of the thermostat. Its value shall be limited by the ControlSequenceOfOperation attribute."
+        },
+        {
+          "id": 30,
+          "name": "ThermostatRunningMode",
+          "type": "ThermostatRunningModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the running mode of the thermostat. This attribute uses the same values as SystemModeEnum but can only be Off, Cool or Heat. This attribute is intended to provide additional information when the thermostat's system mode is in auto mode."
+        },
+        {
+          "id": 35,
+          "name": "TemperatureSetpointHold",
+          "type": "TemperatureSetpointHoldEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the temperature hold status on the thermostat. If hold status is on, the thermostat SHOULD maintain the temperature setpoint for the current mode until a system mode change. If hold status is off, the thermostat SHOULD follow the setpoint transitions specified by its internal scheduling program. If the thermostat supports setpoint hold for a specific duration, it SHOULD also implement the TemperatureSetpointHoldDuration attribute.\nIf the server supports a setpoint hold for a specific duration, it SHOULD also implement the SetpointHoldExpiryTimestamp attribute.\nIf this attribute is updated to SetpointHoldOn and the TemperatureSetpointHoldDuration has a non-null value and the SetpointHoldExpiryTimestamp is supported, the server shall update the SetpointHoldExpiryTimestamp with a value of current UTC timestamp, in seconds, plus the value in TemperatureSetpointHoldDuration multiplied by 60.\nIf this attribute is updated to SetpointHoldOff and the SetpointHoldExpiryTimestamp is supported, the server shall set the SetpointHoldExpiryTimestamp to null."
+        },
+        {
+          "id": 36,
+          "name": "TemperatureSetpointHoldDuration",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the period in minutes for which a setpoint hold is active. Thermostats that support hold for a specified duration SHOULD implement this attribute. The null value indicates the field is unused. All other values are reserved.\nIf this attribute is updated to a non-null value and the TemperatureSetpointHold is set to SetpointHoldOn and the SetpointHoldExpiryTimestamp is supported, the server shall update SetpointHoldExpiryTimestamp with a value of current UTC timestamp, in seconds, plus the new value of this attribute multiplied by 60.\nIf this attribute is set to null and the SetpointHoldExpiryTimestamp is supported, the server shall set the SetpointHoldExpiryTimestamp to null."
+        },
+        {
+          "id": 41,
+          "name": "ThermostatRunningState",
+          "type": "RelayStateBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current relay state of the heat, cool, and fan relays.\nUnimplemented outputs shall be treated as if they were Off."
+        },
+        {
+          "id": 48,
+          "name": "SetpointChangeSource",
+          "type": "SetpointChangeSourceEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the source of the current active OccupiedCoolingSetpoint or OccupiedHeatingSetpoint (i.e., who or what determined the current setpoint).\nThis attribute enables service providers to determine whether changes to setpoints were initiated due to occupant comfort, scheduled programming or some other source (e.g., electric utility or other service provider). Because automation services may initiate frequent setpoint changes, this attribute clearly differentiates the source of setpoint changes made at the thermostat."
+        },
+        {
+          "id": 49,
+          "name": "SetpointChangeAmount",
+          "type": "int16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the delta between the current active OccupiedCoolingSetpoint or OccupiedHeatingSetpoint and the previous active setpoint. This attribute is meant to accompany the SetpointChangeSource attribute; devices implementing SetpointChangeAmount SHOULD also implement SetpointChangeSource.\nThe null value indicates that the previous setpoint was unknown."
+        },
+        {
+          "id": 50,
+          "name": "SetpointChangeSourceTimestamp",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the time in UTC at which the SetpointChangeAmount attribute change was recorded."
+        },
+        {
+          "id": 58,
+          "name": "EmergencyHeatDelta",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the delta between the Calculated Local Temperature and the OccupiedHeatingSetpoint or UnoccupiedHeatingSetpoint attributes at which the Thermostat server will operate in emergency heat mode.\nIf the difference between the Calculated Local Temperature and OccupiedCoolingSetpoint or UnoccupiedCoolingSetpoint is greater than or equal to the EmergencyHeatDelta and the Thermostat server's SystemMode attribute is in a heating-related mode, then the Thermostat server shall immediately switch to the SystemMode attribute value that provides the highest stage of heating (e.g., emergency heat) and continue operating in that running state until the OccupiedHeatingSetpoint value is reached. For example:\n  - Calculated Local Temperature = 10.0°C\n  - OccupiedHeatingSetpoint = 16.0°C\n  - EmergencyHeatDelta = 2.0°C\n=> OccupiedHeatingSetpoint - Calculated Local Temperature ≥? EmergencyHeatDelta\n  - => 16°C - 10°C ≥? 2°C\n=> TRUE >>> Thermostat server changes its SystemMode to operate in 2^nd stage or emergency heat mode\nThe purpose of this attribute is to provide Thermostat clients the ability to configure rapid heating when a setpoint is of a specified amount greater than the measured temperature. This allows the heated space to be quickly heated to the desired level set by the user."
+        },
+        {
+          "id": 64,
+          "name": "AcType",
+          "type": "ACTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the type of Mini Split ACTypeEnum of Mini Split AC is defined depending on how Cooling and Heating condition is achieved by Mini Split AC."
+        },
+        {
+          "id": 65,
+          "name": "AcCapacity",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates capacity of Mini Split AC in terms of the format defined by the ACCapacityFormat attribute"
+        },
+        {
+          "id": 66,
+          "name": "AcRefrigerantType",
+          "type": "ACRefrigerantTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates type of refrigerant used within the Mini Split AC."
+        },
+        {
+          "id": 67,
+          "name": "AcCompressorType",
+          "type": "ACCompressorTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the type of compressor used within the Mini Split AC."
+        },
+        {
+          "id": 68,
+          "name": "AcErrorCode",
+          "type": "ACErrorCodeBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the type of errors encountered within the Mini Split AC."
+        },
+        {
+          "id": 69,
+          "name": "AcLouverPosition",
+          "type": "ACLouverPositionEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the position of Louver on the AC."
+        },
+        {
+          "id": 70,
+          "name": "AcCoilTemperature",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the temperature of the AC coil, as measured locally or remotely (over the network)."
+        },
+        {
+          "id": 71,
+          "name": "AcCapacityFormat",
+          "type": "ACCapacityFormatEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the format for the ACCapacity attribute."
+        },
+        {
+          "id": 72,
+          "name": "PresetTypes",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "PresetTypeStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the supported PresetScenarioEnum values, limits on how many presets can be created for each PresetScenarioEnum, and whether or not a thermostat can transition automatically to a given scenario.\nThe list shall contain at least one entry. The list shall NOT be larger than the number of supported PresetScenarioEnum values (maximum 7). The list shall NOT contain any PresetTypeStruct entries with duplicate PresetScenarioEnum values."
+        },
+        {
+          "id": 73,
+          "name": "ScheduleTypes",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ScheduleTypeStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the supported SystemMode values for Schedules, limits on how many schedules can be created for each SystemMode value, and whether or not a given SystemMode value supports transitions to Presets, target setpoints, or both.\nThe list shall contain at least one entry. The list shall NOT be larger than the number of supported schedule SystemMode values (maximum 3, since the data type only allows Auto, Heat and Cool). The list shall NOT contain any ScheduleTypeStruct entries with duplicate SystemModeEnum values."
+        },
+        {
+          "id": 74,
+          "name": "NumberOfPresets",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum number of entries supported by the Presets attribute."
+        },
+        {
+          "id": 75,
+          "name": "NumberOfSchedules",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum number of entries supported by the Schedules attribute."
+        },
+        {
+          "id": 76,
+          "name": "NumberOfScheduleTransitions",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum number of transitions per Schedules attribute entry."
+        },
+        {
+          "id": 77,
+          "name": "NumberOfScheduleTransitionPerDay",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum number of transitions per day of the week supported by each Schedules attribute entry. If this value is null, there is no limit on the number of transitions per day."
+        },
+        {
+          "id": 78,
+          "name": "ActivePresetHandle",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the PresetHandle of the active preset. If this attribute is null, then there is no active preset."
+        },
+        {
+          "id": 79,
+          "name": "ActiveScheduleHandle",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the ScheduleHandle of the active schedule. A null value in this attribute indicates that there is no active schedule."
+        },
+        {
+          "id": 80,
+          "name": "Presets",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "PresetStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute shall contain the current list of configured presets.\nOn receipt of a write request:\n  1. If the PresetHandle field is null, the PresetStruct shall be treated as an added preset, and the device shall create a new unique value for the PresetHandle field.\n  1. If the BuiltIn field is true, a response with the status code CONSTRAINT_ERROR shall be returned.\n  2. If the PresetHandle field is not null, the PresetStruct shall be treated as a modification of an existing preset.\n  1. If the value of the PresetHandle field does not match any of the existing presets, a response with the status code NOT_FOUND shall be returned.\n  2. If the value of the PresetHandle field is duplicated on multiple presets in the updated list, a response with the status code CONSTRAINT_ERROR shall be returned.\n  3. If the BuiltIn field is true, and the PresetStruct in the current value with a matching PresetHandle field has a BuiltIn field set to false, a response with the status code CONSTRAINT_ERROR shall be returned.\n  4. If the BuiltIn field is false, and the PresetStruct in the current value with a matching PresetHandle field has a BuiltIn field set to true, a response with the status code CONSTRAINT_ERROR shall be returned.\n  3. If the specified PresetScenarioEnum value does not exist in PresetTypes, a response with the status code CONSTRAINT_ERROR shall be returned.\n  4. If the Name is set, but the associated PresetTypeStruct does not have the SupportsNames bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  5. If appending the received PresetStruct to the pending list of Presets would cause the total number of pending presets to exceed the value of the NumberOfPresets attribute, a response with the status code RESOURCE_EXHAUSTED shall be returned.\n  6. If appending the received PresetStruct to the pending list of Presets would cause the total number of pending presets whose PresetScenario field matches the appended preset's PresetScenario field to exceed the value of the NumberOfPresets field on the PresetTypeStruct whose PresetScenario matches the appended preset's PresetScenario field, a response with the status code RESOURCE_EXHAUSTED shall be returned.\n  7. Otherwise, the write shall be pended until receipt of a commit request, and the status code SUCCESS shall be returned.\n  1. If the BuiltIn field is null:\n  1. If there is a PresetStruct in the current value with a matching PresetHandle field, the BuiltIn field on the pending PresetStruct shall be set to the value of the BuiltIn on the matching PresetStruct.\n  2. Otherwise, the BuiltIn field on the pending PresetStruct shall be set to false.\nOn an attempt to commit, the status of this attribute shall be determined as follows:\n  1. For all existing presets:\n  1. If, after applying all pending changes, the updated value of the Presets attribute would not contain a PresetStruct with a matching PresetHandle field, indicating the removal of the PresetStruct, the server shall check for invalid removal of the PresetStruct:\n  1. If the BuiltIn field is true on the removed PresetStruct, the attribute status shall be CONSTRAINT_ERROR.\n  2. If the MSCH feature is supported and the removed PresetHandle would be referenced by any PresetHandle on any ScheduleTransitionStruct on any ScheduleStruct in the updated value of the Schedules attribute, the attribute status shall be INVALID_IN_STATE.\n  3. If the removed PresetHandle is equal to the value of the ActivePresetHandle attribute, the attribute status shall be INVALID_IN_STATE.\n  2. Otherwise, the attribute status shall be SUCCESS."
+        },
+        {
+          "id": 81,
+          "name": "Schedules",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ScheduleStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute shall contain a list of ScheduleStructs.\nOn receipt of a write request:\n  1. For all schedules in the write request:\n  1. If the ScheduleHandle field is null, the ScheduleStruct shall be treated as an added schedule, and the device shall create a new unique value for the ScheduleHandle field.\n  1. If the BuiltIn field is true, a response with the status code CONSTRAINT_ERROR shall be returned.\n  2. Otherwise, if the ScheduleHandle field is not null, the ScheduleStruct shall be treated as a modification of an existing schedule.\n  1. If the value of the ScheduleHandle field does not match any of the existing schedules, a response with the status code NOT_FOUND shall be returned.\n  2. If the BuiltIn field is true, and the ScheduleStruct in the current value with a matching ScheduleHandle field has a BuiltIn field set to false, a response with the status code CONSTRAINT_ERROR shall be returned.\n  3. If the BuiltIn field is false, and the ScheduleStruct in the current value with a matching ScheduleHandle field has a BuiltIn field set to true, a response with the status code CONSTRAINT_ERROR shall be returned.\n  3. If the specified SystemMode does not exist in ScheduleTypes, a response with the status code CONSTRAINT_ERROR shall be returned.\n  4. If the number of transitions exceeds the NumberOfScheduleTransitions value, a response with the status code RESOURCE_EXHAUSTED shall be returned.\n  5. If the value of the NumberOfScheduleTransitionPerDay attribute is not null, and the number of transitions on any single day of the week exceeds the NumberOfScheduleTransitionPerDay value, a response with the status code RESOURCE_EXHAUSTED shall be returned.\n  6. If the PresetHandle field is present, but the associated ScheduleTypeStruct does not have the SupportsPresets bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  7. If the PresetHandle field is present, but after applying all pending changes, the Presets attribute would not contain a PresetStruct whose PresetHandle field matches the value of the PresetHandle field, a response with the status code CONSTRAINT_ERROR shall be returned.\n  8. If the Name is set, but the associated ScheduleTypeStruct does not have the SupportsNames bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  9. For all transitions in all schedules in the write request:\n  1. If the PresetHandle field is present, but the ScheduleTypeStruct matching the value of the SystemMode field on the encompassing ScheduleStruct does not have the SupportsPresets bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  10. If the PresetHandle field is present, but after applying all pending changes, the Presets attribute would not contain a PresetStruct whose PresetHandle field matches the value of the PresetHandle field, a response with the status code CONSTRAINT_ERROR shall be returned.\n  1. If the SystemMode field is present, but the ScheduleTypeStruct matching the value of the SystemMode field on the encompassing ScheduleStruct does not have the SupportsSetpoints bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  2. If the SystemMode field is has a value of SystemModeOff, but the ScheduleTypeStruct matching the value of the SystemMode field on the encompassing ScheduleStruct does not have the SupportsOff bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  11. If the HeatingSetpoint field is present, but the ScheduleTypeStruct matching the value of the SystemMode field on the encompassing ScheduleStruct does not have the SupportsSetpoints bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  12. If the CoolingSetpoint field is present, but the ScheduleTypeStruct matching the value of the SystemMode field on the encompassing ScheduleStruct does not have the SupportsSetpoints bit set, a response with the status code CONSTRAINT_ERROR shall be returned.\n  2. If appending the received ScheduleStruct to the pending list of Schedules would cause the total number of pending schedules to exceed the value of the NumberOfSchedules attribute, a response with the status code RESOURCE_EXHAUSTED shall be returned.\n  3. If appending the received ScheduleStruct to the pending list of Schedules would cause the total number of pending schedules whose SystemMode field matches the appended schedule's SystemMode field to exceed the value of the NumberOfSchedules field on the ScheduleTypeStruct whose SystemMode field matches the appended schedule's SystemMode field, a response with the status code RESOURCE_EXHAUSTED shall be returned.\n  4. Otherwise, the write shall be pended until receipt of a commit request, and the attribute status shall be SUCCESS.\n  1. If the BuiltIn field is null:\n  1. If there is a ScheduleStruct in the current value with a matching ScheduleHandle field, the BuiltIn field on the pending ScheduleStruct shall be set to the value of the BuiltIn on the matching ScheduleStruct.\n  2. Otherwise, the BuiltIn field on the pending ScheduleStruct shall be set to false.\nOn an attempt to commit, the status of this attribute shall be determined as follows:\n  1. For all existing schedules:\n  1. If, after applying all pending changes, the updated value of the Schedules attribute would not contain a ScheduleStruct with a matching ScheduleHandle field, indicating the removal of the ScheduleStruct, the server shall check for invalid removal of the ScheduleStruct:\n  1. If the BuiltIn field is true on the removed ScheduleStruct, the attribute status shall be CONSTRAINT_ERROR.\n  2. If the removed ScheduleHandle is equal to the value of the ActiveScheduleHandle attribute, the attribute status shall be INVALID_IN_STATE.\n  2. Otherwise, the attribute status shall be SUCCESS."
+        },
+        {
+          "id": 82,
+          "name": "SetpointHoldExpiryTimestamp",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "If there is a known time when the TemperatureSetpointHold shall be cleared, this attribute shall contain the timestamp in UTC indicating when that will happen. If there is no such known time, this attribute shall be null.\nIf the TemperatureSetpointHold is set to SetpointHoldOn and the TemperatureSetpointHoldDuration is set to null, this attribute shall be set to null indicating there is a hold on the Thermostat without a duration.\nIf the TemperatureSetpointHold is set to SetpointHoldOff, this attribute shall be set to null indicating there is no hold on the Thermostat."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SetpointRaiseLower",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Mode",
+              "type": "SetpointRaiseLowerModeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The field shall specify which setpoints are to be adjusted."
+            },
+            {
+              "id": 1,
+              "name": "Amount",
+              "type": "int8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the amount (possibly negative) that should be added to the setpoint(s), in steps of 0.1°C."
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "SetActiveScheduleRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ScheduleHandle",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the value of the ScheduleHandle field on the ScheduleStruct to be made active."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "SetActivePresetRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PresetHandle",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall specify the value of the PresetHandle field on the PresetStruct to be made active. If the field is set to null, that indicates there should be no active preset."
+            }
+          ]
+        },
+        {
+          "id": 253,
+          "name": "AtomicResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "StatusCode",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "AttributeStatus",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ThermostatAttributeStatusEntryStruct",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Timeout",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 254,
+          "name": "AtomicRequest",
+          "direction": "request",
+          "responseId": 253,
+          "fields": [
+            {
+              "id": 0,
+              "name": "RequestType",
+              "type": "enum8",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "AttributeRequests",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "attrib-id",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Timeout",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "ACCapacityFormatEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "BtUh",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ACCompressorTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "T1",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "T2",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "T3",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ACErrorCodeBitmap",
+          "base": "map32",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "CompressorFail",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "RoomSensorFail",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "OutdoorSensorFail",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "CoilSensorFail",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "FanFail",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ACLouverPositionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 1,
+              "name": "Closed",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Open",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Quarter",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Half",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "ThreeQuarters",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ACRefrigerantTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "R22",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "R410A",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "R407C",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ACTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "CoolingFixed",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "HeatPumpFixed",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "CoolingInverter",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "HeatPumpInverter",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ControlSequenceOfOperationEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "> [!NOTE]\n> NOTE: A thermostat indicating it supports CoolingAndHeating (or CoolingAndHeatingWithReheat) SHOULD be able to request heating or cooling on demand and will usually support the Auto SystemMode.\nSystems which support cooling or heating, requiring external intervention to change modes or where the whole building must be in the same mode, SHOULD report CoolingOnly or HeatingOnly based on the current capability.",
+          "values": [
+            {
+              "value": 0,
+              "name": "CoolingOnly",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "CoolingWithReheat",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "HeatingOnly",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "HeatingWithReheat",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "CoolingAndHeating",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "CoolingAndHeatingWithReheat",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "OccupancyBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Occupied",
+              "description": "If this bit is set, it shall indicate the occupied state else if the bit if not set, it shall indicate the unoccupied state."
+            }
+          ]
+        },
+        {
+          "name": "PresetScenarioEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 1,
+              "name": "Occupied",
+              "description": "This value shall indicate the preset for periods when the thermostat's temperature-controlled area is occupied. It is intended for thermostats that can automatically determine occupancy."
+            },
+            {
+              "value": 2,
+              "name": "Unoccupied",
+              "description": "This value shall indicate the preset for periods when the thermostat's temperature-controlled area is unoccupied. It is intended for thermostats that can automatically determine occupancy."
+            },
+            {
+              "value": 3,
+              "name": "Sleep",
+              "description": "This value shall indicate the preset for periods when users are likely to be asleep."
+            },
+            {
+              "value": 4,
+              "name": "Wake",
+              "description": "This value shall indicate the preset for periods when users are likely to be waking up."
+            },
+            {
+              "value": 5,
+              "name": "Vacation",
+              "description": "This value shall indicate the preset for periods when users are on vacation, or otherwise out-of-home for extended periods of time."
+            },
+            {
+              "value": 6,
+              "name": "GoingToSleep",
+              "description": "This value shall indicate the preset for periods when users are likely to be going to sleep."
+            },
+            {
+              "value": 254,
+              "name": "UserDefined",
+              "description": "This value shall indicate a free-form preset; when set, the Name field on PresetStruct shall NOT be null."
+            }
+          ]
+        },
+        {
+          "name": "PresetStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PresetHandle",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate a device generated identifier for this preset. It shall be unique on the device, and shall NOT be reused after the associated preset has been deleted.\nThis field shall only be null when the encompassing PresetStruct is appended to the Presets attribute for the purpose of creating a new Preset. Refer to Presets for the creation of Preset handles."
+            },
+            {
+              "id": 1,
+              "name": "PresetScenario",
+              "type": "PresetScenarioEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the associated PresetScenarioEnum value for this preset."
+            },
+            {
+              "id": 2,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate a name provided by a user. The null value shall indicate no name.\nWithin each subset of presets sharing the same PresetScenario field value, there shall NOT be any presets with the same value, including null as a value, in the Name field."
+            },
+            {
+              "id": 3,
+              "name": "CoolingSetpoint",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the cooling setpoint for the preset. Refer to Setpoint Limits for value constraints."
+            },
+            {
+              "id": 4,
+              "name": "HeatingSetpoint",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the heating setpoint for the preset. Refer to Setpoint Limits for value constraints."
+            },
+            {
+              "id": 5,
+              "name": "BuiltIn",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate whether the preset is marked as \"built-in\", meaning that it can be modified, but it cannot be deleted."
+            }
+          ]
+        },
+        {
+          "name": "PresetTypeFeaturesBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Automatic",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "SupportsNames",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "PresetTypeStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PresetScenario",
+              "type": "PresetScenarioEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a PresetScenarioEnum value supported by this thermostat."
+            },
+            {
+              "id": 1,
+              "name": "NumberOfPresets",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a limit for the number of presets for this PresetScenarioEnum."
+            },
+            {
+              "id": 2,
+              "name": "PresetTypeFeatures",
+              "type": "PresetTypeFeaturesBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a bitmap of features for this PresetTypeStruct."
+            }
+          ]
+        },
+        {
+          "name": "RelayStateBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Heat",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "Cool",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "Fan",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "HeatStage2",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "CoolStage2",
+              "description": null
+            },
+            {
+              "bit": 5,
+              "name": "FanStage2",
+              "description": null
+            },
+            {
+              "bit": 6,
+              "name": "FanStage3",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "RemoteSensingBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "LocalTemperature",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "OutdoorTemperature",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "Occupancy",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ScheduleDayOfWeekBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Sunday",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "Monday",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "Tuesday",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "Wednesday",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "Thursday",
+              "description": null
+            },
+            {
+              "bit": 5,
+              "name": "Friday",
+              "description": null
+            },
+            {
+              "bit": 6,
+              "name": "Saturday",
+              "description": null
+            },
+            {
+              "bit": 7,
+              "name": "Away",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ScheduleModeBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "HeatSetpointPresent",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "CoolSetpointPresent",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ScheduleStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ScheduleHandle",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate a device generated identifier for this schedule. It shall be unique on the device, and shall NOT be reused after the associated schedule has been deleted.\nThis field shall only be null when the encompassing ScheduleStruct is appended to the Schedules attribute for the purpose of creating a new Schedule. Refer to Schedules for the creation of Schedule handles."
+            },
+            {
+              "id": 1,
+              "name": "SystemMode",
+              "type": "SystemModeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the default thermostat system mode for transitions in this schedule. The only valid values for this field shall be Auto, Heat, and Cool."
+            },
+            {
+              "id": 2,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify a name for the ScheduleStruct."
+            },
+            {
+              "id": 3,
+              "name": "PresetHandle",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the default PresetHandle value for transitions in this schedule."
+            },
+            {
+              "id": 4,
+              "name": "Transitions",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ScheduleTransitionStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a list of transitions for the schedule.\nThis field shall NOT contain more than one ScheduleStruct with the same TransitionTime field and overlapping DayOfWeek fields; i.e. there shall be no duplicate transitions.\nIf the NumberOfScheduleTransitionPerDay attribute is not null, then for each bit in ScheduleDayOfWeekBitmap, the number of transitions with that bit set in DayOfWeek shall NOT be greater than the value of the NumberOfScheduleTransitionPerDay attribute.\nFor the purposes of determining which ScheduleStruct in this list is currently active, the current time shall be the number of minutes past midnight in the display value of the current time, not the actual number of minutes that have elapsed since midnight. On days which transition into or out of daylight saving time, certain values may repeat or not occur during the transition period.\nA ScheduleTransitionStruct in this list shall be active if the current day of the week matches its DayOfWeek field and the current time is greater than or equal to the TransitionTime, but less than the TransitionTime on any other ScheduleTransitionStruct in the Transitions field whose DayOfWeek field also matches the current day of the week.\nIf the current time is less than every ScheduleTransitionStruct whose DayOfWeek field also matches the current day of the week, the server shall attempt the same process to identify the active ScheduleTransitionStruct for the day preceding the previously attempted day of the week, repeating until an active ScheduleTransitionStruct is found or the attempted day is the current day of the week again. If no active ScheduleTransitionStruct is found, then the active ScheduleTransitionStruct shall be the ScheduleTransitionStruct with the largest TransitionTime field from the set of ScheduleTransitionStructs whose DayOfWeek field matches the current day of the week."
+            },
+            {
+              "id": 5,
+              "name": "BuiltIn",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate whether the schedule is marked as \"built-in\", meaning that it can be modified, but it cannot be deleted."
+            }
+          ]
+        },
+        {
+          "name": "ScheduleTransitionStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This struct provides a time of day and a set of days of the week for a state transition within a schedule. The thermostat shall use the following order of precedence for determining a new setpoint at the time of transition:\n  1. If the PresetHandle field is provided, then the setpoint for the PresetStruct in the Presets attribute with that identifier shall be used\n  2. If either the HeatingSetpoint or CoolingSetpoint is provided, then it shall be used\n  1. If the SystemMode field is provided, the HeatingSetpoint and CoolingSetpoint fields shall be interpreted using the SystemMode field\n  2. If the SystemMode field is not provided, the HeatingSetpoint and CoolingSetpoint fields shall be interpreted using the SystemMode field on the parent ScheduleStruct\n  3. If neither the PresetHandle field or any Setpoint field is provided, then the PresetHandle field on the parent ScheduleStruct shall be used to determine the active PresetStruct\n  4. If the PresetHandle is not indicated and no setpoint is provided for the current SystemMode, the server shall use a default value for the current SystemMode.\nIf the setpoint was derived from a preset, then the ActivePresetHandle shall be set to the PresetHandle of that preset.\nIf a CoolingSetpoint was used to determine the cooling setpoint:\n  - If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the UnoccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint\n  - Otherwise, the OccupiedCoolingSetpoint attribute shall be set to the CoolingSetpoint\nIf a HeatingSetpoint was used to determine the heating setpoint:\n  - If the server supports the OCC feature, and the Occupied bit is not set on the Occupancy attribute, then the UnoccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint\n  - Otherwise, the OccupiedHeatingSetpoint attribute shall be set to the HeatingSetpoint\nThe ScheduleTransitionStruct shall be invalid if all the following are true:\n  - The HeatingSetpoint field is not provided\n  - The PresetHandle field is not provided\n  - The PresetHandle field on the encompassing ScheduleStruct is not provided\n  - The SystemMode field is provided and has the value Heat or Auto, or the SystemMode field on the parent ScheduleStruct has the value Heat or Auto\nThe ScheduleTransitionStruct shall be invalid if all the following are true:\n  - The CoolingSetpoint field is not provided\n  - The PresetHandle field is not provided\n  - The PresetHandle field on the encompassing ScheduleStruct is not provided\n  - The SystemMode field is provided and has the value Cool or Auto, or the SystemMode field on the parent ScheduleStruct has the value Cool or Auto",
+          "fields": [
+            {
+              "id": 0,
+              "name": "DayOfWeek",
+              "type": "ScheduleDayOfWeekBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a bitmask of days of the week that the transition applies to. The Vacation bit shall NOT be set; vacation schedules shall be set via the vacation preset."
+            },
+            {
+              "id": 1,
+              "name": "TransitionTime",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This shall specify the time of day at which the transition becomes active, in terms of minutes within the day representing the wall clock, where 0 is 00:00:00, 1 is 00:01:00 and 1439 is 23:59:00.\nHandling of transitions during the changeover of Daylight Saving Time is implementation-dependent."
+            },
+            {
+              "id": 2,
+              "name": "PresetHandle",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the preset used at the TransitionTime. If this field is provided, then the SystemMode, CoolingSetpoint and HeatingSetpoint fields shall NOT be provided."
+            },
+            {
+              "id": 3,
+              "name": "SystemMode",
+              "type": "SystemModeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": true,
+              "description": "This shall specify the default mode to which the thermostat will switch for this transition, overriding the default for the schedule. The only valid values for this field shall be Auto, Heat, Cool and Off. This field shall only be included when the required system mode differs from the schedule's default SystemMode."
+            },
+            {
+              "id": 4,
+              "name": "CoolingSetpoint",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the cooling setpoint for the transition. If PresetHandle is set, this field shall NOT be included. Refer to Setpoint Limits for value constraints."
+            },
+            {
+              "id": 5,
+              "name": "HeatingSetpoint",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the cooling setpoint for the transition. If PresetHandle is set, this field shall NOT be included. Refer to Setpoint Limits for value constraints."
+            }
+          ]
+        },
+        {
+          "name": "ScheduleTypeFeaturesBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "SupportsPresets",
+              "description": "This bit shall indicate that any ScheduleStruct with a SystemMode field whose value matches the SystemMode field on the encompassing ScheduleTypeStruct supports specifying presets on ScheduleTransitionStructs contained in its Transitions field."
+            },
+            {
+              "bit": 1,
+              "name": "SupportsSetpoints",
+              "description": "This bit shall indicate that any ScheduleStruct with a SystemMode field whose value matches the SystemMode field on the encompassing ScheduleTypeStruct supports specifying setpoints on ScheduleTransitionStructs contained in its Transitions field."
+            },
+            {
+              "bit": 2,
+              "name": "SupportsNames",
+              "description": "This bit shall indicate that any ScheduleStruct with a SystemMode field whose value matches the SystemMode field on the encompassing ScheduleTypeStruct supports setting the value of the Name field."
+            },
+            {
+              "bit": 3,
+              "name": "SupportsOff",
+              "description": "This bit shall indicate that any ScheduleStruct with a SystemMode field whose value matches the SystemMode field on the encompassing ScheduleTypeStruct supports setting its SystemMode field to Off."
+            }
+          ]
+        },
+        {
+          "name": "ScheduleTypeStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "SystemMode",
+              "type": "SystemModeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a SystemModeEnum supported by this thermostat for Schedules. The only valid values for this field shall be Auto, Heat, and Cool."
+            },
+            {
+              "id": 1,
+              "name": "NumberOfSchedules",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a limit for the number of Schedules for this SystemMode."
+            },
+            {
+              "id": 2,
+              "name": "ScheduleTypeFeatures",
+              "type": "ScheduleTypeFeaturesBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a bitmap of features for this schedule entry. At least one of SupportsPresets and SupportsSetpoints shall be set."
+            }
+          ]
+        },
+        {
+          "name": "SetpointChangeSourceEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Manual",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Schedule",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "External",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SetpointRaiseLowerModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Heat",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Cool",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Both",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SignedTemperature",
+          "base": "int8",
+          "kind": "scalar",
+          "description": "This data type is derived from int8 and represents a temperature from -12.7°C to 12.7°C with a resolution of 0.1°C.\n  - value = (temperature in °C) x 10\n  - -4°C => -40\n  - 12.3°C => 123\nThis type is employed where compactness of representation is important and where the resolution and range are still satisfactory."
+        },
+        {
+          "name": "StartOfWeekEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Sunday",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Monday",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Tuesday",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Wednesday",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Thursday",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Friday",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Saturday",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SystemModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Off",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Auto",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Cool",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Heat",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "EmergencyHeat",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Precooling",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "FanOnly",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Dry",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Sleep",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TemperatureDifference",
+          "base": "int16",
+          "kind": "scalar",
+          "description": "This data type is derived from int16 and represents a temperature difference with a resolution of 0.01°C.\n  - value = (temperature in °C) x 100\n  - -4°C => -400\n  - 123.45°C => 12345\nThe full (non-null) range of -327.67°C to 327.67°C may be used."
+        },
+        {
+          "name": "TemperatureSetpointHoldEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "SetpointHoldOff",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "SetpointHoldOn",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ThermostatAttributeStatusEntryStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AttributeId",
+              "type": "attrib-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "StatusCode",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ThermostatRunningModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Off",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Cool",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Heat",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "UnsignedTemperature",
+          "base": "uint8",
+          "kind": "scalar",
+          "description": "This data type is derived from uint8 and represents a temperature from 0°C to 25.5°C with a resolution of 0.1°C.\n  - value = (temperature in °C) x 10\n  - 4°C => 40\n  - 12.3°C => 123\nThis type is employed where compactness of representation is important and where the resolution and range are still satisfactory."
+        },
+        {
+          "name": "WeeklyScheduleTransitionStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This represents a single transition in a Thermostat schedule",
+          "fields": [
+            {
+              "id": 0,
+              "name": "TransitionTime",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the start time of the schedule transition during the associated day. The time will be represented by a 16 bits unsigned integer to designate the minutes since midnight. For example, 6am will be represented by 360 minutes since midnight and 11:30pm will be represented by 1410 minutes since midnight."
+            },
+            {
+              "id": 1,
+              "name": "HeatSetpoint",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall represent the heat setpoint to be applied at this associated transition start time."
+            },
+            {
+              "id": 2,
+              "name": "CoolSetpoint",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall represent the cool setpoint to be applied at this associated transition start time."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 514,
+      "name": "FanControl",
+      "revision": 6,
+      "features": [
+        {
+          "bit": 0,
+          "code": "SPD",
+          "name": "MultiSpeed",
+          "description": "Legacy Fan Control cluster revision 0-1 defined 3 speeds (low, medium and high) plus automatic speed control but left it up to the implementer to decide what was supported. Therefore, it is assumed that legacy client implementations are capable of determining, from the server, the number of speeds supported between 1, 2, or 3, and whether automatic speed control is supported.\nThe MultiSpeed feature includes attributes that support a running fan speed value from 0 to SpeedMax.\nSee Section 4.4.6.6.1, \"Speed Rules\" for more details."
+        },
+        {
+          "bit": 1,
+          "code": "AUT",
+          "name": "Auto",
+          "description": "Automatic mode supported for fan speed"
+        },
+        {
+          "bit": 2,
+          "code": "RCK",
+          "name": "Rocking",
+          "description": "Rocking movement supported"
+        },
+        {
+          "bit": 3,
+          "code": "WND",
+          "name": "Wind",
+          "description": "Wind emulation supported"
+        },
+        {
+          "bit": 4,
+          "code": "STEP",
+          "name": "Step",
+          "description": "Step command supported"
+        },
+        {
+          "bit": 5,
+          "code": "DIR",
+          "name": "AirflowDirection",
+          "description": "Airflow Direction attribute is supported"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "FanMode",
+          "type": "FanModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the current speed mode of the fan.\nThis attribute shall be set to one of the values in FanModeEnum supported by the server as indicated in the FanModeSequence attribute. The Low value shall be supported if and only if the FanModeSequence attribute value is less than 4. The Medium value shall be supported if and only if the FanModeSequence attribute value is 0 or 2.\nThis attribute may be written by a client to request a different fan mode. The server shall return INVALID_IN_STATE to indicate that the fan is not in a state where this attribute can be changed to the requested value.\nThe server may have values that this attribute can never be set to or that will be ignored by the server. For example, where this cluster appears on the same or another endpoint as other clusters with a system dependency, for example the Thermostat cluster, attempting to set this attribute to Off may not be allowed by the system.\nIf an attempt is made to set this attribute to a value not supported by the server as indicated in the FanModeSequence attribute, the server shall respond with CONSTRAINT_ERROR.\nWhen this attribute is successfully written to, the PercentSetting and SpeedSetting (if present) attributes shall be set to appropriate values, as defined by Section 4.4.6.3.1, \"Percent Rules\" and Section 4.4.6.6.1, \"Speed Rules\" respectively, unless otherwise specified below.\nWhen this attribute is set to any valid value, the PercentCurrent and SpeedCurrent (if present) attributes shall indicate the actual currently operating fan speed, unless otherwise specified below."
+        },
+        {
+          "id": 1,
+          "name": "FanModeSequence",
+          "type": "FanModeSequenceEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute indicates the fan speed ranges that shall be supported by the server."
+        },
+        {
+          "id": 2,
+          "name": "PercentSetting",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the speed setting for the fan with a value of 0 indicating that the fan is off and a value of 100 indicating that the fan is set to run at its maximum speed. If the FanMode attribute is set to Auto, the value of this attribute shall be set to null.\nThis attribute may be written to by a client to indicate a new fan speed. If a client writes null to this attribute, the attribute value shall NOT change. If the fan is in a state where this attribute cannot be changed to the requested value, the server shall return INVALID_IN_STATE.\nWhen this attribute is successfully written, the server shall set the value of the FanMode and SpeedSetting (if present) attributes to values that abide by the mapping requirements listed below."
+        },
+        {
+          "id": 3,
+          "name": "PercentCurrent",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the actual currently operating fan speed, or zero to indicate that the fan is off. There may be a temporary mismatch between the value of this attribute and the value of the PercentSetting attribute due to other system requirements or constraints that would not allow the fan to operate at the requested setting.\nFor example, if the value of this attribute is currently 50%, and the PercentSetting attribute is newly set to 25%, the value of this attribute may stay above 25% for a period necessary to dissipate internal heat, maintain product operational safety, etc.\nWhen the value of the FanMode attribute is AUTO, the value of this attribute may vary across the range over time.\nSee Section 4.4.6.3.1, \"Percent Rules\" for more details."
+        },
+        {
+          "id": 4,
+          "name": "SpeedMax",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value to which the SpeedSetting attribute can be set."
+        },
+        {
+          "id": 5,
+          "name": "SpeedSetting",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the speed setting for the fan. This attribute may be written by a client to indicate a new fan speed. If the FanMode attribute is set to Auto, the value of this attribute shall be set to null.\nThe server shall support all values between 0 and SpeedMax.\nIf a client writes null to this attribute, the attribute value shall NOT change. If the fan is in a state where this attribute cannot be changed to the requested value, the server shall return INVALID_IN_STATE.\nWhen this attribute is successfully written to, the server shall set the value of the FanMode and PercentSetting attributes to values that abide by the mapping requirements listed below."
+        },
+        {
+          "id": 6,
+          "name": "SpeedCurrent",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the actual currently operating fan speed, or zero to indicate that the fan is off. There may be a temporary mismatch between the value of this attribute and the value of the SpeedSetting attribute due to other system requirements or constraints that would not allow the fan to operate at the requested setting.\nFor example, if the value of this attribute is currently 5, and the SpeedSetting attribute is newly set to 2, the value of this attribute may stay above 2 for a period necessary to dissipate internal heat, maintain product operational safety, etc.\nWhen the value of the FanMode attribute is AUTO, the value of this attribute may vary across the range over time.\nSee Section 4.4.6.6.1, \"Speed Rules\" for more details."
+        },
+        {
+          "id": 7,
+          "name": "RockSupport",
+          "type": "RockBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute is a bitmap that indicates the rocking motions that are supported by the server.\nIf this attribute is supported by the server, at least one bit shall be set in this attribute."
+        },
+        {
+          "id": 8,
+          "name": "RockSetting",
+          "type": "RockBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute is a bitmap that indicates the currently active fan rocking motion setting. Each bit shall only be set to 1, if the corresponding bit in the RockSupport attribute is set to 1, otherwise a status code of CONSTRAINT_ERROR shall be returned.\nIf a combination of supported bits is set by a client, and the server does not support the combination, the lowest supported single bit in the combination shall be set and active, and all other bits shall indicate zero.\n> [!NOTE]\n> For example: If RockUpDown and RockRound are both set, but this combination is not possible, then only RockUpDown becomes active."
+        },
+        {
+          "id": 9,
+          "name": "WindSupport",
+          "type": "WindBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute is a bitmap that indicates what wind modes are supported by the server.\nIf this attribute is supported by the server, at least one bit shall be set in this attribute."
+        },
+        {
+          "id": 10,
+          "name": "WindSetting",
+          "type": "WindBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute is a bitmap that indicates the current active fan wind feature settings. Each bit shall only be set to 1, if the corresponding bit in the WindSupport attribute is set to 1, otherwise a status code of CONSTRAINT_ERROR shall be returned.\nIf a combination of supported bits is set by a client, and the server does not support the combination, the lowest supported single bit in the combination shall be set and active, and all other bits shall indicate zero.\n> [!NOTE]\n> For example: If Sleep Wind and Natural Wind are set, but this combination is not possible, then only Sleep Wind becomes active."
+        },
+        {
+          "id": 11,
+          "name": "AirflowDirection",
+          "type": "AirflowDirectionEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the current airflow direction of the fan. This attribute may be written by a client to indicate a new airflow direction for the fan. This attribute shall be set to one of the values in the AirflowDirectionEnum table."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "Step",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Direction",
+              "type": "StepDirectionEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate whether the speed-oriented attributes increase or decrease to the next step value."
+            },
+            {
+              "id": 1,
+              "name": "Wrap",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate if the speed-oriented attributes wrap between highest and lowest step value."
+            },
+            {
+              "id": 2,
+              "name": "LowestOff",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate that the fan being off (FanMode = Off, PercentSetting = 0, or SpeedSetting = 0) is included as a step value."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AirflowDirectionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Forward",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Reverse",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "FanModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Off",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "On",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Auto",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Smart",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "FanModeSequenceEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "OffLowMedHigh",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "OffLowHigh",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "OffLowMedHighAuto",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "OffLowHighAuto",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "OffHighAuto",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "OffHigh",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "RockBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "RockLeftRight",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "RockUpDown",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "RockRound",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "StepDirectionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Increase",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Decrease",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "WindBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "SleepWind",
+              "description": "The fan speed, based on current settings, shall gradually slow down to a final minimum speed. For this process, the sequence, speeds and duration are MS."
+            },
+            {
+              "bit": 1,
+              "name": "NaturalWind",
+              "description": "The fan speed shall vary to emulate natural wind. For this setting, the sequence, speeds and duration are MS."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 516,
+      "name": "ThermostatUserInterfaceConfiguration",
+      "revision": 2,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "TemperatureDisplayMode",
+          "type": "TemperatureDisplayModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the units of the temperature displayed on the thermostat screen."
+        },
+        {
+          "id": 1,
+          "name": "KeypadLockout",
+          "type": "KeypadLockoutEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the level of functionality that is available to the user via the keypad."
+        },
+        {
+          "id": 2,
+          "name": "ScheduleProgrammingVisibility",
+          "type": "ScheduleProgrammingVisibilityEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute is used to hide the weekly schedule programming functionality or menu on a thermostat from a user to prevent local user programming of the weekly schedule. The schedule programming may still be performed via a remote interface, and the thermostat may operate in schedule programming mode.\nThis attribute is designed to prevent local tampering with or disabling of schedules that may have been programmed by users or service providers via a more capable remote interface. The programming schedule shall continue to run even though it is not visible to the user locally at the thermostat."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "KeypadLockoutEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "The interpretation of the various levels is device-dependent.",
+          "values": [
+            {
+              "value": 0,
+              "name": "NoLockout",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Lockout1",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Lockout2",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Lockout3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Lockout4",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Lockout5",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ScheduleProgrammingVisibilityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "ScheduleProgrammingPermitted",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "ScheduleProgrammingDenied",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TemperatureDisplayModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Celsius",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Fahrenheit",
+              "description": null
             }
           ]
         }

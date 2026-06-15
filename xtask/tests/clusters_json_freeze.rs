@@ -12,8 +12,9 @@ use std::fs;
 use std::path::PathBuf;
 
 /// The M7 target clusters (CLAUDE.md milestone / spec §8) plus the M9-A2.1
-/// pilot batch (read-only sensors + Switch) and the M9-A2.2 energy batch.
-const TARGET_CLUSTERS: [&str; 19] = [
+/// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch, and the
+/// M9-A2.3 actuator batch.
+const TARGET_CLUSTERS: [&str; 24] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -35,6 +36,12 @@ const TARGET_CLUSTERS: [&str; 19] = [
     "ElectricalPowerMeasurement",
     "ElectricalEnergyMeasurement",
     "AirQuality",
+    // M9-A2.3 actuators batch:
+    "Thermostat",
+    "FanControl",
+    "ThermostatUserInterfaceConfiguration",
+    "PumpConfigurationAndControl",
+    "WindowCovering",
 ];
 
 fn load() -> Value {

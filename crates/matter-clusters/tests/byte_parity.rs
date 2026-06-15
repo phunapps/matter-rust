@@ -184,3 +184,13 @@ fn lock_door_optional_field() {
     let without = gen::door_lock::encode_lock_door(None);
     assert_eq!(without, cmd("door_lock/cmd_lock_door_no_pin.json"));
 }
+
+#[test]
+fn atomic_request_command_encodes() {
+    // Thermostat.AtomicRequest with a populated list<attrib-id> — proves the
+    // list-typed-command-field encode matches matter.js byte-for-byte.
+    assert_eq!(
+        gen::thermostat::encode_atomic_request(0, &vec![5, 6], Some(1000)),
+        cmd("thermostat/cmd_atomic_request.json")
+    );
+}

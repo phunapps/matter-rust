@@ -227,4 +227,25 @@ attr('electrical_energy_measurement', 'attr_accuracy.json',
     ],
   }));
 
+// ---------------------------------------------------------------------------
+// Thermostat (0x0201) AtomicRequest (0xFE) — a request command whose
+// AttributeRequests field is a list<attrib-id>. This exercises the new
+// M9-A2.3 list-typed-command-field encode codepath (no prior command, and no
+// attribute, ever encoded a TLV array).
+// ---------------------------------------------------------------------------
+
+cmd('thermostat', 'cmd_atomic_request.json',
+  { cluster: 'Thermostat', cluster_id: 0x201, command: 'AtomicRequest', command_id: 0xfe,
+    fields: [
+      { name: 'RequestType', id: 0, value: 0 },
+      { name: 'AttributeRequests', id: 1, value: [5, 6] },
+      { name: 'Timeout', id: 2, value: 1000 },
+    ],
+    note: 'request with a list<attrib-id> field (new list-command-encode codepath)' },
+  TlvObject({
+    requestType: TlvField(0, TlvUInt8),
+    attributeRequests: TlvField(1, TlvArray(TlvUInt32)),
+    timeout: TlvOptionalField(2, TlvUInt16),
+  }).encode({ requestType: 0, attributeRequests: [5, 6], timeout: 1000 }));
+
 console.log('capture-clusters: all vectors written.');

@@ -43,7 +43,7 @@ const DUMP_SCRIPT_VERSION = 1;
 // later does not break the gate.
 const SPEC_REVISION = '1.5.1';
 
-// The M7 clusters plus the M9-A2.1 pilot and M9-A2.2 energy batches.
+// The M7 clusters plus the M9-A2.1 pilot, M9-A2.2 energy, and M9-A2.3 actuator batches.
 const ALLOWLIST = [
   { id: 0x0028, name: 'BasicInformation' },
   { id: 0x001d, name: 'Descriptor' },
@@ -66,6 +66,12 @@ const ALLOWLIST = [
   { id: 0x0090, name: 'ElectricalPowerMeasurement' },
   { id: 0x0091, name: 'ElectricalEnergyMeasurement' },
   { id: 0x005b, name: 'AirQuality' },
+  // M9-A2.3 actuators batch:
+  { id: 0x0201, name: 'Thermostat' },
+  { id: 0x0202, name: 'FanControl' },
+  { id: 0x0204, name: 'ThermostatUserInterfaceConfiguration' },
+  { id: 0x0200, name: 'PumpConfigurationAndControl' },
+  { id: 0x0102, name: 'WindowCovering' },
 ];
 
 const excluded = [];
@@ -125,8 +131,31 @@ function requireIdNameType(el, where) {
   if (!el.effectiveType) fail(`${where} (${el.name}): missing type`);
 }
 
+// Per-cluster sink for synthesized anonymous-struct datatypes, set in dumpCluster.
+let _synthSink = null;
+let _synthOwner = '';
+
+// When a model element (or its list entry) is an ANONYMOUS struct (metatype
+// object but effectiveType is the bare `struct` base — no named datatype),
+// synthesize a named cluster-local datatype from its children and return the
+// synthesized name; otherwise return the element's effectiveType. The
+// synthesized struct reuses the normal struct emitter (its fields are scalar
+// AttributeId/StatusCode), so each cluster module stays self-contained.
+function resolveAnonStruct(el, role) {
+  if (el && el.effectiveMetatype === 'object' && el.effectiveType === 'struct') {
+    const name = `${_synthOwner}${role}Struct`;
+    if (_synthSink && !_synthSink.some((d) => d.name === name)) {
+      _synthSink.push(dumpDatatype(el, `${_synthOwner}.synth`, name));
+    }
+    return name;
+  }
+  return el ? el.effectiveType : undefined;
+}
+
 function entryTypeOf(el) {
-  if (el.effectiveMetatype === 'array' && el.listEntry) return el.listEntry.effectiveType;
+  if (el.effectiveMetatype === 'array' && el.listEntry) {
+    return resolveAnonStruct(el.listEntry, `${el.name}Entry`);
+  }
   return undefined; // omitted by JSON.stringify
 }
 
@@ -135,7 +164,7 @@ function dumpField(f, where) {
   return {
     id: f.id,
     name: f.name,
-    type: f.effectiveType,
+    type: resolveAnonStruct(f, f.name),
     metatype: f.effectiveMetatype,
     entryType: entryTypeOf(f),
     nullable: !!(f.effectiveQuality && f.effectiveQuality.nullable),
@@ -159,10 +188,20 @@ function dumpAttribute(a, where) {
   };
 }
 
-function dumpCommand(cmd, where) {
+function dumpCommand(cmd, clusterName) {
+  const where = `${clusterName}.cmd`;
   if (cmd.id === undefined || cmd.id === null) fail(`${where}: command missing id`);
   if (!cmd.name) fail(`${where} (id ${cmd.id}): command missing name`);
-  const fields = [...cmd.children].map((c, i) => dumpField(c, `${where}.${cmd.name}.field[${i}]`));
+  // Drop `disallowed` (conformance X) reserved fields — e.g. WindowCovering's
+  // GoToLiftPercentage/GoToTiltPercentage each carry a typeless `Ignored` field.
+  const fields = [];
+  [...cmd.children].forEach((c, i) => {
+    if (c.isDisallowed) {
+      recordExclusion(clusterName, `${cmd.name}.${c.name}`, 'command-field', 'disallowed');
+      return;
+    }
+    fields.push(dumpField(c, `${where}.${cmd.name}.field[${i}]`));
+  });
   return {
     id: cmd.id,
     name: cmd.name,
@@ -172,10 +211,13 @@ function dumpCommand(cmd, where) {
   };
 }
 
-function dumpDatatype(dt, where) {
-  if (!dt.name) fail(`${where}: datatype missing name`);
+function dumpDatatype(dt, where, nameOverride) {
+  const name = nameOverride || dt.name;
+  if (!name) fail(`${where}: datatype missing name`);
   const meta = dt.effectiveMetatype;
-  const out = { name: dt.name, base: dt.effectiveType, kind: 'scalar', description: dt.details || null };
+  // A synthesized anonymous struct has no effectiveType; record its base as `struct`.
+  const base = nameOverride ? 'struct' : dt.effectiveType;
+  const out = { name, base, kind: 'scalar', description: dt.details || null };
   if (meta === 'enum') {
     out.kind = 'enum';
     out.values = [...dt.children].map((c) => {
@@ -279,6 +321,10 @@ function dumpCluster(entry) {
     fail(`cluster id ${entry.id} is "${cluster.name}", expected "${entry.name}" — allowlist/model drift`);
   }
 
+  // Collect synthesized anonymous-struct datatypes for this cluster.
+  _synthSink = [];
+  _synthOwner = cluster.name;
+
   const featureNames = new Set(cluster.features.map((f) => f.name));
 
   // Aliro denylist: the Aliro-titled features (DoorLock has ALIRO + ALBU).
@@ -317,7 +363,7 @@ function dumpCluster(entry) {
       recordExclusion(cluster.name, cmd.name, 'command', reason);
       continue;
     }
-    commands.push(dumpCommand(cmd, `${cluster.name}.cmd`));
+    commands.push(dumpCommand(cmd, cluster.name));
   }
 
   // Events: not dumped at all (no IM event support until M8). Record a
@@ -328,6 +374,19 @@ function dumpCluster(entry) {
   }
 
   const datatypes = [...cluster.datatypes].map((dt) => dumpDatatype(dt, `${cluster.name}.datatype`));
+
+  // Merge synthesized anonymous-struct datatypes (e.g. ThermostatAttributeStatusEntryStruct).
+  for (const d of _synthSink) if (!datatypes.some((x) => x.name === d.name)) datatypes.push(d);
+
+  // Resolve cluster-local scalar typedefs (kind=scalar, e.g. SignedTemperature
+  // -> int8) to their base primitive in every type reference — the Rust emitter
+  // has no decl for them ("referenced inline", see emit.rs::emit_datatype).
+  const scalarAlias = new Map();
+  for (const dt of datatypes) if (dt.kind === 'scalar' && dt.base) scalarAlias.set(dt.name, dt.base);
+  const deAlias = (t) => (t && scalarAlias.has(t) ? scalarAlias.get(t) : t);
+  for (const a of attributes) { a.type = deAlias(a.type); a.entryType = deAlias(a.entryType); }
+  for (const cmd of commands) for (const f of cmd.fields) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }
+  for (const dt of datatypes) for (const f of dt.fields || []) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }
 
   // Inline referenced model-global composite datatypes (transitive) so each
   // cluster module is self-contained for the Rust emitter.
