@@ -14,6 +14,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Every job runs a `just` recipe so the local gate (`just gate`) and CI share a
+# single definition and cannot drift. See the justfile.
 jobs:
   fmt:
     name: rustfmt
@@ -23,7 +25,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just fmt-check
 
   clippy:
     name: clippy
@@ -34,7 +39,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just lint
 
   test:
     name: test (${{ matrix.os }})
@@ -47,9 +55,14 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features --no-fail-fast
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      # nextest for unit + integration; doctests run separately (nextest #16).
+      - run: just test
+      - run: just doctest
       - name: codegen up to date
-        run: cargo xtask codegen --check
+        run: just codegen-check
 
   msrv:
     name: msrv
@@ -60,18 +73,22 @@ jobs:
         with:
           toolchain: "1.88.0"
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --all-features
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just build
 
   docs:
     name: rustdoc
     runs-on: ubuntu-latest
-    env:
-      RUSTDOCFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --workspace --all-features --no-deps
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: just docs
 
   embedded:
     name: embedded (matter-transport no-default-features)
@@ -80,34 +97,33 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
       # Sans-IO core: no tokio, no mdns-sd. Mirrors the embedded build the
       # crate docs advertise; keeps the always-compiled docs free of
-      # intra-doc links to feature-gated items.
-      - run: cargo build -p matter-transport --no-default-features
-      - run: cargo test -p matter-transport --no-default-features
-      - name: rustdoc (no-default-features)
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc -p matter-transport --no-default-features --no-deps
-      # Each default feature on its own — catches a feature that only
-      # compiles when its sibling is also enabled.
-      - run: cargo build -p matter-transport --no-default-features --features tokio
-      - run: cargo build -p matter-transport --no-default-features --features mdns-sd
+      # intra-doc links to feature-gated items. The recipe also exercises each
+      # default feature on its own.
+      - run: just embedded
 
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: rustsec/audit-check@v2.0.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: just,cargo-audit
+      - run: just audit
 
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
         with:
-          command: check
+          tool: just,cargo-deny
+      - run: just deny

@@ -1,0 +1,8 @@
+# cargo-nextest configuration — https://nexte.st/docs/configuration/
+
+[profile.default]
+# The whole suite runs in ~35s, so any single test past 60s is almost certainly
+# hung (e.g. the getrandom-under-sandbox stall the cluster-codegen plans warn
+# about). Warn at 60s, then terminate after 3 such periods (180s) with a named
+# report — kills the wedged test instead of freezing the entire run.
+slow-timeout = { period = "60s", terminate-after = 3 }
