@@ -248,4 +248,39 @@ cmd('thermostat', 'cmd_atomic_request.json',
     timeout: TlvOptionalField(2, TlvUInt16),
   }).encode({ requestType: 0, attributeRequests: [5, 6], timeout: 1000 }));
 
+// ---------------------------------------------------------------------------
+// GeneralDiagnostics (0x0033) NetworkInterfaces (0x00) — list<NetworkInterface>.
+// One element exercises all three M9-A2.4 emitter shapes at once: a hwadr bytes
+// field, a `Type` keyword enum field, and list<ipv4adr>/list<ipv6adr>
+// byte-string-element lists.
+// ---------------------------------------------------------------------------
+
+const networkInterfaceSchema = TlvObject({
+  name: TlvField(0, TlvString),
+  isOperational: TlvField(1, TlvBoolean),
+  offPremiseServicesReachableIPv4: TlvField(2, TlvNullable(TlvBoolean)),
+  offPremiseServicesReachableIPv6: TlvField(3, TlvNullable(TlvBoolean)),
+  hardwareAddress: TlvField(4, TlvByteString),
+  iPv4Addresses: TlvField(5, TlvArray(TlvByteString)),
+  iPv6Addresses: TlvField(6, TlvArray(TlvByteString)),
+  type: TlvField(7, TlvUInt8), // InterfaceTypeEnum (enum8)
+});
+
+attr('general_diagnostics', 'attr_network_interfaces.json',
+  { cluster: 'GeneralDiagnostics', cluster_id: 0x33, attribute: 'NetworkInterfaces', attribute_id: 0x00,
+    type: 'list<NetworkInterface>', writable: false,
+    note: 'struct with a hwadr bytes field, a keyword Type field, and byte-string-element lists' },
+  TlvArray(networkInterfaceSchema).encode([
+    {
+      name: 'eth0',
+      isOperational: true,
+      offPremiseServicesReachableIPv4: null,
+      offPremiseServicesReachableIPv6: null,
+      hardwareAddress: Buffer.from([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]),
+      iPv4Addresses: [Buffer.from([192, 168, 1, 5])],
+      iPv6Addresses: [Buffer.from([0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])],
+      type: 1, // Wi-Fi (InterfaceTypeEnum)
+    },
+  ]));
+
 console.log('capture-clusters: all vectors written.');

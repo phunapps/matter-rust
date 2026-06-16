@@ -43,7 +43,7 @@ const DUMP_SCRIPT_VERSION = 1;
 // later does not break the gate.
 const SPEC_REVISION = '1.5.1';
 
-// The M7 clusters plus the M9-A2.1 pilot, M9-A2.2 energy, and M9-A2.3 actuator batches.
+// The M7 clusters plus the M9-A2.1 pilot, M9-A2.2 energy, M9-A2.3 actuator, and M9-A2.4 utility batches.
 const ALLOWLIST = [
   { id: 0x0028, name: 'BasicInformation' },
   { id: 0x001d, name: 'Descriptor' },
@@ -72,6 +72,12 @@ const ALLOWLIST = [
   { id: 0x0204, name: 'ThermostatUserInterfaceConfiguration' },
   { id: 0x0200, name: 'PumpConfigurationAndControl' },
   { id: 0x0102, name: 'WindowCovering' },
+  // M9-A2.4 utility batch:
+  { id: 0x0004, name: 'Groups' },
+  { id: 0x001e, name: 'Binding' },
+  { id: 0x0033, name: 'GeneralDiagnostics' },
+  { id: 0x0040, name: 'FixedLabel' },
+  { id: 0x0041, name: 'UserLabel' },
 ];
 
 const excluded = [];
@@ -383,7 +389,21 @@ function dumpCluster(entry) {
   // has no decl for them ("referenced inline", see emit.rs::emit_datatype).
   const scalarAlias = new Map();
   for (const dt of datatypes) if (dt.kind === 'scalar' && dt.base) scalarAlias.set(dt.name, dt.base);
-  const deAlias = (t) => (t && scalarAlias.has(t) ? scalarAlias.get(t) : t);
+  // Also resolve model-GLOBAL **named** (PascalCase) scalar typedefs (e.g.
+  // FabricIndex -> fabric-idx -> u8) to their base token, which the Rust scalar
+  // map keys on. Restricted to PascalCase names so lowercase base tokens the
+  // scalar map already handles (vendor-id, node-id, uint16, ...) are left
+  // untouched — rewriting those would perturb existing clusters.
+  const deAliasGlobal = (t) => {
+    if (!t || scalarAlias.has(t) || !/^[A-Z]/.test(t)) return t;
+    const node = globalDatatypeNode(t);
+    if (node && node.effectiveMetatype !== 'object' && node.effectiveMetatype !== 'enum'
+        && node.effectiveMetatype !== 'bitmap' && node.effectiveType && node.effectiveType !== t) {
+      return node.effectiveType; // base token (scalar map handles it)
+    }
+    return t;
+  };
+  const deAlias = (t) => deAliasGlobal(scalarAlias.has(t) ? scalarAlias.get(t) : t);
   for (const a of attributes) { a.type = deAlias(a.type); a.entryType = deAlias(a.entryType); }
   for (const cmd of commands) for (const f of cmd.fields) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }
   for (const dt of datatypes) for (const f of dt.fields || []) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }

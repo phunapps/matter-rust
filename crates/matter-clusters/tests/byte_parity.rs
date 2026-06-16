@@ -194,3 +194,27 @@ fn atomic_request_command_encodes() {
         cmd("thermostat/cmd_atomic_request.json")
     );
 }
+
+#[test]
+fn network_interface_struct_decodes() {
+    // GeneralDiagnostics.NetworkInterfaces: a NetworkInterface with a hwadr
+    // bytes field, a keyword `Type` field, and byte-string-element lists
+    // (the new A2.4 shape). Field names are the generated snake form (IPv4 ->
+    // i_pv4).
+    let ifaces = gen::general_diagnostics::decode_network_interfaces(&attr(
+        "general_diagnostics/attr_network_interfaces.json",
+    ))
+    .unwrap();
+    assert_eq!(ifaces.len(), 1);
+    let ni = &ifaces[0];
+    assert_eq!(ni.name, "eth0");
+    assert!(ni.is_operational);
+    assert_eq!(
+        ni.hardware_address,
+        vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]
+    );
+    assert_eq!(ni.i_pv4_addresses, vec![vec![192, 168, 1, 5]]);
+    assert_eq!(ni.i_pv6_addresses.len(), 1);
+    assert_eq!(ni.i_pv6_addresses[0].len(), 16);
+    assert_eq!(ni.r#type.to_raw(), 1); // Wi-Fi
+}

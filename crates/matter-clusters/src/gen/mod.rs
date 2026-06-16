@@ -2,6 +2,7 @@
 
 pub mod air_quality;
 pub mod basic_information;
+pub mod binding;
 pub mod boolean_state;
 pub mod color_control;
 pub mod descriptor;
@@ -9,8 +10,11 @@ pub mod door_lock;
 pub mod electrical_energy_measurement;
 pub mod electrical_power_measurement;
 pub mod fan_control;
+pub mod fixed_label;
 pub mod flow_measurement;
+pub mod general_diagnostics;
 pub mod globals;
+pub mod groups;
 pub mod identify;
 pub mod illuminance_measurement;
 pub mod level_control;
@@ -24,4 +28,5 @@ pub mod switch;
 pub mod temperature_measurement;
 pub mod thermostat;
 pub mod thermostat_user_interface_configuration;
+pub mod user_label;
 pub mod window_covering;

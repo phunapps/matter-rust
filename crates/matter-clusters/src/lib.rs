@@ -32,7 +32,9 @@
 //! (roundtrip + decode-smoke, with a byte-parity vector for the list-typed
 //! `AtomicRequest` command): `Thermostat`, `FanControl`,
 //! `ThermostatUserInterfaceConfiguration`, `PumpConfigurationAndControl`, and
-//! `WindowCovering`.
+//! `WindowCovering`. M9-A2.4 utility (decode-smoke + one struct-with-byte-fields
+//! byte-parity vector for `GeneralDiagnostics` `NetworkInterface`): `Groups`,
+//! `Binding`, `GeneralDiagnostics`, `FixedLabel`, and `UserLabel`.
 //!
 //! For any attribute not covered by these typed codecs — optional,
 //! manufacturer-specific, or a cluster not in this list — the generic `Value`

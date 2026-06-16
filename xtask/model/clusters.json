@@ -5,12 +5,17 @@
     "dumpScriptVersion": 1,
     "generatedClusters": [
       "Identify",
+      "Groups",
       "OnOff",
       "LevelControl",
       "Descriptor",
+      "Binding",
       "BasicInformation",
       "PowerSource",
+      "GeneralDiagnostics",
       "Switch",
+      "FixedLabel",
+      "UserLabel",
       "BooleanState",
       "AirQuality",
       "ElectricalPowerMeasurement",
@@ -135,6 +140,18 @@
       {
         "cluster": "ElectricalPowerMeasurement",
         "element": "1 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
+      },
+      {
+        "cluster": "GeneralDiagnostics",
+        "element": "DoNotUse",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "GeneralDiagnostics",
+        "element": "4 event(s)",
         "kind": "events",
         "reason": "no IM event support until M8"
       },
@@ -401,6 +418,273 @@
             {
               "value": 5,
               "name": "Actuator",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Groups",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "GN",
+          "name": "GroupNames",
+          "description": "The Group Names feature indicates the ability to store a name for a group when a group is added."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "NameSupport",
+          "type": "NameSupportBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute provides legacy, read-only access to whether the Group Names feature is supported. The most significant bit, bit 7 (GroupNames), shall be equal to bit 0 of the FeatureMap attribute (GN Feature). All other bits shall be 0."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "AddGroup",
+          "direction": "request",
+          "responseId": 0,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be used to identify the group and any associated key material to which the server endpoint is to be added."
+            },
+            {
+              "id": 1,
+              "name": "GroupName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field may be set to a human-readable name for the group. If the client has no name for the group, the GroupName field shall be set to the empty string.\nSupport of group names is optional and is indicated by the FeatureMap and NameSupport attribute."
+            }
+          ]
+        },
+        {
+          "id": 0,
+          "name": "AddGroupResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field is set according to the Effect on Receipt section of the AddGroup command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field is set to the GroupID field of the received AddGroup command."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ViewGroup",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ViewGroupResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field is according to the Effect on Receipt section of the ViewGroup command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field is set to the GroupID field of the received ViewGroup command."
+            },
+            {
+              "id": 2,
+              "name": "GroupName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "If the status is SUCCESS, and group names are supported, this field is set to the group name associated with that group in the Group Table; otherwise it is set to the empty string."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "GetGroupMembership",
+          "direction": "request",
+          "responseId": 2,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "group-id",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "GetGroupMembershipResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Capacity",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall contain the remaining capacity of the Group Table of the node. The following values apply:\n  - 0 - No further groups may be added.\n  - 0 < Capacity < 0xFE - Capacity holds the number of groups that may be added.\n  - 0xFE - At least 1 further group may be added (exact number is unknown).\n  - null - It is unknown if any further groups may be added."
+            },
+            {
+              "id": 1,
+              "name": "GroupList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "group-id",
+              "nullable": false,
+              "optional": false,
+              "description": "The GroupList field shall contain either the group IDs of all the groups in the Group Table for which the server endpoint is a member of the group (in the case where the GroupList field of the received GetGroupMembership command was empty), or the group IDs of all the groups in the Group Table for which the server endpoint is a member of the group and for which the group ID was included in the the GroupList field of the received GetGroupMembership command (in the case where the GroupList field of the received GetGroupMembership command was not empty). Zigbee: If the total number of groups will cause the maximum payload length of a frame to be exceeded, then the GroupList field shall contain only as many groups as will fit."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "RemoveGroup",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "RemoveGroupResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field is according to the Effect on Receipt section of the RemoveGroup command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field is set to the GroupID field of the received RemoveGroup command."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "RemoveAllGroups",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "AddGroupIfIdentifying",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be used to identify the group and any associated key material to which the server endpoint is to be added."
+            },
+            {
+              "id": 1,
+              "name": "GroupName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field may be set to a human-readable name for the group. If the client has no name for the group, the GroupName field shall be set to the empty string.\nSupport of group names is optional and is indicated by the FeatureMap and NameSupport attribute."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "NameSupportBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 7,
+              "name": "GroupNames",
               "description": null
             }
           ]
@@ -1208,6 +1492,81 @@
               "nullable": false,
               "optional": false,
               "description": "This is the implemented revision of the device type definition. The endpoint shall conform to this revision of the device type."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "name": "Binding",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Binding",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TargetStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Each entry shall represent a binding."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "TargetStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 1,
+              "name": "Node",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field is the remote target node ID. If the Endpoint field is present, this field shall be present."
+            },
+            {
+              "id": 2,
+              "name": "Group",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field is the target group ID that represents remote endpoints. If the Endpoint field is present, this field shall NOT be present."
+            },
+            {
+              "id": 3,
+              "name": "Endpoint",
+              "type": "endpoint-no",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field is the remote endpoint that the local endpoint is bound to. If the Group field is present, this field shall NOT be present."
+            },
+            {
+              "id": 4,
+              "name": "Cluster",
+              "type": "cluster-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field is the cluster ID (client & server) on the local and target endpoint(s). If this field is present, the client cluster shall also exist on this endpoint (with this Binding cluster). If this field is present, the target shall be this cluster on the target endpoint(s)."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
             }
           ]
         }
@@ -2848,6 +3207,522 @@
       ]
     },
     {
+      "id": 51,
+      "name": "GeneralDiagnostics",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "DMTEST",
+          "name": "DataModelTest",
+          "description": "This feature indicates support for extended Data Model testing commands, which are required in some situations.\nThis feature shall be supported if the MaxPathsPerInvoke attribute of the Basic Information Cluster has a value > 1."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "NetworkInterfaces",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NetworkInterface",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "The NetworkInterfaces attribute shall be a list of NetworkInterface structs. Each logical network interface on the Node shall be represented by a single entry within the NetworkInterfaces attribute."
+        },
+        {
+          "id": 1,
+          "name": "RebootCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "The RebootCount attribute shall indicate a best-effort count of the number of times the Node has rebooted. The RebootCount attribute SHOULD be incremented each time the Node reboots. The RebootCount attribute shall NOT be incremented when a Node wakes from a low-power or sleep state. The RebootCount attribute shall only be reset to 0 upon a factory reset of the Node."
+        },
+        {
+          "id": 2,
+          "name": "UpTime",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "The UpTime attribute shall indicate a best-effort assessment of the length of time, in seconds, since the Node's last reboot. This attribute SHOULD be incremented to account for the periods of time that a Node is in a low-power or sleep state. This attribute shall only be reset upon a device reboot. This attribute shall be based on the same System Time source as those used to fulfill any usage of the systime-us and systime-ms data types within the server."
+        },
+        {
+          "id": 3,
+          "name": "TotalOperationalHours",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The TotalOperationalHours attribute shall indicate a best-effort attempt at tracking the length of time, in hours, that the Node has been operational. The TotalOperationalHours attribute SHOULD be incremented to account for the periods of time that a Node is in a low-power or sleep state. The TotalOperationalHours attribute shall only be reset upon a factory reset of the Node."
+        },
+        {
+          "id": 4,
+          "name": "BootReason",
+          "type": "BootReasonEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The BootReason attribute shall indicate the reason for the Node's most recent boot."
+        },
+        {
+          "id": 5,
+          "name": "ActiveHardwareFaults",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "HardwareFaultEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The ActiveHardwareFaults attribute shall indicate the set of faults currently detected by the Node. When the Node detects a fault has been raised, the appropriate HardwareFaultEnum value shall be added to this list. This list shall NOT contain more than one instance of a specific HardwareFaultEnum value. When the Node detects that all conditions contributing to a fault has been cleared, the corresponding HardwareFaultEnum value shall be removed from this list. An empty list shall indicate there are currently no active faults. The order of this list SHOULD have no significance. Clients interested in monitoring changes in active faults may subscribe to this attribute, or they may subscribe to HardwareFaultChange."
+        },
+        {
+          "id": 6,
+          "name": "ActiveRadioFaults",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "RadioFaultEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The ActiveRadioFaults attribute shall indicate the set of faults currently detected by the Node. When the Node detects a fault has been raised, the appropriate RadioFaultEnum value shall be added to this list. This list shall NOT contain more than one instance of a specific RadioFaultEnum value. When the Node detects that all conditions contributing to a fault has been cleared, the corresponding RadioFaultEnum value shall be removed from this list. An empty list shall indicate there are currently no active faults. The order of this list SHOULD have no significance. Clients interested in monitoring changes in active faults may subscribe to this attribute, or they may subscribe to RadioFaultChange."
+        },
+        {
+          "id": 7,
+          "name": "ActiveNetworkFaults",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NetworkFaultEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The ActiveNetworkFaults attribute shall indicate the set of faults currently detected by the Node. When the Node detects a fault has been raised, the appropriate NetworkFaultEnum value shall be added to this list. This list shall NOT contain more than one instance of a specific NetworkFaultEnum value. When the Node detects that all conditions contributing to a fault has been cleared, the corresponding NetworkFaultEnum value shall be removed from this list. An empty list shall indicate there are currently no active faults. The order of this list SHOULD have no significance. Clients interested in monitoring changes in active faults may subscribe to this attribute, or they may subscribe to NetworkFaultChange."
+        },
+        {
+          "id": 8,
+          "name": "TestEventTriggersEnabled",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "The TestEventTriggersEnabled attribute shall indicate whether the Node has any TestEventTrigger configured. When this attribute is true, the Node has been configured with one or more test event triggers by virtue of the internally programmed EnableKey value (see Section 11.12.7.1, \"TestEventTrigger Command\") being set to a non-zero value. This attribute can be used by Administrators to detect if a device was inadvertently commissioned with test event trigger mode enabled, and take appropriate action (e.g. warn the user and/or offer to remove all fabrics on the Node)."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "TestEventTrigger",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "EnableKey",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "The EnableKey is a 128 bit value provided by the client in this command, which needs to match a value chosen by the manufacturer and configured on the server using manufacturer-specific means, such as pre-provisioning. The value of all zeroes is reserved to indicate that no EnableKey is set. Therefore, if the EnableKey field is received with all zeroes, this command shall FAIL with a response status of CONSTRAINT_ERROR.\nThe EnableKey SHOULD be unique per exact set of devices going to a certification test.\nDevices not targeted towards going to a certification test event shall NOT have a non-zero EnableKey value configured, so that only devices in test environments are responsive to this command.\nIn order to prevent unwittingly actuating a particular trigger, this command shall respond with a response status of CONSTRAINT_ERROR if the EnableKey field does not match the a-priori value configured on the device."
+            },
+            {
+              "id": 1,
+              "name": "EventTrigger",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the test or test mode which the client wants to trigger.\nThe expected side-effects of EventTrigger values are out of scope of this specification and will be described within appropriate certification test literature provided to manufacturers by the Connectivity Standards Alliance, in conjunction with certification test cases documentation.\nValues of EventTrigger in the range 0xFFFF_FFFF_0000_0000 through 0xFFFF_FFFF_FFFF_FFFF are reserved for testing use by manufacturers and will not appear in the Connectivity Standards Alliance certification test literature.\nIf the value of EventTrigger received is not supported by the receiving Node, this command shall fail with a status code of INVALID_COMMAND.\nOtherwise, if the EnableKey value matches the configured internal value for a particular Node, and the EventTrigger value matches a supported test event trigger value, the command shall succeed and execute the expected trigger action.\nIf no specific test event triggers are required to be supported by certification test requirements for the features that a given product will be certified against, this command may always fail with the INVALID_COMMAND status, equivalent to the situation of receiving an unknown EventTrigger, for all possible EventTrigger values."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "TimeSnapshot",
+          "direction": "request",
+          "responseId": 2,
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "TimeSnapshotResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "SystemTimeMs",
+              "type": "systime-ms",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This shall indicate the current System Time in milliseconds (type systime-ms), with the value taken at the time of processing of the TimeSnapshot command that generated this response.\nThe value shall be taken from the same clock which populates the Timestamp field in events when using System Time for the field."
+            },
+            {
+              "id": 1,
+              "name": "PosixTimeMs",
+              "type": "posix-ms",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This shall indicate the current time in POSIX Time in milliseconds, with the value taken from the same source that could populate the Timestamp field of events. This value shall only be null when any the following are true:\n  - The node doesn't support the Time Synchronization cluster.\n  - The node's Time Synchronization cluster instance's UTCTime attribute is null."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "PayloadTestRequest",
+          "direction": "request",
+          "responseId": 4,
+          "fields": [
+            {
+              "id": 0,
+              "name": "EnableKey",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall have the same meaning and usage as the TestEventTrigger EnableKey field."
+            },
+            {
+              "id": 1,
+              "name": "Value",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the value to use in every byte of the PayloadTestResponse's Payload field."
+            },
+            {
+              "id": 2,
+              "name": "Count",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the number of times to repeat the Value in the PayloadTestResponse's Payload field."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "PayloadTestResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Payload",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the computed response of the PayloadTestRequest command."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "BootReasonEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "PowerOnReboot",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "BrownOutReset",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "SoftwareWatchdogReset",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "HardwareWatchdogReset",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "SoftwareUpdateCompleted",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "SoftwareReset",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "HardwareFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Radio",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Sensor",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "ResettableOverTemp",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "NonResettableOverTemp",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "PowerSource",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "VisualDisplayFault",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "AudioOutputFault",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "UserInterfaceFault",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "NonVolatileMemoryError",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "TamperDetected",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "InterfaceTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "WiFi",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ethernet",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Cellular",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Thread",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NetworkFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "HardwareFailure",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "NetworkJammed",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "ConnectionFailed",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NetworkInterface",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure describes a network interface supported by the Node, as provided in the NetworkInterfaces attribute.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a human-readable (displayable) name for the network interface, that is different from all other interfaces."
+            },
+            {
+              "id": 1,
+              "name": "IsOperational",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate if the Node is currently advertising itself operationally on this network interface and is capable of successfully receiving incoming traffic from other Nodes."
+            },
+            {
+              "id": 2,
+              "name": "OffPremiseServicesReachableIPv4",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate whether the Node is currently able to reach off-premise services it uses by utilizing IPv4. The value shall be null if the Node does not use such services or does not know whether it can reach them."
+            },
+            {
+              "id": 3,
+              "name": "OffPremiseServicesReachableIPv6",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate whether the Node is currently able to reach off-premise services it uses by utilizing IPv6. The value shall be null if the Node does not use such services or does not know whether it can reach them."
+            },
+            {
+              "id": 4,
+              "name": "HardwareAddress",
+              "type": "hwadr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the current link-layer address for a 802.3 or IEEE 802.11-2020 network interface and contain the current extended MAC address for a 802.15.4 interface. The byte order of the octstr shall be in wire byte order. For addresses values less than 64 bits, the first two bytes shall be zero."
+            },
+            {
+              "id": 5,
+              "name": "IPv4Addresses",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ipv4adr",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide a list of the IPv4 addresses that are currently assigned to the network interface."
+            },
+            {
+              "id": 6,
+              "name": "IPv6Addresses",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ipv6adr",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide a list of the unicast IPv6 addresses that are currently assigned to the network interface. This list shall include the Node's link-local address and SHOULD include any assigned GUA and ULA addresses. This list shall NOT include any multicast group addresses to which the Node is subscribed."
+            },
+            {
+              "id": 7,
+              "name": "Type",
+              "type": "InterfaceTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of the interface using the InterfaceTypeEnum."
+            }
+          ]
+        },
+        {
+          "name": "RadioFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "WiFiFault",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "CellularFault",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "ThreadFault",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "NfcFault",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "BleFault",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "EthernetFault",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 59,
       "name": "Switch",
       "revision": 2,
@@ -2923,6 +3798,102 @@
       ],
       "commands": [],
       "datatypes": []
+    },
+    {
+      "id": 64,
+      "name": "FixedLabel",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "LabelList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "LabelStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": null
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LabelStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This is a string tuple with strings that are user defined.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "The Label or Value semantic is not defined here.\nLabel examples: \"room\", \"zone\", \"group\", \"direction\"."
+            },
+            {
+              "id": 1,
+              "name": "Value",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "The Label or Value semantic is not defined here. The Value is a discriminator for a Label that may have multiple instances.\nLabel:Value examples: \"room\":\"bedroom 2\", \"orientation\":\"North\", \"floor\":\"2\", \"direction\":\"up\""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 65,
+      "name": "UserLabel",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "LabelList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "LabelStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "The server shall support the storage of up to 4 list entries in this attribute. The server may support the storage of more than 4 entries in this attribute.\nWhen reading from this attribute, the server shall respond with the actual contents of the attribute which may contain any number of entries (possibly more than 4), When writing to this attribute, a client may include any number of entries to be written, or none at all.\nIf an attempt is made to write to this attribute with a list length that is not supported by the server, the server shall respond with RESOURCE_EXHAUSTED."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LabelStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This is a string tuple with strings that are user defined.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "The Label or Value semantic is not defined here.\nLabel examples: \"room\", \"zone\", \"group\", \"direction\"."
+            },
+            {
+              "id": 1,
+              "name": "Value",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "The Label or Value semantic is not defined here. The Value is a discriminator for a Label that may have multiple instances.\nLabel:Value examples: \"room\":\"bedroom 2\", \"orientation\":\"North\", \"floor\":\"2\", \"direction\":\"up\""
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 69,

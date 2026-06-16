@@ -17,8 +17,8 @@ fn all_real_clusters_generate_and_format() {
         .expect("real model loads + validates");
     assert_eq!(
         model.clusters.len(),
-        24,
-        "expected the 10 M7 + 5 A2.1 pilot + 4 A2.2 energy + 5 A2.3 actuator clusters"
+        29,
+        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 utility clusters"
     );
     for c in &model.clusters {
         let src = xtask::codegen::rustgen::emit::generate_cluster(c);

@@ -266,3 +266,113 @@ fn window_covering_mode_decodes() {
     let m = gen::window_covering::decode_mode(&uint_attr(1)).unwrap();
     assert_eq!(m.bits(), 1);
 }
+
+// ---- M9-A2.4 utility batch ------------------------------------------------
+
+#[test]
+fn binding_target_struct_decodes_fabric_index() {
+    use matter_codec::{ContainerKind, Element, TlvReader};
+    // TargetStruct { Cluster(4)=0x0006, FabricIndex(254)=1 } — proves the
+    // global FabricIndex typedef de-aliases to u8 (gap 1).
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(4), 0x0006).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+        w.end_container().unwrap();
+    }
+    let mut r = TlvReader::new(&buf);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Structure,
+            ..
+        })
+    ));
+    let t = gen::binding::TargetStruct::decode_from(&mut r).unwrap();
+    assert_eq!(t.cluster, Some(0x0006));
+    assert_eq!(t.fabric_index, 1u8);
+}
+
+#[test]
+fn fixed_label_label_struct_decodes() {
+    use matter_codec::{ContainerKind, Element, TlvReader};
+    // LabelStruct { Label(0)="room", Value(1)="kitchen" }.
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_utf8(Tag::Context(0), "room").unwrap();
+        w.put_utf8(Tag::Context(1), "kitchen").unwrap();
+        w.end_container().unwrap();
+    }
+    let mut r = TlvReader::new(&buf);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Structure,
+            ..
+        })
+    ));
+    let l = gen::fixed_label::LabelStruct::decode_from(&mut r).unwrap();
+    assert_eq!(l.label, "room");
+    assert_eq!(l.value, "kitchen");
+}
+
+#[test]
+fn groups_add_group_command_encodes_wellformed() {
+    use matter_codec::{Element, TlvReader, Value};
+    // encode_add_group(group_id, group_name) -> anon struct { ctx0=uint, ctx1=utf8 }.
+    let bytes = gen::groups::encode_add_group(0x0007, &"den".to_string());
+    let mut r = TlvReader::new(&bytes);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar {
+            tag: Tag::Context(0),
+            value: Value::Uint(7)
+        })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar { tag: Tag::Context(1), value: Value::Utf8(ref s) }) if s == "den"
+    ));
+}
+
+#[test]
+fn groups_get_group_membership_command_encodes_list() {
+    use matter_codec::{ContainerKind, Element, TlvReader, Value};
+    // encode_get_group_membership(list<group-id>) -> anon struct { ctx0=array[uint,uint] }
+    // (reuses the A2.3 list-typed-command-field encode codepath).
+    let bytes = gen::groups::encode_get_group_membership(&vec![1u16, 2u16]);
+    let mut r = TlvReader::new(&bytes);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart {
+            tag: Tag::Context(0),
+            kind: ContainerKind::Array
+        })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar {
+            value: Value::Uint(1),
+            ..
+        })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar {
+            value: Value::Uint(2),
+            ..
+        })
+    ));
+}

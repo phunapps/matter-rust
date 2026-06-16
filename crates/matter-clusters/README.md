@@ -44,6 +44,12 @@ fields). The M9-A2.3 actuator batch adds 5 read/write clusters — Thermostat,
 FanControl, ThermostatUserInterfaceConfiguration, PumpConfigurationAndControl,
 and WindowCovering — roundtrip (`decode(encode(x)) == x`) and decode-smoke
 tested, with a byte-parity vector for the list-typed `AtomicRequest` command.
+The M9-A2.4 utility batch adds 5 more clusters — Groups, Binding,
+GeneralDiagnostics, FixedLabel, and UserLabel — decode-smoke tested (incl. the
+Groups command encoders and the global `FabricIndex` typedef), with a byte-parity
+vector for the new struct-with-byte-fields shape (GeneralDiagnostics
+`NetworkInterface`: a `hwadr` bytes field, a keyword `Type` field, and
+byte-string-element lists).
 For any attribute not covered by these typed codecs — optional,
 manufacturer-specific, or a cluster not in this list — the generic `Value` path
 in `matter-controller` remains the universal answer. Hand-written support lives
