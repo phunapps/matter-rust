@@ -260,12 +260,14 @@ fn emit_struct(s: &mut String, d: &Datatype) {
             Position::Field,
         );
         line!(s, "    /// Field {} (tag {}).", f.name, f.id);
-        line!(s, "    pub {}: {},", snake(&f.name), ty);
+        // Escape reserved-word field names (`Type` -> `r#type`); see field_ident
+        // in emit_codecs (the codec pass uses the same rule).
+        line!(s, "    pub {}: {},", ident(&snake(&f.name)), ty);
     }
     line!(s, "}}\n");
     // The struct's encode/decode impls are emitted by the codec pass (next
     // task), since they share the scalar read/write helpers.
-    let _ = (base_type, ident); // keep imports used regardless of branch
+    let _ = base_type; // keep import used regardless of branch
 }
 
 #[cfg(test)]

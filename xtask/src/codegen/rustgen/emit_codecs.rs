@@ -11,6 +11,13 @@ use std::fmt::Write as _;
 /// bare `enum8`/`map8`/`status` scalars).
 type DatatypeMap<'a> = HashMap<&'a str, &'a Datatype>;
 
+/// A struct/command field name as a Rust identifier: `snake_case`, with reserved
+/// words escaped (`Type` -> `r#type`). The `f_`-prefixed decode locals stay bare
+/// `snake` (the prefix already makes them keyword-safe).
+fn field_ident(name: &str) -> String {
+    ident(&snake(name))
+}
+
 /// Emit every codec for the cluster.
 pub fn emit_codecs(s: &mut String, c: &Cluster) {
     let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
@@ -165,8 +172,18 @@ fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
             _ => {}
         }
     }
-    if base_type(entry, None).ends_with("Struct") {
+    let rust = base_type(entry, None);
+    if rust.ends_with("Struct") {
         return "object"; // a global struct (e.g. semtag -> SemanticTagStruct)
+    }
+    // Byte-string / string list elements (e.g. GeneralDiagnostics
+    // NetworkInterface's IPv4Addresses = list<ipv4adr>) decode as Bytes/Utf8,
+    // not as an integer.
+    if rust == "Vec<u8>" {
+        return "bytes";
+    }
+    if rust == "String" {
+        return "string";
     }
     "integer"
 }
@@ -399,7 +416,7 @@ fn emit_command_encoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>)
                 f.optional,
                 Position::Field,
             );
-            format!("{}: {}", snake(&f.name), borrowed(&t))
+            format!("{}: {}", field_ident(&f.name), borrowed(&t))
         })
         .collect();
     line!(s, "/// Encode the `{}` command request payload.", cmd.name);
@@ -418,7 +435,7 @@ fn emit_command_encoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>)
         "    w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
     );
     for f in &cmd.fields {
-        emit_field_write(s, f, &snake(&f.name), dts);
+        emit_field_write(s, f, &field_ident(&f.name), dts);
     }
     line!(
         s,
@@ -665,7 +682,7 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
                 Position::Field,
             );
             line!(s, "    /// Field {} (tag {}).", f.name, f.id);
-            line!(s, "    pub {}: {},", snake(&f.name), ty);
+            line!(s, "    pub {}: {},", field_ident(&f.name), ty);
         }
         line!(s, "}}\n");
     }
@@ -725,12 +742,13 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     line!(s, "        Ok(Self {{");
     for f in &d.fields {
         let var = snake(&f.name);
+        let field = field_ident(&f.name);
         if f.optional {
-            line!(s, "            {var}: f_{var},");
+            line!(s, "            {field}: f_{var},");
         } else {
             line!(
                 s,
-                "            {var}: f_{var}.ok_or(ClusterError::MissingField(\"{}\"))?,",
+                "            {field}: f_{var}.ok_or(ClusterError::MissingField(\"{}\"))?,",
                 f.name
             );
         }
@@ -812,7 +830,10 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
 /// Emit a `write_fields` line for struct field `f`, reading `self.<field>`.
 /// (Struct datatypes in scope have only scalar/enum/bitmap fields.)
 fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
-    let var = snake(&f.name);
+    // `field_ident` covers both the `self.<field>` access and the local pattern
+    // bindings (`Nullable::Value(<var>)`), so a keyword field name is escaped
+    // uniformly.
+    let var = field_ident(&f.name);
     let tag = format!("Tag::Context({})", f.id);
     let inner =
         |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
@@ -1029,5 +1050,40 @@ mod tests {
             "{s}"
         );
         assert!(s.contains("w.start_array(Tag::Context(1))"), "{s}");
+    }
+
+    #[test]
+    fn keyword_struct_field_is_escaped() {
+        // A datatype struct whose field is the Rust keyword `Type`.
+        let d = struct_dt(
+            "NetworkInterface",
+            vec![field(7, "Type", "InterfaceTypeEnum", "enum", None)],
+        );
+        let mut s = String::new();
+        let dts: DatatypeMap<'_> = HashMap::new();
+        emit_struct_codec(&mut s, &d, &dts);
+        assert!(s.contains("r#type: f_type"), "construction escaped:\n{s}");
+        assert!(
+            !s.contains("            type: f_type"),
+            "raw keyword field:\n{s}"
+        );
+    }
+
+    #[test]
+    fn field_ident_escapes_keyword_and_passes_through_normal() {
+        assert_eq!(field_ident("Type"), "r#type");
+        assert_eq!(field_ident("HardwareAddress"), "hardware_address");
+    }
+
+    #[test]
+    fn entry_metatype_classifies_bytes_and_string_elements() {
+        let dts: DatatypeMap<'_> = HashMap::new();
+        // list<ipv4adr> / list<octstr> elements decode as bytes, not integers.
+        assert_eq!(entry_metatype("ipv4adr", &dts), "bytes");
+        assert_eq!(entry_metatype("octstr", &dts), "bytes");
+        // list<string> elements decode as Utf8.
+        assert_eq!(entry_metatype("string", &dts), "string");
+        // a bare integer id stays integer.
+        assert_eq!(entry_metatype("group-id", &dts), "integer");
     }
 }

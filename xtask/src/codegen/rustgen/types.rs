@@ -30,7 +30,8 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         "single" => "f32",
         "double" => "f64",
         "string" => "String",
-        "octstr" => "Vec<u8>",
+        // byte strings: generic + hardware/IP address octet-string semantics
+        "octstr" | "hwadr" | "ipadr" | "ipv4adr" | "ipv6adr" => "Vec<u8>",
         // u32: primitive + semantic globals
         "uint24" | "uint32" | "cluster-id" | "attrib-id" | "command-id" | "event-id"
         | "devtype-id" | "epoch-s" | "elapsed-s" | "map32" | "fabric-id" => "u32",
@@ -188,6 +189,11 @@ mod tests {
         assert_eq!(base_type("temperature", None), "i16");
         assert_eq!(base_type("bool", None), "bool");
         assert_eq!(base_type("octstr", None), "Vec<u8>");
+        // M9-A2.4 hardware/IP-address byte-string semantic globals.
+        assert_eq!(base_type("hwadr", None), "Vec<u8>");
+        assert_eq!(base_type("ipadr", None), "Vec<u8>");
+        assert_eq!(base_type("ipv4adr", None), "Vec<u8>");
+        assert_eq!(base_type("ipv6adr", None), "Vec<u8>");
         assert_eq!(base_type("string", None), "String");
         assert_eq!(base_type("vendor-id", None), "u16");
         assert_eq!(base_type("cluster-id", None), "u32");
