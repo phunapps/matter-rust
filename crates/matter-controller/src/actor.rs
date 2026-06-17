@@ -187,6 +187,8 @@ struct SubEntry {
     /// Subscribe params, retained to re-issue the `SubscribeRequest` on resubscribe.
     node_id: u64,
     paths: Vec<matter_interaction::ReadPath>,
+    event_paths: Vec<matter_interaction::EventPath>,
+    event_filters: Vec<matter_interaction::EventFilter>,
     min_interval: u16,
     max_interval: u16,
     /// Re-subscribe if no report arrives by this instant.
@@ -199,6 +201,8 @@ struct PendingResubscribe {
     attempt_at: Instant,
     node_id: u64,
     paths: Vec<matter_interaction::ReadPath>,
+    event_paths: Vec<matter_interaction::EventPath>,
+    event_filters: Vec<matter_interaction::EventFilter>,
     min_interval: u16,
     max_interval: u16,
     retry_count: u32,
@@ -260,6 +264,8 @@ enum PendingReply {
         priming: Box<ReportReassembler>,
         node_id: u64,
         paths: Vec<matter_interaction::ReadPath>,
+        event_paths: Vec<matter_interaction::EventPath>,
+        event_filters: Vec<matter_interaction::EventFilter>,
         min_interval: u16,
         max_interval: u16,
         retry_count: u32,
@@ -402,6 +408,8 @@ pub(crate) enum Command {
     Subscribe {
         node_id: u64,
         paths: Vec<matter_interaction::ReadPath>,
+        event_paths: Vec<matter_interaction::EventPath>,
+        event_filters: Vec<matter_interaction::EventFilter>,
         min_interval: u16,
         max_interval: u16,
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
@@ -631,12 +639,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Command::Subscribe {
                 node_id,
                 paths,
+                event_paths,
+                event_filters,
                 min_interval,
                 max_interval,
                 reply,
             } => {
-                self.start_subscribe(node_id, paths, min_interval, max_interval, reply)
-                    .await;
+                self.start_subscribe(
+                    node_id,
+                    paths,
+                    event_paths,
+                    event_filters,
+                    min_interval,
+                    max_interval,
+                    reply,
+                )
+                .await;
             }
             Command::CancelSubscription { key } => {
                 self.subscriptions.remove(&key);
@@ -1274,6 +1292,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         &mut self,
         node_id: u64,
         paths: Vec<matter_interaction::ReadPath>,
+        event_paths: Vec<matter_interaction::EventPath>,
+        event_filters: Vec<matter_interaction::EventFilter>,
         min_interval: u16,
         max_interval: u16,
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
@@ -1291,8 +1311,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 min_interval_floor: min_interval,
                 max_interval_ceiling: max_interval,
                 paths: paths.clone(),
-                event_paths: Vec::new(),
-                event_filters: Vec::new(),
+                event_paths: event_paths.clone(),
+                event_filters: event_filters.clone(),
             });
         match self
             .send_request(
@@ -1337,6 +1357,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             priming: Box::new(ReportReassembler::default()),
                             node_id,
                             paths,
+                            event_paths,
+                            event_filters,
                             min_interval,
                             max_interval,
                             retry_count: 0,
@@ -1406,6 +1428,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 report_rx,
                 node_id,
                 paths,
+                event_paths,
+                event_filters,
                 min_interval,
                 ..
             } = p.reply
@@ -1442,6 +1466,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             wire_sub_id: resp.subscription_id,
                             node_id,
                             paths,
+                            event_paths,
+                            event_filters,
                             min_interval,
                             max_interval: resp.max_interval,
                             liveness_deadline: deadline,
@@ -1533,6 +1559,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 report_tx,
                 node_id,
                 paths,
+                event_paths,
+                event_filters,
                 min_interval,
                 max_interval,
                 retry_count,
@@ -1563,6 +1591,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     attempt_at: Instant::now(),
                     node_id,
                     paths,
+                    event_paths,
+                    event_filters,
                     min_interval,
                     max_interval,
                     retry_count,
@@ -1688,6 +1718,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             attempt_at: Instant::now() + wait,
             node_id: entry.node_id,
             paths: entry.paths,
+            event_paths: entry.event_paths,
+            event_filters: entry.event_filters,
             min_interval: entry.min_interval,
             max_interval: entry.max_interval,
             retry_count: 0,
@@ -1726,8 +1758,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 min_interval_floor: pr.min_interval,
                 max_interval_ceiling: pr.max_interval,
                 paths: pr.paths.clone(),
-                event_paths: Vec::new(),
-                event_filters: Vec::new(),
+                event_paths: pr.event_paths.clone(),
+                event_filters: pr.event_filters.clone(),
             });
         match self
             .send_request(
@@ -1761,6 +1793,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             priming: Box::new(ReportReassembler::default()),
                             node_id: pr.node_id,
                             paths: pr.paths,
+                            event_paths: pr.event_paths,
+                            event_filters: pr.event_filters,
                             min_interval: pr.min_interval,
                             max_interval: pr.max_interval,
                             retry_count: pr.retry_count,
@@ -3165,6 +3199,7 @@ mod tests {
         let mut sub = node
             .subscribe(
                 &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                &[],
                 1,
                 30,
             )
@@ -3246,7 +3281,7 @@ mod tests {
 
         let node = controller.node(device_node_id);
         let mut sub = node
-            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x1d)], 1, 30)
+            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x1d)], &[], 1, 30)
             .await
             .expect("subscribe");
 
@@ -3309,7 +3344,12 @@ mod tests {
 
         let node = controller.node(device_node_id);
         let mut sub = node
-            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x06)], 1, 30)
+            .subscribe(
+                &[matter_interaction::ReadPath::cluster(1, 0x06)],
+                &[matter_interaction::EventPath::cluster(0, 0x28)],
+                1,
+                30,
+            )
             .await
             .expect("subscribe");
 
@@ -3380,6 +3420,7 @@ mod tests {
         let mut sub = node
             .subscribe(
                 &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                &[],
                 1,
                 30,
             )
@@ -3458,6 +3499,7 @@ mod tests {
         let mut sub = node
             .subscribe(
                 &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                &[],
                 1,
                 0,
             )
@@ -3527,6 +3569,8 @@ mod tests {
             wire_sub_id: 0x1234,
             node_id: 2,
             paths: vec![matter_interaction::ReadPath::all()],
+            event_paths: vec![],
+            event_filters: vec![],
             min_interval: 1,
             max_interval: 30,
             liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
@@ -4025,6 +4069,8 @@ mod tests {
                 wire_sub_id: 0x1234,
                 node_id: 2,
                 paths: vec![matter_interaction::ReadPath::all()],
+                event_paths: vec![],
+                event_filters: vec![],
                 min_interval: 1,
                 max_interval: 30,
                 // Already overdue at spawn time.

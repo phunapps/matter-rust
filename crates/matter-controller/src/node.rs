@@ -227,10 +227,17 @@ impl Node {
         }
     }
 
-    /// Subscribe to attribute reports for `paths` (concrete or wildcard). The
-    /// device reports the priming values, then changes within
-    /// `[min_interval, max_interval]` seconds. Await reports via
+    /// Subscribe to attribute reports for `attrs` and/or event reports for
+    /// `events` (concrete or wildcard paths) on a **single** subscription. The
+    /// device sends the priming values/events, then steady-state changes within
+    /// `[min_interval, max_interval]` seconds. Await
+    /// [`SubscriptionEvent`](crate::subscription::SubscriptionEvent)s — both
+    /// `Report` (attributes) and `Event` (events) — via
     /// [`Subscription::next`](crate::subscription::Subscription::next).
+    ///
+    /// Pass an empty slice for either to subscribe to only the other. The
+    /// subscription auto-resubscribes transparently on staleness/session loss,
+    /// re-requesting the same attribute and event paths.
     ///
     /// # Errors
     ///
@@ -239,7 +246,8 @@ impl Node {
     /// subscription.
     pub async fn subscribe(
         &self,
-        paths: &[ReadPath],
+        attrs: &[ReadPath],
+        events: &[EventPath],
         min_interval: u16,
         max_interval: u16,
     ) -> Result<crate::subscription::Subscription, Error> {
@@ -247,7 +255,9 @@ impl Node {
         self.tx
             .send(Command::Subscribe {
                 node_id: self.node_id,
-                paths: paths.to_vec(),
+                paths: attrs.to_vec(),
+                event_paths: events.to_vec(),
+                event_filters: Vec::new(),
                 min_interval,
                 max_interval,
                 reply,

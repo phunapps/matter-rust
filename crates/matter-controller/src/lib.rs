@@ -61,7 +61,7 @@
 //! }
 //!
 //! // Subscribe to live changes.
-//! let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
+//! let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
 //! while let Some(event) = sub.next().await {
 //!     if let SubscriptionEvent::Report(change) = event {
 //!         println!("changed: {:?} = {:?}", change.path, change.value);

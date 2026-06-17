@@ -50,7 +50,7 @@ let node = controller.node(node_id);
 
 // Read all OnOff attributes; subscribe to changes.
 let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;
-let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
+let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
 while let Some(change) = sub.next().await { /* … */ }
 ```
 
