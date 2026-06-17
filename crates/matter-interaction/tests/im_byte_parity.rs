@@ -20,7 +20,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
 use matter_interaction::invoke::build_invoke_request;
 use matter_interaction::path::AttributePath;
-use matter_interaction::event::{EventFilter, EventPath};
+use matter_interaction::event::{EventFilter, EventPath, EventReport};
 use matter_interaction::read::{build_read_request_full, build_read_request_paths};
 use matter_interaction::subscription::{
     build_status_response, build_subscribe_request, parse_subscribe_response, SubscribeRequest,
@@ -186,6 +186,47 @@ fn read_request_with_event_path_matches_matter_js() {
         ours, theirs,
         "event ReadRequest must match matter.js byte-for-byte"
     );
+}
+
+#[derive(Deserialize)]
+struct EventReportFixture {
+    event: EvReportExpect,
+    response_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct EvReportExpect {
+    endpoint: u16,
+    cluster: u32,
+    event: u32,
+    event_number: u64,
+    #[allow(dead_code)]
+    priority: u8,
+}
+
+#[test]
+fn parses_event_report_from_matter_js() {
+    let path = fixtures_root()
+        .join("report")
+        .join("report_data_event.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no event report fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: EventReportFixture = serde_json::from_str(&raw).unwrap();
+    let bytes = B64.decode(&f.response_message_b64).unwrap();
+    let report = parse_report_data(&bytes).unwrap();
+    assert_eq!(report.events().len(), 1, "expected one event report");
+    match &report.events()[0] {
+        EventReport::Data(it) => {
+            assert_eq!(it.path.endpoint, Some(f.event.endpoint));
+            assert_eq!(it.path.cluster, Some(f.event.cluster));
+            assert_eq!(it.path.event, Some(f.event.event));
+            assert_eq!(it.event_number, f.event.event_number);
+        }
+        EventReport::Status { .. } => panic!("expected Data, got Status"),
+        _ => panic!("unexpected EventReport variant"),
+    }
 }
 
 #[derive(Deserialize)]

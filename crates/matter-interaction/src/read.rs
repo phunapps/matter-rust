@@ -123,6 +123,9 @@ pub struct ReportData {
     /// `SuppressResponse` (context tag 4): `true` ⇒ the sender does not expect
     /// a `StatusResponse` for this message. Absent on the wire ⇒ `false`.
     pub suppress_response: bool,
+    /// Every `EventReportIB` carried in `eventReports` (context tag 2), in wire
+    /// order. Empty for attribute-only reports.
+    pub events: Vec<crate::event::EventReport>,
 }
 
 impl ReportData {
@@ -133,6 +136,10 @@ impl ReportData {
     /// way to build one (e.g. test fixtures that synthesize a report). Any
     /// future spec-driven field will gain a default here without breaking
     /// existing callers.
+    ///
+    /// Synthesizes an attribute-only report (`events` empty). Event reports are
+    /// populated only by [`parse_report_data`]; an external caller that needs to
+    /// synthesize events should construct via the parser from bytes.
     #[must_use]
     pub fn new(
         items: Vec<AttributeReportItem>,
@@ -145,7 +152,15 @@ impl ReportData {
             subscription_id,
             more_chunked_messages,
             suppress_response,
+            events: Vec::new(),
         }
+    }
+
+    /// Borrowing view over the event reports carried in this message
+    /// (`eventReports`, context tag 2). Empty for attribute-only reports.
+    #[must_use]
+    pub fn events(&self) -> &[crate::event::EventReport] {
+        &self.events
     }
 
     /// Borrowing `(path, value)` view over the whole-attribute `Replace` reports
@@ -228,6 +243,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
     expect_message_struct(&mut r)?;
 
     let mut items: Vec<AttributeReportItem> = Vec::new();
+    let mut events: Vec<crate::event::EventReport> = Vec::new();
     let mut subscription_id: Option<u32> = None;
     let mut more_chunked_messages = false;
     let mut suppress_response = false;
@@ -262,7 +278,12 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
                 tag: Tag::Context(4),
                 value: Value::Bool(b),
             }) => suppress_response = b,
-            // eventReports [2] and any other container — skip.
+            // eventReports [2] — consume the array inline.
+            Some(Element::ContainerStart {
+                tag: Tag::Context(2),
+                kind: ContainerKind::Array,
+            }) => crate::event::parse_event_reports(&mut r, &mut events)?,
+            // Any other container — skip.
             Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
             Some(_) => {}
         }
@@ -273,6 +294,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
         subscription_id,
         more_chunked_messages,
         suppress_response,
+        events,
     })
 }
 
