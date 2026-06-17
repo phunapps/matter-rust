@@ -4,9 +4,10 @@ use tokio::sync::oneshot;
 
 use matter_codec::{Tag, TlvReader, TlvWriter, Value};
 use matter_interaction::{
-    build_invoke_request, build_read_request_paths, build_write_request, parse_invoke_response,
-    parse_write_response, AttributePath, AttributeWriteRequest, CommandPath, ImStatus,
-    InvokeResponse, ReadPath, ReportAccumulator, ReportData,
+    build_invoke_request, build_read_request_full, build_read_request_paths, build_write_request,
+    parse_invoke_response, parse_write_response, AttributePath, AttributeWriteRequest, CommandPath,
+    EventFilter, EventPath, EventReport, ImStatus, InvokeResponse, ReadPath, ReportAccumulator,
+    ReportData,
 };
 
 use crate::actor::Command;
@@ -144,6 +145,33 @@ impl Node {
             acc.push(chunk)?;
         }
         Ok(acc.finish())
+    }
+
+    /// Read events for the given (concrete or wildcard) event paths, optionally
+    /// filtered to events with number `>= event_min` (via [`EventFilter`]).
+    /// Returns every reported [`EventReport`] in wire order, reassembled across
+    /// chunks. Decode the event payloads with `matter-clusters` codecs.
+    ///
+    /// Events are discrete records (not list attributes), so — unlike
+    /// [`read`](Self::read) — there is no merge step: each chunk's events are
+    /// concatenated in arrival order.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`], any connect/transport error, or
+    /// [`Error::InteractionModel`] if a response chunk cannot be parsed.
+    pub async fn read_events(
+        &self,
+        paths: &[EventPath],
+        filters: &[EventFilter],
+    ) -> Result<Vec<EventReport>, Error> {
+        let req = build_read_request_full(&[], paths, filters);
+        let chunks = self.round_trip_chunked(req).await?;
+        let mut events = Vec::new();
+        for chunk in chunks {
+            events.extend(chunk.events);
+        }
+        Ok(events)
     }
 
     /// Write attributes. Each `Value` is TLV-encoded into the write payload.

@@ -95,7 +95,10 @@ pub use error::Error;
 pub use fabric::{create_fabric, FabricConfig};
 pub use matter_cert::MatterTime;
 pub use matter_codec::Value;
-pub use matter_interaction::{AttributePath, CommandPath, ImStatus, ReadPath};
+pub use matter_interaction::{
+    AttributePath, CommandPath, EventFilter, EventPath, EventPriority, EventReport,
+    EventReportItem, EventTimestamp, ImStatus, ReadPath,
+};
 pub use node::{InvokeResult, Node};
 pub use state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
 pub use store::{ControllerStore, FileStore, StoreError};

@@ -1937,6 +1937,42 @@ mod tests {
         buf
     }
 
+    /// Build a `ReportDataMessage` carrying one `eventReports[2]` entry: an
+    /// `EventData` for `(ep, cl, ev)` with the given event number and payload.
+    /// Mirrors the matter.js `report_data_event.json` fixture shape
+    /// (EventPathIB is a list; EventDataIB tags path 0 / number 1 / priority 2 /
+    /// epoch 3 / data 7).
+    fn build_report_data_event(
+        ep: u16,
+        cl: u32,
+        ev: u32,
+        event_number: u64,
+        value: &matter_codec::Value,
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // ReportDataMessage
+        w.start_array(Tag::Context(2)).unwrap(); // eventReports
+        w.start_structure(Tag::Anonymous).unwrap(); // EventReportIB
+        w.start_structure(Tag::Context(1)).unwrap(); // EventData
+        w.start_list(Tag::Context(0)).unwrap(); // Path (EventPathIB list)
+        w.put_uint(Tag::Context(1), u64::from(ep)).unwrap();
+        w.put_uint(Tag::Context(2), u64::from(cl)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(ev)).unwrap();
+        w.end_container().unwrap(); // /Path
+        w.put_uint(Tag::Context(1), event_number).unwrap(); // EventNumber
+        w.put_uint(Tag::Context(2), 2).unwrap(); // Priority = Critical
+        w.put_uint(Tag::Context(3), 0).unwrap(); // EpochTimestamp
+        w.write_value(Tag::Context(7), value).unwrap(); // Data
+        w.end_container().unwrap(); // /EventData
+        w.end_container().unwrap(); // /EventReportIB
+        w.end_container().unwrap(); // /eventReports
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap(); // /ReportDataMessage
+        buf
+    }
+
     /// Like [`build_report_data`] but sets `MoreChunkedMessages` (context tag 3)
     /// when `more` — i.e. a non-final chunk that must be acked + continued.
     fn build_report_data_chunk(
@@ -2812,6 +2848,67 @@ mod tests {
         assert_eq!(path.cluster, 0x06);
         assert_eq!(path.attribute, 0x0000);
         assert_eq!(*value, matter_codec::Value::Bool(true));
+
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_events_returns_event_report_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // The device answers the event read with a ReportData carrying one
+        // EventData: BasicInformation.StartUp (0x28 / event 0x00) on ep 0.
+        let report_blob =
+            build_report_data_event(0, 0x28, 0x00, 1, &matter_codec::Value::Uint(7));
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            report_blob,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let events = node
+            .read_events(
+                &[matter_interaction::EventPath::concrete(0, 0x28, 0x00)],
+                &[],
+            )
+            .await
+            .expect("read_events");
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            matter_interaction::EventReport::Data(it) => {
+                assert_eq!(it.path.endpoint, Some(0));
+                assert_eq!(it.path.cluster, Some(0x28));
+                assert_eq!(it.path.event, Some(0x00));
+                assert_eq!(it.event_number, 1);
+                assert_eq!(it.value, matter_codec::Value::Uint(7));
+            }
+            other => panic!("expected EventReport::Data, got {other:?}"),
+        }
 
         device.await.unwrap();
     }
