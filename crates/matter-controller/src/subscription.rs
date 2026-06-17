@@ -1,7 +1,7 @@
 //! A live attribute subscription: reports arrive via [`Subscription::next`].
 
 use matter_codec::Value;
-use matter_interaction::AttributePath;
+use matter_interaction::{AttributePath, EventReport};
 use tokio::sync::mpsc;
 
 use crate::actor::Command;
@@ -25,6 +25,12 @@ pub struct AttributeReport {
 pub enum SubscriptionEvent {
     /// A reported attribute value (a priming value or a steady-state change).
     Report(AttributeReport),
+    /// A reported event (a priming/historical event or a steady-state emission).
+    /// Delivered on the same bounded report channel as [`Self::Report`]; under
+    /// backpressure it is dropped and surfaced via [`Self::Lagged`] like any
+    /// report. Events have no list-merge semantics, so they are delivered as they
+    /// arrive (they bypass the chunked-attribute reassembler).
+    Event(EventReport),
     /// The subscription was (re-)established by the device; carries the
     /// device-assigned subscription id. Fired after each successful
     /// `SubscribeResponse`, including after an auto-resubscribe (SH.2b). Priming

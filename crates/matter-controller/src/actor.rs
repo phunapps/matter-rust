@@ -138,6 +138,34 @@ impl ReportSink {
         }
     }
 
+    /// Like [`try_send_report`](Self::try_send_report) but for an event report.
+    /// Shares the bounded report channel + `Lagged` accounting (events are
+    /// report-volume and the device controls their cadence, so they must be
+    /// bounded the same way). Returns `false` only if the consumer's report
+    /// receiver is gone (closed), signalling the subscription should be reaped.
+    fn try_send_event(&mut self, event: matter_interaction::EventReport) -> bool {
+        // Flush a pending Lagged first (mirrors try_send_report).
+        if self.dropped > 0 {
+            match self.report_tx.try_send(SubscriptionEvent::Lagged {
+                dropped: self.dropped,
+            }) {
+                Ok(()) => self.dropped = 0,
+                Err(mpsc::error::TrySendError::Closed(_)) => return false,
+                Err(mpsc::error::TrySendError::Full(_)) => {}
+            }
+        }
+        match self.report_tx.try_send(SubscriptionEvent::Event(event)) {
+            Ok(()) => true,
+            // Buffer full: drop this event and count it (coalesced Lagged later).
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped += 1;
+                true
+            }
+            // Consumer gone: reap the subscription.
+            Err(mpsc::error::TrySendError::Closed(_)) => false,
+        }
+    }
+
     /// Deliver a control event reliably. Returns `false` if the consumer's
     /// control receiver is gone (the subscription should be reaped).
     fn send_control(&self, event: SubscriptionEvent) -> bool {
@@ -1184,7 +1212,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// current `(session, wire_sub_id)`, reassembling chunks and resetting the
     /// liveness deadline, then ack on the report's own exchange.
     async fn deliver_report(&mut self, session_id: SessionId, exchange_id: u16, payload: &[u8]) {
-        let Ok(rd) = matter_interaction::parse_report_data(payload) else {
+        let Ok(mut rd) = matter_interaction::parse_report_data(payload) else {
             return;
         };
         let Some(wire_sub_id) = rd.subscription_id else {
@@ -1201,19 +1229,32 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         entry.liveness_deadline =
             now + std::time::Duration::from_secs(u64::from(entry.max_interval)) + LIVENESS_GRACE;
         let peer = entry.peer;
+        // Events have no merge semantics — forward them immediately, bypassing the
+        // attribute reassembler. Take them out before `push_parsed` consumes `rd`.
+        // Both the event loop and `push_parsed` borrow `entry` mutably, so the
+        // event forwarding completes before the reassembler call.
+        let mut consumer_gone = false;
+        for ev in std::mem::take(&mut rd.events) {
+            // try_send_event: never blocks the actor loop; a full buffer drops +
+            // counts (coalesced `Lagged`), a closed receiver reaps the sub.
+            if !entry.tx.try_send_event(ev) {
+                consumer_gone = true;
+                break;
+            }
+        }
         // `rd` was parsed once above (to read its `subscription_id`); hand the
         // parsed struct straight to the reassembler rather than re-parsing the
         // same bytes inside `push`.
-        let merged = entry.reassembler.push_parsed(rd);
-        let mut consumer_gone = false;
-        if let Some(attrs) = merged {
-            for (path, value) in attrs {
-                // try_send: never blocks the actor loop. A full buffer drops the
-                // report and counts it (surfaced later as a coalesced `Lagged`);
-                // a closed receiver means the consumer is gone — reap the sub.
-                if !entry.tx.try_send_report(AttributeReport { path, value }) {
-                    consumer_gone = true;
-                    break;
+        if !consumer_gone {
+            if let Some(attrs) = entry.reassembler.push_parsed(rd) {
+                for (path, value) in attrs {
+                    // try_send: never blocks the actor loop. A full buffer drops the
+                    // report and counts it (surfaced later as a coalesced `Lagged`);
+                    // a closed receiver means the consumer is gone — reap the sub.
+                    if !entry.tx.try_send_report(AttributeReport { path, value }) {
+                        consumer_gone = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1335,9 +1376,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }) = self.pending.get_mut(&key)
             {
                 // Parse the priming chunk once and merge the parsed struct.
-                let Ok(rd) = matter_interaction::parse_report_data(&payload) else {
+                let Ok(mut rd) = matter_interaction::parse_report_data(&payload) else {
                     return;
                 };
+                // Priming events bypass the reassembler too — forward immediately.
+                for ev in std::mem::take(&mut rd.events) {
+                    if !report_tx.try_send_event(ev) {
+                        break;
+                    }
+                }
                 if let Some(attrs) = priming.push_parsed(rd) {
                     for (path, value) in attrs {
                         // Priming reports are bounded the same way as steady-state
@@ -1957,6 +2004,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap(); // ReportDataMessage
+        w.put_uint(Tag::Context(0), 0x1234_5678).unwrap(); // subscriptionId (steady-state)
         w.start_array(Tag::Context(2)).unwrap(); // eventReports
         w.start_structure(Tag::Anonymous).unwrap(); // EventReportIB
         w.start_structure(Tag::Context(1)).unwrap(); // EventData
@@ -3217,6 +3265,73 @@ mod tests {
             matter_codec::Value::Array(vec![matter_codec::Value::Uint(7)]),
             "list-append must reassemble into the full list"
         );
+
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
+    }
+
+    #[tokio::test]
+    async fn subscribe_streams_event_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // The device streams one steady-state event report: BasicInformation.StartUp
+        // (0x28 / event 0x00) on ep 0. The consumer must observe it as a
+        // SubscriptionEvent::Event (events bypass the attribute reassembler).
+        let event_blob =
+            build_report_data_event(0, 0x28, 0x00, 1, &matter_codec::Value::Uint(7));
+        let device = tokio::spawn(run_subscription_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D7,
+            vec![event_blob],
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let mut sub = node
+            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x06)], 1, 30)
+            .await
+            .expect("subscribe");
+
+        match sub.next().await {
+            Some(SubscriptionEvent::Established { .. }) => {}
+            other => panic!("expected Established, got {other:?}"),
+        }
+        // Drain to the first event (Report/Lagged could in principle interleave).
+        loop {
+            match sub.next().await {
+                Some(SubscriptionEvent::Event(matter_interaction::EventReport::Data(it))) => {
+                    assert_eq!(it.path.endpoint, Some(0));
+                    assert_eq!(it.path.cluster, Some(0x28));
+                    assert_eq!(it.path.event, Some(0x00));
+                    assert_eq!(it.event_number, 1);
+                    assert_eq!(it.value, matter_codec::Value::Uint(7));
+                    break;
+                }
+                Some(_) => continue,
+                None => panic!("subscription ended before an event arrived"),
+            }
+        }
 
         device.await.unwrap();
         sub.cancel().await.expect("cancel");
