@@ -149,7 +149,12 @@ async fn main() -> Result<()> {
 
     // 6. Subscribe to live changes (priming report + steady-state updates).
     let mut sub = node
-        .subscribe(&[ReadPath::cluster(ONOFF_ENDPOINT, ONOFF_CLUSTER)], &[], 1, 30)
+        .subscribe(
+            &[ReadPath::cluster(ONOFF_ENDPOINT, ONOFF_CLUSTER)],
+            &[],
+            1,
+            30,
+        )
         .await
         .context("subscribing")?;
     println!("subscribed; printing up to 3 reports (Ctrl-C to stop)…");

@@ -99,7 +99,7 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
 
 ## matter-interaction
 
-### [Unreleased] — M9-B1 event reads
+### [Unreleased] — M9-B1 event reads, M9-B2 event subscribe
 
 #### Added
 
@@ -115,8 +115,16 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
 - `ReportData` gains `events: Vec<EventReport>` (populated from
   `eventReports[2]`); `ReportData::new` stays 4-arg (events default empty —
   no caller ripple).
-- `matter-controller`: `Node::read_events(paths, filters)` over the chunked-read
-  transaction; event types re-exported.
+- `SubscribeRequest` gains `event_paths` / `event_filters`;
+  `build_subscribe_request` emits `EventRequests[4]` / `EventFilters[5]`
+  (byte-parity vs matter.js; attribute-only requests stay byte-identical).
+- `matter-controller`: `Node::read_events(paths, filters)` (M9-B1) over the
+  chunked-read transaction; event types re-exported. **M9-B2:**
+  `SubscriptionEvent::Event(EventReport)` and a **breaking**
+  `Node::subscribe(attrs, events, min_interval, max_interval)` — one
+  subscription carries attributes and events; event reports are delivered as
+  they arrive (bypassing the chunked-attribute reassembler) and the
+  auto-resubscribe engine re-requests the same events.
 
 ### [Unreleased] — M7.1 crate created (IM lift + Write support)
 

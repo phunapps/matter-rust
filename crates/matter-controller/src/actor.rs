@@ -1288,6 +1288,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// report receiver is handed back via `reply` once the `SubscribeResponse`
     /// arrives (see [`Self::resolve_subscribe`]); priming reports that precede it
     /// flow through the same channel.
+    // Mirrors the `Command::Subscribe` variant's fields one-for-one; bundling them
+    // into a params struct would only move the same set behind one name.
+    #[allow(clippy::too_many_arguments)]
     async fn start_subscribe(
         &mut self,
         node_id: u64,
@@ -3281,7 +3284,12 @@ mod tests {
 
         let node = controller.node(device_node_id);
         let mut sub = node
-            .subscribe(&[matter_interaction::ReadPath::cluster(1, 0x1d)], &[], 1, 30)
+            .subscribe(
+                &[matter_interaction::ReadPath::cluster(1, 0x1d)],
+                &[],
+                1,
+                30,
+            )
             .await
             .expect("subscribe");
 
@@ -3321,8 +3329,7 @@ mod tests {
         // The device streams one steady-state event report: BasicInformation.StartUp
         // (0x28 / event 0x00) on ep 0. The consumer must observe it as a
         // SubscriptionEvent::Event (events bypass the attribute reassembler).
-        let event_blob =
-            build_report_data_event(0, 0x28, 0x00, 1, &matter_codec::Value::Uint(7));
+        let event_blob = build_report_data_event(0, 0x28, 0x00, 1, &matter_codec::Value::Uint(7));
         let device = tokio::spawn(run_subscription_device(
             dev_io,
             ctrl_addr,
@@ -3368,7 +3375,7 @@ mod tests {
                     assert_eq!(it.value, matter_codec::Value::Uint(7));
                     break;
                 }
-                Some(_) => continue,
+                Some(_) => {}
                 None => panic!("subscription ended before an event arrived"),
             }
         }

@@ -21,8 +21,8 @@ matter-rust returns **raw `Value`s** rather than runtime-typed cluster objects.
 | `node.getClusterClient(OnOff)` + typed getters | `node.read(&[ReadPath])` → `Vec<(AttributePath, Value)>` | Raw `Value`; decode with `matter-clusters` codecs |
 | `clusterClient.toggle()` | `node.invoke(CommandPath, Value)` | Raw command fields as a `Value` |
 | `clusterClient.setX(v)` | `node.write(&[(AttributePath, Value)])` | Returns per-path `ImStatus` |
-| `node.subscribeAllAttributes(…)` / `subscribeMultiple` | `node.subscribe(&[ReadPath], min, max)` → `Subscription` | Pull stream (`next().await`), not an `EventEmitter` |
-| `subscription` callback | `while let Some(event) = sub.next().await { … }` | `event: SubscriptionEvent::{Report(AttributeReport), Established, Resubscribing}` |
+| `node.subscribeAllAttributes(…)` / `subscribeMultiple` / `subscribeEvents` | `node.subscribe(&[ReadPath], &[EventPath], min, max)` → `Subscription` | One subscription carries attrs **and** events; pull stream (`next().await`), not an `EventEmitter` |
+| `subscription` callback | `while let Some(event) = sub.next().await { … }` | `event: SubscriptionEvent::{Report(AttributeReport), Event(EventReport), Established, Resubscribing, Lagged}` |
 | wildcard read | `ReadPath::cluster(ep, cl)` / `ReadPath::all()` | `None` fields = wildcard |
 | `node.readEvent(...)` | `node.read_events(&[EventPath], &[EventFilter])` → `Vec<EventReport>` | Raw event payloads as `Value`; `EventFilter::from_event_min(n)` resumes after event `n` |
 
@@ -157,13 +157,19 @@ node.events.attributeChanged.on(data => { … });
 ```
 
 ```rust
-// matter-rust
-let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
+// matter-rust — ONE subscription carries attributes AND events. Pass an empty
+// slice for either to subscribe to only the other (here: DoorLock state attrs +
+// LockOperation events on one subscription).
+let mut sub = node
+    .subscribe(&[ReadPath::cluster(1, 0x0101)], &[EventPath::cluster(1, 0x0101)], 1, 30)
+    .await?;
 while let Some(event) = sub.next().await {
     match event {
-        SubscriptionEvent::Report(report) => println!("{:?} = {:?}", report.path, report.value),
+        SubscriptionEvent::Report(report) => println!("attr {:?} = {:?}", report.path, report.value),
+        SubscriptionEvent::Event(ev) => println!("event {ev:?}"),
         SubscriptionEvent::Established { subscription_id } => println!("established {subscription_id:#x}"),
         SubscriptionEvent::Resubscribing { cause } => println!("resubscribing: {cause}"),
+        _ => {} // SubscriptionEvent is non_exhaustive (e.g. Lagged)
     }
 }
 sub.cancel().await?; // or just drop `sub`
