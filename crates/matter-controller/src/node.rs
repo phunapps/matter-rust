@@ -4,10 +4,10 @@ use tokio::sync::oneshot;
 
 use matter_codec::{Tag, TlvReader, TlvWriter, Value};
 use matter_interaction::{
-    build_invoke_request, build_read_request_full, build_read_request_paths, build_write_request,
-    parse_invoke_response, parse_write_response, AttributePath, AttributeWriteRequest, CommandPath,
-    EventFilter, EventPath, EventReport, ImStatus, InvokeResponse, ReadPath, ReportAccumulator,
-    ReportData,
+    build_invoke_request, build_invoke_request_timed, build_read_request_full,
+    build_read_request_paths, build_write_request, build_write_request_timed, parse_invoke_response,
+    parse_write_response, AttributePath, AttributeWriteRequest, CommandPath, EventFilter, EventPath,
+    EventReport, ImStatus, InvokeResponse, ReadPath, ReportAccumulator, ReportData,
 };
 
 use crate::actor::Command;
@@ -16,6 +16,14 @@ use crate::error::Error;
 pub(crate) const OP_READ_REQUEST: u8 = 0x02;
 const OP_WRITE_REQUEST: u8 = 0x06;
 const OP_INVOKE_REQUEST: u8 = 0x08;
+
+/// Default timed-interaction timeout (milliseconds) used by
+/// [`Node::write_timed`] / [`Node::invoke_timed`] when the caller passes `None`.
+///
+/// This is the window the **device** holds open for the follow-up Write/Invoke
+/// after our `TimedRequest`. We send the action immediately, so this only needs
+/// to cover the round-trip plus MRP retransmits; a chip-aligned 10s is generous.
+pub const TIMED_DEFAULT_MS: u16 = 10_000;
 
 /// Outcome of [`Node::invoke`].
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +130,34 @@ impl Node {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
+    /// Run a timed interaction: send a `TimedRequest`, await
+    /// `StatusResponse(SUCCESS)`, then send `action_payload` (opcode
+    /// `action_opcode`) on the same exchange and return its response bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped, or any
+    /// connect / transport / driver error.
+    pub(crate) async fn round_trip_timed(
+        &self,
+        timeout_ms: u16,
+        action_opcode: u8,
+        action_payload: Vec<u8>,
+    ) -> Result<Vec<u8>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::TimedRoundTrip {
+                node_id: self.node_id,
+                timeout_ms,
+                action_opcode,
+                action_payload,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Read attributes (concrete or wildcard paths). Returns the device's
     /// `(path, value)` reports keyed by the concrete paths it reports. Values
     /// are raw [`Value`]; decode them with `matter-clusters` codecs.
@@ -202,6 +238,41 @@ impl Node {
         Ok(parse_write_response(&resp)?)
     }
 
+    /// Like [`write`](Self::write) but always performs a **timed** interaction:
+    /// a `TimedRequest` precedes the write (required by some attributes, e.g.
+    /// certain DoorLock settings). `timeout_ms` defaults to [`TIMED_DEFAULT_MS`].
+    ///
+    /// Plain [`write`](Self::write) already auto-upgrades to timed on a
+    /// `NEEDS_TIMED_INTERACTION` rejection; use this when you want to force the
+    /// timed path explicitly (e.g. to avoid the first wasted round-trip, or for
+    /// testing).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::write`].
+    pub async fn write_timed(
+        &self,
+        writes: &[(AttributePath, Value)],
+        timeout_ms: Option<u16>,
+    ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
+        let mut reqs = Vec::with_capacity(writes.len());
+        for (path, value) in writes {
+            reqs.push(AttributeWriteRequest {
+                path: *path,
+                value_tlv: value_to_tlv(value)?,
+            });
+        }
+        let payload = build_write_request_timed(&reqs);
+        let resp = self
+            .round_trip_timed(
+                timeout_ms.unwrap_or(TIMED_DEFAULT_MS),
+                OP_WRITE_REQUEST,
+                payload,
+            )
+            .await?;
+        Ok(parse_write_response(&resp)?)
+    }
+
     /// Invoke a command with raw `Value` fields (TLV-encoded into the payload).
     ///
     /// # Errors
@@ -216,6 +287,40 @@ impl Node {
                 OP_INVOKE_REQUEST,
                 matter_transport::ProtocolId::INTERACTION_MODEL,
                 req,
+            )
+            .await?;
+        match parse_invoke_response(&resp)? {
+            InvokeResponse::Status(s) => Ok(InvokeResult::Status(s)),
+            InvokeResponse::Command { path, fields_tlv } => Ok(InvokeResult::Data {
+                path,
+                fields: tlv_to_value(&fields_tlv)?,
+            }),
+        }
+    }
+
+    /// Like [`invoke`](Self::invoke) but always performs a **timed** interaction
+    /// (a `TimedRequest` precedes the command — required by some commands, e.g.
+    /// `DoorLock` lock/unlock). `timeout_ms` defaults to [`TIMED_DEFAULT_MS`].
+    ///
+    /// Plain [`invoke`](Self::invoke) already auto-upgrades to timed on a
+    /// `NEEDS_TIMED_INTERACTION` rejection; use this to force the timed path.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::invoke`].
+    pub async fn invoke_timed(
+        &self,
+        path: CommandPath,
+        fields: Value,
+        timeout_ms: Option<u16>,
+    ) -> Result<InvokeResult, Error> {
+        let fields_tlv = value_to_tlv(&fields)?;
+        let payload = build_invoke_request_timed(path, &fields_tlv);
+        let resp = self
+            .round_trip_timed(
+                timeout_ms.unwrap_or(TIMED_DEFAULT_MS),
+                OP_INVOKE_REQUEST,
+                payload,
             )
             .await?;
         match parse_invoke_response(&resp)? {

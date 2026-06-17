@@ -26,6 +26,7 @@ const OP_SUBSCRIBE_REQUEST: u8 = 0x03;
 const OP_SUBSCRIBE_RESPONSE: u8 = 0x04;
 const OP_REPORT_DATA: u8 = 0x05;
 const OP_STATUS_RESPONSE: u8 = 0x01;
+const OP_TIMED_REQUEST: u8 = 0x0a;
 
 /// How often the loop wakes to drive MRP / liveness when no MRP deadline is
 /// pending.
@@ -239,6 +240,15 @@ struct PendingRequest {
 enum PendingReply {
     /// Single request/response (`Node::round_trip`).
     RoundTrip(oneshot::Sender<Result<Vec<u8>, Error>>),
+    /// Timed handshake: a `TimedRequest` is in flight. On `StatusResponse(SUCCESS)`
+    /// the actor sends `action_payload` (opcode `action_opcode`) on the SAME
+    /// exchange and converts this pending into a [`RoundTrip`](Self::RoundTrip)
+    /// awaiting the action's response, which resolves `reply`.
+    TimedAction {
+        action_opcode: u8,
+        action_payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    },
     /// Chunked read: accumulate parsed `ReportData` chunks; resolve on the
     /// final chunk. Each chunk is parsed exactly once here (in the actor's
     /// receive path) and handed to `Node::read` already decoded, so the read
@@ -413,6 +423,17 @@ pub(crate) enum Command {
         min_interval: u16,
         max_interval: u16,
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
+    },
+    /// Timed round-trip: send a `TimedRequest`, await `StatusResponse(SUCCESS)`,
+    /// then send `action_opcode`/`action_payload` on the SAME exchange and return
+    /// its response bytes. Used by `Node::write_timed`/`invoke_timed` and the
+    /// timed-escalation path of [`Command::Action`].
+    TimedRoundTrip {
+        node_id: u64,
+        timeout_ms: u16,
+        action_opcode: u8,
+        action_payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
     /// Cancel the subscription identified by its `(session, subscription_id)` key.
     CancelSubscription { key: SubId },
@@ -652,6 +673,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     event_filters,
                     min_interval,
                     max_interval,
+                    reply,
+                )
+                .await;
+            }
+            Command::TimedRoundTrip {
+                node_id,
+                timeout_ms,
+                action_opcode,
+                action_payload,
+                reply,
+            } => {
+                self.start_timed_round_trip(
+                    node_id,
+                    timeout_ms,
+                    action_opcode,
+                    action_payload,
                     reply,
                 )
                 .await;
@@ -1027,6 +1064,82 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
+    /// Send a `TimedRequest` and register a [`PendingReply::TimedAction`] that, on
+    /// the device's `StatusResponse(SUCCESS)`, sends `action_payload` on the same
+    /// exchange (see [`Self::resolve_timed`]). Shared by
+    /// [`Self::start_timed_round_trip`] and the timed-escalation path of a
+    /// write/invoke `Action`.
+    #[allow(clippy::too_many_arguments)] // the timed handshake inputs; bundling only renames them.
+    async fn begin_timed(
+        &mut self,
+        sid: SessionId,
+        peer: SocketAddr,
+        node_id: u64,
+        timeout_ms: u16,
+        action_opcode: u8,
+        action_payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    ) {
+        let req = matter_interaction::build_timed_request(timeout_ms);
+        match self
+            .send_request(sid, peer, OP_TIMED_REQUEST, ProtocolId::INTERACTION_MODEL, &req)
+            .await
+        {
+            Ok(exchange) => {
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode: OP_TIMED_REQUEST,
+                            protocol_id: ProtocolId::INTERACTION_MODEL,
+                            payload: req,
+                        },
+                        retried: false,
+                        reply: PendingReply::TimedAction {
+                            action_opcode,
+                            action_payload,
+                            reply,
+                        },
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e));
+            }
+        }
+    }
+
+    /// Timed round-trip: resolve the session, then run the `TimedRequest` →
+    /// action handshake (see [`Self::begin_timed`] / [`Self::resolve_timed`]).
+    async fn start_timed_round_trip(
+        &mut self,
+        node_id: u64,
+        timeout_ms: u16,
+        action_opcode: u8,
+        action_payload: Vec<u8>,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    ) {
+        let (sid, peer) = match self.session_for(node_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        self.begin_timed(
+            sid,
+            peer,
+            node_id,
+            timeout_ms,
+            action_opcode,
+            action_payload,
+            reply,
+        )
+        .await;
+    }
+
     /// Send a `ReadRequest` and register a pending read; chunks accumulate in
     /// the pending entry and resolve on the final chunk.
     async fn start_read(
@@ -1126,6 +1239,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             RoundTrip,
             Read,
             Subscribe,
+            Timed,
         }
         let key = (session_id, exchange_id);
         let kind = match self.pending.get(&key) {
@@ -1133,6 +1247,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 PendingReply::RoundTrip(_) => Kind::RoundTrip,
                 PendingReply::Read { .. } => Kind::Read,
                 PendingReply::Subscribe { .. } => Kind::Subscribe,
+                PendingReply::TimedAction { .. } => Kind::Timed,
             },
             None => return,
         };
@@ -1198,7 +1313,89 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.resolve_subscribe(session_id, exchange_id, opcode, payload)
                     .await;
             }
+            Kind::Timed => {
+                self.resolve_timed(session_id, exchange_id, payload).await;
+            }
         }
+    }
+
+    /// Drive a timed handshake on the device's `StatusResponse` to our
+    /// `TimedRequest`. On SUCCESS, send the action on the SAME exchange and
+    /// convert the pending into a [`PendingReply::RoundTrip`] awaiting the action
+    /// response. On a non-success/unparseable status, resolve the caller with the
+    /// raw bytes so it can surface the status.
+    async fn resolve_timed(&mut self, sid: SessionId, exchange: u16, payload: Vec<u8>) {
+        let success = matches!(
+            matter_interaction::parse_status_response(&payload),
+            Ok(Some(0))
+        );
+        let Some(p) = self.pending.remove(&(sid, exchange)) else {
+            return;
+        };
+        let PendingReply::TimedAction {
+            action_opcode,
+            action_payload,
+            reply,
+        } = p.reply
+        else {
+            return;
+        };
+        if !success {
+            // The device rejected the TimedRequest (e.g. TIMED_REQUEST_MISMATCH)
+            // or sent an unexpected message — hand the bytes back to the caller.
+            let _ = reply.send(Ok(payload));
+            return;
+        }
+        if let Err(e) = self
+            .send_on_exchange(sid, exchange, p.peer, action_opcode, &action_payload)
+            .await
+        {
+            let _ = reply.send(Err(e));
+            return;
+        }
+        // Await the action's response on the same exchange as a normal round-trip.
+        self.pending.insert(
+            (sid, exchange),
+            Pending {
+                node_id: p.node_id,
+                peer: p.peer,
+                request: PendingRequest {
+                    opcode: action_opcode,
+                    protocol_id: ProtocolId::INTERACTION_MODEL,
+                    payload: action_payload,
+                },
+                retried: true, // mid-handshake; do not trigger the reconnect-once dance
+                reply: PendingReply::RoundTrip(reply),
+            },
+        );
+    }
+
+    /// Send `payload` (opcode `opcode`) on an EXISTING exchange — reuses the wire
+    /// exchange id via `encode_outbound(.., Some(exchange), ..)`, exactly like
+    /// [`Self::send_chunk_ack`]. Reliable. Sends the Write/Invoke half of a timed
+    /// interaction on the same exchange as the preceding `TimedRequest`.
+    async fn send_on_exchange(
+        &mut self,
+        sid: SessionId,
+        exchange: u16,
+        peer: SocketAddr,
+        opcode: u8,
+        payload: &[u8],
+    ) -> Result<(), Error> {
+        let out = self.sessions.encode_outbound(
+            sid,
+            Some(exchange),
+            opcode,
+            ProtocolId::INTERACTION_MODEL,
+            payload,
+            MrpFlags { reliable: true },
+            Instant::now(),
+        )?;
+        self.transport
+            .send_to(&out.wire_bytes, peer)
+            .await
+            .map_err(|e| Error::Operational(format!("timed action send: {e}")))?;
+        Ok(())
     }
 
     /// Reliable `StatusResponse(SUCCESS)` on a read exchange to solicit the next
@@ -1650,7 +1847,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             PendingReply::Subscribe { priming, .. } => {
                                 **priming = ReportReassembler::default();
                             }
-                            PendingReply::RoundTrip(_) => {}
+                            // A timed handshake retry re-sends the TimedRequest;
+                            // nothing partial to discard.
+                            PendingReply::RoundTrip(_) | PendingReply::TimedAction { .. } => {}
                         }
                         self.pending.insert((sid, exchange), np);
                         return;
@@ -1668,7 +1867,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Resolve a pending op's reply channel with an error.
     fn fail_pending(p: Pending, err: Error) {
         match p.reply {
-            PendingReply::RoundTrip(reply) => {
+            PendingReply::RoundTrip(reply) | PendingReply::TimedAction { reply, .. } => {
                 let _ = reply.send(Err(err));
             }
             PendingReply::Read { reply, .. } => {
@@ -2255,6 +2454,7 @@ mod tests {
     /// Loopback device: completes CASE, then replies to each secured IM request
     /// with `reply_payload` (opcode 0x05). Pass `b"pong"` for a raw-round-trip
     /// echo, or a `build_report_data` blob to answer a `Node::read`.
+    #[allow(clippy::too_many_arguments)] // test harness; one more flag than the verbs it exercises.
     async fn run_loopback_device(
         io: InMemoryDatagram,
         ctrl_addr: std::net::SocketAddr,
@@ -2263,6 +2463,7 @@ mod tests {
         responder_session_id: u16,
         echoes: usize,
         reply_payload: Vec<u8>,
+        expect_timed: bool,
     ) {
         let mut responder = CaseResponder::new(
             creds,
@@ -2320,6 +2521,34 @@ mod tests {
         // Secured IM echo: register the session, then reply to each request.
         let mut sessions = SessionManager::new();
         let sid = sessions.register_case(&output, SessionRole::Responder);
+        // Timed interaction: the first inbound is a TimedRequest (opcode 0x0a);
+        // ack it with StatusResponse(SUCCESS) on the same exchange. The following
+        // action (Write/Invoke) then arrives on that exchange and is answered by
+        // the echo loop below — exactly the chip TimedHandler flow.
+        if expect_timed {
+            let (wire, _) = io.recv_from().await.unwrap();
+            let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+            let DecodeInboundOutput::AppMessage {
+                exchange_id, opcode, ..
+            } = decoded
+            else {
+                panic!("expected a TimedRequest app message");
+            };
+            assert_eq!(opcode, 0x0a, "expected TimedRequest opcode 0x0a");
+            let status = matter_interaction::build_status_response(0);
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x01, // StatusResponse
+                    ProtocolId::INTERACTION_MODEL,
+                    &status,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        }
         for _ in 0..echoes {
             let (wire, _) = io.recv_from().await.unwrap();
             let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
@@ -2853,6 +3082,7 @@ mod tests {
             0x00D2,
             2,
             b"pong".to_vec(),
+            false,
         ));
 
         let controller = crate::controller::MatterController::with_components(
@@ -2913,6 +3143,7 @@ mod tests {
             0x00D2,
             1,
             report_blob,
+            false,
         ));
 
         let controller = crate::controller::MatterController::with_components(
@@ -2965,6 +3196,7 @@ mod tests {
             0x00D2,
             1,
             report_blob,
+            false,
         ));
 
         let controller = crate::controller::MatterController::with_components(
@@ -2997,6 +3229,85 @@ mod tests {
             }
             other => panic!("expected EventReport::Data, got {other:?}"),
         }
+
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_timed_does_handshake_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Device flow: TimedRequest -> StatusResponse(SUCCESS) -> timed
+        // WriteRequest -> WriteResponse(SUCCESS) for NodeLabel (0/0x28/0x05).
+        let resp = {
+            use matter_codec::{Tag, TlvWriter};
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_array(Tag::Context(0)).unwrap(); // WriteResponses
+            w.start_structure(Tag::Anonymous).unwrap(); // AttributeStatusIB
+            w.start_list(Tag::Context(0)).unwrap(); // Path
+            w.put_uint(Tag::Context(2), 0).unwrap();
+            w.put_uint(Tag::Context(3), 0x28).unwrap();
+            w.put_uint(Tag::Context(4), 0x05).unwrap();
+            w.end_container().unwrap();
+            w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+            w.put_uint(Tag::Context(0), 0).unwrap(); // SUCCESS
+            w.end_container().unwrap();
+            w.end_container().unwrap(); // AttributeStatusIB
+            w.end_container().unwrap(); // array
+            w.put_uint(Tag::Context(0xFF), 11).unwrap();
+            w.end_container().unwrap();
+            buf
+        };
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D8,
+            1,
+            resp,
+            true, // expect a TimedRequest first
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let statuses = node
+            .write_timed(
+                &[(
+                    matter_interaction::AttributePath {
+                        endpoint: 0,
+                        cluster: 0x28,
+                        attribute: 0x05,
+                    },
+                    matter_codec::Value::Utf8("x".to_string()),
+                )],
+                None,
+            )
+            .await
+            .expect("write_timed");
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
 
         device.await.unwrap();
     }
