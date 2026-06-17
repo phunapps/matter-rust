@@ -27,6 +27,10 @@ const OP_SUBSCRIBE_RESPONSE: u8 = 0x04;
 const OP_REPORT_DATA: u8 = 0x05;
 const OP_STATUS_RESPONSE: u8 = 0x01;
 const OP_TIMED_REQUEST: u8 = 0x0a;
+/// IM status `NEEDS_TIMED_INTERACTION` — a device returns this (as a message-level
+/// `StatusResponse`) when a write/invoke that requires a timed interaction arrives
+/// without a preceding `TimedRequest`. Triggers the transparent timed retry.
+const NEEDS_TIMED_INTERACTION: u8 = 0xc6;
 
 /// How often the loop wakes to drive MRP / liveness when no MRP deadline is
 /// pending.
@@ -249,6 +253,18 @@ enum PendingReply {
         action_payload: Vec<u8>,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
+    /// A plain write/invoke awaiting its response. On a `NEEDS_TIMED_INTERACTION`
+    /// rejection the actor records `keys` in the learned timed-cache and retries
+    /// the action timed (`timed_payload`); otherwise it resolves `reply` with the
+    /// response bytes. (See [`Actor::resolve_action`].)
+    Action {
+        opcode: u8,
+        timed_payload: Vec<u8>,
+        keys: Vec<(u32, u32)>,
+        timeout_ms: u16,
+        node_id: u64,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    },
     /// Chunked read: accumulate parsed `ReportData` chunks; resolve on the
     /// final chunk. Each chunk is parsed exactly once here (in the actor's
     /// receive path) and handed to `Node::read` already decoded, so the read
@@ -424,6 +440,21 @@ pub(crate) enum Command {
         max_interval: u16,
         reply: oneshot::Sender<Result<SubEstablished, Error>>,
     },
+    /// A write/invoke that auto-handles timed interactions: if any `keys`
+    /// `(cluster, id)` is in the learned timed-cache, go straight to a timed
+    /// interaction; otherwise send `plain_payload`, and on a
+    /// `NEEDS_TIMED_INTERACTION (0xc6)` rejection record the `keys` and transparently
+    /// retry with `timed_payload`. Returns the final response bytes. (Explicit
+    /// timed is [`Command::TimedRoundTrip`] via `write_timed`/`invoke_timed`.)
+    Action {
+        node_id: u64,
+        opcode: u8, // OP_WRITE_REQUEST | OP_INVOKE_REQUEST
+        plain_payload: Vec<u8>,
+        timed_payload: Vec<u8>,
+        keys: Vec<(u32, u32)>,
+        timeout_ms: u16,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    },
     /// Timed round-trip: send a `TimedRequest`, await `StatusResponse(SUCCESS)`,
     /// then send `action_opcode`/`action_payload` on the SAME exchange and return
     /// its response bytes. Used by `Node::write_timed`/`invoke_timed` and the
@@ -486,6 +517,12 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     next_sub_id: u64,
     /// Scheduled resubscribe attempts (fired from the timer arm when due).
     resubscribes: Vec<PendingResubscribe>,
+    /// Learned set of `(cluster_id, attr_or_command_id)` paths the device has
+    /// rejected with `NEEDS_TIMED_INTERACTION` — a write/invoke to one of these
+    /// skips the (wasted) plain attempt and goes straight to a timed interaction.
+    /// Populated on a `0xc6` rejection; covers manufacturer/ungenerated clusters
+    /// and survives for the controller's lifetime (the spec's B3 learned-cache).
+    timed_paths: std::collections::HashSet<(u32, u32)>,
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -512,6 +549,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             pending: HashMap::new(),
             next_sub_id: 1,
             resubscribes: Vec::new(),
+            timed_paths: std::collections::HashSet::new(),
         }
     }
 
@@ -673,6 +711,26 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     event_filters,
                     min_interval,
                     max_interval,
+                    reply,
+                )
+                .await;
+            }
+            Command::Action {
+                node_id,
+                opcode,
+                plain_payload,
+                timed_payload,
+                keys,
+                timeout_ms,
+                reply,
+            } => {
+                self.handle_action(
+                    node_id,
+                    opcode,
+                    plain_payload,
+                    timed_payload,
+                    keys,
+                    timeout_ms,
                     reply,
                 )
                 .await;
@@ -1140,6 +1198,102 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         .await;
     }
 
+    /// Handle a write/invoke `Action`: consult the learned timed-cache and either
+    /// go straight to a timed interaction (cache hit) or send the plain action and
+    /// let [`Self::resolve_action`] retry-on-`0xc6`.
+    #[allow(clippy::too_many_arguments)] // mirrors the Command::Action fields.
+    async fn handle_action(
+        &mut self,
+        node_id: u64,
+        opcode: u8,
+        plain_payload: Vec<u8>,
+        timed_payload: Vec<u8>,
+        keys: Vec<(u32, u32)>,
+        timeout_ms: u16,
+        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+    ) {
+        let (sid, peer) = match self.session_for(node_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        // Fast-path: a known-timed path skips the wasted plain attempt.
+        if keys.iter().any(|k| self.timed_paths.contains(k)) {
+            self.begin_timed(sid, peer, node_id, timeout_ms, opcode, timed_payload, reply)
+                .await;
+            return;
+        }
+        match self
+            .send_request(sid, peer, opcode, ProtocolId::INTERACTION_MODEL, &plain_payload)
+            .await
+        {
+            Ok(exchange) => {
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode,
+                            protocol_id: ProtocolId::INTERACTION_MODEL,
+                            payload: plain_payload,
+                        },
+                        retried: false,
+                        reply: PendingReply::Action {
+                            opcode,
+                            timed_payload,
+                            keys,
+                            timeout_ms,
+                            node_id,
+                            reply,
+                        },
+                    },
+                );
+            }
+            Err(e) => {
+                let _ = reply.send(Err(e));
+            }
+        }
+    }
+
+    /// Resolve a plain write/invoke response. If the device rejected it with
+    /// `NEEDS_TIMED_INTERACTION (0xc6)`, record the `keys` in the learned
+    /// timed-cache and transparently retry the action as a timed interaction;
+    /// otherwise resolve the caller with the response bytes.
+    async fn resolve_action(&mut self, sid: SessionId, exchange: u16, payload: Vec<u8>) {
+        let needs_timed = matches!(
+            matter_interaction::parse_status_response(&payload),
+            Ok(Some(NEEDS_TIMED_INTERACTION))
+        );
+        let Some(p) = self.pending.remove(&(sid, exchange)) else {
+            return;
+        };
+        let PendingReply::Action {
+            opcode,
+            timed_payload,
+            keys,
+            timeout_ms,
+            node_id,
+            reply,
+        } = p.reply
+        else {
+            return;
+        };
+        if !needs_timed {
+            let _ = reply.send(Ok(payload));
+            return;
+        }
+        // Learn these paths so future ops skip the wasted plain attempt, then
+        // retry the action as a timed interaction feeding the same reply.
+        for k in keys {
+            self.timed_paths.insert(k);
+        }
+        self.begin_timed(sid, p.peer, node_id, timeout_ms, opcode, timed_payload, reply)
+            .await;
+    }
+
     /// Send a `ReadRequest` and register a pending read; chunks accumulate in
     /// the pending entry and resolve on the final chunk.
     async fn start_read(
@@ -1240,6 +1394,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Read,
             Subscribe,
             Timed,
+            Action,
         }
         let key = (session_id, exchange_id);
         let kind = match self.pending.get(&key) {
@@ -1248,6 +1403,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 PendingReply::Read { .. } => Kind::Read,
                 PendingReply::Subscribe { .. } => Kind::Subscribe,
                 PendingReply::TimedAction { .. } => Kind::Timed,
+                PendingReply::Action { .. } => Kind::Action,
             },
             None => return,
         };
@@ -1315,6 +1471,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             Kind::Timed => {
                 self.resolve_timed(session_id, exchange_id, payload).await;
+            }
+            Kind::Action => {
+                self.resolve_action(session_id, exchange_id, payload).await;
             }
         }
     }
@@ -1847,9 +2006,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             PendingReply::Subscribe { priming, .. } => {
                                 **priming = ReportReassembler::default();
                             }
-                            // A timed handshake retry re-sends the TimedRequest;
-                            // nothing partial to discard.
-                            PendingReply::RoundTrip(_) | PendingReply::TimedAction { .. } => {}
+                            // A timed handshake / plain-action retry re-sends the
+                            // original request; nothing partial to discard.
+                            PendingReply::RoundTrip(_)
+                            | PendingReply::TimedAction { .. }
+                            | PendingReply::Action { .. } => {}
                         }
                         self.pending.insert((sid, exchange), np);
                         return;
@@ -1867,7 +2028,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Resolve a pending op's reply channel with an error.
     fn fail_pending(p: Pending, err: Error) {
         match p.reply {
-            PendingReply::RoundTrip(reply) | PendingReply::TimedAction { reply, .. } => {
+            PendingReply::RoundTrip(reply)
+            | PendingReply::TimedAction { reply, .. }
+            | PendingReply::Action { reply, .. } => {
                 let _ = reply.send(Err(err));
             }
             PendingReply::Read { reply, .. } => {
@@ -2571,6 +2734,155 @@ mod tests {
                 .unwrap();
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
+    }
+
+    /// Device side of one timed handshake: ack a `TimedRequest` (0x0a) with
+    /// `StatusResponse(SUCCESS)`, then reply `write_response` (0x07) to the timed
+    /// `WriteRequest` (0x06). Both replies reuse the inbound exchange.
+    async fn ack_timed_then_reply(
+        io: &InMemoryDatagram,
+        sessions: &mut SessionManager,
+        sid: SessionId,
+        ctrl_addr: std::net::SocketAddr,
+        write_response: &[u8],
+    ) {
+        let (w, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id, opcode, ..
+        } = sessions.decode_inbound(&w, Instant::now()).unwrap()
+        else {
+            panic!("expected a TimedRequest app message");
+        };
+        assert_eq!(opcode, 0x0a, "expected TimedRequest opcode 0x0a");
+        let status = matter_interaction::build_status_response(0);
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x01,
+                ProtocolId::INTERACTION_MODEL,
+                &status,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        let (w2, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id: e2,
+            opcode: op2,
+            ..
+        } = sessions.decode_inbound(&w2, Instant::now()).unwrap()
+        else {
+            panic!("expected a timed WriteRequest app message");
+        };
+        assert_eq!(op2, 0x06, "expected timed WriteRequest opcode 0x06");
+        let out2 = sessions
+            .encode_outbound(
+                sid,
+                Some(e2),
+                0x07,
+                ProtocolId::INTERACTION_MODEL,
+                write_response,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out2.wire_bytes, ctrl_addr).await.unwrap();
+    }
+
+    /// Device exercising timed auto-upgrade: cycle 1 rejects the plain
+    /// `WriteRequest` with `StatusResponse(0xc6)` then completes the timed
+    /// handshake; cycle 2 expects a `TimedRequest` FIRST — proving the
+    /// controller's learned cache skipped the plain attempt.
+    async fn run_timed_retry_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        write_response: Vec<u8>,
+    ) {
+        // --- CASE handshake (identical to run_loopback_device) ---
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        // Cycle 1: reject the plain WriteRequest (0x06) with 0xc6.
+        let (w, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id, opcode, ..
+        } = sessions.decode_inbound(&w, Instant::now()).unwrap()
+        else {
+            panic!("expected a plain WriteRequest app message");
+        };
+        assert_eq!(opcode, 0x06, "cycle 1 must start with a plain WriteRequest");
+        let reject = matter_interaction::build_status_response(0xc6);
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x01,
+                ProtocolId::INTERACTION_MODEL,
+                &reject,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        // ... then the controller escalates to a timed interaction.
+        ack_timed_then_reply(&io, &mut sessions, sid, ctrl_addr, &write_response).await;
+
+        // Cycle 2: the path is cached → the controller skips the plain attempt and
+        // sends a TimedRequest first.
+        ack_timed_then_reply(&io, &mut sessions, sid, ctrl_addr, &write_response).await;
     }
 
     /// Build a `SubscribeResponse` TLV (device side): ctx0=subscriptionId,
@@ -3308,6 +3620,86 @@ mod tests {
 
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
+
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_auto_upgrades_and_caches_timed() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // WriteResponse(SUCCESS) for NodeLabel (0/0x28/0x05), replied to each
+        // (timed) WriteRequest by the retry device.
+        let resp = {
+            use matter_codec::{Tag, TlvWriter};
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_array(Tag::Context(0)).unwrap();
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_list(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(2), 0).unwrap();
+            w.put_uint(Tag::Context(3), 0x28).unwrap();
+            w.put_uint(Tag::Context(4), 0x05).unwrap();
+            w.end_container().unwrap();
+            w.start_structure(Tag::Context(1)).unwrap();
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(0xFF), 11).unwrap();
+            w.end_container().unwrap();
+            buf
+        };
+        let device = tokio::spawn(run_timed_retry_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D9,
+            resp,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let path = matter_interaction::AttributePath {
+            endpoint: 0,
+            cluster: 0x28,
+            attribute: 0x05,
+        };
+        // First plain write is rejected with NEEDS_TIMED_INTERACTION → the
+        // controller transparently retries timed and succeeds.
+        let s1 = node
+            .write(&[(path, matter_codec::Value::Utf8("a".to_string()))])
+            .await
+            .expect("write 1 (auto-upgrade)");
+        assert_eq!(s1[0].1, matter_interaction::ImStatus::Success);
+        // The path is now cached → the second write skips the plain attempt and
+        // goes straight to the timed handshake (the device asserts a TimedRequest
+        // arrives first, with no preceding plain WriteRequest).
+        let s2 = node
+            .write(&[(path, matter_codec::Value::Utf8("b".to_string()))])
+            .await
+            .expect("write 2 (cached timed)");
+        assert_eq!(s2[0].1, matter_interaction::ImStatus::Success);
 
         device.await.unwrap();
     }

@@ -210,8 +210,40 @@ impl Node {
         Ok(events)
     }
 
+    /// Run a write/invoke `Action` through the actor: the actor consults the
+    /// learned timed-cache (skips the plain attempt for known-timed paths) and
+    /// transparently retries timed on a `NEEDS_TIMED_INTERACTION` rejection.
+    /// Returns the final response bytes.
+    async fn action(
+        &self,
+        opcode: u8,
+        plain_payload: Vec<u8>,
+        timed_payload: Vec<u8>,
+        keys: Vec<(u32, u32)>,
+    ) -> Result<Vec<u8>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::Action {
+                node_id: self.node_id,
+                opcode,
+                plain_payload,
+                timed_payload,
+                keys,
+                timeout_ms: TIMED_DEFAULT_MS,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Write attributes. Each `Value` is TLV-encoded into the write payload.
     /// Returns the per-path statuses the device reported.
+    ///
+    /// Timed writes are handled transparently: if the device rejects the write
+    /// with `NEEDS_TIMED_INTERACTION`, the controller retries it as a timed
+    /// interaction and remembers the path so later writes skip the wasted attempt.
+    /// Use [`write_timed`](Self::write_timed) to force the timed path explicitly.
     ///
     /// # Errors
     ///
@@ -227,12 +259,13 @@ impl Node {
                 value_tlv: value_to_tlv(value)?,
             });
         }
-        let req = build_write_request(&reqs);
+        let keys = writes.iter().map(|(p, _)| (p.cluster, p.attribute)).collect();
         let resp = self
-            .round_trip(
+            .action(
                 OP_WRITE_REQUEST,
-                matter_transport::ProtocolId::INTERACTION_MODEL,
-                req,
+                build_write_request(&reqs),
+                build_write_request_timed(&reqs),
+                keys,
             )
             .await?;
         Ok(parse_write_response(&resp)?)
@@ -281,12 +314,12 @@ impl Node {
     /// or the response fields cannot be decoded.
     pub async fn invoke(&self, path: CommandPath, fields: Value) -> Result<InvokeResult, Error> {
         let fields_tlv = value_to_tlv(&fields)?;
-        let req = build_invoke_request(path, &fields_tlv);
         let resp = self
-            .round_trip(
+            .action(
                 OP_INVOKE_REQUEST,
-                matter_transport::ProtocolId::INTERACTION_MODEL,
-                req,
+                build_invoke_request(path, &fields_tlv),
+                build_invoke_request_timed(path, &fields_tlv),
+                vec![(path.cluster, path.command)],
             )
             .await?;
         match parse_invoke_response(&resp)? {
