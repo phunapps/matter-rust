@@ -61,6 +61,7 @@ const {
     TlvDataReport,
     TlvBoolean,
     TlvTimedRequest,
+    TlvInvokeResponse,
 } = await loadImSchemas();
 
 // encodeTlv (TlvStream form, for TlvAny fields) must exist on schemas.
@@ -144,6 +145,60 @@ writeFixture('invoke', 'on_off_toggle.json', {
             commandPath: { endpointId: 1, clusterId: 0x06, commandId: 0x02 },
             commandFields: TlvNoFields.encodeTlv({}),
         }],
+        interactionModelRevision: 11,
+    })),
+});
+
+// Multi-command InvokeRequest: OnOff.Toggle(ep1) + OnOff.Off(ep2), each with a
+// commandRef (CommandDataIB tag 2). No fields. Gates M9-B5 batched invoke.
+writeFixture('invoke', 'batch_request.json', {
+    commands: [
+        { endpoint: 1, cluster: 0x06, command: 0x02, command_ref: 0 },
+        { endpoint: 2, cluster: 0x06, command: 0x00, command_ref: 1 },
+    ],
+    expected_message_b64: b64(TlvInvokeRequest.encode({
+        suppressResponse: false,
+        timedRequest: false,
+        invokeRequests: [
+            {
+                commandPath: { endpointId: 1, clusterId: 0x06, commandId: 0x02 },
+                commandFields: TlvNoFields.encodeTlv({}),
+                commandRef: 0,
+            },
+            {
+                commandPath: { endpointId: 2, clusterId: 0x06, commandId: 0x00 },
+                commandFields: TlvNoFields.encodeTlv({}),
+                commandRef: 1,
+            },
+        ],
+        interactionModelRevision: 11,
+    })),
+});
+
+// Multi-response InvokeResponse: two CommandStatusIB(SUCCESS), commandRef 0 and 1.
+writeFixture('invoke', 'batch_response.json', {
+    expected: [
+        { command_ref: 0, status: 0 },
+        { command_ref: 1, status: 0 },
+    ],
+    response_message_b64: b64(TlvInvokeResponse.encode({
+        suppressResponse: false,
+        invokeResponses: [
+            {
+                status: {
+                    commandPath: { endpointId: 1, clusterId: 0x06, commandId: 0x02 },
+                    status: { status: 0 },
+                    commandRef: 0,
+                },
+            },
+            {
+                status: {
+                    commandPath: { endpointId: 2, clusterId: 0x06, commandId: 0x00 },
+                    status: { status: 0 },
+                    commandRef: 1,
+                },
+            },
+        ],
         interactionModelRevision: 11,
     })),
 });
