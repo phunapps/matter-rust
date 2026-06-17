@@ -1250,6 +1250,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 min_interval_floor: min_interval,
                 max_interval_ceiling: max_interval,
                 paths: paths.clone(),
+                event_paths: Vec::new(),
+                event_filters: Vec::new(),
             });
         match self
             .send_request(
@@ -1677,6 +1679,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 min_interval_floor: pr.min_interval,
                 max_interval_ceiling: pr.max_interval,
                 paths: pr.paths.clone(),
+                event_paths: Vec::new(),
+                event_filters: Vec::new(),
             });
         match self
             .send_request(

@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 use crate::error::ImError;
+use crate::event::{EventFilter, EventPath};
 use crate::path::ReadPath;
 use crate::{expect_message_struct, skip_container, IM_REVISION};
 use matter_codec::{Element, Tag, TlvReader, TlvWriter};
@@ -31,6 +32,12 @@ pub struct SubscribeRequest {
     /// `AttributePathIB` list (endpoint=2, cluster=3, attribute=4);
     /// `None` fields are omitted (wildcard).
     pub paths: Vec<ReadPath>,
+    /// Event paths to subscribe to (`EventRequests`, context tag 4). Empty ⇒
+    /// the array is omitted.
+    pub event_paths: Vec<EventPath>,
+    /// Event filters (`EventFilters`, context tag 5) — report only events with
+    /// number `>= event_min`. Empty ⇒ the array is omitted.
+    pub event_filters: Vec<EventFilter>,
 }
 
 /// Parsed `SubscribeResponseMessage` — the device's subscription confirmation.
@@ -99,9 +106,29 @@ pub fn build_subscribe_request(req: &SubscribeRequest) -> Vec<u8> {
     }
     w.end_container().expect("infallible: vec writer"); // attributeRequests array
 
+    // ctx[4]: eventRequests (array of EventPathIB lists) — omitted when empty.
+    if !req.event_paths.is_empty() {
+        w.start_array(Tag::Context(4))
+            .expect("infallible: vec writer");
+        for p in &req.event_paths {
+            p.write(&mut w).expect("infallible: vec writer");
+        }
+        w.end_container().expect("infallible: vec writer");
+    }
+
+    // ctx[5]: eventFilters (array of EventFilterIB structs) — omitted when empty.
+    if !req.event_filters.is_empty() {
+        w.start_array(Tag::Context(5))
+            .expect("infallible: vec writer");
+        for f in &req.event_filters {
+            f.write(&mut w).expect("infallible: vec writer");
+        }
+        w.end_container().expect("infallible: vec writer");
+    }
+
     // ctx[7]: isFabricFiltered (bool) — always false for controller-side reads.
-    // NOTE: gap ctx[4..6] is intentional — the spec omits them (no dataVersionFilters,
-    // eventRequests, eventFilters) when those fields are absent.
+    // ctx[4]=eventRequests / ctx[5]=eventFilters are emitted above when present;
+    // ctx[6] (dataVersionFilters) is unused.
     w.put_bool(Tag::Context(7), false)
         .expect("infallible: vec writer");
 
@@ -226,6 +253,8 @@ mod tests {
             min_interval_floor: 1,
             max_interval_ceiling: 30,
             paths: vec![ReadPath::concrete(1, 0x06, 0x0000)],
+            event_paths: vec![],
+            event_filters: vec![],
         };
         let bytes = build_subscribe_request(&req);
         let mut r = TlvReader::new(&bytes);

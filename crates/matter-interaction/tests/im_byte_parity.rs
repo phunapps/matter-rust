@@ -341,6 +341,8 @@ fn write_response_parses_matter_js() {
 /// Fixture for a `SubscribeRequest` message — contains the input parameters
 /// and the matter.js-encoded `expected_message_b64`.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)] // so the subscribe_with_events fixture (extra event_* fields) is
+                              // skipped here and handled by subscribe_request_with_events_matches_matter_js.
 struct SubscribeRequestFixture {
     keep_subscriptions: bool,
     min_interval_floor: u16,
@@ -421,6 +423,8 @@ fn subscribe_request_matches_matter_js() {
             min_interval_floor: f.min_interval_floor,
             max_interval_ceiling: f.max_interval_ceiling,
             paths: our_paths,
+            event_paths: vec![],
+            event_filters: vec![],
         };
         let ours = build_subscribe_request(&req);
         let theirs = B64.decode(&f.expected_message_b64).unwrap();
@@ -434,6 +438,61 @@ fn subscribe_request_matches_matter_js() {
         asserted += 1;
     }
     assert!(asserted > 0, "no subscribe-request fixtures parsed");
+}
+
+/// Fixture for a `SubscribeRequest` carrying attribute AND event paths/filters.
+#[derive(Deserialize)]
+struct SubEventsFixture {
+    keep_subscriptions: bool,
+    min_interval_floor: u16,
+    max_interval_ceiling: u16,
+    paths: Vec<SubscribePathFixture>,
+    event_paths: Vec<EvPathFixture>,
+    event_filters: Vec<EvFilterFixture>,
+    expected_message_b64: String,
+}
+
+/// `build_subscribe_request` with event paths/filters matches matter.js.
+#[test]
+fn subscribe_request_with_events_matches_matter_js() {
+    let path = fixtures_root()
+        .join("subscribe")
+        .join("subscribe_with_events.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no subscribe-with-events fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: SubEventsFixture = serde_json::from_str(&raw).unwrap();
+    let req = SubscribeRequest {
+        keep_subscriptions: f.keep_subscriptions,
+        min_interval_floor: f.min_interval_floor,
+        max_interval_ceiling: f.max_interval_ceiling,
+        paths: f
+            .paths
+            .iter()
+            .map(|p| ReadPath {
+                endpoint: p.endpoint,
+                cluster: p.cluster,
+                attribute: p.attribute,
+            })
+            .collect(),
+        event_paths: f
+            .event_paths
+            .iter()
+            .map(|p| EventPath::concrete(p.endpoint, p.cluster, p.event))
+            .collect(),
+        event_filters: f
+            .event_filters
+            .iter()
+            .map(|x| EventFilter::from_event_min(x.event_min))
+            .collect(),
+    };
+    let ours = build_subscribe_request(&req);
+    let theirs = B64.decode(&f.expected_message_b64).unwrap();
+    assert_eq!(
+        ours, theirs,
+        "subscribe-with-events must match matter.js byte-for-byte"
+    );
 }
 
 /// `parse_subscribe_response` parses the matter.js-captured bytes correctly.
