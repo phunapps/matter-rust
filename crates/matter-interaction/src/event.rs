@@ -9,7 +9,9 @@
 
 #![forbid(unsafe_code)]
 
-use matter_codec::{Tag, TlvWriter};
+use crate::error::ImError;
+use crate::{read_container_members, read_container_value, skip_container};
+use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// A read/subscribe event path with optional (wildcard) components. A `None`
 /// field is omitted from the encoded `EventPathIB`, which the IM interprets as a
@@ -114,6 +116,266 @@ impl EventFilter {
     }
 }
 
+/// Event priority (Matter §14.3). Unknown values are preserved verbatim so a
+/// newer-revision device does not break decoding.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EventPriority {
+    /// Debug priority (0).
+    Debug,
+    /// Info priority (1).
+    Info,
+    /// Critical priority (2).
+    Critical,
+    /// Any other (future) priority value.
+    Unknown(u8),
+}
+
+impl EventPriority {
+    #[must_use]
+    fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Debug,
+            1 => Self::Info,
+            2 => Self::Critical,
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+/// The timestamp carried by an `EventDataIB`. A report carries exactly one of
+/// these (absolute epoch/system, or a delta against the prior event in a
+/// subscription stream); [`None`](EventTimestamp::None) if the device omitted all
+/// four (tolerated rather than rejected).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EventTimestamp {
+    /// Milliseconds since the Unix epoch (`EpochTimestamp`, tag 3).
+    Epoch(u64),
+    /// Milliseconds since boot (`SystemTimestamp`, tag 4).
+    System(u64),
+    /// Delta-epoch against the prior event in the stream (tag 5).
+    DeltaEpoch(u64),
+    /// Delta-system against the prior event in the stream (tag 6).
+    DeltaSystem(u64),
+    /// No timestamp present.
+    None,
+}
+
+/// One `EventDataIB` (a real event with data).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct EventReportItem {
+    /// The event's `(node?, endpoint, cluster, event)` path.
+    pub path: EventPath,
+    /// Monotonic event number (scoped to priority).
+    pub event_number: u64,
+    /// Event priority.
+    pub priority: EventPriority,
+    /// Event timestamp.
+    pub timestamp: EventTimestamp,
+    /// The event payload (cluster-defined TLV; decode with `matter-clusters`).
+    pub value: Value,
+}
+
+/// One `EventReportIB`: a real event ([`Data`](EventReport::Data)) or a per-path
+/// error ([`Status`](EventReport::Status)).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum EventReport {
+    /// An `EventDataIB` carrying a real event.
+    Data(EventReportItem),
+    /// An `EventStatusIB` carrying a status for a requested event path.
+    Status {
+        /// The event path the status refers to.
+        path: EventPath,
+        /// The IM status code (`StatusIB.Status`).
+        status: u8,
+    },
+}
+
+/// Read an `EventPathIB` list's members into an [`EventPath`] (tags 0–4).
+fn event_path_from_members(members: &[(Tag, Value)]) -> EventPath {
+    let mut p = EventPath::default();
+    for (tag, v) in members {
+        match (tag, v) {
+            (Tag::Context(0), Value::Uint(n)) => p.node = Some(*n),
+            (Tag::Context(1), Value::Uint(n)) => p.endpoint = u16::try_from(*n).ok(),
+            (Tag::Context(2), Value::Uint(n)) => p.cluster = u32::try_from(*n).ok(),
+            (Tag::Context(3), Value::Uint(n)) => p.event = u32::try_from(*n).ok(),
+            (Tag::Context(4), Value::Bool(b)) => p.is_urgent = Some(*b),
+            _ => {}
+        }
+    }
+    p
+}
+
+/// Parse the body of one `EventReportIB` (reader positioned just after its struct
+/// start). Returns the report, or `None` for an empty IB.
+///
+/// # Errors
+///
+/// Returns [`ImError`] if the input ends mid-container, or an `EventData` is
+/// missing its `Data` member.
+fn parse_event_report_ib(r: &mut TlvReader<'_>) -> Result<Option<EventReport>, ImError> {
+    let mut out: Option<EventReport> = None;
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
+            // EventData [1]
+            Some(Element::ContainerStart {
+                tag: Tag::Context(1),
+                kind: ContainerKind::Structure,
+            }) => out = Some(EventReport::Data(parse_event_data(r)?)),
+            // EventStatus [0]
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::Structure,
+            }) => out = Some(parse_event_status(r)?),
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Parse an `EventDataIB` body (reader just after the struct start at ctx 1).
+///
+/// # Errors
+///
+/// Returns [`ImError::MissingField`] if `Data` (tag 7) is absent, or propagates a
+/// codec error.
+fn parse_event_data(r: &mut TlvReader<'_>) -> Result<EventReportItem, ImError> {
+    let mut path = EventPath::default();
+    let mut event_number = 0u64;
+    let mut priority = EventPriority::Unknown(0xFF);
+    let mut timestamp = EventTimestamp::None;
+    let mut value: Option<Value> = None;
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
+            // Path [0] — EventPathIB list.
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::List,
+            }) => {
+                let members = read_container_members(r)?;
+                path = event_path_from_members(&members);
+            }
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(n),
+            }) => event_number = n,
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(n),
+            }) => priority = EventPriority::from_u8(u8::try_from(n).unwrap_or(0xFF)),
+            Some(Element::Scalar {
+                tag: Tag::Context(3),
+                value: Value::Uint(n),
+            }) => timestamp = EventTimestamp::Epoch(n),
+            Some(Element::Scalar {
+                tag: Tag::Context(4),
+                value: Value::Uint(n),
+            }) => timestamp = EventTimestamp::System(n),
+            Some(Element::Scalar {
+                tag: Tag::Context(5),
+                value: Value::Uint(n),
+            }) => timestamp = EventTimestamp::DeltaEpoch(n),
+            Some(Element::Scalar {
+                tag: Tag::Context(6),
+                value: Value::Uint(n),
+            }) => timestamp = EventTimestamp::DeltaSystem(n),
+            // Data [7] — scalar or container.
+            Some(Element::Scalar {
+                tag: Tag::Context(7),
+                value: v,
+            }) => value = Some(v),
+            Some(Element::ContainerStart {
+                tag: Tag::Context(7),
+                kind,
+            }) => value = Some(read_container_value(r, kind)?),
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
+        }
+    }
+    Ok(EventReportItem {
+        path,
+        event_number,
+        priority,
+        timestamp,
+        value: value.ok_or(ImError::MissingField("EventData.Data"))?,
+    })
+}
+
+/// Parse an `EventStatusIB` body (reader just after the struct start at ctx 0).
+///
+/// # Errors
+///
+/// Propagates a codec error if the input ends mid-container.
+fn parse_event_status(r: &mut TlvReader<'_>) -> Result<EventReport, ImError> {
+    let mut path = EventPath::default();
+    let mut status = 0u8;
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break,
+            // Path [0] — EventPathIB list.
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::List,
+            }) => {
+                let members = read_container_members(r)?;
+                path = event_path_from_members(&members);
+            }
+            // Status [1] — StatusIB struct { 0: Status u8, 1: ClusterStatus? }.
+            Some(Element::ContainerStart {
+                tag: Tag::Context(1),
+                kind: ContainerKind::Structure,
+            }) => {
+                for (tag, v) in read_container_members(r)? {
+                    if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
+                        status = u8::try_from(n).unwrap_or(0);
+                    }
+                }
+            }
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
+        }
+    }
+    Ok(EventReport::Status { path, status })
+}
+
+/// Parse a `DataReport`'s `eventReports[2]` array body (reader positioned just
+/// after the array start at ctx 2), pushing one [`EventReport`] per IB.
+///
+/// # Errors
+///
+/// Propagates any [`ImError`] from parsing an individual `EventReportIB`.
+pub(crate) fn parse_event_reports(
+    r: &mut TlvReader<'_>,
+    out: &mut Vec<EventReport>,
+) -> Result<(), ImError> {
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Ok(()),
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {
+                if let Some(rep) = parse_event_report_ib(r)? {
+                    out.push(rep);
+                }
+            }
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md test-code carve-out.
@@ -179,5 +441,80 @@ mod tests {
                 value: Value::Uint(0)
             })
         ));
+    }
+
+    #[test]
+    fn parses_event_data_ib() {
+        // EventReportIB { EventData[1] { Path[0](list){1:ep,2:cl,3:ev}, 1:num,
+        // 2:prio, 3:epoch, 7:data } }
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // EventReportIB
+        w.start_structure(Tag::Context(1)).unwrap(); // EventData
+        w.start_list(Tag::Context(0)).unwrap(); // Path (EventPathIB list)
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 0x28).unwrap();
+        w.put_uint(Tag::Context(3), 0x00).unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap(); // EventNumber
+        w.put_uint(Tag::Context(2), 2).unwrap(); // Priority = Critical
+        w.put_uint(Tag::Context(3), 0).unwrap(); // EpochTimestamp
+        w.put_uint(Tag::Context(7), 7).unwrap(); // Data (scalar for the test)
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        let rep = parse_event_report_ib(&mut r).unwrap().unwrap();
+        match rep {
+            EventReport::Data(it) => {
+                assert_eq!(it.path.endpoint, Some(0));
+                assert_eq!(it.path.cluster, Some(0x28));
+                assert_eq!(it.path.event, Some(0x00));
+                assert_eq!(it.event_number, 1);
+                assert_eq!(it.priority, EventPriority::Critical);
+                assert_eq!(it.timestamp, EventTimestamp::Epoch(0));
+                assert_eq!(it.value, Value::Uint(7));
+            }
+            EventReport::Status { .. } => panic!("expected Data, got Status"),
+        }
+    }
+
+    #[test]
+    fn parses_event_status_ib() {
+        // EventReportIB { EventStatus[0] { Path[0](list){1:ep,2:cl,3:ev},
+        // Status[1](struct){0:status} } }
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // EventReportIB
+        w.start_structure(Tag::Context(0)).unwrap(); // EventStatus
+        w.start_list(Tag::Context(0)).unwrap(); // Path
+        w.put_uint(Tag::Context(1), 1).unwrap();
+        w.put_uint(Tag::Context(2), 0x28).unwrap();
+        w.put_uint(Tag::Context(3), 0x02).unwrap();
+        w.end_container().unwrap();
+        w.start_structure(Tag::Context(1)).unwrap(); // Status (StatusIB)
+        w.put_uint(Tag::Context(0), 0x86).unwrap(); // UnsupportedEvent (example)
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        let rep = parse_event_report_ib(&mut r).unwrap().unwrap();
+        match rep {
+            EventReport::Status { path, status } => {
+                assert_eq!(path.endpoint, Some(1));
+                assert_eq!(path.event, Some(0x02));
+                assert_eq!(status, 0x86);
+            }
+            EventReport::Data(_) => panic!("expected Status, got Data"),
+        }
     }
 }

@@ -31,7 +31,9 @@ pub mod write;
 
 pub use accumulator::{ReportAccumulator, DEFAULT_MAX_BYTES, DEFAULT_MAX_ELEMENTS};
 pub use error::ImError;
-pub use event::{EventFilter, EventPath};
+pub use event::{
+    EventFilter, EventPath, EventPriority, EventReport, EventReportItem, EventTimestamp,
+};
 pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 pub use path::{AttributePath, CommandPath, ReadPath};
 pub use read::{
