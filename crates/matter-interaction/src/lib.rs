@@ -9,8 +9,10 @@
 //! `matter-clusters` codecs) and compose them with the concrete paths in
 //! [`path`].
 //!
-//! Scope is a deliberate subset: one command per invoke, concrete
-//! (non-wildcard) paths, no events, no timed actions, no chunked writes.
+//! Scope is a deliberate subset: one command per invoke, concrete and wildcard
+//! read paths, **event reads** (event paths/filters in `ReadRequest`,
+//! `EventReportIB` parsing — event subscribe lands in M9-B2), no timed actions,
+//! no chunked writes.
 //!
 //! Lifted from `matter-commissioning` in M7.1 (the M6.6 design kept this
 //! module free of state-machine dependencies for exactly this move).

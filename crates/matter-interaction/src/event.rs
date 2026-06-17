@@ -58,7 +58,7 @@ impl EventPath {
 
     /// Encode this path as an anonymous-tagged `EventPathIB` **list** element.
     ///
-    /// Tags: Node 0, Endpoint 1, Cluster 2, Event 3, IsUrgent 4 (Matter
+    /// Tags: Node 0, Endpoint 1, Cluster 2, Event 3, `IsUrgent` 4 (Matter
     /// Appendix A). Omitted (`None`) fields are wildcards.
     pub(crate) fn write(&self, w: &mut TlvWriter<'_>) -> Result<(), matter_codec::Error> {
         w.start_list(Tag::Anonymous)?;

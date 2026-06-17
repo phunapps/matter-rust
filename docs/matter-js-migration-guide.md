@@ -24,6 +24,7 @@ matter-rust returns **raw `Value`s** rather than runtime-typed cluster objects.
 | `node.subscribeAllAttributes(…)` / `subscribeMultiple` | `node.subscribe(&[ReadPath], min, max)` → `Subscription` | Pull stream (`next().await`), not an `EventEmitter` |
 | `subscription` callback | `while let Some(event) = sub.next().await { … }` | `event: SubscriptionEvent::{Report(AttributeReport), Established, Resubscribing}` |
 | wildcard read | `ReadPath::cluster(ep, cl)` / `ReadPath::all()` | `None` fields = wildcard |
+| `node.readEvent(...)` | `node.read_events(&[EventPath], &[EventFilter])` → `Vec<EventReport>` | Raw event payloads as `Value`; `EventFilter::from_event_min(n)` resumes after event `n` |
 
 ## Construction & persistence
 
@@ -120,6 +121,28 @@ components:
 ```rust
 let everything = node.read(&[ReadPath::all()]).await?;            // all attrs, all clusters
 let basic = node.read(&[ReadPath::cluster(0, 0x0028)]).await?;     // all of BasicInformation
+```
+
+Events (matter.js's `readEvent`) are a separate verb. `EventPath::concrete(ep,
+cl, ev)` / `EventPath::cluster(ep, cl)` select events; an `EventFilter` resumes
+after a known event number. Each `EventReport` carries the event path, number,
+priority, timestamp, and a raw `Value` payload (decode with `matter-clusters`):
+
+```rust
+use matter_controller::{EventPath, EventFilter, EventReport};
+
+// All BasicInformation events on endpoint 0, from the beginning.
+let events = node.read_events(&[EventPath::cluster(0, 0x0028)], &[]).await?;
+for e in &events {
+    if let EventReport::Data(it) = e {
+        // it.event_number, it.priority, it.timestamp, it.value
+    }
+}
+
+// Resume: only events newer than the last one seen.
+let newer = node
+    .read_events(&[EventPath::cluster(0, 0x0028)], &[EventFilter::from_event_min(42)])
+    .await?;
 ```
 
 ## Subscriptions

@@ -1940,8 +1940,8 @@ mod tests {
     /// Build a `ReportDataMessage` carrying one `eventReports[2]` entry: an
     /// `EventData` for `(ep, cl, ev)` with the given event number and payload.
     /// Mirrors the matter.js `report_data_event.json` fixture shape
-    /// (EventPathIB is a list; EventDataIB tags path 0 / number 1 / priority 2 /
-    /// epoch 3 / data 7).
+    /// (`EventPathIB` is a list; `EventDataIB` tags path 0 / number 1 /
+    /// priority 2 / epoch 3 / data 7).
     fn build_report_data_event(
         ep: u16,
         cl: u32,
@@ -2867,8 +2867,7 @@ mod tests {
 
         // The device answers the event read with a ReportData carrying one
         // EventData: BasicInformation.StartUp (0x28 / event 0x00) on ep 0.
-        let report_blob =
-            build_report_data_event(0, 0x28, 0x00, 1, &matter_codec::Value::Uint(7));
+        let report_blob = build_report_data_event(0, 0x28, 0x00, 1, &matter_codec::Value::Uint(7));
         let device = tokio::spawn(run_loopback_device(
             dev_io,
             ctrl_addr,

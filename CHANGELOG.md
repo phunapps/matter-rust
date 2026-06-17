@@ -99,6 +99,25 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
 
 ## matter-interaction
 
+### [Unreleased] — M9-B1 event reads
+
+#### Added
+
+- `event` module: `EventPath` / `EventFilter` (encode `EventPathIB` as a TLV
+  list, `EventFilterIB` as a TLV struct — both byte-parity-verified against
+  matter.js), and `EventReport` / `EventReportItem` / `EventPriority` /
+  `EventTimestamp` with `EventReportIB` / `EventDataIB` / `EventStatusIB`
+  parsing.
+- `read::build_read_request_full(attr_paths, event_paths, event_filters)` —
+  `ReadRequest` carrying event paths/filters (`EventRequests[1]` /
+  `EventFilters[2]`). `build_read_request_paths` now delegates to it
+  (byte-identical for attribute-only reads).
+- `ReportData` gains `events: Vec<EventReport>` (populated from
+  `eventReports[2]`); `ReportData::new` stays 4-arg (events default empty —
+  no caller ripple).
+- `matter-controller`: `Node::read_events(paths, filters)` over the chunked-read
+  transaction; event types re-exported.
+
 ### [Unreleased] — M7.1 crate created (IM lift + Write support)
 
 #### M7.1 — Interaction Model framing lifted out of matter-commissioning

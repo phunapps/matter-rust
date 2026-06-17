@@ -18,9 +18,9 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
+use matter_interaction::event::{EventFilter, EventPath, EventReport};
 use matter_interaction::invoke::build_invoke_request;
 use matter_interaction::path::AttributePath;
-use matter_interaction::event::{EventFilter, EventPath, EventReport};
 use matter_interaction::read::{build_read_request_full, build_read_request_paths};
 use matter_interaction::subscription::{
     build_status_response, build_subscribe_request, parse_subscribe_response, SubscribeRequest,
