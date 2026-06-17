@@ -37,7 +37,7 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         | "devtype-id" | "epoch-s" | "elapsed-s" | "map32" | "fabric-id" => "u32",
         // u64: primitive + semantic globals
         "uint40" | "uint48" | "uint56" | "uint64" | "node-id" | "epoch-us" | "posix-ms"
-        | "systime-us" | "systime-ms" | "fabric-id64" => "u64",
+        | "systime-us" | "systime-ms" | "fabric-id64" | "subject-id" => "u64",
         _ => return None,
     })
 }
@@ -212,6 +212,8 @@ mod tests {
         assert_eq!(base_type("energy-mVARh", None), "i64");
         // …and the millisecond system-time global (uint64-based).
         assert_eq!(base_type("systime-ms", None), "u64");
+        // M9-A2.5 ACL subject id (node/group/CAT id as uint64).
+        assert_eq!(base_type("subject-id", None), "u64");
     }
 
     #[test]

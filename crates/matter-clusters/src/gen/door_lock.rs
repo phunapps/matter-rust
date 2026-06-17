@@ -327,7 +327,6 @@ bitflags::bitflags! {
 
 /// `CredentialStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct CredentialStruct {
     /// Field CredentialType (tag 0).
     pub credential_type: CredentialTypeEnum,

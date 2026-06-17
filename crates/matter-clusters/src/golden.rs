@@ -124,7 +124,6 @@ bitflags::bitflags! {
 
 /// `PointStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct PointStruct {
     /// Field X (tag 0).
     pub x: u16,

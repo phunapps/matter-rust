@@ -7,6 +7,7 @@
 
 use crate::codegen::model::{Cluster, Datatype};
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, screaming, snake, Position};
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 /// Emit the full Rust module source for one cluster.
@@ -16,8 +17,12 @@ pub fn generate_cluster(c: &Cluster) -> String {
     emit_header(&mut s, c);
     emit_ids(&mut s, c);
     emit_feature_bitflags(&mut s, c);
+    // Structs reachable from a request command are built by callers (to encode),
+    // so their declaration must stay constructible (no `#[non_exhaustive]`).
+    let dts = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
+    let encode_reachable = super::emit_codecs::command_encode_reachable_structs(c, &dts);
     for d in &c.datatypes {
-        emit_datatype(&mut s, d);
+        emit_datatype(&mut s, d, &encode_reachable);
     }
     super::emit_codecs::emit_codecs(&mut s, c);
     s
@@ -139,11 +144,11 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "}}\n");
 }
 
-fn emit_datatype(s: &mut String, d: &Datatype) {
+fn emit_datatype(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
     match d.kind.as_str() {
         "enum" => emit_enum(s, d),
         "bitmap" => emit_bitmap(s, d),
-        "struct" => emit_struct(s, d),
+        "struct" => emit_struct(s, d, encode_reachable),
         _ => {} // "scalar": a named alias of a primitive — referenced inline, no decl needed.
     }
 }
@@ -246,10 +251,15 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
     line!(s, "}}\n");
 }
 
-fn emit_struct(s: &mut String, d: &Datatype) {
+fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
     line!(s, "/// `{}` struct.", d.name);
     line!(s, "#[derive(Clone, Debug, PartialEq)]");
-    line!(s, "#[non_exhaustive]");
+    // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
+    // struct-literal construction that command-encode callers need; skip it for
+    // structs reachable from a request command (they are built to be encoded).
+    if !encode_reachable.contains(d.name.as_str()) {
+        line!(s, "#[non_exhaustive]");
+    }
     line!(s, "pub struct {} {{", d.name);
     for f in &d.fields {
         let ty = rust_type(
@@ -330,5 +340,28 @@ mod tests {
         );
         assert!(s.contains("other => Self::Unrecognized(other),"), "{s}");
         assert!(s.contains("Self::Unrecognized(v) => v,"), "{s}");
+    }
+
+    #[test]
+    fn non_exhaustive_skipped_for_command_encode_reachable_structs() {
+        use std::collections::HashSet;
+        let d = Datatype {
+            name: "EncStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![],
+        };
+        // A normal data struct keeps #[non_exhaustive].
+        let mut normal = String::new();
+        emit_struct(&mut normal, &d, &HashSet::new());
+        assert!(normal.contains("#[non_exhaustive]"), "{normal}");
+        // A command-encode-reachable struct must stay constructible by callers
+        // (they build it to pass to encode_*) -> no #[non_exhaustive].
+        let reachable: HashSet<&str> = std::iter::once("EncStruct").collect();
+        let mut enc = String::new();
+        emit_struct(&mut enc, &d, &reachable);
+        assert!(!enc.contains("#[non_exhaustive]"), "{enc}");
     }
 }

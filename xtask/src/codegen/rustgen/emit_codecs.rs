@@ -3,7 +3,7 @@
 use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, FieldDef};
 use crate::codegen::rustgen::emit::line;
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, snake, Position};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 /// Name → datatype lookup for the cluster being emitted, so the scalar codec
@@ -18,12 +18,55 @@ fn field_ident(name: &str) -> String {
     ident(&snake(name))
 }
 
+/// Struct datatype names reachable from a **request** command's field types,
+/// transitively through struct fields and list-of-struct entries. These structs
+/// need an encodable `write_fields` even when they carry a list field (the
+/// scalar-only [`struct_is_write_capable`] rule alone would leave them
+/// decode-only) and must stay constructible by callers (not `#[non_exhaustive]`).
+/// Empty for every cluster whose request commands take only scalars/lists-of-scalar.
+pub(crate) fn command_encode_reachable_structs<'a>(
+    c: &'a Cluster,
+    dts: &DatatypeMap<'a>,
+) -> HashSet<&'a str> {
+    let mut out = HashSet::new();
+    let mut queue: Vec<&str> = Vec::new();
+    let consider = |t: Option<&'a str>, q: &mut Vec<&'a str>| {
+        if let Some(name) = t {
+            if dts.get(name).is_some_and(|d| d.kind == "struct") {
+                q.push(name);
+            }
+        }
+    };
+    for cmd in &c.commands {
+        if cmd.direction != "request" {
+            continue;
+        }
+        for f in &cmd.fields {
+            consider(Some(f.ty.as_str()), &mut queue);
+            consider(f.entry_type.as_deref(), &mut queue);
+        }
+    }
+    while let Some(name) = queue.pop() {
+        if !out.insert(name) {
+            continue;
+        }
+        if let Some(d) = dts.get(name) {
+            for f in &d.fields {
+                consider(Some(f.ty.as_str()), &mut queue);
+                consider(f.entry_type.as_deref(), &mut queue);
+            }
+        }
+    }
+    out
+}
+
 /// Emit every codec for the cluster.
 pub fn emit_codecs(s: &mut String, c: &Cluster) {
     let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
+    let encode_reachable = command_encode_reachable_structs(c, &dts);
     for d in &c.datatypes {
         if d.kind == "struct" {
-            emit_struct_codec(s, d, &dts);
+            emit_struct_codec(s, d, &dts, &encode_reachable);
         }
     }
     for a in &c.attributes {
@@ -512,10 +555,10 @@ fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'
 }
 
 /// Emit the write for a list-typed command request field (e.g.
-/// `AtomicRequest.AttributeRequests = list<attrib-id>`): open an array
-/// container at the context tag, write each Copy scalar element at an anonymous
-/// tag, close. Struct-element lists are surfaced as a `compile_error!` (no A2.3
-/// case; deferred to a later batch).
+/// `AtomicRequest.AttributeRequests = list<attrib-id>`, or
+/// `ReviewFabricRestrictions.Arl = list<struct>`): open an array container at
+/// the context tag, write each element at an anonymous tag — a Copy scalar
+/// inline, or a nested struct via its (recursive) `write_fields` — then close.
 fn emit_list_field_write(
     s: &mut String,
     f: &FieldDef,
@@ -525,23 +568,33 @@ fn emit_list_field_write(
 ) {
     let entry = f.entry_type.as_deref().unwrap_or("octstr");
     let entry_meta = entry_metatype(entry, dts);
-    if entry_meta == "object" {
-        line!(
-            s,
-            "    compile_error!(\"struct-list command field {} needs list-of-struct encode\");",
-            f.name
-        );
-        return;
-    }
-    let put = write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts);
+    // Per-element emission differs for struct vs scalar entries: a struct is
+    // written as an anonymous container via its (recursive) write_fields; a Copy
+    // scalar is written inline. Iterate structs by reference, scalars by value.
+    // Here the writer is `let mut w` (command-encode body), so calls take `&mut w`.
     let open = |s: &mut String, expr: &str| {
         line!(
             s,
             "    w.start_array({tag}).expect(\"infallible: vec writer\");"
         );
-        line!(s, "    for el in {expr}.iter().copied() {{");
-        line!(s, "        {put}");
-        line!(s, "    }}");
+        if entry_meta == "object" {
+            line!(s, "    for el in {expr}.iter() {{");
+            line!(
+                s,
+                "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+            );
+            line!(s, "        el.write_fields(&mut w);");
+            line!(
+                s,
+                "        w.end_container().expect(\"infallible: vec writer\");"
+            );
+            line!(s, "    }}");
+        } else {
+            let put = write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts);
+            line!(s, "    for el in {expr}.iter().copied() {{");
+            line!(s, "        {put}");
+            line!(s, "    }}");
+        }
         line!(
             s,
             "    w.end_container().expect(\"infallible: vec writer\");"
@@ -626,7 +679,9 @@ fn emit_response_decoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>
         bits: vec![],
         fields: cmd.fields.iter().map(clone_field).collect(),
     };
-    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts);
+    // Response payloads are decode-only (the gate is `!decl`), so the reachable
+    // set is never consulted here — pass an empty one.
+    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new());
 }
 
 fn clone_field(f: &FieldDef) -> FieldDef {
@@ -656,10 +711,15 @@ fn struct_is_write_capable(d: &Datatype) -> bool {
     })
 }
 
-fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
+fn emit_struct_codec(
+    s: &mut String,
+    d: &Datatype,
+    dts: &DatatypeMap<'_>,
+    encode_reachable: &HashSet<&str>,
+) {
     // Struct *decl* was already emitted by emit.rs::emit_struct; emit only the
     // codec here.
-    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts);
+    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encode_reachable);
 }
 
 /// Emit the codec for a struct `d`: `decode_from`(positioned reader) +
@@ -667,7 +727,13 @@ fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
 /// bytes). When `decl` is true, also emit the `pub struct` declaration
 /// (response payloads aren't in the cluster datatypes).
 #[allow(clippy::too_many_lines)] // a code emitter — long but linear.
-fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &DatatypeMap<'_>) {
+fn emit_struct_decl_and_codec(
+    s: &mut String,
+    d: &Datatype,
+    decl: bool,
+    dts: &DatatypeMap<'_>,
+    encode_reachable: &HashSet<&str>,
+) {
     if decl {
         line!(s, "/// Decoded `{}` payload.", d.name);
         line!(s, "#[derive(Clone, Debug, PartialEq)]");
@@ -784,7 +850,7 @@ fn emit_struct_decl_and_codec(s: &mut String, d: &Datatype, decl: bool, dts: &Da
     // clusters guarantee have scalar-only fields, so write_fields compiles).
     // Response-payload structs (`decl`) are decode-only — they may carry
     // composite fields (e.g. list[struct]) that we never re-encode.
-    if !decl && struct_is_write_capable(d) {
+    if !decl && (struct_is_write_capable(d) || encode_reachable.contains(d.name.as_str())) {
         line!(
             s,
             "    /// Write this struct's fields into an already-open container."
@@ -835,6 +901,51 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
     // uniformly.
     let var = field_ident(&f.name);
     let tag = format!("Tag::Context({})", f.id);
+    // List (array) fields: open an array at the context tag, write each element
+    // at an anonymous tag — a Copy scalar, or a nested struct via write_fields.
+    // (Only reached for command-encode-reachable structs; scalar-only structs
+    // have no array fields. Nullable/optional list fields on an encoded struct
+    // are YAGNI — none in A2.5 — so a guarded list is a compile_error.) Inside
+    // `write_fields(&self, w: &mut TlvWriter)` the writer `w` is already `&mut`.
+    if f.metatype == "array" {
+        if f.nullable || f.optional {
+            line!(
+                s,
+                "        compile_error!(\"nullable/optional list field {} in an encoded struct\");",
+                f.name
+            );
+            return;
+        }
+        let entry = f.entry_type.as_deref().unwrap_or("octstr");
+        let entry_meta = entry_metatype(entry, dts);
+        line!(
+            s,
+            "        w.start_array({tag}).expect(\"infallible: vec writer\");"
+        );
+        if entry_meta == "object" {
+            line!(s, "        for el in &self.{var} {{");
+            line!(
+                s,
+                "            w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+            );
+            line!(s, "            el.write_fields(w);");
+            line!(
+                s,
+                "            w.end_container().expect(\"infallible: vec writer\");"
+            );
+            line!(s, "        }}");
+        } else {
+            let put = write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts);
+            line!(s, "        for el in self.{var}.iter().copied() {{");
+            line!(s, "            {put}");
+            line!(s, "        }}");
+        }
+        line!(
+            s,
+            "        w.end_container().expect(\"infallible: vec writer\");"
+        );
+        return;
+    }
     let inner =
         |expr: &str| write_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &tag, expr, dts);
     // A bound `Nullable::Value`/`Some` field needs dereferencing. Named
@@ -1061,7 +1172,7 @@ mod tests {
         );
         let mut s = String::new();
         let dts: DatatypeMap<'_> = HashMap::new();
-        emit_struct_codec(&mut s, &d, &dts);
+        emit_struct_codec(&mut s, &d, &dts, &HashSet::new());
         assert!(s.contains("r#type: f_type"), "construction escaped:\n{s}");
         assert!(
             !s.contains("            type: f_type"),
@@ -1085,5 +1196,97 @@ mod tests {
         assert_eq!(entry_metatype("string", &dts), "string");
         // a bare integer id stays integer.
         assert_eq!(entry_metatype("group-id", &dts), "integer");
+    }
+
+    fn request_cmd(name: &str, fields: Vec<FieldDef>) -> CommandDef {
+        CommandDef {
+            id: 0,
+            name: name.to_string(),
+            direction: "request".to_string(),
+            response_id: None,
+            fields,
+        }
+    }
+
+    fn cluster_with(commands: Vec<CommandDef>, datatypes: Vec<Datatype>) -> Cluster {
+        Cluster {
+            id: 0x1,
+            name: "T".to_string(),
+            revision: 1,
+            features: vec![],
+            attributes: vec![],
+            commands,
+            datatypes,
+        }
+    }
+
+    #[test]
+    fn command_encode_reachable_collects_transitive_structs() {
+        // A request command taking list<Outer>; Outer has a list<Inner> field.
+        let inner = struct_dt("Inner", vec![field(0, "Id", "uint32", "integer", None)]);
+        let outer = struct_dt(
+            "Outer",
+            vec![field(0, "Items", "list", "array", Some("Inner"))],
+        );
+        let cmd = request_cmd(
+            "DoIt",
+            vec![field(0, "Arg", "list", "array", Some("Outer"))],
+        );
+        let c = cluster_with(vec![cmd], vec![inner, outer]);
+        let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
+        let set = command_encode_reachable_structs(&c, &dts);
+        assert!(set.contains("Outer"), "{set:?}");
+        assert!(set.contains("Inner"), "transitive via list field: {set:?}");
+    }
+
+    #[test]
+    fn command_encode_reachable_empty_without_struct_command_fields() {
+        // A scalar-list request command does NOT reach any struct (the case for
+        // every committed cluster -> zero generated-output change).
+        let dt = struct_dt("Unused", vec![field(0, "Id", "uint32", "integer", None)]);
+        let cmd = request_cmd(
+            "Scalar",
+            vec![field(0, "Ids", "list", "array", Some("attrib-id"))],
+        );
+        let c = cluster_with(vec![cmd], vec![dt]);
+        let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
+        assert!(command_encode_reachable_structs(&c, &dts).is_empty());
+    }
+
+    #[test]
+    fn list_of_struct_command_field_encodes_array_of_structs() {
+        // emit_list_field_write must wrap each element in an anon structure and
+        // call write_fields (no compile_error).
+        let f = field(1, "Arl", "list", "array", Some("EntryStruct"));
+        let entry = struct_dt(
+            "EntryStruct",
+            vec![field(0, "Id", "uint32", "integer", None)],
+        );
+        let dts: DatatypeMap<'_> = std::iter::once(("EntryStruct", &entry)).collect();
+        let mut s = String::new();
+        emit_list_field_write(&mut s, &f, "arl", "Tag::Context(1)", &dts);
+        assert!(s.contains("w.start_array(Tag::Context(1))"), "{s}");
+        assert!(s.contains("w.start_structure(Tag::Anonymous)"), "{s}");
+        assert!(s.contains(".write_fields(&mut w)"), "{s}");
+        assert!(!s.contains("compile_error!"), "{s}");
+    }
+
+    #[test]
+    fn write_fields_emitted_for_struct_with_list_field_when_reachable() {
+        // A struct with a list<scalar> field gains write_fields ONLY when in the
+        // reachable set (gate widened beyond struct_is_write_capable).
+        let d = struct_dt(
+            "HasList",
+            vec![field(0, "Ids", "list", "array", Some("uint32"))],
+        );
+        let dts: DatatypeMap<'_> = std::iter::once(("HasList", &d)).collect();
+        let reachable: HashSet<&str> = std::iter::once("HasList").collect();
+        let mut s = String::new();
+        emit_struct_decl_and_codec(&mut s, &d, /*decl=*/ false, &dts, &reachable);
+        assert!(
+            s.contains("pub fn write_fields"),
+            "reachable list struct writes: {s}"
+        );
+        assert!(s.contains("w.start_array(Tag::Context(0))"), "{s}");
     }
 }
