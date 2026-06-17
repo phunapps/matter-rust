@@ -99,7 +99,7 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
 
 ## matter-interaction
 
-### [Unreleased] — M9-B1 event reads, M9-B2 event subscribe, M9-B3 timed interactions
+### [Unreleased] — M9-B1 event reads, M9-B2 event subscribe, M9-B3 timed interactions, M9-B5 multi-command invoke
 
 #### Added
 
@@ -134,6 +134,14 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
   the wasted plain attempt; covers manufacturer clusters, no codegen). Explicit
   `Node::write_timed`/`invoke_timed` (`TIMED_DEFAULT_MS = 10s`) force the timed
   path. The `TimedRequest` and the Write/Invoke ride one exchange (chip-faithful).
+- **M9-B5 multi-command invoke (wire-level):** `build_invoke_request_batch` (one
+  `CommandDataIB` per command, each with a sequential `CommandRef` at tag 2) and
+  `parse_invoke_response_batch` → `Vec<InvokeResponseEntry>` (each carrying its
+  `CommandRef` for matching). Byte-parity vs matter.js. The single-command
+  `build_invoke_request`/`parse_invoke_response` are unchanged. **Deferred:** the
+  controller-side `Node` batch verb + `MaxPathsPerInvoke` SessionParameters
+  plumbing land when a device advertising `MaxPathsPerInvoke > 1` exists to
+  validate against (a batch >1 is non-conformant otherwise).
 
 ### [Unreleased] — M7.1 crate created (IM lift + Write support)
 

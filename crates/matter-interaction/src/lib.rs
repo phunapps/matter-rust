@@ -9,11 +9,13 @@
 //! `matter-clusters` codecs) and compose them with the concrete paths in
 //! [`path`].
 //!
-//! Scope is a deliberate subset: one command per invoke, concrete and wildcard
-//! read paths, **events** (event paths/filters in `ReadRequest` and
-//! `SubscribeRequest`, `EventReportIB` parsing), **timed write/invoke** (the
-//! `TimedRequest` message + the `TimedRequest` flag on write/invoke), no chunked
-//! writes.
+//! Scope: single- and multi-command invoke (the latter via
+//! `build_invoke_request_batch` / `parse_invoke_response_batch` with `CommandRef`
+//! — the controller-side verb + `MaxPathsPerInvoke` gating are deferred until a
+//! batch-capable device exists), concrete and wildcard read paths, **events**
+//! (event paths/filters in `ReadRequest` and `SubscribeRequest`, `EventReportIB`
+//! parsing), **timed write/invoke** (the `TimedRequest` message + the
+//! `TimedRequest` flag), no chunked writes (deferred to the ACL/groups work).
 //!
 //! Lifted from `matter-commissioning` in M7.1 (the M6.6 design kept this
 //! module free of state-machine dependencies for exactly this move).

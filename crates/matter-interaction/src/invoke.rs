@@ -92,7 +92,7 @@ fn build_invoke_request_inner(
 /// anonymous-tagged TLV blob (e.g. a `matter-clusters` command encoder output).
 ///
 /// NB: the wire format permits a batch, but a device only accepts more than one
-/// command if it advertises `MaxPathsPerInvoke > 1` in its SessionParameters;
+/// command if it advertises `MaxPathsPerInvoke > 1` in its `SessionParameters`;
 /// the controller-side gating is deferred (M9-B5 scope) — callers must respect it.
 ///
 /// # Panics
@@ -416,9 +416,7 @@ fn parse_command_status(r: &mut TlvReader<'_>) -> Result<ImStatus, ImError> {
 }
 
 /// Like [`parse_command_status`] but also captures the `CommandRef` (tag 2).
-fn parse_command_status_ref(
-    r: &mut TlvReader<'_>,
-) -> Result<(ImStatus, Option<u16>), ImError> {
+fn parse_command_status_ref(r: &mut TlvReader<'_>) -> Result<(ImStatus, Option<u16>), ImError> {
     // `None` ⇒ the Status member was never seen (genuinely missing).
     // `Some(raw)` ⇒ the member was present; `raw` is the verbatim wire value,
     // which we range-check to a `u8` only after the parse loop so an
@@ -927,7 +925,7 @@ mod tests {
             w.put_uint(Tag::Context(2), 0).unwrap(); // CommandRef
             w.end_container().unwrap(); // Command
             w.end_container().unwrap(); // IB 1
-            // IB 2: Status = CommandStatusIB { path, status=SUCCESS, ref=1 }
+                                        // IB 2: Status = CommandStatusIB { path, status=SUCCESS, ref=1 }
             w.start_structure(Tag::Anonymous).unwrap();
             w.start_structure(Tag::Context(1)).unwrap(); // Status
             w.start_list(Tag::Context(0)).unwrap();
