@@ -38,15 +38,31 @@ fn write_command_path(w: &mut TlvWriter<'_>, tag: Tag, path: CommandPath) {
 /// element (i.e. not the output of a codec encode call). The function is
 /// otherwise infallible; `Vec`-backed `TlvWriter` never fails.
 #[must_use]
-#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 pub fn build_invoke_request(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
+    build_invoke_request_inner(path, command_fields_tlv, false)
+}
+
+/// Like [`build_invoke_request`] but sets `TimedRequest = true` — the action half
+/// of a timed interaction, sent on the same exchange after a `TimedRequest`
+/// message (see [`crate::build_timed_request`]).
+///
+/// # Panics
+///
+/// As [`build_invoke_request`] (invalid `command_fields_tlv`).
+#[must_use]
+pub fn build_invoke_request_timed(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
+    build_invoke_request_inner(path, command_fields_tlv, true)
+}
+
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+fn build_invoke_request_inner(path: CommandPath, command_fields_tlv: &[u8], timed: bool) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     w.put_bool(Tag::Context(0), false)
         .expect("infallible: vec writer"); // SuppressResponse
-    w.put_bool(Tag::Context(1), false)
+    w.put_bool(Tag::Context(1), timed)
         .expect("infallible: vec writer"); // TimedRequest
     w.start_array(Tag::Context(2))
         .expect("infallible: vec writer"); // InvokeRequests

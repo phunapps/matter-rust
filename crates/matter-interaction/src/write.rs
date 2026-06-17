@@ -30,15 +30,27 @@ pub struct AttributeWriteRequest {
 /// (i.e. not the output of a codec encode call). The function is
 /// otherwise infallible; `Vec`-backed `TlvWriter` never fails.
 #[must_use]
-#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 pub fn build_write_request(writes: &[AttributeWriteRequest]) -> Vec<u8> {
+    build_write_request_inner(writes, false)
+}
+
+/// Like [`build_write_request`] but sets `TimedRequest = true` — the action half
+/// of a timed interaction, sent on the same exchange after a `TimedRequest`
+/// message (see [`crate::build_timed_request`]).
+#[must_use]
+pub fn build_write_request_timed(writes: &[AttributeWriteRequest]) -> Vec<u8> {
+    build_write_request_inner(writes, true)
+}
+
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+fn build_write_request_inner(writes: &[AttributeWriteRequest], timed: bool) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     w.put_bool(Tag::Context(0), false)
         .expect("infallible: vec writer"); // SuppressResponse
-    w.put_bool(Tag::Context(1), false)
+    w.put_bool(Tag::Context(1), timed)
         .expect("infallible: vec writer"); // TimedRequest
     w.start_array(Tag::Context(2))
         .expect("infallible: vec writer"); // WriteRequests

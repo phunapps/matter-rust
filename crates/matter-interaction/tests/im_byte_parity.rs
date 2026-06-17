@@ -598,3 +598,92 @@ fn report_data_subscribed_parses_matter_js() {
     }
     assert!(asserted > 0, "no report-data-subscribed fixtures parsed");
 }
+
+// --- M9-B3 timed interactions ---
+
+#[derive(Deserialize)]
+struct TimedRequestFixture {
+    timeout_ms: u16,
+    expected_message_b64: String,
+}
+
+#[test]
+fn timed_request_matches_matter_js() {
+    let path = fixtures_root().join("timed").join("timed_request.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no timed_request fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: TimedRequestFixture = serde_json::from_str(&raw).unwrap();
+    let ours = matter_interaction::build_timed_request(f.timeout_ms);
+    let theirs = B64.decode(&f.expected_message_b64).unwrap();
+    assert_eq!(ours, theirs, "TimedRequest must match matter.js byte-for-byte");
+}
+
+#[test]
+fn write_request_timed_matches_matter_js() {
+    use matter_interaction::write::{build_write_request_timed, AttributeWriteRequest};
+    let path = fixtures_root().join("timed").join("write_request_timed.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no write_request_timed fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: WriteFixture = serde_json::from_str(&raw).unwrap();
+    let writes: Vec<AttributeWriteRequest> = f
+        .writes
+        .iter()
+        .map(|w| AttributeWriteRequest {
+            path: AttributePath {
+                endpoint: w.endpoint,
+                cluster: w.cluster,
+                attribute: w.attribute,
+            },
+            value_tlv: B64.decode(&w.value_tlv_b64).unwrap(),
+        })
+        .collect();
+    let ours = build_write_request_timed(&writes);
+    let theirs = B64.decode(&f.expected_message_b64).unwrap();
+    assert_eq!(ours, theirs, "timed WriteRequest must match matter.js byte-for-byte");
+}
+
+#[test]
+fn invoke_request_timed_matches_matter_js() {
+    let path = fixtures_root().join("timed").join("invoke_request_timed.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no invoke_request_timed fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: InvokeFixture = serde_json::from_str(&raw).unwrap();
+    let fields = B64.decode(&f.command_fields_b64).unwrap();
+    let ours = matter_interaction::build_invoke_request_timed(
+        CommandPath {
+            endpoint: f.endpoint,
+            cluster: f.cluster,
+            command: f.command,
+        },
+        &fields,
+    );
+    let theirs = B64.decode(&f.expected_message_b64).unwrap();
+    assert_eq!(ours, theirs, "timed InvokeRequest must match matter.js byte-for-byte");
+}
+
+#[derive(Deserialize)]
+struct StatusResponseParseFixture {
+    status: u8,
+    response_message_b64: String,
+}
+
+#[test]
+fn status_needs_timed_parses() {
+    let path = fixtures_root().join("timed").join("status_needs_timed.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no status_needs_timed fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: StatusResponseParseFixture = serde_json::from_str(&raw).unwrap();
+    let bytes = B64.decode(&f.response_message_b64).unwrap();
+    assert_eq!(
+        matter_interaction::parse_status_response(&bytes).unwrap(),
+        Some(f.status)
+    );
+}
