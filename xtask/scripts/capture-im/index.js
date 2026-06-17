@@ -60,6 +60,7 @@ const {
     TlvStatusResponse,
     TlvDataReport,
     TlvBoolean,
+    TlvTimedRequest,
 } = await loadImSchemas();
 
 // encodeTlv (TlvStream form, for TlvAny fields) must exist on schemas.
@@ -482,6 +483,61 @@ writeFixture('report', 'report_data_event.json', {
                 data: TlvStartUpFields.encodeTlv({ softwareVersion: 1 }),
             },
         }],
+        interactionModelRevision: 11,
+    })),
+});
+
+// ---------------------------------------------------------------------
+// TIMED fixtures (gate M9-B3). TimedRequest opcode 0x0a: {0: timeout, 0xFF}.
+// WriteRequest/InvokeRequest with timedRequest=true (tag 1). StatusResponse
+// with NEEDS_TIMED_INTERACTION (0xc6) for parse_status_response.
+// ---------------------------------------------------------------------
+writeFixture('timed', 'timed_request.json', {
+    timeout_ms: 10000,
+    expected_message_b64: b64(TlvTimedRequest.encode({
+        timeout: 10000,
+        interactionModelRevision: 11,
+    })),
+});
+
+writeFixture('timed', 'write_request_timed.json', {
+    writes: [{
+        endpoint: 0,
+        cluster: 0x28,
+        attribute: 0x05,
+        value_tlv_b64: b64(TlvString.encode('matter-rust')),
+    }],
+    expected_message_b64: b64(TlvWriteRequest.encode({
+        suppressResponse: false,
+        timedRequest: true,
+        writeRequests: [{
+            path: { endpointId: 0, clusterId: 0x28, attributeId: 0x05 },
+            data: TlvString.encodeTlv('matter-rust'),
+        }],
+        interactionModelRevision: 11,
+    })),
+});
+
+writeFixture('timed', 'invoke_request_timed.json', {
+    endpoint: 1,
+    cluster: 0x06,
+    command: 0x02,
+    command_fields_b64: b64(TlvNoFields.encode({})),
+    expected_message_b64: b64(TlvInvokeRequest.encode({
+        suppressResponse: false,
+        timedRequest: true,
+        invokeRequests: [{
+            commandPath: { endpointId: 1, clusterId: 0x06, commandId: 0x02 },
+            commandFields: TlvNoFields.encodeTlv({}),
+        }],
+        interactionModelRevision: 11,
+    })),
+});
+
+writeFixture('timed', 'status_needs_timed.json', {
+    status: 0xc6,
+    response_message_b64: b64(TlvStatusResponse.encode({
+        status: 0xc6,
         interactionModelRevision: 11,
     })),
 });
