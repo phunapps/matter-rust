@@ -335,6 +335,29 @@ writeFixture('subscribe', 'subscribe_onoff.json', {
     })),
 });
 
+// SubscribeRequest carrying BOTH an attribute path (OnOff.OnOff ep1) and an
+// event path (BasicInformation.StartUp ep0) + an event filter, min 1s/max 30s.
+// Event tags: eventRequests[4] (EventPathIB list), eventFilters[5]
+// (EventFilterIB struct) — both before isFabricFiltered[7].
+writeFixture('subscribe', 'subscribe_with_events.json', {
+    keep_subscriptions: false,
+    min_interval_floor: 1,
+    max_interval_ceiling: 30,
+    paths: [{ endpoint: 1, cluster: 0x06, attribute: 0x0000 }],
+    event_paths: [{ endpoint: 0, cluster: 0x28, event: 0x00 }],
+    event_filters: [{ event_min: 0 }],
+    expected_message_b64: b64(TlvSubscribeRequest.encode({
+        keepSubscriptions: false,
+        minIntervalFloorSeconds: 1,
+        maxIntervalCeilingSeconds: 30,
+        attributeRequests: [{ endpointId: 1, clusterId: 0x06, attributeId: 0x0000 }],
+        eventRequests: [{ endpointId: 0, clusterId: 0x28, eventId: 0x00 }],
+        eventFilters: [{ eventMin: 0 }],
+        isFabricFiltered: false,
+        interactionModelRevision: 11,
+    })),
+});
+
 // SubscribeResponse parse: subscriptionId + maxInterval.
 writeFixture('subscribe', 'subscribe_response.json', {
     subscription_id: 0x1234_5678,
