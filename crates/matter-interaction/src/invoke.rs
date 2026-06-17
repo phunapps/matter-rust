@@ -85,6 +85,53 @@ fn build_invoke_request_inner(
     buf
 }
 
+/// Build an `InvokeRequestMessage` carrying **multiple** commands, each tagged
+/// with a sequential `CommandRef` (`CommandDataIB` tag 2) so the device's
+/// responses can be matched back. `SuppressResponse` and `TimedRequest` are
+/// `false`. Each tuple is `(path, command_fields_tlv)`, the fields an
+/// anonymous-tagged TLV blob (e.g. a `matter-clusters` command encoder output).
+///
+/// NB: the wire format permits a batch, but a device only accepts more than one
+/// command if it advertises `MaxPathsPerInvoke > 1` in its SessionParameters;
+/// the controller-side gating is deferred (M9-B5 scope) — callers must respect it.
+///
+/// # Panics
+///
+/// As [`build_invoke_request`] (a `command_fields_tlv` that is not a valid
+/// anonymous-tagged TLV element).
+#[must_use]
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+pub fn build_invoke_request_batch(commands: &[(CommandPath, &[u8])]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bool(Tag::Context(0), false)
+        .expect("infallible: vec writer"); // SuppressResponse
+    w.put_bool(Tag::Context(1), false)
+        .expect("infallible: vec writer"); // TimedRequest
+    w.start_array(Tag::Context(2))
+        .expect("infallible: vec writer"); // InvokeRequests
+    for (i, (path, fields)) in commands.iter().enumerate() {
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer"); // CommandDataIB
+        write_command_path(&mut w, Tag::Context(0), *path);
+        w.put_preencoded(Tag::Context(1), fields)
+            .expect("infallible: caller passes a valid anonymous-tagged struct");
+        // CommandRef (tag 2): the index. `try_from` is total for any realistic
+        // batch; cap defensively rather than panic on an absurd one.
+        let cref = u16::try_from(i).unwrap_or(u16::MAX);
+        w.put_uint(Tag::Context(2), u64::from(cref))
+            .expect("infallible: vec writer");
+        w.end_container().expect("infallible: vec writer"); // CommandDataIB
+    }
+    w.end_container().expect("infallible: vec writer"); // InvokeRequests array
+    w.put_uint(Tag::Context(0xFF), u64::from(IM_REVISION))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer"); // message struct
+    buf
+}
+
 /// Outcome of parsing a single-command `InvokeResponseMessage`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InvokeResponse {
@@ -99,6 +146,16 @@ pub enum InvokeResponse {
     },
     /// The device returned a bare status (no response command payload).
     Status(ImStatus),
+}
+
+/// One parsed `InvokeResponseIB` from a batched response, with its `CommandRef`
+/// (`CommandDataIB` / `CommandStatusIB` tag 2) for matching to the request command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvokeResponseEntry {
+    /// The `CommandRef` echoed by the device, if present.
+    pub command_ref: Option<u16>,
+    /// The response: a command payload or a status.
+    pub response: InvokeResponse,
 }
 
 /// Re-encode a [`Value`] as a standalone, anonymous-tagged TLV blob. Used
@@ -212,11 +269,102 @@ pub fn parse_invoke_response(bytes: &[u8]) -> Result<InvokeResponse, ImError> {
     }
 }
 
+/// Parse a multi-command `InvokeResponseMessage`: every `InvokeResponseIB`, each
+/// with its `CommandRef`. The single-command [`parse_invoke_response`] is retained
+/// for the commissioning path (reads only the first IB, ignores `CommandRef`).
+///
+/// # Errors
+///
+/// Returns [`ImError`] if the message is not a struct, lacks the
+/// `InvokeResponses` array, or an IB has neither Command nor Status.
+pub fn parse_invoke_response_batch(bytes: &[u8]) -> Result<Vec<InvokeResponseEntry>, ImError> {
+    let mut r = TlvReader::new(bytes);
+    expect_message_struct(&mut r)?;
+    // Advance to the InvokeResponses array (context tag 1).
+    loop {
+        match r.next()? {
+            None | Some(Element::ContainerEnd) => {
+                return Err(ImError::MissingField("InvokeResponses"))
+            }
+            Some(Element::ContainerStart {
+                tag: Tag::Context(1),
+                kind: ContainerKind::Array,
+            }) => break,
+            Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
+            Some(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Ok(out), // end of array
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => out.push(parse_invoke_response_ib(&mut r)?),
+            Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
+            Some(_) => {}
+        }
+    }
+}
+
+/// Parse one `InvokeResponseIB` body into an [`InvokeResponseEntry`] (reader
+/// positioned just after its struct start). Drains the **entire** IB (through its
+/// matching `ContainerEnd`) so the caller's array walk stays in sync.
+fn parse_invoke_response_ib(r: &mut TlvReader<'_>) -> Result<InvokeResponseEntry, ImError> {
+    let mut entry: Option<InvokeResponseEntry> = None;
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => break, // end of this InvokeResponseIB
+            // Command = CommandDataIB
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::Structure,
+            }) => {
+                let (path, fields, command_ref) = parse_command_data_ref(r)?;
+                entry = Some(InvokeResponseEntry {
+                    command_ref,
+                    response: InvokeResponse::Command {
+                        path,
+                        fields_tlv: fields,
+                    },
+                });
+            }
+            // Status = CommandStatusIB
+            Some(Element::ContainerStart {
+                tag: Tag::Context(1),
+                kind: ContainerKind::Structure,
+            }) => {
+                let (status, command_ref) = parse_command_status_ref(r)?;
+                entry = Some(InvokeResponseEntry {
+                    command_ref,
+                    response: InvokeResponse::Status(status),
+                });
+            }
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
+        }
+    }
+    entry.ok_or(ImError::EmptyInvokeResponse)
+}
+
 /// Parse a `CommandDataIB` body (reader positioned just after its struct
-/// start), returning `(path, anonymous-tagged CommandFields bytes)`.
+/// start), returning `(path, anonymous-tagged CommandFields bytes)`. The single-
+/// command path ignores the `CommandRef`; [`parse_command_data_ref`] captures it.
 fn parse_command_data(r: &mut TlvReader<'_>) -> Result<(CommandPath, Vec<u8>), ImError> {
+    let (path, fields, _ref) = parse_command_data_ref(r)?;
+    Ok((path, fields))
+}
+
+/// Like [`parse_command_data`] but also captures the `CommandRef` (tag 2).
+fn parse_command_data_ref(
+    r: &mut TlvReader<'_>,
+) -> Result<(CommandPath, Vec<u8>, Option<u16>), ImError> {
     let mut path = None;
     let mut fields = Vec::new();
+    let mut command_ref = None;
     loop {
         match r.next()? {
             None => return Err(ImError::MissingField("CommandDataIB.body")),
@@ -235,6 +383,11 @@ fn parse_command_data(r: &mut TlvReader<'_>) -> Result<(CommandPath, Vec<u8>), I
                 let v = read_container_value(r, kind)?;
                 fields = reencode_anonymous(&v);
             }
+            // CommandRef (tag 2), a scalar uint.
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(n),
+            }) => command_ref = u16::try_from(n).ok(),
             Some(Element::ContainerStart { .. }) => skip_container(r)?,
             Some(_) => {}
         }
@@ -250,17 +403,28 @@ fn parse_command_data(r: &mut TlvReader<'_>) -> Result<(CommandPath, Vec<u8>), I
     Ok((
         path.ok_or(ImError::MissingField("CommandDataIB.CommandPath"))?,
         fields,
+        command_ref,
     ))
 }
 
 /// Parse a `CommandStatusIB` body, returning the `StatusIB.Status` mapped
-/// to [`ImStatus`].
+/// to [`ImStatus`]. The single-command path ignores the `CommandRef`;
+/// [`parse_command_status_ref`] captures it.
 fn parse_command_status(r: &mut TlvReader<'_>) -> Result<ImStatus, ImError> {
+    let (status, _ref) = parse_command_status_ref(r)?;
+    Ok(status)
+}
+
+/// Like [`parse_command_status`] but also captures the `CommandRef` (tag 2).
+fn parse_command_status_ref(
+    r: &mut TlvReader<'_>,
+) -> Result<(ImStatus, Option<u16>), ImError> {
     // `None` ⇒ the Status member was never seen (genuinely missing).
     // `Some(raw)` ⇒ the member was present; `raw` is the verbatim wire value,
     // which we range-check to a `u8` only after the parse loop so an
     // out-of-range value reports as `InvalidStatusCode`, not `MissingField`.
     let mut status: Option<u64> = None;
+    let mut command_ref = None;
     loop {
         match r.next()? {
             None => return Err(ImError::MissingField("CommandStatusIB.body")),
@@ -277,13 +441,18 @@ fn parse_command_status(r: &mut TlvReader<'_>) -> Result<ImStatus, ImError> {
                     }
                 }
             }
+            // CommandRef (tag 2), a scalar uint.
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(n),
+            }) => command_ref = u16::try_from(n).ok(),
             Some(Element::ContainerStart { .. }) => skip_container(r)?,
             Some(_) => {}
         }
     }
     let raw = status.ok_or(ImError::MissingField("StatusIB.Status"))?;
     let code = u8::try_from(raw).map_err(|_| ImError::InvalidStatusCode { code: raw })?;
-    Ok(ImStatus::from_u8(code))
+    Ok((ImStatus::from_u8(code), command_ref))
 }
 
 #[cfg(test)]
@@ -690,5 +859,110 @@ mod tests {
             parse_invoke_response(&buf),
             Err(ImError::EmptyInvokeResponse)
         ));
+    }
+
+    #[test]
+    fn batch_request_carries_command_refs() {
+        let fields = vec![0x15u8, 0x18]; // anonymous empty struct
+        let bytes = build_invoke_request_batch(&[
+            (
+                CommandPath {
+                    endpoint: 1,
+                    cluster: 0x06,
+                    command: 0x02,
+                },
+                &fields,
+            ),
+            (
+                CommandPath {
+                    endpoint: 2,
+                    cluster: 0x06,
+                    command: 0x00,
+                },
+                &fields,
+            ),
+        ]);
+        // The InvokeRequests array (ctx 2) holds two CommandDataIB structs, each
+        // ending with CommandRef (ctx 2) = 0 then 1. Parse the whole thing back
+        // through the batch response parser shape is not applicable (this is a
+        // request), so just confirm both refs appear in order in the stream.
+        let mut r = TlvReader::new(&bytes);
+        let mut refs = Vec::new();
+        let mut depth = 0i32;
+        while let Some(el) = r.next().unwrap() {
+            match el {
+                Element::ContainerStart { .. } => depth += 1,
+                Element::ContainerEnd => depth -= 1,
+                // CommandRef sits at depth 2 (struct > array > CommandDataIB), tag 2.
+                Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(n),
+                } if depth == 3 => refs.push(n),
+                _ => {}
+            }
+        }
+        assert_eq!(refs, vec![0, 1], "CommandRefs must be 0 then 1");
+    }
+
+    #[test]
+    fn batch_response_parses_all_ibs_with_refs() {
+        use matter_codec::{Tag, TlvWriter};
+        // Two InvokeResponseIBs: a Command (ref 0) and a Status (ref 1).
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+        {
+            // IB 1: Command = CommandDataIB { path, fields(empty), ref=0 }
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_structure(Tag::Context(0)).unwrap(); // Command
+            w.start_list(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(0), 1).unwrap();
+            w.put_uint(Tag::Context(1), 0x06).unwrap();
+            w.put_uint(Tag::Context(2), 0x02).unwrap();
+            w.end_container().unwrap();
+            w.start_structure(Tag::Context(1)).unwrap();
+            w.end_container().unwrap(); // empty fields
+            w.put_uint(Tag::Context(2), 0).unwrap(); // CommandRef
+            w.end_container().unwrap(); // Command
+            w.end_container().unwrap(); // IB 1
+            // IB 2: Status = CommandStatusIB { path, status=SUCCESS, ref=1 }
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_structure(Tag::Context(1)).unwrap(); // Status
+            w.start_list(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(0), 2).unwrap();
+            w.put_uint(Tag::Context(1), 0x06).unwrap();
+            w.put_uint(Tag::Context(2), 0x00).unwrap();
+            w.end_container().unwrap();
+            w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+            w.put_uint(Tag::Context(0), 0).unwrap(); // SUCCESS
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(2), 1).unwrap(); // CommandRef
+            w.end_container().unwrap(); // Status
+            w.end_container().unwrap(); // IB 2
+        }
+        w.end_container().unwrap(); // array
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+
+        let entries = parse_invoke_response_batch(&buf).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].command_ref, Some(0));
+        assert!(matches!(
+            entries[0].response,
+            InvokeResponse::Command { ref path, .. } if path.endpoint == 1 && path.command == 0x02
+        ));
+        assert_eq!(entries[1].command_ref, Some(1));
+        assert_eq!(
+            entries[1].response,
+            InvokeResponse::Status(ImStatus::Success)
+        );
+
+        // Back-compat: the single-command parser reads the first IB only.
+        match parse_invoke_response(&buf).unwrap() {
+            InvokeResponse::Command { path, .. } => assert_eq!(path.endpoint, 1),
+            InvokeResponse::Status(_) => panic!("expected the first IB (a Command)"),
+        }
     }
 }

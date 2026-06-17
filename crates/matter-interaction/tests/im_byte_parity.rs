@@ -702,3 +702,85 @@ fn status_needs_timed_parses() {
         Some(f.status)
     );
 }
+
+// --- M9-B5 multi-command invoke ---
+
+#[derive(Deserialize)]
+struct BatchRequestFixture {
+    commands: Vec<BatchCmdFixture>,
+    expected_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct BatchCmdFixture {
+    endpoint: u16,
+    cluster: u32,
+    command: u32,
+    #[allow(dead_code)]
+    command_ref: u16,
+}
+
+#[test]
+fn batch_invoke_request_matches_matter_js() {
+    let path = fixtures_root().join("invoke").join("batch_request.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no batch invoke fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: BatchRequestFixture = serde_json::from_str(&raw).unwrap();
+    // Empty anonymous struct as command fields (the fixture uses no fields).
+    let empty = [0x15u8, 0x18];
+    let cmds: Vec<(CommandPath, &[u8])> = f
+        .commands
+        .iter()
+        .map(|c| {
+            (
+                CommandPath {
+                    endpoint: c.endpoint,
+                    cluster: c.cluster,
+                    command: c.command,
+                },
+                &empty[..],
+            )
+        })
+        .collect();
+    let ours = matter_interaction::build_invoke_request_batch(&cmds);
+    let theirs = B64.decode(&f.expected_message_b64).unwrap();
+    assert_eq!(
+        ours, theirs,
+        "batch InvokeRequest must match matter.js byte-for-byte"
+    );
+}
+
+#[derive(Deserialize)]
+struct BatchResponseFixture {
+    expected: Vec<BatchExpectFixture>,
+    response_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct BatchExpectFixture {
+    command_ref: u16,
+    status: u8,
+}
+
+#[test]
+fn batch_invoke_response_parses_matter_js() {
+    use matter_interaction::{parse_invoke_response_batch, ImStatus, InvokeResponse};
+    let path = fixtures_root().join("invoke").join("batch_response.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no batch invoke response fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: BatchResponseFixture = serde_json::from_str(&raw).unwrap();
+    let bytes = B64.decode(&f.response_message_b64).unwrap();
+    let entries = parse_invoke_response_batch(&bytes).unwrap();
+    assert_eq!(entries.len(), f.expected.len());
+    for (entry, exp) in entries.iter().zip(f.expected.iter()) {
+        assert_eq!(entry.command_ref, Some(exp.command_ref));
+        match &entry.response {
+            InvokeResponse::Status(s) => assert_eq!(*s, ImStatus::from_u8(exp.status)),
+            InvokeResponse::Command { .. } => panic!("expected Status entries"),
+        }
+    }
+}

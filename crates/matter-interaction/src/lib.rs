@@ -39,7 +39,8 @@ pub use event::{
     EventFilter, EventPath, EventPriority, EventReport, EventReportItem, EventTimestamp,
 };
 pub use invoke::{
-    build_invoke_request, build_invoke_request_timed, parse_invoke_response, InvokeResponse,
+    build_invoke_request, build_invoke_request_batch, build_invoke_request_timed,
+    parse_invoke_response, parse_invoke_response_batch, InvokeResponse, InvokeResponseEntry,
 };
 pub use path::{AttributePath, CommandPath, ReadPath};
 pub use read::{
