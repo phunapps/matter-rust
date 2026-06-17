@@ -115,6 +115,18 @@ let on = matches!(report.first().map(|(_, v)| v), Some(Value::Bool(true)));
 node.invoke(CommandPath { endpoint: 1, cluster: 0x0006, command: 0x02 }, Value::Structure(vec![])).await?;
 ```
 
+**Timed interactions** (DoorLock lock/unlock, certain "Timed" attributes) are
+handled transparently: plain `write`/`invoke` auto-retry as a timed interaction
+if the device rejects the action with `NEEDS_TIMED_INTERACTION`, and remember the
+path so later calls skip the wasted attempt — matter.js does this from its
+compiled-in model; matter-rust learns it at runtime (so it also works for
+manufacturer clusters). To force the timed path explicitly:
+
+```rust
+node.write_timed(&[(path, value)], None).await?;        // None ⇒ default 10s window
+node.invoke_timed(CommandPath { .. }, fields, None).await?;
+```
+
 Wildcard reads — matter.js's "read everything" — map to `ReadPath` with `None`
 components:
 

@@ -55,7 +55,11 @@ pub fn build_invoke_request_timed(path: CommandPath, command_fields_tlv: &[u8]) 
 }
 
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-fn build_invoke_request_inner(path: CommandPath, command_fields_tlv: &[u8], timed: bool) -> Vec<u8> {
+fn build_invoke_request_inner(
+    path: CommandPath,
+    command_fields_tlv: &[u8],
+    timed: bool,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)

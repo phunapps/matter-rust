@@ -11,7 +11,8 @@
 //!
 //! Scope is a deliberate subset: one command per invoke, concrete and wildcard
 //! read paths, **events** (event paths/filters in `ReadRequest` and
-//! `SubscribeRequest`, `EventReportIB` parsing), no timed actions, no chunked
+//! `SubscribeRequest`, `EventReportIB` parsing), **timed write/invoke** (the
+//! `TimedRequest` message + the `TimedRequest` flag on write/invoke), no chunked
 //! writes.
 //!
 //! Lifted from `matter-commissioning` in M7.1 (the M6.6 design kept this

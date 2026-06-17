@@ -99,7 +99,7 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
 
 ## matter-interaction
 
-### [Unreleased] — M9-B1 event reads, M9-B2 event subscribe
+### [Unreleased] — M9-B1 event reads, M9-B2 event subscribe, M9-B3 timed interactions
 
 #### Added
 
@@ -125,6 +125,15 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
   subscription carries attributes and events; event reports are delivered as
   they arrive (bypassing the chunked-attribute reassembler) and the
   auto-resubscribe engine re-requests the same events.
+- **M9-B3 timed interactions:** `build_timed_request` (`TimedRequest`, opcode
+  `0x0a`), `build_write_request_timed` / `build_invoke_request_timed` (the
+  `TimedRequest` flag), and `parse_status_response` — all byte-parity vs matter.js.
+  `matter-controller`: plain `Node::write`/`invoke` transparently handle timed
+  attributes/commands — on a `NEEDS_TIMED_INTERACTION` rejection they retry as a
+  timed interaction and remember the path in a learned cache (so later ops skip
+  the wasted plain attempt; covers manufacturer clusters, no codegen). Explicit
+  `Node::write_timed`/`invoke_timed` (`TIMED_DEFAULT_MS = 10s`) force the timed
+  path. The `TimedRequest` and the Write/Invoke ride one exchange (chip-faithful).
 
 ### [Unreleased] — M7.1 crate created (IM lift + Write support)
 

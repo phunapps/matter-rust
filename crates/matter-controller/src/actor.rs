@@ -405,8 +405,10 @@ pub(crate) enum Command {
         cfg: FabricConfig,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
-    /// Raw secured IM round-trip to `node_id`. Constructed by the crate-internal
-    /// `Node::round_trip`, which the typed `read`/`write`/`invoke` verbs wrap.
+    /// Raw secured IM round-trip to `node_id`. A generic primitive retained for
+    /// tests that exercise the actor's connect/cache/demux without IM payloads;
+    /// the production verbs use `Read`/`Action`/`Subscribe`/`TimedRoundTrip`.
+    #[cfg(test)]
     RoundTrip {
         node_id: u64,
         opcode: u8,
@@ -672,6 +674,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Command::CreateFabric { cfg, reply } => {
                 let _ = reply.send(self.handle_create_fabric(&cfg).await);
             }
+            #[cfg(test)]
             Command::RoundTrip {
                 node_id,
                 opcode,
@@ -1081,6 +1084,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Send a secured IM round-trip and register a pending op; the central
     /// [`Self::handle_inbound`] resolves `reply` when the response (or timeout)
     /// arrives.
+    #[cfg(test)]
     async fn start_round_trip(
         &mut self,
         node_id: u64,
@@ -1140,7 +1144,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ) {
         let req = matter_interaction::build_timed_request(timeout_ms);
         match self
-            .send_request(sid, peer, OP_TIMED_REQUEST, ProtocolId::INTERACTION_MODEL, &req)
+            .send_request(
+                sid,
+                peer,
+                OP_TIMED_REQUEST,
+                ProtocolId::INTERACTION_MODEL,
+                &req,
+            )
             .await
         {
             Ok(exchange) => {
@@ -1226,7 +1236,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             return;
         }
         match self
-            .send_request(sid, peer, opcode, ProtocolId::INTERACTION_MODEL, &plain_payload)
+            .send_request(
+                sid,
+                peer,
+                opcode,
+                ProtocolId::INTERACTION_MODEL,
+                &plain_payload,
+            )
             .await
         {
             Ok(exchange) => {
@@ -1290,8 +1306,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         for k in keys {
             self.timed_paths.insert(k);
         }
-        self.begin_timed(sid, p.peer, node_id, timeout_ms, opcode, timed_payload, reply)
-            .await;
+        self.begin_timed(
+            sid,
+            p.peer,
+            node_id,
+            timeout_ms,
+            opcode,
+            timed_payload,
+            reply,
+        )
+        .await;
     }
 
     /// Send a `ReadRequest` and register a pending read; chunks accumulate in
@@ -2692,7 +2716,9 @@ mod tests {
             let (wire, _) = io.recv_from().await.unwrap();
             let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
             let DecodeInboundOutput::AppMessage {
-                exchange_id, opcode, ..
+                exchange_id,
+                opcode,
+                ..
             } = decoded
             else {
                 panic!("expected a TimedRequest app message");
@@ -2748,7 +2774,9 @@ mod tests {
     ) {
         let (w, _) = io.recv_from().await.unwrap();
         let DecodeInboundOutput::AppMessage {
-            exchange_id, opcode, ..
+            exchange_id,
+            opcode,
+            ..
         } = sessions.decode_inbound(&w, Instant::now()).unwrap()
         else {
             panic!("expected a TimedRequest app message");
@@ -2858,7 +2886,9 @@ mod tests {
         // Cycle 1: reject the plain WriteRequest (0x06) with 0xc6.
         let (w, _) = io.recv_from().await.unwrap();
         let DecodeInboundOutput::AppMessage {
-            exchange_id, opcode, ..
+            exchange_id,
+            opcode,
+            ..
         } = sessions.decode_inbound(&w, Instant::now()).unwrap()
         else {
             panic!("expected a plain WriteRequest app message");

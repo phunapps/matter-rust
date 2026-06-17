@@ -25,26 +25,28 @@ pub fn parse_status_response(bytes: &[u8]) -> Result<Option<u8>, ImError> {
     expect_message_struct(&mut r)?;
     loop {
         match r.next()? {
-            None | Some(Element::ContainerEnd) => return Ok(None),
             // A bare StatusResponse carries Status as a scalar uint at ctx 0.
             Some(Element::Scalar {
                 tag: Tag::Context(0),
                 value: Value::Uint(n),
             }) => {
-                let code =
-                    u8::try_from(n).map_err(|_| ImError::InvalidStatusCode { code: n })?;
+                let code = u8::try_from(n).map_err(|_| ImError::InvalidStatusCode { code: n })?;
                 return Ok(Some(code));
             }
-            // tag 0 as a bool (InvokeResponse SuppressResponse) or any container
-            // (WriteResponse array) ⇒ not a bare status response.
-            Some(Element::Scalar {
-                tag: Tag::Context(0),
-                ..
-            })
-            | Some(Element::ContainerStart {
-                tag: Tag::Context(0),
-                ..
-            }) => return Ok(None),
+            // Not a bare status response: end of message, or tag 0 is a bool
+            // (InvokeResponse SuppressResponse) / a container (WriteResponse array).
+            None
+            | Some(
+                Element::ContainerEnd
+                | Element::Scalar {
+                    tag: Tag::Context(0),
+                    ..
+                }
+                | Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    ..
+                },
+            ) => return Ok(None),
             Some(Element::ContainerStart { .. }) => skip_container(&mut r)?,
             Some(_) => {}
         }

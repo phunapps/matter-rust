@@ -617,13 +617,18 @@ fn timed_request_matches_matter_js() {
     let f: TimedRequestFixture = serde_json::from_str(&raw).unwrap();
     let ours = matter_interaction::build_timed_request(f.timeout_ms);
     let theirs = B64.decode(&f.expected_message_b64).unwrap();
-    assert_eq!(ours, theirs, "TimedRequest must match matter.js byte-for-byte");
+    assert_eq!(
+        ours, theirs,
+        "TimedRequest must match matter.js byte-for-byte"
+    );
 }
 
 #[test]
 fn write_request_timed_matches_matter_js() {
     use matter_interaction::write::{build_write_request_timed, AttributeWriteRequest};
-    let path = fixtures_root().join("timed").join("write_request_timed.json");
+    let path = fixtures_root()
+        .join("timed")
+        .join("write_request_timed.json");
     let Ok(raw) = fs::read_to_string(&path) else {
         eprintln!("skipping: no write_request_timed fixture (run `cargo xtask capture-im`)");
         return;
@@ -643,12 +648,17 @@ fn write_request_timed_matches_matter_js() {
         .collect();
     let ours = build_write_request_timed(&writes);
     let theirs = B64.decode(&f.expected_message_b64).unwrap();
-    assert_eq!(ours, theirs, "timed WriteRequest must match matter.js byte-for-byte");
+    assert_eq!(
+        ours, theirs,
+        "timed WriteRequest must match matter.js byte-for-byte"
+    );
 }
 
 #[test]
 fn invoke_request_timed_matches_matter_js() {
-    let path = fixtures_root().join("timed").join("invoke_request_timed.json");
+    let path = fixtures_root()
+        .join("timed")
+        .join("invoke_request_timed.json");
     let Ok(raw) = fs::read_to_string(&path) else {
         eprintln!("skipping: no invoke_request_timed fixture (run `cargo xtask capture-im`)");
         return;
@@ -664,7 +674,10 @@ fn invoke_request_timed_matches_matter_js() {
         &fields,
     );
     let theirs = B64.decode(&f.expected_message_b64).unwrap();
-    assert_eq!(ours, theirs, "timed InvokeRequest must match matter.js byte-for-byte");
+    assert_eq!(
+        ours, theirs,
+        "timed InvokeRequest must match matter.js byte-for-byte"
+    );
 }
 
 #[derive(Deserialize)]
@@ -675,7 +688,9 @@ struct StatusResponseParseFixture {
 
 #[test]
 fn status_needs_timed_parses() {
-    let path = fixtures_root().join("timed").join("status_needs_timed.json");
+    let path = fixtures_root()
+        .join("timed")
+        .join("status_needs_timed.json");
     let Ok(raw) = fs::read_to_string(&path) else {
         eprintln!("skipping: no status_needs_timed fixture (run `cargo xtask capture-im`)");
         return;

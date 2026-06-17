@@ -5,9 +5,10 @@ use tokio::sync::oneshot;
 use matter_codec::{Tag, TlvReader, TlvWriter, Value};
 use matter_interaction::{
     build_invoke_request, build_invoke_request_timed, build_read_request_full,
-    build_read_request_paths, build_write_request, build_write_request_timed, parse_invoke_response,
-    parse_write_response, AttributePath, AttributeWriteRequest, CommandPath, EventFilter, EventPath,
-    EventReport, ImStatus, InvokeResponse, ReadPath, ReportAccumulator, ReportData,
+    build_read_request_paths, build_write_request, build_write_request_timed,
+    parse_invoke_response, parse_write_response, AttributePath, AttributeWriteRequest, CommandPath,
+    EventFilter, EventPath, EventReport, ImStatus, InvokeResponse, ReadPath, ReportAccumulator,
+    ReportData,
 };
 
 use crate::actor::Command;
@@ -81,12 +82,15 @@ impl Node {
     /// Send a raw secured Interaction-Model payload and await the response
     /// payload. Establishes/caches the CASE session transparently.
     ///
-    /// Crate-internal: M8.4 layers typed read/write/invoke on top.
+    /// A generic primitive retained for tests that exercise connect/cache/demux
+    /// without IM payloads; the production verbs (`read`/`write`/`invoke`/
+    /// `subscribe`) use the specialized actor commands.
     ///
     /// # Errors
     ///
     /// [`Error::ControllerStopped`] if the owning task has stopped, or any
     /// connect / transport / driver error.
+    #[cfg(test)]
     pub(crate) async fn round_trip(
         &self,
         opcode: u8,
@@ -259,7 +263,10 @@ impl Node {
                 value_tlv: value_to_tlv(value)?,
             });
         }
-        let keys = writes.iter().map(|(p, _)| (p.cluster, p.attribute)).collect();
+        let keys = writes
+            .iter()
+            .map(|(p, _)| (p.cluster, p.attribute))
+            .collect();
         let resp = self
             .action(
                 OP_WRITE_REQUEST,
@@ -273,7 +280,7 @@ impl Node {
 
     /// Like [`write`](Self::write) but always performs a **timed** interaction:
     /// a `TimedRequest` precedes the write (required by some attributes, e.g.
-    /// certain DoorLock settings). `timeout_ms` defaults to [`TIMED_DEFAULT_MS`].
+    /// certain `DoorLock` settings). `timeout_ms` defaults to [`TIMED_DEFAULT_MS`].
     ///
     /// Plain [`write`](Self::write) already auto-upgrades to timed on a
     /// `NEEDS_TIMED_INTERACTION` rejection; use this when you want to force the
