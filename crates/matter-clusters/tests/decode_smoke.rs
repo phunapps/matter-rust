@@ -376,3 +376,117 @@ fn groups_get_group_membership_command_encodes_list() {
         })
     ));
 }
+
+// ---- M9-A2.5 management batch ----------------------------------------------
+
+#[test]
+fn access_control_entry_decodes_subjects_u64() {
+    use matter_codec::{ContainerKind, Element, TlvReader};
+    // AccessControlEntryStruct { Privilege(1)=5, AuthMode(2)=2,
+    //   Subjects(3)=[0x1122334455667788], Targets(4)=null, FabricIndex(254)=1 }.
+    // Proves subject-id -> u64 (gap 1) and nullable list-of-scalar decode.
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(1), 5).unwrap();
+        w.put_uint(Tag::Context(2), 2).unwrap();
+        w.start_array(Tag::Context(3)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x1122_3344_5566_7788).unwrap();
+        w.end_container().unwrap();
+        w.put_null(Tag::Context(4)).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+        w.end_container().unwrap();
+    }
+    let mut r = TlvReader::new(&buf);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Structure,
+            ..
+        })
+    ));
+    let e = gen::access_control::AccessControlEntryStruct::decode_from(&mut r).unwrap();
+    assert_eq!(e.subjects, Nullable::Value(vec![0x1122_3344_5566_7788u64]));
+    assert!(matches!(e.targets, Nullable::Null));
+    assert_eq!(e.fabric_index, 1u8);
+}
+
+#[test]
+fn group_key_set_write_encodes_wellformed() {
+    use matter_codec::{Element, TlvReader};
+    // KeySetWrite wraps a GroupKeySetStruct at ctx0 (single struct command field,
+    // a shape DoorLock's SetCredential already proves). Smoke: encode is a
+    // well-formed anon struct holding a nested struct.
+    let gks = gen::group_key_management::GroupKeySetStruct {
+        group_key_set_id: 0x0042,
+        group_key_security_policy: gen::group_key_management::GroupKeySecurityPolicyEnum::from_raw(
+            0,
+        ),
+        epoch_key0: Nullable::Value(vec![0xab; 16]),
+        epoch_start_time0: Nullable::Value(1234),
+        epoch_key1: Nullable::Null,
+        epoch_start_time1: Nullable::Null,
+        epoch_key2: Nullable::Null,
+        epoch_start_time2: Nullable::Null,
+        group_key_multicast_policy: None,
+        fabric_index: None,
+    };
+    let bytes = gen::group_key_management::encode_key_set_write(gks);
+    let mut r = TlvReader::new(&bytes);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart {
+            tag: Tag::Context(0),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn admin_open_basic_commissioning_window_encodes() {
+    use matter_codec::{Element, TlvReader, Value};
+    let bytes = gen::administrator_commissioning::encode_open_basic_commissioning_window(180);
+    let mut r = TlvReader::new(&bytes);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar {
+            tag: Tag::Context(0),
+            value: Value::Uint(180)
+        })
+    ));
+}
+
+#[test]
+fn ota_announce_provider_encodes_scalars_and_enum() {
+    use gen::ota_software_update_requestor::AnnouncementReasonEnum;
+    use matter_codec::{Element, TlvReader, Value};
+    // metadata_for_node is optional -> None skips ctx3; ctx0 is the node id.
+    let bytes = gen::ota_software_update_requestor::encode_announce_ota_provider(
+        0x0000_0000_0000_1234,
+        0xFFF1,
+        AnnouncementReasonEnum::SimpleAnnouncement,
+        None,
+        1,
+    );
+    let mut r = TlvReader::new(&bytes);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar {
+            tag: Tag::Context(0),
+            value: Value::Uint(0x1234)
+        })
+    ));
+}

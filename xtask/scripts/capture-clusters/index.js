@@ -283,4 +283,28 @@ attr('general_diagnostics', 'attr_network_interfaces.json',
     },
   ]));
 
+// ---------------------------------------------------------------------------
+// AccessControl (0x001F) ReviewFabricRestrictions (cmd 0) — Arl =
+// list<CommissioningAccessRestrictionEntryStruct>, each carrying a nested
+// list<AccessRestrictionStruct>. The recursive list-of-struct encode (M9-A2.5
+// gap 2). AccessRestrictionStruct.Id is nullable on the wire.
+// ---------------------------------------------------------------------------
+const accessRestrictionSchema = TlvObject({
+  type: TlvField(0, TlvUInt8),
+  id: TlvField(1, TlvNullable(TlvUInt32)),
+});
+const commRestrictionEntrySchema = TlvObject({
+  endpoint: TlvField(0, TlvUInt16),
+  cluster: TlvField(1, TlvUInt32),
+  restrictions: TlvField(2, TlvArray(accessRestrictionSchema)),
+});
+cmd('access_control', 'cmd_review_fabric_restrictions.json',
+  { cluster: 'AccessControl', cluster_id: 0x1f, command: 'ReviewFabricRestrictions', command_id: 0x00,
+    note: 'recursive list-of-struct-with-nested-list command request field' },
+  TlvObject({ arl: TlvField(0, TlvArray(commRestrictionEntrySchema)) }).encode({
+    arl: [
+      { endpoint: 1, cluster: 0x0006, restrictions: [{ type: 0, id: 0x1234 }] },
+    ],
+  }));
+
 console.log('capture-clusters: all vectors written.');

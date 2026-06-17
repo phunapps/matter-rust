@@ -50,6 +50,15 @@ Groups command encoders and the global `FabricIndex` typedef), with a byte-parit
 vector for the new struct-with-byte-fields shape (GeneralDiagnostics
 `NetworkInterface`: a `hwadr` bytes field, a keyword `Type` field, and
 byte-string-element lists).
+The M9-A2.5 management batch adds 4 more clusters — AccessControl,
+GroupKeyManagement, AdministratorCommissioning, and OtaSoftwareUpdateRequestor —
+**codecs only** (their protocol logic — ACL evaluation, group multicast,
+window-open orchestration, OTA — belongs to later milestones). Decode-smoke
+tested (incl. ACL entries whose `subject-id` subjects decode as `u64`), with a
+byte-parity vector for the recursive list-of-struct command encode
+(`AccessControl.ReviewFabricRestrictions`, whose `Arl` is a list of structs each
+carrying a nested list-of-struct). This completes the cluster-library widening
+(10 → 33 clusters).
 For any attribute not covered by these typed codecs — optional,
 manufacturer-specific, or a cluster not in this list — the generic `Value` path
 in `matter-controller` remains the universal answer. Hand-written support lives

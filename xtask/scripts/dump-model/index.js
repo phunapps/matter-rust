@@ -43,7 +43,7 @@ const DUMP_SCRIPT_VERSION = 1;
 // later does not break the gate.
 const SPEC_REVISION = '1.5.1';
 
-// The M7 clusters plus the M9-A2.1 pilot, M9-A2.2 energy, M9-A2.3 actuator, and M9-A2.4 utility batches.
+// The M7 clusters plus the M9-A2.1 pilot, M9-A2.2 energy, M9-A2.3 actuator, M9-A2.4 utility, and M9-A2.5 mgmt batches.
 const ALLOWLIST = [
   { id: 0x0028, name: 'BasicInformation' },
   { id: 0x001d, name: 'Descriptor' },
@@ -78,6 +78,11 @@ const ALLOWLIST = [
   { id: 0x0033, name: 'GeneralDiagnostics' },
   { id: 0x0040, name: 'FixedLabel' },
   { id: 0x0041, name: 'UserLabel' },
+  // M9-A2.5 mgmt batch (codecs only):
+  { id: 0x001f, name: 'AccessControl' },
+  { id: 0x003f, name: 'GroupKeyManagement' },
+  { id: 0x003c, name: 'AdministratorCommissioning' },
+  { id: 0x002a, name: 'OtaSoftwareUpdateRequestor' },
 ];
 
 const excluded = [];

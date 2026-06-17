@@ -34,7 +34,12 @@
 //! `ThermostatUserInterfaceConfiguration`, `PumpConfigurationAndControl`, and
 //! `WindowCovering`. M9-A2.4 utility (decode-smoke + one struct-with-byte-fields
 //! byte-parity vector for `GeneralDiagnostics` `NetworkInterface`): `Groups`,
-//! `Binding`, `GeneralDiagnostics`, `FixedLabel`, and `UserLabel`.
+//! `Binding`, `GeneralDiagnostics`, `FixedLabel`, and `UserLabel`. M9-A2.5
+//! management (codecs only — protocol logic deferred to later milestones;
+//! decode-smoke + a byte-parity vector for the recursive list-of-struct command
+//! encode `AccessControl::ReviewFabricRestrictions`): `AccessControl`,
+//! `GroupKeyManagement`, `AdministratorCommissioning`, and
+//! `OtaSoftwareUpdateRequestor`.
 //!
 //! For any attribute not covered by these typed codecs — optional,
 //! manufacturer-specific, or a cluster not in this list — the generic `Value`

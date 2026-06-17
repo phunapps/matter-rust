@@ -218,3 +218,24 @@ fn network_interface_struct_decodes() {
     assert_eq!(ni.i_pv6_addresses[0].len(), 16);
     assert_eq!(ni.r#type.to_raw(), 1); // Wi-Fi
 }
+
+#[test]
+fn review_fabric_restrictions_recursive_list_encodes() {
+    // AccessControl.ReviewFabricRestrictions — Arl is list<struct{.., list<struct>}>;
+    // the recursive list-of-struct command encode (M9-A2.5 gap 2) must match
+    // matter.js byte-for-byte. AccessRestrictionStruct.Id is Nullable<u32>.
+    let arl = vec![
+        gen::access_control::CommissioningAccessRestrictionEntryStruct {
+            endpoint: 1,
+            cluster: 0x0006,
+            restrictions: vec![gen::access_control::AccessRestrictionStruct {
+                r#type: gen::access_control::AccessRestrictionTypeEnum::from_raw(0),
+                id: Nullable::Value(0x1234),
+            }],
+        },
+    ];
+    assert_eq!(
+        gen::access_control::encode_review_fabric_restrictions(&arl),
+        cmd("access_control/cmd_review_fabric_restrictions.json")
+    );
+}
