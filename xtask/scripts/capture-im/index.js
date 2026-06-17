@@ -203,6 +203,26 @@ writeFixture('read', 'endpoint_wildcard_basic_info.json', {
 });
 
 // ---------------------------------------------------------------------
+// EVENT READ fixtures (gate M9-B1 event reads). ReadRequest event tags:
+// eventRequests[1] (EventPathIB: nodeId 0, endpointId 1, clusterId 2,
+// eventId 3, isUrgent 4), eventFilters[2] (EventFilterIB: nodeId 0,
+// eventMin 1). Field names + tags confirmed against @matter/types schema.
+// ---------------------------------------------------------------------
+
+// ReadRequest carrying an EVENT path: BasicInformation.StartUp (0x28 / event
+// 0x00) on endpoint 0, plus an event filter (eventMin = 0 ⇒ from the beginning).
+writeFixture('read', 'events_basic_information.json', {
+    event_paths: [{ endpoint: 0, cluster: 0x28, event: 0x00 }],
+    event_filters: [{ event_min: 0 }],
+    expected_message_b64: b64(TlvReadRequest.encode({
+        eventRequests: [{ endpointId: 0, clusterId: 0x28, eventId: 0x00 }],
+        eventFilters: [{ eventMin: 0 }],
+        isFabricFiltered: false,
+        interactionModelRevision: 11,
+    })),
+});
+
+// ---------------------------------------------------------------------
 // WRITE fixtures (gate matter-interaction::write — Task 6)
 // ---------------------------------------------------------------------
 
@@ -415,6 +435,32 @@ writeFixture('report', 'report_data_chunked_list.json', {
     chunks_b64: [b64(listReplace), b64(listAppend1)],
     expected_path: { endpoint: 0, cluster: 0x1d, attribute: 0x0003 },
     expected_list: [1],
+});
+
+// ---------------------------------------------------------------------
+// EVENT REPORT fixture (gate M9-B1 event parse). DataReport.eventReports[2]
+// carrying one EventData (EventDataIB tags: path 0, eventNumber 1, priority 2,
+// epochTimestamp 3, ... data 7). Event: BasicInformation.StartUp on ep0.
+// ---------------------------------------------------------------------
+const TlvStartUpFields = TlvObject({ softwareVersion: TlvField(0, TlvUInt32) });
+writeFixture('report', 'report_data_event.json', {
+    event: {
+        endpoint: 0, cluster: 0x28, event: 0x00,
+        event_number: 1, priority: 2 /* Critical */,
+        epoch_timestamp: 0,
+    },
+    response_message_b64: b64(TlvDataReport.encode({
+        eventReports: [{
+            eventData: {
+                path: { endpointId: 0, clusterId: 0x28, eventId: 0x00 },
+                eventNumber: 1,
+                priority: 2,
+                epochTimestamp: 0,
+                data: TlvStartUpFields.encodeTlv({ softwareVersion: 1 }),
+            },
+        }],
+        interactionModelRevision: 11,
+    })),
 });
 
 console.log('capture-im: all fixtures written.');
