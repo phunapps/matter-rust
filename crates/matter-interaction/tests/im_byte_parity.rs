@@ -20,7 +20,8 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 // Deep submodule paths used intentionally to confirm the submodules are directly accessible (flat re-exports also exist at the crate root).
 use matter_interaction::invoke::build_invoke_request;
 use matter_interaction::path::AttributePath;
-use matter_interaction::read::build_read_request_paths;
+use matter_interaction::event::{EventFilter, EventPath};
+use matter_interaction::read::{build_read_request_full, build_read_request_paths};
 use matter_interaction::subscription::{
     build_status_response, build_subscribe_request, parse_subscribe_response, SubscribeRequest,
 };
@@ -138,6 +139,53 @@ fn read_request_matches_matter_js() {
         asserted += 1;
     }
     assert!(asserted > 0, "no read-request fixtures parsed");
+}
+
+#[derive(Deserialize)]
+struct EventReadFixture {
+    event_paths: Vec<EvPathFixture>,
+    event_filters: Vec<EvFilterFixture>,
+    expected_message_b64: String,
+}
+
+#[derive(Deserialize)]
+struct EvPathFixture {
+    endpoint: u16,
+    cluster: u32,
+    event: u32,
+}
+
+#[derive(Deserialize)]
+struct EvFilterFixture {
+    event_min: u64,
+}
+
+#[test]
+fn read_request_with_event_path_matches_matter_js() {
+    let path = fixtures_root()
+        .join("read")
+        .join("events_basic_information.json");
+    let Ok(raw) = fs::read_to_string(&path) else {
+        eprintln!("skipping: no event read fixture (run `cargo xtask capture-im`)");
+        return;
+    };
+    let f: EventReadFixture = serde_json::from_str(&raw).unwrap();
+    let eps: Vec<EventPath> = f
+        .event_paths
+        .iter()
+        .map(|p| EventPath::concrete(p.endpoint, p.cluster, p.event))
+        .collect();
+    let efs: Vec<EventFilter> = f
+        .event_filters
+        .iter()
+        .map(|x| EventFilter::from_event_min(x.event_min))
+        .collect();
+    let ours = build_read_request_full(&[], &eps, &efs);
+    let theirs = B64.decode(&f.expected_message_b64).unwrap();
+    assert_eq!(
+        ours, theirs,
+        "event ReadRequest must match matter.js byte-for-byte"
+    );
 }
 
 #[derive(Deserialize)]

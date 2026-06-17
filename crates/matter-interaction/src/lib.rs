@@ -35,8 +35,8 @@ pub use event::{EventFilter, EventPath};
 pub use invoke::{build_invoke_request, parse_invoke_response, InvokeResponse};
 pub use path::{AttributePath, CommandPath, ReadPath};
 pub use read::{
-    build_read_request, build_read_request_paths, parse_report_data, AttributeReportItem,
-    ReportData, ReportOp,
+    build_read_request, build_read_request_full, build_read_request_paths, parse_report_data,
+    AttributeReportItem, ReportData, ReportOp,
 };
 pub use status::ImStatus;
 pub use subscription::{

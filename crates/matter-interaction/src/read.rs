@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use crate::error::ImError;
+use crate::event::{EventFilter, EventPath};
 use crate::path::attribute_path_and_append_from_value;
 pub use crate::path::{AttributePath, ReadPath};
 use crate::{
@@ -11,44 +12,82 @@ use crate::{
 };
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
-/// Build a `ReadRequestMessage` for the given (possibly wildcard) paths.
+/// Build a `ReadRequestMessage` carrying attribute paths, event paths, and event
+/// filters.
 ///
-/// Each [`ReadPath`] field that is `Some` is emitted as a context-tagged member of
-/// the `AttributePathIB` list (endpoint=2, cluster=3, attribute=4); `None` fields
-/// are omitted (wildcard). `FabricFiltered` is `false`.
+/// Field order on the wire (Matter §10.6 / `ReadRequestMessage`):
+/// `AttributeRequests[0]`, `EventRequests[1]`, `EventFilters[2]`,
+/// `IsFabricFiltered[3]`, `InteractionModelRevision[0xFF]`. An empty slice omits
+/// its array entirely. Each `AttributePathIB` is a list (endpoint=2, cluster=3,
+/// attribute=4); `EventPathIB` is a list and `EventFilterIB` is a struct (see
+/// [`EventPath`]/[`EventFilter`]). `Some` fields are emitted, `None` are wildcards.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn build_read_request_paths(paths: &[ReadPath]) -> Vec<u8> {
+pub fn build_read_request_full(
+    attr_paths: &[ReadPath],
+    event_paths: &[EventPath],
+    event_filters: &[EventFilter],
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.start_array(Tag::Context(0))
-        .expect("infallible: vec writer"); // AttributeRequests
-    for p in paths {
-        w.start_list(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        if let Some(ep) = p.endpoint {
-            w.put_uint(Tag::Context(2), u64::from(ep))
+    if !attr_paths.is_empty() {
+        w.start_array(Tag::Context(0))
+            .expect("infallible: vec writer"); // AttributeRequests
+        for p in attr_paths {
+            w.start_list(Tag::Anonymous)
                 .expect("infallible: vec writer");
+            if let Some(ep) = p.endpoint {
+                w.put_uint(Tag::Context(2), u64::from(ep))
+                    .expect("infallible: vec writer");
+            }
+            if let Some(cl) = p.cluster {
+                w.put_uint(Tag::Context(3), u64::from(cl))
+                    .expect("infallible: vec writer");
+            }
+            if let Some(at) = p.attribute {
+                w.put_uint(Tag::Context(4), u64::from(at))
+                    .expect("infallible: vec writer");
+            }
+            w.end_container().expect("infallible: vec writer");
         }
-        if let Some(cl) = p.cluster {
-            w.put_uint(Tag::Context(3), u64::from(cl))
-                .expect("infallible: vec writer");
-        }
-        if let Some(at) = p.attribute {
-            w.put_uint(Tag::Context(4), u64::from(at))
-                .expect("infallible: vec writer");
+        w.end_container().expect("infallible: vec writer"); // AttributeRequests array
+    }
+    if !event_paths.is_empty() {
+        w.start_array(Tag::Context(1))
+            .expect("infallible: vec writer"); // EventRequests
+        for p in event_paths {
+            p.write(&mut w).expect("infallible: vec writer");
         }
         w.end_container().expect("infallible: vec writer");
     }
-    w.end_container().expect("infallible: vec writer"); // AttributeRequests array
+    if !event_filters.is_empty() {
+        w.start_array(Tag::Context(2))
+            .expect("infallible: vec writer"); // EventFilters
+        for f in event_filters {
+            f.write(&mut w).expect("infallible: vec writer");
+        }
+        w.end_container().expect("infallible: vec writer");
+    }
     w.put_bool(Tag::Context(3), false)
-        .expect("infallible: vec writer"); // FabricFiltered
+        .expect("infallible: vec writer"); // IsFabricFiltered
     w.put_uint(Tag::Context(0xFF), u64::from(IM_REVISION))
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
+}
+
+/// Build a `ReadRequestMessage` for the given (possibly wildcard) attribute paths.
+///
+/// Each [`ReadPath`] field that is `Some` is emitted as a context-tagged member of
+/// the `AttributePathIB` list (endpoint=2, cluster=3, attribute=4); `None` fields
+/// are omitted (wildcard). `IsFabricFiltered` is `false`. Delegates to
+/// [`build_read_request_full`] with no event paths/filters, so the output is
+/// byte-identical to the attribute-only encoding.
+#[must_use]
+pub fn build_read_request_paths(paths: &[ReadPath]) -> Vec<u8> {
+    build_read_request_full(paths, &[], &[])
 }
 
 /// Build a `ReadRequestMessage` for one or more concrete attribute paths.
