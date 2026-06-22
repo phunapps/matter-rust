@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@iarna/toml": "2.2.5",
-    "@matter/types": "0.17.1",
+    "@matter/types": "0.17.3",
     "@project-chip/matter.js": "0.17.1"
   }
 }
