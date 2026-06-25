@@ -539,6 +539,53 @@ impl Node {
         }
     }
 
+    /// Remove a fabric from the device by its `fabric_index`.
+    ///
+    /// Reads `CurrentFabricIndex` first and refuses to remove our OWN fabric
+    /// (that would sever this CASE session and orphan persisted state) with
+    /// [`Error::WouldRemoveSelf`]. There is intentionally no `force` override.
+    ///
+    /// # Errors
+    /// [`Error::WouldRemoveSelf`] if `fabric_index` is our own;
+    /// [`Error::OperationalCredentialsRejected`] if the device rejects it (e.g.
+    /// 7 `InvalidFabricIndex`); else an interaction error.
+    pub async fn remove_fabric(&self, fabric_index: u8) -> Result<(), Error> {
+        // Self-protection: CurrentFabricIndex over our session is OUR fabric's
+        // index here. Must check BEFORE invoking — this is a destructive op.
+        let cur = self
+            .read(&[ReadPath::concrete(
+                0,
+                crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+                crate::opcreds::ATTR_CURRENT_FABRIC_INDEX,
+            )])
+            .await?;
+        if crate::opcreds::parse_current_fabric_index(&cur) == Some(fabric_index) {
+            return Err(Error::WouldRemoveSelf);
+        }
+        let fields = Value::Structure(vec![(
+            matter_codec::Tag::Context(0),
+            Value::Uint(u64::from(fabric_index)),
+        )]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+            command: crate::opcreds::CMD_REMOVE_FABRIC,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Data { fields, .. } => {
+                let status = crate::opcreds::parse_noc_response(&fields);
+                crate::opcreds::noc_status_to_result(&status)
+            }
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => {
+                Err(Error::OperationalCredentialsRejected(code))
+            }
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unexpected status for RemoveFabric".into(),
+            )),
+        }
+    }
+
     /// Subscribe to attribute reports for `attrs` and/or event reports for
     /// `events` (concrete or wildcard paths) on a **single** subscription. The
     /// device sends the priming values/events, then steady-state changes within

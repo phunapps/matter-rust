@@ -5144,4 +5144,242 @@ mod tests {
         assert_eq!(fabrics[0].fabric_id, 0xAABB);
         device.await.unwrap();
     }
+
+    // --- Task 4: remove_fabric helpers + loopback tests ---
+
+    /// Build an `InvokeResponseMessage` whose single `InvokeResponseIB` carries
+    /// a `CommandDataIB` (not `CommandStatusIB`) with the `NOCResponse` response
+    /// command (cluster 0x003E, command 0x08). The fields struct is
+    /// `[ctx0 = status, ctx1 = fabric_index?]`. This is the RESPONSE COMMAND
+    /// shape — `InvokeResponse::Command { path, fields_tlv }` — mirroring the
+    /// `parses_command_response_payload` test in `matter-interaction/src/invoke.rs`.
+    fn build_invoke_response_noc(status: u8, fabric_index: Option<u8>) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseMessage
+        w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+        w.start_structure(Tag::Context(0)).unwrap(); // Command = CommandDataIB
+        w.start_list(Tag::Context(0)).unwrap(); // CommandPath
+        w.put_uint(Tag::Context(0), 0).unwrap(); // endpoint
+        w.put_uint(
+            Tag::Context(1),
+            u64::from(crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER),
+        )
+        .unwrap(); // cluster 0x003E
+        w.put_uint(Tag::Context(2), 0x08).unwrap(); // NOCResponse command id
+        w.end_container().unwrap(); // /CommandPath
+        w.start_structure(Tag::Context(1)).unwrap(); // CommandFields = NOCResponse struct
+        w.put_uint(Tag::Context(0), u64::from(status)).unwrap(); // StatusCode
+        if let Some(fi) = fabric_index {
+            w.put_uint(Tag::Context(1), u64::from(fi)).unwrap(); // FabricIndex (optional)
+        }
+        w.end_container().unwrap(); // /CommandFields
+        w.end_container().unwrap(); // /CommandDataIB
+        w.end_container().unwrap(); // /InvokeResponseIB
+        w.end_container().unwrap(); // /InvokeResponses
+        w.put_uint(Tag::Context(0xFF), 11).unwrap(); // InteractionModelRevision
+        w.end_container().unwrap(); // /InvokeResponseMessage
+        buf
+    }
+
+    /// Like [`run_loopback_device`] but with NO timed handshake and a distinct
+    /// reply for each inbound IM request: `replies[i]` is sent in response to the
+    /// i-th request received after the CASE handshake.
+    ///
+    /// Used for `remove_fabric` which issues two sequential requests (a read then
+    /// an invoke) and needs different reply content for each.
+    async fn run_loopback_device_seq(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        replies: Vec<Vec<u8>>,
+    ) {
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+
+        // Sigma1 → Sigma2
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+
+        // Sigma3 → success StatusReport, absorb the ack.
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        // Secured IM: reply to the i-th inbound request with replies[i].
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+        for reply_payload in &replies {
+            let (wire, _) = io.recv_from().await.unwrap();
+            let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } = decoded else {
+                panic!("expected an IM request app message");
+            };
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    reply_payload,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        }
+    }
+
+    /// Self-protection guard: `remove_fabric` with the device's own fabric index
+    /// must return `WouldRemoveSelf` WITHOUT sending an invoke — only the read
+    /// (`CurrentFabricIndex`) goes to the device.
+    #[tokio::test]
+    async fn remove_fabric_refuses_self_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Device replies to ONE request (the read for CurrentFabricIndex = 1).
+        let reply = build_report_data(
+            0,
+            crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+            crate::opcreds::ATTR_CURRENT_FABRIC_INDEX,
+            &matter_codec::Value::Uint(1),
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            reply,
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let err = controller
+            .node(device_node_id)
+            .remove_fabric(1)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::WouldRemoveSelf),
+            "expected WouldRemoveSelf, got {err:?}"
+        );
+        device.await.unwrap();
+    }
+
+    /// Happy path: `remove_fabric` for a DIFFERENT fabric index succeeds when the
+    /// device responds with a `NOCResponse(status=0, fabric_index=2)`.
+    #[tokio::test]
+    async fn remove_fabric_removes_other_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // reply[0] = CurrentFabricIndex=1 (the read); reply[1] = NOCResponse(OK)
+        let replies = vec![
+            build_report_data(
+                0,
+                crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+                crate::opcreds::ATTR_CURRENT_FABRIC_INDEX,
+                &matter_codec::Value::Uint(1),
+            ),
+            build_invoke_response_noc(0, Some(2)),
+        ];
+        let device = tokio::spawn(run_loopback_device_seq(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            replies,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .node(device_node_id)
+            .remove_fabric(2)
+            .await
+            .expect("remove fabric 2 must succeed");
+        device.await.unwrap();
+    }
 }
