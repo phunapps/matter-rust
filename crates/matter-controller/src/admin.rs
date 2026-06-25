@@ -181,6 +181,39 @@ pub(crate) fn onboarding_payload(
     Ok((manual_code, qr_code))
 }
 
+/// Generate a valid `(passcode, salt, discriminator)` for an enhanced window.
+///
+/// Passcode is a fresh 27-bit value with the spec's trivial values excluded;
+/// salt is 32 random bytes; discriminator is a random 12-bit value.
+///
+/// # Errors
+/// Returns [`Error::Operational`] if the system RNG fails or no valid passcode
+/// is found within the retry budget (practically never — ~12 values excluded).
+pub(crate) fn random_window_secrets() -> Result<(u32, [u8; 32], u16), Error> {
+    use matter_commissioning::setup::Passcode;
+    let rng = |buf: &mut [u8]| {
+        matter_crypto::random_bytes(buf).map_err(|e| Error::Operational(format!("rng: {e}")))
+    };
+    let mut salt = [0u8; 32];
+    rng(&mut salt)?;
+    let mut db = [0u8; 2];
+    rng(&mut db)?;
+    let discriminator = u16::from_le_bytes(db) & 0x0FFF;
+    // Passcode: draw 27-bit values until one is spec-valid (Passcode::new rejects
+    // out-of-range and the disallowed-trivial set).
+    for _ in 0..64 {
+        let mut pb = [0u8; 4];
+        rng(&mut pb)?;
+        let candidate = u32::from_le_bytes(pb) & 0x07FF_FFFF; // 27-bit
+        if Passcode::new(candidate).is_ok() {
+            return Ok((candidate, salt, discriminator));
+        }
+    }
+    Err(Error::Operational(
+        "could not generate a valid passcode".into(),
+    ))
+}
+
 /// Parse the three status attributes from a `read` result.
 // Task 3 calls this from Node::commissioning_window_status; #[allow] removed then.
 #[allow(dead_code)]
@@ -254,6 +287,19 @@ mod tests {
         assert!(qr.is_none());
         let (_m, qr2) = onboarding_payload(20_202_021, 3840, Some(0xFFF1), Some(0x8000)).unwrap();
         assert!(qr2.unwrap().starts_with("MT:"));
+    }
+
+    #[test]
+    fn random_window_secrets_are_valid_and_vary() {
+        use matter_commissioning::setup::{Discriminator, Passcode};
+        let (p1, s1, d1) = random_window_secrets().unwrap();
+        let (p2, _s2, _d2) = random_window_secrets().unwrap();
+        // Passcode is constructible (27-bit, non-trivial) and discriminator ≤ 0x0FFF.
+        Passcode::new(p1).unwrap();
+        Discriminator::new(d1).unwrap();
+        assert_eq!(s1.len(), 32);
+        assert_ne!(s1, [0u8; 32]);
+        assert_ne!(p1, p2); // overwhelmingly likely to differ
     }
 
     #[test]

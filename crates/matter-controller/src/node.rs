@@ -432,6 +432,32 @@ impl Node {
         })
     }
 
+    /// Open an enhanced commissioning window so a second admin can commission
+    /// this device onto its own fabric. Generates a fresh passcode/salt/
+    /// discriminator, computes the PAKE verifier, and returns the onboarding
+    /// payload (manual pairing code, plus QR when `opts.vendor_id`/`product_id`
+    /// are set). The `AdminComm` command is sent as a timed invoke.
+    ///
+    /// # Errors
+    /// Returns [`Error::CommissioningWindowRejected`] if the device rejects it,
+    /// or a crypto/RNG/interaction error.
+    pub async fn open_commissioning_window(
+        &self,
+        opts: crate::admin::OpenWindowOpts,
+    ) -> Result<crate::admin::CommissioningWindow, Error> {
+        let (passcode, salt, discriminator) = crate::admin::random_window_secrets()?;
+        self.open_commissioning_window_with(
+            opts.timeout_s,
+            passcode,
+            &salt,
+            discriminator,
+            opts.iterations,
+            opts.vendor_id,
+            opts.product_id,
+        )
+        .await
+    }
+
     /// Subscribe to attribute reports for `attrs` and/or event reports for
     /// `events` (concrete or wildcard paths) on a **single** subscription. The
     /// device sends the priming values/events, then steady-state changes within
