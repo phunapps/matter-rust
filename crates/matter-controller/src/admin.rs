@@ -18,14 +18,10 @@ pub(crate) const CMD_OPEN_BASIC_COMMISSIONING_WINDOW: u32 = 0x01;
 #[allow(dead_code)]
 pub(crate) const CMD_REVOKE_COMMISSIONING: u32 = 0x02;
 /// Attribute id for `WindowStatus`.
-// Used by parse_window_status (Task 3 wires it to a Node::read call).
-#[allow(dead_code)]
 pub(crate) const ATTR_WINDOW_STATUS: u32 = 0x0000;
 /// Attribute id for `AdminFabricIndex`.
-#[allow(dead_code)]
 pub(crate) const ATTR_ADMIN_FABRIC_INDEX: u32 = 0x0001;
 /// Attribute id for `AdminVendorId`.
-#[allow(dead_code)]
 pub(crate) const ATTR_ADMIN_VENDOR_ID: u32 = 0x0002;
 /// Spec default/floor PBKDF iterations for an opened window.
 pub const DEFAULT_WINDOW_ITERATIONS: u32 = 1000;
@@ -92,8 +88,6 @@ pub enum CommissioningWindowStatus {
 }
 
 impl CommissioningWindowStatus {
-    // Task 3 wires this to parse_window_status; the #[allow] is removed then.
-    #[allow(dead_code)]
     fn from_u8(v: u8) -> Self {
         match v {
             0 => Self::WindowNotOpen,
@@ -215,8 +209,6 @@ pub(crate) fn random_window_secrets() -> Result<(u32, [u8; 32], u16), Error> {
 }
 
 /// Parse the three status attributes from a `read` result.
-// Task 3 calls this from Node::commissioning_window_status; #[allow] removed then.
-#[allow(dead_code)]
 pub(crate) fn parse_window_status(reports: &[(AttributePath, Value)]) -> WindowStatus {
     let mut status = CommissioningWindowStatus::WindowNotOpen;
     let mut admin_fabric_index: Option<u8> = None;

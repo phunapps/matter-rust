@@ -372,6 +372,27 @@ impl Node {
         }
     }
 
+    /// Read `AdministratorCommissioning` `WindowStatus`, `AdminFabricIndex`, and
+    /// `AdminVendorId` from endpoint 0. Returns a snapshot of the current
+    /// commissioning-window state.
+    ///
+    /// # Errors
+    ///
+    /// An interaction error if the read fails.
+    pub async fn commissioning_window_status(&self) -> Result<crate::admin::WindowStatus, Error> {
+        use crate::admin::{
+            ADMIN_COMMISSIONING_CLUSTER, ATTR_ADMIN_FABRIC_INDEX, ATTR_ADMIN_VENDOR_ID,
+            ATTR_WINDOW_STATUS,
+        };
+        let paths = [
+            ReadPath::concrete(0, ADMIN_COMMISSIONING_CLUSTER, ATTR_WINDOW_STATUS),
+            ReadPath::concrete(0, ADMIN_COMMISSIONING_CLUSTER, ATTR_ADMIN_FABRIC_INDEX),
+            ReadPath::concrete(0, ADMIN_COMMISSIONING_CLUSTER, ATTR_ADMIN_VENDOR_ID),
+        ];
+        let reports = self.read(&paths).await?;
+        Ok(crate::admin::parse_window_status(&reports))
+    }
+
     /// Open an enhanced commissioning window using **caller-supplied** secrets
     /// (test/power-user seam). Most callers want
     /// `Node::open_commissioning_window` (Task 3), which generates the secrets.

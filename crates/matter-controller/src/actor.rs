@@ -5023,4 +5023,52 @@ mod tests {
             .expect("revoke");
         device.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn commissioning_window_status_reads_window_status_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Device answers the read with WindowStatus = 1 (EnhancedWindowOpen).
+        let reply = build_report_data(0, 0x003C, 0x0000, &matter_codec::Value::Uint(1));
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            reply,
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let ws = controller
+            .node(device_node_id)
+            .commissioning_window_status()
+            .await
+            .expect("status");
+        assert_eq!(
+            ws.status,
+            crate::admin::CommissioningWindowStatus::EnhancedWindowOpen
+        );
+        device.await.unwrap();
+    }
 }
