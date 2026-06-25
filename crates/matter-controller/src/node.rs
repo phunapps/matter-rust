@@ -502,8 +502,9 @@ impl Node {
 
     /// Shared helper: timed-invoke an `AdminComm` command expecting a bare
     /// success status. Maps `Success` to `Ok(())`, `Failure(code)` to
-    /// [`Error::CommissioningWindowRejected`], and any response command to an
-    /// operational error.
+    /// [`Error::CommissioningWindowRejected`], any other `Status(_)` variant
+    /// (catch-all for `#[non_exhaustive]` future codes) to an operational
+    /// error, and any response command to an operational error.
     async fn admin_timed_command(
         &self,
         path: CommandPath,

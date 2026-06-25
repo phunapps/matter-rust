@@ -82,7 +82,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod actor;
-pub mod admin;
+pub(crate) mod admin;
 pub mod builder;
 pub(crate) mod commission;
 pub mod controller;

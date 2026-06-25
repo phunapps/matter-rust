@@ -11,11 +11,8 @@ pub(crate) const ADMIN_COMMISSIONING_CLUSTER: u32 = 0x003C;
 /// Command id for `OpenCommissioningWindow`.
 pub(crate) const CMD_OPEN_COMMISSIONING_WINDOW: u32 = 0x00;
 /// Command id for `OpenBasicCommissioningWindow`.
-// Task 3 (open_commissioning_window) and future RevokeCommissioning use these.
-#[allow(dead_code)]
 pub(crate) const CMD_OPEN_BASIC_COMMISSIONING_WINDOW: u32 = 0x01;
 /// Command id for `RevokeCommissioning`.
-#[allow(dead_code)]
 pub(crate) const CMD_REVOKE_COMMISSIONING: u32 = 0x02;
 /// Attribute id for `WindowStatus`.
 pub(crate) const ATTR_WINDOW_STATUS: u32 = 0x0000;
@@ -160,13 +157,14 @@ pub(crate) fn onboarding_payload(
         discriminator: Discriminator::new(discriminator).map_err(map)?,
         passcode: Passcode::new(passcode).map_err(map)?,
     };
+    // Build the manual code (borrows base) before consuming base into the QR payload.
     let manual_code = encode_manual_code(&base);
     let qr_code = match (vendor_id, product_id) {
         (Some(v), Some(p)) => {
             let qr = SetupPayload {
                 vendor_id: Some(v),
                 product_id: Some(p),
-                ..base.clone()
+                ..base
             };
             Some(encode_qr(&qr).map_err(map)?)
         }
