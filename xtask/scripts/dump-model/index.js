@@ -83,6 +83,8 @@ const ALLOWLIST = [
   { id: 0x003f, name: 'GroupKeyManagement' },
   { id: 0x003c, name: 'AdministratorCommissioning' },
   { id: 0x002a, name: 'OtaSoftwareUpdateRequestor' },
+  // M9-D2 operational credentials:
+  { id: 0x003e, name: 'OperationalCredentials' },
 ];
 
 const excluded = [];

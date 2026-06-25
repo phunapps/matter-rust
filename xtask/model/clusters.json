@@ -17,6 +17,7 @@
       "GeneralDiagnostics",
       "Switch",
       "AdministratorCommissioning",
+      "OperationalCredentials",
       "GroupKeyManagement",
       "FixedLabel",
       "UserLabel",
@@ -4701,6 +4702,662 @@
             {
               "value": 4,
               "name": "WindowNotOpen",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 62,
+      "name": "OperationalCredentials",
+      "revision": 2,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Nocs",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NOCStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain all NOCs applicable to this Node, encoded as a read-only list of NOCStruct.\nOperational Certificates shall be added through the AddNOC command, and shall be removed through the RemoveFabric command.\nUpon Factory Data Reset, this attribute shall be set to a default value of an empty list.\nThe number of entries in this list shall match the number of entries in the Fabrics attribute."
+        },
+        {
+          "id": 1,
+          "name": "Fabrics",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "FabricDescriptorStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates all fabrics to which this Node is commissioned, encoded as a read-only list of FabricDescriptorStruct. This information may be computed directly from the NOCs attribute.\nThe Fabrics attribute is also known as \"the fabric table\".\nUpon Factory Data Reset, this attribute shall be set to a default value of an empty list.\nThe number of entries in this list shall match the number of entries in the NOCs attribute."
+        },
+        {
+          "id": 2,
+          "name": "SupportedFabrics",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the number of Fabrics that are supported by the device. This value is fixed for a particular device."
+        },
+        {
+          "id": 3,
+          "name": "CommissionedFabrics",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the number of Fabrics to which the device is currently commissioned. This attribute shall be equal to the following:\n  - The number of entries in the NOCs attribute.\n  - The number of entries in the Fabrics attribute.\nUpon Factory Data Reset, this attribute shall be set to a default value of 0."
+        },
+        {
+          "id": 4,
+          "name": "TrustedRootCertificates",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "octstr",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain the list of Trusted Root CA Certificates (RCAC) installed on the Node, as octet strings containing their Matter Certificate Encoding representation.\nThese certificates are installed through the AddTrustedRootCertificate command.\nDepending on the method of storage employed by the server, either shared storage for identical root certificates shared by many fabrics, or individually stored root certificate per fabric, multiple identical root certificates may legally appear within the list.\nTo match a root with a given fabric, the root certificate's subject and subject public key need to be cross-referenced with the NOC or ICAC certificates that appear in the NOCs attribute for a given fabric.\nUpon Factory Data Reset, this attribute shall be set to a default value whereby the list is empty."
+        },
+        {
+          "id": 5,
+          "name": "CurrentFabricIndex",
+          "type": "fabric-idx",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the accessing fabric index.\nThis attribute is useful to contextualize Fabric-Scoped entries obtained from response commands or attribute reads, since a given Fabric may be referenced by a different Fabric Index locally on a remote Node."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "AttestationRequest",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AttestationNonce",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "AttestationResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AttestationElements",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the octet string of the serialized attestation_elements_message."
+            },
+            {
+              "id": 1,
+              "name": "AttestationSignature",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the octet string of the necessary attestation_signature as described in Section 11.18.4.7, \"Attestation Information\"."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "CertificateChainRequest",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CertificateType",
+              "type": "CertificateChainTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "CertificateChainResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Certificate",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be the DER encoded certificate corresponding to the CertificateType field in the CertificateChainRequest command."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "CsrRequest",
+          "direction": "request",
+          "responseId": 5,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CsrNonce",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "IsForUpdateNoc",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "CsrResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NocsrElements",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the octet string of the serialized nocsr_elements_message."
+            },
+            {
+              "id": 1,
+              "name": "AttestationSignature",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the octet string of the necessary attestation_signature as described in Section 11.18.4.9, \"NOCSR Information\"."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "AddNoc",
+          "direction": "request",
+          "responseId": 8,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NocValue",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "IcacValue",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "IpkValue",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the value of the Epoch Key for the Identity Protection Key (IPK) to set for the Fabric which is to be added. This is needed to bootstrap a necessary configuration value for subsequent CASE to succeed. See Section 4.14.2.6.1, \"Identity Protection Key (IPK)\" for details.\nThe IPK shall be provided as an octet string of length CRYPTO_SYMMETRIC_KEY_LENGTH_BYTES.\nOn successful execution of the AddNOC command, the side-effect of having provided this field shall be equivalent to having done a GroupKeyManagement cluster KeySetWrite command invocation using the newly joined fabric as the accessing fabric and with the following argument fields (assuming KeySetWrite allowed a GroupKeySetID set to 0):"
+            },
+            {
+              "id": 3,
+              "name": "CaseAdminSubject",
+              "type": "subject-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "If the AddNOC command succeeds according to the semantics of the following subsections, then the Access Control subject-id shall be used to atomically add an Access Control Entry enabling that Subject to subsequently administer the Node whose operational identity is being added by this command.\nThe format of the new Access Control Entry, created from this, shall be:\n> [!NOTE]\n> NOTE: Unless such an Access Control Entry is added atomically as described here, there would be no way for the caller on its given Fabric to eventually add another Access Control Entry for CASE authentication mode, to enable the new Administrator to administer the device, since the Fabric Scoping of the Access Control List prevents the current Node from being able to write new entries scoped to that Fabric, if the session is established from CASE. While a session established from PASE does gain Fabric Scope of a newly-joined Fabric, this argument is made mandatory to provide symmetry between both types of session establishment, both of which need to eventually add an \"Administer Node over CASE\" Access Control Entry to finalize new Fabric configuration and subsequently be able to call the CommissioningComplete command."
+            },
+            {
+              "id": 4,
+              "name": "AdminVendorId",
+              "type": "vendor-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the Vendor ID of the entity issuing the AddNOC command. This value shall NOT be one of the reserved Vendor ID values defined in Table 1, \"Vendor ID Allocations\"."
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "name": "UpdateNoc",
+          "direction": "request",
+          "responseId": 8,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NocValue",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "IcacValue",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "name": "NocResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "StatusCode",
+              "type": "NodeOperationalCertStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain an NOCStatus value representing the status of an operation involving a NOC."
+            },
+            {
+              "id": 1,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "If present, it shall contain the Fabric Index of the Fabric last added, removed or updated."
+            },
+            {
+              "id": 2,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field may contain debugging textual information from the cluster implementation, which SHOULD NOT be presented to user interfaces in any way. Its purpose is to help developers in troubleshooting errors and the contents may go into logs or crash reports."
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "name": "UpdateFabricLabel",
+          "direction": "request",
+          "responseId": 8,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the label to set for the fabric associated with the current secure session."
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "name": "RemoveFabric",
+          "direction": "request",
+          "responseId": 8,
+          "fields": [
+            {
+              "id": 0,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the Fabric Index reference (see Section 7.19.2.23, \"Fabric Index\") associated with the Fabric which is to be removed from the device."
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "name": "AddTrustedRootCertificate",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "RootCaCertificate",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "name": "SetVidVerificationStatement",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "VendorId",
+              "type": "vendor-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "VidVerificationStatement",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Vvsc",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "name": "SignVidVerificationRequest",
+          "direction": "request",
+          "responseId": 14,
+          "fields": [
+            {
+              "id": 0,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ClientChallenge",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "name": "SignVidVerificationResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "FabricBindingVersion",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Signature",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "CertificateChainTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "This enumeration is used by the CertificateChainRequest command to convey which certificate from the device attestation certificate chain to transmit back to the client.",
+          "values": [
+            {
+              "value": 1,
+              "name": "DacCertificate",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "PaiCertificate",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "FabricDescriptorStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure encodes a Fabric Reference for a fabric within which a given Node is currently commissioned.",
+          "fields": [
+            {
+              "id": 1,
+              "name": "RootPublicKey",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the public key for the trusted root that scopes the fabric referenced by FabricIndex and its associated operational credential (see Section 6.4.5.3, \"Trusted Root CA Certificates\"). The format for the key shall be the same as that used in the ec-pub-key field of the Matter Certificate Encoding for the root in the operational certificate chain."
+            },
+            {
+              "id": 2,
+              "name": "VendorId",
+              "type": "vendor-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the value of VendorID associated with the fabric.\nThis value shall have been provided by the AdminVendorID value provided in the AddNOC command that led to the creation of this FabricDescriptorStruct, or the value updated via the SetVIDVerificationStatement command, whichever was last completed. The set of allowed values is defined in AdminVendorID.\nThe intent is to provide user transparency about which entities have Administer privileges on the Node.\nClients shall consider the VendorID field value to be untrustworthy until the Fabric Table Vendor ID Verification Procedure has been executed against the fabric entry having this VendorID."
+            },
+            {
+              "id": 3,
+              "name": "FabricId",
+              "type": "fabric-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the FabricID allocated to the fabric referenced by FabricIndex. This field shall match the value found in the matter-fabric-id field from the operational certificate providing the operational identity under this Fabric."
+            },
+            {
+              "id": 4,
+              "name": "NodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the NodeID in use within the fabric referenced by FabricIndex. This field shall match the value found in the matter-node-id field from the operational certificate providing this operational identity."
+            },
+            {
+              "id": 5,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain a commissioner-set label for the fabric referenced by FabricIndex. This field is set by the UpdateFabricLabel command."
+            },
+            {
+              "id": 6,
+              "name": "VidVerificationStatement",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall contain a previously-installed administrator-set vid_verification_statement value (see Section 6.4.10, \"Fabric Table Vendor ID Verification Procedure\") for the fabric referenced by FabricIndex. This field is set by the SetVIDVerificationStatement command."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NOCStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This encodes a NOC chain, underpinning a commissioned Operational Identity for a given Node.\n> [!NOTE]\n> NOTE: The VVSC field is mutually exclusive with the ICAC field. If the ICAC field is non-null, the VVSC field shall be omitted. If the VVSC field is present in the structure, the ICAC field shall be null. The reason for this is to optimize storage usage, as the VID Verification Signer Certificate (VVSC) is a field that is only needed in root-per-fabric situations without ICAC present.\n> [!NOTE]\n> NOTE: The Trusted Root CA Certificate (RCAC) is not included in this structure. The roots are available in the TrustedRootCertificates attribute under the same associated fabric as the one for the NOCStruct entry.",
+          "fields": [
+            {
+              "id": 1,
+              "name": "Noc",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the NOC for the struct's associated fabric, encoded using Matter Certificate Encoding."
+            },
+            {
+              "id": 2,
+              "name": "Icac",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall contain the ICAC for the struct's associated fabric, encoded using Matter Certificate Encoding. If no ICAC is present in the chain, this field shall be set to null."
+            },
+            {
+              "id": 3,
+              "name": "Vvsc",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall contain the Vendor Verification Signer Certificate (VVSC) for the struct's associated fabric, encoded using Matter Certificate Encoding. If no VVSC is needed, this field shall be omitted (in that there shall NOT be a value present, not even an empty octet string). If the ICAC field is non-null, this field shall NOT be present."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NodeOperationalCertStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "This enumeration is used by the NOCResponse common response command to convey detailed outcome of several of this cluster's operations.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ok",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "InvalidPublicKey",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "InvalidNodeOpId",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "InvalidNoc",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "MissingCsr",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "TableFull",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "InvalidAdminSubject",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "FabricConflict",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "LabelConflict",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "InvalidFabricIndex",
               "description": null
             }
           ]
