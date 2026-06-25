@@ -598,6 +598,37 @@ impl Node {
         }
     }
 
+    /// Update the label of OUR fabric on the device (`UpdateFabricLabel` acts on
+    /// the accessing fabric; there is no index argument).
+    ///
+    /// # Errors
+    /// [`Error::OperationalCredentialsRejected`] if the device rejects it
+    /// (e.g. 9 `LabelConflict`); else an interaction error.
+    pub async fn update_fabric_label(&self, label: &str) -> Result<(), Error> {
+        let fields = Value::Structure(vec![(
+            matter_codec::Tag::Context(0),
+            Value::Utf8(label.to_string()),
+        )]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+            command: crate::opcreds::CMD_UPDATE_FABRIC_LABEL,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Data { fields, .. } => {
+                let status = crate::opcreds::parse_noc_response(&fields);
+                crate::opcreds::noc_status_to_result(&status)
+            }
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => {
+                Err(Error::OperationalCredentialsRejected(code))
+            }
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unexpected status for UpdateFabricLabel".into(),
+            )),
+        }
+    }
+
     /// Subscribe to attribute reports for `attrs` and/or event reports for
     /// `events` (concrete or wildcard paths) on a **single** subscription. The
     /// device sends the priming values/events, then steady-state changes within

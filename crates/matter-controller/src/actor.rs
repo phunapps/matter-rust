@@ -5448,4 +5448,48 @@ mod tests {
         );
         device.await.unwrap();
     }
+
+    /// Happy path: `update_fabric_label` succeeds when the device responds
+    /// with a `NOCResponse(status=0, fabric_index=1)`.
+    #[tokio::test]
+    async fn update_fabric_label_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            build_invoke_response_noc(0, Some(1)),
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .node(device_node_id)
+            .update_fabric_label("living-room")
+            .await
+            .expect("relabel");
+        device.await.unwrap();
+    }
 }
