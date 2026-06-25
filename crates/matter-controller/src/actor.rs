@@ -4855,4 +4855,88 @@ mod tests {
             "liveness timer must fire under inbound flood (got {got:?})"
         );
     }
+
+    /// Build an `InvokeResponseMessage` whose single `InvokeResponseIB` carries
+    /// a `CommandStatusIB` with `StatusIB.Status = 0x00` (SUCCESS). Used by
+    /// [`open_commissioning_window_with_does_timed_invoke_over_loopback`] to
+    /// simulate a device accepting `OpenCommissioningWindow`.
+    fn build_invoke_status_success() -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap();
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+        w.start_structure(Tag::Context(1)).unwrap(); // Status = CommandStatusIB
+        w.start_list(Tag::Context(0)).unwrap(); // CommandPath
+        w.put_uint(Tag::Context(0), 0).unwrap(); // endpoint
+        w.put_uint(
+            Tag::Context(1),
+            u64::from(crate::admin::ADMIN_COMMISSIONING_CLUSTER),
+        )
+        .unwrap(); // cluster
+        w.put_uint(
+            Tag::Context(2),
+            u64::from(crate::admin::CMD_OPEN_COMMISSIONING_WINDOW),
+        )
+        .unwrap(); // command
+        w.end_container().unwrap(); // /CommandPath
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        w.put_uint(Tag::Context(0), 0x00).unwrap(); // SUCCESS
+        w.end_container().unwrap(); // /StatusIB
+        w.end_container().unwrap(); // /CommandStatusIB
+        w.end_container().unwrap(); // /InvokeResponseIB
+        w.end_container().unwrap(); // /InvokeResponses
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[tokio::test]
+    async fn open_commissioning_window_with_does_timed_invoke_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let reply = build_invoke_status_success();
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            reply,
+            /* expect_timed */ true,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let node = controller.node(device_node_id);
+        let win = node
+            .open_commissioning_window_with(180, 20_202_021, &[0x01; 32], 3840, 1000, None, None)
+            .await
+            .expect("open window");
+        assert_eq!(win.passcode, 20_202_021);
+        assert_eq!(win.discriminator, 3840);
+        assert_eq!(win.manual_code.len(), 11);
+        assert!(win.qr_code.is_none());
+        device.await.unwrap();
+    }
 }

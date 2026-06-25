@@ -70,4 +70,10 @@ pub enum Error {
     /// Commissioning requires attestation trust, but none was configured.
     #[error("no attestation trust configured (use MatterController::builder)")]
     NoTrust,
+
+    /// An `AdministratorCommissioning` command returned a non-success IM status
+    /// (e.g. 0x02 Busy, 0x03 `PAKEParameterError`, 0x04 `WindowNotOpen` reported as
+    /// a cluster status). The raw IM status byte is preserved.
+    #[error("commissioning window command rejected (IM status {0:#04x})")]
+    CommissioningWindowRejected(u8),
 }

@@ -76,6 +76,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod actor;
+pub mod admin;
 pub mod builder;
 pub(crate) mod commission;
 pub mod controller;
@@ -89,6 +90,10 @@ pub mod store;
 pub mod subscription;
 pub mod trust;
 
+pub use admin::{
+    CommissioningWindow, CommissioningWindowStatus, OpenWindowOpts, WindowStatus,
+    DEFAULT_WINDOW_ITERATIONS, DEFAULT_WINDOW_TIMEOUT_S,
+};
 pub use builder::MatterControllerBuilder;
 pub use controller::MatterController;
 pub use error::Error;

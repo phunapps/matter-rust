@@ -372,6 +372,66 @@ impl Node {
         }
     }
 
+    /// Open an enhanced commissioning window using **caller-supplied** secrets
+    /// (test/power-user seam). Most callers want
+    /// `Node::open_commissioning_window` (Task 3), which generates the secrets.
+    ///
+    /// Computes the PAKE passcode verifier from `passcode`/`salt`/`iterations`,
+    /// invokes `OpenCommissioningWindow` (a **timed** invoke — `AdminComm` requires
+    /// it), and returns the onboarding payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CommissioningWindowRejected`] if the device rejects the
+    /// command, or a crypto/interaction error.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_commissioning_window_with(
+        &self,
+        timeout_s: u16,
+        passcode: u32,
+        salt: &[u8],
+        discriminator: u16,
+        iterations: u32,
+        vendor_id: Option<u16>,
+        product_id: Option<u16>,
+    ) -> Result<crate::admin::CommissioningWindow, Error> {
+        let verifier = matter_crypto::pake_passcode_verifier(passcode, salt, iterations)
+            .map_err(|e| Error::Operational(format!("verifier: {e}")))?;
+        let fields =
+            crate::admin::open_window_fields(timeout_s, &verifier, discriminator, iterations, salt);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::admin::ADMIN_COMMISSIONING_CLUSTER,
+            command: crate::admin::CMD_OPEN_COMMISSIONING_WINDOW,
+        };
+        match self.invoke_timed(path, fields, None).await? {
+            InvokeResult::Status(ImStatus::Success) => {}
+            InvokeResult::Status(ImStatus::Failure(code)) => {
+                return Err(Error::CommissioningWindowRejected(code));
+            }
+            InvokeResult::Status(_) => {
+                return Err(Error::Operational(
+                    "unrecognised IM status for OpenCommissioningWindow".into(),
+                ));
+            }
+            InvokeResult::Data { .. } => {
+                return Err(Error::Operational(
+                    "unexpected response command for OpenCommissioningWindow".into(),
+                ));
+            }
+        }
+        let (manual_code, qr_code) =
+            crate::admin::onboarding_payload(passcode, discriminator, vendor_id, product_id)?;
+        Ok(crate::admin::CommissioningWindow {
+            passcode,
+            discriminator,
+            iterations,
+            salt: salt.to_vec(),
+            manual_code,
+            qr_code,
+        })
+    }
+
     /// Subscribe to attribute reports for `attrs` and/or event reports for
     /// `events` (concrete or wildcard paths) on a **single** subscription. The
     /// device sends the priming values/events, then steady-state changes within
