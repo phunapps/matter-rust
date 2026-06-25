@@ -393,6 +393,21 @@ impl Node {
         Ok(crate::admin::parse_window_status(&reports))
     }
 
+    /// Read the device's `Fabrics` list (every fabric it is commissioned onto).
+    ///
+    /// # Errors
+    ///
+    /// An interaction error if the read fails.
+    pub async fn list_fabrics(&self) -> Result<Vec<crate::opcreds::FabricDescriptor>, Error> {
+        let paths = [ReadPath::concrete(
+            0,
+            crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+            crate::opcreds::ATTR_FABRICS,
+        )];
+        let reports = self.read(&paths).await?;
+        Ok(crate::opcreds::parse_fabrics(&reports))
+    }
+
     /// Open an enhanced commissioning window using **caller-supplied** secrets
     /// (test/power-user seam). Most callers want
     /// `Node::open_commissioning_window` (Task 3), which generates the secrets.

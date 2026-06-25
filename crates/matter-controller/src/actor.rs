@@ -5071,4 +5071,77 @@ mod tests {
         );
         device.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn list_fabrics_reads_fabrics_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Build a single-fabric reply: one Structure with the six context-tagged fields.
+        let fabric = matter_codec::Value::Structure(vec![
+            (
+                matter_codec::Tag::Context(1),
+                matter_codec::Value::Bytes(vec![4u8; 65]),
+            ),
+            (
+                matter_codec::Tag::Context(2),
+                matter_codec::Value::Uint(0xFFF1),
+            ),
+            (
+                matter_codec::Tag::Context(3),
+                matter_codec::Value::Uint(0xAABB),
+            ),
+            (
+                matter_codec::Tag::Context(4),
+                matter_codec::Value::Uint(0x1234),
+            ),
+            (
+                matter_codec::Tag::Context(5),
+                matter_codec::Value::Utf8("home".into()),
+            ),
+            (
+                matter_codec::Tag::Context(254),
+                matter_codec::Value::Uint(1),
+            ),
+        ]);
+        let reply = build_report_data(0, 0x003E, 0x0001, &matter_codec::Value::Array(vec![fabric]));
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            reply,
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let fabrics = controller
+            .node(device_node_id)
+            .list_fabrics()
+            .await
+            .expect("list");
+        assert_eq!(fabrics.len(), 1);
+        assert_eq!(fabrics[0].fabric_index, 1);
+        assert_eq!(fabrics[0].fabric_id, 0xAABB);
+        device.await.unwrap();
+    }
 }
