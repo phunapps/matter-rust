@@ -174,6 +174,52 @@ unchanged — its full test suite passes with zero test edits.
   `#[non_exhaustive]` now binds across the crate boundary; unknown status
   variants map to generic FAILURE (0x01), never success.
 
+## matter-controller
+
+### [Unreleased] — M9-D1 commissioning window
+
+#### Added
+
+- **`Node::open_commissioning_window(opts: OpenWindowOpts) -> Result<CommissioningWindow>`** —
+  generates a fresh passcode/salt/discriminator via the system RNG, computes the
+  PAKE verifier (`matter-crypto::pake_passcode_verifier`), and sends
+  `OpenCommissioningWindow` as a timed invoke to the device's
+  `AdministratorCommissioning` cluster (0x003C). Returns a
+  [`CommissioningWindow`] carrying the 11-digit `manual_code` (always) and
+  `qr_code` (`Some` when `opts.vendor_id`/`opts.product_id` are set). The
+  onboarding payload is composed from the existing `matter-commissioning` setup-
+  payload encoders (`encode_manual_code` / `encode_qr`) — no new payload code.
+- **`Node::open_commissioning_window_with(timeout_s, passcode, salt, discriminator, iterations, vendor_id, product_id) -> Result<CommissioningWindow>`** —
+  deterministic seam for tests: caller supplies all secrets, no RNG involved.
+  Computes the verifier from the supplied `passcode`/`salt`/`iterations` and
+  drives the same timed invoke path.
+- **`Node::open_basic_commissioning_window(timeout_s: u16) -> Result<()>`** —
+  opens a basic commissioning window (device reuses its original passcode; no
+  new onboarding payload returned). Timed invoke.
+- **`Node::revoke_commissioning() -> Result<()>`** — revokes any open
+  commissioning window. Timed invoke.
+- **`Node::commissioning_window_status() -> Result<WindowStatus>`** — reads
+  `WindowStatus` (attr 0x0000), `AdminFabricIndex` (0x0001), and `AdminVendorId`
+  (0x0002) from the `AdministratorCommissioning` cluster and returns a
+  [`WindowStatus`] snapshot.
+- New public types re-exported from `matter-controller`:
+  [`OpenWindowOpts`], [`CommissioningWindow`], [`WindowStatus`],
+  [`CommissioningWindowStatus`], and constants
+  `DEFAULT_WINDOW_ITERATIONS` (1000) / `DEFAULT_WINDOW_TIMEOUT_S` (180 s).
+- `Error::CommissioningWindowRejected(u8)` — emitted when the device returns an
+  IM failure status on any `AdminComm` command.
+
+#### Notes
+
+- All four node verbs route through an internal `admin_timed_command` helper that
+  sends a `TimedRequest` + the command in one exchange (chip-faithful). The M9-B3
+  timed-interaction path provides this automatically.
+- `open_basic_commissioning_window` is deliberately separate from
+  `open_commissioning_window`: the basic variant carries no new verifier and its
+  security characteristics differ (it re-exposes the original setup passcode).
+- `open_commissioning_window_with` is the test / power-user seam; production code
+  uses `open_commissioning_window`.
+
 ## matter-commissioning
 
 ### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete), M6.6.5a production CD-root ingestion, M7.5 control_onoff example
@@ -927,6 +973,22 @@ fixture file; the test assertions remain stable.
 - Group messaging (post-1.0).
 
 ## matter-crypto
+
+### [Unreleased] — M9-D1 commissioning window helpers
+
+#### Added
+
+- **`pake_passcode_verifier(passcode: u32, salt: &[u8], iterations: u32) -> Result<[u8; 97]>`** —
+  derives the PAKE2+ verifier bytes from a setup passcode using PBKDF2-HMAC-SHA256
+  with the supplied salt and iteration count. The 97-byte output is the
+  `PAKEPasscodeVerifier` field required by `OpenCommissioningWindow` (Matter Core
+  Spec §3.10.7.2). Re-exported at the crate root; was previously an internal PASE
+  helper, now part of the public surface.
+- **`random_bytes(buf: &mut [u8]) -> Result<()>`** — fills `buf` with
+  cryptographically secure random bytes via `ring::rand::SystemRandom`. Exposed
+  so callers generating commissioning-window secrets (passcode, salt,
+  discriminator) can use the same RNG primitive without reaching inside the pase
+  module. Re-exported at the crate root.
 
 ### [0.1.0-pre] — 2026-05-20 (not yet published)
 

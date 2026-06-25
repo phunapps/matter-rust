@@ -20,6 +20,12 @@
 //! - **Subscriptions** — [`Node::subscribe`] returns a [`Subscription`] stream
 //!   of [`SubscriptionEvent`]s (`Report` / `Established` / `Resubscribing` /
 //!   `Lagged`; `next().await` + `cancel()`).
+//! - **Multi-admin / commissioning windows** — [`Node::open_commissioning_window`]
+//!   opens an enhanced commissioning window (generates secrets, computes the PAKE
+//!   verifier, returns a [`CommissioningWindow`] with `manual_code`/`qr_code`);
+//!   [`Node::open_basic_commissioning_window`] opens a basic window; and
+//!   [`Node::revoke_commissioning`] closes any open window.
+//!   [`Node::commissioning_window_status`] reads the current window state.
 //!
 //! # Quickstart
 //!
