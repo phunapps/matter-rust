@@ -26,6 +26,10 @@
 //!   [`Node::open_basic_commissioning_window`] opens a basic window; and
 //!   [`Node::revoke_commissioning`] closes any open window.
 //!   [`Node::commissioning_window_status`] reads the current window state.
+//! - **Fabric management** — [`Node::list_fabrics`] reads the device's full
+//!   fabric table as [`Vec<FabricDescriptor>`]; [`Node::remove_fabric`] removes a
+//!   fabric by index (self-protected: returns [`Error::WouldRemoveSelf`] for our
+//!   own fabric); [`Node::update_fabric_label`] relabels the accessing fabric.
 //!
 //! # Quickstart
 //!

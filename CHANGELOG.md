@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## matter-clusters
 
+### [Unreleased] — M9-D2 OperationalCredentials cluster
+
+#### Added
+
+- **`OperationalCredentials` cluster (0x003E) generated** into
+  `matter_clusters::gen::operational_credentials` — typed attribute/command/struct
+  codecs for the full cluster surface: `FabricDescriptorStruct` (root public key,
+  vendor id, fabric id, node id, label, fabric index), `NOCSStruct`, and
+  `NocStatus` enum. Command codecs cover `AttestationRequest`/`Response`,
+  `CertificateChainRequest`/`Response`, `CSRRequest`/`Response`, `AddNOC`,
+  `UpdateNOC`, `UpdateFabricLabel`, `RemoveFabric`, `AddTrustedRootCertificate`,
+  and `OpenCommissioningWindow`/`OpenBasicCommissioningWindow`. Total cluster
+  count: **33 → 34**.
+
 ### [Unreleased] — M7.4b generated clusters, M7.3 foundation
 
 #### M7.4b — generated cluster modules (the 10 M7 clusters)
@@ -175,6 +189,44 @@ unchanged — its full test suite passes with zero test edits.
   variants map to generic FAILURE (0x01), never success.
 
 ## matter-controller
+
+### [Unreleased] — M9-D2 fabric management
+
+#### Added
+
+- **`Node::list_fabrics() -> Result<Vec<FabricDescriptor>>`** — reads the
+  `Fabrics` attribute (0x0001) from the device's `OperationalCredentials` cluster
+  (0x003E) and returns the full fabric table. Each entry carries `root_public_key`,
+  `vendor_id`, `fabric_id: u64`, `node_id`, `label`, and `fabric_index`.
+- **`Node::remove_fabric(fabric_index: u8) -> Result<()>`** — invokes
+  `RemoveFabric` on the device's `OperationalCredentials` cluster to remove the
+  fabric at `fabric_index`. **Self-protected:** reads `CurrentFabricIndex` first
+  and returns `Error::WouldRemoveSelf` if `fabric_index` matches our own fabric.
+  Fails closed if `CurrentFabricIndex` cannot be read. There is intentionally no
+  force override.
+- **`Node::update_fabric_label(label: &str) -> Result<()>`** — invokes
+  `UpdateFabricLabel` on `OperationalCredentials` to relabel the **accessing
+  fabric** (i.e. our own fabric entry on this device). Takes no `fabric_index`
+  argument — the cluster command acts on the fabric of the session peer.
+- **`FabricDescriptor`** — new public type re-exported at the crate root. Fields:
+  `root_public_key: Vec<u8>`, `vendor_id: u16`, `fabric_id: u64`, `node_id: u64`,
+  `label: String`, `fabric_index: u8`.
+- **`Error::WouldRemoveSelf`** — returned by `remove_fabric` when the requested
+  index is our own.
+- **`Error::OperationalCredentialsRejected(u8)`** — returned by `remove_fabric`
+  and `update_fabric_label` when the device returns a non-success `NocStatus`
+  code; the raw status code is carried in the variant.
+
+#### Notes
+
+- `remove_fabric` and `update_fabric_label` are plain invokes (not timed); the
+  device returns a `NOCResponse` TLV and non-success codes surface as
+  `OperationalCredentialsRejected`. The `NocStatus` enum and the raw `opcreds`
+  module remain `pub(crate)` — only `FabricDescriptor` is re-exported.
+- The self-protection in `remove_fabric` reads `CurrentFabricIndex` (attr 0x0005)
+  from `OperationalCredentials` before issuing the invoke. If the read fails (e.g.
+  the device is offline or permission is denied), the function fails closed rather
+  than risking an accidental self-removal.
 
 ### [Unreleased] — M9-D1 commissioning window
 
