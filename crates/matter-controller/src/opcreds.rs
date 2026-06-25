@@ -1,10 +1,6 @@
 //! `OperationalCredentials` (0x003E) controller support: types and the pure
 //! Value codecs the fabric-management `Node` verbs compose. See M9-D2 plan.
 
-// These items are the Task 2 API surface consumed by Task 3+; they are not yet
-// called outside this module so clippy correctly flags them as dead code.
-#![allow(dead_code)]
-
 use crate::error::Error;
 use matter_codec::{Tag, Value};
 use matter_interaction::AttributePath;

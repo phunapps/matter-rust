@@ -480,3 +480,24 @@ Once both happy-path + tampered-DAC fixtures land, drop the
 `tests/state_machine_noc.rs`, and
 `tests/state_machine_attestation.rs` — they'll exercise the captured
 fixtures via the public API.
+
+## matter-clusters
+
+### Codegen scalar narrowing: `fabric-id` fields emitted as `u32` instead of `u64`
+
+**Status:** open. Documented residual from M9-D2 final review 2026-06-25.
+
+The generated `FabricDescriptorStruct.fabric_id` (and any other
+`fabric-id`-typed field produced by the codegen scalar table) is emitted as
+`u32`. `FabricId` is `uint64` in the Matter spec — a device sending a
+high-bit FabricId would fail decode. This is a codegen scalar-table narrowing
+bug affecting all `fabric-id` fields.
+
+Not yet impactful because `matter-controller` hand-parses `fabric_id` as `u64`
+via the raw `Value` path and does not consume the generated `FabricDescriptorStruct`
+for operational reads. No real-device regression observed.
+
+**Concrete deliverable:** fix the codegen scalar table to map `fabric-id` →
+`u64`, regenerate affected structs, update any decode/encode call sites. Revisit
+when the generated `OperationalCredentials` codec is wired into a typed read
+path.
