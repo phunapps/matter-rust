@@ -404,22 +404,7 @@ impl Node {
             cluster: crate::admin::ADMIN_COMMISSIONING_CLUSTER,
             command: crate::admin::CMD_OPEN_COMMISSIONING_WINDOW,
         };
-        match self.invoke_timed(path, fields, None).await? {
-            InvokeResult::Status(ImStatus::Success) => {}
-            InvokeResult::Status(ImStatus::Failure(code)) => {
-                return Err(Error::CommissioningWindowRejected(code));
-            }
-            InvokeResult::Status(_) => {
-                return Err(Error::Operational(
-                    "unrecognised IM status for OpenCommissioningWindow".into(),
-                ));
-            }
-            InvokeResult::Data { .. } => {
-                return Err(Error::Operational(
-                    "unexpected response command for OpenCommissioningWindow".into(),
-                ));
-            }
-        }
+        self.admin_timed_command(path, fields).await?;
         let (manual_code, qr_code) =
             crate::admin::onboarding_payload(passcode, discriminator, vendor_id, product_id)?;
         Ok(crate::admin::CommissioningWindow {
@@ -456,6 +441,65 @@ impl Node {
             opts.product_id,
         )
         .await
+    }
+
+    /// Open a *basic* commissioning window (reuses the device's original
+    /// passcode — no new onboarding payload). Timed invoke.
+    ///
+    /// # Errors
+    /// [`Error::CommissioningWindowRejected`] on device rejection, else an
+    /// interaction error.
+    pub async fn open_basic_commissioning_window(&self, timeout_s: u16) -> Result<(), Error> {
+        let fields = matter_codec::Value::Structure(vec![(
+            matter_codec::Tag::Context(0),
+            matter_codec::Value::Uint(u64::from(timeout_s)),
+        )]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::admin::ADMIN_COMMISSIONING_CLUSTER,
+            command: crate::admin::CMD_OPEN_BASIC_COMMISSIONING_WINDOW,
+        };
+        self.admin_timed_command(path, fields).await
+    }
+
+    /// Revoke any open commissioning window. Timed invoke. Returns `Ok(())`
+    /// even if no window was open (the device reports `WindowNotOpen`, which is
+    /// surfaced as [`Error::CommissioningWindowRejected`] only on a hard IM
+    /// failure).
+    ///
+    /// # Errors
+    /// [`Error::CommissioningWindowRejected`] on device rejection.
+    pub async fn revoke_commissioning(&self) -> Result<(), Error> {
+        let fields = matter_codec::Value::Structure(vec![]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::admin::ADMIN_COMMISSIONING_CLUSTER,
+            command: crate::admin::CMD_REVOKE_COMMISSIONING,
+        };
+        self.admin_timed_command(path, fields).await
+    }
+
+    /// Shared helper: timed-invoke an `AdminComm` command expecting a bare
+    /// success status. Maps `Success` to `Ok(())`, `Failure(code)` to
+    /// [`Error::CommissioningWindowRejected`], and any response command to an
+    /// operational error.
+    async fn admin_timed_command(
+        &self,
+        path: CommandPath,
+        fields: matter_codec::Value,
+    ) -> Result<(), Error> {
+        match self.invoke_timed(path, fields, None).await? {
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => {
+                Err(Error::CommissioningWindowRejected(code))
+            }
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unrecognised IM status for admin command".into(),
+            )),
+            InvokeResult::Data { .. } => {
+                Err(Error::Operational("unexpected response command".into()))
+            }
+        }
     }
 
     /// Subscribe to attribute reports for `attrs` and/or event reports for

@@ -4939,4 +4939,88 @@ mod tests {
         assert!(win.qr_code.is_none());
         device.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn open_basic_commissioning_window_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            build_invoke_status_success(),
+            /* expect_timed */ true,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .node(device_node_id)
+            .open_basic_commissioning_window(180)
+            .await
+            .expect("open basic");
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn revoke_commissioning_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            build_invoke_status_success(),
+            /* expect_timed */ true,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .node(device_node_id)
+            .revoke_commissioning()
+            .await
+            .expect("revoke");
+        device.await.unwrap();
+    }
 }
