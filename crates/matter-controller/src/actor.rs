@@ -5382,4 +5382,70 @@ mod tests {
             .expect("remove fabric 2 must succeed");
         device.await.unwrap();
     }
+
+    /// Fail-closed guard: when the device's reply does NOT contain
+    /// `CurrentFabricIndex` (here we reply with a different attribute on the
+    /// same cluster — attribute 0x0001 `NOCs` — so
+    /// `parse_current_fabric_index` returns `None`), `remove_fabric` must
+    /// return `Err(Error::Operational(_))` and must NOT send a `RemoveFabric`
+    /// invoke to the device.
+    ///
+    /// The loopback device is set to handle exactly ONE round-trip (the read).
+    /// If `remove_fabric` falls through and attempts a second round-trip (the
+    /// invoke), the device will have exited and the send will fail — the test
+    /// would panic rather than silently pass. The `echoes = 1` constraint
+    /// therefore also acts as a canary for the invoke-not-sent guarantee.
+    #[tokio::test]
+    async fn remove_fabric_fails_closed_when_fabric_index_unreadable() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Reply with a report for attribute 0x0001 (NOCs), NOT 0x0005
+        // (CurrentFabricIndex) — parse_current_fabric_index will return None.
+        let reply = build_report_data(
+            0,
+            crate::opcreds::OPERATIONAL_CREDENTIALS_CLUSTER,
+            0x0001, // NOCs — different attribute, not CurrentFabricIndex
+            &matter_codec::Value::Array(vec![]),
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            reply,
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let err = controller
+            .node(device_node_id)
+            .remove_fabric(2)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::Operational(_)),
+            "expected Operational error when CurrentFabricIndex unreadable, got {err:?}"
+        );
+        device.await.unwrap();
+    }
 }

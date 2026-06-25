@@ -547,6 +547,9 @@ impl Node {
     ///
     /// # Errors
     /// [`Error::WouldRemoveSelf`] if `fabric_index` is our own;
+    /// [`Error::Operational`] if the device does not return a readable
+    /// `CurrentFabricIndex` — the call fails without invoking `RemoveFabric` in
+    /// that case (fail-closed on a destructive operation);
     /// [`Error::OperationalCredentialsRejected`] if the device rejects it (e.g.
     /// 7 `InvalidFabricIndex`); else an interaction error.
     pub async fn remove_fabric(&self, fabric_index: u8) -> Result<(), Error> {
@@ -559,7 +562,16 @@ impl Node {
                 crate::opcreds::ATTR_CURRENT_FABRIC_INDEX,
             )])
             .await?;
-        if crate::opcreds::parse_current_fabric_index(&cur) == Some(fabric_index) {
+        // Fail CLOSED: if we cannot read CurrentFabricIndex we refuse to
+        // proceed. The equality guard `== Some(fabric_index)` would silently
+        // fall through when `parse_current_fabric_index` returns `None`,
+        // allowing RemoveFabric on an unverified index.
+        let cur_idx = crate::opcreds::parse_current_fabric_index(&cur).ok_or_else(|| {
+            Error::Operational(
+                "could not read CurrentFabricIndex; refusing remove_fabric for safety".into(),
+            )
+        })?;
+        if cur_idx == fabric_index {
             return Err(Error::WouldRemoveSelf);
         }
         let fields = Value::Structure(vec![(
