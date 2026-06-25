@@ -76,4 +76,14 @@ pub enum Error {
     /// a cluster status). The raw IM status byte is preserved.
     #[error("commissioning window command rejected (IM status {0:#04x})")]
     CommissioningWindowRejected(u8),
+
+    /// Refused to remove the controller's own fabric (would sever the CASE
+    /// session and orphan persisted device state). No `force` override exists.
+    #[error("refusing to remove our own fabric (would orphan the device)")]
+    WouldRemoveSelf,
+
+    /// An `OperationalCredentials` command returned a non-success
+    /// `NodeOperationalCertStatusEnum` (e.g. 7 `InvalidFabricIndex`). Raw code preserved.
+    #[error("operational-credentials command rejected (status {0})")]
+    OperationalCredentialsRejected(u8),
 }

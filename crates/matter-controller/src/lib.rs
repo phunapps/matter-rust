@@ -90,6 +90,7 @@ pub(crate) mod credentials;
 pub mod error;
 pub mod fabric;
 pub mod node;
+pub(crate) mod opcreds;
 pub mod snapshot;
 pub mod state;
 pub mod store;
@@ -111,6 +112,7 @@ pub use matter_interaction::{
     EventReportItem, EventTimestamp, ImStatus, ReadPath,
 };
 pub use node::{InvokeResult, Node};
+pub use opcreds::FabricDescriptor;
 pub use state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
 pub use store::{ControllerStore, FileStore, StoreError};
 pub use subscription::{AttributeReport, Subscription, SubscriptionEvent};
