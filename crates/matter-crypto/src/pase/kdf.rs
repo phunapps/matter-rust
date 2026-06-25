@@ -215,6 +215,29 @@ pub(crate) fn derive_l(w1: &Scalar) -> [u8; 65] {
     out
 }
 
+/// Serialize the SPAKE2+ PAKE passcode verifier `w0 ‖ L` (97 bytes) for a
+/// setup `passcode`, as carried by the `AdministratorCommissioning`
+/// `OpenCommissioningWindow` command's `PAKEPasscodeVerifier` field
+/// (Matter Core Spec §3.10 / Cluster spec §11.18).
+///
+/// `w0` is the 32-byte big-endian PBKDF2-derived scalar; `L = w1·P` is the
+/// 65-byte SEC1-uncompressed P-256 point. This is a pure function of
+/// `(passcode, salt, iterations)`; it does **not** run a PASE session.
+///
+/// # Errors
+/// Returns [`Error::PbkdfIterationsTooLow`]/`…TooHigh`/`PbkdfSaltLengthInvalid`
+/// if `iterations`/`salt` are out of the spec range, or a derivation error.
+pub fn pake_passcode_verifier(passcode: u32, salt: &[u8], iterations: u32) -> Result<[u8; 97]> {
+    validate_params(iterations, salt)?;
+    let (w0, w1) = derive_w0_w1(passcode, salt, iterations)?;
+    let l = derive_l(&w1);
+    let w0_be: p256::FieldBytes = w0.to_bytes();
+    let mut out = [0u8; 97];
+    out[..32].copy_from_slice(&w0_be);
+    out[32..].copy_from_slice(&l);
+    Ok(out)
+}
+
 /// Thin wrapper around ring's HKDF-Expand for use by `spake2plus.rs`.
 ///
 /// `prk` is the pseudo-random key (typically derived from the SPAKE2+
@@ -461,5 +484,30 @@ mod tests {
         hkdf_expand(&prk, b"SessionKeys", &mut out_48).unwrap();
         // The first 16 bytes of a 48-byte expand must equal a standalone 16-byte expand.
         assert_eq!(&out_48[..16], &out_16[..]);
+    }
+
+    // ─── pake_passcode_verifier ───────────────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::unreadable_literal)] // 123456 is the raw Matter test-vector passcode; separating it would obscure the match.
+    fn pake_passcode_verifier_matches_known_params_vector() {
+        // From test-vectors/pase/handshake-known-params.json
+        let salt = hex_to_vec("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd");
+        let w0_hex = "d8e14a916650ff651dcd0c34d15fc1ed9b8232d550827be4816cc8e0fbd31bfa";
+        let l_hex = "04cd104598fca43b1a17bcc78d51ad2ec542bdd3f8541ecfbe5b66c7ea714f505d7e4626053087b2980c37876053c431600662fe09af442d6ca49525334dbf59e5";
+        let mut expected = hex_to_vec(w0_hex);
+        expected.extend_from_slice(&hex_to_vec(l_hex));
+
+        let got = super::pake_passcode_verifier(123456, &salt, 2000).unwrap();
+        assert_eq!(got.len(), 97);
+        assert_eq!(&got[..], &expected[..]);
+    }
+
+    // Minimal local hex decoder for the test (no new dep).
+    fn hex_to_vec(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 }

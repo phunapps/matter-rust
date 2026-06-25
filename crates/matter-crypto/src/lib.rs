@@ -49,4 +49,32 @@ pub use case::{
 };
 pub use error::{Error, Result};
 pub use operational::{derive_compressed_fabric_id, derive_operational_ipk};
-pub use pase::{PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys, PaseVerifier};
+pub use pase::{
+    pake_passcode_verifier, PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys,
+    PaseVerifier,
+};
+
+/// Fill `buf` with cryptographically secure random bytes (ring `SystemRandom`).
+///
+/// # Errors
+/// Returns [`Error::Rng`] if the system RNG fails.
+pub fn random_bytes(buf: &mut [u8]) -> Result<()> {
+    use ring::rand::SecureRandom;
+    ring::rand::SystemRandom::new()
+        .fill(buf)
+        .map_err(|_| Error::Rng)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
+mod tests {
+    #[test]
+    fn random_bytes_fills_and_varies() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        crate::random_bytes(&mut a).unwrap();
+        crate::random_bytes(&mut b).unwrap();
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(a, b); // collision probability ~2^-256
+    }
+}

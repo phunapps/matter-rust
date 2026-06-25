@@ -142,6 +142,10 @@ pub enum Error {
     #[error("CASE: resumption MAC tag did not verify")]
     ResumptionMacMismatch,
 
+    /// Secure random generation failed.
+    #[error("secure random generation failed")]
+    Rng,
+
     /// `CaseSigner` returned a `SignerError`.
     #[error("CASE: signing failed — {0}")]
     SigningFailed(#[source] crate::case::signer::SignerError),

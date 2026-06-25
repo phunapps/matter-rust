@@ -11,6 +11,7 @@ pub(crate) mod prover;
 pub(crate) mod spake2plus;
 pub(crate) mod verifier;
 
+pub use kdf::pake_passcode_verifier;
 pub use prover::PaseProver;
 pub use verifier::PaseVerifier;
 
