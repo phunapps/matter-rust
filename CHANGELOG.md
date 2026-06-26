@@ -1151,13 +1151,20 @@ fixture file; the test assertions remain stable.
   confirmed against connectedhomeip `CHIPCryptoPAL.cpp::DeriveGroupSessionId`
   and `TestGroup_SessionIdDerivation`), output = 2 bytes interpreted as
   big-endian `u16`, no bit-masking applied. Re-exported at the crate root.
-- **`group_multicast_ipv6(compressed_fabric_id: &[u8; 8], group_id: u16) -> std::net::Ipv6Addr`** —
+- **`group_multicast_ipv6(fabric_id: u64, group_id: u16) -> std::net::Ipv6Addr`** —
   constructs the operational group multicast IPv6 address (Matter Core Spec
-  §2.5.6): `ff35:0040:fd<cfid>:00<group_id>`. Pure byte assembly; no HKDF
-  or crypto primitive involved. Re-exported at the crate root. Byte-parity
+  §2.5.6): `ff35:0040:fd<fabric_id_be>:00<group_id>`. Takes the **raw
+  operational Fabric ID** (`u64`) — NOT the Compressed Fabric Identifier
+  (the 8-byte HKDF output of `derive_compressed_fabric_id`). Mirrors chip's
+  `BuildMatterPerGroupMulticastAddress` which takes `FabricId` (raw `uint64_t`)
+  and writes its 8 big-endian bytes into the prefix. Pure byte assembly; no
+  HKDF or crypto primitive involved. Re-exported at the crate root. Byte-parity
   confirmed against connectedhomeip
   `PeerAddress.h::BuildMatterPerGroupMulticastAddress` and
-  `TestPeerAddress.cpp::TestPeerAddressMulticast`.
+  `TestPeerAddress.cpp::TestPeerAddressMulticast`; a second KAT
+  (fabric `0x2906C908D115D362`, group `0x0007`) regression-locks the
+  raw-vs-compressed distinction (compressed id `87e1b004e235a130` would produce
+  a different address).
 - The **operational group key** itself reuses the existing
   `derive_operational_ipk(epoch_key, compressed_fabric_id)` — the same
   `"GroupKey v1.0"` HKDF derivation that produces the CASE Sigma1 IPK also

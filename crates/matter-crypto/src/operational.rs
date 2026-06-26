@@ -187,36 +187,44 @@ pub fn derive_group_session_id(operational_group_key: &[u8; 16]) -> Result<u16> 
     Ok(u16::from_be_bytes(out))
 }
 
-/// Derive the operational group multicast IPv6 address for a given
-/// `compressed_fabric_id` and `group_id` (Matter Core Spec §2.5.6).
+/// Derive the operational group multicast IPv6 address for a given raw
+/// operational `fabric_id` and `group_id` (Matter Core Spec §2.5.6).
+///
+/// **`fabric_id` must be the raw operational Fabric ID (a `u64`), NOT the
+/// Compressed Fabric Identifier** (which is the 8-byte HKDF output of
+/// [`derive_compressed_fabric_id`]).  Chip's
+/// `BuildMatterPerGroupMulticastAddress` takes `FabricId` (a raw `uint64_t`)
+/// and writes its 8 big-endian bytes directly into the address prefix; the
+/// compressed fabric id is a different value and would produce a wrong address.
 ///
 /// The 16-byte address layout (confirmed byte-for-byte against
 /// connectedhomeip `PeerAddress.h::BuildMatterPerGroupMulticastAddress`
 /// and its KAT in `TestPeerAddress.cpp`):
 ///
-/// | Bytes    | Value                              |
-/// |----------|-------------------------------------|
-/// | \[0\]     | `0xff` — multicast                 |
-/// | \[1\]     | `0x35` — flags 3 (non-perm, prefix) + scope 5 (site-local) |
-/// | \[2\]     | `0x00`                              |
-/// | \[3\]     | `0x40` — prefix length 64           |
-/// | \[4\]     | `0xfd` — ULA locally-assigned designator |
-/// | \[5..13\] | `compressed_fabric_id[0..8]` (big-endian) |
-/// | \[13\]    | `0x00`                              |
-/// | \[14..16\]| `group_id` in big-endian            |
+/// | Bytes         | Value                                                        |
+/// |---------------|--------------------------------------------------------------|
+/// | \[0\]         | `0xff` — multicast                                           |
+/// | \[1\]         | `0x35` — flags 3 (non-perm, prefix) + scope 5 (site-local)  |
+/// | \[2\]         | `0x00`                                                       |
+/// | \[3\]         | `0x40` — prefix length 64                                    |
+/// | \[4\]         | `0xfd` — ULA locally-assigned designator                     |
+/// | bytes 5–12 (8 bytes) | raw operational Fabric ID in big-endian — NOT the compressed fabric id |
+/// | \[13\]        | `0x00`                                                       |
+/// | \[14..16\]    | `group_id` in big-endian                                     |
 ///
 /// No HKDF or crypto primitive is involved — this is pure byte assembly.
-/// Vector: `fabric_id = 0xa1a2a4a8b1b2b4b8`, `group_id = 0xe10f` →
+/// Vector: `fabric_id = 0xa1a2a4a8b1b2b4b8u64`, `group_id = 0xe10f` →
 /// `ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f`.
 #[must_use]
-pub fn group_multicast_ipv6(compressed_fabric_id: &[u8; 8], group_id: u16) -> std::net::Ipv6Addr {
+pub fn group_multicast_ipv6(fabric_id: u64, group_id: u16) -> std::net::Ipv6Addr {
+    let fabric_bytes = fabric_id.to_be_bytes();
     let mut b = [0u8; 16];
     b[0] = 0xff;
     b[1] = 0x35; // multicast flags=3 (non-permanent, has-prefix), scope=5 (site-local)
     b[2] = 0x00;
     b[3] = 0x40; // prefix length 64
     b[4] = 0xfd; // ULA locally-assigned designator
-    b[5..13].copy_from_slice(compressed_fabric_id);
+    b[5..13].copy_from_slice(&fabric_bytes); // raw Fabric ID, big-endian — NOT compressed fabric id
     b[13] = 0x00;
     b[14..16].copy_from_slice(&group_id.to_be_bytes());
     std::net::Ipv6Addr::from(b)
@@ -272,9 +280,11 @@ mod tests {
         ];
         assert_eq!(derive_group_session_id(&op_key_2).unwrap(), 0x0c48u16);
 
-        // KAT #3 (anchor): op key from the matter.js-validated chain above
-        // (operational_ipk_matches_matter_js test), session id computed by the
-        // same independent Python HKDF — bridges the two test chains.
+        // KAT #3 (anchor): op key equals the `derive_operational_ipk` output
+        // asserted in `operational_ipk_matches_matter_js`; per Matter §4.15.2
+        // that same HKDF output IS the operational group key.  Session id
+        // computed by the same independent Python HKDF — bridges the two test
+        // chains.
         let op_key_anchor: [u8; 16] = [
             0xda, 0xee, 0x42, 0x4f, 0x43, 0x46, 0x77, 0xaf, 0xb5, 0x94, 0x97, 0x06, 0x57, 0x2b,
             0x4c, 0xcb,
@@ -301,22 +311,37 @@ mod tests {
         assert_eq!(got, expected);
     }
 
-    /// Known-answer test for [`group_multicast_ipv6`] against the independent
+    /// Known-answer tests for [`group_multicast_ipv6`] against the independent
     /// connectedhomeip vector from `TestPeerAddress.cpp::TestPeerAddressMulticast`
-    /// (hardcoded `expected[]` in that file).
+    /// (hardcoded `expected[]` in that file), plus a distinguishing KAT that
+    /// regression-locks the raw-vs-compressed fabric id distinction.
     ///
-    /// Layout confirmed: cfid occupies bytes [5..13], `group_id` big-endian at
-    /// [14..16]; byte [4]=0xfd (ULA), byte [13]=0x00.
-    /// Vector stored at `test-vectors/operational/group-crypto.json`
-    /// (`multicast_ipv6_vectors[0]`).
+    /// Layout confirmed: raw fabric id occupies bytes 5–12 (big-endian),
+    /// `group_id` big-endian at bytes 14–15; byte [4]=0xfd (ULA), byte [13]=0x00.
+    /// Vectors stored at `test-vectors/operational/group-crypto.json`
+    /// (`multicast_ipv6_vectors`).
     #[test]
     fn group_multicast_ipv6_matches_vector() {
         use std::net::Ipv6Addr;
-        // chip TestPeerAddressMulticast: fabric_id=0xa1a2a4a8b1b2b4b8, group=0xe10f
+
+        // KAT #1 — chip TestPeerAddressMulticast:
+        // raw fabric_id = 0xa1a2a4a8b1b2b4b8u64, group = 0xe10f
         // → ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f
-        let cfid: [u8; 8] = [0xa1, 0xa2, 0xa4, 0xa8, 0xb1, 0xb2, 0xb4, 0xb8];
-        let got = group_multicast_ipv6(&cfid, 0xe10f);
+        let got = group_multicast_ipv6(0xa1a2_a4a8_b1b2_b4b8_u64, 0xe10f);
         let expected: Ipv6Addr = "ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f".parse().unwrap();
         assert_eq!(got, expected);
+
+        // KAT #2 — distinguishing raw-vs-compressed:
+        // raw fabric_id = 0x2906C908D115D362u64, group = 0x0007
+        // fabric bytes BE = [29,06,c9,08,d1,15,d3,62]
+        // → ff35:0040:fd29:06c9:08d1:15d3:6200:0007
+        //
+        // The compressed fabric id for this fabric (from compressed_fabric_id_matches_spec_vector)
+        // is [87,e1,b0,04,e2,35,a1,30], which would produce a DIFFERENT address
+        // (ff35:0040:fd87:e1b0:04e2:35a1:3000:0007) — so this KAT locks that we
+        // use the raw fabric id, not the compressed one.
+        let got2 = group_multicast_ipv6(0x2906_C908_D115_D362u64, 0x0007);
+        let expected2: Ipv6Addr = "ff35:0040:fd29:06c9:08d1:15d3:6200:0007".parse().unwrap();
+        assert_eq!(got2, expected2);
     }
 }
