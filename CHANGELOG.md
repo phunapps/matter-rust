@@ -1140,6 +1140,48 @@ fixture file; the test assertions remain stable.
 
 ## matter-crypto
 
+### [Unreleased] — M9-E2 operational group crypto
+
+#### Added
+
+- **`derive_group_session_id(operational_group_key: &[u8; 16]) -> Result<u16>`** —
+  derives the 16-bit group session id from a 16-byte operational group key
+  (Matter Core Spec §4.15.2). KDF: HKDF-SHA256, IKM = operational group key,
+  salt = empty, info = `"GroupKeyHash"` (12 bytes, no ` v1.0` suffix —
+  confirmed against connectedhomeip `CHIPCryptoPAL.cpp::DeriveGroupSessionId`
+  and `TestGroup_SessionIdDerivation`), output = 2 bytes interpreted as
+  big-endian `u16`, no bit-masking applied. Re-exported at the crate root.
+- **`group_multicast_ipv6(compressed_fabric_id: &[u8; 8], group_id: u16) -> std::net::Ipv6Addr`** —
+  constructs the operational group multicast IPv6 address (Matter Core Spec
+  §2.5.6): `ff35:0040:fd<cfid>:00<group_id>`. Pure byte assembly; no HKDF
+  or crypto primitive involved. Re-exported at the crate root. Byte-parity
+  confirmed against connectedhomeip
+  `PeerAddress.h::BuildMatterPerGroupMulticastAddress` and
+  `TestPeerAddress.cpp::TestPeerAddressMulticast`.
+- The **operational group key** itself reuses the existing
+  `derive_operational_ipk(epoch_key, compressed_fabric_id)` — the same
+  `"GroupKey v1.0"` HKDF derivation that produces the CASE Sigma1 IPK also
+  produces the operational group key per spec §4.15.2. No new function needed.
+
+#### Test vectors
+
+- `test-vectors/operational/group-crypto.json` — known-answer vectors sourced
+  from **connectedhomeip** (`TestGroup_SessionIdDerivation`,
+  `TestPeerAddressMulticast`), independently verified via a Python3
+  HKDF-SHA256 reproduction. Two independent sources; no self-derived vectors.
+
+#### Release gate — external cryptographic review required
+
+> **RELEASE GATE:** the group-message crypto path — the E2 derivations
+> (`derive_group_session_id`, `group_multicast_ipv6`, `derive_operational_ipk`
+> used as group key) **plus** the E3 group-secured message framing (AES-CCM
+> group message encode, group message counter) — **must receive external
+> cryptographic review before any release that ships group messaging**.
+> This follows the same CLAUDE.md crypto-protocol rule applied to PASE (M3)
+> and CASE (M4). Development continues unblocked; this is a release-time gate,
+> not a build gate. Flag this section when preparing a release that enables
+> group send.
+
 ### [Unreleased] — M9-D1 commissioning window helpers
 
 #### Added

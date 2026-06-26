@@ -1,6 +1,12 @@
 //! Operational identity derivations (Matter Core Spec §4.3).
 //!
 //! Composes `ring`'s HKDF — this crate never implements primitives.
+//!
+//! **Release gate:** the group-message crypto path — [`derive_group_session_id`],
+//! [`group_multicast_ipv6`], and [`derive_operational_ipk`] used as the
+//! operational group key — plus the E3 group-secured framing must receive
+//! external cryptographic review before any release that ships group messaging
+//! (CLAUDE.md crypto-protocol rule; same gate as PASE/CASE).
 
 use ring::hkdf;
 
