@@ -6212,6 +6212,109 @@ mod tests {
         device.await.unwrap();
     }
 
+    /// `write_acl` multi-chunk path exercised THROUGH the real `write_acl` dispatch.
+    ///
+    /// Uses `write_acl_with_budget` (the test-only budget seam) with a tiny budget
+    /// (40 bytes) so the entries split into ≥2 chunks. This ensures the
+    /// `if chunks.len() == 1 { … } else { chunked_write(…) }` branch inside
+    /// `write_acl` is exercised: a miswired dispatch would be caught here, unlike
+    /// `write_acl_multi_chunk_reassembles` which calls `chunked_write` directly.
+    ///
+    /// The lockout guard still runs first; we include an Administer/CASE entry
+    /// for our node id so the guard passes.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn write_acl_multi_chunk_via_dispatch() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // loopback_harness sets commissioner_node_id = 1.  Administer/CASE/subject=1
+        // ensures the lockout guard passes.  Three entries with budget=40 force ≥2 chunks.
+        let entries = vec![
+            crate::acl::AclEntry {
+                privilege: crate::acl::AclPrivilege::Administer,
+                auth_mode: crate::acl::AclAuthMode::Case,
+                subjects: Some(vec![1u64]),
+                targets: None,
+                fabric_index: None,
+            },
+            crate::acl::AclEntry {
+                privilege: crate::acl::AclPrivilege::Operate,
+                auth_mode: crate::acl::AclAuthMode::Case,
+                subjects: Some(vec![2u64]),
+                targets: None,
+                fabric_index: None,
+            },
+            crate::acl::AclEntry {
+                privilege: crate::acl::AclPrivilege::View,
+                auth_mode: crate::acl::AclAuthMode::Case,
+                subjects: Some(vec![3u64]),
+                targets: None,
+                fabric_index: None,
+            },
+        ];
+
+        // Compute expected chunk count so the device mock knows how many to receive.
+        let acl_path = matter_interaction::AttributePath {
+            endpoint: 0,
+            cluster: crate::acl::ACCESS_CONTROL_CLUSTER,
+            attribute: crate::acl::ATTR_ACL,
+        };
+        let element_tlvs: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|e| crate::node::value_to_tlv(&crate::acl::acl_entry_value(e)).expect("encode"))
+            .collect();
+        let expected_chunks =
+            matter_interaction::build_list_write_chunks(acl_path, &element_tlvs, 40, false).len();
+        assert!(
+            expected_chunks >= 2,
+            "test requires multi-chunk write; got {expected_chunks} chunk(s)"
+        );
+
+        let device = tokio::spawn(run_chunked_write_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x62,
+            expected_chunks,
+            build_write_response_acl_success(),
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // Drive the multi-chunk path THROUGH write_acl's own dispatch branch.
+        // Public write_acl uses budget=800; this seam forces the else-branch.
+        let statuses = controller
+            .node(device_node_id)
+            .write_acl_with_budget(&entries, 40)
+            .await
+            .expect("write_acl_with_budget must succeed");
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
+        assert_eq!(statuses[0].0.cluster, crate::acl::ACCESS_CONTROL_CLUSTER);
+        assert_eq!(statuses[0].0.attribute, crate::acl::ATTR_ACL);
+
+        device.await.unwrap();
+    }
+
     /// Byte-parity test: `build_list_write_chunks` for a one-entry ACL (Administer/CASE/
     /// subjects=[1]/targets=null) with a large budget produces bytes matching the
     /// spec-derived fixture at `test-vectors/acl/write_acl_single_chunk.json`.

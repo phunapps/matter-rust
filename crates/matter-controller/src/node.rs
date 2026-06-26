@@ -48,10 +48,13 @@ pub enum InvokeResult {
 
 /// Encode a `Value` into a standalone anonymous-tagged TLV blob.
 ///
+/// Exposed as `pub(crate)` so tests in sibling modules can encode ACL entry
+/// values for chunk-count calculations without reaching through the public API.
+///
 /// # Errors
 ///
 /// Returns [`Error::Codec`] if the TLV writer fails.
-fn value_to_tlv(value: &Value) -> Result<Vec<u8>, Error> {
+pub(crate) fn value_to_tlv(value: &Value) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.write_value(Tag::Anonymous, value)?;
@@ -478,6 +481,32 @@ impl Node {
         &self,
         entries: &[crate::acl::AclEntry],
     ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
+        self.write_acl_with_budget(entries, WRITE_CHUNK_BUDGET)
+            .await
+    }
+
+    /// Inner implementation of [`write_acl`](Node::write_acl) with an injectable
+    /// per-chunk byte budget.
+    ///
+    /// The lockout guard runs before any bytes are sent to the device, regardless
+    /// of the budget. `budget` controls the `build_list_write_chunks` split point;
+    /// the production verb always passes [`WRITE_CHUNK_BUDGET`] (800 bytes).
+    ///
+    /// Exposed as `pub(crate)` so tests can force a small budget (e.g. 40 bytes)
+    /// to exercise the multi-chunk dispatch branch through `write_acl` itself
+    /// rather than calling `chunked_write` directly.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclWouldLockOut`] if `entries` contains no Administer/CASE entry
+    /// covering our commissioner node id; no bytes are sent to the device in that
+    /// case. Otherwise returns an interaction error or a per-path device status.
+    pub(crate) async fn write_acl_with_budget(
+        &self,
+        entries: &[crate::acl::AclEntry],
+        budget: usize,
+    ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
+        // Lockout guard MUST run before any network I/O.
         let our = self.commissioner_node_id().await?;
         if !crate::acl::acl_retains_admin(entries, our) {
             return Err(Error::AclWouldLockOut);
@@ -491,7 +520,7 @@ impl Node {
             .iter()
             .map(|e| value_to_tlv(&crate::acl::acl_entry_value(e)))
             .collect::<Result<_, _>>()?;
-        let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
+        let chunks = build_list_write_chunks(path, &element_tlvs, budget, false);
         let resp = if chunks.len() == 1 {
             // Single message: reuse the plain Action path (byte-identical to a
             // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
