@@ -197,10 +197,6 @@ fn target_value(t: &AclTarget) -> Value {
 /// fabric-index=254). The `fabric_index` field is omitted when `None` (write
 /// path: the device fills it in for the accessing fabric).
 pub(crate) fn acl_entry_value(e: &AclEntry) -> Value {
-    #[allow(clippy::cast_possible_truncation)]
-    // Privilege and AuthMode raw values are spec-typed as uint8 (1–5 and 1–3
-    // respectively); u64::from(u8) then stored as Value::Uint — no truncation
-    // on this path, but the allow covers the to_raw() -> u8 call site.
     let mut m = vec![
         (
             Tag::Context(TAG_PRIVILEGE),
@@ -294,8 +290,9 @@ fn parse_entry(v: &Value) -> Option<AclEntry> {
 
 /// Parse the `ACL` list attribute (0x0000) from a read result.
 ///
-/// Searches `reports` for the attribute path whose `attribute` field equals
-/// [`ATTR_ACL`] and decodes each `AccessControlEntryStruct` inside it.
+/// Searches `reports` for the attribute path whose `cluster` field equals
+/// [`ACCESS_CONTROL_CLUSTER`] and whose `attribute` field equals [`ATTR_ACL`],
+/// then decodes each `AccessControlEntryStruct` inside it.
 /// Malformed entries are silently skipped. Returns an empty `Vec` when the
 /// attribute is absent or contains no decodable entries (infallible).
 pub(crate) fn parse_acl(reports: &[(AttributePath, Value)]) -> Vec<AclEntry> {
