@@ -30,6 +30,12 @@
 //!   fabric table as [`Vec<FabricDescriptor>`]; [`Node::remove_fabric`] removes a
 //!   fabric by index (self-protected: returns [`Error::WouldRemoveSelf`] for our
 //!   own fabric); [`Node::update_fabric_label`] relabels the accessing fabric.
+//! - **ACL management** — [`Node::read_acl`] returns the device's
+//!   `AccessControl.Acl` list as [`Vec<AclEntry>`]; [`Node::write_acl`] replaces it
+//!   atomically (single-chunk) or via a multi-chunk `MoreChunkedMessages` sequence
+//!   (large lists), with a lockout guard that returns [`Error::AclWouldLockOut`]
+//!   before sending any bytes if the new list would drop our own Administer/CASE
+//!   access.
 //!
 //! # Quickstart
 //!

@@ -113,6 +113,23 @@ frozen input the M7.3 codegen will consume for `matter-clusters`.
 
 ## matter-interaction
 
+### [Unreleased] — M9-D3 chunked list-write (B4)
+
+#### Added
+
+- **`build_list_write_chunks(path, element_tlvs, budget, timed) -> Vec<Vec<u8>>`** —
+  the general chunked list-write mechanism (B4). Greedily packs pre-encoded element
+  TLVs into `WriteRequestMessage` frames, emitting the first frame as a
+  `ReplaceAll` (partial list, replaces everything seen so far) and subsequent
+  frames as `AppendItem` requests, all with `MoreChunkedMessages` set on every
+  frame except the last. When all elements fit a single frame the output is a
+  single-element `Vec` whose bytes are **byte-identical** to
+  `build_write_request(&[AttributeWriteRequest { path, value_tlv: <full-array> }])`,
+  so the single-chunk path carries no overhead. An empty `element_tlvs` yields a
+  single empty-array `ReplaceAll`. Accepts a caller-supplied `budget` (maximum
+  frame size in bytes) and a `timed` flag that propagates to the `TimedRequest`
+  header field.
+
 ### [Unreleased] — M9-B1 event reads, M9-B2 event subscribe, M9-B3 timed interactions, M9-B5 multi-command invoke
 
 #### Added
@@ -189,6 +206,55 @@ unchanged — its full test suite passes with zero test edits.
   variants map to generic FAILURE (0x01), never success.
 
 ## matter-controller
+
+### [Unreleased] — M9-D3 ACL read/write
+
+#### Added
+
+- **`Node::read_acl() -> Result<Vec<AclEntry>>`** — reads `AccessControl.Acl`
+  (cluster 0x001F, attribute 0x0000, endpoint 0) on the accessing fabric and
+  returns the decoded entry list. Uses the existing chunked-read path; always
+  safe to call (read-only, no guard required).
+- **`Node::write_acl(entries: &[AclEntry]) -> Result<Vec<(AttributePath, ImStatus)>>`** —
+  replaces the device's ACL list atomically. When all entries fit one
+  `WriteRequestMessage` the write is byte-identical to a plain `write` call
+  and transparently upgrades through the `NEEDS_TIMED_INTERACTION` (0xc6) path
+  when required. When the encoded list exceeds the per-chunk budget (800 bytes),
+  the write is split across multiple frames using the B4 chunked-write mechanism
+  (`MoreChunkedMessages` + `ReplaceAll`/`AppendItem` sequence).
+  **Lockout guard:** before sending any bytes, `write_acl` fetches the
+  commissioner node id via the actor and checks that `entries` contains at least
+  one `Administer`/`Case` entry covering our node id. If the check fails it
+  returns `Error::AclWouldLockOut` immediately — no network I/O occurs.
+- **`AclEntry`** — public struct re-exported at the crate root. Fields:
+  `privilege: AclPrivilege`, `auth_mode: AclAuthMode`,
+  `subjects: Option<Vec<u64>>` (`None` = wildcard), `targets: Option<Vec<AclTarget>>`
+  (`None` = wildcard), `fabric_index: Option<u8>` (omit on write; always
+  `Some` on read). `#[non_exhaustive]`.
+- **`AclTarget`** — public struct re-exported at the crate root. Fields:
+  `cluster: Option<u32>`, `endpoint: Option<u16>`, `device_type: Option<u32>`
+  (each `None` = wildcard). `#[non_exhaustive]`.
+- **`AclPrivilege`** — public enum re-exported at the crate root: `View`,
+  `ProxyView`, `Operate`, `Manage`, `Administer`, `Unknown(u8)`. `#[non_exhaustive]`.
+- **`AclAuthMode`** — public enum re-exported at the crate root: `Pase`, `Case`,
+  `Group`, `Unknown(u8)`. `#[non_exhaustive]`.
+- **`Error::AclWouldLockOut`** — returned by `write_acl` when the proposed entry
+  list would strip our own Administer/CASE access. The guard fires client-side
+  (no bytes sent) so there is no risk of accidentally orphaning the device.
+
+#### Notes
+
+- Internal actor primitives `Command::ChunkedWrite` and `Command::CommissionerNodeId`
+  support `write_acl`: `ChunkedWrite` drives the multi-frame send loop against the
+  device, and `CommissionerNodeId` retrieves the controller's node id for the
+  lockout predicate. Both remain `pub(crate)`.
+- The `acl` module (`pub(crate)`) contains the encoding/parsing helpers
+  (`acl_entry_value`, `parse_acl`, `acl_retains_admin`) and the cluster/attribute
+  constants. Only the four public types and the error variant are part of the
+  stable API.
+- Multi-chunk writes are validated against a synthetic in-process fixture (loopback)
+  and by `write_acl_with_budget` tests with an injected small budget. Real-device
+  validation covers the single-chunk path only (see `docs/runbooks/m9-d3-acl.md`).
 
 ### [Unreleased] — M9-D2 fabric management
 
