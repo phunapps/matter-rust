@@ -73,6 +73,28 @@ pub fn derive_compressed_fabric_id(root_public_key: &[u8; 65], fabric_id: u64) -
 /// §4.15.2, `GroupKey v1.0`).
 const GROUP_KEY_INFO: &[u8] = b"GroupKey v1.0";
 
+/// HKDF info label for group session-id derivation.
+///
+/// The chip source comment says "`GroupKeyHash` v1.0", but the actual
+/// `kGroupKeyHashInfo[]` byte array in `CHIPCryptoPAL.cpp` contains only the
+/// 12-byte ASCII string `"GroupKeyHash"` — no ` v1.0` suffix.  Confirmed by
+/// connectedhomeip `TestGroup_SessionIdDerivation` KATs and an independent
+/// Python HKDF-SHA256 reproduction; see
+/// `test-vectors/operational/group-crypto.json` (`_session_id_kdf`).
+const GROUP_SESSION_ID_INFO: &[u8] = b"GroupKeyHash";
+
+/// `KeyType` adapter for a fixed 2-byte HKDF output.
+///
+/// Mirrors [`Len8`] / [`Len16`] above; required because `ring::hkdf::Prk::expand`
+/// enforces the output length at the type level.
+struct Len2;
+
+impl hkdf::KeyType for Len2 {
+    fn len(&self) -> usize {
+        2
+    }
+}
+
 /// `KeyType` adapter for a fixed 16-byte HKDF output.
 struct Len16;
 
@@ -121,6 +143,44 @@ pub fn derive_operational_ipk(
     Ok(out)
 }
 
+/// Derive the 16-bit **group session id** from a 16-byte operational group key
+/// (Matter Core Spec §4.15.2).
+///
+/// The group session id identifies which group key a group message was
+/// encrypted with.  It is embedded in the Group Message Counter header so
+/// receivers can locate the correct decryption key without trying all of them.
+///
+/// KDF parameters (verified byte-for-byte against connectedhomeip
+/// `CHIPCryptoPAL.cpp::DeriveGroupSessionId` and `TestGroup_SessionIdDerivation`):
+///
+/// - **IKM**: the 16-byte operational group key.
+/// - **Salt**: empty (`&[]`).
+/// - **Info**: the 12-byte ASCII literal `"GroupKeyHash"` (the chip source
+///   comment says "`GroupKeyHash` v1.0", but the actual byte array carries no
+///   ` v1.0` suffix; confirmed by independent Python HKDF reproduction).
+/// - **Output length**: 2 bytes, interpreted as a big-endian `u16`.
+///   No bit-masking or OR-ing is applied.
+///
+/// # Errors
+///
+/// Returns [`Error::KeyDerivationFailed`] if the internal HKDF `expand` or
+/// `fill` call fails (effectively unreachable for the fixed 2-byte output).
+pub fn derive_group_session_id(operational_group_key: &[u8; 16]) -> Result<u16> {
+    // Salt is empty per spec (connectedhomeip DeriveGroupSessionId uses a
+    // zero-length salt, confirmed in test-vectors/operational/group-crypto.json).
+    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]).extract(operational_group_key);
+
+    let okm = prk
+        .expand(&[GROUP_SESSION_ID_INFO], Len2)
+        .map_err(|_| Error::KeyDerivationFailed)?;
+
+    let mut out = [0u8; 2];
+    okm.fill(&mut out).map_err(|_| Error::KeyDerivationFailed)?;
+
+    // Big-endian u16 — no masking, no bit-set; raw HKDF output per spec.
+    Ok(u16::from_be_bytes(out))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -141,6 +201,44 @@ mod tests {
         let fabric_id: u64 = 0x2906_C908_D115_D362;
         let got = derive_compressed_fabric_id(&root_pub, fabric_id).unwrap();
         assert_eq!(got, [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30]);
+    }
+
+    /// Known-answer tests for [`derive_group_session_id`].
+    ///
+    /// Inputs and expected outputs are taken from connectedhomeip
+    /// `TestChipCryptoPAL.cpp::TestGroup_SessionIdDerivation`
+    /// (`kGroupOperationalKey1`/`kGroupSessionId1` and
+    /// `kGroupOperationalKey2`/`kGroupSessionId2`), plus one anchor value
+    /// derived from the same chip test-vector chain via an independent
+    /// Python3 HKDF-SHA256 reproduction (no Rust involved); all three stored in
+    /// `test-vectors/operational/group-crypto.json`.
+    ///
+    /// Confirms: info = bare `"GroupKeyHash"` (12 bytes), salt = empty, L = 2,
+    /// output interpreted as big-endian `u16`, no bit-masking applied.
+    #[test]
+    fn group_session_id_matches_vector() {
+        // KAT #1: chip kGroupOperationalKey1 -> kGroupSessionId1 (0x6c80).
+        let op_key_1: [u8; 16] = [
+            0x1f, 0x19, 0xed, 0x3c, 0xef, 0x8a, 0x21, 0x1b, 0xaf, 0x30, 0x6f, 0xae, 0xee, 0xe7,
+            0xaa, 0xc6,
+        ];
+        assert_eq!(derive_group_session_id(&op_key_1).unwrap(), 0x6c80u16);
+
+        // KAT #2: chip kGroupOperationalKey2 -> kGroupSessionId2 (0x0c48).
+        let op_key_2: [u8; 16] = [
+            0xaa, 0x97, 0x9a, 0x48, 0xbd, 0x8c, 0xdf, 0x29, 0x3a, 0x07, 0x09, 0xb9, 0xc1, 0xeb,
+            0x19, 0x30,
+        ];
+        assert_eq!(derive_group_session_id(&op_key_2).unwrap(), 0x0c48u16);
+
+        // KAT #3 (anchor): op key from the matter.js-validated chain above
+        // (operational_ipk_matches_matter_js test), session id computed by the
+        // same independent Python HKDF — bridges the two test chains.
+        let op_key_anchor: [u8; 16] = [
+            0xda, 0xee, 0x42, 0x4f, 0x43, 0x46, 0x77, 0xaf, 0xb5, 0x94, 0x97, 0x06, 0x57, 0x2b,
+            0x4c, 0xcb,
+        ];
+        assert_eq!(derive_group_session_id(&op_key_anchor).unwrap(), 0xb13bu16);
     }
 
     /// Cross-verified against matter.js 0.17.1 (`StandardCrypto.createHkdfKey`

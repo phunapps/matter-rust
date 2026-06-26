@@ -48,7 +48,9 @@ pub use case::{
     ResumptionId, ResumptionRecord, Sigma1Outcome,
 };
 pub use error::{Error, Result};
-pub use operational::{derive_compressed_fabric_id, derive_operational_ipk};
+pub use operational::{
+    derive_compressed_fabric_id, derive_group_session_id, derive_operational_ipk,
+};
 pub use pase::{
     pake_passcode_verifier, PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys,
     PaseVerifier,
