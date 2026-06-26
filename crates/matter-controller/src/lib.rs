@@ -36,6 +36,12 @@
 //!   (large lists), with a lockout guard that returns [`Error::AclWouldLockOut`]
 //!   before sending any bytes if the new list would drop our own Administer/CASE
 //!   access.
+//! - **Group provisioning** — [`Node::write_group_key_set`] provisions a key set
+//!   on the device (`KeySetWrite`, `GroupKeyManagement` cluster 0x003F);
+//!   [`Node::write_group_key_map`] writes the `GroupKeyMap` attribute via the
+//!   chunked list-write mechanism; [`Node::add_group`] / [`Node::remove_group`]
+//!   add and remove an endpoint from a group (`Groups` cluster 0x0004). Public
+//!   types: [`GroupKeySet`] and [`GroupKeyMapEntry`].
 //!
 //! # Quickstart
 //!

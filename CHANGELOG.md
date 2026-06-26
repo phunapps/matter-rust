@@ -207,6 +207,54 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-controller
 
+### [Unreleased] — M9-E1 group provisioning
+
+#### Added
+
+- **`Node::write_group_key_set(set: &GroupKeySet) -> Result<()>`** — provisions
+  a key set on the device via `KeySetWrite` on the `GroupKeyManagement` cluster
+  (0x003F, endpoint 0). Caller supplies a fully constructed [`GroupKeySet`]
+  (key set id, 16-byte epoch key, epoch start time). Non-success status from the
+  device surfaces as `Error::GroupCommandRejected`.
+- **`Node::write_group_key_map(entries: &[GroupKeyMapEntry]) -> Result<Vec<(AttributePath, ImStatus)>>`** —
+  writes the `GroupKeyMap` attribute (0x003F/0x0000) via the B4 chunked
+  list-write mechanism. Each [`GroupKeyMapEntry`] binds a group id to a key set
+  id. Returns one `(AttributePath, ImStatus)` per entry path; all statuses are
+  `Success` on acceptance.
+- **`Node::add_group(endpoint: u16, group_id: u16, name: &str) -> Result<()>`** —
+  invokes `AddGroup` on the `Groups` cluster (0x0004) at the given endpoint.
+  Adds the endpoint to `group_id` under the supplied name. Non-success status
+  surfaces as `Error::GroupCommandRejected`.
+- **`Node::remove_group(endpoint: u16, group_id: u16) -> Result<()>`** — invokes
+  `RemoveGroup` on the `Groups` cluster (0x0004). Removes the endpoint from
+  `group_id`. Non-success status surfaces as `Error::GroupCommandRejected`.
+- **`GroupKeySet`** — public type re-exported at the crate root. Constructor:
+  `GroupKeySet::new(key_set_id: u16, epoch_key: Vec<u8>, epoch_start_time: u64)`.
+  Carries the key set id, the 16-byte epoch key (EpochKey0), and the epoch start
+  time (0 for "use immediately"). `#[non_exhaustive]`.
+- **`GroupKeyMapEntry`** — public type re-exported at the crate root. Constructor:
+  `GroupKeyMapEntry::new(group_id: u16, group_key_set_id: u16)`. Binds a group id
+  to a key set, forming one row of the `GroupKeyMap` attribute. `#[non_exhaustive]`.
+- **`Error::GroupCommandRejected(u8)`** — returned by `write_group_key_set`,
+  `add_group`, and `remove_group` when the device returns a non-success status.
+  The raw status code is carried in the variant.
+
+#### Notes
+
+- `write_group_key_map` delegates to the B4 chunked-write mechanism
+  (`build_list_write_chunks` in `matter-interaction`). When all entries fit one
+  frame the write is byte-identical to a plain `write` call; when the encoded
+  list exceeds the per-chunk budget (800 bytes) the write is split across
+  multiple `MoreChunkedMessages`-flagged frames.
+- The `group` module (`pub(crate)`) contains the encoding helpers
+  (`key_set_write_fields`, `group_key_map_entry_value`, `add_group_fields`,
+  `remove_group_fields`, `parse_group_status`) and cluster/attribute constants.
+  Only `GroupKeySet`, `GroupKeyMapEntry`, and `Error::GroupCommandRejected` are
+  part of the stable API.
+- This is the **provisioning foundation** for group communication. The multicast
+  send that exercises a provisioned group lands in E3. See
+  `docs/runbooks/m9-e1-group-provisioning.md` for the operator validation steps.
+
 ### [Unreleased] — M9-D3 ACL read/write
 
 #### Added
