@@ -85,6 +85,7 @@
 
 #![forbid(unsafe_code)]
 
+pub(crate) mod acl;
 pub(crate) mod actor;
 pub(crate) mod admin;
 pub mod builder;
@@ -101,6 +102,7 @@ pub mod store;
 pub mod subscription;
 pub mod trust;
 
+pub use acl::{AclAuthMode, AclEntry, AclPrivilege, AclTarget};
 pub use admin::{
     CommissioningWindow, CommissioningWindowStatus, OpenWindowOpts, WindowStatus,
     DEFAULT_WINDOW_ITERATIONS, DEFAULT_WINDOW_TIMEOUT_S,

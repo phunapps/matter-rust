@@ -86,4 +86,10 @@ pub enum Error {
     /// `NodeOperationalCertStatusEnum` (e.g. 7 `InvalidFabricIndex`). Raw code preserved.
     #[error("operational-credentials command rejected (status {0})")]
     OperationalCredentialsRejected(u8),
+
+    /// Refused an ACL write that would strip our own administrative access
+    /// (no Administer/CASE entry covering our commissioner node id). Prevents
+    /// orphaning the device. Checked before any bytes are sent.
+    #[error("refusing ACL write: it would remove our own administrative access")]
+    AclWouldLockOut,
 }
