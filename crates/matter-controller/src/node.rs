@@ -162,6 +162,49 @@ impl Node {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
+    /// Send a multi-chunk write: each element of `chunks` is one
+    /// `WriteRequestMessage` (built by
+    /// [`build_list_write_chunks`](matter_interaction::build_list_write_chunks),
+    /// which sets `MoreChunkedMessages` on all but the last). All chunks are sent
+    /// reliably on ONE exchange; the device replies with a single
+    /// `WriteResponseMessage` after the final chunk, whose bytes are returned.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped, or any
+    /// connect / transport / driver error.
+    #[allow(dead_code)] // Consumed by the chunked-list write verb (later D3 task).
+    pub(crate) async fn chunked_write(&self, chunks: Vec<Vec<u8>>) -> Result<Vec<u8>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ChunkedWrite {
+                node_id: self.node_id,
+                chunks,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
+    /// The controller's commissioner node id (the sole fabric's
+    /// `commissioner.node_id`). Used by the ACL lockout guard to avoid writing
+    /// an ACL that would lock the commissioner out of the device.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped, or
+    /// [`Error::NotCommissioned`] if no sole fabric exists.
+    #[allow(dead_code)] // Consumed by the ACL lockout guard (later D3 task).
+    pub(crate) async fn commissioner_node_id(&self) -> Result<u64, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::CommissionerNodeId { reply })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Read attributes (concrete or wildcard paths). Returns the device's
     /// `(path, value)` reports keyed by the concrete paths it reports. Values
     /// are raw [`Value`]; decode them with `matter-clusters` codecs.

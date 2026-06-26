@@ -56,7 +56,8 @@ pub use subscription::{
 };
 pub use timed::build_timed_request;
 pub use write::{
-    build_write_request, build_write_request_timed, parse_write_response, AttributeWriteRequest,
+    build_list_write_chunks, build_write_request, build_write_request_timed, parse_write_response,
+    AttributeWriteRequest,
 };
 
 /// Interaction Model protocol revision emitted at context tag `0xFF` in
