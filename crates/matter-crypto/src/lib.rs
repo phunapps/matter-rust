@@ -50,6 +50,7 @@ pub use case::{
 pub use error::{Error, Result};
 pub use operational::{
     derive_compressed_fabric_id, derive_group_session_id, derive_operational_ipk,
+    group_multicast_ipv6,
 };
 pub use pase::{
     pake_passcode_verifier, PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys,

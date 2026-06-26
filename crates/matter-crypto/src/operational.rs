@@ -181,6 +181,41 @@ pub fn derive_group_session_id(operational_group_key: &[u8; 16]) -> Result<u16> 
     Ok(u16::from_be_bytes(out))
 }
 
+/// Derive the operational group multicast IPv6 address for a given
+/// `compressed_fabric_id` and `group_id` (Matter Core Spec §2.5.6).
+///
+/// The 16-byte address layout (confirmed byte-for-byte against
+/// connectedhomeip `PeerAddress.h::BuildMatterPerGroupMulticastAddress`
+/// and its KAT in `TestPeerAddress.cpp`):
+///
+/// | Bytes    | Value                              |
+/// |----------|-------------------------------------|
+/// | \[0\]     | `0xff` — multicast                 |
+/// | \[1\]     | `0x35` — flags 3 (non-perm, prefix) + scope 5 (site-local) |
+/// | \[2\]     | `0x00`                              |
+/// | \[3\]     | `0x40` — prefix length 64           |
+/// | \[4\]     | `0xfd` — ULA locally-assigned designator |
+/// | \[5..13\] | `compressed_fabric_id[0..8]` (big-endian) |
+/// | \[13\]    | `0x00`                              |
+/// | \[14..16\]| `group_id` in big-endian            |
+///
+/// No HKDF or crypto primitive is involved — this is pure byte assembly.
+/// Vector: `fabric_id = 0xa1a2a4a8b1b2b4b8`, `group_id = 0xe10f` →
+/// `ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f`.
+#[must_use]
+pub fn group_multicast_ipv6(compressed_fabric_id: &[u8; 8], group_id: u16) -> std::net::Ipv6Addr {
+    let mut b = [0u8; 16];
+    b[0] = 0xff;
+    b[1] = 0x35; // multicast flags=3 (non-permanent, has-prefix), scope=5 (site-local)
+    b[2] = 0x00;
+    b[3] = 0x40; // prefix length 64
+    b[4] = 0xfd; // ULA locally-assigned designator
+    b[5..13].copy_from_slice(compressed_fabric_id);
+    b[13] = 0x00;
+    b[14..16].copy_from_slice(&group_id.to_be_bytes());
+    std::net::Ipv6Addr::from(b)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -257,6 +292,25 @@ mod tests {
             0xda, 0xee, 0x42, 0x4f, 0x43, 0x46, 0x77, 0xaf, 0xb5, 0x94, 0x97, 0x06, 0x57, 0x2b,
             0x4c, 0xcb,
         ];
+        assert_eq!(got, expected);
+    }
+
+    /// Known-answer test for [`group_multicast_ipv6`] against the independent
+    /// connectedhomeip vector from `TestPeerAddress.cpp::TestPeerAddressMulticast`
+    /// (hardcoded `expected[]` in that file).
+    ///
+    /// Layout confirmed: cfid occupies bytes [5..13], `group_id` big-endian at
+    /// [14..16]; byte [4]=0xfd (ULA), byte [13]=0x00.
+    /// Vector stored at `test-vectors/operational/group-crypto.json`
+    /// (`multicast_ipv6_vectors[0]`).
+    #[test]
+    fn group_multicast_ipv6_matches_vector() {
+        use std::net::Ipv6Addr;
+        // chip TestPeerAddressMulticast: fabric_id=0xa1a2a4a8b1b2b4b8, group=0xe10f
+        // → ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f
+        let cfid: [u8; 8] = [0xa1, 0xa2, 0xa4, 0xa8, 0xb1, 0xb2, 0xb4, 0xb8];
+        let got = group_multicast_ipv6(&cfid, 0xe10f);
+        let expected: Ipv6Addr = "ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f".parse().unwrap();
         assert_eq!(got, expected);
     }
 }
