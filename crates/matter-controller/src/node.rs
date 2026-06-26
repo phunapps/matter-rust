@@ -408,6 +408,21 @@ impl Node {
         Ok(crate::opcreds::parse_fabrics(&reports))
     }
 
+    /// Read the device's `AccessControl.Acl` list (the ACL entries on this fabric).
+    ///
+    /// # Errors
+    ///
+    /// An interaction error if the read fails.
+    pub async fn read_acl(&self) -> Result<Vec<crate::acl::AclEntry>, Error> {
+        let paths = [ReadPath::concrete(
+            0,
+            crate::acl::ACCESS_CONTROL_CLUSTER,
+            crate::acl::ATTR_ACL,
+        )];
+        let reports = self.read(&paths).await?;
+        Ok(crate::acl::parse_acl(&reports))
+    }
+
     /// Open an enhanced commissioning window using **caller-supplied** secrets
     /// (test/power-user seam). Most callers want
     /// `Node::open_commissioning_window` (Task 3), which generates the secrets.

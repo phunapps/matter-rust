@@ -305,7 +305,7 @@ fn parse_entry(v: &Value) -> Option<AclEntry> {
 /// attribute is absent or contains no decodable entries (infallible).
 pub(crate) fn parse_acl(reports: &[(AttributePath, Value)]) -> Vec<AclEntry> {
     for (path, value) in reports {
-        if path.attribute == ATTR_ACL {
+        if path.cluster == ACCESS_CONTROL_CLUSTER && path.attribute == ATTR_ACL {
             if let Value::Array(items) = value {
                 return items.iter().filter_map(parse_entry).collect();
             }
