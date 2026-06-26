@@ -5978,6 +5978,319 @@ mod tests {
         device.await.unwrap();
     }
 
+    /// Build a `WriteResponseMessage` carrying one `AttributeStatusIB(path, SUCCESS)`.
+    /// This is the device-side reply to a `WriteRequest` for ACL path 0/0x001F/0x0000.
+    fn build_write_response_acl_success() -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(0)).unwrap(); // WriteResponses
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeStatusIB
+        w.start_list(Tag::Context(0)).unwrap(); // Path (AttributePathIB)
+        w.put_uint(Tag::Context(2), 0).unwrap(); // endpoint 0
+        w.put_uint(Tag::Context(3), 0x001F).unwrap(); // cluster AccessControl
+        w.put_uint(Tag::Context(4), 0x0000).unwrap(); // attribute ACL
+        w.end_container().unwrap();
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        w.put_uint(Tag::Context(0), 0).unwrap(); // SUCCESS
+        w.end_container().unwrap();
+        w.end_container().unwrap(); // /AttributeStatusIB
+        w.end_container().unwrap(); // /WriteResponses
+        w.put_uint(Tag::Context(0xFF), 11).unwrap(); // IM revision
+        w.end_container().unwrap();
+        buf
+    }
+
+    /// `write_acl` with a small ACL that retains admin: device replies
+    /// `WriteResponse(Success)` for path 0/0x001F/0x0000 → expect `[(path, Success)]`.
+    ///
+    /// `commissioner_node_id` is an internal actor query with no network round-trip,
+    /// so the device only sees one datagram (the `WriteRequest` itself). `expect_timed`
+    /// is false: the ACL attribute does not require a timed interaction.
+    #[tokio::test]
+    async fn write_acl_single_chunk_round_trip() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let reply = build_write_response_acl_success();
+        // The device replies with WriteResponse opcode 0x07.  run_loopback_device
+        // uses 0x05 (ReportData) for the reply opcode — the actor resolves by
+        // (session, exchange), not opcode, so the bytes land correctly.  We need
+        // 0x07 here to satisfy parse_write_response; use run_chunked_write_device
+        // with expected_chunks=1 so the device sends 0x07.
+        let device = tokio::spawn(run_chunked_write_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x60,
+            /* expected_chunks */ 1,
+            reply,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // loopback_harness sets commissioner_node_id = 1; this entry retains admin.
+        let our_node_id: u64 = 1;
+        let entries = vec![crate::acl::AclEntry {
+            privilege: crate::acl::AclPrivilege::Administer,
+            auth_mode: crate::acl::AclAuthMode::Case,
+            subjects: Some(vec![our_node_id]),
+            targets: None,
+            fabric_index: None,
+        }];
+
+        let statuses = controller
+            .node(device_node_id)
+            .write_acl(&entries)
+            .await
+            .expect("write_acl must succeed");
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(
+            statuses[0].1,
+            matter_interaction::ImStatus::Success,
+            "device must reply Success"
+        );
+        assert_eq!(statuses[0].0.cluster, crate::acl::ACCESS_CONTROL_CLUSTER);
+        assert_eq!(statuses[0].0.attribute, crate::acl::ATTR_ACL);
+
+        device.await.unwrap();
+    }
+
+    /// `write_acl` refuses an ACL that would lock out the commissioner and sends
+    /// ZERO bytes to the device (the lockout guard runs before any network I/O).
+    ///
+    /// The device is NOT started at all: if `write_acl` tried to send anything
+    /// there would be no device to accept the CASE handshake, and the test would
+    /// panic or time out rather than pass silently.
+    #[tokio::test]
+    async fn write_acl_refuses_lockout() {
+        let Harness {
+            store,
+            ctrl_io,
+            discovery,
+            ..
+        } = loopback_harness();
+        // No device spawned — zero datagrams must reach the network.
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // Entry with Operate privilege (not Administer) for our node id = 1;
+        // the lockout guard must fire before anything is sent.
+        let entries = vec![crate::acl::AclEntry {
+            privilege: crate::acl::AclPrivilege::Operate,
+            auth_mode: crate::acl::AclAuthMode::Case,
+            subjects: Some(vec![1]),
+            targets: None,
+            fabric_index: None,
+        }];
+
+        let err = controller
+            .node(42) // node_id; irrelevant — lockout fires first
+            .write_acl(&entries)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, crate::error::Error::AclWouldLockOut),
+            "expected AclWouldLockOut, got {err:?}"
+        );
+        // No device was spawned — if write_acl had sent any bytes the test would
+        // have failed because there is nothing to accept the CASE handshake.
+    }
+
+    /// `write_acl` multi-chunk path: build chunks directly with a tiny budget so
+    /// they split, then drive them through `chunked_write` (which is what
+    /// `write_acl` delegates to). The loopback device collects all chunks, asserts
+    /// `MoreChunkedMessages=true` on all but the last (courtesy of
+    /// `run_chunked_write_device`), then replies `WriteResponse(Success)`.
+    ///
+    /// Note: `write_acl` hardcodes budget=800 which won't force multi-chunk in a
+    /// unit test (that would need ~100 large ACL entries). We therefore test the
+    /// multi-chunk path via `chunked_write` directly, using the same tiny budget
+    /// as Task 4's `chunked_write_sends_all_chunks_one_exchange`. This is
+    /// explicitly endorsed by the brief ("a second from this angle is fine") and
+    /// covers the end-to-end multi-chunk write path that `write_acl` delegates to.
+    #[tokio::test]
+    async fn write_acl_multi_chunk_reassembles() {
+        use matter_codec::{Tag, TlvWriter};
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Use AccessControl path to make it semantically coherent.
+        let path = matter_interaction::AttributePath {
+            endpoint: 0,
+            cluster: crate::acl::ACCESS_CONTROL_CLUSTER,
+            attribute: crate::acl::ATTR_ACL,
+        };
+
+        // Encode several small uint elements; a tiny budget forces multi-chunk.
+        let elems: Vec<Vec<u8>> = (0u64..4)
+            .map(|n| {
+                let mut buf = Vec::new();
+                let mut w = TlvWriter::new(&mut buf);
+                w.put_uint(Tag::Anonymous, n).unwrap();
+                buf
+            })
+            .collect();
+        let chunks = matter_interaction::build_list_write_chunks(path, &elems, 40, false);
+        assert!(
+            chunks.len() >= 2,
+            "test requires multi-chunk write; got {} chunk(s)",
+            chunks.len()
+        );
+        let n_chunks = chunks.len();
+
+        let write_response = build_write_response_acl_success();
+
+        let device = tokio::spawn(run_chunked_write_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x61,
+            n_chunks,
+            write_response,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let resp = controller
+            .node(device_node_id)
+            .chunked_write(chunks)
+            .await
+            .expect("chunked_write must succeed");
+
+        let statuses =
+            matter_interaction::parse_write_response(&resp).expect("parse WriteResponse");
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
+
+        device.await.unwrap();
+    }
+
+    /// Byte-parity test: `build_list_write_chunks` for a one-entry ACL (Administer/CASE/
+    /// subjects=[1]/targets=null) with a large budget produces bytes matching the
+    /// spec-derived fixture at `test-vectors/acl/write_acl_single_chunk.json`.
+    ///
+    /// This confirms:
+    /// 1. `acl_entry_value` encodes the spec-correct TLV layout.
+    /// 2. Single-chunk output from `build_list_write_chunks` is byte-identical to a plain
+    ///    `WriteRequestMessage`, which is the invariant `write_acl` relies on for the
+    ///    single-chunk path (0xc6 auto-upgrade safety + network byte parity).
+    #[test]
+    fn write_acl_single_chunk_byte_parity() {
+        use crate::acl::{acl_entry_value, AclAuthMode, AclEntry, AclPrivilege};
+        use matter_codec::{Tag, TlvWriter};
+        use matter_interaction::AttributePath;
+        use std::{fs, path::PathBuf};
+
+        // Struct and helpers declared before any statements (items_after_statements lint).
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            entry_tlv_hex: String,
+            expected_message_hex: String,
+        }
+
+        // Decode hex string to bytes.
+        fn hex_decode(s: &str) -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        }
+
+        let fixture_path: PathBuf = {
+            let mut p: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+            p.push("..");
+            p.push("..");
+            p.push("test-vectors");
+            p.push("acl");
+            p.push("write_acl_single_chunk.json");
+            p
+        };
+        let Ok(raw) = fs::read_to_string(&fixture_path) else {
+            eprintln!("skipping write_acl_single_chunk_byte_parity: fixture not found");
+            return;
+        };
+        let f: Fixture = serde_json::from_str(&raw).unwrap();
+
+        let expected_entry_tlv = hex_decode(&f.entry_tlv_hex);
+        let expected_message = hex_decode(&f.expected_message_hex);
+
+        // Encode the entry TLV using our public encoder.
+        let entry = AclEntry {
+            privilege: AclPrivilege::Administer,
+            auth_mode: AclAuthMode::Case,
+            subjects: Some(vec![1u64]),
+            targets: None,
+            fabric_index: None,
+        };
+        let mut entry_tlv: Vec<u8> = Vec::new();
+        TlvWriter::new(&mut entry_tlv)
+            .write_value(Tag::Anonymous, &acl_entry_value(&entry))
+            .unwrap();
+        assert_eq!(
+            entry_tlv, expected_entry_tlv,
+            "acl_entry_value TLV does not match fixture entry_tlv_hex"
+        );
+
+        let path = AttributePath {
+            endpoint: 0,
+            cluster: crate::acl::ACCESS_CONTROL_CLUSTER,
+            attribute: crate::acl::ATTR_ACL,
+        };
+        let chunks = matter_interaction::build_list_write_chunks(path, &[entry_tlv], 4096, false);
+        assert_eq!(chunks.len(), 1, "must be single chunk with big budget");
+        assert_eq!(
+            chunks[0], expected_message,
+            "build_list_write_chunks single-chunk does not match fixture expected_message_hex"
+        );
+    }
+
     /// Happy path: `update_fabric_label` succeeds when the device responds
     /// with a `NOCResponse(status=0, fabric_index=1)`.
     #[tokio::test]

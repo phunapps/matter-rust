@@ -4,11 +4,11 @@ use tokio::sync::oneshot;
 
 use matter_codec::{Tag, TlvReader, TlvWriter, Value};
 use matter_interaction::{
-    build_invoke_request, build_invoke_request_timed, build_read_request_full,
-    build_read_request_paths, build_write_request, build_write_request_timed,
-    parse_invoke_response, parse_write_response, AttributePath, AttributeWriteRequest, CommandPath,
-    EventFilter, EventPath, EventReport, ImStatus, InvokeResponse, ReadPath, ReportAccumulator,
-    ReportData,
+    build_invoke_request, build_invoke_request_timed, build_list_write_chunks,
+    build_read_request_full, build_read_request_paths, build_write_request,
+    build_write_request_timed, parse_invoke_response, parse_write_response, AttributePath,
+    AttributeWriteRequest, CommandPath, EventFilter, EventPath, EventReport, ImStatus,
+    InvokeResponse, ReadPath, ReportAccumulator, ReportData,
 };
 
 use crate::actor::Command;
@@ -17,6 +17,11 @@ use crate::error::Error;
 pub(crate) const OP_READ_REQUEST: u8 = 0x02;
 const OP_WRITE_REQUEST: u8 = 0x06;
 const OP_INVOKE_REQUEST: u8 = 0x08;
+
+/// Budget for a single `WriteRequestMessage` when writing the ACL list.
+/// Stays well under `MAX_PAYLOAD_LEN` (1024 post-encryption); reserves
+/// headroom for the secured-message header, MRP acks, and AES tag.
+const WRITE_CHUNK_BUDGET: usize = 800;
 
 /// Default timed-interaction timeout (milliseconds) used by
 /// [`Node::write_timed`] / [`Node::invoke_timed`] when the caller passes `None`.
@@ -173,7 +178,6 @@ impl Node {
     ///
     /// [`Error::ControllerStopped`] if the owning task stopped, or any
     /// connect / transport / driver error.
-    #[allow(dead_code)] // Consumed by the chunked-list write verb (later D3 task).
     pub(crate) async fn chunked_write(&self, chunks: Vec<Vec<u8>>) -> Result<Vec<u8>, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -195,7 +199,6 @@ impl Node {
     ///
     /// [`Error::ControllerStopped`] if the owning task stopped, or
     /// [`Error::NotCommissioned`] if no sole fabric exists.
-    #[allow(dead_code)] // Consumed by the ACL lockout guard (later D3 task).
     pub(crate) async fn commissioner_node_id(&self) -> Result<u64, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -449,6 +452,62 @@ impl Node {
         )];
         let reports = self.read(&paths).await?;
         Ok(crate::opcreds::parse_fabrics(&reports))
+    }
+
+    /// Write the device's `AccessControl.Acl` list to exactly `entries`.
+    ///
+    /// Refuses (before sending) any list that would strip our own administrative
+    /// access ([`Error::AclWouldLockOut`]). Small lists go in one
+    /// `WriteRequestMessage` (byte-identical to a normal write); larger lists are
+    /// chunked (`ReplaceAll`+`AppendItem`) without ever sending an empty `ReplaceAll`.
+    ///
+    /// ACL writes are NOT timed (the spec does not require `TimedRequest` for
+    /// `AccessControl.Acl`); however, if the device unexpectedly rejects the write
+    /// with `NEEDS_TIMED_INTERACTION` the controller's timed-auto-upgrade will
+    /// transparently retry on the single-chunk path (the same bytes are safe to
+    /// re-send because the whole list is idempotent). The multi-chunk path fails
+    /// cleanly on a `0xc6` rejection (the `ChunkedWrite` pending does not carry
+    /// a `timed_payload`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclWouldLockOut`] if `entries` contains no Administer/CASE entry
+    /// covering our commissioner node id; no bytes are sent to the device in that
+    /// case. Otherwise returns an interaction error or a per-path device status.
+    pub async fn write_acl(
+        &self,
+        entries: &[crate::acl::AclEntry],
+    ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
+        let our = self.commissioner_node_id().await?;
+        if !crate::acl::acl_retains_admin(entries, our) {
+            return Err(Error::AclWouldLockOut);
+        }
+        let path = AttributePath {
+            endpoint: 0,
+            cluster: crate::acl::ACCESS_CONTROL_CLUSTER,
+            attribute: crate::acl::ATTR_ACL,
+        };
+        let element_tlvs: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|e| value_to_tlv(&crate::acl::acl_entry_value(e)))
+            .collect::<Result<_, _>>()?;
+        let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
+        let resp = if chunks.len() == 1 {
+            // Single message: reuse the plain Action path (byte-identical to a
+            // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
+            // plain and timed payload so the retry — if the device demands timed —
+            // re-sends identical bytes (safe for a full-list replace).
+            self.action(
+                OP_WRITE_REQUEST,
+                chunks[0].clone(),
+                chunks[0].clone(),
+                vec![(path.cluster, path.attribute)],
+            )
+            .await?
+        } else {
+            self.chunked_write(chunks).await?
+        };
+        Ok(parse_write_response(&resp)?)
     }
 
     /// Read the device's `AccessControl.Acl` list (the ACL entries on this fabric).

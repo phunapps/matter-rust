@@ -2,11 +2,6 @@
 //! encode/parse, and the lockout guard. Decoder-agnostic (hand-built Value);
 //! the generated matter-clusters decoder is the read byte-parity oracle. M9-D3.
 
-// Private helpers and pub(crate) fns are consumed by Tasks 3/4 (Node verbs).
-// They exist in this module now to keep the data model self-contained; clippy
-// sees them as unused until the call sites land.
-#![allow(dead_code)]
-
 use matter_codec::{Tag, Value};
 use matter_interaction::AttributePath;
 
