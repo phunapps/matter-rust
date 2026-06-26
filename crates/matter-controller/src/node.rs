@@ -775,6 +775,39 @@ impl Node {
         }
     }
 
+    /// Provision a group key set on the device via `KeySetWrite`
+    /// (`GroupKeyManagement` cluster, endpoint 0). The epoch key is the
+    /// group's symmetric key material. Returns `Ok(())` on a bare
+    /// `Success` status from the device.
+    ///
+    /// `KeySetWrite` is NOT a timed command — the plain `invoke` path is used.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GroupCommandRejected`] if the device returns a non-success IM
+    /// status (e.g. `ResourceExhausted`). An interaction or transport error is
+    /// surfaced as its corresponding [`Error`] variant.
+    pub async fn write_group_key_set(&self, set: &crate::group::GroupKeySet) -> Result<(), Error> {
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::group::GROUP_KEY_MANAGEMENT_CLUSTER,
+            command: crate::group::CMD_KEY_SET_WRITE,
+        };
+        match self
+            .invoke(path, crate::group::key_set_write_fields(set))
+            .await?
+        {
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::GroupCommandRejected(code)),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unexpected status for KeySetWrite".into(),
+            )),
+            InvokeResult::Data { .. } => Err(Error::Operational(
+                "unexpected response command for KeySetWrite".into(),
+            )),
+        }
+    }
+
     /// Subscribe to attribute reports for `attrs` and/or event reports for
     /// `events` (concrete or wildcard paths) on a **single** subscription. The
     /// device sends the priming values/events, then steady-state changes within

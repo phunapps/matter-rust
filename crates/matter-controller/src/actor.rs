@@ -6437,4 +6437,49 @@ mod tests {
             .expect("relabel");
         device.await.unwrap();
     }
+
+    /// Happy path: `write_group_key_set` succeeds when the device responds
+    /// with a bare `Success` status (plain invoke, not timed).
+    #[tokio::test]
+    async fn write_group_key_set_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            build_invoke_status_success(),
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let set = crate::group::GroupKeySet::new(42, vec![0xABu8; 16], 0);
+        controller
+            .node(device_node_id)
+            .write_group_key_set(&set)
+            .await
+            .expect("write_group_key_set");
+        device.await.unwrap();
+    }
 }
