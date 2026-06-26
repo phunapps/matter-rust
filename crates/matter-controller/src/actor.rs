@@ -6569,4 +6569,134 @@ mod tests {
 
         device.await.unwrap();
     }
+
+    // --- Task 4 (M9-E1): add_group / remove_group loopback tests ---
+
+    /// Build an `InvokeResponseMessage` carrying an `AddGroupResponse` response
+    /// command (cluster 0x0004 `Groups`, command 0x00). Fields: `status` at
+    /// context tag 0, `group_id` at context tag 1. This is the `CommandDataIB`
+    /// shape (not `CommandStatusIB`) — `InvokeResponse::Command { path, fields_tlv }`.
+    ///
+    /// Replicates the `build_invoke_response_noc` structure with different
+    /// cluster/command/fields.
+    fn build_add_group_response(status: u8, group_id: u16) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        #[allow(clippy::unwrap_used)] // test: Vec writer is infallible
+        {
+            w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseMessage
+            w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+            w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+            w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+            w.start_structure(Tag::Context(0)).unwrap(); // Command = CommandDataIB
+            w.start_list(Tag::Context(0)).unwrap(); // CommandPath
+            w.put_uint(Tag::Context(0), 1).unwrap(); // endpoint 1 (application ep on Tapo)
+            w.put_uint(Tag::Context(1), u64::from(crate::group::GROUPS_CLUSTER))
+                .unwrap(); // cluster 0x0004
+            w.put_uint(Tag::Context(2), 0x00).unwrap(); // AddGroupResponse command id
+            w.end_container().unwrap(); // /CommandPath
+            w.start_structure(Tag::Context(1)).unwrap(); // CommandFields = AddGroupResponse struct
+            w.put_uint(Tag::Context(0), u64::from(status)).unwrap(); // status
+            w.put_uint(Tag::Context(1), u64::from(group_id)).unwrap(); // group_id
+            w.end_container().unwrap(); // /CommandFields
+            w.end_container().unwrap(); // /CommandDataIB
+            w.end_container().unwrap(); // /InvokeResponseIB
+            w.end_container().unwrap(); // /InvokeResponses
+            w.put_uint(Tag::Context(0xFF), 11).unwrap(); // InteractionModelRevision
+            w.end_container().unwrap(); // /InvokeResponseMessage
+        }
+        buf
+    }
+
+    /// `add_group` succeeds when the device replies with `AddGroupResponse(status=0, group_id=7)`.
+    ///
+    /// `expect_timed` is false: `Groups.AddGroup` does not require a timed interaction.
+    #[tokio::test]
+    async fn add_group_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            build_add_group_response(0, 7),
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .node(device_node_id)
+            .add_group(1, 7, "test")
+            .await
+            .expect("add_group must succeed");
+        device.await.unwrap();
+    }
+
+    /// `remove_group` succeeds when the device replies with `RemoveGroupResponse(status=0, group_id=7)`.
+    ///
+    /// `expect_timed` is false: `Groups.RemoveGroup` does not require a timed interaction.
+    #[tokio::test]
+    async fn remove_group_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // RemoveGroupResponse (command 0x03) has the same field layout as AddGroupResponse.
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x55,
+            /* echoes */ 1,
+            build_add_group_response(0, 7),
+            /* expect_timed */ false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .node(device_node_id)
+            .remove_group(1, 7)
+            .await
+            .expect("remove_group must succeed");
+        device.await.unwrap();
+    }
 }

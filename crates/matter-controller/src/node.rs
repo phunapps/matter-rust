@@ -775,6 +775,65 @@ impl Node {
         }
     }
 
+    /// Add the device endpoint to a group (`Groups.AddGroup`). The endpoint then
+    /// joins the group's multicast address and accepts group commands.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GroupCommandRejected`] on a non-success status; else interaction error.
+    pub async fn add_group(&self, endpoint: u16, group_id: u16, name: &str) -> Result<(), Error> {
+        self.group_command(
+            endpoint,
+            crate::group::CMD_ADD_GROUP,
+            crate::group::add_group_fields(group_id, name),
+        )
+        .await
+    }
+
+    /// Remove the device endpoint from a group (`Groups.RemoveGroup`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GroupCommandRejected`] on a non-success status; else interaction error.
+    pub async fn remove_group(&self, endpoint: u16, group_id: u16) -> Result<(), Error> {
+        self.group_command(
+            endpoint,
+            crate::group::CMD_REMOVE_GROUP,
+            crate::group::remove_group_fields(group_id),
+        )
+        .await
+    }
+
+    /// Shared: invoke a `Groups` command and map its response-status to `()`/error.
+    ///
+    /// `AddGroup`/`RemoveGroup` both return a response command whose `status` field
+    /// (context tag 0) is 0 on success or a non-zero `GroupClusterStatus` code on
+    /// failure. A bare `Success` IM status is also accepted (some devices skip the
+    /// response command on success); bare `Failure` codes become
+    /// [`Error::GroupCommandRejected`].
+    async fn group_command(&self, endpoint: u16, command: u32, fields: Value) -> Result<(), Error> {
+        let path = CommandPath {
+            endpoint,
+            cluster: crate::group::GROUPS_CLUSTER,
+            command,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Data { fields, .. } => {
+                let status = crate::group::parse_group_status(&fields);
+                if status == 0 {
+                    Ok(())
+                } else {
+                    Err(Error::GroupCommandRejected(status))
+                }
+            }
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::GroupCommandRejected(code)),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unexpected status for Groups command".into(),
+            )),
+        }
+    }
+
     /// Provision a group key set on the device via `KeySetWrite`
     /// (`GroupKeyManagement` cluster, endpoint 0). The epoch key is the
     /// group's symmetric key material. Returns `Ok(())` on a bare
