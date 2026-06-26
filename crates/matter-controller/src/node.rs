@@ -808,6 +808,53 @@ impl Node {
         }
     }
 
+    /// Write the device's `GroupKeyMap` list (binds group ids to key sets).
+    ///
+    /// Small lists go in one `WriteRequestMessage` (byte-identical to a normal
+    /// write); larger lists are chunked (`ReplaceAll`+`AppendItem`) without ever
+    /// sending an empty `ReplaceAll`. There is no lockout guard — `GroupKeyMap`
+    /// has no self-lock concern unlike `AccessControl.Acl`.
+    ///
+    /// `GroupKeyMap` writes are NOT timed (the spec does not require
+    /// `TimedRequest`); however, if the device unexpectedly rejects the write with
+    /// `NEEDS_TIMED_INTERACTION` the controller's timed-auto-upgrade will
+    /// transparently retry on the single-chunk path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an interaction error or a per-path device status from the device.
+    pub async fn write_group_key_map(
+        &self,
+        entries: &[crate::group::GroupKeyMapEntry],
+    ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
+        let path = AttributePath {
+            endpoint: 0,
+            cluster: crate::group::GROUP_KEY_MANAGEMENT_CLUSTER,
+            attribute: crate::group::ATTR_GROUP_KEY_MAP,
+        };
+        let element_tlvs: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|e| value_to_tlv(&crate::group::group_key_map_entry_value(*e)))
+            .collect::<Result<_, _>>()?;
+        let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
+        let resp = if chunks.len() == 1 {
+            // Single message: reuse the plain Action path (byte-identical to a
+            // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
+            // plain and timed payload so the retry — if the device demands timed —
+            // re-sends identical bytes (safe for a full-list replace).
+            self.action(
+                OP_WRITE_REQUEST,
+                chunks[0].clone(),
+                chunks[0].clone(),
+                vec![(path.cluster, path.attribute)],
+            )
+            .await?
+        } else {
+            self.chunked_write(chunks).await?
+        };
+        Ok(parse_write_response(&resp)?)
+    }
+
     /// Subscribe to attribute reports for `attrs` and/or event reports for
     /// `events` (concrete or wildcard paths) on a **single** subscription. The
     /// device sends the priming values/events, then steady-state changes within

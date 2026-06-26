@@ -6482,4 +6482,91 @@ mod tests {
             .expect("write_group_key_set");
         device.await.unwrap();
     }
+
+    /// Build a `WriteResponseMessage` carrying one `AttributeStatusIB(path, SUCCESS)`.
+    /// This is the device-side reply to a `WriteRequest` for `GroupKeyMap` 0/0x003F/0x0000.
+    fn build_write_response_group_key_map_success() -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        #[allow(clippy::unwrap_used)] // test: Vec writer is infallible
+        {
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_array(Tag::Context(0)).unwrap(); // WriteResponses
+            w.start_structure(Tag::Anonymous).unwrap(); // AttributeStatusIB
+            w.start_list(Tag::Context(0)).unwrap(); // Path (AttributePathIB)
+            w.put_uint(Tag::Context(2), 0).unwrap(); // endpoint 0
+            w.put_uint(Tag::Context(3), 0x003F).unwrap(); // cluster GroupKeyManagement
+            w.put_uint(Tag::Context(4), 0x0000).unwrap(); // attribute GroupKeyMap
+            w.end_container().unwrap();
+            w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+            w.put_uint(Tag::Context(0), 0).unwrap(); // SUCCESS
+            w.end_container().unwrap();
+            w.end_container().unwrap(); // /AttributeStatusIB
+            w.end_container().unwrap(); // /WriteResponses
+            w.put_uint(Tag::Context(0xFF), 11).unwrap(); // IM revision
+            w.end_container().unwrap();
+        }
+        buf
+    }
+
+    /// `write_group_key_map` with one entry: device replies `WriteResponse(Success)`
+    /// for path 0/0x003F/0x0000 → expect `[(path, Success)]`.
+    ///
+    /// `expect_timed` is false: `GroupKeyMap` does not require a timed interaction.
+    #[tokio::test]
+    async fn write_group_key_map_single_chunk_round_trip() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let reply = build_write_response_group_key_map_success();
+        let device = tokio::spawn(run_chunked_write_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x61,
+            /* expected_chunks */ 1,
+            reply,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let entries = vec![crate::group::GroupKeyMapEntry::new(7, 42)];
+        let statuses = controller
+            .node(device_node_id)
+            .write_group_key_map(&entries)
+            .await
+            .expect("write_group_key_map must succeed");
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(
+            statuses[0].1,
+            matter_interaction::ImStatus::Success,
+            "device must reply Success"
+        );
+        assert_eq!(
+            statuses[0].0.cluster,
+            crate::group::GROUP_KEY_MANAGEMENT_CLUSTER
+        );
+        assert_eq!(statuses[0].0.attribute, crate::group::ATTR_GROUP_KEY_MAP);
+
+        device.await.unwrap();
+    }
 }
