@@ -148,6 +148,47 @@ pub struct AclEntry {
     pub fabric_index: Option<u8>,
 }
 
+impl AclTarget {
+    /// Construct a target restricting to the given cluster / endpoint /
+    /// device-type. Any `None` is a wildcard for that dimension.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]` and so cannot be
+    /// built with a struct literal outside this crate.
+    #[must_use]
+    pub fn new(cluster: Option<u32>, endpoint: Option<u16>, device_type: Option<u32>) -> Self {
+        Self {
+            cluster,
+            endpoint,
+            device_type,
+        }
+    }
+}
+
+impl AclEntry {
+    /// Construct an ACL entry for a write. `subjects`/`targets` `None` ⇒
+    /// wildcard. `fabric_index` is left `None` — the device fills it in for the
+    /// accessing fabric.
+    ///
+    /// Provided because the struct is `#[non_exhaustive]` and so cannot be
+    /// built with a struct literal outside this crate (e.g. when assembling an
+    /// ACL to pass to [`crate::Node::write_acl`]).
+    #[must_use]
+    pub fn new(
+        privilege: AclPrivilege,
+        auth_mode: AclAuthMode,
+        subjects: Option<Vec<u64>>,
+        targets: Option<Vec<AclTarget>>,
+    ) -> Self {
+        Self {
+            privilege,
+            auth_mode,
+            subjects,
+            targets,
+            fabric_index: None,
+        }
+    }
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn struct_members(v: &Value) -> Option<&[(Tag, Value)]> {
@@ -448,5 +489,23 @@ mod tests {
         assert_eq!(targets[0].endpoint, Some(1));
         assert_eq!(targets[0].device_type, None);
         assert_eq!(parsed[1].fabric_index, Some(1));
+    }
+
+    #[test]
+    fn constructors_build_writable_entries() {
+        let t = AclTarget::new(Some(6), Some(1), None);
+        assert_eq!(t.cluster, Some(6));
+        let e = AclEntry::new(
+            AclPrivilege::Administer,
+            AclAuthMode::Case,
+            Some(vec![7]),
+            Some(vec![t]),
+        );
+        assert_eq!(e.privilege, AclPrivilege::Administer);
+        assert_eq!(e.subjects, Some(vec![7]));
+        // fabric_index defaults to None (device assigns it on write).
+        assert_eq!(e.fabric_index, None);
+        // The constructed entry round-trips through the encoder.
+        assert!(matches!(acl_entry_value(&e), Value::Structure(_)));
     }
 }

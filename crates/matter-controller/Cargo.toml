@@ -41,3 +41,6 @@ name = "power"
 
 [[example]]
 name = "dump_attributes"
+
+[[example]]
+name = "fabric_management"
