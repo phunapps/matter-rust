@@ -100,6 +100,7 @@ pub mod controller;
 pub(crate) mod credentials;
 pub mod error;
 pub mod fabric;
+pub(crate) mod group;
 pub mod node;
 pub(crate) mod opcreds;
 pub mod snapshot;
@@ -117,6 +118,7 @@ pub use builder::MatterControllerBuilder;
 pub use controller::MatterController;
 pub use error::Error;
 pub use fabric::{create_fabric, FabricConfig};
+pub use group::{GroupKeyMapEntry, GroupKeySet};
 pub use matter_cert::MatterTime;
 pub use matter_codec::Value;
 pub use matter_interaction::{

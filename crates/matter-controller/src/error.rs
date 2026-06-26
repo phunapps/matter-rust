@@ -92,4 +92,9 @@ pub enum Error {
     /// orphaning the device. Checked before any bytes are sent.
     #[error("refusing ACL write: it would remove our own administrative access")]
     AclWouldLockOut,
+
+    /// A `Groups` / `GroupKeyManagement` command returned a non-success status
+    /// (e.g. `ResourceExhausted` from `MaxGroupsPerFabric`). Raw status preserved.
+    #[error("group command rejected (status {0})")]
+    GroupCommandRejected(u8),
 }
