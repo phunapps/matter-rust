@@ -44,3 +44,6 @@ name = "dump_attributes"
 
 [[example]]
 name = "fabric_management"
+
+[[example]]
+name = "d_hardware_extras"
