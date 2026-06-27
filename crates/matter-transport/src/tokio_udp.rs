@@ -5,6 +5,30 @@
 //! [`crate::transport::Transport`] with synchronous `try_send_to` /
 //! `try_recv_from`; callers drive readiness via the runtime
 //! (`socket.readable().await`).
+//!
+//! # IPv6 multicast send
+//!
+//! The socket is configured at bind time with the `IPV6_MULTICAST_HOPS`
+//! socket option so that the existing [`Transport::send`] call routes
+//! group messages at the right hop limit without any API change:
+//!
+//! * **`IPV6_MULTICAST_HOPS`** — set to [`MATTER_GROUP_MULTICAST_HOPS`]
+//!   (8). Matter group addresses are `ff35:…` (site-local scope, scope
+//!   nibble = `5`). A hop limit of 8 clears any reasonable intra-site
+//!   routing hop count while staying well clear of global scope.
+//!
+//! The outgoing interface is left at its kernel default (equivalent to
+//! interface index 0 on Linux / "unset" on macOS). Setting
+//! `IPV6_MULTICAST_IF` explicitly to 0 is rejected by macOS with
+//! `EINVAL`; on Linux index 0 means "OS picks via routing table" but
+//! the kernel-default behaviour is identical without the explicit call.
+//! A future `bind_addr_with_if` variant can expose the interface
+//! selector for multi-NIC hosts.
+//!
+//! End-to-end multicast delivery is **hardware-validated in the E3
+//! runbook** (not in these unit tests). The unit tests here verify that
+//! the socket accepts `IPV6_MULTICAST_HOPS` without error and that the
+//! configured hop count reads back correctly.
 
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 
@@ -17,6 +41,15 @@ use crate::transport::{PeerAddress, Transport};
 /// IPv6 minimum MTU minus IPv6 header + UDP header = safe single-packet
 /// receive buffer size. Larger packets fragment; smaller is fine.
 const RECV_BUF_SIZE: usize = 1500;
+
+/// Hop limit set on `IPV6_MULTICAST_HOPS` for outbound group messages.
+///
+/// Matter group multicast addresses use `ff35:…` (site-local scope,
+/// scope nibble = 5). A hop limit of 8 is well above any realistic
+/// intra-site path length and well below global scope; it follows the
+/// conservative convention used by the reference `matter.js`
+/// implementation.
+pub const MATTER_GROUP_MULTICAST_HOPS: u32 = 8;
 
 /// Default Tokio-based UDP transport for Matter.
 ///
@@ -61,6 +94,11 @@ impl TokioUdpTransport {
         // Disable IPV6_V6ONLY so dual-stack works.
         if matches!(addr, SocketAddr::V6(_)) {
             raw.set_only_v6(false)?;
+            // Raise the multicast hop limit so outbound group packets
+            // reach their site-local scope. The outgoing interface is
+            // left at the kernel default (unset) — see module-level
+            // doc for why we do NOT call `set_multicast_if_v6(0)`.
+            raw.set_multicast_hops_v6(MATTER_GROUP_MULTICAST_HOPS)?;
         }
         raw.set_nonblocking(true)?;
         raw.bind(&addr.into())?;
@@ -224,6 +262,99 @@ mod tests {
                 "did not receive within 1s"
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    // ── Multicast socket-option tests ────────────────────────────────────────
+    //
+    // These tests verify that:
+    //   (a) `MATTER_GROUP_MULTICAST_HOPS` round-trips through the
+    //       `IPV6_MULTICAST_HOPS` socket option on a raw socket2::Socket; and
+    //   (b) `TokioUdpTransport::bind_addr` succeeds with the hop option
+    //       applied (the bind path sets it unconditionally for IPv6 sockets).
+    //
+    // Note: we do NOT test `set_multicast_if_v6(0)` because macOS rejects
+    // interface index 0 with EINVAL. The outgoing interface is instead left
+    // at its kernel default (equivalent to "let OS pick" on all platforms).
+    //
+    // End-to-end delivery of a group packet to real Matter devices is
+    // hardware-validated in the E3 runbook; it cannot be exercised in CI
+    // because it requires actual network interfaces with multicast routing.
+
+    /// Verify that the `MATTER_GROUP_MULTICAST_HOPS` constant round-trips
+    /// through `set_multicast_hops_v6` / `multicast_hops_v6` on a raw
+    /// `socket2::Socket`. If the kernel rejects the value or the constant
+    /// is wrong this test fails.
+    #[test]
+    fn multicast_hops_const_roundtrips_on_raw_socket() {
+        use socket2::{Domain, Protocol, Socket, Type};
+        let sock = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+        sock.set_multicast_hops_v6(MATTER_GROUP_MULTICAST_HOPS)
+            .unwrap();
+        let readback = sock.multicast_hops_v6().unwrap();
+        assert_eq!(
+            readback, MATTER_GROUP_MULTICAST_HOPS,
+            "IPV6_MULTICAST_HOPS readback mismatch"
+        );
+    }
+
+    /// Verify that `TokioUdpTransport::bind_addr` succeeds after
+    /// `set_multicast_hops_v6` is applied inside it. The test binds to
+    /// `[::1]:0` (IPv6, so the hop-limit branch runs) and confirms the
+    /// returned port is non-zero — which means bind + option-set both
+    /// succeeded.
+    #[tokio::test]
+    async fn bind_addr_succeeds_with_multicast_hops_applied() {
+        let t = TokioUdpTransport::bind_addr("[::1]:0".parse::<SocketAddr>().unwrap())
+            .await
+            .unwrap();
+        // Port 0 was resolved to a real OS-assigned port.
+        assert_ne!(t.local_address().port(), 0);
+    }
+
+    /// Verify that `Transport::send` to a Matter group multicast address
+    /// (`ff35:…`) does not return an error at the socket layer on a
+    /// loopback-bound socket. Whether the datagram is delivered depends on
+    /// a joined multicast group and a real interface — that is
+    /// hardware-validated in the E3 runbook, not here.
+    ///
+    /// On most kernels `sendto` to a multicast address returns `Ok` even
+    /// when the packet is silently dropped (no route). If the kernel
+    /// returns `ENETUNREACH` the test skips rather than failing, because
+    /// that is a routing configuration detail, not a bug in our code.
+    #[tokio::test]
+    async fn send_to_multicast_addr_does_not_error_at_socket_layer() {
+        let mut t = TokioUdpTransport::bind_addr("[::1]:0".parse::<SocketAddr>().unwrap())
+            .await
+            .unwrap();
+
+        // ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f — the canonical test
+        // vector from matter-crypto's group_multicast_ipv6 KAT.
+        let group: Ipv6Addr = "ff35:0040:fda1:a2a4:a8b1:b2b4:b800:e10f".parse().unwrap();
+        // Matter group port per spec §4.11.2.
+        let dest = PeerAddress::from_ipv6(group, 5540);
+
+        t.socket().writable().await.unwrap();
+        match t.send(dest, b"test".to_vec()) {
+            Ok(()) => { /* send accepted by kernel — expected path */ }
+            Err(crate::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    // WouldBlock: Tokio hasn't internally observed write
+                    // readiness yet — same as the unicast path.
+                    std::io::ErrorKind::WouldBlock
+                        // NetworkUnreachable / HostUnreachable (ENETUNREACH /
+                        // EHOSTUNREACH): no multicast route on the loopback
+                        // interface in a CI container without a real NIC.
+                        // These are routing-configuration issues, not bugs in
+                        // our socket-option setup.
+                        | std::io::ErrorKind::NetworkUnreachable
+                        | std::io::ErrorKind::HostUnreachable
+                ) =>
+            {
+                // Acceptable routing-layer rejection; not our bug.
+            }
+            Err(e) => panic!("unexpected socket error on multicast send: {e}"),
         }
     }
 }
