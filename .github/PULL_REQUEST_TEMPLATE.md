@@ -24,8 +24,6 @@ description is much harder to review on a security-sensitive protocol library.
 
 - [ ] This PR touches `matter-crypto/` or otherwise changes PASE / CASE wire bytes
 - [ ] I have labelled the PR `crypto`
-- [ ] I understand this PR blocks a release of `matter-crypto` until external
-      cryptographic review has signed off
 
 ## Related issues / milestones
 

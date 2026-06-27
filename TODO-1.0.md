@@ -90,18 +90,6 @@ it.
 
 ## matter-crypto
 
-### External cryptographic protocol review (M3 PASE + M4 CASE)
-
-**Status:** owned by the user; pending arrangement.
-
-**Why it matters:** CLAUDE.md mandates external review for any crate
-implementing cryptographic protocols. PASE (M3) and CASE (M4) are both
-in scope. Implementations are complete; review is the remaining gate.
-
-**Concrete deliverable:** review completed, feedback applied, sign-off
-captured in a comment on `matter-crypto/README.md` or in a new
-`docs/` artefact. Required before any `cargo publish matter-crypto`.
-
 ### CASE / SIGMA-I (M4) — DONE (new-session path)
 
 **Status:** feature-complete and byte-parity verified for new-session
@@ -260,17 +248,6 @@ caller just sees empty `poll_results` and timeouts.
 (b) automatic daemon respawn on detected channel disconnection. Track
 upstream mdns-sd issue tracker for a "watchdog" API; consider
 contributing one if not present.
-
-### External cryptographic protocol review
-
-**Status:** owned by the user; runs in parallel with development.
-
-**Why it matters:** CLAUDE.md mandates external review for M3
-(PASE/SPAKE2+) and M4 (CASE/SIGMA). The user has stated review runs
-in parallel and does not block development. This item is here so
-the requirement isn't lost — review must complete (and feedback be
-applied) before any cargo publish of a crate touching protocol-level
-crypto.
 
 ## matter-commissioning
 

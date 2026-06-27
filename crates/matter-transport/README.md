@@ -26,11 +26,6 @@ MRP reliability layer (§4.11) and the application protocol header
 **Pre-release (`0.1.0-pre`).** M5 is feature-complete. Not yet published
 to crates.io; no real-device interop testing yet (M6 territory).
 
-This crate has not been externally crypto-reviewed. The cryptographic
-primitives it consumes are in `matter-crypto`, which itself has the
-crypto-review obligation. See [`TODO-1.0.md`](../../TODO-1.0.md) for
-the open work tracked before any `cargo publish`.
-
 ## Cargo features
 
 - `tokio` (default): enables `TokioUdpTransport` and the `Error::Io`

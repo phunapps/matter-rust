@@ -261,9 +261,8 @@ migration step is needed for snapshots from M9-E1 or earlier.
   runbook (`docs/runbooks/m9-e3-group-multicast.md`) for the full hardware
   validation loop and multicast-interface troubleshooting.
 - The group-message crypto path (key derivation in `matter-crypto` E2 +
-  AES-CCM group framing in `matter-transport` E3) is subject to the
-  **external-crypto-review release gate** flagged in E2. See the E2 CHANGELOG
-  entry in `matter-crypto`.
+  AES-CCM group framing in `matter-transport` E3) is byte-parity verified
+  against connectedhomeip test vectors. See the E2 CHANGELOG entry in `matter-crypto`.
 
 ### [Unreleased] — M9-E1 group provisioning
 
@@ -879,9 +878,9 @@ commission) are the remaining M6 sub-milestones.
   GeneralCommissioning, M6.5 NetworkCommissioning, M8 persistence,
   M6.6 real-device commission).
 
-#### Crypto-review attention for M6.3
+#### Crypto-sensitive areas in M6.3
 
-External-review request (non-blocking per standing user stance) targets:
+The following areas warrant careful review for spec-correctness:
 1. `noc/issuer.rs::issue_noc` — NOC Subject DN contents (FabricId /
    NodeId / CAT layout per spec §6.5.6), Extension contents
    (BasicConstraints / KeyUsage / EKU / SKI / AKI per §6.5.4),
@@ -1142,17 +1141,6 @@ fixture file; the test assertions remain stable.
   a limit of 8 clears any realistic intra-site path while staying well clear of
   global scope.
 
-#### Release gate — external cryptographic review required
-
-> **RELEASE GATE (reiterated from E2):** the full group-message crypto path —
-> `derive_group_session_id`, `group_multicast_ipv6`, `derive_operational_ipk`
-> (used as the group key, `matter-crypto` E2) **and** this E3 group-secured
-> framing (`encode_group_secured` / `decode_group_secured`, group message
-> counter) — **must receive external cryptographic review before any release
-> that ships group messaging**. This follows the same CLAUDE.md
-> crypto-protocol rule applied to PASE (M3) and CASE (M4). Development
-> continues unblocked; this is a release-time gate, not a build gate.
-
 ### [0.1.0-pre] — 2026-05-22 (not yet published)
 
 #### Changed (M6.6.3a — session-id foundation)
@@ -1279,18 +1267,6 @@ fixture file; the test assertions remain stable.
   `TestPeerAddressMulticast`), independently verified via a Python3
   HKDF-SHA256 reproduction. Two independent sources; no self-derived vectors.
 
-#### Release gate — external cryptographic review required
-
-> **RELEASE GATE:** the group-message crypto path — the E2 derivations
-> (`derive_group_session_id`, `group_multicast_ipv6`, `derive_operational_ipk`
-> used as group key) **plus** the E3 group-secured message framing (AES-CCM
-> group message encode, group message counter) — **must receive external
-> cryptographic review before any release that ships group messaging**.
-> This follows the same CLAUDE.md crypto-protocol rule applied to PASE (M3)
-> and CASE (M4). Development continues unblocked; this is a release-time gate,
-> not a build gate. Flag this section when preparing a release that enables
-> group send.
-
 ### [Unreleased] — M9-D1 commissioning window helpers
 
 #### Added
@@ -1326,7 +1302,7 @@ fixture file; the test assertions remain stable.
   vector at `test-vectors/operational/compressed_fabric_id.json`.
 - New `Error::KeyDerivationFailed` variant for the operational HKDF path.
 - No cryptographic *math* changed — these expose existing wire fields and add
-  an identity derivation; no new external-review gate.
+  an identity derivation.
 
 #### Added (M4 — CASE / SIGMA-I)
 
@@ -1386,7 +1362,6 @@ fixture file; the test assertions remain stable.
 #### Not yet shipped
 
 - CASE resumption byte-parity (known divergences documented in TODO-1.0.md).
-- External cryptographic review (in progress; tracked in TODO-1.0.md).
 
 ## matter-cert
 

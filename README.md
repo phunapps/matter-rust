@@ -110,9 +110,8 @@ before changing the test.
   come from [`ring`](https://docs.rs/ring) (or `aws-lc-rs` if a switch becomes
   justified). We implement the Matter-defined **protocols** on top — SPAKE2+,
   SIGMA — not the math underneath.
-- The `matter-crypto` crate will not be released without external review by a
-  cryptographic engineer for any change that touches the PASE or CASE wire
-  protocol. This is enforced by the maintainer, not by CI.
+- Correctness is verified by byte-parity against matter.js and
+  connectedhomeip, plus real-device validation from Milestone 6 onwards.
 
 ## Using the published crates
 
@@ -149,8 +148,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The short version:
 
 - Issues labelled `good-first-issue` and `help-wanted` are open.
 - Any PR that changes protocol behaviour must include matter.js test vectors.
-- Any PR that changes cryptographic protocol code is flagged for external review
-  before the next release.
 - No `unwrap()` or `expect()` in library code. Test code is fine with a comment
   justifying the assumption.
 

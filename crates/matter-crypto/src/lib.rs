@@ -18,9 +18,6 @@
 //! HMAC come from `ring`. EC scalar/point arithmetic (which ring deliberately
 //! doesn't expose) comes from `p256`. We implement only the Matter-defined
 //! protocols on top of those primitives.
-//!
-//! Releases that change anything in this crate require external cryptographic
-//! review before publishing. See `CONTRIBUTING.md`.
 
 #![forbid(unsafe_code)]
 

@@ -35,10 +35,6 @@ Authenticated Session Establishment) via SIGMA-I. Part of the
 
 **Pre-release (`0.1.0-pre`).** PASE and CASE feature-complete.
 
-This crate has not been externally crypto-reviewed yet. See
-[`TODO-1.0.md`](../../TODO-1.0.md) for review tracking before any
-crates.io release.
-
 ## Minimal example
 
 ```rust

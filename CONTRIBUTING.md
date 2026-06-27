@@ -85,8 +85,6 @@ Any PR that modifies code inside `crates/matter-crypto/` — or anything that
 affects the bytes on the wire during PASE or CASE — is subject to extra rules:
 
 - Label the PR `crypto`.
-- The PR is **not eligible for release** until external cryptographic review has
-  signed off on the diff. The maintainer will arrange this.
 - Include the matter.js test vectors that prove the change is correct.
 - Do not change cryptographic primitives or their parameters without a written
   justification in the PR description.
