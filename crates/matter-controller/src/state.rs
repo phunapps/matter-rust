@@ -19,7 +19,12 @@ use crate::error::Error;
 ///
 /// This is a `pub` type because callers that program group keys (e.g.
 /// higher-level fabric-management APIs) need to construct and inspect it.
+///
+/// `#[non_exhaustive]`: persisted record whose shape may grow (e.g. key policy
+/// epoch, security level flags); marking it keeps such additions non-breaking.
+/// Construct via [`GroupKeySetConfig::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GroupKeySetConfig {
     /// Group Key Set ID (`GrpKeySetID`, 16-bit, spec §4.15).
     pub key_set_id: u16,
@@ -27,6 +32,21 @@ pub struct GroupKeySetConfig {
     pub epoch_key: [u8; 16],
     /// Epoch key start time in Matter epoch seconds (0 = unset / pre-operational).
     pub epoch_start_time: u64,
+}
+
+impl GroupKeySetConfig {
+    /// Construct a [`GroupKeySetConfig`].
+    ///
+    /// Required because the struct is `#[non_exhaustive]`; external callers
+    /// cannot use struct-literal syntax.
+    #[must_use]
+    pub fn new(key_set_id: u16, epoch_key: [u8; 16], epoch_start_time: u64) -> Self {
+        Self {
+            key_set_id,
+            epoch_key,
+            epoch_start_time,
+        }
+    }
 }
 
 /// A device commissioned onto a fabric.

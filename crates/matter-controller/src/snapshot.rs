@@ -189,11 +189,11 @@ fn group_key_from_value(v: &Value) -> Result<GroupKeySetConfig, Error> {
         .map_err(|_| Error::Snapshot("key_set_id exceeds u16 range".into()))?;
     let epoch_key = byte_array::<16>(get_bytes(m, 1)?, "epoch_key")?;
     let epoch_start_time = get_uint(m, 2)?;
-    Ok(GroupKeySetConfig {
+    Ok(GroupKeySetConfig::new(
         key_set_id,
         epoch_key,
         epoch_start_time,
-    })
+    ))
 }
 
 fn commissioner_from_value(v: &Value) -> Result<CommissionerIdentity, Error> {
@@ -424,16 +424,8 @@ mod tests {
         // serialize → deserialize with all group fields preserved.
         let mut fabric = shared_fabric().clone();
         fabric.group_keys = vec![
-            GroupKeySetConfig {
-                key_set_id: 0x0001,
-                epoch_key: [0xAA; 16],
-                epoch_start_time: 1_700_000_000,
-            },
-            GroupKeySetConfig {
-                key_set_id: 0x0002,
-                epoch_key: [0xBB; 16],
-                epoch_start_time: 1_700_100_000,
-            },
+            GroupKeySetConfig::new(0x0001, [0xAA; 16], 1_700_000_000),
+            GroupKeySetConfig::new(0x0002, [0xBB; 16], 1_700_100_000),
         ];
         fabric.outbound_group_counter = 42;
         let state = ControllerState {

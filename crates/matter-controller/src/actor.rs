@@ -1047,26 +1047,19 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         key_set_id: u16,
         epoch_start_time: u64,
     ) -> Result<crate::GroupKeySet, Error> {
-        // Generate the 16-byte epoch key from the CSPRNG. Validate the length
-        // explicitly (E1 final-review note): `random_bytes` fills the slice in
-        // place, but we assert the buffer is exactly 16 bytes before trusting it
-        // as group key material.
+        // Generate the 16-byte epoch key from the CSPRNG. The fixed-size array
+        // type `[u8; 16]` guarantees the buffer is exactly 16 bytes.
         let mut epoch_key = [0u8; 16];
         matter_crypto::random_bytes(&mut epoch_key)
             .map_err(|e| Error::Operational(format!("group epoch-key generation failed: {e}")))?;
-        if epoch_key.len() != 16 {
-            return Err(Error::Operational(
-                "group epoch key is not 16 bytes".to_string(),
-            ));
-        }
 
         // Append the persisted key-set config to the sole fabric.
         let fabric = self.sole_fabric_mut()?;
-        fabric.group_keys.push(crate::state::GroupKeySetConfig {
+        fabric.group_keys.push(crate::state::GroupKeySetConfig::new(
             key_set_id,
             epoch_key,
             epoch_start_time,
-        });
+        ));
 
         // Durability-critical: the caller relies on the key set being persisted
         // before it programs the key onto devices (so a crash mid-provision can
