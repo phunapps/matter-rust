@@ -467,6 +467,125 @@ pub fn decode_secured(
     Ok((header, plaintext))
 }
 
+/// Encode + encrypt a Matter **group** secured message (Matter Core Spec
+/// §4.15 group messaging, framing per §4.4 / §4.8.2).
+///
+/// A group message differs from the unicast secured path in five ways, all
+/// of which we mirror here against the independent matter.js vector
+/// (`test-vectors/transport/group-message.json`):
+///
+/// 1. **Key.** AES-128-CCM uses the *operational group key* directly — there
+///    is no per-session `i2r`/`r2i` split and no [`crate::session::Session`],
+///    so the caller supplies the 16-byte key.
+/// 2. **Security flags.** [`SecurityFlags::SESSION_TYPE_GROUP`] is set
+///    (`0x01`); the wire `securityFlags` byte is `0x01`.
+/// 3. **Message flags / destination.** [`SecuredMessageFlags::DEST_GROUP`]
+///    (`DSIZ = 0b10`) plus [`SecuredMessageFlags::SOURCE_PRESENT`] — a group
+///    header carries BOTH the 8-byte source node id and the 2-byte
+///    destination group id (`msgFlags = 0x06`).
+/// 4. **Nonce.** `SecurityFlags(1) || MessageCounter(4 LE) || SourceNodeId(8
+///    LE)`, where the node id is OUR (the sender's) operational node id. The
+///    header already carries this same source node id, so the nonce builder
+///    picks it up from the header — but we pass it explicitly too for parity
+///    with the unicast contract.
+/// 5. **No MRP.** Group sends are unacknowledged; the caller owns the group
+///    message counter (there is no session counter to advance).
+///
+/// `counter` is the group message counter the caller has allocated.
+/// `protocol_header` and `app_payload` form the plaintext exactly as on the
+/// unicast path: `encode_protocol_header(protocol_header) || app_payload`.
+///
+/// The output layout is `header bytes || AES-CCM(plaintext) || 16-byte tag`,
+/// byte-for-byte the full group wire message.
+///
+/// # Errors
+///
+/// - [`Error::PayloadTooLarge`] if the encoded plaintext (protocol header +
+///   `app_payload`) exceeds the framing payload cap.
+/// - [`Error::Crypto`] if the underlying AES-CCM cipher fails (not expected
+///   in practice for spec-bounded message sizes).
+pub fn encode_group_secured(
+    operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+    group_session_id: u16,
+    source_node_id: u64,
+    group_id: u16,
+    counter: u32,
+    protocol_header: &crate::protocol_header::ProtocolHeader,
+    app_payload: &[u8],
+) -> Result<Vec<u8>> {
+    // Plaintext = protocol header || app payload, identical to the unicast
+    // path's `prepared.wire_payload`.
+    let mut plaintext = Vec::with_capacity(16 + app_payload.len());
+    crate::protocol_header::encode_protocol_header(protocol_header, &mut plaintext);
+    plaintext.extend_from_slice(app_payload);
+
+    if plaintext.len() > MAX_PAYLOAD_LEN {
+        return Err(Error::PayloadTooLarge {
+            len: plaintext.len(),
+            max: MAX_PAYLOAD_LEN,
+        });
+    }
+
+    let header = SecuredMessageHeader {
+        // Group header carries BOTH the source node id (S=1) and the 2-byte
+        // group id (DSIZ=0b10) → msgFlags = 0x06.
+        flags: SecuredMessageFlags::SOURCE_PRESENT | SecuredMessageFlags::DEST_GROUP,
+        session_id: SessionId(group_session_id),
+        security_flags: SecurityFlags::SESSION_TYPE_GROUP,
+        message_counter: MessageCounter(counter),
+        source_node_id: Some(NodeId(source_node_id)),
+        destination_node_id: Some(DestNodeId::Group(group_id)),
+    };
+
+    // AAD = the exact encoded packet-header bytes (spec §4.8.2; matter.js
+    // `GroupSession.encode`). Nonce mixes the source node id; `build_nonce`
+    // reads it from the header (which carries it for group messages).
+    let aad = encode_header(&header);
+    let nonce = build_nonce(&header, source_node_id);
+
+    // Reuse the shared AES-CCM routine — never hand-roll the cipher.
+    let ciphertext = matter_crypto::aead::encrypt(operational_group_key, &nonce, &aad, &plaintext)?;
+    let mut out = aad;
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Decrypt + decode a Matter **group** secured message produced by
+/// [`encode_group_secured`] (or a matter.js group sender).
+///
+/// On success returns the parsed header and the decrypted plaintext (protocol
+/// header || app payload). The caller recovers the source node id and group
+/// id from the returned [`SecuredMessageHeader`].
+///
+/// Unlike [`decode_secured`], there is no replay window: group messaging is
+/// stateless on the receive side here, and the caller owns any per-group
+/// replay tracking. The nonce node id is taken from the header's source node
+/// id (always present on group messages).
+///
+/// # Errors
+///
+/// - [`Error::MalformedHeader`] if the header bytes are truncated or
+///   reserved-value bits are set.
+/// - [`Error::DecryptionFailed`] if the AES-CCM tag does not verify (wrong
+///   group key, tampered ciphertext, or mismatched AAD/nonce).
+pub fn decode_group_secured(
+    bytes: &[u8],
+    operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+) -> Result<(SecuredMessageHeader, Vec<u8>)> {
+    let (header, rest) = decode_header(bytes)?;
+    // AAD is the on-the-wire header — the leading bytes up to `rest` (same
+    // optimisation as `decode_secured`).
+    let header_len = bytes.len() - rest.len();
+    let aad = &bytes[..header_len];
+    // Group messages carry the source node id in the header; `build_nonce`
+    // uses it. The fallback (0) is never reached for a well-formed group
+    // header (S=1).
+    let nonce = build_nonce(&header, 0);
+    let plaintext = matter_crypto::aead::decrypt(operational_group_key, &nonce, aad, rest)
+        .map_err(|_| Error::DecryptionFailed)?;
+    Ok((header, plaintext))
+}
+
 /// Compose the AES-CCM nonce per Matter Core Spec §4.8.2:
 /// `nonce = SecurityFlags(1) || MessageCounter(4 LE) || SourceNodeId(8 LE)`.
 ///
@@ -498,6 +617,36 @@ fn build_nonce(
 mod tests {
     use super::*;
     use crate::error::Error;
+
+    /// Decode a hex string to bytes (test helper for the group KAT).
+    fn hex(s: &str) -> Vec<u8> {
+        assert!(
+            s.len().is_multiple_of(2),
+            "hex string must have even length"
+        );
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Decode a 32-char hex string into a fixed 16-byte array.
+    fn hex16(s: &str) -> [u8; 16] {
+        let v = hex(s);
+        let mut a = [0u8; 16];
+        a.copy_from_slice(&v);
+        a
+    }
+
+    /// Lowercase hex-encode bytes (for readable KAT assertion messages).
+    fn hex_encode(b: &[u8]) -> String {
+        use std::fmt::Write as _;
+        b.iter()
+            .fold(String::with_capacity(b.len() * 2), |mut s, x| {
+                let _ = write!(s, "{x:02x}");
+                s
+            })
+    }
 
     /// Spec §4.4.1 minimum header: version=0, S=0, DSIZ=0. Only the
     /// 8-byte fixed portion is present.
@@ -803,6 +952,173 @@ mod tests {
         });
         assert_eq!(h6.message_counter.0, 6);
         assert_eq!(payload, b"world");
+    }
+
+    /// **Security-critical known-answer test.** The group-secured encode
+    /// MUST byte-match the independent matter.js vector
+    /// (`test-vectors/transport/group-message.json`, captured from
+    /// `@matter/protocol` `GroupSession.encode` + Node `aes-128-ccm`). If the
+    /// nonce, AAD, key, or header layout drifts by a single byte the tag
+    /// changes and this fails. This is the proof that our group nonce/AAD/key
+    /// construction matches the oracle.
+    ///
+    /// Inputs are read straight from the fixture:
+    /// - `operational_group_key` = `4e6f436f6e74726f6c4d61747465724b`
+    /// - `group_session_id` = 1, `group_id` = 0x1234, `message_counter` = 5
+    /// - `source_node_id` = 0xDEADBEEFCAFEBABE
+    /// - plaintext = `052102d10a0001003501290218` (a protocol header
+    ///   `INITIATOR|RELIABLE`, opcode 0x21, exchange 0xd102, protocol 0x000a,
+    ///   followed by the app payload tail `01003501290218`).
+    /// - expected wire = header `0601000105000000bebafecaefbeadde3412` ||
+    ///   ciphertext+tag.
+    #[test]
+    fn group_encode_matches_matterjs_vector() {
+        use crate::protocol_header::{ExchangeFlags, ProtocolHeader, ProtocolId};
+
+        // ---- Inputs (verbatim from group-message.json) ----
+        let key: [u8; 16] = hex16("4e6f436f6e74726f6c4d61747465724b");
+        let group_session_id: u16 = 1;
+        let group_id: u16 = 0x1234; // 4660
+        let counter: u32 = 5;
+        let source_node_id: u64 = 0xDEAD_BEEF_CAFE_BABE;
+
+        // The fixture's plaintext decodes as protocol-header || app-payload.
+        // We reconstruct the header fields and the tail so the encoded
+        // plaintext is byte-identical to `payload_hex`.
+        let protocol_header = ProtocolHeader {
+            exchange_flags: ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+            opcode: 0x21,
+            exchange_id: 0xd102,
+            protocol_id: ProtocolId {
+                vendor: 0,
+                protocol: 0x000a,
+            },
+            ack_counter: None,
+        };
+        let app_payload = hex("01003501290218");
+
+        // Sanity: the reconstructed plaintext equals the fixture's payload_hex.
+        let mut plaintext = Vec::new();
+        crate::protocol_header::encode_protocol_header(&protocol_header, &mut plaintext);
+        plaintext.extend_from_slice(&app_payload);
+        assert_eq!(
+            plaintext,
+            hex("052102d10a0001003501290218"),
+            "reconstructed plaintext must equal the fixture payload_hex"
+        );
+
+        // ---- Encode ----
+        let wire = encode_group_secured(
+            &key,
+            group_session_id,
+            source_node_id,
+            group_id,
+            counter,
+            &protocol_header,
+            &app_payload,
+        )
+        .unwrap();
+
+        // ---- Assert byte-for-byte against the full fixture wire message ----
+        let expected_wire =
+            hex("0601000105000000bebafecaefbeadde34129506e3d4b7267e33e078a21650d79c70db886e5ddfc1398a6ee2212fb5");
+        assert_eq!(
+            hex_encode(&wire),
+            hex_encode(&expected_wire),
+            "group wire message must byte-match the matter.js vector"
+        );
+
+        // Cross-check the discrete fixture fields too: header + ciphertext+tag.
+        let header_bytes = hex("0601000105000000bebafecaefbeadde3412");
+        assert_eq!(
+            &wire[..header_bytes.len()],
+            &header_bytes[..],
+            "header (AAD)"
+        );
+        assert_eq!(
+            &wire[header_bytes.len()..],
+            &hex("9506e3d4b7267e33e078a21650d79c70db886e5ddfc1398a6ee2212fb5")[..],
+            "ciphertext || tag"
+        );
+    }
+
+    /// Loopback: encode a group message then decode it with the SAME
+    /// operational group key. Recover the payload, the group id, and the
+    /// source node id from the decoded header.
+    #[test]
+    fn group_encode_decode_roundtrip() {
+        use crate::protocol_header::{ExchangeFlags, ProtocolHeader, ProtocolId};
+
+        let key: [u8; 16] = [0xA5; 16];
+        let group_session_id: u16 = 0x0007;
+        let group_id: u16 = 0xBEEF;
+        let counter: u32 = 0x1234_5678;
+        let source_node_id: u64 = 0x0011_2233_4455_6677;
+
+        let protocol_header = ProtocolHeader {
+            exchange_flags: ExchangeFlags::INITIATOR,
+            opcode: 0x06, // ReportData
+            exchange_id: 0x4242,
+            protocol_id: ProtocolId::INTERACTION_MODEL,
+            ack_counter: None,
+        };
+        let app_payload = b"group payload bytes";
+
+        let wire = encode_group_secured(
+            &key,
+            group_session_id,
+            source_node_id,
+            group_id,
+            counter,
+            &protocol_header,
+            app_payload,
+        )
+        .unwrap();
+
+        let (header, plaintext) = decode_group_secured(&wire, &key).unwrap();
+
+        // Header fields recovered.
+        assert_eq!(header.session_id, SessionId(group_session_id));
+        assert_eq!(header.message_counter, MessageCounter(counter));
+        assert_eq!(header.source_node_id, Some(NodeId(source_node_id)));
+        assert_eq!(
+            header.destination_node_id,
+            Some(DestNodeId::Group(group_id))
+        );
+        assert!(header
+            .security_flags
+            .contains(SecurityFlags::SESSION_TYPE_GROUP));
+        assert!(header.flags.contains(SecuredMessageFlags::DEST_GROUP));
+        assert!(header.flags.contains(SecuredMessageFlags::SOURCE_PRESENT));
+
+        // Plaintext = protocol header || app payload. Strip the header back
+        // off and confirm the app payload survived the round-trip.
+        let (decoded_ph, tail) =
+            crate::protocol_header::decode_protocol_header(&plaintext).unwrap();
+        assert_eq!(decoded_ph.opcode, 0x06);
+        assert_eq!(decoded_ph.exchange_id, 0x4242);
+        assert_eq!(decoded_ph.protocol_id, ProtocolId::INTERACTION_MODEL);
+        assert_eq!(tail, app_payload);
+    }
+
+    /// A group message decoded with the WRONG group key must fail
+    /// authentication (the tag will not verify).
+    #[test]
+    fn group_decode_wrong_key_fails() {
+        use crate::protocol_header::{ExchangeFlags, ProtocolHeader, ProtocolId};
+
+        let key: [u8; 16] = [0x11; 16];
+        let wrong: [u8; 16] = [0x22; 16];
+        let ph = ProtocolHeader {
+            exchange_flags: ExchangeFlags::INITIATOR,
+            opcode: 0x06,
+            exchange_id: 1,
+            protocol_id: ProtocolId::INTERACTION_MODEL,
+            ack_counter: None,
+        };
+        let wire = encode_group_secured(&key, 1, 0xCAFE, 0x1234, 9, &ph, b"x").unwrap();
+        let err = decode_group_secured(&wire, &wrong).unwrap_err();
+        assert!(matches!(err, Error::DecryptionFailed));
     }
 
     mod replay_window {
