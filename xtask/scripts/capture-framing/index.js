@@ -214,6 +214,108 @@ function captureScenario(inputs) {
 }
 
 // ---------------------------------------------------------------------------
+// Encode a single GROUP-secured scenario
+// ---------------------------------------------------------------------------
+
+/**
+ * Drive the matter.js GROUP secured-message encoder with fixed inputs.
+ *
+ * This mirrors `GroupSession.encode` in
+ * `@matter/protocol/src/session/GroupSession.ts` (lines 165-186), the
+ * authoritative matter.js group-encode path:
+ *
+ *   1. headerBytes = MessageCodec.encodePacketHeader(packetHeader)   // = AAD
+ *   2. securityFlags = headerBytes[3]                                 // = 0x01 (Group)
+ *   3. nonce = Session.generateNonce(securityFlags, messageId, fabric.nodeId)
+ *        where fabric.nodeId is the SOURCE node id of this message.
+ *   4. ciphertext = AES-128-CCM(operationalGroupKey, payload, nonce, headerBytes)
+ *
+ * For a GROUP message, MessageCodec.encodePacketHeader requires:
+ *   - destGroupId  !== undefined  (sets HasDestGroupId flag, 0b10)
+ *   - sourceNodeId !== undefined  (sets HasSourceNodeId flag, 0b100)
+ *   - destNodeId   === undefined  (group + dest-node is rejected)
+ *   - sessionType  === SessionType.Group (=1) → securityFlags byte = 0x01.
+ *
+ * We deliberately call the static MessageCodec + Session helpers directly and
+ * use Node's native AES-CCM (identical to NodeJsStyleCrypto.encrypt: aes-128-ccm,
+ * 16-byte tag, returns ciphertext||tag). We do NOT construct a GroupSession —
+ * that needs a Fabric/FabricManager/transport/multicast machinery we don't have.
+ * The static path produces byte-identical output (GroupSession.encode is a thin
+ * wrapper around exactly these calls).
+ */
+function captureGroupScenario(inputs) {
+    const groupKey = Buffer.from(inputs.operational_group_key, 'hex');
+    if (groupKey.length !== 16) {
+        throw new Error('operational_group_key must be 16 bytes');
+    }
+
+    const sourceNodeId = nodeIdFromHexBE(inputs.source_node_id); // BigInt
+    if (sourceNodeId === null) {
+        throw new Error('group message requires source_node_id');
+    }
+
+    // Build the GROUP PacketHeader. SessionType.Group → securityFlags byte 0x01;
+    // HasDestGroupId + HasSourceNodeId message flags; NO destNodeId.
+    const packetHeader = {
+        sessionId: inputs.session_id,
+        sessionType: SessionType.Group,
+        hasPrivacyEnhancements: false,
+        isControlMessage: false,
+        hasMessageExtensions: false,
+        messageId: inputs.message_counter >>> 0,
+        sourceNodeId, // BigInt — present (required for group)
+        destNodeId: undefined, // MUST be absent for group
+        destGroupId: inputs.group_id, // u16 — present (required for group)
+    };
+
+    // 1. Encode the packet header → AAD bytes.
+    const headerBytes = Buffer.from(MessageCodec.encodePacketHeader(packetHeader));
+    const securityFlagsByte = headerBytes[3]; // = 0x01 for Group.
+
+    // 2. Build the nonce. matter.js GroupSession.encode passes fabric.nodeId,
+    //    which is the SOURCE node id of the outgoing message. Decode confirms
+    //    this: generateNonce(securityFlags, messageId, header.sourceNodeId).
+    const nonce = buildNonce(securityFlagsByte, packetHeader.messageId, sourceNodeId);
+
+    // 3. AES-CCM encrypt with the operational group key. AAD = encoded header.
+    const payload = Buffer.from(inputs.payload_hex, 'hex');
+    const ciphertextAndTag = aesCcmEncrypt(groupKey, payload, nonce, headerBytes);
+
+    // ciphertext||tag; tag is the trailing 16 bytes.
+    const tagLen = 16;
+    const ciphertext = ciphertextAndTag.subarray(0, ciphertextAndTag.length - tagLen);
+    const tag = ciphertextAndTag.subarray(ciphertextAndTag.length - tagLen);
+
+    const wire = Buffer.concat([headerBytes, ciphertextAndTag]);
+
+    return {
+        source: {
+            oracle: 'matter.js',
+            packages: '@matter/protocol@0.16.11 (MessageCodec.encodePacketHeader + Session.generateNonce) + Node native aes-128-ccm',
+            mirrors: 'GroupSession.encode (src/session/GroupSession.ts lines 165-186)',
+        },
+        notes: {
+            nonce: 'u8(securityFlags) || u32_LE(messageId) || u64_LE(sourceNodeId) — 13 bytes; node id == SOURCE node id for group',
+            security_flags: 'securityFlags byte == SessionType.Group == 0x01 (no privacy/control/extension bits)',
+            message_flags: 'header byte 0: version(0)<<4 | HasDestGroupId(0x02) | HasSourceNodeId(0x04) == 0x06',
+            aad: 'AAD == the exact encoded packet-header bytes (header_hex below)',
+            key: 'AES-128-CCM key == operational_group_key (16 B); auth tag 16 B; output == ciphertext||tag',
+        },
+        inputs,
+        expected: {
+            header_hex: headerBytes.toString('hex'), // = AAD
+            security_flags_byte: securityFlagsByte,
+            message_flags_byte: headerBytes[0],
+            nonce_hex: nonce.toString('hex'),
+            ciphertext_hex: ciphertext.toString('hex'),
+            tag_hex: tag.toString('hex'),
+            ciphertext_and_tag_hex: ciphertextAndTag.toString('hex'),
+            wire_hex: wire.toString('hex'),
+        },
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Scenarios — see the plan (docs/superpowers/plans/...transport-phase-1.md
 // "Task 7: capture-framing") for the rationale behind each set of inputs.
 // ---------------------------------------------------------------------------
@@ -264,6 +366,28 @@ const scenarios = [
     },
 ];
 
+// Group-secured-message scenarios. Fixed inputs: operational group key (16 B),
+// source node id (u64), group id (u16), group message counter (u32), plaintext.
+const groupScenarios = [
+    {
+        id: 'group-message',
+        inputs: {
+            // Operational group key (16 B). Distinct from the unicast scenario
+            // keys so a mix-up is obvious.
+            operational_group_key: '4e6f436f6e74726f6c4d61747465724b', // "NoControlMatterK"
+            // session_id here is the Group Session ID (derived from the group
+            // key); for the KAT we pin it to a fixed value. matter.js writes it
+            // verbatim into the header; the value is not used in the nonce.
+            session_id: 0x0001,
+            group_id: 0x1234, // u16 destination group id
+            message_counter: 0x00000005, // u32 group message counter
+            source_node_id: 'DEADBEEFCAFEBABE', // BE hex → u64; SOURCE of the message
+            // A small IM payload (matches the unicast scenarios' shape).
+            payload_hex: '052102d10a0001003501290218',
+        },
+    },
+];
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -271,6 +395,20 @@ const scenarios = [
 for (const scenario of scenarios) {
     try {
         const out = captureScenario(scenario.inputs);
+        const outPath = join(OUT_DIR, `${scenario.id}.json`);
+        writeFileSync(outPath, `${JSON.stringify(out, null, 2)}\n`);
+        const byteLen = out.expected.wire_hex.length / 2;
+        console.log(`captured ${scenario.id} -> ${outPath} (wire ${byteLen} bytes)`);
+    } catch (err) {
+        console.error(`failed ${scenario.id}: ${err.message}`);
+        if (err.stack) console.error(err.stack);
+        process.exitCode = 1;
+    }
+}
+
+for (const scenario of groupScenarios) {
+    try {
+        const out = captureGroupScenario(scenario.inputs);
         const outPath = join(OUT_DIR, `${scenario.id}.json`);
         writeFileSync(outPath, `${JSON.stringify(out, null, 2)}\n`);
         const byteLen = out.expected.wire_hex.length / 2;
