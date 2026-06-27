@@ -396,8 +396,14 @@ impl Commissioner {
             Stage::ArmFailsafe | Stage::FailsafeBeforeWiFiEnable => Ok(self.arm_failsafe_action()),
             Stage::ConfigRegulatory => {
                 let breadcrumb = self.next_breadcrumb();
+                // FIXME(temp, uncommitted): hardcoding IndoorOutdoor(2) exceeds
+                // stricter devices' LocationCapability → SetRegulatoryConfig
+                // returns ValueOutsideRange (errorCode 1). The chip-faithful fix
+                // is to read attr 0x03 (LocationCapability) in ReadCommissioningInfo
+                // and echo it here. Indoor(0) is the safe universal value (accepted
+                // by Indoor-only AND IndoorOutdoor devices) — minimal unblock.
                 let payload = gc::encode_set_regulatory_config(
-                    gc::RegulatoryLocation::IndoorOutdoor,
+                    gc::RegulatoryLocation::Indoor,
                     "XX",
                     breadcrumb,
                 );
