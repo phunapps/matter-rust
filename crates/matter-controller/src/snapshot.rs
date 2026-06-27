@@ -5,20 +5,36 @@
 //! root: Structure { C0: version(u8), C1: Array[fabric] }
 //! fabric: Structure {
 //!   C0: fabric_id(uint), C1: ipk(bytes16), C2: rcac_cert(bytes,TLV),
-//!   C3: rcac_pkcs8(bytes), C4: commissioner(struct), C5: Array[device]
+//!   C3: rcac_pkcs8(bytes), C4: commissioner(struct), C5: Array[device],
+//!   C6: Array[group_key_set] (optional — absent in v1 snapshots written
+//!       before group-key support; defaults to empty on read),
+//!   C7: outbound_group_counter(uint, optional — same default rule)
 //! }
 //! commissioner: Structure { C0: node_id(uint), C1: op_pkcs8(bytes), C2: noc(bytes,TLV) }
 //! device: Structure {
 //!   C0: node_id(uint), C1: peer_noc_public_key(bytes65),
 //!   C2: resumption_record(bytes, optional), C3: last_known_addr(utf8, optional)
 //! }
+//! group_key_set: Structure {
+//!   C0: key_set_id(uint), C1: epoch_key(bytes16), C2: epoch_start_time(uint)
+//! }
 //! ```
+//!
+//! ## Backward compatibility
+//!
+//! C6 and C7 are optional tags: a v1 snapshot without them (written by an
+//! older binary) still deserializes cleanly — `group_keys` defaults to
+//! `Vec::new()` and `outbound_group_counter` to `0`.  No version bump is
+//! needed because the tag-keyed deserializer simply treats absent tags as
+//! defaults.
 
 use matter_cert::MatterCertificate;
 use matter_codec::{Tag, TlvWriter, Value};
 
 use crate::error::Error;
-use crate::state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
+use crate::state::{
+    CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry, GroupKeySetConfig,
+};
 
 /// Current snapshot schema version.
 pub const SNAPSHOT_VERSION: u8 = 1;
@@ -47,6 +63,7 @@ pub fn serialize(state: &ControllerState) -> Result<Vec<u8>, Error> {
 
 fn fabric_to_value(f: &FabricEntry) -> Result<Value, Error> {
     let devices = f.devices.iter().map(device_to_value).collect();
+    let group_keys: Vec<Value> = f.group_keys.iter().map(group_key_to_value).collect();
     Ok(Value::Structure(vec![
         (Tag::Context(0), Value::Uint(f.fabric_id)),
         (Tag::Context(1), Value::Bytes(f.ipk.to_vec())),
@@ -54,7 +71,20 @@ fn fabric_to_value(f: &FabricEntry) -> Result<Value, Error> {
         (Tag::Context(3), Value::Bytes(f.rcac_pkcs8.clone())),
         (Tag::Context(4), commissioner_to_value(&f.commissioner)?),
         (Tag::Context(5), Value::Array(devices)),
+        (Tag::Context(6), Value::Array(group_keys)),
+        (
+            Tag::Context(7),
+            Value::Uint(u64::from(f.outbound_group_counter)),
+        ),
     ]))
+}
+
+fn group_key_to_value(k: &GroupKeySetConfig) -> Value {
+    Value::Structure(vec![
+        (Tag::Context(0), Value::Uint(u64::from(k.key_set_id))),
+        (Tag::Context(1), Value::Bytes(k.epoch_key.to_vec())),
+        (Tag::Context(2), Value::Uint(k.epoch_start_time)),
+    ])
 }
 
 fn commissioner_to_value(c: &CommissionerIdentity) -> Result<Value, Error> {
@@ -121,6 +151,26 @@ fn fabric_from_value(v: &Value) -> Result<FabricEntry, Error> {
     for dv in as_array(devices_val)? {
         devices.push(device_from_value(dv)?);
     }
+
+    // t6 / t7 are optional (absent in v1 snapshots written before group-key
+    // support was added).  Default to empty / 0 when missing — this keeps old
+    // stores loadable without a version bump.
+    let group_keys = match get(m, 6) {
+        Some(arr) => {
+            let mut keys = Vec::new();
+            for kv in as_array(arr)? {
+                keys.push(group_key_from_value(kv)?);
+            }
+            keys
+        }
+        None => Vec::new(),
+    };
+    let outbound_group_counter = match get(m, 7) {
+        Some(Value::Uint(n)) => u32::try_from(*n)
+            .map_err(|_| Error::Snapshot("outbound_group_counter exceeds u32 range".into()))?,
+        _ => 0,
+    };
+
     Ok(FabricEntry {
         fabric_id: get_uint(m, 0)?,
         ipk: byte_array::<16>(get_bytes(m, 1)?, "ipk")?,
@@ -128,6 +178,21 @@ fn fabric_from_value(v: &Value) -> Result<FabricEntry, Error> {
         rcac_pkcs8: get_bytes(m, 3)?.to_vec(),
         commissioner: commissioner_from_value(commissioner_val)?,
         devices,
+        group_keys,
+        outbound_group_counter,
+    })
+}
+
+fn group_key_from_value(v: &Value) -> Result<GroupKeySetConfig, Error> {
+    let m = as_struct(v)?;
+    let key_set_id = u16::try_from(get_uint(m, 0)?)
+        .map_err(|_| Error::Snapshot("key_set_id exceeds u16 range".into()))?;
+    let epoch_key = byte_array::<16>(get_bytes(m, 1)?, "epoch_key")?;
+    let epoch_start_time = get_uint(m, 2)?;
+    Ok(GroupKeySetConfig {
+        key_set_id,
+        epoch_key,
+        epoch_start_time,
     })
 }
 
@@ -349,5 +414,89 @@ mod tests {
                 prop_assert_eq!(&a.last_known_addr, &b.last_known_addr);
             }
         }
+    }
+
+    // --- group-key persistence tests ---
+
+    #[test]
+    fn group_keys_round_trip() {
+        // A FabricEntry WITH group_keys and a non-zero counter must survive
+        // serialize → deserialize with all group fields preserved.
+        let mut fabric = shared_fabric().clone();
+        fabric.group_keys = vec![
+            GroupKeySetConfig {
+                key_set_id: 0x0001,
+                epoch_key: [0xAA; 16],
+                epoch_start_time: 1_700_000_000,
+            },
+            GroupKeySetConfig {
+                key_set_id: 0x0002,
+                epoch_key: [0xBB; 16],
+                epoch_start_time: 1_700_100_000,
+            },
+        ];
+        fabric.outbound_group_counter = 42;
+        let state = ControllerState {
+            fabrics: vec![fabric.clone()],
+        };
+
+        let bytes = serialize(&state).expect("serialize");
+        let back = deserialize(&bytes).expect("deserialize");
+
+        assert_eq!(back.fabrics.len(), 1);
+        let f = &back.fabrics[0];
+        assert_eq!(f.outbound_group_counter, 42);
+        assert_eq!(f.group_keys.len(), 2);
+        assert_eq!(f.group_keys[0].key_set_id, 0x0001);
+        assert_eq!(f.group_keys[0].epoch_key, [0xAA; 16]);
+        assert_eq!(f.group_keys[0].epoch_start_time, 1_700_000_000);
+        assert_eq!(f.group_keys[1].key_set_id, 0x0002);
+        assert_eq!(f.group_keys[1].epoch_key, [0xBB; 16]);
+        assert_eq!(f.group_keys[1].epoch_start_time, 1_700_100_000);
+    }
+
+    #[test]
+    fn old_snapshot_without_t6_t7_loads_with_defaults() {
+        // Simulate a v1 snapshot written by old code: a fabric value that has
+        // only t0..t5 (no t6/t7).  The deserializer must accept it and default
+        // group_keys to [] and outbound_group_counter to 0.
+        let fabric = shared_fabric().clone();
+
+        // Build the fabric Value manually with only t0..t5 (the old layout).
+        let old_fabric_val = Value::Structure(vec![
+            (Tag::Context(0), Value::Uint(fabric.fabric_id)),
+            (Tag::Context(1), Value::Bytes(fabric.ipk.to_vec())),
+            (
+                Tag::Context(2),
+                Value::Bytes(fabric.rcac_cert.to_tlv().expect("rcac tlv")),
+            ),
+            (Tag::Context(3), Value::Bytes(fabric.rcac_pkcs8.clone())),
+            (
+                Tag::Context(4),
+                commissioner_to_value(&fabric.commissioner).expect("commissioner"),
+            ),
+            (Tag::Context(5), Value::Array(vec![])), // no devices
+        ]);
+
+        let root = Value::Structure(vec![
+            (Tag::Context(0), Value::Uint(u64::from(SNAPSHOT_VERSION))),
+            (Tag::Context(1), Value::Array(vec![old_fabric_val])),
+        ]);
+
+        let mut out = Vec::new();
+        let mut w = TlvWriter::new(&mut out);
+        w.write_value(Tag::Anonymous, &root).unwrap();
+
+        let back = deserialize(&out).expect("old snapshot must load without error");
+        assert_eq!(back.fabrics.len(), 1);
+        let f = &back.fabrics[0];
+        assert!(
+            f.group_keys.is_empty(),
+            "group_keys must default to empty for old snapshot"
+        );
+        assert_eq!(
+            f.outbound_group_counter, 0,
+            "outbound_group_counter must default to 0 for old snapshot"
+        );
     }
 }

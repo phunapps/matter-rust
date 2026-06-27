@@ -108,6 +108,8 @@ pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry
             noc,
         },
         devices: Vec::new(),
+        group_keys: Vec::new(),
+        outbound_group_counter: 0,
     })
 }
 

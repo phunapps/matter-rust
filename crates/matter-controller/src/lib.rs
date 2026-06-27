@@ -133,7 +133,9 @@ pub use matter_interaction::{
 };
 pub use node::{InvokeResult, Node};
 pub use opcreds::FabricDescriptor;
-pub use state::{CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry};
+pub use state::{
+    CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry, GroupKeySetConfig,
+};
 pub use store::{ControllerStore, FileStore, StoreError};
 pub use subscription::{AttributeReport, Subscription, SubscriptionEvent};
 pub use trust::AttestationTrust;

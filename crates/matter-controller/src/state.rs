@@ -9,6 +9,26 @@ use matter_crypto::{RingSigner, Signer};
 
 use crate::error::Error;
 
+/// The persisted material for one group key set.
+///
+/// Stored inside [`FabricEntry::group_keys`] and round-tripped through the
+/// TLV snapshot at context tags t6 (key-set array) and t7 (outbound counter).
+/// This carries only what the controller needs to *send* group-encrypted
+/// messages; a full `GroupKeySet` cluster record lives in the device, not
+/// here.
+///
+/// This is a `pub` type because callers that program group keys (e.g.
+/// higher-level fabric-management APIs) need to construct and inspect it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupKeySetConfig {
+    /// Group Key Set ID (`GrpKeySetID`, 16-bit, spec §4.15).
+    pub key_set_id: u16,
+    /// 16-byte epoch key (`EpochKey0` / `EpochKey1` / `EpochKey2` per policy).
+    pub epoch_key: [u8; 16],
+    /// Epoch key start time in Matter epoch seconds (0 = unset / pre-operational).
+    pub epoch_start_time: u64,
+}
+
 /// A device commissioned onto a fabric.
 ///
 /// `#[non_exhaustive]`: persisted record whose shape may grow (e.g. CAT tags,
@@ -98,6 +118,15 @@ pub struct FabricEntry {
     pub commissioner: CommissionerIdentity,
     /// Devices commissioned onto this fabric.
     pub devices: Vec<DeviceEntry>,
+    /// Group key sets programmed on this fabric (persisted for outbound group
+    /// message encryption). Empty until the controller programs group keys.
+    pub group_keys: Vec<GroupKeySetConfig>,
+    /// The outbound group message counter for this fabric.
+    ///
+    /// Monotonically incremented each time the controller sends a group
+    /// message. Persisted so the counter survives restarts (spec §4.6.7
+    /// prohibits counter reuse across sessions / resets).
+    pub outbound_group_counter: u32,
 }
 
 impl std::fmt::Debug for FabricEntry {
@@ -109,6 +138,11 @@ impl std::fmt::Debug for FabricEntry {
             .field("rcac_pkcs8", &"<redacted PKCS#8>")
             .field("commissioner", &self.commissioner)
             .field("devices", &self.devices)
+            .field(
+                "group_keys",
+                &format!("<{} key sets>", self.group_keys.len()),
+            )
+            .field("outbound_group_counter", &self.outbound_group_counter)
             .finish()
     }
 }
