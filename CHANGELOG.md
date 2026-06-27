@@ -207,6 +207,64 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-controller
 
+### [Unreleased] — M9-E3 group multicast send
+
+#### Added
+
+- **`MatterController::create_group(key_set_id: u16, epoch_start_time: u64) -> Result<GroupKeySet>`** —
+  generates a fresh 16-byte epoch key from the CSPRNG, persists a
+  `GroupKeySetConfig` under `key_set_id` in the controller's TLV snapshot
+  (context tags t6 / t7), and returns a [`GroupKeySet`] so the caller can
+  immediately program it onto each member device via
+  [`Node::write_group_key_set`]. The key set is stored durably before this
+  call returns — the controller can encrypt outbound group messages for it
+  right away. Returns `Error::NotCommissioned` if no fabric exists.
+- **`MatterController::invoke_group(group_id: u16, key_set_id: u16, path: CommandPath, fields: Value) -> Result<()>`** —
+  fire-and-forget multicast group invoke: derives the operational group key
+  (via `derive_operational_ipk`, reusing the E2 derivation) and group session
+  id (via `derive_group_session_id`) from the persisted epoch key; builds and
+  encrypts the group secured message (`encode_group_secured`); sends the
+  datagram to the Matter per-group multicast IPv6 address
+  (`group_multicast_ipv6(fabric_id, group_id)`) computed from the raw fabric
+  id. The outbound group message counter is bumped and persisted **before** the
+  send so no counter is reused across a crash. Returns as soon as the datagram
+  leaves the socket — group commands are unacknowledged; there is no response.
+- **`Error::GroupNotProvisioned(u16)`** — returned by `invoke_group` when
+  `key_set_id` has no matching `GroupKeySetConfig` in the persisted fabric
+  state. Call `create_group` first. The raw key-set id is carried in the
+  variant.
+
+#### Persistence changes (snapshot t6 / t7)
+
+The controller snapshot gains two new context-tagged fields per fabric:
+
+- **t6 — group key array** — a TLV list of `GroupKeySetConfig` records (key
+  set id, 16-byte epoch key, epoch start time). Persisted by `create_group`
+  before returning.
+- **t7 — outbound group counter** — a monotonic `u32` that advances with
+  every `invoke_group` call and is written before the UDP send. Guards against
+  counter reuse across process restarts.
+
+Snapshots without t6/t7 decode cleanly (empty key array, counter = 0) — no
+migration step is needed for snapshots from M9-E1 or earlier.
+
+#### Notes
+
+- `invoke_group` does not look up a group→key-set map: the caller supplies
+  both `group_id` and `key_set_id` explicitly. This is intentional — a
+  controller may bind the same key set to multiple groups, and the
+  group→key-set relationship is already captured on the device via
+  `write_group_key_map`.
+- Real multicast delivery requires the host network to route `ff35:…`
+  datagrams to the device's L2 segment. The send returns `Ok` even when the
+  host has no route (the bytes are correct at the socket layer). See the E3
+  runbook (`docs/runbooks/m9-e3-group-multicast.md`) for the full hardware
+  validation loop and multicast-interface troubleshooting.
+- The group-message crypto path (key derivation in `matter-crypto` E2 +
+  AES-CCM group framing in `matter-transport` E3) is subject to the
+  **external-crypto-review release gate** flagged in E2. See the E2 CHANGELOG
+  entry in `matter-crypto`.
+
 ### [Unreleased] — M9-E1 group provisioning
 
 #### Added
@@ -1050,6 +1108,50 @@ fixture file; the test assertions remain stable.
 - Proptest roundtrip suite (3 properties × 256 cases default).
 
 ## matter-transport
+
+### [Unreleased] — M9-E3 group-secured framing + IPv6 multicast send
+
+#### Added
+
+- **`encode_group_secured(key, group_session_id, source_node_id, group_id, counter, protocol_header, app_payload) -> Result<Vec<u8>>`** —
+  encodes and AES-CCM-128 encrypts a Matter group secured message (Matter Core
+  Spec §4.15 / §4.4 / §4.8.2). Differs from the unicast `encode_secured` path
+  in five spec-mandated ways: the operational group key is supplied directly
+  (no per-session i2r/r2i split); `SecurityFlags::SESSION_TYPE_GROUP` (`0x01`)
+  is set; the message-flags byte is `0x06` (`DEST_GROUP | SOURCE_PRESENT` — both
+  source node id and 2-byte group id are present in the header); the AES-CCM
+  nonce is `SecurityFlags(1) || MessageCounter(4 LE) || SourceNodeId(8 LE)`;
+  and there is no MRP (group commands are unacknowledged). Byte-parity confirmed
+  against an independent matter.js group-message vector
+  (`test-vectors/transport/group-message.json`). Re-exported at the crate root.
+- **`decode_group_secured(bytes, key) -> Result<(SecuredMessageHeader, Vec<u8>)>`** —
+  decrypts and decodes a group secured message produced by `encode_group_secured`
+  or a matter.js group sender. Returns the parsed header (carries source node id
+  and group id) plus the decrypted plaintext. No replay window — the caller owns
+  per-group replay tracking. Re-exported at the crate root.
+- **IPv6 multicast send** — `TokioUdpTransport::bind_addr` now sets
+  `IPV6_MULTICAST_HOPS` to `MATTER_GROUP_MULTICAST_HOPS` (8) at bind time via
+  `socket2`, so the existing `Transport::send` call routes `ff35:…` group
+  datagrams at the correct hop limit without any API change. `set_multicast_if_v6`
+  is deliberately **not** called: macOS rejects interface index 0 with `EINVAL`;
+  the OS kernel default (equivalent to index 0 on Linux) gives the same routing
+  behaviour. A `bind_addr_with_if` variant for explicit interface selection on
+  multi-NIC hosts is the noted follow-up (see E3 runbook).
+- **`MATTER_GROUP_MULTICAST_HOPS`** (= 8) — public constant for the hop limit
+  applied to all multicast sends. `ff35:…` is site-local scope (scope nibble 5);
+  a limit of 8 clears any realistic intra-site path while staying well clear of
+  global scope.
+
+#### Release gate — external cryptographic review required
+
+> **RELEASE GATE (reiterated from E2):** the full group-message crypto path —
+> `derive_group_session_id`, `group_multicast_ipv6`, `derive_operational_ipk`
+> (used as the group key, `matter-crypto` E2) **and** this E3 group-secured
+> framing (`encode_group_secured` / `decode_group_secured`, group message
+> counter) — **must receive external cryptographic review before any release
+> that ships group messaging**. This follows the same CLAUDE.md
+> crypto-protocol rule applied to PASE (M3) and CASE (M4). Development
+> continues unblocked; this is a release-time gate, not a build gate.
 
 ### [0.1.0-pre] — 2026-05-22 (not yet published)
 

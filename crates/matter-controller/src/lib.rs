@@ -42,6 +42,13 @@
 //!   chunked list-write mechanism; [`Node::add_group`] / [`Node::remove_group`]
 //!   add and remove an endpoint from a group (`Groups` cluster 0x0004). Public
 //!   types: [`GroupKeySet`] and [`GroupKeyMapEntry`].
+//! - **Group multicast send** — [`MatterController::create_group`] generates and
+//!   persists a group epoch key (returns a [`GroupKeySet`] ready to program onto
+//!   member devices); [`MatterController::invoke_group`] sends a fire-and-forget
+//!   group command over IPv6 multicast (`ff35:…`), encrypted with the operational
+//!   group key derived from the persisted epoch key. Returns `Ok` on datagram
+//!   send; there is no acknowledgement. [`Error::GroupNotProvisioned`] when the
+//!   key set has not been created via `create_group`.
 //!
 //! # Quickstart
 //!
