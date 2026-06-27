@@ -99,6 +99,20 @@ impl TokioUdpTransport {
             // left at the kernel default (unset) — see module-level
             // doc for why we do NOT call `set_multicast_if_v6(0)`.
             raw.set_multicast_hops_v6(MATTER_GROUP_MULTICAST_HOPS)?;
+            // Interim multicast egress-interface selection (a proper builder
+            // option is the follow-up): on a multi-homed/macOS host the kernel
+            // default has no route for the admin-local `ff35:` group address, so
+            // a group send fails with "No route to host". `MATTER_MULTICAST_IF`
+            // (a non-zero interface index, e.g. `if_nametoindex("en0")`) sets
+            // `IPV6_MULTICAST_IF` explicitly. A real index is accepted on macOS
+            // (only index 0 is rejected).
+            if let Some(idx) = std::env::var("MATTER_MULTICAST_IF")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .filter(|&i| i != 0)
+            {
+                raw.set_multicast_if_v6(idx)?;
+            }
         }
         raw.set_nonblocking(true)?;
         raw.bind(&addr.into())?;

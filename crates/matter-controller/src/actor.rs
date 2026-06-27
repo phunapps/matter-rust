@@ -1170,7 +1170,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
         // (i) Multicast to the group address on the Matter group port (5540).
         // The transport's multicast hop limit was raised at bind time.
-        let dest = SocketAddr::V6(std::net::SocketAddrV6::new(mcast, MATTER_GROUP_PORT, 0, 0));
+        // Egress interface for the admin-local `ff35:` group address: on a
+        // multi-homed/macOS host the kernel resolves the outgoing interface from
+        // the destination's scope id; without it the send fails with "No route
+        // to host". `MATTER_MULTICAST_IF` (a non-zero interface index, e.g.
+        // `if_nametoindex("en0")`) supplies it. (A proper builder option is the
+        // follow-up; 0 = kernel default.)
+        let scope_id = std::env::var("MATTER_MULTICAST_IF")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+        let dest = SocketAddr::V6(std::net::SocketAddrV6::new(
+            mcast,
+            MATTER_GROUP_PORT,
+            0,
+            scope_id,
+        ));
         self.transport
             .send_to(&wire, dest)
             .await
