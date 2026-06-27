@@ -39,7 +39,7 @@ fn write_command_path(w: &mut TlvWriter<'_>, tag: Tag, path: CommandPath) {
 /// otherwise infallible; `Vec`-backed `TlvWriter` never fails.
 #[must_use]
 pub fn build_invoke_request(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
-    build_invoke_request_inner(path, command_fields_tlv, false)
+    build_invoke_request_inner(path, command_fields_tlv, false, false)
 }
 
 /// Like [`build_invoke_request`] but sets `TimedRequest = true` — the action half
@@ -51,7 +51,23 @@ pub fn build_invoke_request(path: CommandPath, command_fields_tlv: &[u8]) -> Vec
 /// As [`build_invoke_request`] (invalid `command_fields_tlv`).
 #[must_use]
 pub fn build_invoke_request_timed(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
-    build_invoke_request_inner(path, command_fields_tlv, true)
+    build_invoke_request_inner(path, command_fields_tlv, true, false)
+}
+
+/// Like [`build_invoke_request`] but sets `SuppressResponse = true` — the form
+/// used for **group** (multicast) invokes. Group commands are unacknowledged at
+/// the IM layer: there is no return path for a multicast send, so the request
+/// must instruct the receiving devices to suppress any `InvokeResponse`
+/// (Matter Core Spec §8.9.2 / §10.7.2 — group commands carry `SuppressResponse`).
+/// `TimedRequest` is `false` (timed interactions are not available on group
+/// sends).
+///
+/// # Panics
+///
+/// As [`build_invoke_request`] (invalid `command_fields_tlv`).
+#[must_use]
+pub fn build_invoke_request_group(path: CommandPath, command_fields_tlv: &[u8]) -> Vec<u8> {
+    build_invoke_request_inner(path, command_fields_tlv, false, true)
 }
 
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
@@ -59,12 +75,13 @@ fn build_invoke_request_inner(
     path: CommandPath,
     command_fields_tlv: &[u8],
     timed: bool,
+    suppress_response: bool,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
-    w.put_bool(Tag::Context(0), false)
+    w.put_bool(Tag::Context(0), suppress_response)
         .expect("infallible: vec writer"); // SuppressResponse
     w.put_bool(Tag::Context(1), timed)
         .expect("infallible: vec writer"); // TimedRequest

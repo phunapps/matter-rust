@@ -16,7 +16,7 @@ use crate::error::Error;
 
 pub(crate) const OP_READ_REQUEST: u8 = 0x02;
 const OP_WRITE_REQUEST: u8 = 0x06;
-const OP_INVOKE_REQUEST: u8 = 0x08;
+pub(crate) const OP_INVOKE_REQUEST: u8 = 0x08;
 
 /// Budget for a single `WriteRequestMessage` when writing the ACL list.
 /// Stays well under `MAX_PAYLOAD_LEN` (1024 post-encryption); reserves

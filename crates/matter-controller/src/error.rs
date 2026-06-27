@@ -97,4 +97,12 @@ pub enum Error {
     /// (e.g. `ResourceExhausted` from `MaxGroupsPerFabric`). Raw status preserved.
     #[error("group command rejected (status {0})")]
     GroupCommandRejected(u8),
+
+    /// A group send (`invoke_group`) named a `key_set_id` that has not been
+    /// provisioned on the controller's fabric (no matching
+    /// [`GroupKeySetConfig`](crate::GroupKeySetConfig) in `group_keys`). Call
+    /// [`MatterController::create_group`](crate::MatterController::create_group)
+    /// first to mint and persist the key set.
+    #[error("group key set {0} is not provisioned on this fabric")]
+    GroupNotProvisioned(u16),
 }

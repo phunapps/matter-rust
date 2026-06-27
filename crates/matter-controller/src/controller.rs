@@ -151,6 +151,84 @@ impl MatterController {
         }
     }
 
+    /// Create a group key set on the controller's fabric: mints a fresh 16-byte
+    /// epoch key from the CSPRNG, persists a `GroupKeySetConfig` under
+    /// `key_set_id`, and returns the [`GroupKeySet`](crate::GroupKeySet) so the caller can program
+    /// it onto each member device via
+    /// [`Node::write_group_key_set`](crate::Node::write_group_key_set) and map a
+    /// group to it. The key set is stored durably before this returns, so the
+    /// controller can encrypt outbound group messages for it immediately
+    /// (see [`Self::invoke_group`]).
+    ///
+    /// `epoch_start_time` is the Matter-epoch start time recorded in the
+    /// returned `GroupKeySet` (the device-side `KeySetWrite` echoes it).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotCommissioned`] if no single fabric exists,
+    /// [`Error::ControllerStopped`] if the task has stopped, or any
+    /// CSPRNG / persistence error.
+    pub async fn create_group(
+        &self,
+        key_set_id: u16,
+        epoch_start_time: u64,
+    ) -> Result<crate::GroupKeySet, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::CreateGroup {
+                key_set_id,
+                epoch_start_time,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
+    /// Fire-and-forget multicast group invoke: send `path`/`fields` to every
+    /// device in `group_id`, encrypted with the operational group key derived
+    /// from the persisted `key_set_id`. Returns as soon as the datagram is sent
+    /// — group commands are unacknowledged, so there is no response.
+    ///
+    /// The caller supplies `key_set_id` (the key set the group was bound to when
+    /// it was created): the controller's persisted `group_keys` are keyed by
+    /// key set id, avoiding a separate group→key-set map. The outbound group
+    /// message counter is bumped and persisted **before** the send so a counter
+    /// is never reused across a crash.
+    ///
+    /// Real multicast delivery requires the host network to route the Matter
+    /// site-local group address; on a host without it the send still succeeds at
+    /// the socket layer (the bytes are correct — see the loopback test).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GroupNotProvisioned`] if `key_set_id` has no persisted key set,
+    /// [`Error::NotCommissioned`] if no single fabric exists,
+    /// [`Error::Operational`] on counter exhaustion or send failure,
+    /// [`Error::ControllerStopped`] if the task has stopped, or any
+    /// crypto / persistence error.
+    pub async fn invoke_group(
+        &self,
+        group_id: u16,
+        key_set_id: u16,
+        path: crate::CommandPath,
+        fields: crate::Value,
+    ) -> Result<(), Error> {
+        let fields_tlv = crate::node::value_to_tlv(&fields)?;
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::InvokeGroup {
+                group_id,
+                key_set_id,
+                path,
+                fields_tlv,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     #[cfg(test)]
     pub(crate) async fn session_count(&self) -> usize {
         let (reply, rx) = oneshot::channel();

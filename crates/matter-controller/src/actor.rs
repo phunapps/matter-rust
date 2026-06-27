@@ -10,7 +10,8 @@ use std::time::Instant;
 use matter_commissioning::driver::AsyncDatagram;
 use matter_commissioning::NocRng;
 use matter_transport::{
-    DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolId, SessionId, SessionManager,
+    DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolHeader, ProtocolId, SessionId,
+    SessionManager,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -43,6 +44,10 @@ const LIVENESS_TICK: std::time::Duration = std::time::Duration::from_millis(250)
 const MAX_READ_CHUNKS: usize = 64;
 /// Max total decoded payload bytes a single read may accumulate (256 `KiB`).
 const MAX_READ_BYTES: usize = 256 * 1024;
+
+/// The Matter group multicast UDP port (Matter Core Spec §4.2.2 — operational
+/// and group traffic share port 5540).
+const MATTER_GROUP_PORT: u16 = 5540;
 
 /// chip resubscribe backoff constants (`CHIPConfig.h`, verbatim).
 const RESUB_MAX_FIBONACCI_STEP_INDEX: u32 = 14;
@@ -499,6 +504,28 @@ pub(crate) enum Command {
     CommissionerNodeId {
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// Mint a fresh 16-byte group epoch key, append a
+    /// [`GroupKeySetConfig`](crate::state::GroupKeySetConfig) to
+    /// the sole fabric's `group_keys`, durably persist, and return the
+    /// corresponding [`GroupKeySet`](crate::GroupKeySet) so the caller can
+    /// program it onto devices via `Node::write_group_key_set`.
+    CreateGroup {
+        key_set_id: u16,
+        epoch_start_time: u64,
+        reply: oneshot::Sender<Result<crate::GroupKeySet, Error>>,
+    },
+    /// Fire-and-forget multicast group invoke. The actor derives the operational
+    /// group key + session id from the persisted `key_set_id`, bumps and
+    /// **persists** the fabric's outbound group counter BEFORE sending, encodes
+    /// a group-secured `InvokeRequest`, and multicasts it. No pending is
+    /// registered and no response is awaited (group sends are unacknowledged).
+    InvokeGroup {
+        group_id: u16,
+        key_set_id: u16,
+        path: matter_interaction::CommandPath,
+        fields_tlv: Vec<u8>,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
     /// Cancel the subscription identified by its `(session, subscription_id)` key.
     CancelSubscription { key: SubId },
     /// Test/diagnostic: how many live cached sessions exist.
@@ -799,6 +826,25 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Command::CommissionerNodeId { reply } => {
                 let _ = reply.send(self.sole_fabric().map(|f| f.commissioner.node_id));
             }
+            Command::CreateGroup {
+                key_set_id,
+                epoch_start_time,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_create_group(key_set_id, epoch_start_time).await);
+            }
+            Command::InvokeGroup {
+                group_id,
+                key_set_id,
+                path,
+                fields_tlv,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.handle_invoke_group(group_id, key_set_id, path, &fields_tlv)
+                        .await,
+                );
+            }
             Command::CancelSubscription { key } => {
                 self.subscriptions.remove(&key);
                 // Also drop any scheduled resubscribe for this handle. An
@@ -973,6 +1019,172 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 "multiple fabrics; fabric(id).node(id) addressing is not in M8.2".into(),
             )),
         }
+    }
+
+    /// The sole fabric (mutable), or an error if not exactly one. Mirrors
+    /// [`Self::sole_fabric`] for the group-key mutation paths.
+    fn sole_fabric_mut(&mut self) -> Result<&mut crate::state::FabricEntry, Error> {
+        match self.state.fabrics.as_mut_slice() {
+            [one] => Ok(one),
+            [] => Err(Error::NotCommissioned("no fabric created yet".into())),
+            _ => Err(Error::NotCommissioned(
+                "multiple fabrics; fabric(id).node(id) addressing is not in M8.2".into(),
+            )),
+        }
+    }
+
+    /// Mint a fresh group key set: generate a 16-byte epoch key from the CSPRNG,
+    /// append a [`GroupKeySetConfig`](crate::state::GroupKeySetConfig) to the
+    /// sole fabric's `group_keys`, durably persist the snapshot, and return the
+    /// corresponding [`GroupKeySet`](crate::GroupKeySet) for the caller to
+    /// program onto devices (`Node::write_group_key_set`).
+    ///
+    /// The epoch key never leaves the controller as plaintext on the wire — the
+    /// returned `GroupKeySet` carries it so the caller can run the (CASE-secured)
+    /// `KeySetWrite`; the key set is stored locally for outbound group encryption.
+    async fn handle_create_group(
+        &mut self,
+        key_set_id: u16,
+        epoch_start_time: u64,
+    ) -> Result<crate::GroupKeySet, Error> {
+        // Generate the 16-byte epoch key from the CSPRNG. Validate the length
+        // explicitly (E1 final-review note): `random_bytes` fills the slice in
+        // place, but we assert the buffer is exactly 16 bytes before trusting it
+        // as group key material.
+        let mut epoch_key = [0u8; 16];
+        matter_crypto::random_bytes(&mut epoch_key)
+            .map_err(|e| Error::Operational(format!("group epoch-key generation failed: {e}")))?;
+        if epoch_key.len() != 16 {
+            return Err(Error::Operational(
+                "group epoch key is not 16 bytes".to_string(),
+            ));
+        }
+
+        // Append the persisted key-set config to the sole fabric.
+        let fabric = self.sole_fabric_mut()?;
+        fabric.group_keys.push(crate::state::GroupKeySetConfig {
+            key_set_id,
+            epoch_key,
+            epoch_start_time,
+        });
+
+        // Durability-critical: the caller relies on the key set being persisted
+        // before it programs the key onto devices (so a crash mid-provision can
+        // resume from a known key). Serialize under `&self`, then drop the
+        // borrow before awaiting the offloaded save.
+        let (store, bytes) = self.durable_save_inputs()?;
+        save_offloaded(store, bytes).await?;
+
+        Ok(crate::GroupKeySet::new(
+            key_set_id,
+            epoch_key.to_vec(),
+            epoch_start_time,
+        ))
+    }
+
+    /// Fire-and-forget multicast group invoke (see [`Command::InvokeGroup`]).
+    ///
+    /// Derives the operational group key + group session id from the persisted
+    /// `key_set_id`, allocates the next outbound group counter and **persists it
+    /// before sending** (a reused counter weakens replay protection), builds a
+    /// group-secured `InvokeRequest`, and multicasts it to the group's
+    /// site-local address. Returns `Ok(())` as soon as the datagram is handed to
+    /// the socket — no response is awaited.
+    async fn handle_invoke_group(
+        &mut self,
+        group_id: u16,
+        key_set_id: u16,
+        path: matter_interaction::CommandPath,
+        fields_tlv: &[u8],
+    ) -> Result<(), Error> {
+        // --- Gather everything from the sole fabric into owned locals so no
+        // borrow of `self` is held across the persist `.await` below. ---
+        let (fabric_id, source_node_id, root_public_key, epoch_key, counter) = {
+            let fabric = self.sole_fabric()?;
+            // (a) Look up the epoch key for this key set.
+            let epoch_key = fabric
+                .group_keys
+                .iter()
+                .find(|k| k.key_set_id == key_set_id)
+                .map(|k| k.epoch_key)
+                .ok_or(Error::GroupNotProvisioned(key_set_id))?;
+            // The RCAC root public key (SEC1 uncompressed) for the compressed
+            // fabric id derivation (read straight off the stored root cert, as
+            // the CASE credentials path does).
+            let root_public_key = *fabric.rcac_cert.public_key().as_bytes();
+            // (f) Allocate the counter; reject on overflow (re-key needed).
+            if fabric.outbound_group_counter == u32::MAX {
+                return Err(Error::Operational(
+                    "group counter exhausted — re-key the group".to_string(),
+                ));
+            }
+            (
+                fabric.fabric_id,
+                fabric.commissioner.node_id,
+                root_public_key,
+                epoch_key,
+                fabric.outbound_group_counter,
+            )
+        };
+
+        // (b-e) Crypto derivations (reuse E2; never hand-rolled).
+        let compressed_fabric_id =
+            matter_crypto::derive_compressed_fabric_id(&root_public_key, fabric_id)
+                .map_err(|e| Error::Operational(format!("compressed fabric id: {e}")))?;
+        let op_group_key = matter_crypto::derive_operational_ipk(&epoch_key, &compressed_fabric_id)
+            .map_err(|e| Error::Operational(format!("operational group key: {e}")))?;
+        let group_session_id = matter_crypto::derive_group_session_id(&op_group_key)
+            .map_err(|e| Error::Operational(format!("group session id: {e}")))?;
+        let mcast = matter_crypto::group_multicast_ipv6(fabric_id, group_id);
+
+        // (f) Bump the counter and PERSIST BEFORE SENDING. A counter reused
+        // after a crash would let an attacker replay an old group message, so
+        // the new counter must be durable before any datagram carrying it
+        // leaves the host.
+        self.sole_fabric_mut()?.outbound_group_counter =
+            counter.checked_add(1).ok_or_else(|| {
+                Error::Operational("group counter exhausted — re-key the group".into())
+            })?;
+        let (store, bytes) = self.durable_save_inputs()?;
+        save_offloaded(store, bytes).await?;
+
+        // (g) Build the InvokeRequest IM payload (SuppressResponse=true — group
+        // commands are unacknowledged) and a fresh-exchange protocol header.
+        let payload = matter_interaction::build_invoke_request_group(path, fields_tlv);
+        let mut eid = [0u8; 2];
+        matter_crypto::random_bytes(&mut eid)
+            .map_err(|e| Error::Operational(format!("exchange-id generation failed: {e}")))?;
+        let protocol_header = ProtocolHeader {
+            // The controller initiates the group exchange; no ack is piggybacked
+            // (group sends are unreliable, so `ack_counter` is `None`).
+            exchange_flags: matter_transport::ExchangeFlags::INITIATOR,
+            opcode: crate::node::OP_INVOKE_REQUEST,
+            exchange_id: u16::from_le_bytes(eid),
+            protocol_id: ProtocolId::INTERACTION_MODEL,
+            ack_counter: None,
+        };
+
+        // (h) Encode the group-secured wire message (reuses Task-3 framing).
+        let wire = matter_transport::encode_group_secured(
+            &op_group_key,
+            group_session_id,
+            source_node_id,
+            group_id,
+            counter,
+            &protocol_header,
+            &payload,
+        )?;
+
+        // (i) Multicast to the group address on the Matter group port (5540).
+        // The transport's multicast hop limit was raised at bind time.
+        let dest = SocketAddr::V6(std::net::SocketAddrV6::new(mcast, MATTER_GROUP_PORT, 0, 0));
+        self.transport
+            .send_to(&wire, dest)
+            .await
+            .map_err(|e| Error::Operational(format!("group send: {e}")))?;
+
+        // (j) Fire-and-forget: no pending, no MRP, no response awaited.
+        Ok(())
     }
 
     /// Establish a fresh CASE session to `node_id`, cache it, and record an
@@ -2485,6 +2697,175 @@ mod tests {
         let restored = crate::snapshot::deserialize(&bytes).expect("deserialize");
         assert_eq!(restored.fabrics.len(), 1);
         assert_eq!(restored.fabrics[0].commissioner.node_id, 1);
+    }
+
+    /// Loopback acceptance for the multicast group send.
+    ///
+    /// Drive `create_group` + `invoke_group`, capture the multicast frame the
+    /// transport emits (the paired `InMemoryDatagram` endpoint receives every
+    /// `send_to` regardless of destination), then DECODE it with
+    /// `decode_group_secured` and the SAME operational group key (derived the
+    /// same way from the persisted fabric + epoch key). Assert the recovered IM
+    /// payload is the expected `InvokeRequest`, and the group header
+    /// flags / group-id / source-node-id are correct.
+    #[tokio::test]
+    async fn invoke_group_emits_decodable_multicast_frame() {
+        use matter_codec::{Tag, TlvReader, Value};
+        use matter_transport::{decode_group_secured, DestNodeId, NodeId, SecuredMessageFlags};
+
+        let store = Arc::new(MemStore::default());
+        let (io, peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let fabric_id = controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+
+        // 1. Mint a group key set.
+        let key_set_id = 0x0042u16;
+        let group_key = controller
+            .create_group(key_set_id, 0)
+            .await
+            .expect("create_group");
+        assert_eq!(group_key.key_set_id, key_set_id);
+        assert_eq!(group_key.epoch_key.len(), 16, "epoch key must be 16 bytes");
+
+        // The create_group save must have persisted the key set.
+        let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(snap.fabrics[0].group_keys.len(), 1);
+        assert_eq!(snap.fabrics[0].outbound_group_counter, 0);
+        let commissioner_node_id = snap.fabrics[0].commissioner.node_id;
+        let root_public_key = *snap.fabrics[0].rcac_cert.public_key().as_bytes();
+        let epoch_key: [u8; 16] = group_key.epoch_key.clone().try_into().unwrap();
+
+        // 2. Fire-and-forget group invoke: OnOff.On (cluster 0x0006, cmd 0x01).
+        let group_id = 0xBEEFu16;
+        let path = crate::CommandPath {
+            endpoint: 0,
+            cluster: 0x0006,
+            command: 0x01,
+        };
+        let fields = Value::Structure(vec![]); // OnOff.On has no fields
+        controller
+            .invoke_group(group_id, key_set_id, path, fields.clone())
+            .await
+            .expect("invoke_group");
+
+        // The counter must have been bumped AND persisted BEFORE the send.
+        let snap2 = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            snap2.fabrics[0].outbound_group_counter, 1,
+            "counter must be persisted (bumped) before send"
+        );
+
+        // 3. Capture the multicast frame on the paired endpoint.
+        let (wire, _from) = peer.recv_from().await.expect("frame emitted");
+
+        // 4. Derive the SAME operational group key the actor used.
+        let compressed = derive_compressed_fabric_id(&root_public_key, fabric_id).unwrap();
+        let op_group_key = derive_operational_ipk(&epoch_key, &compressed).unwrap();
+
+        // 5. Decode the group-secured frame.
+        let (header, plaintext) = decode_group_secured(&wire, &op_group_key).expect("decode group");
+
+        // Group header: SOURCE_PRESENT | DEST_GROUP, the group id, and our node id.
+        assert!(header.flags.contains(SecuredMessageFlags::SOURCE_PRESENT));
+        assert!(header.flags.contains(SecuredMessageFlags::DEST_GROUP));
+        assert_eq!(header.source_node_id, Some(NodeId(commissioner_node_id)));
+        assert_eq!(
+            header.destination_node_id,
+            Some(DestNodeId::Group(group_id))
+        );
+        // Counter on the wire is the pre-bump value (0); the persisted counter is 1.
+        assert_eq!(header.message_counter.0, 0);
+
+        // 6. plaintext = protocol header || InvokeRequest. Strip + check opcode.
+        let (ph, app) = matter_transport::decode_protocol_header(&plaintext).unwrap();
+        assert_eq!(ph.opcode, crate::node::OP_INVOKE_REQUEST);
+        assert_eq!(ph.protocol_id, ProtocolId::INTERACTION_MODEL);
+
+        // The IM payload is exactly the group InvokeRequest builder output.
+        let fields_tlv = crate::node::value_to_tlv(&fields).unwrap();
+        let expected = matter_interaction::build_invoke_request_group(path, &fields_tlv);
+        assert_eq!(app, &expected[..], "IM payload must be the InvokeRequest");
+
+        // And it parses structurally to the expected command path.
+        let (_t, msg) = TlvReader::new(app).read_value().unwrap();
+        let Value::Structure(members) = msg else {
+            panic!("InvokeRequest is a structure")
+        };
+        // SuppressResponse (t0) must be true for a group invoke.
+        assert_eq!(
+            members
+                .iter()
+                .find(|(t, _)| *t == Tag::Context(0))
+                .map(|(_, v)| v),
+            Some(&Value::Bool(true))
+        );
+        // InvokeRequests array (t2) → first CommandDataIB → CommandPath (t0 list).
+        let invoke_requests = members
+            .iter()
+            .find(|(t, _)| *t == Tag::Context(2))
+            .map(|(_, v)| v)
+            .unwrap();
+        let Value::Array(command_list) = invoke_requests else {
+            panic!("InvokeRequests is an array")
+        };
+        let Value::Structure(first_command) = &command_list[0] else {
+            panic!("CommandDataIB is a structure")
+        };
+        let cmd_path = first_command
+            .iter()
+            .find(|(t, _)| *t == Tag::Context(0))
+            .map(|(_, v)| v)
+            .unwrap();
+        let Value::List(path_members) = cmd_path else {
+            panic!("CommandPath is a list")
+        };
+        // endpoint t0 = 0, cluster t1 = 0x0006, command t2 = 0x01.
+        assert_eq!(path_members[0], (Tag::Context(0), Value::Uint(0)));
+        assert_eq!(path_members[1], (Tag::Context(1), Value::Uint(0x0006)));
+        assert_eq!(path_members[2], (Tag::Context(2), Value::Uint(0x01)));
+    }
+
+    /// `invoke_group` with an unprovisioned key set is rejected up front.
+    #[tokio::test]
+    async fn invoke_group_unprovisioned_key_set_errors() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+
+        let path = crate::CommandPath {
+            endpoint: 0,
+            cluster: 0x0006,
+            command: 0x01,
+        };
+        let err = controller
+            .invoke_group(0xBEEF, 0x0099, path, matter_codec::Value::Structure(vec![]))
+            .await
+            .expect_err("must reject unprovisioned key set");
+        assert!(matches!(err, Error::GroupNotProvisioned(0x0099)));
     }
 
     // --- loopback acceptance test (CaseResponder over InMemoryDatagram) ---
