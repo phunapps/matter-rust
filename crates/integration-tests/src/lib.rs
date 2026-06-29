@@ -3,6 +3,8 @@
 //! `xtask integration`), so the normal `cargo test` / gate compiles + skips them.
 use std::path::PathBuf;
 
+pub mod fixture;
+
 /// Device-under-test configuration and helpers.
 pub mod dut {
     use super::PathBuf;
@@ -17,6 +19,9 @@ pub mod dut {
         pub chip_root: PathBuf,
         /// Multicast egress interface index for group-cast (`MATTER_MULTICAST_IF`).
         pub multicast_if: Option<u32>,
+        /// Absolute dir for per-run DUT state (controller store + node-id sidecar),
+        /// supplied by `xtask integration` so paths don't depend on cargo's test cwd.
+        pub dut_dir: PathBuf,
     }
 
     impl DutConfig {
@@ -30,11 +35,27 @@ pub mod dut {
             let multicast_if = std::env::var("MATTER_MULTICAST_IF")
                 .ok()
                 .and_then(|s| s.parse().ok());
+            let dut_dir = std::env::var("MATTER_INTEGRATION_DUT_DIR")
+                .map_or_else(|_| PathBuf::from("target/integration-dut"), PathBuf::from);
             Some(DutConfig {
                 setup_code,
                 chip_root,
                 multicast_if,
+                dut_dir,
             })
+        }
+
+        /// Per-run controller store path.
+        #[must_use]
+        pub fn store_path(&self) -> PathBuf {
+            self.dut_dir.join("controller-store.bin")
+        }
+
+        /// Per-run node-id sidecar path (records the commissioned node id so later
+        /// tests in the same run reconnect instead of re-commissioning).
+        #[must_use]
+        pub fn node_sidecar(&self) -> PathBuf {
+            self.dut_dir.join("node-id.txt")
         }
 
         /// Development PAA root certs dir.

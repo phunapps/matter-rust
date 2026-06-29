@@ -34,6 +34,19 @@ pub(crate) fn run() -> Result<(), String> {
     let kvs_path = dut_dir.join("kvs.json");
     let log_path = dut_dir.join("app.log");
 
+    // Fresh state each run: the app must boot UNcommissioned (so the fixture can
+    // commission it), and the controller store + node-id sidecar from a prior run
+    // must be cleared (else the fixture would try to reconnect to a node the
+    // freshly-booted app no longer has).
+    for stale in [
+        "kvs.json",
+        "controller-store.bin",
+        "controller-store.tmp",
+        "node-id.txt",
+    ] {
+        let _ = fs::remove_file(dut_dir.join(stale));
+    }
+
     eprintln!("integration: launching {}", binary.display());
     eprintln!("integration: KVS  → {}", kvs_path.display());
     eprintln!("integration: log  → {}", log_path.display());
@@ -48,7 +61,7 @@ pub(crate) fn run() -> Result<(), String> {
 
     let multicast_if = resolve_multicast_if();
 
-    let status = run_tests(&chip_root, multicast_if)?;
+    let status = run_tests(&chip_root, &dut_dir, multicast_if)?;
 
     // Explicit teardown before we inspect the exit status, so the process is
     // gone even on a test failure.
@@ -319,7 +332,11 @@ fn resolve_multicast_if() -> Option<u32> {
 // ---------------------------------------------------------------------------
 
 /// Run `cargo test -p integration-tests` with the necessary env vars.
-fn run_tests(chip_root: &Path, multicast_if: Option<u32>) -> Result<ExitStatus, String> {
+fn run_tests(
+    chip_root: &Path,
+    dut_dir: &Path,
+    multicast_if: Option<u32>,
+) -> Result<ExitStatus, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
 
     let mut cmd = Command::new(cargo);
@@ -334,6 +351,9 @@ fn run_tests(chip_root: &Path, multicast_if: Option<u32>) -> Result<ExitStatus, 
 
     cmd.env("MATTER_INTEGRATION_DUT", "MT:-24J042C00KA0648G00");
     cmd.env("CHIP_ROOT", chip_root);
+    // Absolute DUT-state dir so the fixture's store/sidecar paths don't depend on
+    // cargo's per-package test cwd.
+    cmd.env("MATTER_INTEGRATION_DUT_DIR", dut_dir);
 
     if let Some(idx) = multicast_if {
         cmd.env("MATTER_MULTICAST_IF", idx.to_string());
