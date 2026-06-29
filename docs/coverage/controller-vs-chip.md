@@ -58,7 +58,15 @@ See the runbook: `docs/runbooks/m9-h1-integration-harness.md`.
 | AirQuality (typed-decode) | `clusters_sensors::air_quality_typed_decode` | ✓-live |
 | PowerSource (typed-decode of scalar attrs) | `clusters_power_source::power_source_typed_decode` | ✓-live |
 | ElectricalPowerMeasurement, ElectricalEnergyMeasurement | — | **gap: not in all-clusters-app** (need `energy-management-app` / real energy device DUT) |
-| Descriptor, GeneralDiagnostics, Binding, Labels, AccessControl, GroupKeyManagement, AdministratorCommissioning, OtaRequestor | — | pending H4 |
+| Descriptor (ServerList behavioral + list typed-decode) | `clusters_descriptor::descriptor_lists_typed_decode` | ✓-live |
+| GeneralDiagnostics (typed-decode) | `clusters_diagnostics::general_diagnostics_typed_decode` | ✓-live |
+| FixedLabel (typed-decode) | `clusters_labels_binding::fixed_label_typed_decode` | ✓-live |
+| Binding (typed-decode) | `clusters_labels_binding::binding_typed_decode` | ✓-live |
+| UserLabel (write + read-back) | `clusters_labels_binding::user_label_write_read_back` | ✓-live |
+| AccessControl (typed-decode) | `clusters_mgmt::access_control_typed_decode` | ✓-live |
+| GroupKeyManagement (typed-decode) | `clusters_mgmt::group_key_management_typed_decode` | ✓-live |
+| AdministratorCommissioning (typed-decode) | `clusters_mgmt::administrator_commissioning_typed_decode` | ✓-live |
+| OtaSoftwareUpdateRequestor (typed-decode) | `clusters_mgmt::ota_requestor_typed_decode` | ✓-live |
 
 ### Groups, ACL & access enforcement
 
@@ -106,11 +114,18 @@ ElectricalEnergyMeasurement are absent from all-clusters-app** and recorded as a
 gap (need `energy-management-app` or a real energy device). See the "Cluster
 behavior" table above for per-cluster test names.
 
-## H4 — utility / mgmt clusters (planned)
+## H4 — utility / mgmt clusters (DONE)
 
-Descriptor, GeneralDiagnostics, Binding, Labels, AccessControl,
-GroupKeyManagement, AdministratorCommissioning, OtaRequestor (read /
-where-applicable invoke). Tracked in its own plan.
+Reads a representative attribute from every utility/mgmt cluster all-clusters-app
+exposes (Descriptor, GeneralDiagnostics, Binding, FixedLabel, UserLabel,
+AccessControl, GroupKeyManagement, AdministratorCommissioning, OtaRequestor) and
+runs the real device bytes through the generated typed decoders — exercising the
+list/struct decoders (ServerList, DeviceTypeList, NetworkInterfaces, Acl,
+GroupKeyMap, LabelList, Binding) on real container bytes. Descriptor adds a
+behavioral assertion (ep1 ServerList contains OnOff; ep0 PartsList contains
+endpoint 1), and UserLabel exercises a writable list-of-struct attribute
+end-to-end (write a label, read it back through the typed decoder). No DUT gaps.
+See the "Cluster behavior" table above for per-cluster test names.
 
 ## H5 — nightly CI + coverage reporting (planned)
 
