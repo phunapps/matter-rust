@@ -9,6 +9,7 @@ members = [
     "crates/matter-commissioning",
     "crates/matter-clusters",
     "crates/matter-controller",
+    "crates/integration-tests",
     "xtask",
 ]
 
