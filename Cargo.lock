@@ -750,6 +750,7 @@ name = "integration-tests"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "matter-codec",
  "matter-controller",
  "tokio",
 ]
