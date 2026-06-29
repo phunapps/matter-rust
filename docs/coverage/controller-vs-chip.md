@@ -5,10 +5,42 @@ connectedhomeip's `all-clusters-app` by the `just integration` harness
 (`crates/integration-tests/`). Status legend:
 
 - ✓-live — a gated integration test drives this against the live DUT and asserts behavior.
-- pending H2–H4 — planned for the per-cluster behavioral batches.
-- pending H5 — planned for the nightly CI + coverage-reporting milestone.
 
 See the runbook: `docs/runbooks/m9-h1-integration-harness.md`.
+
+## Status summary
+
+The harness commissions connectedhomeip's `all-clusters-app` with pure-Rust
+matter-controller (dev-cert attestation) and exercises, **live against the
+device**: commissioning + reconnect; the full Interaction-Model op set
+(read / write / invoke / subscribe / events / timed); behavioral actuator
+sequences (OnOff, LevelControl, ColorControl, Thermostat, WindowCovering,
+FanControl); typed-decode of every sensor/measurement and utility/management
+cluster the DUT exposes, run against **real device bytes** through the generated
+`matter_clusters::gen::*::decode_*` codecs; groups + ACL + group-cast actuation;
+AccessControl enforcement (deny/grant); and a multi-admin loop (open window →
+second controller → fabric removal).
+
+Run locally with `just integration`; run on a schedule via the
+`Integration (nightly)` GitHub Actions workflow
+(`.github/workflows/integration-nightly.yml`).
+
+## Known DUT gaps
+
+These are **not controller gaps** — the matter-controller / matter-clusters
+codecs for them exist and are unit/byte-parity tested; `all-clusters-app` simply
+does not expose the cluster, so end-to-end coverage needs a different DUT:
+
+- **DoorLock (0x0101)** — absent from all-clusters-app; needs the `lock-app`
+  example (also exercises timed invoke + PIN credentials).
+- **ElectricalPowerMeasurement (0x0090) / ElectricalEnergyMeasurement (0x0091)** —
+  absent from all-clusters-app; need `energy-management-app` or a real energy
+  device. (Their composite shapes were already exercised via *generic* decode
+  against a real Tapo P110M in the M9-D hardware sweep; *typed*-decode against
+  real bytes is the remaining gap.)
+
+Out of scope by the matter-rust roadmap (not coverage holes): CNET network
+commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 
 ---
 
@@ -127,7 +159,14 @@ endpoint 1), and UserLabel exercises a writable list-of-struct attribute
 end-to-end (write a label, read it back through the typed decoder). No DUT gaps.
 See the "Cluster behavior" table above for per-cluster test names.
 
-## H5 — nightly CI + coverage reporting (planned)
+## H5 — nightly CI + coverage matrix (DONE)
 
-- Nightly job runs `just integration` against a freshly built all-clusters-app.
-- This matrix is regenerated / checked as part of that job.
+- `.github/workflows/integration-nightly.yml` runs `just integration` against a
+  freshly built `all-clusters-app` on a nightly schedule (07:00 UTC) and on
+  manual `workflow_dispatch`. It is **not** a per-PR check (the connectedhomeip
+  build is heavy; the fast per-PR gate is untouched).
+- **First-run caveat:** the connectedhomeip pigweed bootstrap + build is
+  environment-sensitive; the workflow must be manually dispatched once to
+  validate on a GitHub runner before the nightly schedule is relied upon.
+- This document is the standing coverage record (see the "Status summary" and
+  "Known DUT gaps" at the top, and the per-cluster tables above).
