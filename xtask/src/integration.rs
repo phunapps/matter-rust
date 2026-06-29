@@ -35,14 +35,18 @@ pub(crate) fn run() -> Result<(), String> {
     let log_path = dut_dir.join("app.log");
 
     // Fresh state each run: the app must boot UNcommissioned (so the fixture can
-    // commission it), and the controller store + node-id sidecar from a prior run
-    // must be cleared (else the fixture would try to reconnect to a node the
-    // freshly-booted app no longer has).
+    // commission it), and every controller store + node-id sidecar from a prior
+    // run must be cleared (else a controller would try to reconnect — or re-create
+    // a fabric — against a freshly-booted app that no longer has that node).
+    // `controller-b-store.bin` is the second-controller store the multi_admin
+    // test creates; it must be cleared too or its stale fabric breaks the re-run.
     for stale in [
         "kvs.json",
         "controller-store.bin",
         "controller-store.tmp",
         "node-id.txt",
+        "controller-b-store.bin",
+        "controller-b-store.tmp",
     ] {
         let _ = fs::remove_file(dut_dir.join(stale));
     }
