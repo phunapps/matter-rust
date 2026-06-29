@@ -37,6 +37,7 @@
 
 mod capture_cd;
 mod capture_commissioning;
+mod integration;
 mod trace_diff;
 
 use std::path::PathBuf;
@@ -144,6 +145,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("integration") => match integration::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask integration: {err}");
+                ExitCode::FAILURE
+            }
+        },
         Some("dump-model") => match run_dump_model() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -211,6 +219,7 @@ fn print_help() {
              capture-noc              Capture Matter NOC + OpCreds command fixtures from matter.js.\n  \
              capture-cd               Generate a synthetic CSA-test CD signing root + CD fixtures.\n  \
              capture-commissioning    Capture a full matter.js commissioning trace for byte-parity (M6.4.6).\n  \
+             integration              Build/launch all-clusters-app DUT and run the integration sweep.\n  \
              dump-model               Dump the @matter/model data model to xtask/model/clusters.json (M7.2).\n  \
              capture-clusters         Capture cluster attribute/command byte-parity vectors from matter.js (M7.4a).\n  \
              codegen [--check]        Generate matter-clusters from clusters.json (M7); --check fails on drift.\n  \

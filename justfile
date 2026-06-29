@@ -98,3 +98,9 @@ audit:
 # Full pre-push gate, mirroring CI end-to-end (run before every push).
 gate: fmt-check lint test doctest codegen-check docs embedded deny audit
     @echo "gate: all green ✓"
+
+# ---------------------------------------------------------- integration ---
+
+# Build + launch all-clusters-app and run the integration sweep (local/nightly).
+integration:
+    cargo run -p xtask -- integration
