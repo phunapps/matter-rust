@@ -1,0 +1,91 @@
+# Nightly integration sweep against connectedhomeip's all-clusters-app.
+#
+# NOT a per-PR check (by design — the connectedhomeip build is multi-GB and
+# multi-minute; the per-PR gate stays fast). Runs on a nightly schedule and on
+# manual dispatch. Drives the same `just integration` recipe as the local
+# harness, so CI and local cannot drift.
+#
+# FIRST-RUN NOTE: the connectedhomeip pigweed bootstrap + all-clusters-app build
+# is environment-sensitive. Trigger this manually (Actions tab → "Run workflow")
+# once to validate on the runner before relying on the nightly schedule; tune the
+# apt deps / bootstrap steps if the runner differs.
+name: Integration (nightly)
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily
+  workflow_dispatch:
+
+# A nightly DUT sweep should not pile up; keep only the latest.
+concurrency:
+  group: integration-nightly
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  # Pin the connectedhomeip ref the harness was validated against; bump
+  # deliberately when adopting a newer all-clusters-app.
+  CHIP_REF: master
+
+jobs:
+  integration:
+    name: all-clusters-app integration sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout matter-rust
+        uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: Checkout connectedhomeip
+        uses: actions/checkout@v6
+        with:
+          repository: project-chip/connectedhomeip
+          ref: ${{ env.CHIP_REF }}
+          path: connectedhomeip
+          submodules: false
+
+      - name: Install connectedhomeip build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git gcc g++ pkg-config ninja-build \
+            python3 python3-venv python3-dev python3-pip unzip \
+            libssl-dev libdbus-1-dev libglib2.0-dev \
+            libgirepository1.0-dev libcairo2-dev libreadline-dev
+
+      - name: Fetch Linux submodules
+        working-directory: connectedhomeip
+        run: python3 scripts/checkout_submodules.py --shallow --platform linux
+
+      # Pigweed/CIPD env is large; cache it keyed on the connectedhomeip ref and
+      # the bootstrap scripts so most nightly runs skip the slow bootstrap.
+      - name: Cache pigweed environment
+        uses: actions/cache@v4
+        with:
+          path: connectedhomeip/.environment
+          key: chip-env-${{ env.CHIP_REF }}-${{ hashFiles('connectedhomeip/scripts/setup/*', 'connectedhomeip/scripts/bootstrap.sh') }}
+
+      - name: Bootstrap connectedhomeip (pigweed)
+        working-directory: connectedhomeip
+        run: bash -c "source scripts/bootstrap.sh"
+
+      - name: Run integration sweep (just integration)
+        env:
+          CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
+        run: just integration
+
+      - name: Upload DUT log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dut-app-log
+          path: target/integration-dut/app.log
+          if-no-files-found: ignore
