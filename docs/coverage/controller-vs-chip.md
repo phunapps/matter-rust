@@ -42,7 +42,14 @@ See the runbook: `docs/runbooks/m9-h1-integration-harness.md`.
 | OnOff (On / Off / Toggle) | `clusters_onoff::onoff_on_off_toggle` | ✓-live |
 | BasicInformation (read/write attrs, StartUp event) | `im_ops.rs` | ✓-live |
 | Identify (command) | `im_ops.rs` | ✓-live |
-| LevelControl, ColorControl, Descriptor, OccupancySensing, TemperatureMeasurement, RelativeHumidityMeasurement, DoorLock, … | — | pending H2–H4 |
+| LevelControl (MoveToLevel → CurrentLevel) | `clusters_level_control::level_control_move_to_level` | ✓-live |
+| ColorControl (MoveToColorTemperature → ColorTemperatureMireds) | `clusters_color_control::color_control_move_to_color_temperature` | ✓-live |
+| Thermostat (setpoint write + SetpointRaiseLower) | `clusters_thermostat::thermostat_setpoint_write_then_raise` | ✓-live |
+| WindowCovering (GoToLiftPercentage → TargetPositionLiftPercent100ths) | `clusters_window_covering::window_covering_go_to_lift_percentage` | ✓-live |
+| FanControl (FanMode + PercentSetting write/read-back) | `clusters_fan_control::fan_control_mode_and_percent` | ✓-live |
+| DoorLock | — | **gap: not in all-clusters-app** (needs a `lock-app` DUT; candidate future H phase) |
+| OccupancySensing, TemperatureMeasurement, RelativeHumidityMeasurement, the measurement/energy set | — | pending H3 |
+| Descriptor, GeneralDiagnostics, Binding, Labels, AccessControl, GroupKeyManagement, AdministratorCommissioning, OtaRequestor | — | pending H4 |
 
 ### Groups, ACL & access enforcement
 
@@ -70,10 +77,19 @@ See the runbook: `docs/runbooks/m9-h1-integration-harness.md`.
 
 ---
 
-## H2–H4 — per-cluster behavioral batches (planned)
+## H2 — actuator clusters (DONE)
 
-One behavioral test per typed cluster (the `clusters_onoff.rs` template), across
-the ~33 clusters `matter-clusters` generates. Tracked in their own plans.
+Behavioral sequences for the actuator clusters present on all-clusters-app
+(LevelControl, ColorControl, Thermostat, WindowCovering, FanControl), all on
+endpoint 1, following the `clusters_onoff.rs` template. **DoorLock is absent from
+all-clusters-app** and is recorded as a gap (needs a `lock-app` DUT). See the
+"Cluster behavior" table above for per-cluster test names.
+
+## H3–H4 — sensor/measurement + utility/mgmt clusters (planned)
+
+The remaining per-cluster behavioral / typed-decode coverage across the ~33
+clusters `matter-clusters` generates. Tracked in their own plans (H3 = sensor /
+measurement read + typed-decode; H4 = utility / mgmt).
 
 ## H5 — nightly CI + coverage reporting (planned)
 
