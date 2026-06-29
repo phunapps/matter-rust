@@ -48,7 +48,16 @@ See the runbook: `docs/runbooks/m9-h1-integration-harness.md`.
 | WindowCovering (GoToLiftPercentage → TargetPositionLiftPercent100ths) | `clusters_window_covering::window_covering_go_to_lift_percentage` | ✓-live |
 | FanControl (FanMode + PercentSetting write/read-back) | `clusters_fan_control::fan_control_mode_and_percent` | ✓-live |
 | DoorLock | — | **gap: not in all-clusters-app** (needs a `lock-app` DUT; candidate future H phase) |
-| OccupancySensing, TemperatureMeasurement, RelativeHumidityMeasurement, the measurement/energy set | — | pending H3 |
+| TemperatureMeasurement (typed-decode vs real bytes) | `clusters_measurement::temperature_measurement_typed_decode` | ✓-live |
+| RelativeHumidityMeasurement (typed-decode) | `clusters_measurement::relative_humidity_measurement_typed_decode` | ✓-live |
+| IlluminanceMeasurement (typed-decode) | `clusters_measurement::illuminance_measurement_typed_decode` | ✓-live |
+| PressureMeasurement (typed-decode) | `clusters_measurement::pressure_measurement_typed_decode` | ✓-live |
+| FlowMeasurement (typed-decode) | `clusters_measurement::flow_measurement_typed_decode` | ✓-live |
+| OccupancySensing (typed-decode) | `clusters_sensors::occupancy_sensing_typed_decode` | ✓-live |
+| BooleanState (typed-decode) | `clusters_sensors::boolean_state_typed_decode` | ✓-live |
+| AirQuality (typed-decode) | `clusters_sensors::air_quality_typed_decode` | ✓-live |
+| PowerSource (typed-decode of scalar attrs) | `clusters_power_source::power_source_typed_decode` | ✓-live |
+| ElectricalPowerMeasurement, ElectricalEnergyMeasurement | — | **gap: not in all-clusters-app** (need `energy-management-app` / real energy device DUT) |
 | Descriptor, GeneralDiagnostics, Binding, Labels, AccessControl, GroupKeyManagement, AdministratorCommissioning, OtaRequestor | — | pending H4 |
 
 ### Groups, ACL & access enforcement
@@ -85,11 +94,23 @@ endpoint 1, following the `clusters_onoff.rs` template. **DoorLock is absent fro
 all-clusters-app** and is recorded as a gap (needs a `lock-app` DUT). See the
 "Cluster behavior" table above for per-cluster test names.
 
-## H3–H4 — sensor/measurement + utility/mgmt clusters (planned)
+## H3 — sensor / measurement clusters (DONE)
 
-The remaining per-cluster behavioral / typed-decode coverage across the ~33
-clusters `matter-clusters` generates. Tracked in their own plans (H3 = sensor /
-measurement read + typed-decode; H4 = utility / mgmt).
+Reads every sensor/measurement cluster all-clusters-app exposes (the 5
+measurement clusters + OccupancySensing, BooleanState, AirQuality, PowerSource —
+all on endpoint 1) and feeds the real device bytes through the generated
+`matter_clusters::gen::*::decode_*` typed decoders, asserting `Ok` (plus the exact
+deterministic Min/Max defaults). This closes the long-standing "validate typed
+decoders against real device bytes" follow-up. **ElectricalPowerMeasurement /
+ElectricalEnergyMeasurement are absent from all-clusters-app** and recorded as a
+gap (need `energy-management-app` or a real energy device). See the "Cluster
+behavior" table above for per-cluster test names.
+
+## H4 — utility / mgmt clusters (planned)
+
+Descriptor, GeneralDiagnostics, Binding, Labels, AccessControl,
+GroupKeyManagement, AdministratorCommissioning, OtaRequestor (read /
+where-applicable invoke). Tracked in its own plan.
 
 ## H5 — nightly CI + coverage reporting (planned)
 
