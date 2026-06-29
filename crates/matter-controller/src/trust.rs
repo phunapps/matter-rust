@@ -103,4 +103,80 @@ mod tests {
         .expect_err("missing dir must error");
         assert!(matches!(err, Error::Trust(_)));
     }
+
+    /// `from_dirs` must skip non-`.der` files (`.pem`, `.txt`, etc.) in
+    /// both the PAA and CD directories.  The connectedhomeip
+    /// `credentials/development/{paa-root-certs,cd-certs}` directories
+    /// contain `.pem` files alongside each `.der`; without the extension
+    /// filter, `from_dirs` errors trying to parse PEM as DER.
+    ///
+    /// Test strategy:
+    /// - Write a real PAA root DER into a temp PAA dir alongside a junk
+    ///   `.pem` and a `.txt`.
+    /// - Write a real X.509 P-256 cert DER into a temp CD dir alongside
+    ///   the same junk files.
+    /// - Assert that `from_dirs` succeeds (junk files were skipped) and
+    ///   that each store contains exactly 1 entry.
+    ///
+    /// Temp dirs are created under `target/` so they stay out of the
+    /// source tree and survive interrupted runs gracefully (the directory
+    /// is cleaned up at the end of the test).
+    ///
+    /// Cert fixtures are read from the in-repo `test-vectors/` tree via
+    /// `CARGO_MANIFEST_DIR` so no extra crate dependency is required.
+    #[test]
+    fn from_dirs_skips_non_der_files() {
+        use std::fs;
+
+        // ── locate in-repo fixtures ────────────────────────────────────────
+        // CARGO_MANIFEST_DIR points to `crates/matter-controller/`.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent() // crates/
+            .unwrap()
+            .parent() // matter-rust/
+            .unwrap();
+
+        // PAA cert: a real Matter PAA (no-VID variant) bundled in the
+        // commissioning crate's CSA test-root collection.
+        let paa_der_src = repo_root
+            .join("crates/matter-commissioning/src/attestation/csa_test_roots")
+            .join("Chip-Test-PAA-NoVID-Cert.der");
+        let paa_bytes = fs::read(&paa_der_src).expect("bundled PAA NoVID DER must be readable");
+
+        // CD signing cert: reuse the same PAA cert (any X.509 P-256 cert
+        // satisfies `CdSigningRoots::from_cert_der`; we only need the
+        // extension filter to run, not a real attestation verification).
+        let cd_bytes = paa_bytes.clone();
+
+        // ── build temp directories under target/ ──────────────────────────
+        let target_dir = repo_root.join("target").join("from-dirs-test");
+        let paa_dir = target_dir.join("paa");
+        let cd_dir = target_dir.join("cd");
+        fs::create_dir_all(&paa_dir).expect("create temp PAA dir");
+        fs::create_dir_all(&cd_dir).expect("create temp CD dir");
+
+        // Write the real DER cert into each dir.
+        fs::write(paa_dir.join("test-paa.der"), &paa_bytes).expect("write PAA DER");
+        fs::write(cd_dir.join("test-cd.der"), &cd_bytes).expect("write CD DER");
+
+        // Write junk files alongside — these must be silently skipped.
+        fs::write(paa_dir.join("test-paa.pem"), b"not der at all")
+            .expect("write junk pem in PAA dir");
+        fs::write(paa_dir.join("README.txt"), b"also junk").expect("write junk txt in PAA dir");
+        fs::write(cd_dir.join("test-cd.pem"), b"not der at all").expect("write junk pem in CD dir");
+        fs::write(cd_dir.join("notes.txt"), b"also junk").expect("write junk txt in CD dir");
+
+        // ── exercise `from_dirs` ──────────────────────────────────────────
+        let trust = AttestationTrust::from_dirs(&paa_dir, &cd_dir)
+            .expect("from_dirs must succeed when non-.der files are present");
+
+        // Each dir contained exactly one .der file.
+        assert_eq!(trust.paa.len(), 1, "exactly one PAA loaded");
+        assert_eq!(trust.cd.len(), 1, "exactly one CD signing root loaded");
+
+        // ── clean up ──────────────────────────────────────────────────────
+        // Best-effort: a failure here does not invalidate the test result.
+        let _ = fs::remove_dir_all(&target_dir);
+    }
 }
