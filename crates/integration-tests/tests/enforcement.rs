@@ -143,7 +143,6 @@ async fn group_cast_denied_without_acl_then_allowed_with_it() {
         Some(true),
         "group-cast On WITH the ACL grant must be allowed (OnOff turned true)"
     );
-
-    // Cleanup (best-effort): turn the device back off via the now-authorized group.
-    group_cast_onoff(&controller, 0x00).await;
+    // No teardown: the harness clears all DUT state before the next run, and
+    // tests that need a known OnOff baseline reset it themselves.
 }

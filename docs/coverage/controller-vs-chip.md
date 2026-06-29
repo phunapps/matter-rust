@@ -65,7 +65,8 @@ See the runbook: `docs/runbooks/m9-h1-integration-harness.md`.
 
 > Note: the T9-flagged risk (whether `commission` consumes an open-window manual
 > code directly) is **resolved** — the full multi-admin loop runs live, no
-> fallback. The test retains the fallback for resilience.
+> fallback. A 2nd-controller commission failure is now a hard test error, so the
+> loop cannot pass vacuously.
 
 ---
 

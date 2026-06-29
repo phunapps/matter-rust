@@ -47,10 +47,11 @@ async fn read_onoff(node: &Node) -> Option<bool> {
 ///   4. A.list_fabrics() shows ≥ 2 fabrics; both A and B can read OnOff.
 ///   5. A removes B's fabric by index; the fabric count drops back.
 ///
-/// Flagged risk (plan T9): if matter-rust's `commission` cannot consume the
-/// window's manual code, the test records the gap and falls back to asserting
-/// the window opened (manual code present) — keeping the harness green while the
-/// untested leg is surfaced for the controller.
+/// Plan T9 flagged a risk that `commission` might not consume an open-window
+/// manual code directly. That is now validated live: the full loop runs (B
+/// commissions through the window, A removes B's fabric), so a commission
+/// failure here is a hard error — never silently downgraded to a weaker
+/// assertion that could let a regression pass green.
 #[tokio::test]
 async fn open_window_second_controller_and_remove_fabric() {
     let cfg = integration_tests::dut_or_skip!();
@@ -152,17 +153,10 @@ async fn open_window_second_controller_and_remove_fabric() {
             );
         }
         Err(e) => {
-            // Known-gap fallback (plan T9): record and assert only the window leg.
-            eprintln!(
-                "KNOWN GAP: 2nd-controller commission via the open-window manual code \
-                 failed ({e:?}); falling back to asserting the window opened. \
-                 Surface to the controller for follow-up."
-            );
-            assert!(
-                window.iterations >= 1000,
-                "commissioning window iterations look invalid: {}",
-                window.iterations
-            );
+            // The full multi-admin loop is validated live, so a 2nd-controller
+            // commission failure is a real regression — fail hard rather than
+            // pass vacuously.
+            panic!("2nd-controller commission via the open-window manual code failed: {e:?}");
         }
     }
 }
