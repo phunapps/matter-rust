@@ -21,6 +21,7 @@
 pub mod error;
 pub mod message_type;
 pub mod messages;
+pub mod sender;
 
 pub use error::BdxError;
 pub use message_type::{BdxStatusCode, MessageType};
@@ -28,3 +29,4 @@ pub use messages::{
     BdxMessage, CounterMessage, DataBlock, RangeControl, ReceiveAccept, SendAccept,
     TransferControl, TransferInit, BDX_VERSION,
 };
+pub use sender::{BlockSender, OutgoingMessage, SenderOutcome};
