@@ -20,6 +20,8 @@
 
 pub mod error;
 pub mod message_type;
+pub mod messages;
 
 pub use error::BdxError;
 pub use message_type::{BdxStatusCode, MessageType};
+pub use messages::{RangeControl, TransferControl, TransferInit, BDX_VERSION};

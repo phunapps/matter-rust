@@ -1,0 +1,253 @@
+//! BDX message codecs (Matter Core §11.21). All integers little-endian; the
+//! Transfer Control byte packs `version` in the low nibble and the drive-mode
+//! flags in the high bits. Metadata is an opaque passthrough (empty for OTA).
+
+#![forbid(unsafe_code)]
+
+use crate::error::BdxError;
+
+/// BDX protocol version implemented here (Matter Core §11.21).
+pub const BDX_VERSION: u8 = 0;
+
+const VERSION_MASK: u8 = 0x0F;
+
+bitflags::bitflags! {
+    /// Transfer Control flags (high bits of the Transfer Control byte; the low
+    /// nibble holds the version, handled separately).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TransferControl: u8 {
+        /// Sender drives the transfer (pushes blocks).
+        const SENDER_DRIVE = 0x10;
+        /// Receiver drives the transfer (pulls blocks). OTA uses this.
+        const RECEIVER_DRIVE = 0x20;
+        /// Asynchronous mode (unused here).
+        const ASYNC = 0x40;
+    }
+}
+
+bitflags::bitflags! {
+    /// Range Control flags.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RangeControl: u8 {
+        /// A definite transfer length is present.
+        const DEF_LEN = 0x01;
+        /// A non-zero start offset is present.
+        const START_OFFSET = 0x02;
+        /// Offsets/lengths are 8 bytes (else 4).
+        const WIDE_RANGE = 0x10;
+    }
+}
+
+/// Little-endian cursor with bounds checks (no panics, no `unwrap`).
+pub(crate) struct Reader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    pub(crate) fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+    pub(crate) fn u8(&mut self) -> Result<u8, BdxError> {
+        let b = *self.buf.get(self.pos).ok_or(BdxError::Truncated)?;
+        self.pos += 1;
+        Ok(b)
+    }
+    pub(crate) fn u16_le(&mut self) -> Result<u16, BdxError> {
+        let s = self.take(2)?;
+        Ok(u16::from_le_bytes([s[0], s[1]]))
+    }
+    pub(crate) fn u32_le(&mut self) -> Result<u32, BdxError> {
+        let s = self.take(4)?;
+        Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+    }
+    pub(crate) fn u64_le(&mut self) -> Result<u64, BdxError> {
+        let s = self.take(8)?;
+        let mut a = [0u8; 8];
+        a.copy_from_slice(s);
+        Ok(u64::from_le_bytes(a))
+    }
+    pub(crate) fn take(&mut self, n: usize) -> Result<&'a [u8], BdxError> {
+        let end = self.pos.checked_add(n).ok_or(BdxError::Truncated)?;
+        let s = self.buf.get(self.pos..end).ok_or(BdxError::Truncated)?;
+        self.pos = end;
+        Ok(s)
+    }
+    pub(crate) fn rest(&mut self) -> &'a [u8] {
+        let r = &self.buf[self.pos..];
+        self.pos = self.buf.len();
+        r
+    }
+}
+
+/// Append a 4- or 8-byte little-endian range value (low 4 bytes of the u64 when
+/// not wide — correct since LE puts the low word first).
+fn put_range_value(buf: &mut Vec<u8>, value: u64, wide: bool) {
+    let le = value.to_le_bytes();
+    if wide {
+        buf.extend_from_slice(&le);
+    } else {
+        buf.extend_from_slice(&le[..4]);
+    }
+}
+
+/// `SendInit` / `ReceiveInit` — identical wire format (a proposed transfer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferInit {
+    /// Proposed transfer-control flags (drive mode).
+    pub control: TransferControl,
+    /// Highest BDX version the proposer supports.
+    pub version: u8,
+    /// Proposed maximum block size.
+    pub max_block_size: u16,
+    /// Proposed start offset (0 = none).
+    pub start_offset: u64,
+    /// Proposed definite length (0 = indefinite).
+    pub max_length: u64,
+    /// File designator (for OTA, the `ImageURI` path).
+    pub file_designator: Vec<u8>,
+    /// Optional TLV metadata, opaque here (empty for OTA).
+    pub metadata: Vec<u8>,
+}
+
+impl TransferInit {
+    /// Encode to the BDX message body (raw little-endian).
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let wide = self.start_offset > u64::from(u32::MAX) || self.max_length > u64::from(u32::MAX);
+        let mut range = RangeControl::empty();
+        range.set(RangeControl::DEF_LEN, self.max_length > 0);
+        range.set(RangeControl::START_OFFSET, self.start_offset > 0);
+        range.set(RangeControl::WIDE_RANGE, wide);
+
+        let mut buf = Vec::new();
+        buf.push((self.version & VERSION_MASK) | self.control.bits());
+        buf.push(range.bits());
+        buf.extend_from_slice(&self.max_block_size.to_le_bytes());
+        if self.start_offset > 0 {
+            put_range_value(&mut buf, self.start_offset, wide);
+        }
+        if self.max_length > 0 {
+            put_range_value(&mut buf, self.max_length, wide);
+        }
+        let fd_len = u16::try_from(self.file_designator.len()).unwrap_or(u16::MAX);
+        buf.extend_from_slice(&fd_len.to_le_bytes());
+        buf.extend_from_slice(&self.file_designator);
+        buf.extend_from_slice(&self.metadata);
+        buf
+    }
+
+    /// Decode a BDX `TransferInit` body.
+    ///
+    /// # Errors
+    /// Returns [`BdxError::Truncated`] if the body ends before a fixed field.
+    pub fn decode(body: &[u8]) -> Result<Self, BdxError> {
+        let mut r = Reader::new(body);
+        let ctl = r.u8()?;
+        let range = RangeControl::from_bits_retain(r.u8()?);
+        let max_block_size = r.u16_le()?;
+        let version = ctl & VERSION_MASK;
+        let control = TransferControl::from_bits_retain(ctl & !VERSION_MASK);
+        let wide = range.contains(RangeControl::WIDE_RANGE);
+        let start_offset = if range.contains(RangeControl::START_OFFSET) {
+            if wide {
+                r.u64_le()?
+            } else {
+                u64::from(r.u32_le()?)
+            }
+        } else {
+            0
+        };
+        let max_length = if range.contains(RangeControl::DEF_LEN) {
+            if wide {
+                r.u64_le()?
+            } else {
+                u64::from(r.u32_le()?)
+            }
+        } else {
+            0
+        };
+        let fd_len = usize::from(r.u16_le()?);
+        let file_designator = r.take(fd_len)?.to_vec();
+        let metadata = r.rest().to_vec();
+        Ok(Self {
+            control,
+            version,
+            max_block_size,
+            start_offset,
+            max_length,
+            file_designator,
+            metadata,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
+    use super::*;
+
+    // ReceiveInit, field-by-field (all LE):
+    //   20            TransferControl: version 0 | ReceiverDrive(0x20)
+    //   00            RangeControl: no DefLen, no StartOffset, not wide
+    //   00 04         MaxBlockSize u16 = 0x0400 = 1024
+    //   06 00         FileDesignatorLength u16 = 6
+    //   66 77 2e 6f 74 61   "fw.ota"
+    const RECEIVE_INIT_HEX: &str = "20000004060066772e6f7461";
+
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn transfer_init_encodes_to_frozen_bytes() {
+        let init = TransferInit {
+            control: TransferControl::RECEIVER_DRIVE,
+            version: 0,
+            max_block_size: 1024,
+            start_offset: 0,
+            max_length: 0,
+            file_designator: b"fw.ota".to_vec(),
+            metadata: Vec::new(),
+        };
+        assert_eq!(init.encode(), unhex(RECEIVE_INIT_HEX));
+    }
+
+    #[test]
+    fn transfer_init_roundtrips() {
+        let init = TransferInit {
+            control: TransferControl::RECEIVER_DRIVE,
+            version: 0,
+            max_block_size: 1024,
+            start_offset: 0,
+            max_length: 0,
+            file_designator: b"fw.ota".to_vec(),
+            metadata: Vec::new(),
+        };
+        assert_eq!(TransferInit::decode(&init.encode()).unwrap(), init);
+    }
+
+    #[test]
+    fn transfer_init_wide_range_offset_and_length_roundtrip() {
+        // Offset/length above u32::MAX force the WideRange (8-byte) encoding.
+        let init = TransferInit {
+            control: TransferControl::RECEIVER_DRIVE,
+            version: 0,
+            max_block_size: 256,
+            start_offset: 0x1_0000_0000,
+            max_length: 0x2_0000_0000,
+            file_designator: b"x".to_vec(),
+            metadata: Vec::new(),
+        };
+        let decoded = TransferInit::decode(&init.encode()).unwrap();
+        assert_eq!(decoded, init);
+    }
+
+    #[test]
+    fn transfer_init_decode_truncated_errs() {
+        assert_eq!(TransferInit::decode(&[0x20]), Err(BdxError::Truncated));
+    }
+}
