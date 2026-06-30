@@ -141,7 +141,7 @@ pub use matter_interaction::{
 };
 pub use node::{InvokeResult, Node};
 pub use opcreds::FabricDescriptor;
-pub use provider_server::build_operational_service;
+pub use provider_server::{build_operational_service, ProviderServer};
 pub use state::{
     CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry, GroupKeySetConfig,
 };

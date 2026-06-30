@@ -2608,7 +2608,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 ///
 /// Returns [`Error::Operational`] if the system clock is before the Unix epoch
 /// (extremely unlikely in practice).
-fn current_matter_time() -> Result<matter_cert::MatterTime, Error> {
+pub(crate) fn current_matter_time() -> Result<matter_cert::MatterTime, Error> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| Error::Operational(format!("clock: {e}")))?
@@ -5583,6 +5583,76 @@ mod tests {
             .await
             .expect("announce ota provider");
         device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_server_accepts_case_and_dispatches_invoke_over_loopback() {
+        use crate::provider_server::ProviderServer;
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // The provider server plays the responder ("device") role with the
+        // harness's operational identity; its handler replies SUCCESS for any
+        // invoke. This swaps `run_loopback_device` for the production
+        // `ProviderServer` — our own controller (initiator) CASE-connects and
+        // gets the handler's response, in-process.
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                device_creds,
+                device_roots,
+                /* responder_session_id */ 0x55,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .accept_and_dispatch_once(
+                |req: &matter_interaction::ParsedInvokeRequest| {
+                    let path = req.commands[0].path;
+                    matter_interaction::build_invoke_response_status(
+                        path,
+                        matter_interaction::ImStatus::Success,
+                    )
+                },
+                /* max_invokes */ 1,
+            )
+            .await
+        });
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // Drive a plain invoke from our client against our server.
+        let path = matter_interaction::CommandPath {
+            endpoint: 0,
+            cluster: 0x0029,
+            command: 0x00,
+        };
+        let result = controller
+            .node(device_node_id)
+            .invoke(path, matter_codec::Value::Structure(vec![]))
+            .await
+            .expect("invoke");
+        assert!(matches!(
+            result,
+            crate::InvokeResult::Status(matter_interaction::ImStatus::Success)
+        ));
+
+        let dispatched = server.await.unwrap().expect("server ok");
+        assert_eq!(dispatched, 1);
     }
 
     #[tokio::test]
