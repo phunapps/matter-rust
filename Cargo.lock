@@ -963,6 +963,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "matter-ota"
+version = "0.0.0"
+dependencies = [
+ "matter-clusters",
+ "matter-codec",
+ "matter-interaction",
+ "thiserror",
+]
+
+[[package]]
 name = "matter-transport"
 version = "0.1.0-pre"
 dependencies = [
