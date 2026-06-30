@@ -108,6 +108,22 @@ Under a plain `cargo test` (no DUT env) every integration test **skips**
 
 ---
 
+## Other DUTs (multi-DUT)
+
+`all-clusters-app` omits a few clusters, so the harness can build/launch other
+connectedhomeip example apps and run just that app's tests:
+
+- `just integration-lock` → builds + launches `lock-app` (`<host>-lock` /
+  `chip-lock-app`) and runs the DoorLock test (`clusters_door_lock`).
+- `just integration-energy` → builds + launches `evse-app` (`<host>-evse` /
+  `chip-evse-app`) and runs the Electrical* test (`clusters_electrical`).
+
+Each builds its app on first run (slow, then cached under `out/`). The harness
+parses the device's real `SetupQRCode: [MT:...]` from the app log to commission
+it. The app-specific tests skip under the default `just integration` run, so the
+all-clusters sweep is unaffected. `xtask integration <app>` selects the app
+directly (`all-clusters` default | `lock` | `evse`).
+
 ## Coverage
 
 See `docs/coverage/controller-vs-chip.md` for the controller-operation × DUT

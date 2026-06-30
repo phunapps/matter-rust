@@ -25,22 +25,25 @@ Run locally with `just integration`; run on a schedule via the
 `Integration (nightly)` GitHub Actions workflow
 (`.github/workflows/integration-nightly.yml`).
 
-## Known DUT gaps
+## Multi-DUT
 
-These are **not controller gaps** — the matter-controller / matter-clusters
-codecs for them exist and are unit/byte-parity tested; `all-clusters-app` simply
-does not expose the cluster, so end-to-end coverage needs a different DUT:
+`all-clusters-app` omits a few clusters, so the harness can drive other
+connectedhomeip example apps as additional DUTs (`xtask integration <app>`),
+each with its own `just` recipe. The app-specific tests skip unless their DUT is
+running, so the default `just integration` (all-clusters) sweep is unaffected.
 
-- **DoorLock (0x0101)** — absent from all-clusters-app; needs the `lock-app`
-  example (also exercises timed invoke + PIN credentials).
-- **ElectricalPowerMeasurement (0x0090) / ElectricalEnergyMeasurement (0x0091)** —
-  absent from all-clusters-app; need `energy-management-app` or a real energy
-  device. (Their composite shapes were already exercised via *generic* decode
-  against a real Tapo P110M in the M9-D hardware sweep; *typed*-decode against
-  real bytes is the remaining gap.)
+- **`just integration-lock`** — `lock-app` → DoorLock (0x0101) lock/unlock
+  behavioral.
+- **`just integration-energy`** — `evse-app` → ElectricalPowerMeasurement
+  (0x0090) + ElectricalEnergyMeasurement (0x0091) typed-decode (incl. the
+  composite `MeasurementAccuracyStruct`). At-rest readings are null/zero (no
+  energy event trigger fired), so the test validates the typed *decoders* against
+  real bytes — the gap that needed closing; firing the energy event trigger for
+  non-null magnitudes is a possible future enhancement.
 
-Out of scope by the matter-rust roadmap (not coverage holes): CNET network
-commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
+There are **no remaining cluster DUT gaps** for the clusters matter-clusters
+generates. Out of scope by the matter-rust roadmap (not coverage holes): CNET
+network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 
 ---
 
@@ -79,7 +82,7 @@ commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | Thermostat (setpoint write + SetpointRaiseLower) | `clusters_thermostat::thermostat_setpoint_write_then_raise` | ✓-live |
 | WindowCovering (GoToLiftPercentage → TargetPositionLiftPercent100ths) | `clusters_window_covering::window_covering_go_to_lift_percentage` | ✓-live |
 | FanControl (FanMode + PercentSetting write/read-back) | `clusters_fan_control::fan_control_mode_and_percent` | ✓-live |
-| DoorLock | — | **gap: not in all-clusters-app** (needs a `lock-app` DUT; candidate future H phase) |
+| DoorLock (lock/unlock → LockState, on lock-app) | `clusters_door_lock::door_lock_lock_unlock` | ✓-live (`just integration-lock`) |
 | TemperatureMeasurement (typed-decode vs real bytes) | `clusters_measurement::temperature_measurement_typed_decode` | ✓-live |
 | RelativeHumidityMeasurement (typed-decode) | `clusters_measurement::relative_humidity_measurement_typed_decode` | ✓-live |
 | IlluminanceMeasurement (typed-decode) | `clusters_measurement::illuminance_measurement_typed_decode` | ✓-live |
@@ -89,7 +92,7 @@ commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | BooleanState (typed-decode) | `clusters_sensors::boolean_state_typed_decode` | ✓-live |
 | AirQuality (typed-decode) | `clusters_sensors::air_quality_typed_decode` | ✓-live |
 | PowerSource (typed-decode of scalar attrs) | `clusters_power_source::power_source_typed_decode` | ✓-live |
-| ElectricalPowerMeasurement, ElectricalEnergyMeasurement | — | **gap: not in all-clusters-app** (need `energy-management-app` / real energy device DUT) |
+| ElectricalPowerMeasurement / ElectricalEnergyMeasurement (typed-decode incl. composite Accuracy, on evse-app) | `clusters_electrical::electrical_measurement_typed_decode` | ✓-live (`just integration-energy`) |
 | Descriptor (ServerList behavioral + list typed-decode) | `clusters_descriptor::descriptor_lists_typed_decode` | ✓-live |
 | GeneralDiagnostics (typed-decode) | `clusters_diagnostics::general_diagnostics_typed_decode` | ✓-live |
 | FixedLabel (typed-decode) | `clusters_labels_binding::fixed_label_typed_decode` | ✓-live |
