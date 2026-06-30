@@ -966,6 +966,7 @@ dependencies = [
 name = "matter-ota"
 version = "0.0.0"
 dependencies = [
+ "hex",
  "matter-clusters",
  "matter-codec",
  "matter-interaction",

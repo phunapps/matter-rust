@@ -19,3 +19,6 @@ matter-codec = { path = "../matter-codec", version = "0.1.0" }
 matter-interaction = { path = "../matter-interaction", version = "0.1.0-pre" }
 matter-clusters = { path = "../matter-clusters", version = "0.0.0" }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
