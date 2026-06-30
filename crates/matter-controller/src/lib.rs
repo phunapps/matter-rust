@@ -116,6 +116,7 @@ pub mod fabric;
 pub(crate) mod group;
 pub mod node;
 pub(crate) mod opcreds;
+pub mod provider_server;
 pub mod snapshot;
 pub mod state;
 pub mod store;
@@ -140,6 +141,7 @@ pub use matter_interaction::{
 };
 pub use node::{InvokeResult, Node};
 pub use opcreds::FabricDescriptor;
+pub use provider_server::build_operational_service;
 pub use state::{
     CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry, GroupKeySetConfig,
 };
