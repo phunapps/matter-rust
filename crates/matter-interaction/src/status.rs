@@ -76,6 +76,16 @@ impl ImStatus {
         }
     }
 
+    /// The raw IM status byte: `0x00` for [`Success`](Self::Success), the
+    /// preserved code for [`Failure`](Self::Failure). Inverse of [`Self::from_u8`].
+    #[must_use]
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::Success => 0x00,
+            Self::Failure(code) => code,
+        }
+    }
+
     /// `true` iff this is [`ImStatus::Success`].
     #[must_use]
     pub fn is_success(self) -> bool {

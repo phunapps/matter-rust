@@ -14,7 +14,7 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 /// Write a `CommandPathIB` (a TLV **list**: 0=endpoint, 1=cluster,
 /// 2=command) under `tag`.
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-fn write_command_path(w: &mut TlvWriter<'_>, tag: Tag, path: CommandPath) {
+pub(crate) fn write_command_path(w: &mut TlvWriter<'_>, tag: Tag, path: CommandPath) {
     w.start_list(tag).expect("infallible: vec writer");
     w.put_uint(Tag::Context(0), u64::from(path.endpoint))
         .expect("infallible: vec writer");
@@ -182,7 +182,7 @@ pub struct InvokeResponseEntry {
 /// Integer wire widths are normalized to the minimal width, so the re-encoded
 /// bytes are not guaranteed byte-identical to the device's original encoding
 /// (this path is consumed locally, never retransmitted).
-fn reencode_anonymous(value: &Value) -> Vec<u8> {
+pub(crate) fn reencode_anonymous(value: &Value) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     #[allow(clippy::expect_used)] // Vec-backed writer is infallible.
@@ -192,7 +192,7 @@ fn reencode_anonymous(value: &Value) -> Vec<u8> {
 }
 
 /// Read a `CommandPathIB` list (`Value::List` members) into a [`CommandPath`].
-fn command_path_from_value(members: &[(Tag, Value)]) -> Result<CommandPath, ImError> {
+pub(crate) fn command_path_from_value(members: &[(Tag, Value)]) -> Result<CommandPath, ImError> {
     let mut endpoint = None;
     let mut cluster = None;
     let mut command = None;
