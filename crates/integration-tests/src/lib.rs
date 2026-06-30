@@ -22,6 +22,10 @@ pub mod dut {
         /// Absolute dir for per-run DUT state (controller store + node-id sidecar),
         /// supplied by `xtask integration` so paths don't depend on cargo's test cwd.
         pub dut_dir: PathBuf,
+        /// Which connectedhomeip example app is the running DUT
+        /// (`MATTER_INTEGRATION_DUT_APP`, default `all-clusters`). App-specific
+        /// tests gate on this via [`DutConfig::is_app`].
+        pub app: String,
     }
 
     impl DutConfig {
@@ -37,12 +41,22 @@ pub mod dut {
                 .and_then(|s| s.parse().ok());
             let dut_dir = std::env::var("MATTER_INTEGRATION_DUT_DIR")
                 .map_or_else(|_| PathBuf::from("target/integration-dut"), PathBuf::from);
+            let app = std::env::var("MATTER_INTEGRATION_DUT_APP")
+                .unwrap_or_else(|_| "all-clusters".to_string());
             Some(DutConfig {
                 setup_code,
                 chip_root,
                 multicast_if,
                 dut_dir,
+                app,
             })
+        }
+
+        /// True when the named connectedhomeip example app is the running DUT
+        /// (set by `xtask integration <app>`). The default DUT is `all-clusters`.
+        #[must_use]
+        pub fn is_app(&self, name: &str) -> bool {
+            self.app == name
         }
 
         /// Per-run controller store path.

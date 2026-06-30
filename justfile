@@ -104,3 +104,11 @@ gate: fmt-check lint test doctest codegen-check docs embedded deny audit
 # Build + launch all-clusters-app and run the integration sweep (local/nightly).
 integration:
     cargo run -p xtask -- integration
+
+# Build + launch lock-app and run the DoorLock integration tests.
+integration-lock:
+    cargo run -p xtask -- integration lock
+
+# Build + launch evse-app and run the Electrical* integration tests.
+integration-energy:
+    cargo run -p xtask -- integration evse

@@ -23,10 +23,59 @@ use std::time::{Duration, Instant};
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Run the integration orchestration end-to-end.
-pub(crate) fn run() -> Result<(), String> {
+/// A connectedhomeip example app the harness can drive as a DUT.
+struct AppSpec {
+    /// Canonical app name (also exported as `MATTER_INTEGRATION_DUT_APP`).
+    name: &'static str,
+    /// `build_examples.py` target suffix: `<host-target>-<suffix>`.
+    target_suffix: &'static str,
+    /// Binary name under `out/<host-target>-<suffix>/`.
+    binary: &'static str,
+    /// If set, this fixed setup QR is used; if `None`, the device's QR is parsed
+    /// from the app log (keeps the proven all-clusters path on its known QR).
+    fixed_qr: Option<&'static str>,
+    /// If set, `cargo test` is restricted to this single `--test <name>` binary
+    /// (so a minimal DUT doesn't run the all-clusters cluster tests).
+    test_filter: Option<&'static str>,
+}
+
+/// Resolve the DUT app spec from the optional `xtask integration <app>` argument.
+fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
+    Ok(match app.unwrap_or("all-clusters") {
+        "all-clusters" => AppSpec {
+            name: "all-clusters",
+            target_suffix: "all-clusters",
+            binary: "chip-all-clusters-app",
+            fixed_qr: Some("MT:-24J042C00KA0648G00"),
+            test_filter: None,
+        },
+        "lock" => AppSpec {
+            name: "lock",
+            target_suffix: "lock",
+            binary: "chip-lock-app",
+            fixed_qr: None,
+            test_filter: Some("clusters_door_lock"),
+        },
+        "evse" => AppSpec {
+            name: "evse",
+            target_suffix: "evse",
+            binary: "chip-evse-app",
+            fixed_qr: None,
+            test_filter: Some("clusters_electrical"),
+        },
+        other => {
+            return Err(format!(
+                "unknown integration app '{other}' (expected: all-clusters, lock, evse)"
+            ))
+        }
+    })
+}
+
+/// Run the integration orchestration end-to-end for the selected DUT app.
+pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
+    let spec = app_spec(app)?;
     let chip_root = chip_root()?;
-    let binary = locate_or_build_binary(&chip_root)?;
+    let binary = locate_or_build_binary(&chip_root, &spec)?;
 
     kill_stale_duts();
 
@@ -51,6 +100,7 @@ pub(crate) fn run() -> Result<(), String> {
         let _ = fs::remove_file(dut_dir.join(stale));
     }
 
+    eprintln!("integration: app  → {}", spec.name);
     eprintln!("integration: launching {}", binary.display());
     eprintln!("integration: KVS  → {}", kvs_path.display());
     eprintln!("integration: log  → {}", log_path.display());
@@ -63,9 +113,16 @@ pub(crate) fn run() -> Result<(), String> {
     wait_for_ready(&log_path)?;
     eprintln!("integration: DUT ready — Server Listening detected");
 
+    // The all-clusters app keeps its known QR; other apps advertise a different
+    // payload, so parse the device's real QR from its startup log.
+    let setup_qr = match spec.fixed_qr {
+        Some(qr) => qr.to_string(),
+        None => parse_setup_qr(&log_path)?,
+    };
+
     let multicast_if = resolve_multicast_if();
 
-    let status = run_tests(&chip_root, &dut_dir, multicast_if)?;
+    let status = run_tests(&chip_root, &dut_dir, multicast_if, &spec, &setup_qr)?;
 
     // Explicit teardown before we inspect the exit status, so the process is
     // gone even on a test failure.
@@ -107,14 +164,15 @@ fn host_target() -> &'static str {
     }
 }
 
-/// Return the expected path to the all-clusters-app binary. If it is missing,
+/// Return the expected path to the selected app's binary. If it is missing,
 /// build it first.
-fn locate_or_build_binary(chip_root: &Path) -> Result<PathBuf, String> {
+fn locate_or_build_binary(chip_root: &Path, spec: &AppSpec) -> Result<PathBuf, String> {
     let target = host_target();
+    let suffix = spec.target_suffix;
     let binary = chip_root
         .join("out")
-        .join(format!("{target}-all-clusters"))
-        .join("chip-all-clusters-app");
+        .join(format!("{target}-{suffix}"))
+        .join(spec.binary);
 
     if binary.exists() {
         eprintln!(
@@ -124,14 +182,12 @@ fn locate_or_build_binary(chip_root: &Path) -> Result<PathBuf, String> {
         return Ok(binary);
     }
 
-    eprintln!(
-        "integration: binary not found — building {target}-all-clusters (this takes a while)"
-    );
+    eprintln!("integration: binary not found — building {target}-{suffix} (this takes a while)");
 
     let script = format!(
         "source scripts/activate.sh && \
          ./scripts/build/build_examples.py \
-             --target {target}-all-clusters build"
+             --target {target}-{suffix} build"
     );
 
     let status = Command::new("bash")
@@ -335,25 +391,47 @@ fn resolve_multicast_if() -> Option<u32> {
 // Run the tests
 // ---------------------------------------------------------------------------
 
+/// Parse the device's setup QR (`MT:...`) from a line like
+/// `CHIP:SVR: SetupQRCode: [MT:....]` in the app log.
+fn parse_setup_qr(log_path: &Path) -> Result<String, String> {
+    let log = fs::read_to_string(log_path)
+        .map_err(|e| format!("reading app log for SetupQRCode: {e}"))?;
+    for line in log.lines() {
+        if let Some(idx) = line.find("SetupQRCode: [") {
+            let rest = &line[idx + "SetupQRCode: [".len()..];
+            if let Some(end) = rest.find(']') {
+                let qr = rest[..end].trim().to_string();
+                if qr.starts_with("MT:") {
+                    eprintln!("integration: parsed SetupQRCode {qr}");
+                    return Ok(qr);
+                }
+            }
+        }
+    }
+    Err("SetupQRCode: [MT:...] not found in app log".to_string())
+}
+
 /// Run `cargo test -p integration-tests` with the necessary env vars.
 fn run_tests(
     chip_root: &Path,
     dut_dir: &Path,
     multicast_if: Option<u32>,
+    spec: &AppSpec,
+    setup_qr: &str,
 ) -> Result<ExitStatus, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
 
     let mut cmd = Command::new(cargo);
-    cmd.args([
-        "test",
-        "-p",
-        "integration-tests",
-        "--",
-        "--nocapture",
-        "--test-threads=1",
-    ]);
+    cmd.args(["test", "-p", "integration-tests"]);
+    // Minimal DUTs run only their own test binary (so they don't execute the
+    // all-clusters cluster tests against an app that lacks those clusters).
+    if let Some(test) = spec.test_filter {
+        cmd.args(["--test", test]);
+    }
+    cmd.args(["--", "--nocapture", "--test-threads=1"]);
 
-    cmd.env("MATTER_INTEGRATION_DUT", "MT:-24J042C00KA0648G00");
+    cmd.env("MATTER_INTEGRATION_DUT", setup_qr);
+    cmd.env("MATTER_INTEGRATION_DUT_APP", spec.name);
     cmd.env("CHIP_ROOT", chip_root);
     // Absolute DUT-state dir so the fixture's store/sidecar paths don't depend on
     // cargo's per-package test cwd.

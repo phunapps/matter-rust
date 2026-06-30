@@ -145,13 +145,16 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("integration") => match integration::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(err) => {
-                eprintln!("xtask integration: {err}");
-                ExitCode::FAILURE
+        Some("integration") => {
+            let app = args.next();
+            match integration::run(app.as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("xtask integration: {err}");
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
         Some("dump-model") => match run_dump_model() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
