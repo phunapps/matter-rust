@@ -490,3 +490,50 @@ fn ota_announce_provider_encodes_scalars_and_enum() {
         })
     ));
 }
+
+#[test]
+fn ota_provider_query_image_encodes_scalars() {
+    use gen::ota_software_update_provider::{encode_query_image, DownloadProtocolEnum};
+    use matter_codec::{Element, TlvReader, Value};
+    let bytes = encode_query_image(
+        0xFFF1,
+        0x8000,
+        5,
+        &vec![DownloadProtocolEnum::BdxSynchronous],
+        None,
+        None,
+        None,
+        None,
+    );
+    let mut r = TlvReader::new(&bytes);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::Scalar {
+            tag: Tag::Context(0),
+            value: Value::Uint(0xFFF1)
+        })
+    ));
+}
+
+#[test]
+fn ota_provider_query_image_response_decodes() {
+    use gen::ota_software_update_provider::{QueryImageResponse, StatusEnum};
+    use matter_codec::{Element, Tag, TlvReader, TlvWriter};
+    // Hand-build a minimal QueryImageResponse: ctx0 Status = UpdateAvailable(0).
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).unwrap();
+    w.put_uint(Tag::Context(0), 0).unwrap(); // Status = UpdateAvailable
+    w.end_container().unwrap();
+    let mut r = TlvReader::new(&buf);
+    assert!(matches!(
+        r.next().unwrap(),
+        Some(Element::ContainerStart { .. })
+    ));
+    let decoded = QueryImageResponse::decode_from(&mut r).expect("decode QueryImageResponse");
+    assert_eq!(decoded.status, StatusEnum::UpdateAvailable);
+}

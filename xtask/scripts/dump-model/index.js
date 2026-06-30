@@ -85,6 +85,8 @@ const ALLOWLIST = [
   { id: 0x002a, name: 'OtaSoftwareUpdateRequestor' },
   // M9-D2 operational credentials:
   { id: 0x003e, name: 'OperationalCredentials' },
+  // M9-F1 OTA Provider:
+  { id: 0x0029, name: 'OtaSoftwareUpdateProvider' },
 ];
 
 const excluded = [];

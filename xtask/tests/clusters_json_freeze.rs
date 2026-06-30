@@ -14,7 +14,7 @@ use std::path::PathBuf;
 /// The M7 target clusters (CLAUDE.md milestone / spec §8) plus the M9-A2.1
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, and M9-D2 operational credentials.
-const TARGET_CLUSTERS: [&str; 34] = [
+const TARGET_CLUSTERS: [&str; 35] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -55,6 +55,8 @@ const TARGET_CLUSTERS: [&str; 34] = [
     "OtaSoftwareUpdateRequestor",
     // M9-D2 operational credentials:
     "OperationalCredentials",
+    // M9-F1 OTA Provider:
+    "OtaSoftwareUpdateProvider",
 ];
 
 fn load() -> Value {
@@ -95,8 +97,15 @@ fn every_cluster_has_id_revision_and_attributes() {
             c["revision"].is_number(),
             "{name}: missing numeric revision"
         );
+        // A cluster must expose at least one attribute OR one command. Most are
+        // attribute-bearing; OtaSoftwareUpdateProvider (0x0029) is command-only
+        // (QueryImage/ApplyUpdateRequest/NotifyUpdateApplied, no server attrs).
         let attrs = c["attributes"].as_array().expect("attributes array");
-        assert!(!attrs.is_empty(), "{name}: expected at least one attribute");
+        let cmds = c["commands"].as_array().map_or(0, Vec::len);
+        assert!(
+            !attrs.is_empty() || cmds > 0,
+            "{name}: expected at least one attribute or command"
+        );
     }
 }
 

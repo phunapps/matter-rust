@@ -24,6 +24,7 @@ pub mod level_control;
 pub mod occupancy_sensing;
 pub mod on_off;
 pub mod operational_credentials;
+pub mod ota_software_update_provider;
 pub mod ota_software_update_requestor;
 pub mod power_source;
 pub mod pressure_measurement;
