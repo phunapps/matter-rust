@@ -182,6 +182,133 @@ impl TransferInit {
     }
 }
 
+/// `ReceiveAccept` — the receiver-drive accept an OTA Provider sends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveAccept {
+    /// Agreed transfer-control flags (drive mode).
+    pub control: TransferControl,
+    /// Agreed BDX version.
+    pub version: u8,
+    /// Chosen maximum block size.
+    pub max_block_size: u16,
+    /// Chosen start offset (0 = none).
+    pub start_offset: u64,
+    /// Definite transfer length (0 = indefinite).
+    pub length: u64,
+    /// Optional TLV metadata, opaque here.
+    pub metadata: Vec<u8>,
+}
+
+impl ReceiveAccept {
+    /// Encode to the BDX message body.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let wide = self.start_offset > u64::from(u32::MAX) || self.length > u64::from(u32::MAX);
+        let mut range = RangeControl::empty();
+        range.set(RangeControl::DEF_LEN, self.length > 0);
+        range.set(RangeControl::START_OFFSET, self.start_offset > 0);
+        range.set(RangeControl::WIDE_RANGE, wide);
+
+        let mut buf = Vec::new();
+        buf.push((self.version & VERSION_MASK) | self.control.bits());
+        buf.push(range.bits());
+        buf.extend_from_slice(&self.max_block_size.to_le_bytes());
+        if self.start_offset > 0 {
+            put_range_value(&mut buf, self.start_offset, wide);
+        }
+        if self.length > 0 {
+            put_range_value(&mut buf, self.length, wide);
+        }
+        buf.extend_from_slice(&self.metadata);
+        buf
+    }
+
+    /// Decode a BDX `ReceiveAccept` body.
+    ///
+    /// # Errors
+    /// Returns [`BdxError::Truncated`] if the body ends before a fixed field.
+    pub fn decode(body: &[u8]) -> Result<Self, BdxError> {
+        let mut r = Reader::new(body);
+        let ctl = r.u8()?;
+        let range = RangeControl::from_bits_retain(r.u8()?);
+        let max_block_size = r.u16_le()?;
+        let version = ctl & VERSION_MASK;
+        let control = TransferControl::from_bits_retain(ctl & !VERSION_MASK);
+        let wide = range.contains(RangeControl::WIDE_RANGE);
+        let start_offset = if range.contains(RangeControl::START_OFFSET) {
+            if wide {
+                r.u64_le()?
+            } else {
+                u64::from(r.u32_le()?)
+            }
+        } else {
+            0
+        };
+        let length = if range.contains(RangeControl::DEF_LEN) {
+            if wide {
+                r.u64_le()?
+            } else {
+                u64::from(r.u32_le()?)
+            }
+        } else {
+            0
+        };
+        let metadata = r.rest().to_vec();
+        Ok(Self {
+            control,
+            version,
+            max_block_size,
+            start_offset,
+            length,
+            metadata,
+        })
+    }
+}
+
+/// `SendAccept` — accept of a `SendInit` (no range/offset/length on the wire).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendAccept {
+    /// Agreed transfer-control flags.
+    pub control: TransferControl,
+    /// Agreed BDX version.
+    pub version: u8,
+    /// Chosen maximum block size.
+    pub max_block_size: u16,
+    /// Optional TLV metadata, opaque here.
+    pub metadata: Vec<u8>,
+}
+
+impl SendAccept {
+    /// Encode to the BDX message body.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.push((self.version & VERSION_MASK) | self.control.bits());
+        buf.extend_from_slice(&self.max_block_size.to_le_bytes());
+        buf.extend_from_slice(&self.metadata);
+        buf
+    }
+
+    /// Decode a BDX `SendAccept` body.
+    ///
+    /// # Errors
+    /// Returns [`BdxError::Truncated`] if the body ends before a fixed field.
+    pub fn decode(body: &[u8]) -> Result<Self, BdxError> {
+        let mut r = Reader::new(body);
+        let ctl = r.u8()?;
+        let max_block_size = r.u16_le()?;
+        let version = ctl & VERSION_MASK;
+        let control = TransferControl::from_bits_retain(ctl & !VERSION_MASK);
+        let metadata = r.rest().to_vec();
+        Ok(Self {
+            control,
+            version,
+            max_block_size,
+            metadata,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
@@ -249,5 +376,38 @@ mod tests {
     #[test]
     fn transfer_init_decode_truncated_errs() {
         assert_eq!(TransferInit::decode(&[0x20]), Err(BdxError::Truncated));
+    }
+
+    // ReceiveAccept, field-by-field (all LE):
+    //   20            TransferControl: version 0 | ReceiverDrive
+    //   01            RangeControl: DefLen (Length present), no offset, not wide
+    //   00 04         MaxBlockSize u16 = 1024
+    //   0a 00 00 00   Length u32 = 10
+    const RECEIVE_ACCEPT_HEX: &str = "200100040a000000";
+
+    #[test]
+    fn receive_accept_encodes_to_frozen_bytes() {
+        let acc = ReceiveAccept {
+            control: TransferControl::RECEIVER_DRIVE,
+            version: 0,
+            max_block_size: 1024,
+            start_offset: 0,
+            length: 10,
+            metadata: Vec::new(),
+        };
+        assert_eq!(acc.encode(), unhex(RECEIVE_ACCEPT_HEX));
+        assert_eq!(ReceiveAccept::decode(&acc.encode()).unwrap(), acc);
+    }
+
+    #[test]
+    fn send_accept_roundtrips() {
+        let acc = SendAccept {
+            control: TransferControl::RECEIVER_DRIVE,
+            version: 0,
+            max_block_size: 512,
+            metadata: Vec::new(),
+        };
+        assert_eq!(acc.encode(), unhex("200002")); // 20 | 00 02 (512 LE)
+        assert_eq!(SendAccept::decode(&acc.encode()).unwrap(), acc);
     }
 }
