@@ -421,6 +421,63 @@ impl Node {
         }
     }
 
+    /// Trigger `AnnounceOTAProvider` on this device's
+    /// `OtaSoftwareUpdateRequestor` (0x002A) cluster — telling the device that
+    /// *we* (`provider_node_id`) are an OTA Provider it may query for firmware.
+    /// Sent as a `SimpleAnnouncement` (the device decides when to act): it
+    /// resolves us via operational mDNS, opens a CASE session to us, and invokes
+    /// `QueryImage`.
+    ///
+    /// `provider_node_id` is our own operational node id; `vendor_id` is our
+    /// vendor id; `endpoint` is the endpoint **on us** that hosts the
+    /// `OtaSoftwareUpdateProvider` (0x0029) cluster. The command itself is
+    /// invoked on the device's endpoint 0.
+    ///
+    /// This only fires the announcement — the provider-server half (serving the
+    /// image over BDX) lands in a later M9-F phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InteractionModel`] if the invoke fails to build or parse,
+    /// or [`Error::Operational`] if the device rejects the command with a
+    /// non-success IM status or answers with an unexpected response command.
+    pub async fn announce_ota_provider(
+        &self,
+        provider_node_id: u64,
+        vendor_id: u16,
+        endpoint: u16,
+    ) -> Result<(), Error> {
+        use matter_clusters::gen::ota_software_update_requestor::{
+            command_id::ANNOUNCE_OTA_PROVIDER, encode_announce_ota_provider,
+            AnnouncementReasonEnum, CLUSTER_ID,
+        };
+        let fields_tlv = encode_announce_ota_provider(
+            provider_node_id,
+            vendor_id,
+            AnnouncementReasonEnum::SimpleAnnouncement,
+            None,
+            endpoint,
+        );
+        let fields = tlv_to_value(&fields_tlv)?;
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: CLUSTER_ID,
+            command: ANNOUNCE_OTA_PROVIDER,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::Operational(format!(
+                "AnnounceOTAProvider rejected (IM status {code:#04x})"
+            ))),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unrecognised IM status for AnnounceOTAProvider".into(),
+            )),
+            InvokeResult::Data { .. } => Err(Error::Operational(
+                "unexpected response command for AnnounceOTAProvider".into(),
+            )),
+        }
+    }
+
     /// Read `AdministratorCommissioning` `WindowStatus`, `AdminFabricIndex`, and
     /// `AdminVendorId` from endpoint 0. Returns a snapshot of the current
     /// commissioning-window state.
