@@ -309,6 +309,107 @@ impl SendAccept {
     }
 }
 
+/// `BlockQuery` / `BlockAck` / `BlockAckEOF` — a bare block counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CounterMessage {
+    /// The block counter.
+    pub block_counter: u32,
+}
+
+impl CounterMessage {
+    /// Encode to the BDX message body.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        self.block_counter.to_le_bytes().to_vec()
+    }
+    /// Decode a BDX counter-message body.
+    ///
+    /// # Errors
+    /// Returns [`BdxError::Truncated`] if fewer than 4 bytes.
+    pub fn decode(body: &[u8]) -> Result<Self, BdxError> {
+        let mut r = Reader::new(body);
+        Ok(Self {
+            block_counter: r.u32_le()?,
+        })
+    }
+}
+
+/// `Block` / `BlockEOF` — a block counter followed by the block data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataBlock {
+    /// The block counter.
+    pub block_counter: u32,
+    /// The block payload.
+    pub data: Vec<u8>,
+}
+
+impl DataBlock {
+    /// Encode to the BDX message body.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(4 + self.data.len());
+        buf.extend_from_slice(&self.block_counter.to_le_bytes());
+        buf.extend_from_slice(&self.data);
+        buf
+    }
+    /// Decode a BDX data-block body.
+    ///
+    /// # Errors
+    /// Returns [`BdxError::Truncated`] if fewer than 4 bytes.
+    pub fn decode(body: &[u8]) -> Result<Self, BdxError> {
+        let mut r = Reader::new(body);
+        let block_counter = r.u32_le()?;
+        Ok(Self {
+            block_counter,
+            data: r.rest().to_vec(),
+        })
+    }
+}
+
+/// A decoded BDX message, tagged by its [`MessageType`](crate::MessageType).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BdxMessage {
+    /// `ReceiveInit` (0x04).
+    ReceiveInit(TransferInit),
+    /// `SendInit` (0x01).
+    SendInit(TransferInit),
+    /// `ReceiveAccept` (0x05).
+    ReceiveAccept(ReceiveAccept),
+    /// `SendAccept` (0x02).
+    SendAccept(SendAccept),
+    /// `BlockQuery` (0x10).
+    BlockQuery(CounterMessage),
+    /// `Block` (0x11).
+    Block(DataBlock),
+    /// `BlockEOF` (0x12).
+    BlockEof(DataBlock),
+    /// `BlockAck` (0x13).
+    BlockAck(CounterMessage),
+    /// `BlockAckEOF` (0x14).
+    BlockAckEof(CounterMessage),
+}
+
+impl BdxMessage {
+    /// Decode a BDX message body given its [`MessageType`](crate::MessageType).
+    ///
+    /// # Errors
+    /// Returns [`BdxError::Truncated`] on a short body.
+    pub fn decode(message_type: crate::MessageType, body: &[u8]) -> Result<Self, BdxError> {
+        use crate::MessageType as Mt;
+        Ok(match message_type {
+            Mt::ReceiveInit => Self::ReceiveInit(TransferInit::decode(body)?),
+            Mt::SendInit => Self::SendInit(TransferInit::decode(body)?),
+            Mt::ReceiveAccept => Self::ReceiveAccept(ReceiveAccept::decode(body)?),
+            Mt::SendAccept => Self::SendAccept(SendAccept::decode(body)?),
+            Mt::BlockQuery => Self::BlockQuery(CounterMessage::decode(body)?),
+            Mt::Block => Self::Block(DataBlock::decode(body)?),
+            Mt::BlockEof => Self::BlockEof(DataBlock::decode(body)?),
+            Mt::BlockAck => Self::BlockAck(CounterMessage::decode(body)?),
+            Mt::BlockAckEof => Self::BlockAckEof(CounterMessage::decode(body)?),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
@@ -409,5 +510,57 @@ mod tests {
         };
         assert_eq!(acc.encode(), unhex("200002")); // 20 | 00 02 (512 LE)
         assert_eq!(SendAccept::decode(&acc.encode()).unwrap(), acc);
+    }
+
+    #[test]
+    fn counter_message_roundtrips_and_freezes() {
+        let q = CounterMessage { block_counter: 0 };
+        assert_eq!(q.encode(), unhex("00000000"));
+        assert_eq!(CounterMessage::decode(&q.encode()).unwrap(), q);
+        let ack = CounterMessage { block_counter: 2 };
+        assert_eq!(ack.encode(), unhex("02000000"));
+        assert_eq!(
+            CounterMessage::decode(&[0x00, 0x00]),
+            Err(BdxError::Truncated)
+        );
+    }
+
+    #[test]
+    fn data_block_roundtrips_and_freezes() {
+        // Block counter 0, data "HELL".
+        let b = DataBlock {
+            block_counter: 0,
+            data: b"HELL".to_vec(),
+        };
+        assert_eq!(b.encode(), unhex("0000000048454c4c"));
+        assert_eq!(DataBlock::decode(&b.encode()).unwrap(), b);
+        // BlockEOF counter 2, data "RLD".
+        let eof = DataBlock {
+            block_counter: 2,
+            data: b"RLD".to_vec(),
+        };
+        assert_eq!(eof.encode(), unhex("02000000524c44"));
+    }
+
+    #[test]
+    fn bdx_message_dispatch_decodes_by_type() {
+        use crate::MessageType;
+        let body = CounterMessage { block_counter: 5 }.encode();
+        match BdxMessage::decode(MessageType::BlockQuery, &body).unwrap() {
+            BdxMessage::BlockQuery(c) => assert_eq!(c.block_counter, 5),
+            other => panic!("expected BlockQuery, got {other:?}"),
+        }
+        let blk = DataBlock {
+            block_counter: 1,
+            data: b"xy".to_vec(),
+        }
+        .encode();
+        match BdxMessage::decode(MessageType::BlockEof, &blk).unwrap() {
+            BdxMessage::BlockEof(d) => {
+                assert_eq!(d.block_counter, 1);
+                assert_eq!(d.data, b"xy");
+            }
+            other => panic!("expected BlockEof, got {other:?}"),
+        }
     }
 }

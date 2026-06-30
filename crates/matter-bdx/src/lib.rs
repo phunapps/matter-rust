@@ -25,5 +25,6 @@ pub mod messages;
 pub use error::BdxError;
 pub use message_type::{BdxStatusCode, MessageType};
 pub use messages::{
-    RangeControl, ReceiveAccept, SendAccept, TransferControl, TransferInit, BDX_VERSION,
+    BdxMessage, CounterMessage, DataBlock, RangeControl, ReceiveAccept, SendAccept,
+    TransferControl, TransferInit, BDX_VERSION,
 };
