@@ -25,6 +25,10 @@ const COMMAND_CHANNEL_DEPTH: usize = 32;
 #[derive(Clone)]
 pub struct MatterController {
     tx: mpsc::Sender<Command>,
+    /// Retained so the OTA provider server ([`Self::serve_provider_once`]) can
+    /// load the stable, committed operational identity without routing through
+    /// the actor (the identity is minted once and never mutated after).
+    store: Arc<dyn ControllerStore>,
 }
 
 impl MatterController {
@@ -95,14 +99,88 @@ impl MatterController {
         let actor = Actor::new(
             transport,
             discovery,
-            store,
+            store.clone(),
             rng,
             state,
             trust,
             admin_vendor_id,
         );
         tokio::spawn(actor.run(rx));
-        Ok(Self { tx })
+        Ok(Self { tx, store })
+    }
+
+    /// Serve the OTA **provider** role once: advertise our operational service,
+    /// accept one inbound CASE session, and dispatch up to `max_invokes`
+    /// server-side `InvokeRequest`s through `handler`, then withdraw the
+    /// advertisement. `handler` maps a parsed request to the encoded
+    /// `InvokeResponse` bytes (e.g. via `matter_interaction::build_invoke_response_*`).
+    ///
+    /// The server runs on its **own** freshly-bound UDP socket and its own mDNS
+    /// daemon — it does not touch the client actor (the long-running accept is
+    /// kept off the proven request/MRP loop). It authenticates as our persisted
+    /// operational identity (the M8 commissioner NOC/IPK/root).
+    ///
+    /// F3 ships the generic plumbing; F4 supplies the OTA `QueryImage` handler
+    /// and the BDX transfer. Note: advertising a wildcard-bound address may not
+    /// be routable to a foreign requestor — see the F3 runbook for the
+    /// interface-selection caveat (the automated validation is the in-process
+    /// loopback test).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotCommissioned`] if no fabric exists; [`Error::Operational`] on
+    /// bind / mDNS / clock failure; otherwise any CASE-accept or dispatch error
+    /// from [`crate::provider_server::ProviderServer`].
+    pub async fn serve_provider_once<H>(
+        &self,
+        port: u16,
+        handler: H,
+        max_invokes: usize,
+    ) -> Result<usize, Error>
+    where
+        H: FnMut(&matter_interaction::ParsedInvokeRequest) -> Vec<u8>,
+    {
+        use crate::provider_server::{build_operational_service, ProviderServer};
+
+        // 1. Load our persisted fabric + build the responder identity.
+        let state = match self.store.load()? {
+            Some(bytes) => snapshot::deserialize(&bytes)?,
+            None => return Err(Error::NotCommissioned("no fabric to serve from".into())),
+        };
+        let fabric = state
+            .fabrics
+            .first()
+            .ok_or_else(|| Error::NotCommissioned("no fabric to serve from".into()))?;
+        let (credentials, roots, compressed) = crate::credentials::operational_credentials(fabric)?;
+        let node_id = fabric.commissioner.node_id;
+        let now = crate::actor::current_matter_time()?;
+
+        // 2. Bind our own socket + advertise the operational service.
+        let socket = matter_transport::TokioUdpTransport::bind(port)
+            .await
+            .map_err(|e| Error::Operational(format!("provider bind: {e}")))?;
+        let local = socket
+            .socket()
+            .local_addr()
+            .map_err(|e| Error::Operational(format!("provider local_addr: {e}")))?;
+        let mut discovery = matter_transport::MdnsSdDiscovery::new()
+            .map_err(|e| Error::Operational(format!("provider mdns: {e}")))?;
+        let service =
+            build_operational_service(compressed, node_id, vec![local.ip()], local.port());
+        matter_transport::Discovery::publish(&mut discovery, &service)?;
+
+        // 3. Accept one session + dispatch up to `max_invokes` invokes.
+        let result = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now)
+            .accept_and_dispatch_once(handler, max_invokes)
+            .await;
+
+        // 4. Withdraw the advertisement regardless of outcome.
+        let _ = matter_transport::Discovery::unpublish(
+            &mut discovery,
+            &service.instance_name,
+            matter_transport::ServiceKind::Operational,
+        );
+        result
     }
 
     /// Create and persist a new fabric (mints the stable commissioner
