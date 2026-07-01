@@ -87,6 +87,8 @@ const ALLOWLIST = [
   { id: 0x003e, name: 'OperationalCredentials' },
   // M9-F1 OTA Provider:
   { id: 0x0029, name: 'OtaSoftwareUpdateProvider' },
+  // M9-G-a Time Synchronization:
+  { id: 0x0038, name: 'TimeSynchronization' },
 ];
 
 const excluded = [];

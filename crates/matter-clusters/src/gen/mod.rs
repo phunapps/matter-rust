@@ -34,5 +34,6 @@ pub mod switch;
 pub mod temperature_measurement;
 pub mod thermostat;
 pub mod thermostat_user_interface_configuration;
+pub mod time_synchronization;
 pub mod user_label;
 pub mod window_covering;

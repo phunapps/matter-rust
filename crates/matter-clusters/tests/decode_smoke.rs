@@ -537,3 +537,28 @@ fn ota_provider_query_image_response_decodes() {
     let decoded = QueryImageResponse::decode_from(&mut r).expect("decode QueryImageResponse");
     assert_eq!(decoded.status, StatusEnum::UpdateAvailable);
 }
+
+#[test]
+fn time_sync_utc_time_and_granularity_decode() {
+    use gen::time_synchronization::{decode_granularity, decode_utc_time, GranularityEnum};
+    // UTCTime is nullable epoch_us; a present value decodes to Nullable::Some.
+    let decoded = decode_utc_time(&uint_attr(780_000_000_000_000)).unwrap();
+    assert_eq!(decoded, Nullable::Value(780_000_000_000_000));
+    // Granularity enum8 = SecondsGranularity(2).
+    let g = decode_granularity(&uint_attr(2)).unwrap();
+    assert_eq!(g, GranularityEnum::SecondsGranularity);
+}
+
+#[test]
+fn time_sync_set_time_zone_response_decodes() {
+    use gen::time_synchronization::SetTimeZoneResponse;
+    use matter_codec::{Tag, TlvWriter};
+    // Hand-build SetTimeZoneResponse: ctx0 DSTOffsetRequired = true.
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).unwrap();
+    w.put_bool(Tag::Context(0), true).unwrap();
+    w.end_container().unwrap();
+    let decoded = SetTimeZoneResponse::decode(&buf).expect("decode SetTimeZoneResponse");
+    assert!(decoded.dst_offset_required);
+}

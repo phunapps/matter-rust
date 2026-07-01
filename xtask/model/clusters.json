@@ -16,6 +16,7 @@
       "OtaSoftwareUpdateRequestor",
       "PowerSource",
       "GeneralDiagnostics",
+      "TimeSynchronization",
       "Switch",
       "AdministratorCommissioning",
       "OperationalCredentials",
@@ -268,6 +269,12 @@
         "element": "UnoccupiedSetbackMin",
         "kind": "attribute",
         "reason": "deprecated"
+      },
+      {
+        "cluster": "TimeSynchronization",
+        "element": "5 event(s)",
+        "kind": "events",
+        "reason": "no IM event support until M8"
       },
       {
         "cluster": "WindowCovering",
@@ -4784,6 +4791,590 @@
               "value": 6,
               "name": "EthernetFault",
               "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 56,
+      "name": "TimeSynchronization",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "TZ",
+          "name": "TimeZone",
+          "description": "Allows a server to translate a UTC time to a local time using the time zone and daylight savings time (DST) offsets. If a server supports the TimeZone feature, it shall support the SetTimeZone and SetDSTOffset commands, and TimeZone and DSTOffset attributes, and shall expose the local time through the LocalTime attribute."
+        },
+        {
+          "bit": 1,
+          "code": "NTPC",
+          "name": "NtpClient",
+          "description": "Allows a node to use NTP/SNTP for time synchronization."
+        },
+        {
+          "bit": 2,
+          "code": "NTPS",
+          "name": "NtpServer",
+          "description": "Allows a Node to host an NTP server for the network so that other Nodes can achieve a high accuracy time synchronization within the network. See Section 11.17.15, \"Acting as an NTP Server\"."
+        },
+        {
+          "bit": 3,
+          "code": "TSC",
+          "name": "TimeSyncClient",
+          "description": "This node also supports a time synchronization client and can connect to and read time from other nodes."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "UtcTime",
+          "type": "epoch-us",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "If the node has achieved time synchronization, this attribute shall indicate the current time as a UTC epoch-us (Epoch Time in Microseconds).\nIf the node has not achieved time synchronization, this attribute shall be null. This attribute may be set when a SetUTCTime is received."
+        },
+        {
+          "id": 1,
+          "name": "Granularity",
+          "type": "GranularityEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates granularity of the error that the node is willing to guarantee on the time synchronization. It is of type GranularityEnum.\nThis value shall be set to NoTimeGranularity if UTCTime is null and shall NOT be set to NoTimeGranularity if UTCTime is non-null."
+        },
+        {
+          "id": 2,
+          "name": "TimeSource",
+          "type": "TimeSourceEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the node's time source. This attribute indicates what method the node is using to sync, whether the source uses NTS or not and whether the source is internal or external to the Matter network. This attribute may be used by a client to determine its level of trust in the UTCTime. It is of type TimeSourceEnum.\nIf a node is unsure if the selected NTP server is within the Matter network, it SHOULD select one of the NonMatter* values.\nThis value shall be set to None if UTCTime is null and shall NOT be set to None if UTCTime is non-null."
+        },
+        {
+          "id": 3,
+          "name": "TrustedTimeSource",
+          "type": "TrustedTimeSourceStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the Node ID, endpoint, and associated fabric index of a Node that may be used as trusted time source. See Section 11.17.13, \"Time source prioritization\". This attribute reflects the last value set by an administrator using the SetTrustedTimeSource command. If the value is null, no trusted time source has yet been set."
+        },
+        {
+          "id": 4,
+          "name": "DefaultNtp",
+          "type": "string",
+          "metatype": "string",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the default NTP server that this Node may use if other time sources are unavailable. This attribute is settable by an Administrator using the SetDefaultNTP command. It SHOULD be set by the Commissioner during commissioning. If no default NTP server is available, the Commissioner may set this value to null. The default IANA assigned NTP port of 123 shall be used to access the NTP server.\nIf set, the format of this attribute shall be a domain name or a static IPv6 address with no port, in text format, as specified in RFC 5952. The address format shall follow the recommendations in Section 4 and shall NOT contain a port number."
+        },
+        {
+          "id": 5,
+          "name": "TimeZone",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TimeZoneStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain a list of time zone offsets from UTC and when they shall take effect. This attribute uses a list of time offset configurations to allow Nodes to handle scheduled regulatory time zone changes. This attribute shall NOT be used to indicate daylight savings time changes (see Section 11.17.8.7, \"DSTOffset Attribute\" for daylight savings time).\nThe first entry shall have a ValidAt entry of 0. If there is a second entry, it shall have a non-zero ValidAt time.\nIf a node supports a TimeZoneDatabase, and it has data for the given time zone Name and the given Offset matches, the node may update its own DSTOffset attribute to add new DST change times as required, based on the Name fields of the TimeZoneStruct. Administrators may add additional entries to the DSTOffset of other Nodes with the same time zone, if required.\nIf a node does not support a TimeZoneDatabase, the Name field of the TimeZoneStruct is only applicable for client-side localization. In particular:\n  - If the node does not support a TimeZoneDatabase, the Name field shall NOT be used to calculate the local time.\n  - If the node does not support a TimeZoneDatabase, the Name field shall NOT be used to calculate DST start or end dates.\nWhen time passes, the node SHOULD remove any entries which are no longer active and change the ValidAt time for the currently used TimeZoneStruct list item to zero.\nThis attribute shall have at least one entry. If the node does not have a default time zone and no time zone has been set, it may set this value to a list containing a single TimeZoneStruct with an offset of 0 (UTC) and a ValidAt time of 0."
+        },
+        {
+          "id": 6,
+          "name": "DstOffset",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "DSTOffsetStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain a list of offsets to apply for daylight savings time, and their validity period.\nList entries shall be sorted by ValidStarting time.\nA list entry shall NOT have a ValidStarting time that is smaller than the ValidUntil time of the previous entry. There shall be at most one list entry with a null ValidUntil time and, if such an entry is present, it shall appear last in the list.\nOver time, the node SHOULD remove any entries which are no longer active from the list.\nOver time, if the node supports a TimeZoneDatabase and it has information available for the given time zone name, it may update its own list to add additional entries.\nIf a time zone does not use DST, this shall be indicated by a single entry with a 0 offset and a null ValidUntil field."
+        },
+        {
+          "id": 7,
+          "name": "LocalTime",
+          "type": "epoch-us",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the computed current local time of the node as a epoch-us (Epoch Time in Microseconds). The value of LocalTime shall be the sum of the UTCTime, the offset of the currently valid TimeZoneStruct from the TimeZone attribute (converted to microseconds), and the offset of the currently valid DSTOffsetStruct from the DSTOffset attribute (converted to microseconds), if such an entry exists.\nIf the node has not achieved time synchronization, this shall be null. If the node has an empty DSTOffset, this shall be null."
+        },
+        {
+          "id": 8,
+          "name": "TimeZoneDatabase",
+          "type": "TimeZoneDatabaseEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the node has access to a time zone database. Nodes with a time zone database may update their own DSTOffset attribute to add new entries and may push DSTOffset updates to other Nodes in the same time zone as required."
+        },
+        {
+          "id": 9,
+          "name": "NtpServerAvailable",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates if the node is running an RFC 5905 NTPv4 compliant server on port 123, this value shall be True.\nIf the node is not currently running an NTP server, this value shall be False."
+        },
+        {
+          "id": 10,
+          "name": "TimeZoneListMaxSize",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of supported list entries in the TimeZone attribute. This attribute may take the value of 1 or 2, where the optional second list entry may be used to handle scheduled regulatory time zone changes."
+        },
+        {
+          "id": 11,
+          "name": "DstOffsetListMaxSize",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of supported list entries in DSTOffset attribute. This value must be at least 1."
+        },
+        {
+          "id": 12,
+          "name": "SupportsDnsResolve",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates if the node supports resolving a domain name. DefaultNTP Address values for these nodes may include domain names. If this is False, the Address for a DefaultNTP shall be an IPv6 address."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SetUtcTime",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "UtcTime",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall give the Client's UTC Time."
+            },
+            {
+              "id": 1,
+              "name": "Granularity",
+              "type": "GranularityEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall give the Client's Granularity, as described in Granularity."
+            },
+            {
+              "id": 2,
+              "name": "TimeSource",
+              "type": "TimeSourceEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall give the Client's TimeSource, as described in TimeSource."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "SetTrustedTimeSource",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TrustedTimeSource",
+              "type": "FabricScopedTrustedTimeSourceStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": false,
+              "description": "This field contains the Node ID and endpoint of a trusted time source on the accessing fabric."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "SetTimeZone",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TimeZone",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "TimeZoneStruct",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "SetTimeZoneResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DstOffsetRequired",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "If the node supports a time zone database with information for the time zone that will be applied, it may use this information to set the DSTOffset attribute. If the node is setting its own DSTOffset attribute, the DSTOffsetRequired field shall be set to false, otherwise it shall be set to true."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "SetDstOffset",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DstOffset",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "DSTOffsetStruct",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "SetDefaultNtp",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DefaultNtp",
+              "type": "string",
+              "metatype": "string",
+              "nullable": true,
+              "optional": false,
+              "description": "This field contains the address of an NTP server than can be used as a fallback for time synchronization. The format of this field shall follow the requirements in the DefaultNTP attribute description."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "DSTOffsetStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Offset",
+              "type": "int32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The DST offset in seconds. Normally this is in the range of 0 to 3600 seconds (1 hour), but this field will accept any values in the int32 range to accommodate potential future legislation that does not fit with these assumptions."
+            },
+            {
+              "id": 1,
+              "name": "ValidStarting",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The UTC time when the offset shall be applied."
+            },
+            {
+              "id": 2,
+              "name": "ValidUntil",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "The UTC time when the offset shall stop being applied. Providing a null value here indicates a permanent DST change. If this value is non-null the value shall be larger than the ValidStarting time."
+            }
+          ]
+        },
+        {
+          "name": "FabricScopedTrustedTimeSourceStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "Node ID of the trusted time source node on the Fabric of the issuer."
+            },
+            {
+              "id": 1,
+              "name": "Endpoint",
+              "type": "endpoint-no",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "Endpoint on the trusted time source node that contains the Time Synchronization cluster server. This is provided to avoid having to do discovery of the location of that endpoint by walking over all endpoints and checking their Descriptor Cluster."
+            }
+          ]
+        },
+        {
+          "name": "GranularityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "NoTimeGranularity",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "MinutesGranularity",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "SecondsGranularity",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "MillisecondsGranularity",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "MicrosecondsGranularity",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "StatusCodeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 2,
+              "name": "TimeNotAccepted",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TimeSourceEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "None",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Admin",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "NodeTimeCluster",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "NonMatterSntp",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "NonMatterNtp",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "MatterSntp",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "MatterNtp",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "MixedNtp",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "NonMatterSntpnts",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "NonMatterNtpnts",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "MatterSntpnts",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "MatterNtpnts",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "MixedNtpnts",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "CloudSource",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "Ptp",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "Gnss",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TimeZoneDatabaseEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "It indicates what the device knows about the contents of the IANA Time Zone Database. Partial support on a device may be used to omit historical data, less commonly used time zones, and/or time zones not related to the region a product is sold in.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Full",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Partial",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "None",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TimeZoneStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Offset",
+              "type": "int32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The time zone offset from UTC in seconds."
+            },
+            {
+              "id": 1,
+              "name": "ValidAt",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The UTC time when the offset shall be applied."
+            },
+            {
+              "id": 2,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "The time zone name SHOULD provide a human-readable time zone name and it SHOULD use the country/city format specified by the IANA Time Zone Database. The Name field may be used for display. If the node supports a TimeZoneDatabase it may use the Name field to set its own DST offsets if it has database information for the supplied time zone Name and the given Offset matches."
+            }
+          ]
+        },
+        {
+          "name": "TrustedTimeSourceStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The Fabric Index associated with the Fabric of the client which last set the value of the trusted time source node."
+            },
+            {
+              "id": 1,
+              "name": "NodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "Node ID of the trusted time source node on the Fabric associated with the entry."
+            },
+            {
+              "id": 2,
+              "name": "Endpoint",
+              "type": "endpoint-no",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "Endpoint on the trusted time source node that contains the Time Synchronization cluster server."
             }
           ]
         }

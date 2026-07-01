@@ -14,7 +14,7 @@ use std::path::PathBuf;
 /// The M7 target clusters (CLAUDE.md milestone / spec §8) plus the M9-A2.1
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, and M9-D2 operational credentials.
-const TARGET_CLUSTERS: [&str; 35] = [
+const TARGET_CLUSTERS: [&str; 36] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -57,6 +57,8 @@ const TARGET_CLUSTERS: [&str; 35] = [
     "OperationalCredentials",
     // M9-F1 OTA Provider:
     "OtaSoftwareUpdateProvider",
+    // M9-G-a Time Synchronization:
+    "TimeSynchronization",
 ];
 
 fn load() -> Value {
