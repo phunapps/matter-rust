@@ -257,6 +257,70 @@ impl MatterController {
         serve_res
     }
 
+    /// Advertise our operational service and listen for ONE inbound Check-In
+    /// from a registered ICD, verify it against the stored registration key
+    /// (enforcing counter monotonicity), and return it — the caller then
+    /// re-establishes a session and reads/subscribes / `stay_active_request`s
+    /// while the device is briefly active.
+    ///
+    /// Runs on its **own** freshly-bound UDP socket + mDNS daemon (the F3
+    /// pattern), off the client actor. Requires at least one registration from
+    /// [`Node::register_icd_client`](crate::Node::register_icd_client).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotCommissioned`] if no fabric exists; [`Error::Operational`] if
+    /// no ICD clients are registered, on bind / mDNS failure, or if no
+    /// verifiable Check-In arrives before the internal frame budget is reached.
+    pub async fn listen_for_checkin_once(
+        &self,
+        port: u16,
+    ) -> Result<crate::icd_listener::CheckIn, Error> {
+        use crate::provider_server::build_operational_service;
+
+        // Load registrations + advertising identity from the persisted fabric.
+        let state = match self.store.load()? {
+            Some(bytes) => snapshot::deserialize(&bytes)?,
+            None => return Err(Error::NotCommissioned("no fabric to listen from".into())),
+        };
+        let fabric = state
+            .fabrics
+            .first()
+            .ok_or_else(|| Error::NotCommissioned("no fabric to listen from".into()))?;
+        let registrations = fabric.icd_clients.clone();
+        if registrations.is_empty() {
+            return Err(Error::Operational(
+                "no registered ICD clients to listen for".into(),
+            ));
+        }
+        let (_creds, _roots, compressed) = crate::credentials::operational_credentials(fabric)?;
+        let node_id = fabric.commissioner.node_id;
+
+        // Bind our own socket + advertise (so a registered ICD can resolve us).
+        let socket = matter_transport::TokioUdpTransport::bind(port)
+            .await
+            .map_err(|e| Error::Operational(format!("ICD listener bind: {e}")))?;
+        let local = socket
+            .socket()
+            .local_addr()
+            .map_err(|e| Error::Operational(format!("ICD listener local_addr: {e}")))?;
+        let mut discovery = matter_transport::MdnsSdDiscovery::new()
+            .map_err(|e| Error::Operational(format!("ICD listener mdns: {e}")))?;
+        let service =
+            build_operational_service(compressed, node_id, vec![local.ip()], local.port());
+        matter_transport::Discovery::publish(&mut discovery, &service)?;
+
+        // Listen for one verifiable Check-In (generous frame budget for noise).
+        let result = crate::icd_listener::recv_checkin_once(&socket, &registrations, 256).await;
+
+        let _ = matter_transport::Discovery::unpublish(
+            &mut discovery,
+            &service.instance_name,
+            matter_transport::ServiceKind::Operational,
+        );
+        result
+    }
+
     /// Create and persist a new fabric (mints the stable commissioner
     /// identity). Returns the new fabric id.
     ///

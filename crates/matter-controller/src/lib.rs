@@ -116,6 +116,7 @@ pub mod error;
 pub mod fabric;
 pub(crate) mod group;
 pub(crate) mod icd;
+pub(crate) mod icd_listener;
 pub mod node;
 pub(crate) mod opcreds;
 pub mod provider_server;
@@ -137,6 +138,7 @@ pub use error::Error;
 pub use fabric::{create_fabric, FabricConfig};
 pub use group::{GroupKeyMapEntry, GroupKeySet};
 pub use icd::{IcdClientType, IcdRegistration};
+pub use icd_listener::CheckIn;
 pub use matter_cert::MatterTime;
 pub use matter_codec::Value;
 pub use matter_interaction::{
