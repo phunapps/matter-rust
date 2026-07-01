@@ -97,6 +97,7 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | GeneralDiagnostics (typed-decode) | `clusters_diagnostics::general_diagnostics_typed_decode` | ✓-live |
 | FixedLabel (typed-decode) | `clusters_labels_binding::fixed_label_typed_decode` | ✓-live |
 | Binding (typed-decode) | `clusters_labels_binding::binding_typed_decode` | ✓-live |
+| Binding (write + read-back + restore) | `clusters_binding::binding_write_read_restore` | ✓-live (G-b) |
 | UserLabel (write + read-back) | `clusters_labels_binding::user_label_write_read_back` | ✓-live |
 | AccessControl (typed-decode) | `clusters_mgmt::access_control_typed_decode` | ✓-live |
 | GroupKeyManagement (typed-decode) | `clusters_mgmt::group_key_management_typed_decode` | ✓-live |
