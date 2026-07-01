@@ -104,6 +104,7 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | AdministratorCommissioning (typed-decode) | `clusters_mgmt::administrator_commissioning_typed_decode` | ✓-live |
 | OtaSoftwareUpdateRequestor (typed-decode) | `clusters_mgmt::ota_requestor_typed_decode` | ✓-live |
 | TimeSynchronization (SetUTCTime + read-back, SetTimeZone→DSTOffsetRequired, SetDSTOffset) | `clusters_time_sync::time_sync_set_and_read` | ✓-live (G-a) |
+| IcdManagement (register + check-in receive/verify + stay-active) | `checkin` byte-parity + `icd_listener` fake-ICD (in-process); `examples/icd_register_listen` + runbook (live lit-icd-app) | ✓ in-process (G-c); live via runbook |
 
 ### Groups, ACL & access enforcement
 
