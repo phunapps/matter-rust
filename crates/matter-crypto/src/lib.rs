@@ -23,6 +23,7 @@
 
 pub mod aead;
 pub mod case;
+pub mod checkin;
 pub mod error;
 pub mod operational;
 pub mod pase;
