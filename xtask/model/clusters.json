@@ -24,6 +24,7 @@
       "FixedLabel",
       "UserLabel",
       "BooleanState",
+      "IcdManagement",
       "AirQuality",
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
@@ -173,6 +174,12 @@
         "element": "KeySetReadAllIndices.DoNotUse",
         "kind": "command-field",
         "reason": "disallowed"
+      },
+      {
+        "cluster": "IcdManagement.datatype",
+        "element": "MonitoringRegistrationStruct.Key",
+        "kind": "struct-field",
+        "reason": "no readable type (write-only/sensitive)"
       },
       {
         "cluster": "OccupancySensing",
@@ -6768,6 +6775,447 @@
       ],
       "commands": [],
       "datatypes": []
+    },
+    {
+      "id": 70,
+      "name": "IcdManagement",
+      "revision": 3,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CIP",
+          "name": "CheckInProtocolSupport",
+          "description": "When this feature is supported, the device shall support all the associated commands and attributes to properly support the Check-In Protocol."
+        },
+        {
+          "bit": 1,
+          "code": "UAT",
+          "name": "UserActiveModeTrigger",
+          "description": "This feature is supported if and only if the device has a user active mode trigger."
+        },
+        {
+          "bit": 2,
+          "code": "LITS",
+          "name": "LongIdleTimeSupport",
+          "description": "This feature is supported if and only the device is a Long Idle Time ICD."
+        },
+        {
+          "bit": 3,
+          "code": "DSLS",
+          "name": "DynamicSitLitSupport",
+          "description": "This feature is supported if and only if the device can switch between SIT and LIT operating modes even if it has a valid registered client. See the dynamic SIT / LIT operating mode switching for more details."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "IdleModeDuration",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum interval in seconds the server can stay in idle mode. The IdleModeDuration shall NOT be smaller than the ActiveModeDuration."
+        },
+        {
+          "id": 1,
+          "name": "ActiveModeDuration",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the minimum interval in milliseconds the server typically will stay in active mode after initial transition out of idle mode. The ActiveModeDuration does not include the ActiveModeThreshold."
+        },
+        {
+          "id": 2,
+          "name": "ActiveModeThreshold",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the minimum amount of time in milliseconds the server typically will stay active after network activity when in active mode."
+        },
+        {
+          "id": 3,
+          "name": "RegisteredClients",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "MonitoringRegistrationStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain all clients registered to receive notification if their subscription is lost. The maximum number of entries that can be in the list shall be ClientsSupportedPerFabric for each fabric supported on the server, as indicated by the value of the SupportedFabrics attribute in the Operational Credentials cluster."
+        },
+        {
+          "id": 4,
+          "name": "IcdCounter",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute returns the value of the ICD Counter."
+        },
+        {
+          "id": 5,
+          "name": "ClientsSupportedPerFabric",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum number of entries that the server is able to store for each fabric in the RegisteredClients attribute."
+        },
+        {
+          "id": 6,
+          "name": "UserActiveModeTriggerHint",
+          "type": "UserActiveModeTriggerBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates which user action(s) will trigger the ICD to switch to Active mode. If the attribute indicates support for a trigger that is dependent on the UserActiveModeTriggerInstruction in the UserActiveModeTriggerHint table, the UserActiveModeTriggerInstruction attribute shall be implemented and shall provide the required information, unless specified otherwise in the requirement column of the UserActiveModeTriggerHint table.\nActuateSensorLightsBlink, ResetButtonLightsBlink and SetupButtonLightsBlink (i.e. bits 7, 9 and 14) have a dependency on the UserActiveModeTriggerInstruction attribute but do not require the attribute to be present.\nAn ICD can indicate multiple ways of being put into Active Mode by setting multiple bits in the bitmap at the same time. However, a device shall NOT set more than one bit which has a dependency on the UserActiveModeTriggerInstruction attribute."
+        },
+        {
+          "id": 7,
+          "name": "UserActiveModeTriggerInstruction",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The meaning of the attribute is dependent upon the UserActiveModeTriggerHint attribute value, and the conformance is in indicated in the \"dependency\" column in UserActiveModeTriggerHint table. The UserActiveModeTriggerInstruction attribute may give additional information on how to transition the device to Active Mode. If the attribute is present, the value shall be encoded as a valid UTF-8 string with a maximum length of 128 bytes. If the UserActiveModeTriggerHint has the ActuateSensorSeconds, ActuateSensorTimes, ResetButtonSeconds, ResetButtonTimes, SetupButtonSeconds or SetupButtonTimes set, the string shall consist solely of an encoding of N as a decimal unsigned integer using the ASCII digits 0-9, and without leading zeros.\nFor example, given UserActiveModeTriggerHint=\"1024\", ResetButtonSeconds is set which indicates \"Press Reset Button for N seconds\". Therefore, a value of UserActiveModeTriggerInstruction=\"6\" would indicate that N is 6 in that context.\nWhen CustomInstruction is set by the UserActiveModeTriggerHint attribute, indicating presence of a custom string, the ICD SHOULD perform localization (translation to user's preferred language, as indicated in the Device's currently configured locale). The Custom Instruction option SHOULD NOT be used by an ICD that does not have knowledge of the user's language preference.\nWhen the UserActiveModeTriggerHint key indicates a light to blink (ActuateSensorLightsBlink, ResetButtonLightsBlink or SetupButtonLightsBlink), information on color of light may be made available via the UserActiveModeTriggerInstruction attribute. When using such color indication in the UserActiveModeTriggerInstruction attribute, the string shall consist of exactly 6 hexadecimal digits using the ASCII characters 0-F and encoding the RGB color value as used in HTML encodings."
+        },
+        {
+          "id": 8,
+          "name": "OperatingMode",
+          "type": "OperatingModeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the operating mode of the ICD as specified in the OperatingModeEnum.\n  - If the ICD is operating as a LIT ICD, OperatingMode shall be LIT.\n  - If the ICD is operating as a SIT ICD, OperatingMode shall be SIT."
+        },
+        {
+          "id": 9,
+          "name": "MaximumCheckInBackoff",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum time in seconds between two Check-In messages when back-off is active. The MaximumCheckInBackoff shall NOT be smaller than the IdleModeDuration.\nIf the MaximumCheckInBackoff is equal to the IdleModeDuration, it means the ICD does not back-off."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "RegisterClient",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CheckInNodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the node ID to which a Check-In message will be sent if there are no active subscriptions matching MonitoredSubject."
+            },
+            {
+              "id": 1,
+              "name": "MonitoredSubject",
+              "type": "subject-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the monitored subject ID."
+            },
+            {
+              "id": 2,
+              "name": "Key",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the ICDToken, a 128-bit symmetric key shared by the ICD and the ICD Client, used to encrypt Check-In messages from this ICD to the MonitoredSubject."
+            },
+            {
+              "id": 3,
+              "name": "VerificationKey",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall provide the verification key. The verification key represents the key already stored on the server. The verification key provided in this field shall be used by the server to guarantee that a client with manage permissions can only modify entries that contain a Key equal to the verification key. The verification key shall be provided for clients with manage permissions. The verification key SHOULD NOT be provided by clients with administrator permissions for the server cluster. The verification key shall be ignored by the server if it is provided by a client with administrator permissions for the server cluster."
+            },
+            {
+              "id": 4,
+              "name": "ClientType",
+              "type": "ClientTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the client type of the client registering."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "RegisterClientResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "IcdCounter",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "UnregisterClient",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CheckInNodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the registered client node ID to remove from storage."
+            },
+            {
+              "id": 1,
+              "name": "VerificationKey",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall provide the verification key associated with the CheckInNodeID to remove from storage. The verification key represents the key already stored on the server. The verification key provided in this field shall be used by the server to guarantee that a client with manage permissions can only remove entries that contain a Key equal to the stored key. The verification key shall be provided for clients with manage permissions. The verification key SHOULD NOT be provided by clients with administrator permissions for the server cluster. The verification key shall be ignored by the server if it is provided by a client with administrator permissions for the server cluster."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "StayActiveRequest",
+          "direction": "request",
+          "responseId": 4,
+          "fields": [
+            {
+              "id": 0,
+              "name": "StayActiveDuration",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "StayActiveResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PromisedActiveDuration",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the actual duration that the ICD server can stay active from the time it receives the StayActiveRequest command."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "ClientTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Permanent",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ephemeral",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MonitoringRegistrationStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 1,
+              "name": "CheckInNodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the NodeID of the Node to which Check-In messages will be sent when the MonitoredSubject is not subscribed."
+            },
+            {
+              "id": 2,
+              "name": "MonitoredSubject",
+              "type": "subject-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the monitored Subject ID. This field shall be used to determine if a particular client has an active subscription for the given entry. The MonitoredSubject, when it is a NodeID, may be the same as the CheckInNodeID. The MonitoredSubject gives the registering client the flexibility of having a different CheckInNodeID from the MonitoredSubject. A subscription shall count as an active subscription for this entry if:\n  - It is on the associated fabric of this entry, and\n  - The subject of this entry matches the ISD of the SubscriptionRequest message that created the     subscription. Matching shall be determined using the subject_matches function defined in the Access Control Privilege Granting Algorithm.\nFor example, if the MonitoredSubject is Node ID 0x1111_2222_3333_AAAA, and one of the subscribers to the server on the entry's associated fabric bears that Node ID, then the entry matches.\nAnother example is if the MonitoredSubject has the value 0xFFFF_FFFD_AA12_0002, and one of the subscribers to the server on the entry's associated fabric bears the CASE Authenticated TAG value 0xAA12 and the version 0x0002 or higher within its NOC, then the entry matches."
+            },
+            {
+              "id": 4,
+              "name": "ClientType",
+              "type": "ClientTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the client's type to inform the ICD of the availability for communication of the client."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "OperatingModeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Sit",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Lit",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "UserActiveModeTriggerBitmap",
+          "base": "map32",
+          "kind": "bitmap",
+          "description": "See the UserActiveModeTriggerHint table for requirements associated to each bit.",
+          "bits": [
+            {
+              "bit": 0,
+              "name": "PowerCycle",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "SettingsMenu",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "CustomInstruction",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "DeviceManual",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "ActuateSensor",
+              "description": null
+            },
+            {
+              "bit": 5,
+              "name": "ActuateSensorSeconds",
+              "description": null
+            },
+            {
+              "bit": 6,
+              "name": "ActuateSensorTimes",
+              "description": null
+            },
+            {
+              "bit": 7,
+              "name": "ActuateSensorLightsBlink",
+              "description": null
+            },
+            {
+              "bit": 8,
+              "name": "ResetButton",
+              "description": null
+            },
+            {
+              "bit": 9,
+              "name": "ResetButtonLightsBlink",
+              "description": null
+            },
+            {
+              "bit": 10,
+              "name": "ResetButtonSeconds",
+              "description": null
+            },
+            {
+              "bit": 11,
+              "name": "ResetButtonTimes",
+              "description": null
+            },
+            {
+              "bit": 12,
+              "name": "SetupButton",
+              "description": null
+            },
+            {
+              "bit": 13,
+              "name": "SetupButtonSeconds",
+              "description": null
+            },
+            {
+              "bit": 14,
+              "name": "SetupButtonLightsBlink",
+              "description": null
+            },
+            {
+              "bit": 15,
+              "name": "SetupButtonTimes",
+              "description": null
+            },
+            {
+              "bit": 16,
+              "name": "AppDefinedButton",
+              "description": null
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 91,

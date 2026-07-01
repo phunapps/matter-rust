@@ -18,6 +18,7 @@ pub mod general_diagnostics;
 pub mod globals;
 pub mod group_key_management;
 pub mod groups;
+pub mod icd_management;
 pub mod identify;
 pub mod illuminance_measurement;
 pub mod level_control;

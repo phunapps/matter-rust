@@ -550,6 +550,23 @@ fn time_sync_utc_time_and_granularity_decode() {
 }
 
 #[test]
+fn icd_register_client_response_and_operating_mode_decode() {
+    use gen::icd_management::{decode_operating_mode, OperatingModeEnum, RegisterClientResponse};
+    use matter_codec::{Tag, TlvWriter};
+    // RegisterClientResponse: ctx0 ICDCounter = 7.
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).unwrap();
+    w.put_uint(Tag::Context(0), 7).unwrap();
+    w.end_container().unwrap();
+    let decoded = RegisterClientResponse::decode(&buf).expect("decode RegisterClientResponse");
+    assert_eq!(decoded.icd_counter, 7);
+    // OperatingMode enum8 = Lit(1).
+    let m = decode_operating_mode(&uint_attr(1)).unwrap();
+    assert_eq!(m, OperatingModeEnum::Lit);
+}
+
+#[test]
 fn time_sync_set_time_zone_response_decodes() {
     use gen::time_synchronization::SetTimeZoneResponse;
     use matter_codec::{Tag, TlvWriter};

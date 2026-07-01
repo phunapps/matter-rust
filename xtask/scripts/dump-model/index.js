@@ -89,6 +89,8 @@ const ALLOWLIST = [
   { id: 0x0029, name: 'OtaSoftwareUpdateProvider' },
   // M9-G-a Time Synchronization:
   { id: 0x0038, name: 'TimeSynchronization' },
+  // M9-G-c ICD Management:
+  { id: 0x0046, name: 'IcdManagement' },
 ];
 
 const excluded = [];
@@ -250,7 +252,20 @@ function dumpDatatype(dt, where, nameOverride) {
     }));
   } else if (meta === 'object') {
     out.kind = 'struct';
-    out.fields = [...dt.children].map((c, i) => dumpField(c, `${where}.${dt.name}.field[${i}]`));
+    // Drop fields with no readable type — write-only / fabric-sensitive fields
+    // (e.g. IcdManagement MonitoringRegistrationStruct.Key) the device never
+    // returns, so they are not decodable. Keeping them would fail
+    // `requireIdNameType`; the generated decoder decodes by tag id, so omitting
+    // an undecodable field is safe.
+    out.fields = [...dt.children]
+      .filter((c) => {
+        if (!c.effectiveType) {
+          recordExclusion(where, `${dt.name}.${c.name}`, 'struct-field', 'no readable type (write-only/sensitive)');
+          return false;
+        }
+        return true;
+      })
+      .map((c, i) => dumpField(c, `${where}.${dt.name}.field[${i}]`));
   }
   return out;
 }
