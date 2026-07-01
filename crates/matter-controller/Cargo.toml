@@ -24,6 +24,8 @@ matter-commissioning = { path = "../matter-commissioning", version = "0.0.0", fe
 matter-interaction = { path = "../matter-interaction", version = "0.1.0-pre" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 matter-clusters = { path = "../matter-clusters", version = "0.0.0" }
+matter-ota = { path = "../matter-ota", version = "0.0.0" }
+matter-bdx = { path = "../matter-bdx", version = "0.0.0" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

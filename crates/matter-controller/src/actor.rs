@@ -5656,6 +5656,276 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn serve_ota_once_full_flow_over_loopback() {
+        use crate::provider_server::ProviderServer;
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id: _,
+        } = loopback_harness();
+
+        // Provider = our commissioner identity (from the persisted fabric).
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+
+        let image: Vec<u8> = (0..2500u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        // Provider serves on dev_io; requestor drives from ctrl_io.
+        let provider_addr = dev_io.local_addr();
+        let image_for_assert = image.clone();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                provider_creds,
+                provider_roots,
+                0x55,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .serve_ota_once(offer, image, /* max_block_size */ 256)
+            .await
+        });
+
+        let reassembled = ota_test_requestor(
+            ctrl_io,
+            provider_addr,
+            device_creds,
+            device_roots,
+            provider_node_id,
+            fabric_id,
+            /* current_version */ 1,
+        )
+        .await;
+
+        assert_eq!(
+            reassembled, image_for_assert,
+            "requestor reassembled the served image"
+        );
+        server.await.unwrap().expect("provider served OTA");
+    }
+
+    /// In-process OTA **requestor**: CASE-connect to the provider, then drive
+    /// `QueryImage` → BDX download → `ApplyUpdateRequest` → `NotifyUpdateApplied`,
+    /// returning the reassembled image bytes. Uses `secured_round_trip` for each
+    /// request/response (our server is BDX-exchange-agnostic, so per-message
+    /// exchanges are fine in-process; the live requestor uses one BDX exchange).
+    #[allow(clippy::too_many_lines)] // Linear OTA-requestor test driver; kept as one flow.
+    async fn ota_test_requestor(
+        io: matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        creds: matter_crypto::CaseCredentials,
+        roots: matter_cert::TrustedRoots,
+        provider_node_id: u64,
+        fabric_id: u64,
+        current_version: u32,
+    ) -> Vec<u8> {
+        use matter_bdx::{CounterMessage, DataBlock, ReceiveAccept, TransferControl, TransferInit};
+        use matter_clusters::gen::ota_software_update_provider as prov;
+        use matter_commissioning::driver::{run_case, secured_round_trip};
+        use matter_interaction::{
+            build_invoke_request, parse_invoke_response, CommandPath, InvokeResponse,
+        };
+        use matter_transport::{MrpFlags, ProtocolId, SessionManager};
+        use std::time::Instant;
+
+        const IM: u8 = 0x08; // InvokeRequest
+        let now = MatterTime::from_unix_secs(2_000_000_000);
+        let mut sessions = SessionManager::new();
+        let sid = run_case(
+            &io,
+            &mut sessions,
+            provider_addr,
+            creds,
+            roots,
+            provider_node_id,
+            fabric_id,
+            now,
+        )
+        .await
+        .unwrap();
+
+        // 1. QueryImage → QueryImageResponse (UpdateAvailable).
+        let qi = prov::encode_query_image(
+            0xFFF1,
+            0x8000,
+            current_version,
+            &vec![prov::DownloadProtocolEnum::BdxSynchronous],
+            None,
+            None,
+            None,
+            None,
+        );
+        let qi_req = build_invoke_request(
+            CommandPath {
+                endpoint: 0,
+                cluster: prov::CLUSTER_ID,
+                command: prov::command_id::QUERY_IMAGE,
+            },
+            &qi,
+        );
+        let resp = secured_round_trip(
+            &io,
+            &mut sessions,
+            sid,
+            provider_addr,
+            IM,
+            ProtocolId::INTERACTION_MODEL,
+            &qi_req,
+        )
+        .await
+        .unwrap();
+        let update_token = match parse_invoke_response(&resp.payload).unwrap() {
+            InvokeResponse::Command { fields_tlv, .. } => {
+                let qir = prov::QueryImageResponse::decode(&fields_tlv).unwrap();
+                assert_eq!(qir.status, prov::StatusEnum::UpdateAvailable);
+                qir.update_token.unwrap()
+            }
+            other @ InvokeResponse::Status(_) => {
+                panic!("expected QueryImageResponse command, got {other:?}")
+            }
+        };
+
+        // 2. BDX: ReceiveInit → ReceiveAccept, then pull blocks until `length`.
+        let init = TransferInit {
+            control: TransferControl::RECEIVER_DRIVE,
+            version: 0,
+            max_block_size: 256,
+            start_offset: 0,
+            max_length: 0,
+            file_designator: b"fw.ota".to_vec(),
+            metadata: Vec::new(),
+        };
+        let acc = secured_round_trip(
+            &io,
+            &mut sessions,
+            sid,
+            provider_addr,
+            matter_bdx::MessageType::ReceiveInit.to_u8(),
+            ProtocolId::BDX,
+            &init.encode(),
+        )
+        .await
+        .unwrap();
+        let accept = ReceiveAccept::decode(&acc.payload).unwrap();
+        let length = usize::try_from(accept.length).unwrap();
+
+        let mut reassembled = Vec::new();
+        let mut counter = 0u32;
+        while reassembled.len() < length {
+            let q = CounterMessage {
+                block_counter: counter,
+            }
+            .encode();
+            let blk = secured_round_trip(
+                &io,
+                &mut sessions,
+                sid,
+                provider_addr,
+                matter_bdx::MessageType::BlockQuery.to_u8(),
+                ProtocolId::BDX,
+                &q,
+            )
+            .await
+            .unwrap();
+            let block = DataBlock::decode(&blk.payload).unwrap();
+            reassembled.extend_from_slice(&block.data);
+            counter += 1;
+        }
+        // BlockAckEOF (fire-and-forget; final block counter = counter - 1).
+        let ack = CounterMessage {
+            block_counter: counter - 1,
+        }
+        .encode();
+        let out = sessions
+            .encode_outbound(
+                sid,
+                None,
+                matter_bdx::MessageType::BlockAckEof.to_u8(),
+                ProtocolId::BDX,
+                &ack,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, provider_addr).await.unwrap();
+
+        // 3. ApplyUpdateRequest → ApplyUpdateResponse (Proceed).
+        let aur = prov::encode_apply_update_request(&update_token, current_version + 1);
+        let aur_req = build_invoke_request(
+            CommandPath {
+                endpoint: 0,
+                cluster: prov::CLUSTER_ID,
+                command: prov::command_id::APPLY_UPDATE_REQUEST,
+            },
+            &aur,
+        );
+        let ar = secured_round_trip(
+            &io,
+            &mut sessions,
+            sid,
+            provider_addr,
+            IM,
+            ProtocolId::INTERACTION_MODEL,
+            &aur_req,
+        )
+        .await
+        .unwrap();
+        match parse_invoke_response(&ar.payload).unwrap() {
+            InvokeResponse::Command { fields_tlv, .. } => {
+                let r = prov::ApplyUpdateResponse::decode(&fields_tlv).unwrap();
+                assert_eq!(r.action, prov::ApplyUpdateActionEnum::Proceed);
+            }
+            other @ InvokeResponse::Status(_) => {
+                panic!("expected ApplyUpdateResponse command, got {other:?}")
+            }
+        }
+
+        // 4. NotifyUpdateApplied → Success status.
+        let nua = prov::encode_notify_update_applied(&update_token, current_version + 1);
+        let nua_req = build_invoke_request(
+            CommandPath {
+                endpoint: 0,
+                cluster: prov::CLUSTER_ID,
+                command: prov::command_id::NOTIFY_UPDATE_APPLIED,
+            },
+            &nua,
+        );
+        let nr = secured_round_trip(
+            &io,
+            &mut sessions,
+            sid,
+            provider_addr,
+            IM,
+            ProtocolId::INTERACTION_MODEL,
+            &nua_req,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            parse_invoke_response(&nr.payload).unwrap(),
+            InvokeResponse::Status(matter_interaction::ImStatus::Success)
+        ));
+
+        reassembled
+    }
+
+    #[tokio::test]
     async fn revoke_commissioning_over_loopback() {
         let Harness {
             store,
