@@ -678,6 +678,61 @@ impl Node {
         }))
     }
 
+    /// Read this device's `Binding` list on `endpoint` (0x001E attr 0x0000) —
+    /// the targets it is wired to send to.
+    ///
+    /// # Errors
+    ///
+    /// An interaction error if the read fails.
+    pub async fn read_binding(
+        &self,
+        endpoint: u16,
+    ) -> Result<Vec<crate::binding::BindingTarget>, Error> {
+        let reports = self
+            .read(&[ReadPath::concrete(
+                endpoint,
+                crate::binding::BINDING_CLUSTER,
+                crate::binding::ATTR_BINDING,
+            )])
+            .await?;
+        Ok(crate::binding::parse_bindings(&reports))
+    }
+
+    /// Replace this device's `Binding` list on `endpoint` with `targets` (a
+    /// full-list, fabric-scoped write). Returns the per-path device status.
+    ///
+    /// # Errors
+    ///
+    /// An interaction error, or a per-path device status.
+    pub async fn write_binding(
+        &self,
+        endpoint: u16,
+        targets: &[crate::binding::BindingTarget],
+    ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
+        let path = AttributePath {
+            endpoint,
+            cluster: crate::binding::BINDING_CLUSTER,
+            attribute: crate::binding::ATTR_BINDING,
+        };
+        let element_tlvs: Vec<Vec<u8>> = targets
+            .iter()
+            .map(|t| value_to_tlv(&crate::binding::binding_target_value(t)))
+            .collect::<Result<_, _>>()?;
+        let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
+        let resp = if chunks.len() == 1 {
+            self.action(
+                OP_WRITE_REQUEST,
+                chunks[0].clone(),
+                chunks[0].clone(),
+                vec![(path.cluster, path.attribute)],
+            )
+            .await?
+        } else {
+            self.chunked_write(chunks).await?
+        };
+        Ok(parse_write_response(&resp)?)
+    }
+
     /// Read `AdministratorCommissioning` `WindowStatus`, `AdminFabricIndex`, and
     /// `AdminVendorId` from endpoint 0. Returns a snapshot of the current
     /// commissioning-window state.

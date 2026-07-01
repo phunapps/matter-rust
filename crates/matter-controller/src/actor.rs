@@ -7159,6 +7159,78 @@ mod tests {
         device.await.unwrap();
     }
 
+    fn build_write_response_binding_success() -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(0)).unwrap(); // WriteResponses
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeStatusIB
+        w.start_list(Tag::Context(0)).unwrap(); // Path
+        w.put_uint(Tag::Context(2), 1).unwrap(); // endpoint 1
+        w.put_uint(Tag::Context(3), 0x001E).unwrap(); // cluster Binding
+        w.put_uint(Tag::Context(4), 0x0000).unwrap(); // attribute Binding
+        w.end_container().unwrap();
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        w.put_uint(Tag::Context(0), 0).unwrap(); // SUCCESS
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[tokio::test]
+    async fn write_binding_single_chunk_round_trip() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+        let device = tokio::spawn(run_chunked_write_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            /* responder_session_id */ 0x61,
+            /* expected_chunks */ 1,
+            build_write_response_binding_success(),
+        ));
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        let statuses = controller
+            .node(device_node_id)
+            .write_binding(
+                1,
+                &[crate::BindingTarget::new(
+                    Some(0x1122),
+                    None,
+                    Some(1),
+                    Some(0x0006),
+                )],
+            )
+            .await
+            .expect("write_binding");
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
+        assert_eq!(statuses[0].0.cluster, 0x001E);
+        assert_eq!(statuses[0].0.attribute, 0x0000);
+        device.await.unwrap();
+    }
+
     /// `write_acl` multi-chunk path exercised THROUGH the real `write_acl` dispatch.
     ///
     /// Uses `write_acl_with_budget` (the test-only budget seam) with a tiny budget

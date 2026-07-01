@@ -107,6 +107,7 @@
 pub(crate) mod acl;
 pub(crate) mod actor;
 pub(crate) mod admin;
+pub(crate) mod binding;
 pub mod builder;
 pub(crate) mod commission;
 pub mod controller;
@@ -128,6 +129,7 @@ pub use admin::{
     CommissioningWindow, CommissioningWindowStatus, OpenWindowOpts, WindowStatus,
     DEFAULT_WINDOW_ITERATIONS, DEFAULT_WINDOW_TIMEOUT_S,
 };
+pub use binding::BindingTarget;
 pub use builder::MatterControllerBuilder;
 pub use controller::MatterController;
 pub use error::Error;
