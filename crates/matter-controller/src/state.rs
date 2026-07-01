@@ -147,6 +147,11 @@ pub struct FabricEntry {
     /// message. Persisted so the counter survives restarts (spec §4.6.7
     /// prohibits counter reuse across sessions / resets).
     pub outbound_group_counter: u32,
+    /// ICD (Intermittently Connected Device) client registrations on this
+    /// fabric. Each holds the shared key + counter floor the check-in listener
+    /// uses to verify a registered device's Check-In messages. Empty until the
+    /// controller calls `register_icd_client`.
+    pub icd_clients: Vec<crate::icd::IcdRegistration>,
 }
 
 impl std::fmt::Debug for FabricEntry {
@@ -163,6 +168,10 @@ impl std::fmt::Debug for FabricEntry {
                 &format!("<{} key sets>", self.group_keys.len()),
             )
             .field("outbound_group_counter", &self.outbound_group_counter)
+            .field(
+                "icd_clients",
+                &format!("<{} registrations>", self.icd_clients.len()),
+            )
             .finish()
     }
 }

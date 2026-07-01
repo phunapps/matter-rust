@@ -64,6 +64,11 @@ pub fn serialize(state: &ControllerState) -> Result<Vec<u8>, Error> {
 fn fabric_to_value(f: &FabricEntry) -> Result<Value, Error> {
     let devices = f.devices.iter().map(device_to_value).collect();
     let group_keys: Vec<Value> = f.group_keys.iter().map(group_key_to_value).collect();
+    let icd_clients: Vec<Value> = f
+        .icd_clients
+        .iter()
+        .map(icd_registration_to_value)
+        .collect();
     Ok(Value::Structure(vec![
         (Tag::Context(0), Value::Uint(f.fabric_id)),
         (Tag::Context(1), Value::Bytes(f.ipk.to_vec())),
@@ -76,7 +81,18 @@ fn fabric_to_value(f: &FabricEntry) -> Result<Value, Error> {
             Tag::Context(7),
             Value::Uint(u64::from(f.outbound_group_counter)),
         ),
+        (Tag::Context(8), Value::Array(icd_clients)),
     ]))
+}
+
+fn icd_registration_to_value(r: &crate::icd::IcdRegistration) -> Value {
+    Value::Structure(vec![
+        (Tag::Context(0), Value::Uint(r.node_id)),
+        (Tag::Context(1), Value::Uint(r.check_in_node_id)),
+        (Tag::Context(2), Value::Uint(r.monitored_subject)),
+        (Tag::Context(3), Value::Bytes(r.key.to_vec())),
+        (Tag::Context(4), Value::Uint(u64::from(r.start_counter))),
+    ])
 }
 
 fn group_key_to_value(k: &GroupKeySetConfig) -> Value {
@@ -170,6 +186,18 @@ fn fabric_from_value(v: &Value) -> Result<FabricEntry, Error> {
             .map_err(|_| Error::Snapshot("outbound_group_counter exceeds u32 range".into()))?,
         _ => 0,
     };
+    // t8 (ICD registrations) is optional — absent in snapshots written before
+    // ICD support. Default to empty (no version bump).
+    let icd_clients = match get(m, 8) {
+        Some(arr) => {
+            let mut regs = Vec::new();
+            for rv in as_array(arr)? {
+                regs.push(icd_registration_from_value(rv)?);
+            }
+            regs
+        }
+        None => Vec::new(),
+    };
 
     Ok(FabricEntry {
         fabric_id: get_uint(m, 0)?,
@@ -180,7 +208,21 @@ fn fabric_from_value(v: &Value) -> Result<FabricEntry, Error> {
         devices,
         group_keys,
         outbound_group_counter,
+        icd_clients,
     })
+}
+
+fn icd_registration_from_value(v: &Value) -> Result<crate::icd::IcdRegistration, Error> {
+    let m = as_struct(v)?;
+    let start_counter = u32::try_from(get_uint(m, 4)?)
+        .map_err(|_| Error::Snapshot("icd start_counter exceeds u32 range".into()))?;
+    Ok(crate::icd::IcdRegistration::new(
+        get_uint(m, 0)?,
+        get_uint(m, 1)?,
+        get_uint(m, 2)?,
+        byte_array::<16>(get_bytes(m, 3)?, "icd key")?,
+        start_counter,
+    ))
 }
 
 fn group_key_from_value(v: &Value) -> Result<GroupKeySetConfig, Error> {
@@ -445,6 +487,23 @@ mod tests {
         assert_eq!(f.group_keys[1].key_set_id, 0x0002);
         assert_eq!(f.group_keys[1].epoch_key, [0xBB; 16]);
         assert_eq!(f.group_keys[1].epoch_start_time, 1_700_100_000);
+    }
+
+    #[test]
+    fn icd_clients_round_trip() {
+        // A FabricEntry WITH ICD registrations must survive serialize →
+        // deserialize with all fields preserved (additive t8, no version bump).
+        let mut fabric = shared_fabric().clone();
+        fabric.icd_clients = vec![
+            crate::icd::IcdRegistration::new(0x0042, 1, 1, [0xCC; 16], 7),
+            crate::icd::IcdRegistration::new(0x0043, 1, 2, [0xDD; 16], 99),
+        ];
+        let state = ControllerState {
+            fabrics: vec![fabric.clone()],
+        };
+        let bytes = serialize(&state).expect("serialize");
+        let back = deserialize(&bytes).expect("deserialize");
+        assert_eq!(back.fabrics[0].icd_clients, fabric.icd_clients);
     }
 
     #[test]

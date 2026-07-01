@@ -114,6 +114,32 @@ fn dst_required_from_response(fields: &Value) -> Result<bool, Error> {
     ))
 }
 
+/// Extract a `u32` from ctx0 of a decoded response `Value` (used for
+/// `RegisterClientResponse.ICDCounter` and `StayActiveResponse.PromisedActiveDuration`).
+fn u32_ctx0_from_response(fields: &Value, what: &'static str) -> Result<u32, Error> {
+    if let Value::Structure(members) = fields {
+        for (tag, v) in members {
+            if *tag == Tag::Context(0) {
+                if let Value::Uint(n) = v {
+                    return u32::try_from(*n)
+                        .map_err(|_| Error::Operational(format!("{what} exceeds u32 range")));
+                }
+            }
+        }
+    }
+    Err(Error::Operational(format!("response missing {what}")))
+}
+
+/// Extract `RegisterClientResponse.ICDCounter` (ctx0 u32).
+fn icd_counter_from_response(fields: &Value) -> Result<u32, Error> {
+    u32_ctx0_from_response(fields, "ICDCounter")
+}
+
+/// Extract `StayActiveResponse.PromisedActiveDuration` (ctx0 u32).
+fn promised_duration_from_response(fields: &Value) -> Result<u32, Error> {
+    u32_ctx0_from_response(fields, "PromisedActiveDuration")
+}
+
 /// Encode a `Value` into a standalone anonymous-tagged TLV blob.
 ///
 /// Exposed as `pub(crate)` so tests in sibling modules can encode ACL entry
@@ -731,6 +757,127 @@ impl Node {
             self.chunked_write(chunks).await?
         };
         Ok(parse_write_response(&resp)?)
+    }
+
+    /// Register the controller as a check-in client with this ICD
+    /// (`IcdManagement.RegisterClient`, 0x0046 cmd 0x00). Generates a fresh
+    /// 16-byte symmetric key, registers our commissioner node id as the
+    /// `CheckInNodeID`, persists an [`IcdRegistration`](crate::IcdRegistration)
+    /// (so the check-in listener can later verify this device's Check-Ins), and
+    /// returns it. `monitored_subject` is the subject the ICD watches for us
+    /// (usually our node id).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] on RNG failure or device rejection; an interaction
+    /// error; or a persistence error.
+    pub async fn register_icd_client(
+        &self,
+        monitored_subject: u64,
+        client_type: crate::icd::IcdClientType,
+    ) -> Result<crate::icd::IcdRegistration, Error> {
+        let check_in_node_id = self.commissioner_node_id().await?;
+        let mut key = [0u8; 16];
+        matter_crypto::random_bytes(&mut key)
+            .map_err(|e| Error::Operational(format!("ICD key generation failed: {e}")))?;
+        let fields = crate::icd::register_client_fields(
+            check_in_node_id,
+            monitored_subject,
+            &key,
+            client_type,
+        );
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::icd::ICD_MANAGEMENT_CLUSTER,
+            command: 0x00,
+        };
+        let icd_counter = match self.invoke(path, fields).await? {
+            InvokeResult::Data { fields, .. } => icd_counter_from_response(&fields)?,
+            InvokeResult::Status(ImStatus::Failure(code)) => {
+                return Err(Error::Operational(format!(
+                    "RegisterClient rejected (IM status {code:#04x})"
+                )))
+            }
+            InvokeResult::Status(_) => {
+                return Err(Error::Operational(
+                    "RegisterClient returned status, expected RegisterClientResponse".into(),
+                ))
+            }
+        };
+        let registration = crate::icd::IcdRegistration::new(
+            self.node_id,
+            check_in_node_id,
+            monitored_subject,
+            key,
+            icd_counter,
+        );
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::PersistIcdRegistration {
+                registration: registration.clone(),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)??;
+        Ok(registration)
+    }
+
+    /// Unregister the controller from this ICD (`UnregisterClient`, cmd 0x02),
+    /// using our commissioner node id as the `CheckInNodeID`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] on device rejection, else an interaction error.
+    pub async fn unregister_icd_client(&self) -> Result<(), Error> {
+        let check_in_node_id = self.commissioner_node_id().await?;
+        let fields = Value::Structure(vec![(Tag::Context(0), Value::Uint(check_in_node_id))]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::icd::ICD_MANAGEMENT_CLUSTER,
+            command: 0x02,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::Operational(format!(
+                "UnregisterClient rejected (IM status {code:#04x})"
+            ))),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unrecognised IM status for UnregisterClient".into(),
+            )),
+            InvokeResult::Data { .. } => Err(Error::Operational(
+                "unexpected response command for UnregisterClient".into(),
+            )),
+        }
+    }
+
+    /// Ask this ICD to stay in active mode for at least `stay_active_ms`
+    /// (`StayActiveRequest`, cmd 0x03). Returns the device's promised active
+    /// duration (ms).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] on device rejection or a malformed response, else
+    /// an interaction error.
+    pub async fn stay_active_request(&self, stay_active_ms: u32) -> Result<u32, Error> {
+        let fields = Value::Structure(vec![(
+            Tag::Context(0),
+            Value::Uint(u64::from(stay_active_ms)),
+        )]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: crate::icd::ICD_MANAGEMENT_CLUSTER,
+            command: 0x03,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Data { fields, .. } => promised_duration_from_response(&fields),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::Operational(format!(
+                "StayActiveRequest rejected (IM status {code:#04x})"
+            ))),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "StayActiveRequest returned status, expected response".into(),
+            )),
+        }
     }
 
     /// Read `AdministratorCommissioning` `WindowStatus`, `AdminFabricIndex`, and

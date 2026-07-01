@@ -504,6 +504,13 @@ pub(crate) enum Command {
     CommissionerNodeId {
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// Persist an ICD client registration on the sole fabric (replacing any
+    /// prior registration for the same node), then durably save. Used by
+    /// `Node::register_icd_client` after a successful `RegisterClient`.
+    PersistIcdRegistration {
+        registration: crate::icd::IcdRegistration,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
     /// Mint a fresh 16-byte group epoch key, append a
     /// [`GroupKeySetConfig`](crate::state::GroupKeySetConfig) to
     /// the sole fabric's `group_keys`, durably persist, and return the
@@ -826,6 +833,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Command::CommissionerNodeId { reply } => {
                 let _ = reply.send(self.sole_fabric().map(|f| f.commissioner.node_id));
             }
+            Command::PersistIcdRegistration {
+                registration,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_persist_icd_registration(registration).await);
+            }
             Command::CreateGroup {
                 key_set_id,
                 epoch_start_time,
@@ -870,6 +883,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let (store, bytes) = self.durable_save_inputs()?;
         save_offloaded(store, bytes).await?;
         Ok(fabric_id)
+    }
+
+    /// Persist an ICD client registration on the sole fabric, replacing any
+    /// prior registration for the same device node, then durably save.
+    async fn handle_persist_icd_registration(
+        &mut self,
+        registration: crate::icd::IcdRegistration,
+    ) -> Result<(), Error> {
+        let fabric = self.sole_fabric_mut()?;
+        fabric
+            .icd_clients
+            .retain(|r| r.node_id != registration.node_id);
+        fabric.icd_clients.push(registration);
+        let (store, bytes) = self.durable_save_inputs()?;
+        save_offloaded(store, bytes).await?;
+        Ok(())
     }
 
     /// Commission a device onto the sole fabric and persist a `DeviceEntry`.
@@ -5582,6 +5611,125 @@ mod tests {
             )
             .await
             .expect("announce ota provider");
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_icd_client_over_loopback_persists_registration() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+        // Device replies RegisterClientResponse{ ctx0 ICDCounter = 42 }.
+        let resp_fields = {
+            use matter_codec::{Tag, TlvWriter};
+            let mut b = Vec::new();
+            let mut w = TlvWriter::new(&mut b);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 42).unwrap();
+            w.end_container().unwrap();
+            b
+        };
+        let reply = matter_interaction::build_invoke_response_command(
+            matter_interaction::CommandPath {
+                endpoint: 0,
+                cluster: 0x0046,
+                command: 0x01,
+            },
+            &resp_fields,
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x55,
+            1,
+            reply,
+            false,
+        ));
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        let reg = controller
+            .node(device_node_id)
+            .register_icd_client(1, crate::IcdClientType::Permanent)
+            .await
+            .expect("register_icd_client");
+        assert_eq!(reg.node_id, device_node_id);
+        assert_eq!(reg.start_counter, 42);
+        assert_eq!(reg.check_in_node_id, 1); // loopback_harness commissioner node id
+        assert_eq!(reg.monitored_subject, 1);
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stay_active_request_over_loopback_returns_promised() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+        // Device replies StayActiveResponse{ ctx0 PromisedActiveDuration = 5000 }.
+        let resp_fields = {
+            use matter_codec::{Tag, TlvWriter};
+            let mut b = Vec::new();
+            let mut w = TlvWriter::new(&mut b);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 5000).unwrap();
+            w.end_container().unwrap();
+            b
+        };
+        let reply = matter_interaction::build_invoke_response_command(
+            matter_interaction::CommandPath {
+                endpoint: 0,
+                cluster: 0x0046,
+                command: 0x04,
+            },
+            &resp_fields,
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x55,
+            1,
+            reply,
+            false,
+        ));
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        let promised = controller
+            .node(device_node_id)
+            .stay_active_request(3000)
+            .await
+            .expect("stay_active_request");
+        assert_eq!(promised, 5000);
         device.await.unwrap();
     }
 
