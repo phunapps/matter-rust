@@ -183,6 +183,80 @@ impl MatterController {
         result
     }
 
+    /// Announce ourselves as an OTA provider to `target_node_id`, advertise our
+    /// operational service, and serve `image` over the full OTA flow (the
+    /// requestor resolves us, opens CASE, queries, BDX-downloads, applies).
+    /// Returns once the requestor sends `NotifyUpdateApplied`.
+    ///
+    /// `software_version` is offered in `QueryImageResponse` (must exceed the
+    /// requestor's current version for it to update — and match the version
+    /// baked into the `.ota` header for a live requestor). `port` binds the
+    /// provider socket (0 = ephemeral). The image is served verbatim over BDX
+    /// (unsigned; the requestor parses the `OTAImageHeader`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotCommissioned`] if no fabric exists; [`Error::Operational`] on
+    /// bind / mDNS / clock failure; otherwise any announce or serve error.
+    pub async fn serve_ota(
+        &self,
+        target_node_id: u64,
+        image: Vec<u8>,
+        software_version: u32,
+        port: u16,
+    ) -> Result<(), Error> {
+        use crate::provider_server::{build_operational_service, ProviderServer};
+
+        // Identity + offer.
+        let state = match self.store.load()? {
+            Some(bytes) => snapshot::deserialize(&bytes)?,
+            None => return Err(Error::NotCommissioned("no fabric to serve from".into())),
+        };
+        let fabric = state
+            .fabrics
+            .first()
+            .ok_or_else(|| Error::NotCommissioned("no fabric to serve from".into()))?;
+        let (credentials, roots, compressed) = crate::credentials::operational_credentials(fabric)?;
+        let node_id = fabric.commissioner.node_id;
+        let now = crate::actor::current_matter_time()?;
+        let offer = matter_ota::ImageOffer {
+            software_version,
+            software_version_string: software_version.to_string(),
+            image_uri: format!("bdx://{node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        // Bind + advertise.
+        let socket = matter_transport::TokioUdpTransport::bind(port)
+            .await
+            .map_err(|e| Error::Operational(format!("provider bind: {e}")))?;
+        let local = socket
+            .socket()
+            .local_addr()
+            .map_err(|e| Error::Operational(format!("provider local_addr: {e}")))?;
+        let mut discovery = matter_transport::MdnsSdDiscovery::new()
+            .map_err(|e| Error::Operational(format!("provider mdns: {e}")))?;
+        let service =
+            build_operational_service(compressed, node_id, vec![local.ip()], local.port());
+        matter_transport::Discovery::publish(&mut discovery, &service)?;
+
+        // Announce (client invoke to the device) concurrently with serving.
+        let server = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now);
+        let node = self.node(target_node_id);
+        let announce =
+            node.announce_ota_provider(node_id, crate::builder::DEFAULT_ADMIN_VENDOR_ID, 0);
+        let serve = server.serve_ota_once(offer, image, /* max_block_size */ 1024);
+        let (announce_res, serve_res) = tokio::join!(announce, serve);
+
+        let _ = matter_transport::Discovery::unpublish(
+            &mut discovery,
+            &service.instance_name,
+            matter_transport::ServiceKind::Operational,
+        );
+        announce_res?;
+        serve_res
+    }
+
     /// Create and persist a new fabric (mints the stable commissioner
     /// identity). Returns the new fabric id.
     ///
