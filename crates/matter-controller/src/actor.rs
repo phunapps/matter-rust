@@ -5926,6 +5926,166 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_utc_time_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+        let reply = matter_interaction::build_invoke_response_status(
+            matter_interaction::CommandPath {
+                endpoint: 0,
+                cluster: 0x0038,
+                command: 0x00,
+            },
+            matter_interaction::ImStatus::Success,
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x55,
+            1,
+            reply,
+            /* expect_timed */ false,
+        ));
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        controller
+            .node(device_node_id)
+            .set_utc_time(1_000_000, crate::TimeGranularity::Seconds)
+            .await
+            .expect("set utc time");
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_time_zone_over_loopback_returns_dst_required() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+        // Device replies SetTimeZoneResponse{ ctx0 DSTOffsetRequired = true }.
+        let resp_fields = {
+            use matter_codec::{Tag, TlvWriter};
+            let mut b = Vec::new();
+            let mut w = TlvWriter::new(&mut b);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_bool(Tag::Context(0), true).unwrap();
+            w.end_container().unwrap();
+            b
+        };
+        let reply = matter_interaction::build_invoke_response_command(
+            matter_interaction::CommandPath {
+                endpoint: 0,
+                cluster: 0x0038,
+                command: 0x03,
+            },
+            &resp_fields,
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x55,
+            1,
+            reply,
+            false,
+        ));
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        let dst_required = controller
+            .node(device_node_id)
+            .set_time_zone(&[crate::TimeZoneEntry {
+                offset_seconds: 3600,
+                valid_at_us: 0,
+                name: Some("CET".into()),
+            }])
+            .await
+            .expect("set time zone");
+        assert!(dst_required);
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_dst_offset_over_loopback() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+        let reply = matter_interaction::build_invoke_response_status(
+            matter_interaction::CommandPath {
+                endpoint: 0,
+                cluster: 0x0038,
+                command: 0x04,
+            },
+            matter_interaction::ImStatus::Success,
+        );
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x55,
+            1,
+            reply,
+            false,
+        ));
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        controller
+            .node(device_node_id)
+            .set_dst_offset(&[crate::DstOffsetEntry {
+                offset_seconds: 3600,
+                valid_starting_us: 0,
+                valid_until_us: None,
+            }])
+            .await
+            .expect("set dst offset");
+        device.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn revoke_commissioning_over_loopback() {
         let Harness {
             store,

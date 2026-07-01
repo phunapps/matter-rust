@@ -139,7 +139,7 @@ pub use matter_interaction::{
     AttributePath, CommandPath, EventFilter, EventPath, EventPriority, EventReport,
     EventReportItem, EventTimestamp, ImStatus, ReadPath,
 };
-pub use node::{InvokeResult, Node};
+pub use node::{DstOffsetEntry, InvokeResult, Node, TimeGranularity, TimeZoneEntry};
 pub use opcreds::FabricDescriptor;
 pub use provider_server::{build_operational_service, ProviderServer};
 pub use state::{

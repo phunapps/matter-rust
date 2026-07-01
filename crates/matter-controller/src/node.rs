@@ -46,6 +46,74 @@ pub enum InvokeResult {
     Status(ImStatus),
 }
 
+/// `TimeSynchronization.Granularity` (Matter Core §11.17) — how precise the time
+/// passed to [`Node::set_utc_time`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TimeGranularity {
+    /// Time is not currently known.
+    NoTime,
+    /// Accurate to the minute.
+    Minutes,
+    /// Accurate to the second.
+    Seconds,
+    /// Accurate to the millisecond.
+    Milliseconds,
+    /// Accurate to the microsecond.
+    Microseconds,
+}
+
+impl TimeGranularity {
+    fn to_u8(self) -> u8 {
+        match self {
+            Self::NoTime => 0,
+            Self::Minutes => 1,
+            Self::Seconds => 2,
+            Self::Milliseconds => 3,
+            Self::Microseconds => 4,
+        }
+    }
+}
+
+/// One `TimeZoneStruct` entry for [`Node::set_time_zone`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TimeZoneEntry {
+    /// Offset from UTC in seconds (−43200..=50400).
+    pub offset_seconds: i32,
+    /// The `UTCTime` (epoch µs) at which this offset takes effect.
+    pub valid_at_us: u64,
+    /// Optional IANA time-zone name.
+    pub name: Option<String>,
+}
+
+/// One `DSTOffsetStruct` entry for [`Node::set_dst_offset`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DstOffsetEntry {
+    /// DST offset in seconds added to the standard offset.
+    pub offset_seconds: i32,
+    /// The `UTCTime` (epoch µs) at which this DST offset starts.
+    pub valid_starting_us: u64,
+    /// The `UTCTime` (epoch µs) at which it stops, or `None` for indefinite.
+    pub valid_until_us: Option<u64>,
+}
+
+/// Extract `SetTimeZoneResponse.DSTOffsetRequired` (ctx0 bool) from a decoded
+/// response `Value`.
+fn dst_required_from_response(fields: &Value) -> Result<bool, Error> {
+    if let Value::Structure(members) = fields {
+        for (tag, v) in members {
+            if *tag == Tag::Context(0) {
+                if let Value::Bool(b) = v {
+                    return Ok(*b);
+                }
+            }
+        }
+    }
+    Err(Error::Operational(
+        "SetTimeZoneResponse missing DSTOffsetRequired".into(),
+    ))
+}
+
 /// Encode a `Value` into a standalone anonymous-tagged TLV blob.
 ///
 /// Exposed as `pub(crate)` so tests in sibling modules can encode ACL entry
@@ -476,6 +544,138 @@ impl Node {
                 "unexpected response command for AnnounceOTAProvider".into(),
             )),
         }
+    }
+
+    /// Set the device's wall-clock via `TimeSynchronization.SetUTCTime`
+    /// (0x0038 cmd 0x00). `utc_us` is microseconds since the Matter epoch
+    /// (2000-01-01 UTC); `granularity` describes its precision.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] if the device rejects it (e.g. it already has a
+    /// finer-granularity time), else an interaction error.
+    pub async fn set_utc_time(
+        &self,
+        utc_us: u64,
+        granularity: TimeGranularity,
+    ) -> Result<(), Error> {
+        let fields = Value::Structure(vec![
+            (Tag::Context(0), Value::Uint(utc_us)),
+            (Tag::Context(1), Value::Uint(u64::from(granularity.to_u8()))),
+        ]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0038,
+            command: 0x00,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::Operational(format!(
+                "SetUTCTime rejected (IM status {code:#04x})"
+            ))),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unrecognised IM status for SetUTCTime".into(),
+            )),
+            InvokeResult::Data { .. } => Err(Error::Operational(
+                "unexpected response command for SetUTCTime".into(),
+            )),
+        }
+    }
+
+    /// Set the device's time zone via `SetTimeZone` (0x0038 cmd 0x02). Returns
+    /// the device's `DSTOffsetRequired` flag (whether you must also call
+    /// [`Self::set_dst_offset`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] on device rejection or a malformed response, else
+    /// an interaction error.
+    pub async fn set_time_zone(&self, entries: &[TimeZoneEntry]) -> Result<bool, Error> {
+        let list = entries
+            .iter()
+            .map(|e| {
+                let mut members = vec![
+                    (Tag::Context(0), Value::Int(i64::from(e.offset_seconds))),
+                    (Tag::Context(1), Value::Uint(e.valid_at_us)),
+                ];
+                if let Some(name) = &e.name {
+                    members.push((Tag::Context(2), Value::Utf8(name.clone())));
+                }
+                Value::Structure(members)
+            })
+            .collect();
+        let fields = Value::Structure(vec![(Tag::Context(0), Value::Array(list))]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0038,
+            command: 0x02,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Data { fields, .. } => dst_required_from_response(&fields),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::Operational(format!(
+                "SetTimeZone rejected (IM status {code:#04x})"
+            ))),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "SetTimeZone returned status, expected response".into(),
+            )),
+        }
+    }
+
+    /// Set the device's DST offsets via `SetDSTOffset` (0x0038 cmd 0x04).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] on device rejection, else an interaction error.
+    pub async fn set_dst_offset(&self, entries: &[DstOffsetEntry]) -> Result<(), Error> {
+        let list = entries
+            .iter()
+            .map(|e| {
+                Value::Structure(vec![
+                    (Tag::Context(0), Value::Int(i64::from(e.offset_seconds))),
+                    (Tag::Context(1), Value::Uint(e.valid_starting_us)),
+                    (
+                        Tag::Context(2),
+                        e.valid_until_us.map_or(Value::Null, Value::Uint),
+                    ),
+                ])
+            })
+            .collect();
+        let fields = Value::Structure(vec![(Tag::Context(0), Value::Array(list))]);
+        let path = CommandPath {
+            endpoint: 0,
+            cluster: 0x0038,
+            command: 0x04,
+        };
+        match self.invoke(path, fields).await? {
+            InvokeResult::Status(ImStatus::Success) => Ok(()),
+            InvokeResult::Status(ImStatus::Failure(code)) => Err(Error::Operational(format!(
+                "SetDSTOffset rejected (IM status {code:#04x})"
+            ))),
+            InvokeResult::Status(_) => Err(Error::Operational(
+                "unrecognised IM status for SetDSTOffset".into(),
+            )),
+            InvokeResult::Data { .. } => Err(Error::Operational(
+                "unexpected response command for SetDSTOffset".into(),
+            )),
+        }
+    }
+
+    /// Read the device's current `UTCTime` (0x0038 attr 0x00). `None` if the
+    /// device reports a null time (clock not set).
+    ///
+    /// # Errors
+    ///
+    /// An interaction error if the read fails.
+    pub async fn read_utc_time(&self) -> Result<Option<u64>, Error> {
+        let reports = self.read(&[ReadPath::concrete(0, 0x0038, 0x0000)]).await?;
+        Ok(reports.iter().find_map(|(p, v)| {
+            if p.attribute == 0x0000 {
+                if let Value::Uint(u) = v {
+                    return Some(*u);
+                }
+            }
+            None
+        }))
     }
 
     /// Read `AdministratorCommissioning` `WindowStatus`, `AdminFabricIndex`, and
