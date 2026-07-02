@@ -24,18 +24,34 @@ async fn time_sync_set_and_read() {
     // A fixed, plausible epoch-µs value (well after the Matter 2000 epoch;
     // ~2024-09 expressed in microseconds since 2000-01-01 UTC).
     let when_us: u64 = 780_000_000_000_000;
-    node.set_utc_time(when_us, TimeGranularity::Seconds)
-        .await
-        .expect("SetUTCTime");
+    // SetUTCTime acceptance is DEVICE-DISCRETIONARY: per spec §11.16 a node with
+    // an equal-or-finer-granularity time source SHALL reject it, and
+    // all-clusters-app running on a host with a synced clock does exactly that
+    // (a clean `SetUTCTime rejected` IM status). Accept either outcome — the
+    // point of the live test is that the command round-trips against the device;
+    // only a malformed/transport failure is a real error.
+    let accepted = match node.set_utc_time(when_us, TimeGranularity::Seconds).await {
+        Ok(()) => true,
+        Err(e) => {
+            assert!(
+                e.to_string().contains("SetUTCTime rejected"),
+                "SetUTCTime failed unexpectedly (not a clean device rejection): {e}"
+            );
+            false
+        }
+    };
 
-    // The device's clock advances from ~when_us; read it back and assert it is
-    // set (non-null) and not far behind the value we set (allow drift/advance).
+    // Read UTCTime back — this must round-trip regardless. If the device
+    // accepted our value the clock must reflect it (allowing drift/advance);
+    // otherwise the device reports its own time source (may be null if unset).
     let read = node.read_utc_time().await.expect("read UTCTime");
-    let t = read.expect("UTCTime should be set after SetUTCTime");
-    assert!(
-        t + 60_000_000 >= when_us,
-        "clock {t} is far behind the value we set ({when_us})"
-    );
+    if accepted {
+        let t = read.expect("UTCTime should be set after an accepted SetUTCTime");
+        assert!(
+            t + 60_000_000 >= when_us,
+            "clock {t} is far behind the value we set ({when_us})"
+        );
+    }
 
     // Time zone + DST offset (single entries valid from epoch 0).
     let _dst_required = node
