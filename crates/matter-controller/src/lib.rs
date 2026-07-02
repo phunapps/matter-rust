@@ -115,6 +115,7 @@ pub(crate) mod credentials;
 pub mod error;
 pub mod fabric;
 pub(crate) mod group;
+pub(crate) mod handshake_socket;
 pub(crate) mod icd;
 pub(crate) mod icd_listener;
 pub mod node;

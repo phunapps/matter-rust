@@ -11,7 +11,7 @@ use matter_commissioning::driver::AsyncDatagram;
 use matter_commissioning::NocRng;
 use matter_transport::{
     DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolHeader, ProtocolId, SessionId,
-    SessionManager,
+    SessionManager, SessionRole,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -598,6 +598,126 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     commission_tx: mpsc::Sender<CommissionCompletion>,
     /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
     commission_rx: mpsc::Receiver<CommissionCompletion>,
+    /// M9-G-d event-driven connect: verbs waiting on an in-flight CASE connect,
+    /// coalesced per device node id. A key's presence means a connect to that
+    /// node is running on a spawned task; the queued commands are re-dispatched
+    /// (on success) or failed (on error) when it completes. See
+    /// [`Self::enqueue_connect_waiter`] / [`Self::handle_connect_done`].
+    pending_connects: HashMap<u64, Vec<Command>>,
+    /// Per-in-flight-connect inbound queue (keyed by node id): the actor forwards
+    /// the device's unsecured handshake replies here for the spawned task to
+    /// consume via its [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket).
+    connect_inbound: HashMap<u64, mpsc::Sender<(Vec<u8>, SocketAddr)>>,
+    /// Peer-address → node-id route for in-flight handshakes. An inbound
+    /// unsecured datagram from a mapped peer is a handshake reply and is
+    /// forwarded to that connect. Installed when the actor sends the connect's
+    /// first datagram, so it is always in place before any reply arrives.
+    connect_routes: HashMap<SocketAddr, u64>,
+    /// Shared outbound channel: spawned connect tasks push their handshake
+    /// datagrams here; the actor sends each on its own socket (and installs the
+    /// peer route). Kept on the actor so `recv` never closes.
+    connect_outbound_tx: mpsc::Sender<crate::handshake_socket::HandshakeOutbound>,
+    /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
+    connect_outbound_rx: mpsc::Receiver<crate::handshake_socket::HandshakeOutbound>,
+    /// Connect-completion channel: a finished connect task hands its established
+    /// session (or error) back here for registration + waiter resolution.
+    connect_done_tx: mpsc::Sender<ConnectCompletion>,
+    /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
+    connect_done_rx: mpsc::Receiver<ConnectCompletion>,
+}
+
+/// A completed spawned CASE connect (M9-G-d event-driven connect), delivered
+/// back to the actor loop for session registration + waiter resolution. On
+/// success it carries the established [`CaseSessionOutput`] (the actor registers
+/// it — the task has no `SessionManager`) and the resolved device address.
+///
+/// [`CaseSessionOutput`]: matter_crypto::CaseSessionOutput
+struct ConnectCompletion {
+    node_id: u64,
+    result: Result<(matter_crypto::CaseSessionOutput, SocketAddr), Error>,
+}
+
+/// The device node id a command opens a session to, or `None` if it needs no
+/// per-device session (fabric/group/ICD/diagnostic commands). Used by
+/// [`Actor::dispatch`] to park a verb behind an off-loop connect (M9-G-d)
+/// instead of running the handshake inline.
+fn command_target_node(cmd: &Command) -> Option<u64> {
+    match cmd {
+        Command::Read { node_id, .. }
+        | Command::Action { node_id, .. }
+        | Command::TimedRoundTrip { node_id, .. }
+        | Command::ChunkedWrite { node_id, .. }
+        | Command::Subscribe { node_id, .. } => Some(*node_id),
+        #[cfg(test)]
+        Command::RoundTrip { node_id, .. } => Some(*node_id),
+        _ => None,
+    }
+}
+
+/// Resolve a parked verb's caller with `err` when its connect fails. Only the
+/// verb variants [`command_target_node`] parks are handled; other commands are
+/// never enqueued as connect waiters, so they fall through as a no-op.
+fn fail_command(cmd: Command, err: Error) {
+    // Arms are grouped by reply payload type (the `oneshot::Sender<Result<_,_>>`
+    // differs per verb), so they cannot merge into one `|` pattern.
+    match cmd {
+        Command::Read { reply, .. } => {
+            let _ = reply.send(Err(err));
+        }
+        Command::Action { reply, .. }
+        | Command::TimedRoundTrip { reply, .. }
+        | Command::ChunkedWrite { reply, .. } => {
+            let _ = reply.send(Err(err));
+        }
+        Command::Subscribe { reply, .. } => {
+            let _ = reply.send(Err(err));
+        }
+        #[cfg(test)]
+        Command::RoundTrip { reply, .. } => {
+            let _ = reply.send(Err(err));
+        }
+        _ => {}
+    }
+}
+
+/// Run a CASE (SIGMA-I) handshake to an already-resolved `peer` **off the actor
+/// loop** (M9-G-d), driving it over a
+/// [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket) whose datagrams
+/// flow through the actor's own socket (this task never touches a socket).
+/// Reports the established session (or error) back over `done_tx`. Takes only
+/// owned inputs so the future is `'static + Send` and can be `tokio::spawn`ed.
+///
+/// The device is resolved on the actor via its injected discovery *before*
+/// spawning ([`Actor::spawn_connect`]) — a brief bounded step that preserves the
+/// discovery seam — so only the multi-round-trip handshake runs here.
+#[allow(clippy::too_many_arguments)]
+async fn run_connect_task(
+    node_id: u64,
+    fabric_id: u64,
+    local_session_id: u16,
+    credentials: matter_crypto::CaseCredentials,
+    roots: matter_cert::TrustedRoots,
+    now: matter_cert::MatterTime,
+    peer: SocketAddr,
+    inbound_rx: mpsc::Receiver<(Vec<u8>, SocketAddr)>,
+    outbound_tx: mpsc::Sender<crate::handshake_socket::HandshakeOutbound>,
+    done_tx: mpsc::Sender<ConnectCompletion>,
+) {
+    let socket = crate::handshake_socket::HandshakeSocket::new(node_id, outbound_tx, inbound_rx);
+    let result = matter_commissioning::driver::run_case_establish(
+        &socket,
+        peer,
+        local_session_id,
+        credentials,
+        roots,
+        node_id,
+        fabric_id,
+        now,
+    )
+    .await
+    .map(|output| (output, peer))
+    .map_err(Error::from);
+    let _ = done_tx.send(ConnectCompletion { node_id, result }).await;
 }
 
 /// A completed spawned commission (M9-G-d), delivered back to the actor loop
@@ -673,6 +793,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         admin_vendor_id: u16,
     ) -> Self {
         let (commission_tx, commission_rx) = mpsc::channel(8);
+        let (connect_outbound_tx, connect_outbound_rx) = mpsc::channel(64);
+        let (connect_done_tx, connect_done_rx) = mpsc::channel(8);
         Self {
             transport,
             discovery,
@@ -690,6 +812,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             timed_paths: std::collections::HashSet::new(),
             commission_tx,
             commission_rx,
+            pending_connects: HashMap::new(),
+            connect_inbound: HashMap::new(),
+            connect_routes: HashMap::new(),
+            connect_outbound_tx,
+            connect_outbound_rx,
+            connect_done_tx,
+            connect_done_rx,
         }
     }
 
@@ -797,6 +926,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 Some(completion) = self.commission_rx.recv() => {
                     self.handle_commission_completion(completion).await;
                 }
+                // M9-G-d event-driven connect: a spawned CASE handshake wants a
+                // datagram put on the wire — the actor owns the socket, so it
+                // sends it (and installs the peer route). Above the inbound arm
+                // so an inbound flood cannot starve handshake progress.
+                Some(out) = self.connect_outbound_rx.recv() => {
+                    self.handle_connect_outbound(out).await;
+                }
+                // A spawned CASE connect completed — register the session (or
+                // fail the parked verbs) and re-dispatch the waiters.
+                Some(done) = self.connect_done_rx.recv() => {
+                    self.handle_connect_done(done).await;
+                }
                 recv = self.transport.recv_from() => {
                     if let Ok((packet, from)) = recv {
                         self.handle_inbound(&packet, from).await;
@@ -812,12 +953,34 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    /// Process one command.
+    /// Process one command, parking device verbs behind an off-loop connect.
+    ///
+    /// M9-G-d: if `cmd` targets a device with no live cached session, the CASE
+    /// handshake is run on a spawned task ([`Self::spawn_connect`]) and the
+    /// command is queued in `pending_connects`; the actor loop returns
+    /// immediately and stays responsive to every other session for the whole
+    /// handshake. When the connect completes the queued verbs are re-dispatched
+    /// through [`Self::dispatch_ready`] (their `session_for` now cache-hits).
+    /// Commands that need no per-device session — and any verb whose session is
+    /// already cached — run inline via [`Self::dispatch_ready`].
+    async fn dispatch(&mut self, cmd: Command) {
+        if let Some(node_id) = command_target_node(&cmd) {
+            if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
+                if !self.cache.contains_key(&(fabric_id, node_id)) {
+                    self.enqueue_connect_waiter(fabric_id, node_id, cmd).await;
+                    return;
+                }
+            }
+        }
+        self.dispatch_ready(cmd).await;
+    }
+
+    /// Process one command whose device session (if any) is already established.
     // A flat command dispatcher: one arm per `Command` variant, each a thin
     // delegation to a handler. Length tracks the verb count, not branching
     // complexity, so the line cap does not apply meaningfully here.
     #[allow(clippy::too_many_lines)]
-    async fn dispatch(&mut self, cmd: Command) {
+    async fn dispatch_ready(&mut self, cmd: Command) {
         match cmd {
             Command::CreateFabric { cfg, reply } => {
                 let _ = reply.send(self.handle_create_fabric(&cfg).await);
@@ -1341,9 +1504,174 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok(())
     }
 
+    /// Queue `cmd` behind an off-loop connect to `node_id`, starting the connect
+    /// if this is the first waiter (M9-G-d). Concurrent verbs to the same
+    /// not-yet-connected node coalesce onto a single handshake.
+    async fn enqueue_connect_waiter(&mut self, fabric_id: u64, node_id: u64, cmd: Command) {
+        let already_connecting = self.pending_connects.contains_key(&node_id);
+        self.pending_connects.entry(node_id).or_default().push(cmd);
+        if !already_connecting {
+            self.spawn_connect(fabric_id, node_id).await;
+        }
+    }
+
+    /// Resolve `node_id` via the actor's injected discovery, then spawn its CASE
+    /// handshake on a task ([`run_connect_task`]) whose I/O flows through the
+    /// actor's socket (M9-G-d). Resolution runs inline (a brief bounded mDNS
+    /// poll — instant when cached — kept on the actor to preserve the discovery
+    /// seam); only the multi-round-trip handshake is decoupled. On a setup or
+    /// resolution failure the parked waiters are failed immediately.
+    async fn spawn_connect(&mut self, fabric_id: u64, node_id: u64) {
+        let creds = match self.sole_fabric() {
+            Ok(fabric) => crate::credentials::operational_credentials(fabric),
+            Err(e) => Err(e),
+        };
+        let (credentials, roots, compressed) = match creds {
+            Ok(c) => c,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &e);
+                return;
+            }
+        };
+        let now = match current_matter_time() {
+            Ok(n) => n,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &e);
+                return;
+            }
+        };
+        let peer = match matter_commissioning::driver::resolve_operational(
+            &mut self.discovery,
+            compressed,
+            node_id,
+        )
+        .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &Error::from(e));
+                return;
+            }
+        };
+        // Reserve the local session id the handshake advertises in Sigma1; the
+        // actor registers the finished session under it on completion.
+        let local_session_id = self.sessions.allocate_session_id().0;
+        let (inbound_tx, inbound_rx) = mpsc::channel(16);
+        self.connect_inbound.insert(node_id, inbound_tx);
+        let outbound_tx = self.connect_outbound_tx.clone();
+        let done_tx = self.connect_done_tx.clone();
+        tokio::spawn(run_connect_task(
+            node_id,
+            fabric_id,
+            local_session_id,
+            credentials,
+            roots,
+            now,
+            peer,
+            inbound_rx,
+            outbound_tx,
+            done_tx,
+        ));
+    }
+
+    /// Put a spawned connect's outbound datagram on the actor's own socket
+    /// (M9-G-d). Installs the `peer` → node-id route first — before the send, so
+    /// it is guaranteed present before the device's reply can arrive — then
+    /// sends. The route is only installed while the connect is still live
+    /// (`connect_inbound` holds its queue); a late outbound after completion is
+    /// dropped without re-installing a stale route.
+    async fn handle_connect_outbound(&mut self, out: crate::handshake_socket::HandshakeOutbound) {
+        let crate::handshake_socket::HandshakeOutbound {
+            node_id,
+            bytes,
+            peer,
+        } = out;
+        if self.connect_inbound.contains_key(&node_id) {
+            self.connect_routes.insert(peer, node_id);
+        }
+        let _ = self.transport.send_to(&bytes, peer).await;
+    }
+
+    /// Handle a finished spawned connect (M9-G-d): tear down its routing, then
+    /// on success register the established session + re-dispatch the parked
+    /// verbs (their `session_for` now cache-hits), or on failure resolve each
+    /// parked verb's caller with the error.
+    async fn handle_connect_done(&mut self, done: ConnectCompletion) {
+        let ConnectCompletion { node_id, result } = done;
+        // The handshake is over: stop routing the peer's datagrams to the task.
+        self.connect_inbound.remove(&node_id);
+        self.connect_routes.retain(|_, n| *n != node_id);
+
+        let (output, peer) = match result {
+            Ok(ok) => ok,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &e);
+                return;
+            }
+        };
+        let fabric_id = match self.sole_fabric() {
+            Ok(fabric) => fabric.fabric_id,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &e);
+                return;
+            }
+        };
+
+        // Mirror the inline `connect` bookkeeping: evict any prior session for
+        // this node, register the fresh one, refresh the address hint + cache,
+        // and rescue any subscription stranded on the replaced session.
+        let old_session = self.cache.get(&(fabric_id, node_id)).map(|c| c.session_id);
+        if let Some(old) = old_session {
+            self.sessions.remove(old);
+        }
+        let sid = self.sessions.register_case(&output, SessionRole::Initiator);
+        self.upsert_device(fabric_id, node_id, peer);
+        self.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: sid,
+                peer,
+            },
+        );
+        if let Some(old) = old_session {
+            self.resubscribe_stranded(old);
+        }
+
+        // Re-dispatch every verb that was parked on this connect; each now finds
+        // a live cached session and proceeds without blocking the loop.
+        if let Some(waiters) = self.pending_connects.remove(&node_id) {
+            for cmd in waiters {
+                self.dispatch_ready(cmd).await;
+            }
+        }
+    }
+
+    /// Fail every verb parked on a connect to `node_id` with `err` and drop the
+    /// connect's routing. `Error` is not `Clone`, so each waiter gets a fresh
+    /// `Error::Operational` carrying the failure text.
+    fn fail_connect_waiters(&mut self, node_id: u64, err: &Error) {
+        self.connect_inbound.remove(&node_id);
+        self.connect_routes.retain(|_, n| *n != node_id);
+        if let Some(waiters) = self.pending_connects.remove(&node_id) {
+            let msg = err.to_string();
+            for cmd in waiters {
+                fail_command(
+                    cmd,
+                    Error::Operational(format!("connect to node {node_id} failed: {msg}")),
+                );
+            }
+        }
+    }
+
     /// Establish a fresh CASE session to `node_id`, cache it, and record an
     /// address hint in persisted state. Resumption is dormant (M4.2): this
     /// always performs a full SIGMA handshake.
+    ///
+    /// M9-G-d: verbs no longer reach this inline path (they park behind
+    /// [`Self::spawn_connect`] via [`Self::dispatch`]); it now serves only the
+    /// low-frequency recovery sites (a pending round-trip's post-timeout
+    /// reconnect and a stranded subscription's resubscribe), which run from the
+    /// timer arm. Those remain a documented residual — see [`Self::run`].
     async fn connect(&mut self, node_id: u64) -> Result<(SessionId, std::net::SocketAddr), Error> {
         let fabric_id = self.sole_fabric()?.fabric_id;
         let (credentials, roots, compressed) =
@@ -1875,8 +2203,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// `(session, exchange)`; deliver a steady-state `ReportData` to its
     /// subscription by `(session, subscriptionId)`; otherwise let MRP absorb it.
     async fn handle_inbound(&mut self, packet: &[u8], from: SocketAddr) {
-        // Unsecured stragglers (session id 0) are not ours.
+        // Unsecured datagrams (session id 0). During an off-loop CASE connect
+        // (M9-G-d) the device's handshake replies (Sigma2 / StatusReport /
+        // standalone acks) arrive here from the connect's peer — forward them to
+        // that spawned task via its inbound queue. Anything else is a straggler
+        // we drop.
         if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
+            if let Some(&node_id) = self.connect_routes.get(&from) {
+                if let Some(tx) = self.connect_inbound.get(&node_id) {
+                    let _ = tx.send((packet.to_vec(), from)).await;
+                }
+            }
             return;
         }
         let Ok(decoded) = self.sessions.decode_inbound(packet, Instant::now()) else {
@@ -4150,6 +4487,65 @@ mod tests {
         );
 
         device.await.unwrap();
+    }
+
+    /// M9-G-d headline: a verb-triggered CASE connect runs its handshake **off
+    /// the actor loop**, so a stalled handshake no longer starves other work.
+    ///
+    /// The device receives Sigma1 and never answers, so the connect's handshake
+    /// stalls (retransmits Sigma1, eventually times out — seconds). We fire a
+    /// round-trip at that device (which parks behind the connect) and then, while
+    /// the handshake is stalled, issue an unrelated `session_count` command. It
+    /// must be serviced promptly. On the pre-G-d inline design the connect ran on
+    /// the actor task itself, so `session_count` would be blocked behind the
+    /// whole stalled handshake and this 1s timeout would fire.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn connect_handshake_runs_off_loop_which_stays_responsive() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            discovery,
+            device_node_id,
+            ..
+        } = loopback_harness();
+
+        // Device that swallows Sigma1 and then goes quiet — the handshake stalls.
+        let device = tokio::spawn(async move {
+            let _ = dev_io.recv_from().await; // consume Sigma1, answer nothing
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await; // keep the endpoint alive
+        });
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // Fire a round-trip at the un-connected device; it parks behind the
+        // stalled off-loop handshake and will not resolve until that fails.
+        let node = controller.node(device_node_id);
+        let parked = tokio::spawn(async move {
+            let _ = node
+                .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+                .await;
+        });
+
+        // Despite the stalled handshake, an unrelated command is serviced fast.
+        let count = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            controller.session_count(),
+        )
+        .await
+        .expect("session_count must return while a connect handshake is stalled");
+        assert_eq!(count, 0, "the stalled connect established no session");
+
+        parked.abort();
+        device.abort();
     }
 
     #[tokio::test]
