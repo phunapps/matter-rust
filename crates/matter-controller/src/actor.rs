@@ -571,7 +571,10 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     rng: Arc<dyn NocRng>,
     state: ControllerState,
     cache: HashMap<(u64, u64), CachedSession>, // (fabric_id, node_id) -> session
-    trust: Option<crate::trust::AttestationTrust>,
+    /// Attestation trust, `Arc`-wrapped so it can be cheaply shared into the
+    /// spawned commission task (which runs off the actor loop — see
+    /// [`Self::spawn_commission`]) without cloning the cert stores.
+    trust: Option<Arc<crate::trust::AttestationTrust>>,
     admin_vendor_id: u16,
     /// Active subscriptions, keyed by the stable [`SubId`]. Each entry tracks its
     /// current device `(session, wire_sub_id)`; steady-state `ReportData` is
@@ -590,6 +593,73 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// Populated on a `0xc6` rejection; covers manufacturer/ungenerated clusters
     /// and survives for the controller's lifetime (the spec's B3 learned-cache).
     timed_paths: std::collections::HashSet<(u32, u32)>,
+    /// Sender half of the spawned-commission completions channel (M9-G-d):
+    /// cloned into each [`Self::spawn_commission`] task.
+    commission_tx: mpsc::Sender<CommissionCompletion>,
+    /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
+    commission_rx: mpsc::Receiver<CommissionCompletion>,
+}
+
+/// A completed spawned commission (M9-G-d), delivered back to the actor loop
+/// over the completions channel for persistence + reply resolution.
+struct CommissionCompletion {
+    fabric_id: u64,
+    result: Result<matter_commissioning::CommissionedFabric, Error>,
+    reply: oneshot::Sender<Result<u64, Error>>,
+}
+
+/// Run a full commission on a **freshly-bound socket + discovery**, off the actor
+/// loop (M9-G-d). Takes only owned inputs so the future is `'static` + `Send` and
+/// can be `tokio::spawn`ed. `commission()` binds nothing itself here — the
+/// transient PASE/CASE handshakes run on this task's own socket.
+#[allow(clippy::too_many_arguments)]
+async fn run_commission_task(
+    setup_payload: matter_commissioning::SetupPayload,
+    trust: Arc<crate::trust::AttestationTrust>,
+    fabric_record: matter_commissioning::FabricRecord,
+    commissioner_node_id: u64,
+    ipk_epoch_key: [u8; 16],
+    commissioner_noc: matter_cert::MatterCertificate,
+    commissioner_pkcs8: Vec<u8>,
+    assigned_node_id: u64,
+    admin_vendor_id: u16,
+    now: matter_cert::MatterTime,
+    rng: Arc<dyn matter_commissioning::NocRng>,
+) -> Result<matter_commissioning::CommissionedFabric, Error> {
+    use matter_commissioning::driver::{commission, DriverConfig};
+    use matter_commissioning::CommissionerConfig;
+
+    let transport = matter_transport::TokioUdpTransport::bind(0)
+        .await
+        .map_err(|e| Error::Operational(format!("commission bind: {e}")))?;
+    let mut discovery = matter_transport::MdnsSdDiscovery::new()
+        .map_err(|e| Error::Operational(format!("commission mdns: {e}")))?;
+
+    let commissioner = CommissionerConfig {
+        pase_attestation_challenge: [0u8; 16], // commission() overwrites from live PASE
+        fabric: &fabric_record,
+        setup_payload: &setup_payload,
+        paa_trust_store: &trust.paa,
+        cd_signing_roots: &trust.cd,
+        commissioner_node_id,
+        assigned_node_id,
+        ipk_epoch_key,
+        case_admin_subject: commissioner_node_id,
+        admin_vendor_id,
+        now,
+        rng,
+        wifi_credentials: None,
+    };
+    let config = DriverConfig {
+        commissioner,
+        commissionable_addr: None, // discover via mDNS using the discriminator
+        passcode: setup_payload.passcode.as_u32(),
+        commissioner_noc: &commissioner_noc,
+        commissioner_signer_pkcs8: &commissioner_pkcs8,
+    };
+    commission(&transport, &mut discovery, config)
+        .await
+        .map_err(Error::from)
 }
 
 impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
@@ -602,6 +672,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         trust: Option<crate::trust::AttestationTrust>,
         admin_vendor_id: u16,
     ) -> Self {
+        let (commission_tx, commission_rx) = mpsc::channel(8);
         Self {
             transport,
             discovery,
@@ -610,13 +681,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             rng,
             state,
             cache: HashMap::new(),
-            trust,
+            trust: trust.map(Arc::new),
             admin_vendor_id,
             subscriptions: HashMap::new(),
             pending: HashMap::new(),
             next_sub_id: 1,
             resubscribes: Vec::new(),
             timed_paths: std::collections::HashSet::new(),
+            commission_tx,
+            commission_rx,
         }
     }
 
@@ -718,6 +791,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     Some(cmd) => self.dispatch(cmd).await,
                     None => return,
                 },
+                // M9-G-d: a spawned commission finished — persist + resolve its
+                // reply. This arm keeps the loop responsive to other sessions
+                // for the whole commission window.
+                Some(completion) = self.commission_rx.recv() => {
+                    self.handle_commission_completion(completion).await;
+                }
                 recv = self.transport.recv_from() => {
                     if let Ok((packet, from)) = recv {
                         self.handle_inbound(&packet, from).await;
@@ -765,7 +844,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 setup_payload,
                 reply,
             } => {
-                let _ = reply.send(self.handle_commission(setup_payload).await);
+                // M9-G-d: spawn on its own socket + return to the loop
+                // immediately; the result is resolved later via the completions
+                // channel, so a multi-second commission no longer pauses other
+                // sessions' MRP/liveness.
+                self.spawn_commission(setup_payload, reply);
             }
             Command::Subscribe {
                 node_id,
@@ -901,24 +984,43 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok(())
     }
 
-    /// Commission a device onto the sole fabric and persist a `DeviceEntry`.
-    async fn handle_commission(
+    /// Kick off a commission on a **spawned task with its own socket** (M9-G-d).
+    ///
+    /// Commissioning is the longest protocol handler (PASE + attestation + CSR +
+    /// NOC + operational CASE + config — multiple seconds). Running it inline on
+    /// the actor loop would pause every other session's MRP retransmits and
+    /// liveness for that whole window (2026-06-12 audit item #1). Instead we
+    /// snapshot the owned inputs, spawn `run_commission_task` on a fresh socket,
+    /// and return to the loop immediately; the result arrives later on the
+    /// completions channel ([`Self::handle_commission_completion`]), which
+    /// persists the device and resolves `reply`. `commission()` establishes only
+    /// a transient session it does not hand back (the first post-commission
+    /// invoke reconnects), so no session hand-off is needed here.
+    fn spawn_commission(
         &mut self,
         setup_payload: matter_commissioning::SetupPayload,
-    ) -> Result<u64, Error> {
-        use matter_commissioning::driver::{commission, DriverConfig};
-        use matter_commissioning::CommissionerConfig;
-
-        // Bind trust + admin_vendor_id from disjoint fields before the borrow
-        // of self.sole_fabric() below. Binding them here keeps the lifetimes
-        // clean: `trust` borrows only `self.trust`, which is disjoint from
-        // `self.transport` and `self.discovery` used in commission().
-        let trust = self.trust.as_ref().ok_or(Error::NoTrust)?;
+        reply: oneshot::Sender<Result<u64, Error>>,
+    ) {
+        let Some(trust) = self.trust.clone() else {
+            let _ = reply.send(Err(Error::NoTrust));
+            return;
+        };
         let admin_vendor_id = self.admin_vendor_id;
-
-        // Snapshot what we need from the sole fabric into owned locals so we
-        // don't hold a borrow of `self` across the commission() call (which
-        // needs `&self.transport` + `&mut self.discovery`).
+        let snapshot = match self.sole_fabric() {
+            Ok(fabric) => match fabric.to_fabric_record() {
+                Ok(fabric_record) => Ok((
+                    fabric_record,
+                    fabric.fabric_id,
+                    fabric.commissioner.node_id,
+                    fabric.ipk,
+                    fabric.commissioner.noc.clone(),
+                    fabric.commissioner.operational_pkcs8.clone(),
+                    crate::commission::next_device_node_id(fabric),
+                )),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
         let (
             fabric_record,
             fabric_id,
@@ -927,64 +1029,79 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             commissioner_noc,
             commissioner_pkcs8,
             assigned_node_id,
-        ) = {
-            let fabric = self.sole_fabric()?;
-            (
-                fabric.to_fabric_record()?,
-                fabric.fabric_id,
-                fabric.commissioner.node_id,
-                fabric.ipk,
-                fabric.commissioner.noc.clone(),
-                fabric.commissioner.operational_pkcs8.clone(),
-                crate::commission::next_device_node_id(fabric),
+        ) = match snapshot {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let now = match current_matter_time() {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let rng = self.rng.clone();
+        let tx = self.commission_tx.clone();
+
+        tokio::spawn(async move {
+            let result = run_commission_task(
+                setup_payload,
+                trust,
+                fabric_record,
+                commissioner_node_id,
+                ipk_epoch_key,
+                commissioner_noc,
+                commissioner_pkcs8,
+                assigned_node_id,
+                admin_vendor_id,
+                now,
+                rng,
             )
+            .await;
+            let _ = tx
+                .send(CommissionCompletion {
+                    fabric_id,
+                    result,
+                    reply,
+                })
+                .await;
+        });
+    }
+
+    /// Handle a completed spawned commission (M9-G-d): on success persist the
+    /// `DeviceEntry` + durably save, then resolve the original `reply`.
+    async fn handle_commission_completion(&mut self, completion: CommissionCompletion) {
+        let CommissionCompletion {
+            fabric_id,
+            result,
+            reply,
+        } = completion;
+        let outcome = match result {
+            Ok(commissioned) => {
+                let device = crate::commission::device_entry_from_commissioned(&commissioned);
+                let node_id = device.node_id;
+                if let Some(fabric) = self
+                    .state
+                    .fabrics
+                    .iter_mut()
+                    .find(|f| f.fabric_id == fabric_id)
+                {
+                    fabric.devices.push(device);
+                }
+                // Durability-critical: report success only after the device
+                // entry is durably persisted (same guarantee as the old inline
+                // path).
+                match self.durable_save_inputs() {
+                    Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| node_id),
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
         };
-
-        let now = current_matter_time()?;
-        let rng: std::sync::Arc<dyn matter_commissioning::NocRng> = self.rng.clone();
-
-        let commissioner = CommissionerConfig {
-            pase_attestation_challenge: [0u8; 16], // commission() overwrites from live PASE
-            fabric: &fabric_record,
-            setup_payload: &setup_payload,
-            paa_trust_store: &trust.paa,
-            cd_signing_roots: &trust.cd,
-            commissioner_node_id,
-            assigned_node_id,
-            ipk_epoch_key,
-            case_admin_subject: commissioner_node_id,
-            admin_vendor_id,
-            now,
-            rng,
-            wifi_credentials: None,
-        };
-        let config = DriverConfig {
-            commissioner,
-            commissionable_addr: None, // discover via mDNS using the discriminator
-            passcode: setup_payload.passcode.as_u32(),
-            commissioner_noc: &commissioner_noc,
-            commissioner_signer_pkcs8: &commissioner_pkcs8,
-        };
-
-        let result = commission(&self.transport, &mut self.discovery, config).await?;
-
-        // Persist the device.
-        let device = crate::commission::device_entry_from_commissioned(&result);
-        let node_id = device.node_id;
-        if let Some(fabric) = self
-            .state
-            .fabrics
-            .iter_mut()
-            .find(|f| f.fabric_id == fabric_id)
-        {
-            fabric.devices.push(device);
-        }
-        // Durability-critical: commissioning is reported successful to the
-        // caller only after the device entry is durably persisted. Serialize
-        // under `&self`, then drop the borrow before awaiting the offloaded save.
-        let (store, bytes) = self.durable_save_inputs()?;
-        save_offloaded(store, bytes).await?;
-        Ok(node_id)
+        let _ = reply.send(outcome);
     }
 
     /// Prepare the inputs for a durable, await-to-completion snapshot save.
@@ -5428,6 +5545,111 @@ mod tests {
             matches!(got, Ok(Some(SubscriptionEvent::Resubscribing { .. }))),
             "liveness timer must fire under inbound flood (got {got:?})"
         );
+    }
+
+    /// M9-G-d decoupling, part 1 — the actor loop stays responsive while a
+    /// commission is outstanding, and the completions-channel `select!` arm
+    /// drains a finished commission and resolves its reply.
+    ///
+    /// The commission runs on its own spawned task ([`Actor::spawn_commission`])
+    /// and reports back through `commission_tx`. We model "a commission is in
+    /// flight" as "no completion has arrived on the channel yet": while that is
+    /// the case, an unrelated `SessionCount` command must still be serviced
+    /// promptly (pre-G-d, an inline `handle_commission().await` would have held
+    /// the loop for the whole multi-second commission, starving this command).
+    /// We then push a completion onto the channel and confirm the new arm drains
+    /// it and resolves the caller's reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commission_completion_drains_while_loop_stays_responsive() {
+        let actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        // Clone the completions sender before the loop consumes `actor`, so the
+        // test can inject a completion the way a spawned commission task would.
+        let completion_tx = actor.commission_tx.clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(8);
+        let loop_handle = tokio::spawn(actor.run(cmd_rx));
+
+        // A commission is outstanding (nothing on the completions channel yet):
+        // an unrelated command must still be answered promptly.
+        let (count_tx, count_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::SessionCount { reply: count_tx })
+            .await
+            .unwrap();
+        let count = tokio::time::timeout(std::time::Duration::from_secs(1), count_rx)
+            .await
+            .expect("the loop must service SessionCount while a commission is outstanding")
+            .expect("SessionCount reply");
+        assert_eq!(count, 0, "no sessions cached yet");
+
+        // The spawned commission finishes (here: with an error, which needs no
+        // network). The completions arm must drain it and resolve the reply.
+        let (reply_tx, reply_rx) = oneshot::channel();
+        completion_tx
+            .send(CommissionCompletion {
+                fabric_id,
+                result: Err(Error::Operational("simulated commission failure".into())),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), reply_rx)
+            .await
+            .expect("the completions arm must resolve the commission reply")
+            .expect("reply channel");
+        assert!(
+            matches!(outcome, Err(Error::Operational(_))),
+            "the commission error must propagate to the caller (got {outcome:?})"
+        );
+
+        drop(cmd_tx);
+        let _ = loop_handle.await;
+    }
+
+    /// M9-G-d decoupling, part 2 — dispatching `Command::Commission` hands off
+    /// without the loop `.await`ing the commission. With no attestation trust
+    /// configured, `spawn_commission` short-circuits to `NoTrust` (no network),
+    /// so this exercises the dispatch → spawn path in isolation and confirms a
+    /// following command is serviced on the same responsive loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commission_dispatch_hands_off_without_blocking() {
+        let actor = actor_with_one_fabric();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(8);
+        let loop_handle = tokio::spawn(actor.run(cmd_rx));
+
+        let (c_tx, c_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::Commission {
+                setup_payload: matter_commissioning::parse_manual_code("11693312331")
+                    .expect("valid sample manual pairing code"),
+                reply: c_tx,
+            })
+            .await
+            .unwrap();
+        let commission = tokio::time::timeout(std::time::Duration::from_secs(1), c_rx)
+            .await
+            .expect("Commission must be dispatched without blocking the loop")
+            .expect("commission reply");
+        assert!(
+            matches!(commission, Err(Error::NoTrust)),
+            "no trust configured → NoTrust (got {commission:?})"
+        );
+
+        // The loop is still live and services the next command.
+        let (count_tx, count_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::SessionCount { reply: count_tx })
+            .await
+            .unwrap();
+        let count = tokio::time::timeout(std::time::Duration::from_secs(1), count_rx)
+            .await
+            .expect("the loop must remain responsive after a Commission dispatch")
+            .expect("SessionCount reply");
+        assert_eq!(count, 0);
+
+        drop(cmd_tx);
+        let _ = loop_handle.await;
     }
 
     /// Build an `InvokeResponseMessage` whose single `InvokeResponseIB` carries
