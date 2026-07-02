@@ -3,7 +3,7 @@
 //! subscription is active it also listens for unsolicited reports.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -635,6 +635,30 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
 struct ConnectCompletion {
     node_id: u64,
     result: Result<(matter_crypto::CaseSessionOutput, SocketAddr), Error>,
+}
+
+/// Canonicalize a peer address for the in-flight-handshake route table (M9-G-d).
+///
+/// The address we *resolve* (from mDNS) and the address a datagram *arrives*
+/// from can differ in representation for the same peer, so keying the route map
+/// on the raw [`SocketAddr`] would miss:
+/// - **IPv4-mapped IPv6:** on a dual-stack IPv6 socket, `TokioUdpTransport`
+///   sends to an IPv4 peer as `::ffff:a.b.c.d` and `recv_from` reports the reply
+///   `from` in that same mapped form, while the resolved `peer` is plain
+///   `a.b.c.d`. Unmap so the two compare equal.
+/// - **IPv6 scope id:** `recv_from` stamps a link-local `from` with the arrival
+///   interface's scope id, which the resolved `peer` lacks. `IpAddr` carries no
+///   scope id, so rebuilding through it drops the scope.
+///
+/// The port is preserved (a Matter device replies from the operational port it
+/// received on), so distinct devices sharing an IP — e.g. two loopback DUTs —
+/// still route independently.
+fn route_key(addr: SocketAddr) -> SocketAddr {
+    let ip = match addr.ip() {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+    };
+    SocketAddr::new(ip, addr.port())
 }
 
 /// The device node id a command opens a session to, or `None` if it needs no
@@ -1598,7 +1622,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             peer,
         } = out;
         if self.connect_inbound.contains_key(&node_id) {
-            self.connect_routes.insert(peer, node_id);
+            self.connect_routes.insert(route_key(peer), node_id);
         }
         let _ = self.transport.send_to(&bytes, peer).await;
     }
@@ -2220,7 +2244,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // that spawned task via its inbound queue. Anything else is a straggler
         // we drop.
         if packet.len() >= 3 && packet[1] == 0 && packet[2] == 0 {
-            if let Some(&node_id) = self.connect_routes.get(&from) {
+            if let Some(&node_id) = self.connect_routes.get(&route_key(from)) {
                 if let Some(tx) = self.connect_inbound.get(&node_id) {
                     let _ = tx.send((packet.to_vec(), from)).await;
                 }
@@ -4498,6 +4522,43 @@ mod tests {
         );
 
         device.await.unwrap();
+    }
+
+    /// M9-G-d route-key normalization (regression guard for the bug the live
+    /// DUT surfaced): the address a handshake reply arrives *from* and the
+    /// address we *resolved + sent to* must map to the same route key, or the
+    /// device's Sigma2 is dropped and the handshake starves. Covers the two
+    /// real-world forms: IPv4-mapped-IPv6 (dual-stack send) and an IPv6 scope id
+    /// stamped onto the arrival address.
+    #[test]
+    fn route_key_unifies_mapped_ipv4_and_strips_scope() {
+        use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV6};
+
+        // A resolved IPv4 peer vs the same peer as recv_from reports it on a
+        // dual-stack IPv6 socket (`::ffff:a.b.c.d`) must share a route key.
+        let resolved: SocketAddr = (Ipv4Addr::new(192, 0, 2, 7), 5540).into();
+        let arrived_mapped = SocketAddr::new(
+            IpAddr::V6(Ipv4Addr::new(192, 0, 2, 7).to_ipv6_mapped()),
+            5540,
+        );
+        assert_eq!(route_key(resolved), route_key(arrived_mapped));
+        assert_eq!(
+            route_key(resolved),
+            resolved,
+            "canonical form is the IPv4 one"
+        );
+
+        // A link-local IPv6 peer with no scope (resolved) vs the same address
+        // stamped with an arrival-interface scope id (recv_from) must match.
+        let ll = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x1d42);
+        let resolved_v6 = SocketAddr::V6(SocketAddrV6::new(ll, 5540, 0, 0));
+        let arrived_scoped = SocketAddr::V6(SocketAddrV6::new(ll, 5540, 0, 7));
+        assert_eq!(route_key(resolved_v6), route_key(arrived_scoped));
+
+        // Distinct devices sharing an IP but on different ports stay distinct.
+        let a: SocketAddr = (Ipv4Addr::LOCALHOST, 5540).into();
+        let b: SocketAddr = (Ipv4Addr::LOCALHOST, 5541).into();
+        assert_ne!(route_key(a), route_key(b));
     }
 
     /// M9-G-d headline: a verb-triggered CASE connect runs its handshake **off
