@@ -15,7 +15,7 @@ mod exchange;
 mod pase;
 mod unsecured;
 
-pub use case::{operational_instance_name, resolve_operational, run_case};
+pub use case::{operational_instance_name, resolve_operational, run_case, run_case_establish};
 pub use commission::{commission, resolve_commissionable, DriverConfig};
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;

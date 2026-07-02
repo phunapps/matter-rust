@@ -134,13 +134,70 @@ pub async fn run_case<T: AsyncDatagram>(
     peer_fabric_id: u64,
     now: MatterTime,
 ) -> Result<SessionId, DriverError> {
+    // Allocate the local session id up front (advertised in Sigma1), run the
+    // handshake, then register the established output. `run_case_establish` is
+    // the handshake body without the `SessionManager` coupling; keeping the
+    // allocate+register here preserves this function's exact behavior for its
+    // existing callers.
     let local = sessions.allocate_session_id();
+    // `Box::pin` the extracted handshake future so it lives on the heap rather
+    // than being embedded inline in this (and every transitive caller's, e.g.
+    // `commission`) future. Without this, nesting `run_case_establish`'s frame
+    // inside `run_case` grows the commissioning future past clippy's
+    // `large_futures` threshold. CASE connect is not a hot path, so the single
+    // allocation is negligible.
+    let output = Box::pin(run_case_establish(
+        transport,
+        peer,
+        local.0,
+        credentials,
+        trusted_roots,
+        peer_node_id,
+        peer_fabric_id,
+        now,
+    ))
+    .await?;
+    let sid = sessions.register_case(&output, SessionRole::Initiator);
+    Ok(sid)
+}
+
+/// Drive a fresh CASE (SIGMA-I) handshake to completion over `transport` and
+/// return the established [`CaseSessionOutput`](matter_crypto::CaseSessionOutput)
+/// **without registering it** — so the caller can register it into its own
+/// [`SessionManager`] (e.g. after a spawned, own-socket handshake that hands the
+/// session back to a controller actor; see M9-G-d). `local_session_id` is the
+/// local session id to advertise in Sigma1 (the caller allocates it).
+///
+/// [`run_case`] is `allocate_session_id` + this function + `register_case`; the
+/// two share this body so their handshake behavior is identical.
+///
+/// # Errors
+///
+/// - [`DriverError::Crypto`] if a SIGMA step fails (peer chain/signature
+///   invalid, key mismatch, etc.).
+/// - [`DriverError::Io`] / [`DriverError::Transport`] / [`DriverError::Timeout`]
+///   on datagram, framing, or reply-timeout failure.
+/// - [`DriverError::SessionEstablishmentFailed`] if the device closes the
+///   handshake with a non-success `StatusReport`.
+// Same 8-input CASE setup as `run_case`, with an explicit `local_session_id`
+// in place of the `SessionManager` this variant does not touch.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_case_establish<T: AsyncDatagram>(
+    transport: &T,
+    peer: SocketAddr,
+    local_session_id: u16,
+    credentials: CaseCredentials,
+    trusted_roots: TrustedRoots,
+    peer_node_id: u64,
+    peer_fabric_id: u64,
+    now: MatterTime,
+) -> Result<matter_crypto::CaseSessionOutput, DriverError> {
     let mut initiator = CaseInitiator::new(
         credentials,
         trusted_roots,
         peer_node_id,
         peer_fabric_id,
-        local.0,
+        local_session_id,
         now,
     )?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
@@ -191,8 +248,7 @@ pub async fn run_case<T: AsyncDatagram>(
     }
 
     let output = initiator.finish()?;
-    let sid = sessions.register_case(&output, SessionRole::Initiator);
-    Ok(sid)
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -557,6 +613,111 @@ mod tests {
 
         let (ctrl_result, dev_out) = tokio::join!(controller, device);
         let sid = ctrl_result.unwrap();
+        let registered = sessions.get(sid).unwrap();
+        assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
+        assert_eq!(registered.peer_id, matter_transport::SessionId(0x00D2));
+    }
+
+    /// M9-G-d Task 2: `run_case_establish` drives the same handshake but returns
+    /// the [`CaseSessionOutput`] WITHOUT registering it, advertising the caller's
+    /// `local_session_id` in Sigma1. The returned output must (a) carry that
+    /// local id and (b) register into a fresh `SessionManager` yielding a usable
+    /// session whose keys match the device's — i.e. the hand-back path a spawned,
+    /// own-socket connect uses to give the actor a ready-to-register session.
+    #[tokio::test]
+    async fn run_case_establish_returns_registerable_output() {
+        let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
+        let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
+        let (resp_noc, resp_signer) = build_test_noc(&rcac_signer, T_RESPONDER_NODE);
+        let init_creds = creds(init_noc, init_signer, T_INITIATOR_NODE, rcac_pub);
+        let resp_creds = creds(resp_noc, resp_signer, T_RESPONDER_NODE, rcac_pub);
+        let resp_roots = roots_for(&rcac);
+        let ctrl_roots = roots_for(&rcac);
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        // The local session id the caller allocates and advertises in Sigma1.
+        let local_session_id: u16 = 0x0777;
+
+        let device = async {
+            let mut responder = CaseResponder::new(
+                resp_creds,
+                resp_roots,
+                0x00D2,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            assert!(matches!(
+                responder.handle_sigma1(&m.payload).unwrap(),
+                Sigma1Outcome::NewSession
+            ));
+            let sigma2 = responder.next_message().unwrap();
+            let wire = encode_unsecured(
+                200,
+                m.exchange_id,
+                0x31,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &sigma2,
+            );
+            dev_io.send_to(&wire, ctrl_addr).await.unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            responder.handle_sigma3(&m.payload).unwrap();
+            let mut body = Vec::new();
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            let report = encode_unsecured(
+                201,
+                m.exchange_id,
+                0x40,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &body,
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+            let ack = tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                .await
+                .expect("controller must ack the StatusReport")
+                .unwrap();
+            let ack = decode_unsecured(&ack.0).unwrap();
+            assert_eq!(ack.opcode, 0x10);
+            assert_eq!(ack.ack_counter, Some(201));
+            responder.finish().unwrap()
+        };
+
+        let controller = run_case_establish(
+            &ctrl_io,
+            dev_addr,
+            local_session_id,
+            init_creds,
+            ctrl_roots,
+            T_RESPONDER_NODE,
+            T_FABRIC_ID,
+            MatterTime::from_unix_secs(2_000_000_000),
+        );
+
+        let (ctrl_result, dev_out) = tokio::join!(controller, device);
+        let output = ctrl_result.unwrap();
+
+        // (a) The output advertises the caller-chosen local session id.
+        assert_eq!(output.local.session_id, local_session_id);
+
+        // (b) The un-registered output registers cleanly and yields a usable
+        // session whose keys match the device's derived keys.
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Initiator);
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
         assert_eq!(registered.peer_id, matter_transport::SessionId(0x00D2));
