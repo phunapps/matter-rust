@@ -16,17 +16,31 @@ re-architecture and a perf follow-up — independent of the codegen work. Audit
 backlog (uncommitted, local): `docs/audit/2026-06-12-backlog.md` +
 `2026-06-12-findings.json`.
 
-### 1. Controller actor serializes long commission/connect handlers (documented residual)
+### 1. Controller actor serializes long commission/connect handlers — RESOLVED (M9-G-d)
 
-**Status:** documented limitation (rustdoc on `Actor::run` in
-`crates/matter-controller/src/actor.rs`), full fix deferred.
+**Status:** ✅ resolved in M9-G-d (commits `4b8a6028` commission, `bc309e39` +
+`a50a8bc3` connect). See the `Actor::run` rustdoc in
+`crates/matter-controller/src/actor.rs`.
 
-`handle_commission` and the CASE-connect path run to completion on the single
-actor task, pausing all other sessions' MRP retransmits + liveness for the
-handshake duration. The audit's timer-fairness fix (`34457ecc`) stops *inbound
-floods* from starving timers, and the fsync offload (`fddff6d0`) removed the only
-gratuitous blocking call — but fully decoupling long protocol handlers from the
-recv/MRP loop is a significant async re-architecture left for a future milestone.
+Both multi-round-trip flows now run off the actor loop on `tokio::spawn`ed tasks
+that report back over channels the `select!` drains, so other sessions' MRP +
+liveness continue for the whole handshake window:
+- **Commission** runs on its own freshly bound socket + discovery
+  (`spawn_commission` → `handle_commission_completion`).
+- **CASE connect** parks the triggering verb and drives the handshake off-loop
+  through the actor's own socket via `HandshakeSocket` (no second socket, no
+  session migration); `run_connect_task` → `handle_connect_done` registers the
+  session and re-dispatches the parked verbs. Device resolution stays inline (a
+  brief bounded mDNS poll) to preserve the discovery seam.
+
+Proven by hermetic concurrency tests
+(`commission_completion_drains_while_loop_stays_responsive`,
+`connect_handshake_runs_off_loop_which_stays_responsive`) — a stalled
+commission/handshake no longer blocks unrelated commands.
+
+**Residual (minor):** the two low-frequency *recovery* connects (a pending
+round-trip's post-timeout reconnect and a stranded resubscribe, both from the
+timer arm) still use the inline `connect()`. Not a steady-state concern.
 
 ### 2. matter-codec per-element budget check has a measurable decode cost
 

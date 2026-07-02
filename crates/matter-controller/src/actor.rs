@@ -831,25 +831,36 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// the loop instead of owning recv, a steady-state report arriving during a
     /// concurrent round-trip is delivered, not dropped.
     ///
-    /// `run_case` (CASE connect) and `handle_commission` remain blocking command
-    /// handlers that briefly pause the loop; a report arriving during a connect
-    /// is handled by `run_case`'s own recv. This residual window is far narrower
-    /// than the pre-SH.1 per-round-trip window.
+    /// ## Long handlers run off the loop (M9-G-d)
     ///
-    /// ## Residual limitation: long command handlers serialize with MRP
+    /// The two multi-round-trip protocol flows — **commission** and **CASE
+    /// connect** — no longer run inline on this task. Each is driven on a
+    /// `tokio::spawn`ed task and reports back over a channel the `select!`
+    /// drains, so the loop keeps servicing every other session's inbound, MRP
+    /// retransmits, and subscription-liveness checks for the whole handshake
+    /// window (audit item #1, resolved). Concretely:
     ///
-    /// [`Self::handle_commission`] and the CASE-connect path ([`Self::run_case`],
-    /// reached via [`Self::dispatch`]) run to completion *on this single actor
-    /// task*. While one is in flight the `select!` does not loop, so the timer
-    /// arm below cannot fire and inbound datagrams for OTHER sessions are not
-    /// demuxed until the handler returns. For the duration of a commission/connect
-    /// that means every other live session's MRP retransmits and subscription
-    /// liveness checks are paused. (Best-effort store fsyncs were already moved
-    /// off this task via `spawn_blocking`/offload, so the remaining stall is the
-    /// protocol handshake itself, not disk I/O.) Fully decoupling these handlers
-    /// so they run concurrently with the actor's recv/MRP loop is a larger async
-    /// re-architecture deferred to a future milestone; it is intentionally out of
-    /// scope here.
+    /// - **Commission** ([`Self::spawn_commission`]) runs on its own freshly
+    ///   bound socket + discovery; on completion the device is persisted and the
+    ///   caller's reply resolved ([`Self::handle_commission_completion`]).
+    /// - **CASE connect** parks the triggering verb in `pending_connects` and
+    ///   spawns [`run_connect_task`], whose handshake I/O flows through *this*
+    ///   actor's socket via a [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket):
+    ///   its outbound datagrams are drained by the `connect_outbound_rx` arm
+    ///   (which sends them and installs the peer route), and inbound handshake
+    ///   replies are demuxed to the task by [`Self::handle_inbound`]. On
+    ///   completion ([`Self::handle_connect_done`]) the session is registered and
+    ///   the parked verbs re-dispatched. Because every datagram still leaves and
+    ///   arrives on this socket, the session lives here from the first message —
+    ///   no second socket, no session migration. The device is resolved via the
+    ///   injected discovery *inline* first (a brief bounded mDNS poll — instant
+    ///   when cached — kept on the actor to preserve the discovery seam).
+    ///
+    /// **Residual:** the two low-frequency *recovery* connects — a pending
+    /// round-trip's post-timeout reconnect and a stranded subscription's
+    /// resubscribe, both driven from the timer arm — still use the inline
+    /// [`Self::connect`]. They briefly pause the loop; decoupling them the same
+    /// way is a possible future refinement, not a steady-state concern.
     ///
     /// ## Timer fairness under sustained inbound load
     ///

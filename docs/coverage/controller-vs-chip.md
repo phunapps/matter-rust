@@ -25,6 +25,17 @@ Run locally with `just integration`; run on a schedule via the
 `Integration (nightly)` GitHub Actions workflow
 (`.github/workflows/integration-nightly.yml`).
 
+**Actor concurrency (M9-G-d).** The controller's long protocol handlers —
+commission and CASE connect — run off the single actor loop on spawned tasks, so
+one session's multi-round-trip handshake does not stall every other session's
+MRP retransmits / subscription liveness (2026-06-12 audit item #1, resolved). A
+CASE connect's handshake I/O still flows through the actor's own socket (no
+second socket, no session migration). This guarantee is proven by hermetic
+concurrency unit tests in `crates/matter-controller/src/actor.rs`
+(`commission_completion_drains_while_loop_stays_responsive`,
+`connect_handshake_runs_off_loop_which_stays_responsive`), not by this live
+harness. See the `Actor::run` rustdoc for the full model.
+
 ## Multi-DUT
 
 `all-clusters-app` omits a few clusters, so the harness can drive other
