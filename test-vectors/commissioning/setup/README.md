@@ -23,7 +23,7 @@ The `input` shape mirrors matter-rust's `SetupPayload`:
 - `commissioning_flow`: `"Standard"` | `"UserIntent"` | `"Custom"`
 - `discovery_capabilities`: array of `"SoftAp"` | `"Ble"` | `"OnNetwork"`
 - `discriminator`: u16 in `0..=0xFFF`
-- `passcode`: u32 in `0..=0x07FFFFFF`, never a spec-disallowed value
+- `passcode`: u32 in `1..=99999998` (Core Spec §5.1.7.1 range), never a spec-disallowed value
 
 ## Capture procedure
 

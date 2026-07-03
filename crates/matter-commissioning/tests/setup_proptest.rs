@@ -9,11 +9,14 @@
 use matter_commissioning::setup::{
     encode_manual_code, encode_qr, parse_manual_code, parse_qr, CommissioningFlow,
     DiscoveryCapabilities, Discriminator, Passcode, SetupPayload, DISALLOWED_PASSCODES,
+    MAX_PASSCODE,
 };
 use proptest::prelude::*;
 
 fn arb_passcode() -> impl Strategy<Value = Passcode> {
-    (1u32..(1 << 27))
+    // Valid passcode range is 1..=MAX_PASSCODE (spec §5.1.7.1); values above the
+    // max are 27-bit-representable but not valid passcodes.
+    (1u32..=MAX_PASSCODE)
         .prop_filter("disallowed-trivial", |v| !DISALLOWED_PASSCODES.contains(v))
         .prop_map(|v| Passcode::new(v).expect("filtered"))
 }

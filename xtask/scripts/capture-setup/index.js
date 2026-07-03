@@ -176,7 +176,7 @@ const qrScenarios = [
     },
     {
         id: 'qr-edge-passcode-max',
-        intent: 'largest 27-bit passcode that is not on the disallowed list',
+        intent: 'largest valid passcode (spec max, 99_999_998)',
         input: {
             version: 0,
             vendor_id: 0xFFF1,
@@ -184,8 +184,9 @@ const qrScenarios = [
             commissioning_flow: 'Standard',
             discovery_capabilities: ['OnNetwork'],
             discriminator: 0x200,
-            // 2^27 - 2 = 134_217_726
-            passcode: 134_217_726,
+            // Matter Core Spec §5.1.7.1 maximum. Values above this are 27-bit
+            // representable but NOT valid passcodes.
+            passcode: 99_999_998,
         },
     },
 ];
@@ -237,7 +238,7 @@ const manualScenarios = [
     },
     {
         id: 'manual-21-edges',
-        intent: 'short=0xF, passcode near max, VID/PID near max',
+        intent: 'short=0xF, passcode at spec max (99_999_998), VID/PID near max',
         input: {
             version: 0,
             vendor_id: 0xFFF4,
@@ -245,7 +246,7 @@ const manualScenarios = [
             commissioning_flow: 'Standard',
             discovery_capabilities: [],
             discriminator: 0xF00,
-            passcode: 134_217_726,
+            passcode: 99_999_998,
         },
     },
 ];

@@ -1,5 +1,5 @@
 {
-  "intent": "largest 27-bit passcode that is not on the disallowed list",
+  "intent": "largest valid passcode (spec max, 99_999_998)",
   "input": {
     "version": 0,
     "vendor_id": 65521,
@@ -9,9 +9,9 @@
       "OnNetwork"
     ],
     "discriminator": 512,
-    "passcode": 134217726
+    "passcode": 99999998
   },
   "expected": {
-    "qr": "MT:Y.K90AFN00GYR18TV20"
+    "qr": "MT:Y.K90AFN00A1Q36B420"
   }
 }

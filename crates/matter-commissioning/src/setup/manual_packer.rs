@@ -173,6 +173,16 @@ mod tests {
     }
 
     #[test]
+    fn pack_matches_canonical_chip_test_vector() {
+        // Known-answer: the well-known chip test device — passcode 20202021 with
+        // discriminator 3840 (short 0xF) — has manual pairing code 34970112332.
+        // This pins the byte-level encoding against the spec/reference, which
+        // the self-consistent round-trip tests cannot.
+        let s = pack(&payload_11(0x0F, 20_202_021));
+        assert_eq!(s, "34970112332");
+    }
+
+    #[test]
     fn pack_11_digits_length_is_11() {
         let s = pack(&payload_11(0xA, 20_202_021));
         assert_eq!(s.len(), 11);
@@ -290,8 +300,10 @@ mod tests {
 
     #[test]
     fn roundtrip_edge_passcodes() {
-        // Skip disallowed-trivial values; pick boundary-ish allowed ones.
-        for passcode in [1u32, 99_999_998, (1 << 27) - 1] {
+        // The valid passcode range is 1..=MAX_PASSCODE (spec §5.1.7.1); exercise
+        // both boundaries plus a mid value. Skip any that land on the
+        // disallowed-trivial list.
+        for passcode in [1u32, 12_345_679, super::super::MAX_PASSCODE] {
             if super::super::DISALLOWED_PASSCODES.contains(&passcode) {
                 continue;
             }

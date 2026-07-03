@@ -117,6 +117,13 @@ pub const DISALLOWED_PASSCODES: &[u32] = &[
     88_888_888, 99_999_999, 12_345_678, 87_654_321,
 ];
 
+/// Largest valid Matter setup passcode (Core Spec §5.1.7.1: the passcode SHALL
+/// be in `1..=99_999_998`). The QR/manual-code wire field is 27 bits wide, but
+/// values in `99_999_999..=0x07FF_FFFF` are **not** valid passcodes — every
+/// spec-compliant commissioner (chip-tool, Apple/Google Home, …) rejects a
+/// setup code that carries one.
+pub const MAX_PASSCODE: u32 = 99_999_998;
+
 /// 27-bit Matter setup passcode (Matter Core Spec §5.1.7).
 ///
 /// Constructors enforce the 27-bit range and exclude the disallowed-trivial
@@ -126,18 +133,28 @@ pub const DISALLOWED_PASSCODES: &[u32] = &[
 pub struct Passcode(u32);
 
 impl Passcode {
-    /// Construct from a 27-bit value.
+    /// Construct a setup passcode, enforcing Matter Core Spec §5.1.7.1: the
+    /// value SHALL be in `1..=99_999_998` ([`MAX_PASSCODE`]) and MUST NOT be one
+    /// of the trivial values in [`DISALLOWED_PASSCODES`].
+    ///
+    /// The wire field is 27 bits, but a value above [`MAX_PASSCODE`] (up to
+    /// `2^27 - 1`) is **not** a valid passcode — a setup code carrying one is
+    /// rejected by every spec-compliant commissioner, so we reject it here
+    /// rather than emit or accept an uncommissionable code.
     ///
     /// # Errors
-    /// Returns [`Error::PasscodeOutOfRange`] if `value >= 1 << 27`.
-    /// Returns [`Error::PasscodeDisallowedTrivial`] if `value` is one of
-    /// the spec-disallowed values listed in [`DISALLOWED_PASSCODES`].
+    /// Returns [`Error::PasscodeDisallowedTrivial`] if `value` is one of the
+    /// spec-disallowed values in [`DISALLOWED_PASSCODES`] (this includes `0`).
+    /// Returns [`Error::PasscodeOutOfRange`] if `value > MAX_PASSCODE`.
     pub fn new(value: u32) -> Result<Self> {
-        if value >= 1 << 27 {
-            return Err(Error::PasscodeOutOfRange(value));
-        }
+        // Disallowed-set first, so the trivial values (including 0 and
+        // 99_999_999) report `PasscodeDisallowedTrivial` rather than
+        // `PasscodeOutOfRange`.
         if DISALLOWED_PASSCODES.contains(&value) {
             return Err(Error::PasscodeDisallowedTrivial(value));
+        }
+        if value > MAX_PASSCODE {
+            return Err(Error::PasscodeOutOfRange(value));
         }
         Ok(Self(value))
     }
@@ -517,11 +534,34 @@ mod passcode_tests {
     }
 
     #[test]
-    fn new_accepts_max_27_bit() {
-        // Largest 27-bit value not on the disallowed list. We use 99_000_001
-        // (well under 2^27 = 134_217_728, and not on any trivial-pattern list).
+    fn new_accepts_high_valid_value() {
+        // A high, non-trivial, in-range passcode (well under MAX_PASSCODE).
         let p = Passcode::new(99_000_001).unwrap();
         assert_eq!(p.as_u32(), 99_000_001);
+    }
+
+    #[test]
+    fn new_accepts_max_passcode() {
+        // The spec maximum (§5.1.7.1) is valid.
+        let p = Passcode::new(super::MAX_PASSCODE).unwrap();
+        assert_eq!(p.as_u32(), 99_999_998);
+    }
+
+    #[test]
+    fn new_rejects_values_above_max_but_below_2_27() {
+        // Regression: values in 99_999_999..2^27 are 27-bit-representable but are
+        // NOT valid passcodes (spec §5.1.7.1). Before this guard `Passcode::new`
+        // accepted them, so `open_commissioning_window` could emit a manual code
+        // that every spec-compliant commissioner (chip-tool, Apple/Google Home)
+        // rejects. 102_950_749 is exactly the value the field-observed bad code
+        // `11007762830` decoded to.
+        for &v in &[100_000_000_u32, 102_950_749, (1 << 27) - 1] {
+            let err = Passcode::new(v).unwrap_err();
+            assert!(
+                matches!(err, Error::PasscodeOutOfRange(x) if x == v),
+                "expected PasscodeOutOfRange for {v}, got {err:?}"
+            );
+        }
     }
 
     #[test]
