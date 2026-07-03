@@ -5,10 +5,10 @@
 # manual dispatch. Drives the same `just integration` recipe as the local
 # harness, so CI and local cannot drift.
 #
-# FIRST-RUN NOTE: the connectedhomeip pigweed bootstrap + all-clusters-app build
-# is environment-sensitive. Trigger this manually (Actions tab → "Run workflow")
-# once to validate on the runner before relying on the nightly schedule; tune the
-# apt deps / bootstrap steps if the runner differs.
+# Validated on a GitHub Ubuntu runner 2026-07-03 (run 28670513815): full build +
+# DUT sweep green end to end. If the runner image changes and the build breaks,
+# tune the apt deps / bootstrap steps (the ot-commissioner build needs
+# libevent-dev; mDNS needs libavahi-client-dev).
 name: Integration (nightly)
 
 on:

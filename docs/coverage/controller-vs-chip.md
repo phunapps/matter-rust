@@ -182,8 +182,10 @@ See the "Cluster behavior" table above for per-cluster test names.
   freshly built `all-clusters-app` on a nightly schedule (07:00 UTC) and on
   manual `workflow_dispatch`. It is **not** a per-PR check (the connectedhomeip
   build is heavy; the fast per-PR gate is untouched).
-- **First-run caveat:** the connectedhomeip pigweed bootstrap + build is
-  environment-sensitive; the workflow must be manually dispatched once to
-  validate on a GitHub runner before the nightly schedule is relied upon.
+- **Validated on a GitHub runner (2026-07-03, run 28670513815):** the workflow
+  builds all-clusters-app on Linux, launches it as the DUT, and runs the full
+  sweep green end to end. The first dispatches surfaced two missing apt build
+  deps (`libevent-dev` for ot-commissioner, `libavahi-client-dev` for mDNS),
+  now installed by the prerequisites step.
 - This document is the standing coverage record (see the "Status summary" and
   "Known DUT gaps" at the top, and the per-cluster tables above).
