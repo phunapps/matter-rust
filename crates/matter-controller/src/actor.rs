@@ -598,12 +598,13 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     commission_tx: mpsc::Sender<CommissionCompletion>,
     /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
     commission_rx: mpsc::Receiver<CommissionCompletion>,
-    /// M9-G-d event-driven connect: verbs waiting on an in-flight CASE connect,
+    /// M9-G-d event-driven connect: work waiting on an in-flight CASE connect,
     /// coalesced per device node id. A key's presence means a connect to that
-    /// node is running on a spawned task; the queued commands are re-dispatched
-    /// (on success) or failed (on error) when it completes. See
-    /// [`Self::enqueue_connect_waiter`] / [`Self::handle_connect_done`].
-    pending_connects: HashMap<u64, Vec<Command>>,
+    /// node is running on a spawned task; the queued [`ConnectWaiter`]s are
+    /// resumed (on success) or resolved/rescheduled (on error) when it
+    /// completes. See [`Self::enqueue_connect_waiter`] /
+    /// [`Self::handle_connect_done`].
+    pending_connects: HashMap<u64, Vec<ConnectWaiter>>,
     /// Per-in-flight-connect inbound queue (keyed by node id): the actor forwards
     /// the device's unsecured handshake replies here for the spawned task to
     /// consume via its [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket).
@@ -635,6 +636,24 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
 struct ConnectCompletion {
     node_id: u64,
     result: Result<(matter_crypto::CaseSessionOutput, SocketAddr), Error>,
+}
+
+/// A unit of work parked behind an in-flight CASE connect (M9-G-d). On connect
+/// success each is resumed on the freshly-established `(session, peer)`; on
+/// failure each is resolved/rescheduled per its kind ([`Actor::handle_connect_done`]
+/// / [`Actor::fail_connect_waiters`]). This lets the two timer-arm recovery
+/// reconnects share the same off-loop connect as the steady-state verb path, so
+/// no CASE handshake runs inline on the actor loop.
+enum ConnectWaiter {
+    /// A device verb parked before dispatch (the steady-state path): re-dispatch
+    /// on success (its `session_for` now cache-hits), fail its caller on error.
+    Command(Command),
+    /// A timed-out pending op to re-send on the fresh session (pending-retry
+    /// recovery, from [`Actor::on_pending_timeout`]).
+    ResendPending(Pending),
+    /// A stranded subscription to re-establish on the fresh session (resubscribe
+    /// recovery, from [`Actor::attempt_resubscribe`]); reschedule on failure.
+    Resubscribe(PendingResubscribe),
 }
 
 /// Canonicalize a peer address for the in-flight-handshake route table (M9-G-d).
@@ -1002,7 +1021,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if let Some(node_id) = command_target_node(&cmd) {
             if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
                 if !self.cache.contains_key(&(fabric_id, node_id)) {
-                    self.enqueue_connect_waiter(fabric_id, node_id, cmd).await;
+                    self.enqueue_connect_waiter(fabric_id, node_id, ConnectWaiter::Command(cmd))
+                        .await;
                     return;
                 }
             }
@@ -1539,12 +1559,20 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok(())
     }
 
-    /// Queue `cmd` behind an off-loop connect to `node_id`, starting the connect
-    /// if this is the first waiter (M9-G-d). Concurrent verbs to the same
-    /// not-yet-connected node coalesce onto a single handshake.
-    async fn enqueue_connect_waiter(&mut self, fabric_id: u64, node_id: u64, cmd: Command) {
+    /// Queue `waiter` behind an off-loop connect to `node_id`, starting the
+    /// connect if this is the first waiter (M9-G-d). Concurrent work targeting
+    /// the same not-yet-connected node coalesces onto a single handshake.
+    async fn enqueue_connect_waiter(
+        &mut self,
+        fabric_id: u64,
+        node_id: u64,
+        waiter: ConnectWaiter,
+    ) {
         let already_connecting = self.pending_connects.contains_key(&node_id);
-        self.pending_connects.entry(node_id).or_default().push(cmd);
+        self.pending_connects
+            .entry(node_id)
+            .or_default()
+            .push(waiter);
         if !already_connecting {
             self.spawn_connect(fabric_id, node_id).await;
         }
@@ -1672,29 +1700,154 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             self.resubscribe_stranded(old);
         }
 
-        // Re-dispatch every verb that was parked on this connect; each now finds
-        // a live cached session and proceeds without blocking the loop.
+        // Resume every unit of work parked on this connect on the fresh
+        // `(session, peer)`; each proceeds without blocking the loop.
         if let Some(waiters) = self.pending_connects.remove(&node_id) {
-            for cmd in waiters {
-                self.dispatch_ready(cmd).await;
+            for waiter in waiters {
+                match waiter {
+                    // A verb: re-dispatch — its `session_for` now cache-hits.
+                    ConnectWaiter::Command(cmd) => self.dispatch_ready(cmd).await,
+                    // A timed-out op: re-send on the fresh session.
+                    ConnectWaiter::ResendPending(p) => {
+                        self.resume_resend_pending(p, sid, peer).await;
+                    }
+                    // A stranded subscription: re-establish on the fresh session.
+                    ConnectWaiter::Resubscribe(pr) => {
+                        self.resume_resubscribe(pr, sid, peer).await;
+                    }
+                }
             }
         }
     }
 
-    /// Fail every verb parked on a connect to `node_id` with `err` and drop the
-    /// connect's routing. `Error` is not `Clone`, so each waiter gets a fresh
-    /// `Error::Operational` carrying the failure text.
+    /// Resolve every unit of work parked on a failed connect to `node_id` and
+    /// drop the connect's routing. A parked verb fails its caller, a timed-out op
+    /// fails its caller, and a stranded subscription reschedules onto its backoff
+    /// (chip retries a subscription forever). `Error` is not `Clone`, so each
+    /// caller-facing failure gets a fresh `Error::Operational` with the text.
     fn fail_connect_waiters(&mut self, node_id: u64, err: &Error) {
         self.connect_inbound.remove(&node_id);
         self.connect_routes.retain(|_, n| *n != node_id);
         if let Some(waiters) = self.pending_connects.remove(&node_id) {
             let msg = err.to_string();
-            for cmd in waiters {
-                fail_command(
-                    cmd,
-                    Error::Operational(format!("connect to node {node_id} failed: {msg}")),
+            let fail_err =
+                || Error::Operational(format!("connect to node {node_id} failed: {msg}"));
+            for waiter in waiters {
+                match waiter {
+                    ConnectWaiter::Command(cmd) => fail_command(cmd, fail_err()),
+                    ConnectWaiter::ResendPending(p) => Self::fail_pending(p, fail_err()),
+                    ConnectWaiter::Resubscribe(pr) => self.reschedule_resubscribe(pr),
+                }
+            }
+        }
+    }
+
+    /// Re-send a timed-out pending op `p` on the freshly-established
+    /// `(session, peer)` (M9-G-d pending-retry recovery, resumed by
+    /// [`Self::handle_connect_done`]). Marks it `retried` and discards any
+    /// partial read/subscribe accumulation from the first attempt; a send
+    /// failure fails the op's caller.
+    async fn resume_resend_pending(&mut self, p: Pending, sid: SessionId, peer: SocketAddr) {
+        let sent = self
+            .send_request(
+                sid,
+                peer,
+                p.request.opcode,
+                p.request.protocol_id,
+                &p.request.payload,
+            )
+            .await;
+        match sent {
+            Ok(exchange) => {
+                let mut np = p;
+                np.peer = peer;
+                np.retried = true;
+                // The retry re-sends the original request, so any partial
+                // accumulation from the first attempt must be discarded.
+                match &mut np.reply {
+                    PendingReply::Read {
+                        chunks,
+                        total_bytes,
+                        ..
+                    } => {
+                        chunks.clear();
+                        *total_bytes = 0;
+                    }
+                    PendingReply::Subscribe { priming, .. } => {
+                        **priming = ReportReassembler::default();
+                    }
+                    PendingReply::RoundTrip(_)
+                    | PendingReply::TimedAction { .. }
+                    | PendingReply::Action { .. }
+                    | PendingReply::ChunkedWrite { .. } => {}
+                }
+                self.pending.insert((sid, exchange), np);
+            }
+            Err(e) => Self::fail_pending(p, e),
+        }
+    }
+
+    /// Re-establish a stranded subscription `pr` on the freshly-established
+    /// `(session, peer)` (M9-G-d resubscribe recovery, resumed by
+    /// [`Self::handle_connect_done`]). A send failure reschedules it on its
+    /// backoff rather than dropping it.
+    async fn resume_resubscribe(
+        &mut self,
+        pr: PendingResubscribe,
+        sid: SessionId,
+        peer: SocketAddr,
+    ) {
+        let req =
+            matter_interaction::build_subscribe_request(&matter_interaction::SubscribeRequest {
+                keep_subscriptions: false,
+                min_interval_floor: pr.min_interval,
+                max_interval_ceiling: pr.max_interval,
+                paths: pr.paths.clone(),
+                event_paths: pr.event_paths.clone(),
+                event_filters: pr.event_filters.clone(),
+            });
+        match self
+            .send_request(
+                sid,
+                peer,
+                OP_SUBSCRIBE_REQUEST,
+                ProtocolId::INTERACTION_MODEL,
+                &req,
+            )
+            .await
+        {
+            Ok(exchange) => {
+                self.pending.insert(
+                    (sid, exchange),
+                    Pending {
+                        node_id: pr.node_id,
+                        peer,
+                        request: PendingRequest {
+                            opcode: OP_SUBSCRIBE_REQUEST,
+                            protocol_id: ProtocolId::INTERACTION_MODEL,
+                            payload: req,
+                        },
+                        // Skip SH.1's reconnect-once — a timeout reschedules on
+                        // the backoff (see `on_pending_timeout`).
+                        retried: true,
+                        reply: PendingReply::Subscribe {
+                            sub_id: pr.sub_id,
+                            reply: None,
+                            report_tx: pr.tx,
+                            report_rx: None,
+                            priming: Box::new(ReportReassembler::default()),
+                            node_id: pr.node_id,
+                            paths: pr.paths,
+                            event_paths: pr.event_paths,
+                            event_filters: pr.event_filters,
+                            min_interval: pr.min_interval,
+                            max_interval: pr.max_interval,
+                            retry_count: pr.retry_count,
+                        },
+                    },
                 );
             }
+            Err(_) => self.reschedule_resubscribe(pr),
         }
     }
 
@@ -1702,11 +1855,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// address hint in persisted state. Resumption is dormant (M4.2): this
     /// always performs a full SIGMA handshake.
     ///
-    /// M9-G-d: verbs no longer reach this inline path (they park behind
-    /// [`Self::spawn_connect`] via [`Self::dispatch`]); it now serves only the
-    /// low-frequency recovery sites (a pending round-trip's post-timeout
-    /// reconnect and a stranded subscription's resubscribe), which run from the
-    /// timer arm. Those remain a documented residual — see [`Self::run`].
+    /// M9-G-d: this INLINE handshake is now a defensive fallback only. Every
+    /// real caller connects OFF the actor loop instead — verbs park behind
+    /// [`Self::spawn_connect`] via [`Self::dispatch`], and the two timer-arm
+    /// recovery reconnects (pending-retry in [`Self::on_pending_timeout`],
+    /// resubscribe in [`Self::attempt_resubscribe`]) enqueue a
+    /// [`ConnectWaiter`]. It survives only as the cache-miss branch of
+    /// [`Self::session_for`], which those callers no longer reach with a missing
+    /// session; if it ever runs it briefly blocks the loop, so it must stay
+    /// unreached in normal operation.
     async fn connect(&mut self, node_id: u64) -> Result<(SessionId, std::net::SocketAddr), Error> {
         let fabric_id = self.sole_fabric()?.fabric_id;
         let (credentials, roots, compressed) =
@@ -2874,70 +3031,36 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             return;
         }
         if !p.retried {
-            if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
-                // Only evict if the cache still holds the *expired* session. A
-                // sibling op may have already timed out, evicted it, reconnected,
-                // and cached a fresh healthy session under this node — dropping
-                // that here would force a redundant CASE handshake and churn every
-                // subscription just bound to the new session. The superseded op
-                // simply retries below on its own fresh session.
-                if self
-                    .cache
-                    .get(&(fabric_id, p.node_id))
-                    .is_some_and(|c| c.session_id == session_id)
-                {
-                    self.cache.remove(&(fabric_id, p.node_id));
-                }
+            let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) else {
+                Self::fail_pending(p, Error::Operational("round-trip timed out".into()));
+                return;
+            };
+            // Only evict if the cache still holds the *expired* session. A
+            // sibling op may have already timed out, evicted it, reconnected, and
+            // cached a fresh healthy session under this node — dropping that here
+            // would force a redundant CASE handshake and churn every subscription
+            // just bound to the new session.
+            if self
+                .cache
+                .get(&(fabric_id, p.node_id))
+                .is_some_and(|c| c.session_id == session_id)
+            {
+                self.cache.remove(&(fabric_id, p.node_id));
             }
-            match self.connect(p.node_id).await {
-                Ok((sid, peer)) => {
-                    if let Ok(exchange) = self
-                        .send_request(
-                            sid,
-                            peer,
-                            p.request.opcode,
-                            p.request.protocol_id,
-                            &p.request.payload,
-                        )
-                        .await
-                    {
-                        let mut np = p;
-                        np.peer = peer;
-                        np.retried = true;
-                        // The retry re-sends the original request, so any
-                        // partial accumulation from the first attempt must be
-                        // discarded (matches the old fresh-`secured_read` retry).
-                        match &mut np.reply {
-                            PendingReply::Read {
-                                chunks,
-                                total_bytes,
-                                ..
-                            } => {
-                                chunks.clear();
-                                *total_bytes = 0;
-                            }
-                            PendingReply::Subscribe { priming, .. } => {
-                                **priming = ReportReassembler::default();
-                            }
-                            // A timed handshake / plain-action retry re-sends the
-                            // original request; nothing partial to discard. A
-                            // ChunkedWrite is registered `retried: true`, so it
-                            // never reaches this reconnect-once block — listed
-                            // only for exhaustiveness.
-                            PendingReply::RoundTrip(_)
-                            | PendingReply::TimedAction { .. }
-                            | PendingReply::Action { .. }
-                            | PendingReply::ChunkedWrite { .. } => {}
-                        }
-                        self.pending.insert((sid, exchange), np);
-                        return;
-                    }
-                }
-                Err(e) => {
-                    Self::fail_pending(p, e);
-                    return;
-                }
+            // M9-G-d: re-send on a cached fresh session if a sibling already
+            // reconnected, else reconnect OFF the actor loop (the handshake no
+            // longer blocks other sessions) and re-send on completion.
+            if let Some((sid, peer)) = self
+                .cache
+                .get(&(fabric_id, p.node_id))
+                .map(|c| (c.session_id, c.peer))
+            {
+                self.resume_resend_pending(p, sid, peer).await;
+            } else {
+                self.enqueue_connect_waiter(fabric_id, p.node_id, ConnectWaiter::ResendPending(p))
+                    .await;
             }
+            return;
         }
         Self::fail_pending(p, Error::Operational("round-trip timed out".into()));
     }
@@ -3027,65 +3150,25 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    /// One resubscribe attempt: connect if needed, send a fresh `SubscribeRequest`,
-    /// and register a pending Subscribe (no oneshot reply) so the central demux
-    /// drives the handshake. On connect/send failure, reschedule with backoff.
+    /// One resubscribe attempt: send a fresh `SubscribeRequest` on the node's
+    /// cached session and register a pending Subscribe (no oneshot reply) so the
+    /// central demux drives the handshake. If the node is not connected, reconnect
+    /// OFF the actor loop (M9-G-d — the CASE handshake no longer blocks other
+    /// sessions) and resume on completion; a missing fabric reschedules on backoff.
     async fn attempt_resubscribe(&mut self, pr: PendingResubscribe) {
-        let Ok((sid, peer)) = self.session_for(pr.node_id).await else {
+        let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) else {
             self.reschedule_resubscribe(pr);
             return;
         };
-        let req =
-            matter_interaction::build_subscribe_request(&matter_interaction::SubscribeRequest {
-                keep_subscriptions: false,
-                min_interval_floor: pr.min_interval,
-                max_interval_ceiling: pr.max_interval,
-                paths: pr.paths.clone(),
-                event_paths: pr.event_paths.clone(),
-                event_filters: pr.event_filters.clone(),
-            });
-        match self
-            .send_request(
-                sid,
-                peer,
-                OP_SUBSCRIBE_REQUEST,
-                ProtocolId::INTERACTION_MODEL,
-                &req,
-            )
-            .await
+        if let Some((sid, peer)) = self
+            .cache
+            .get(&(fabric_id, pr.node_id))
+            .map(|c| (c.session_id, c.peer))
         {
-            Ok(exchange) => {
-                self.pending.insert(
-                    (sid, exchange),
-                    Pending {
-                        node_id: pr.node_id,
-                        peer,
-                        request: PendingRequest {
-                            opcode: OP_SUBSCRIBE_REQUEST,
-                            protocol_id: ProtocolId::INTERACTION_MODEL,
-                            payload: req,
-                        },
-                        // Skip SH.1's reconnect-once — a timeout reschedules on
-                        // the backoff (see `on_pending_timeout`).
-                        retried: true,
-                        reply: PendingReply::Subscribe {
-                            sub_id: pr.sub_id,
-                            reply: None,
-                            report_tx: pr.tx,
-                            report_rx: None,
-                            priming: Box::new(ReportReassembler::default()),
-                            node_id: pr.node_id,
-                            paths: pr.paths,
-                            event_paths: pr.event_paths,
-                            event_filters: pr.event_filters,
-                            min_interval: pr.min_interval,
-                            max_interval: pr.max_interval,
-                            retry_count: pr.retry_count,
-                        },
-                    },
-                );
-            }
-            Err(_) => self.reschedule_resubscribe(pr),
+            self.resume_resubscribe(pr, sid, peer).await;
+        } else {
+            self.enqueue_connect_waiter(fabric_id, pr.node_id, ConnectWaiter::Resubscribe(pr))
+                .await;
         }
     }
 
