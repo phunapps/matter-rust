@@ -20,6 +20,24 @@ use crate::trust::AttestationTrust;
 
 const COMMAND_CHANNEL_DEPTH: usize = 32;
 
+/// Addresses to advertise for a self-hosted operational service (OTA provider,
+/// ICD check-in listener). A wildcard bind (`[::]`) reports an unspecified
+/// `local_addr` that a peer cannot resolve to anything routable, so substitute
+/// the host's real routable address(es); fall back to the bind address only if
+/// none can be found (e.g. fully offline).
+fn advertise_addrs(local: std::net::SocketAddr) -> Vec<std::net::IpAddr> {
+    if local.ip().is_unspecified() {
+        let real = matter_transport::local_advertise_addrs();
+        if real.is_empty() {
+            vec![local.ip()]
+        } else {
+            real
+        }
+    } else {
+        vec![local.ip()]
+    }
+}
+
 /// The high-level Matter controller. Cloneable; all clones talk to one
 /// owning task.
 #[derive(Clone)]
@@ -166,7 +184,7 @@ impl MatterController {
         let mut discovery = matter_transport::MdnsSdDiscovery::new()
             .map_err(|e| Error::Operational(format!("provider mdns: {e}")))?;
         let service =
-            build_operational_service(compressed, node_id, vec![local.ip()], local.port());
+            build_operational_service(compressed, node_id, advertise_addrs(local), local.port());
         matter_transport::Discovery::publish(&mut discovery, &service)?;
 
         // 3. Accept one session + dispatch up to `max_invokes` invokes.
@@ -237,7 +255,7 @@ impl MatterController {
         let mut discovery = matter_transport::MdnsSdDiscovery::new()
             .map_err(|e| Error::Operational(format!("provider mdns: {e}")))?;
         let service =
-            build_operational_service(compressed, node_id, vec![local.ip()], local.port());
+            build_operational_service(compressed, node_id, advertise_addrs(local), local.port());
         matter_transport::Discovery::publish(&mut discovery, &service)?;
 
         // Announce (client invoke to the device) concurrently with serving.
@@ -307,7 +325,7 @@ impl MatterController {
         let mut discovery = matter_transport::MdnsSdDiscovery::new()
             .map_err(|e| Error::Operational(format!("ICD listener mdns: {e}")))?;
         let service =
-            build_operational_service(compressed, node_id, vec![local.ip()], local.port());
+            build_operational_service(compressed, node_id, advertise_addrs(local), local.port());
         matter_transport::Discovery::publish(&mut discovery, &service)?;
 
         // Listen for one verifiable Check-In (generous frame budget for noise).

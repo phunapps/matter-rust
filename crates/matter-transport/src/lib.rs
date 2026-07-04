@@ -41,6 +41,7 @@
 pub mod discovery;
 pub mod error;
 pub mod framing;
+pub mod local_addr;
 pub mod mrp;
 pub mod protocol_header;
 pub mod session;
@@ -72,6 +73,7 @@ pub use session::{
 };
 
 pub use discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
+pub use local_addr::local_advertise_addrs;
 pub use transport::{PeerAddress, Transport};
 
 #[cfg(feature = "tokio")]
