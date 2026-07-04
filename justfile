@@ -112,3 +112,7 @@ integration-lock:
 # Build + launch evse-app and run the Electrical* integration tests.
 integration-energy:
     cargo run -p xtask -- integration evse
+
+# Build + launch lit-icd-app (short ICD timers) and run the ICD Check-In test.
+integration-icd:
+    cargo run -p xtask -- integration icd
