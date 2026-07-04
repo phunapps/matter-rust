@@ -37,6 +37,12 @@ struct AppSpec {
     /// If set, `cargo test` is restricted to this single `--test <name>` binary
     /// (so a minimal DUT doesn't run the all-clusters cluster tests).
     test_filter: Option<&'static str>,
+    /// Extra CLI args passed to the DUT after `--KVS <path>` (default `&[]`).
+    /// e.g. lit-icd-app's short ICD timers so a Check-In is prompt.
+    extra_args: &'static [&'static str],
+    /// If set, generate a `.ota` image before the tests and export its path as
+    /// `MATTER_INTEGRATION_OTA_IMAGE` (the OTA requestor test consumes it).
+    needs_ota_image: bool,
 }
 
 /// Resolve the DUT app spec from the optional `xtask integration <app>` argument.
@@ -48,6 +54,8 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             binary: "chip-all-clusters-app",
             fixed_qr: Some("MT:-24J042C00KA0648G00"),
             test_filter: None,
+            extra_args: &[],
+            needs_ota_image: false,
         },
         "lock" => AppSpec {
             name: "lock",
@@ -55,6 +63,8 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             binary: "chip-lock-app",
             fixed_qr: None,
             test_filter: Some("clusters_door_lock"),
+            extra_args: &[],
+            needs_ota_image: false,
         },
         "evse" => AppSpec {
             name: "evse",
@@ -62,10 +72,39 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             binary: "chip-evse-app",
             fixed_qr: None,
             test_filter: Some("clusters_electrical"),
+            extra_args: &[],
+            needs_ota_image: false,
+        },
+        "icd" => AppSpec {
+            name: "icd",
+            target_suffix: "lit-icd",
+            binary: "lit-icd-app",
+            fixed_qr: None,
+            test_filter: Some("icd_checkin"),
+            // Short ICD timers so the device goes idle ~1s after we go quiet and
+            // checks in on a 15s cycle (defaults are 10s active / 3600s idle).
+            // chip requires activeModeDuration(ms) <= idleModeDuration(s).
+            extra_args: &[
+                "--icdActiveModeDurationMs",
+                "1000",
+                "--icdIdleModeDuration",
+                "15",
+            ],
+            needs_ota_image: false,
+        },
+        "ota" => AppSpec {
+            name: "ota",
+            target_suffix: "ota-requestor",
+            binary: "chip-ota-requestor-app",
+            fixed_qr: None,
+            test_filter: Some("ota_flow"),
+            extra_args: &[],
+            needs_ota_image: true,
         },
         other => {
             return Err(format!(
-                "unknown integration app '{other}' (expected: all-clusters, lock, evse)"
+                "unknown integration app '{other}' \
+                 (expected: all-clusters, lock, evse, icd, ota)"
             ))
         }
     })
@@ -96,6 +135,8 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
         "node-id.txt",
         "controller-b-store.bin",
         "controller-b-store.tmp",
+        "test.ota",
+        "ota-payload.bin",
     ] {
         let _ = fs::remove_file(dut_dir.join(stale));
     }
@@ -105,7 +146,7 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
     eprintln!("integration: KVS  → {}", kvs_path.display());
     eprintln!("integration: log  → {}", log_path.display());
 
-    let child = spawn_dut(&binary, &kvs_path, &log_path)?;
+    let child = spawn_dut(&binary, &kvs_path, spec.extra_args, &log_path)?;
 
     // The Drop guard ensures the child is killed no matter how run() exits.
     let mut guard = DutGuard(child);
@@ -122,7 +163,24 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
 
     let multicast_if = resolve_multicast_if();
 
-    let status = run_tests(&chip_root, &dut_dir, multicast_if, &spec, &setup_qr)?;
+    // OTA requestor needs a real `.ota` image to download; generate it now and
+    // hand its path to the test via env.
+    let ota_image = if spec.needs_ota_image {
+        let img = generate_ota_image(&chip_root, &dut_dir)?;
+        eprintln!("integration: OTA image → {}", img.display());
+        Some(img)
+    } else {
+        None
+    };
+
+    let status = run_tests(
+        &chip_root,
+        &dut_dir,
+        multicast_if,
+        &spec,
+        &setup_qr,
+        ota_image.as_deref(),
+    )?;
 
     // Explicit teardown before we inspect the exit status, so the process is
     // gone even on a test failure.
@@ -260,7 +318,12 @@ fn prepare_dut_dir() -> Result<PathBuf, String> {
 
 /// Spawn the all-clusters-app with the given KVS path.  stdout+stderr are
 /// redirected to `log_path` so the main terminal stays readable.
-fn spawn_dut(binary: &Path, kvs_path: &Path, log_path: &Path) -> Result<Child, String> {
+fn spawn_dut(
+    binary: &Path,
+    kvs_path: &Path,
+    extra_args: &[&str],
+    log_path: &Path,
+) -> Result<Child, String> {
     let log_file = fs::File::create(log_path)
         .map_err(|e| format!("create log file {}: {e}", log_path.display()))?;
     // Two separate file handles for stdout and stderr.
@@ -271,12 +334,42 @@ fn spawn_dut(binary: &Path, kvs_path: &Path, log_path: &Path) -> Result<Child, S
     let child = Command::new(binary)
         .arg("--KVS")
         .arg(kvs_path)
+        .args(extra_args)
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file2))
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", binary.display()))?;
 
     Ok(child)
+}
+
+/// Generate a throwaway `.ota` image under `dut_dir` with chip's image tool and
+/// return its path. The requestor validates only the `OTAImageHeader` (vendor
+/// 0xFFF1 / product 0x8000 / version 2, above the requestor's built-in
+/// software version 1), not the payload, so a fixed zero payload is fine.
+fn generate_ota_image(chip_root: &Path, dut_dir: &Path) -> Result<PathBuf, String> {
+    let payload = dut_dir.join("ota-payload.bin");
+    fs::write(&payload, vec![0u8; 64 * 1024])
+        .map_err(|e| format!("write ota payload {}: {e}", payload.display()))?;
+    let image = dut_dir.join("test.ota");
+    let tool = chip_root.join("src/app/ota_image_tool.py");
+
+    let status = Command::new("python3")
+        .arg(&tool)
+        .args([
+            "create", "-v", "0xFFF1", "-p", "0x8000", "-vn", "2", "-vs", "2.0", "-da", "sha256",
+        ])
+        .arg(&payload)
+        .arg(&image)
+        .status()
+        .map_err(|e| format!("spawn ota_image_tool.py: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "ota_image_tool.py create failed (exit {status}); tool: {}",
+            tool.display()
+        ));
+    }
+    Ok(image)
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +511,7 @@ fn run_tests(
     multicast_if: Option<u32>,
     spec: &AppSpec,
     setup_qr: &str,
+    ota_image: Option<&Path>,
 ) -> Result<ExitStatus, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
 
@@ -436,6 +530,14 @@ fn run_tests(
     // Absolute DUT-state dir so the fixture's store/sidecar paths don't depend on
     // cargo's per-package test cwd.
     cmd.env("MATTER_INTEGRATION_DUT_DIR", dut_dir);
+
+    if let Some(img) = ota_image {
+        cmd.env("MATTER_INTEGRATION_OTA_IMAGE", img);
+        eprintln!(
+            "integration: MATTER_INTEGRATION_OTA_IMAGE={}",
+            img.display()
+        );
+    }
 
     if let Some(idx) = multicast_if {
         cmd.env("MATTER_MULTICAST_IF", idx.to_string());
