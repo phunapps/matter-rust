@@ -83,6 +83,16 @@ jobs:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
         run: just integration
 
+      # ICD Check-In flow vs lit-icd-app (Linux validation of the
+      # controller-advertising mDNS direction fixed in `local_advertise_addrs`).
+      # Runs even if the all-clusters sweep hit its known transient flakiness, so
+      # a flake there does not mask the ICD result.
+      - name: Run ICD Check-In sweep (just integration-icd)
+        if: ${{ !cancelled() }}
+        env:
+          CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
+        run: just integration-icd
+
       - name: Upload DUT log on failure
         if: failure()
         uses: actions/upload-artifact@v4
