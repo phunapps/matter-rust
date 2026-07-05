@@ -277,6 +277,13 @@ pub struct CaseResponder {
     /// itself — the controller layer supplies the real time. See
     /// `process_sigma3`.
     validation_time: MatterTime,
+    /// Byte-parity test seam: when `Some`, [`accept_resumption`][Self::accept_resumption]
+    /// uses this as the fresh resumption id instead of sampling `SystemRandom`,
+    /// so the emitted `Sigma2_Resume` is deterministic and comparable against a
+    /// captured fixture. Always `None` in production (only the
+    /// `test_support::case_responder_with_eph_key_and_resumption_id`
+    /// constructor sets it).
+    new_resumption_id_override: Option<[u8; 16]>,
 }
 
 impl CaseResponder {
@@ -339,6 +346,7 @@ impl CaseResponder {
                 responder_session_id,
             },
             validation_time: now,
+            new_resumption_id_override: None,
         })
     }
 
@@ -380,7 +388,17 @@ impl CaseResponder {
                 responder_session_id: 0,
             },
             validation_time: now,
+            new_resumption_id_override: None,
         })
+    }
+
+    /// Byte-parity test seam: fix the resumption id that
+    /// [`accept_resumption`][Self::accept_resumption] would otherwise sample
+    /// from `SystemRandom`, so `Sigma2_Resume` output is deterministic.
+    /// The only valid caller is
+    /// `test_support::case_responder_with_eph_key_and_resumption_id`.
+    pub(crate) fn set_new_resumption_id_override(&mut self, id: [u8; 16]) {
+        self.new_resumption_id_override = Some(id);
     }
 
     // ─── State inspection ─────────────────────────────────────────────────
@@ -641,11 +659,17 @@ impl CaseResponder {
 
                 // Step 3: Generate a fresh resumption ID for this new session.
                 // The NEW id is what goes into Sigma2_Resume and into the caller's
-                // persisted record after the handshake completes.
-                let mut new_resumption_id = [0u8; 16];
-                SystemRandom::new()
-                    .fill(&mut new_resumption_id)
-                    .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+                // persisted record after the handshake completes. Byte-parity
+                // tests inject a fixed id via `new_resumption_id_override`.
+                let new_resumption_id = if let Some(id) = self.new_resumption_id_override {
+                    id
+                } else {
+                    let mut id = [0u8; 16];
+                    SystemRandom::new()
+                        .fill(&mut id)
+                        .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+                    id
+                };
 
                 // Step 4: Compute sigma2_resume_mic using the NEW resumption_id.
                 // Pinned from matter.js CaseServer.ts `#resume`:

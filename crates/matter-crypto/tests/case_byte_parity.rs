@@ -19,7 +19,7 @@ use matter_cert::{MatterCertificate, MatterTime, TrustAnchor, TrustedRoots};
 use matter_crypto::{
     test_support::{
         case_initiator_with_eph_key, case_initiator_with_resumption_eph_key,
-        case_responder_with_eph_key,
+        case_responder_with_eph_key, case_responder_with_eph_key_and_resumption_id,
     },
     CaseCredentials, PeerInfo, ResumptionId, ResumptionRecord, RingSigner, Sigma1Outcome,
 };
@@ -442,14 +442,11 @@ fn matter_js_byte_parity_new_session() {
 ///
 /// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
 ///
-/// TODO(M4 byte-parity follow-up): fails because our responder's
-/// `accept_resumption` generates the fresh `resumption_id` via
-/// `SystemRandom`, but matter.js consumes it from the patched RNG
-/// (all-zero bytes). Fix: extend `test_support::case_responder_with_eph_key`
-/// to inject a fixed `new_resumption_id` parameter that bypasses the
-/// internal `SystemRandom::new().fill(...)` call in `responder.rs`.
+/// The responder is built via
+/// `case_responder_with_eph_key_and_resumption_id` so the fresh
+/// `resumption_id` it puts in `Sigma2_Resume` matches the capture script's
+/// patched-RNG value (all-zero bytes) instead of a live `SystemRandom` draw.
 #[test]
-#[ignore = "M4 follow-up: needs fixed new_resumption_id injection — see body TODO"]
 #[allow(clippy::too_many_lines)] // long because it mirrors a multi-step protocol exchange
 fn matter_js_byte_parity_resumption_accepted() {
     let fx = load_fixture("handshake-resumption-accepted");
@@ -518,11 +515,15 @@ fn matter_js_byte_parity_resumption_accepted() {
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
-    let mut responder = case_responder_with_eph_key(
+    // The capture script's patched RNG produced an all-zero fresh resumption
+    // id (visible verbatim in the pinned sigma2_resume bytes) — inject it so
+    // our responder's Sigma2_Resume is byte-comparable.
+    let mut responder = case_responder_with_eph_key_and_resumption_id(
         responder_creds,
         roots,
         hex_to_array::<32>(&fx.inputs.responder_eph_priv),
         hex_to_array::<32>(&fx.inputs.responder_random),
+        [0u8; 16],
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
@@ -582,17 +583,13 @@ fn matter_js_byte_parity_resumption_accepted() {
 ///
 /// Requires fixtures from `cargo xtask capture-case` (M4.3 Task 3).
 ///
-/// TODO(M4 byte-parity follow-up): fails because Sigma1's
-/// `initiator_resume_mic` differs between our implementation and
-/// matter.js even though all fixture inputs (shared_secret,
-/// resumption_id, initiator_random) are identical. Our
-/// `sigma::compute_sigma1_resume_mic` HKDF/AEAD composition is
-/// out of alignment with matter.js's actual derivation in
-/// `CaseClient.ts`. New-session byte-parity passes, so the core
-/// SIGMA-I machinery is correct — resumption MIC needs spec/source
-/// re-read to pin exact salt/info/AAD layout.
+/// (The old `#[ignore]` on this test blamed a `compute_sigma1_resume_mic`
+/// composition mismatch — that was a misdiagnosis: the test fed a hardcoded
+/// `[0xCC; 16]` record secret while the fixture MIC was computed from the
+/// capture scenario's `resumption_shared_secret`. Feeding the fixture's
+/// secret makes the Sigma1 — including its resume MIC — match byte-for-byte,
+/// so the composition was correct all along.)
 #[test]
-#[ignore = "M4 follow-up: sigma1_resume_mic composition needs re-pinning — see body TODO"]
 #[allow(clippy::too_many_lines)] // long because it mirrors a multi-step protocol exchange
 fn matter_js_byte_parity_resumption_declined() {
     let fx = load_fixture("handshake-resumption-declined");
@@ -620,10 +617,11 @@ fn matter_js_byte_parity_resumption_declined() {
         rcac_pub,
     );
 
-    // Build a bogus ResumptionRecord. The responder will decline because it
-    // has no record for this ID, so the specific contents don't matter for
-    // the byte-parity assertion. We still need a syntactically valid record
-    // so the initiator can populate the Sigma1 resumption fields.
+    // Build the ResumptionRecord the initiator presents. The responder will
+    // decline (the test drives `reject_resumption()`), but the record's
+    // contents must match the fixture inputs exactly: the capture script
+    // computed Sigma1's `initiator_resume_mic` from this id + secret, so the
+    // Sigma1 byte-parity assertion depends on them.
     let bogus_id = ResumptionId(hex_to_array::<16>(
         fx.inputs
             .resumption_id
@@ -634,7 +632,12 @@ fn matter_js_byte_parity_resumption_declined() {
         MatterCertificate::from_tlv(&hex::decode(&fx.inputs.responder_noc).unwrap()).unwrap();
     let bogus_record = ResumptionRecord {
         id: bogus_id,
-        shared_secret: [0xCC; 16],
+        shared_secret: hex_to_array::<16>(
+            fx.inputs
+                .resumption_shared_secret
+                .as_deref()
+                .expect("fixture has resumption_shared_secret"),
+        ),
         peer: PeerInfo {
             node_id: fx.inputs.responder_node_id,
             fabric_id: fx.inputs.fabric_id,

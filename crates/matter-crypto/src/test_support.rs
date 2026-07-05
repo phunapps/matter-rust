@@ -298,6 +298,37 @@ pub fn case_responder_with_eph_key(
     )
 }
 
+/// Construct a [`CaseResponder`] like [`case_responder_with_eph_key`] but
+/// additionally fixing the fresh resumption id that
+/// [`CaseResponder::accept_resumption`] would otherwise sample from the OS
+/// CSPRNG, so the emitted `Sigma2_Resume` is deterministic.
+///
+/// Used by the resumption-accepted matter.js byte-parity test to replay a
+/// captured `Sigma1 → Sigma2_Resume` exchange with fully deterministic inputs.
+///
+/// # Errors
+///
+/// - [`crate::Error::EphemeralKeyGenerationFailed`] if `eph_private_key` is
+///   zero, >= the P-256 curve order, or otherwise not a valid scalar.
+pub fn case_responder_with_eph_key_and_resumption_id(
+    credentials: CaseCredentials,
+    trusted_roots: TrustedRoots,
+    eph_private_key: [u8; 32],
+    responder_random: [u8; 32],
+    new_resumption_id: [u8; 16],
+    now: MatterTime,
+) -> Result<CaseResponder> {
+    let mut responder = CaseResponder::new_with_eph_and_random(
+        credentials,
+        trusted_roots,
+        eph_private_key,
+        responder_random,
+        now,
+    )?;
+    responder.set_new_resumption_id_override(new_resumption_id);
+    Ok(responder)
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
