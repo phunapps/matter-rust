@@ -385,6 +385,7 @@ fn full_handshake_records_flip_roles_for_resumption() {
         INITIATOR_NODE_ID,
         TEST_FABRIC_ID,
         b_record,
+        0x0001,
         now,
     )
     .expect("initiator2 (B resuming)");
@@ -659,6 +660,7 @@ fn case_resumption_roundtrip_accepted() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         record_for_initiator,
+        0x0001,
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator2 with resumption");
@@ -802,6 +804,7 @@ fn case_resumption_declined_falls_back_to_new_session() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         bogus_record,
+        0x0001,
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator with resumption");
@@ -919,6 +922,7 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
         RESPONDER_NODE_ID,
         TEST_FABRIC_ID,
         initiator_record,
+        0x0001,
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .expect("initiator with resumption");

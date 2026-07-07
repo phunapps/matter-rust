@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use matter_cert::{MatterTime, TrustedRoots};
 use matter_commissioning::driver::{decode_unsecured, encode_unsecured, AsyncDatagram};
-use matter_crypto::{CaseCredentials, CaseResponder, Sigma1Outcome};
+use matter_crypto::{CaseCredentials, CaseResponder, ResumptionRecord, Sigma1Outcome};
 use matter_interaction::{
     build_invoke_response_command, build_invoke_response_status, parse_invoke_request, CommandPath,
     ImStatus, ParsedInvokeRequest,
@@ -27,7 +27,9 @@ use crate::error::Error;
 const OP_SIGMA1: u8 = 0x30;
 const OP_SIGMA2: u8 = 0x31;
 const OP_SIGMA3: u8 = 0x32;
+const OP_SIGMA2_RESUME: u8 = 0x33;
 const OP_STATUS_REPORT: u8 = 0x40;
+const OP_MRP_STANDALONE_ACK: u8 = 0x10;
 // Interaction Model opcodes.
 const OP_INVOKE_REQUEST: u8 = 0x08;
 const OP_INVOKE_RESPONSE: u8 = 0x09;
@@ -80,6 +82,14 @@ pub struct ProviderServer<D> {
     responder_session_id: u16,
     now: MatterTime,
     handshake_counter: u32,
+    /// Known CASE resumption records. When an inbound Sigma1 carries
+    /// resumption fields whose id matches one of these, the session is
+    /// resumed (`Sigma2_Resume`) instead of a full handshake — chip's OTA
+    /// requestor always requests resumption of the session the controller
+    /// just used to announce, so `serve_ota` seeds this with the announce
+    /// connect's persisted record. No match falls back to
+    /// `reject_resumption` + full handshake.
+    resumption_records: Vec<ResumptionRecord>,
 }
 
 impl<D: AsyncDatagram> ProviderServer<D> {
@@ -102,7 +112,18 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             responder_session_id,
             now,
             handshake_counter: 1,
+            resumption_records: Vec::new(),
         }
+    }
+
+    /// Seed the server with known CASE resumption records (see the field
+    /// docs). An inbound resumption-requesting Sigma1 matching one of these
+    /// by id is accepted via `Sigma2_Resume`; anything else falls back to a
+    /// full handshake.
+    #[must_use]
+    pub fn with_resumption_records(mut self, records: Vec<ResumptionRecord>) -> Self {
+        self.resumption_records = records;
+        self
     }
 
     fn next_handshake_counter(&mut self) -> u32 {
@@ -127,8 +148,22 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
     /// Accept ONE inbound CASE session as the responder, returning an
     /// established [`SessionManager`] + the secured `SessionId` + the peer's
-    /// address. Mirrors the proven `run_loopback_device` accept-flow.
-    async fn accept_case(&mut self) -> Result<(SessionManager, SessionId, SocketAddr), Error> {
+    /// address + the fresh [`ResumptionRecord`] the handshake produced (for
+    /// the caller to persist). Mirrors the proven `run_loopback_device`
+    /// accept-flow on the full path; a Sigma1 carrying resumption fields that
+    /// match a seeded record (see [`Self::with_resumption_records`]) takes the
+    /// `Sigma2_Resume` fast path instead.
+    async fn accept_case(
+        &mut self,
+    ) -> Result<
+        (
+            SessionManager,
+            SessionId,
+            SocketAddr,
+            Option<ResumptionRecord>,
+        ),
+        Error,
+    > {
         let credentials = self
             .credentials
             .take()
@@ -141,7 +176,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         )
         .map_err(|e| Error::Operational(format!("CASE responder init: {e}")))?;
 
-        // Sigma1 → Sigma2.
+        // Sigma1 → decide between the resumed and full paths.
         let (s1, peer) = self.recv().await?;
         let m1 = decode_unsecured(&s1).map_err(|e| Error::Operational(format!("sigma1: {e}")))?;
         if m1.opcode != OP_SIGMA1 {
@@ -150,18 +185,148 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 m1.opcode
             )));
         }
-        match responder
+        let outcome = responder
             .handle_sigma1(&m1.payload)
-            .map_err(|e| Error::Operational(format!("handle_sigma1: {e}")))?
-        {
-            Sigma1Outcome::NewSession => {}
-            Sigma1Outcome::ResumptionRequested { .. } => {
-                return Err(Error::Operational(
-                    "provider server only supports new CASE sessions (resumption unsupported)"
-                        .into(),
-                ))
+            .map_err(|e| Error::Operational(format!("handle_sigma1: {e}")))?;
+
+        let resumed = match outcome {
+            Sigma1Outcome::NewSession => false,
+            Sigma1Outcome::ResumptionRequested { id } => {
+                if let Some(pos) = self.resumption_records.iter().position(|r| r.id == id) {
+                    let record = self.resumption_records.swap_remove(pos);
+                    responder
+                        .accept_resumption(record)
+                        .map_err(|e| Error::Operational(format!("accept_resumption: {e}")))?;
+                    true
+                } else {
+                    // Unknown id — decline and fall back to a full handshake.
+                    responder
+                        .reject_resumption()
+                        .map_err(|e| Error::Operational(format!("reject_resumption: {e}")))?;
+                    false
+                }
+            }
+        };
+
+        if resumed {
+            self.complete_resumed(&mut responder, &m1, peer).await?;
+        } else {
+            self.complete_full(&mut responder, &m1, peer).await?;
+        }
+
+        let output = responder
+            .finish()
+            .map_err(|e| Error::Operational(format!("CASE finish: {e}")))?;
+        let record = output.resumption_record.clone();
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+        Ok((sessions, sid, peer, record))
+    }
+
+    /// Resumed path: send `Sigma2_Resume` on Sigma1's exchange, then await the
+    /// initiator's success `StatusReport` and standalone-ack it (the report is
+    /// MRP-reliable; without our ack chip retransmits it and eventually tears
+    /// the exchange down). Tolerates interleaved Sigma1 retransmits (re-sends
+    /// `Sigma2_Resume`) and stray standalone acks.
+    async fn complete_resumed(
+        &mut self,
+        responder: &mut CaseResponder,
+        m1: &matter_commissioning::driver::UnsecuredMessage,
+        peer: SocketAddr,
+    ) -> Result<(), Error> {
+        let sigma2_resume = responder
+            .next_message()
+            .map_err(|e| Error::Operational(format!("sigma2_resume: {e}")))?;
+        let c = self.next_handshake_counter();
+        let wire = encode_unsecured(
+            c,
+            m1.exchange_id,
+            OP_SIGMA2_RESUME,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m1.message_counter),
+            None,
+            &sigma2_resume,
+        );
+        self.send(&wire, peer).await?;
+
+        // Await the initiator's SigmaFinished success StatusReport, within a
+        // bounded frame budget.
+        for _ in 0..8 {
+            let (bytes, _) = self.recv().await?;
+            let m = decode_unsecured(&bytes)
+                .map_err(|e| Error::Operational(format!("post-resume frame: {e}")))?;
+            match m.opcode {
+                OP_STATUS_REPORT => {
+                    // StatusReport body: GeneralCode(u16 LE) || ProtocolId(u32) || ProtocolCode(u16).
+                    let general_code = m
+                        .payload
+                        .get(0..2)
+                        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                        .ok_or_else(|| {
+                            Error::Operational("truncated resumption StatusReport".into())
+                        })?;
+                    if general_code != 0 {
+                        return Err(Error::Operational(format!(
+                            "initiator rejected resumption: StatusReport general code {general_code}"
+                        )));
+                    }
+                    // Ack the reliable report so the initiator's MRP settles.
+                    let c = self.next_handshake_counter();
+                    let ack = encode_unsecured(
+                        c,
+                        m.exchange_id,
+                        OP_MRP_STANDALONE_ACK,
+                        ProtocolId::SECURE_CHANNEL,
+                        false,
+                        false,
+                        Some(m.message_counter),
+                        None,
+                        &[],
+                    );
+                    self.send(&ack, peer).await?;
+                    return Ok(());
+                }
+                // Sigma1 retransmit: our Sigma2_Resume (or its ack) was lost —
+                // re-send it on the same exchange.
+                OP_SIGMA1 => {
+                    let c = self.next_handshake_counter();
+                    let wire = encode_unsecured(
+                        c,
+                        m.exchange_id,
+                        OP_SIGMA2_RESUME,
+                        ProtocolId::SECURE_CHANNEL,
+                        false,
+                        true,
+                        Some(m.message_counter),
+                        None,
+                        &sigma2_resume,
+                    );
+                    self.send(&wire, peer).await?;
+                }
+                // A standalone ack of our Sigma2_Resume — fine, keep waiting.
+                OP_MRP_STANDALONE_ACK => {}
+                other => {
+                    return Err(Error::Operational(format!(
+                        "expected resumption StatusReport (0x40), got {other:#04x}"
+                    )))
+                }
             }
         }
+        Err(Error::Operational(
+            "no StatusReport after Sigma2_Resume within frame budget".into(),
+        ))
+    }
+
+    /// Full-handshake path (Sigma2 → Sigma3 → our success `StatusReport`), used
+    /// for a plain Sigma1 and as the fallback after `reject_resumption`.
+    async fn complete_full(
+        &mut self,
+        responder: &mut CaseResponder,
+        m1: &matter_commissioning::driver::UnsecuredMessage,
+        peer: SocketAddr,
+    ) -> Result<(), Error> {
         let sigma2 = responder
             .next_message()
             .map_err(|e| Error::Operational(format!("sigma2: {e}")))?;
@@ -211,13 +376,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
         // Absorb the initiator's standalone ack of our StatusReport.
         let _ack = self.recv().await?;
-
-        let output = responder
-            .finish()
-            .map_err(|e| Error::Operational(format!("CASE finish: {e}")))?;
-        let mut sessions = SessionManager::new();
-        let sid = sessions.register_case(&output, SessionRole::Responder);
-        Ok((sessions, sid, peer))
+        Ok(())
     }
 
     /// Accept ONE inbound CASE session, then dispatch up to `max_invokes`
@@ -241,7 +400,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     where
         H: FnMut(&ParsedInvokeRequest) -> Vec<u8>,
     {
-        let (mut sessions, sid, peer) = self.accept_case().await?;
+        // The handshake's fresh resumption record is discarded here: this F3
+        // handler API carries no device identity to persist it under (the OTA
+        // flow, which does, uses `serve_ota_once`).
+        let (mut sessions, sid, peer, _record) = self.accept_case().await?;
 
         let mut dispatched = 0usize;
         while dispatched < max_invokes {
@@ -278,7 +440,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// Accept ONE CASE session, then serve `image` to the requestor over the
     /// full OTA flow: `QueryImage` → `QueryImageResponse`, a BDX transfer, then
     /// `ApplyUpdateRequest` → `ApplyUpdateResponse` and `NotifyUpdateApplied` →
-    /// Success. Returns once `NotifyUpdateApplied` is handled.
+    /// Success. Returns once `NotifyUpdateApplied` is handled, yielding the
+    /// fresh [`ResumptionRecord`] the accept handshake produced (rotated on
+    /// the resumed path, brand-new on the full path) for the caller to
+    /// persist — the requestor's NEXT session presents this record's id.
     ///
     /// `offer` shapes the `QueryImageResponse` (its `ImageURI`/`UpdateToken`);
     /// `max_block_size` caps each BDX block. All replies are unreliable
@@ -298,10 +463,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         offer: matter_ota::ImageOffer,
         image: Vec<u8>,
         max_block_size: u16,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<ResumptionRecord>, Error> {
         use matter_bdx::{BdxMessage, BlockSender, MessageType, SenderOutcome};
 
-        let (mut sessions, sid, peer) = self.accept_case().await?;
+        let (mut sessions, sid, peer, record) = self.accept_case().await?;
         let mut bdx: Option<BlockSender> = None;
         let mut applied = false;
 
@@ -420,7 +585,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         }
 
         if applied {
-            Ok(())
+            Ok(record)
         } else {
             Err(Error::Operational(
                 "OTA flow ended without NotifyUpdateApplied".into(),

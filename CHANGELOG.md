@@ -207,6 +207,24 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-controller
 
+### [Unreleased] — OTA provider accepts CASE resumption
+
+#### Added
+
+- **The OTA provider server accepts CASE session resumption** — chip's OTA
+  requestor always asks to *resume* the session the controller's
+  `AnnounceOTAProvider` connect just established, which previously
+  hard-failed the serve. Now: every completed CASE connect persists its
+  fresh resumption record in `DeviceEntry.resumption_record` (serialized by
+  the new `resumption` module); `serve_ota` announces first, seeds the
+  provider server with the persisted record
+  (`ProviderServer::with_resumption_records`), and the server answers a
+  matching resumption-requesting Sigma1 with `Sigma2_Resume` (awaiting and
+  acking the initiator's success `StatusReport`). An unknown resumption id
+  still falls back to `reject_resumption` + full handshake. The rotated
+  record returned by `serve_ota_once` is persisted after the serve so the
+  requestor's next session can resume again.
+
 ### [Unreleased] — M9-E3 group multicast send
 
 #### Added
@@ -1258,6 +1276,10 @@ fixture file; the test assertions remain stable.
 - Byte-parity tests for the resumption paths un-ignored: the pinned
   Sigma1-resume MIC and `Sigma2_Resume` bytes match our output exactly (the
   old `#[ignore]` reasons were test-input bugs, not composition bugs).
+- **BREAKING (pre-release): `CaseInitiator::new_with_resumption` takes an
+  `initiator_session_id: u16`** (mirroring `new`) — it previously hardcoded
+  session id 0, which collides with the unsecured session and made the
+  resumption initiator unusable for real secured traffic.
 
 ### [Unreleased] — M9-E2 operational group crypto
 

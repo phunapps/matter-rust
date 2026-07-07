@@ -371,6 +371,10 @@ impl CaseInitiator {
     /// [`handle_sigma2_resume`][Self::handle_sigma2_resume]) or fall back to a
     /// regular `Sigma2` (call [`handle_sigma2`][Self::handle_sigma2]).
     ///
+    /// `initiator_session_id` is the non-zero secured-session id we advertise
+    /// in Sigma1 (tag 2) for the peer to address us by, exactly as in
+    /// [`new`][Self::new].
+    ///
     /// `now` is the wall-clock instant against which the peer's operational
     /// certificate chain is checked for temporal validity during Sigma2 (used
     /// only on the non-resumption fallback path). See [`new`][Self::new].
@@ -384,6 +388,7 @@ impl CaseInitiator {
         peer_node_id: u64,
         peer_fabric_id: u64,
         record: ResumptionRecord,
+        initiator_session_id: u16,
         now: MatterTime,
     ) -> Result<Self> {
         let rng = SystemRandom::new();
@@ -393,6 +398,7 @@ impl CaseInitiator {
             peer_node_id,
             peer_fabric_id,
             record,
+            initiator_session_id,
             now,
             &rng,
         )
@@ -407,12 +413,14 @@ impl CaseInitiator {
     /// # Errors
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if the RNG fails.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_resumption_using_rng(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
         peer_node_id: u64,
         peer_fabric_id: u64,
         record: ResumptionRecord,
+        initiator_session_id: u16,
         now: MatterTime,
         rng: &dyn SecureRandom,
     ) -> Result<Self> {
@@ -421,7 +429,7 @@ impl CaseInitiator {
             trusted_roots,
             peer_node_id,
             peer_fabric_id,
-            0,
+            initiator_session_id,
             Some(record),
             now,
             rng,
@@ -1540,6 +1548,7 @@ mod tests {
             0x1234,
             0x5678,
             record,
+            0x0001,
             MatterTime::from_unix_secs(2_000_000_000),
         )
         .unwrap();
@@ -1559,6 +1568,7 @@ mod tests {
             0x1234,
             0x5678,
             record,
+            0x0001,
             MatterTime::from_unix_secs(2_000_000_000),
         )
         .unwrap();
@@ -1639,6 +1649,7 @@ mod tests {
             0x1234,
             0x5678,
             record,
+            0x0001,
             MatterTime::from_unix_secs(2_000_000_000),
             &rng,
         )
@@ -1706,6 +1717,7 @@ mod tests {
             0x1234,
             0x5678,
             record,
+            0x0001,
             MatterTime::from_unix_secs(2_000_000_000),
             &rng,
         )

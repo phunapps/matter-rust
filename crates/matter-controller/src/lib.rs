@@ -121,6 +121,7 @@ pub(crate) mod icd_listener;
 pub mod node;
 pub(crate) mod opcreds;
 pub mod provider_server;
+pub(crate) mod resumption;
 pub mod snapshot;
 pub mod state;
 pub mod store;

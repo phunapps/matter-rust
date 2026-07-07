@@ -258,21 +258,56 @@ impl MatterController {
             build_operational_service(compressed, node_id, advertise_addrs(local), local.port());
         matter_transport::Discovery::publish(&mut discovery, &service)?;
 
-        // Announce (client invoke to the device) concurrently with serving.
-        let server = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now);
+        // Announce FIRST (a client invoke to the device over a fresh CASE
+        // connect), and only then build the server: the requestor's QueryImage
+        // Sigma1 requests RESUMPTION of the session the announce just
+        // established, so the server must be seeded with the resumption
+        // record that connect persisted — which exists only after the
+        // announce completes. The provider socket is already bound and
+        // advertised above, so a Sigma1 arriving in the gap merely waits in
+        // the socket buffer (and chip MRP-retransmits it regardless).
         let node = self.node(target_node_id);
-        let announce =
-            node.announce_ota_provider(node_id, crate::builder::DEFAULT_ADMIN_VENDOR_ID, 0);
-        let serve = server.serve_ota_once(offer, image, /* max_block_size */ 1024);
-        let (announce_res, serve_res) = tokio::join!(announce, serve);
+        let announce_res = node
+            .announce_ota_provider(node_id, crate::builder::DEFAULT_ADMIN_VENDOR_ID, 0)
+            .await;
+        if let Err(e) = announce_res {
+            let _ = matter_transport::Discovery::unpublish(
+                &mut discovery,
+                &service.instance_name,
+                matter_transport::ServiceKind::Operational,
+            );
+            return Err(e);
+        }
+
+        // Fetch the announce connect's resumption record from live actor
+        // state (guaranteed present: the announce rode that session). A
+        // missing/corrupt record only costs the fast path — the server then
+        // declines and falls back to a full handshake.
+        let records = match self.resumption_record_for(target_node_id).await {
+            Ok(Some(r)) => vec![r],
+            Ok(None) | Err(_) => Vec::new(),
+        };
+
+        let server = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now)
+            .with_resumption_records(records);
+        let serve_res = server
+            .serve_ota_once(offer, image, /* max_block_size */ 1024)
+            .await;
 
         let _ = matter_transport::Discovery::unpublish(
             &mut discovery,
             &service.instance_name,
             matter_transport::ServiceKind::Operational,
         );
-        announce_res?;
-        serve_res
+
+        // Persist the rotated record so the requestor's NEXT session (which
+        // presents the fresh id from this handshake) can also resume.
+        // Best-effort: a failed store only costs that future fast path.
+        let rotated = serve_res?;
+        if let Some(record) = rotated {
+            let _ = self.store_resumption_record(target_node_id, &record).await;
+        }
+        Ok(())
     }
 
     /// Advertise our operational service and listen for ONE inbound Check-In
@@ -470,6 +505,60 @@ impl MatterController {
             return 0;
         }
         rx.await.unwrap_or(0)
+    }
+
+    /// Fetch the stored CASE resumption record for `node_id` from the actor's
+    /// live state (deserialized; `None` if the device has none). Used by
+    /// [`Self::serve_ota`] to let the provider server accept the requestor's
+    /// resumption attempt.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped,
+    /// [`Error::NotCommissioned`] if no sole fabric exists, or a
+    /// [`Error::Snapshot`]/[`Error::Codec`]/[`Error::Cert`] deserialization
+    /// failure for a corrupt stored record.
+    pub(crate) async fn resumption_record_for(
+        &self,
+        node_id: u64,
+    ) -> Result<Option<matter_crypto::ResumptionRecord>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ResumptionRecordFor { node_id, reply })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        let bytes = rx.await.map_err(|_| Error::ControllerStopped)??;
+        match bytes {
+            Some(b) => Ok(Some(crate::resumption::deserialize_record(&b)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Store `record` as the CASE resumption record for `node_id` (replacing
+    /// any prior one; best-effort persist). Used by [`Self::serve_ota`] after
+    /// the provider server rotates the record via `Sigma2_Resume`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped,
+    /// [`Error::NotCommissioned`] if no sole fabric exists, or
+    /// [`Error::Operational`] if the device has no entry on the fabric.
+    pub(crate) async fn store_resumption_record(
+        &self,
+        node_id: u64,
+        record: &matter_crypto::ResumptionRecord,
+    ) -> Result<(), Error> {
+        let record_bytes = crate::resumption::serialize_record(record)?;
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::StoreResumptionRecord {
+                node_id,
+                record_bytes,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
     }
 }
 

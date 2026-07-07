@@ -504,6 +504,26 @@ pub(crate) enum Command {
     CommissionerNodeId {
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// Return the sole fabric's stored CASE resumption record bytes for
+    /// `node_id` (serialized [`matter_crypto::ResumptionRecord`], see
+    /// [`crate::resumption`]), or `None` if the device has none. Read from the
+    /// actor's live in-memory state — not the store — so a record written by a
+    /// connect that JUST completed (e.g. the `serve_ota` announce) is visible
+    /// without racing the offloaded persist.
+    ResumptionRecordFor {
+        node_id: u64,
+        reply: oneshot::Sender<Result<Option<Vec<u8>>, Error>>,
+    },
+    /// Store `record_bytes` as the sole fabric's CASE resumption record for
+    /// `node_id` (best-effort persist). Used by `serve_ota` after the provider
+    /// server accepts a resumption: `Sigma2_Resume` rotates the id, and the
+    /// stored record must follow or the requestor's NEXT resumption attempt
+    /// presents an id we no longer recognise.
+    StoreResumptionRecord {
+        node_id: u64,
+        record_bytes: Vec<u8>,
+        reply: oneshot::Sender<Result<(), Error>>,
+    },
     /// Persist an ICD client registration on the sole fabric (replacing any
     /// prior registration for the same node), then durably save. Used by
     /// `Node::register_icd_client` after a successful `RegisterClient`.
@@ -1134,6 +1154,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Command::CommissionerNodeId { reply } => {
                 let _ = reply.send(self.sole_fabric().map(|f| f.commissioner.node_id));
             }
+            Command::ResumptionRecordFor { node_id, reply } => {
+                let result = self.sole_fabric().map(|f| {
+                    f.devices
+                        .iter()
+                        .find(|d| d.node_id == node_id)
+                        .and_then(|d| d.resumption_record.clone())
+                });
+                let _ = reply.send(result);
+            }
+            Command::StoreResumptionRecord {
+                node_id,
+                record_bytes,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_store_resumption_record(node_id, record_bytes));
+            }
             Command::PersistIcdRegistration {
                 registration,
                 reply,
@@ -1687,8 +1723,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if let Some(old) = old_session {
             self.sessions.remove(old);
         }
+        // Persist the fresh CASE resumption record alongside the address hint.
+        // The device stores the same (id, secret) pair from this handshake, so
+        // when it later initiates CASE to our provider server it will present
+        // exactly this record's id. Serialization failure only costs the
+        // fast-path (a later Sigma1-resume falls back to a full handshake).
+        let record_bytes = output
+            .resumption_record
+            .as_ref()
+            .and_then(|r| crate::resumption::serialize_record(r).ok());
         let sid = self.sessions.register_case(&output, SessionRole::Initiator);
-        self.upsert_device(fabric_id, node_id, peer);
+        self.upsert_device(fabric_id, node_id, peer, record_bytes);
         self.cache.insert(
             (fabric_id, node_id),
             CachedSession {
@@ -1897,7 +1942,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if let Some(old) = old_session {
             self.sessions.remove(old);
         }
-        self.upsert_device(fabric_id, node_id, peer);
+        // `run_case` registers the session internally and does not expose the
+        // `CaseSessionOutput`, so this fallback path cannot persist a
+        // resumption record (`None` leaves any stored record untouched).
+        self.upsert_device(fabric_id, node_id, peer, None);
         self.cache.insert(
             (fabric_id, node_id),
             CachedSession {
@@ -1932,15 +1980,30 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    /// Record/refresh the device's last-known address in persisted state.
+    /// Record/refresh the device's last-known address and (when the fresh
+    /// handshake produced one) its CASE resumption record in persisted state.
     /// The NOC public key stays unknown until M8.3 learns it during
     /// commissioning; this entry is an address/resumption cache only.
-    fn upsert_device(&mut self, fabric_id: u64, node_id: u64, peer: std::net::SocketAddr) {
+    ///
+    /// `resumption_record` is the serialized [`matter_crypto::ResumptionRecord`]
+    /// from the just-completed CASE connect (see [`crate::resumption`]). It is
+    /// persisted so a peer that later initiates CASE *to us* — the OTA
+    /// requestor querying our provider server — can be matched by resumption
+    /// id and accepted via `CaseResponder::accept_resumption`. `None` leaves
+    /// any stored record untouched (the inline fallback `connect` path, whose
+    /// driver does not expose the handshake output).
+    fn upsert_device(
+        &mut self,
+        fabric_id: u64,
+        node_id: u64,
+        peer: std::net::SocketAddr,
+        resumption_record: Option<Vec<u8>>,
+    ) {
         let addr = peer.to_string();
         // Track whether this connect actually changed persisted state. A
         // reconnect to the *same* address (the common hot-path case) leaves the
-        // address hint unchanged, so we skip the save entirely — debouncing the
-        // best-effort persist instead of firing a full fsync on every connect.
+        // address hint unchanged; the resumption record, however, rotates on
+        // every fresh handshake, so a connect that carries one always persists.
         let mut changed = false;
         if let Some(fabric) = self
             .state
@@ -1953,23 +2016,53 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     dev.last_known_addr = Some(addr);
                     changed = true;
                 }
+                if let Some(rr) = resumption_record {
+                    dev.resumption_record = Some(rr);
+                    changed = true;
+                }
             } else {
                 fabric.devices.push(crate::state::DeviceEntry {
                     node_id,
                     peer_noc_public_key: [0u8; 65],
-                    resumption_record: None,
+                    resumption_record,
                     last_known_addr: Some(addr),
                 });
                 changed = true;
             }
         }
-        // Address-hint persistence is best-effort and offloaded off the actor
-        // loop; a write failure must not abort an otherwise-successful
-        // connection. Only persist when the hint actually changed (debounce):
-        // an unchanged reconnect skips the fsync altogether.
+        // Persistence here is best-effort and offloaded off the actor loop; a
+        // write failure must not abort an otherwise-successful connection (the
+        // address hint is rebuildable via mDNS, and a lost resumption record
+        // only costs a full handshake later). Skip the fsync when nothing
+        // changed (an unchanged reconnect on the inline fallback path).
         if changed {
             self.persist_best_effort();
         }
+    }
+
+    /// Replace the stored CASE resumption record for `node_id` on the sole
+    /// fabric (best-effort persist). See [`Command::StoreResumptionRecord`].
+    fn handle_store_resumption_record(
+        &mut self,
+        node_id: u64,
+        record_bytes: Vec<u8>,
+    ) -> Result<(), Error> {
+        let fabric = self.sole_fabric()?;
+        let fabric_id = fabric.fabric_id;
+        let Some(dev) = self
+            .state
+            .fabrics
+            .iter_mut()
+            .find(|f| f.fabric_id == fabric_id)
+            .and_then(|f| f.devices.iter_mut().find(|d| d.node_id == node_id))
+        else {
+            return Err(Error::Operational(format!(
+                "no device entry for node {node_id:#x} to store a resumption record on"
+            )));
+        };
+        dev.resumption_record = Some(record_bytes);
+        self.persist_best_effort();
+        Ok(())
     }
 
     /// Return a live `(session, peer)` for `node_id`: the cached session if any,
@@ -4604,6 +4697,16 @@ mod tests {
             "still one session — reused, not re-established"
         );
 
+        // The completed connect must have stored the device's CASE resumption
+        // record (id + 32-byte ECDH secret) in actor state — the provider
+        // server later matches the device's Sigma1-resume against it.
+        let record = controller
+            .resumption_record_for(device_node_id)
+            .await
+            .expect("fetch resumption record")
+            .expect("connect must persist a resumption record");
+        assert_eq!(record.peer.node_id, device_node_id);
+
         device.await.unwrap();
     }
 
@@ -6638,7 +6741,120 @@ mod tests {
             reassembled, image_for_assert,
             "requestor reassembled the served image"
         );
-        server.await.unwrap().expect("provider served OTA");
+        let record = server.await.unwrap().expect("provider served OTA");
+        assert!(
+            record.is_some(),
+            "full-path accept must yield a resumption record to persist"
+        );
+    }
+
+    /// The live chip-requestor shape: the requestor RESUMES the CASE session
+    /// (its Sigma1 carries resumption fields matching the record both sides
+    /// hold from a prior session) and the provider accepts via `Sigma2_Resume`,
+    /// then serves the full OTA flow on the resumed session. Also pins the
+    /// record rotation: the provider returns a rotated record (fresh id, same
+    /// secret) for the caller to persist.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_ota_once_resumed_session_over_loopback() {
+        use crate::provider_server::ProviderServer;
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+
+        // Matched record pair from a (synthetic) prior session: both sides
+        // hold the same id + 32-byte secret, each pinning the OTHER's identity.
+        let prior_id = ResumptionId([0x42; 16]);
+        let prior_secret = [0x24u8; 32];
+        let provider_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: device_node_id,
+                fabric_id,
+                noc: device_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let requestor_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+
+        let image: Vec<u8> = (0..2500u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        let provider_addr = dev_io.local_addr();
+        let image_for_assert = image.clone();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                provider_creds,
+                provider_roots,
+                0x55,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_records(vec![provider_record])
+            .serve_ota_once(offer, image, /* max_block_size */ 256)
+            .await
+        });
+
+        let reassembled = ota_test_requestor_resumed(
+            ctrl_io,
+            provider_addr,
+            device_creds,
+            device_roots,
+            provider_node_id,
+            fabric_id,
+            /* current_version */ 1,
+            requestor_record,
+        )
+        .await;
+
+        assert_eq!(
+            reassembled, image_for_assert,
+            "requestor reassembled the served image over the RESUMED session"
+        );
+        let rotated = server
+            .await
+            .unwrap()
+            .expect("provider served OTA on resumed session")
+            .expect("resumed accept must yield the rotated record");
+        assert_ne!(rotated.id, prior_id, "Sigma2_Resume rotates the id");
+        assert_eq!(
+            rotated.shared_secret, prior_secret,
+            "the shared secret carries over unchanged"
+        );
     }
 
     /// In-process OTA **requestor**: CASE-connect to the provider, then drive
@@ -6656,16 +6872,9 @@ mod tests {
         fabric_id: u64,
         current_version: u32,
     ) -> Vec<u8> {
-        use matter_bdx::{CounterMessage, DataBlock, ReceiveAccept, TransferControl, TransferInit};
-        use matter_clusters::gen::ota_software_update_provider as prov;
-        use matter_commissioning::driver::{run_case, secured_round_trip};
-        use matter_interaction::{
-            build_invoke_request, parse_invoke_response, CommandPath, InvokeResponse,
-        };
-        use matter_transport::{MrpFlags, ProtocolId, SessionManager};
-        use std::time::Instant;
+        use matter_commissioning::driver::run_case;
+        use matter_transport::SessionManager;
 
-        const IM: u8 = 0x08; // InvokeRequest
         let now = MatterTime::from_unix_secs(2_000_000_000);
         let mut sessions = SessionManager::new();
         let sid = run_case(
@@ -6680,6 +6889,114 @@ mod tests {
         )
         .await
         .unwrap();
+        drive_ota_flow(io, provider_addr, sessions, sid, current_version).await
+    }
+
+    /// In-process OTA requestor that RESUMES a prior CASE session instead of
+    /// running the full handshake: sends a Sigma1 with resumption fields built
+    /// from `record`, expects `Sigma2_Resume`, closes with a success
+    /// `StatusReport` (absorbing the provider's standalone ack), then drives the
+    /// same OTA flow. Mirrors chip's requestor behaviour after
+    /// `AnnounceOTAProvider` (it always tries to resume the announce session).
+    #[allow(clippy::too_many_arguments)] // Test driver mirroring ota_test_requestor + a record.
+    async fn ota_test_requestor_resumed(
+        io: matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        creds: matter_crypto::CaseCredentials,
+        roots: matter_cert::TrustedRoots,
+        provider_node_id: u64,
+        fabric_id: u64,
+        current_version: u32,
+        record: matter_crypto::ResumptionRecord,
+    ) -> Vec<u8> {
+        use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
+        use matter_transport::{ProtocolId, SessionManager};
+
+        const OP_SIGMA1: u8 = 0x30;
+        const OP_SIGMA2_RESUME: u8 = 0x33;
+        const OP_STATUS_REPORT: u8 = 0x40;
+        const EXCHANGE: u16 = 0x7001;
+
+        let now = MatterTime::from_unix_secs(2_000_000_000);
+        let mut initiator = matter_crypto::CaseInitiator::new_with_resumption(
+            creds,
+            roots,
+            provider_node_id,
+            fabric_id,
+            record,
+            /* initiator_session_id */ 0x0021,
+            now,
+        )
+        .unwrap();
+
+        // Sigma1 (with resumption fields).
+        let sigma1 = initiator.start().unwrap();
+        let wire = encode_unsecured(
+            1,
+            EXCHANGE,
+            OP_SIGMA1,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            None,
+            None,
+            &sigma1,
+        );
+        io.send_to(&wire, provider_addr).await.unwrap();
+
+        // Sigma2_Resume.
+        let (bytes, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&bytes).unwrap();
+        assert_eq!(m.opcode, OP_SIGMA2_RESUME, "expected Sigma2_Resume");
+        initiator.handle_sigma2_resume(&m.payload).unwrap();
+
+        // SigmaFinished: success StatusReport (reliable, piggyback-acks
+        // Sigma2_Resume), then absorb the provider's standalone ack.
+        let mut body = Vec::with_capacity(8);
+        body.extend_from_slice(&0u16.to_le_bytes()); // GeneralCode: success
+        body.extend_from_slice(&0u32.to_le_bytes()); // ProtocolId: SecureChannel
+        body.extend_from_slice(&0u16.to_le_bytes()); // ProtocolCode: 0
+        let report = encode_unsecured(
+            2,
+            EXCHANGE,
+            OP_STATUS_REPORT,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, provider_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+
+        let output = initiator.finish().unwrap();
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, matter_transport::SessionRole::Initiator);
+        drive_ota_flow(io, provider_addr, sessions, sid, current_version).await
+    }
+
+    /// Drive `QueryImage` → BDX download → `ApplyUpdateRequest` →
+    /// `NotifyUpdateApplied` over an already-established secured session,
+    /// returning the reassembled image bytes.
+    #[allow(clippy::too_many_lines)] // Linear OTA-requestor test driver; kept as one flow.
+    async fn drive_ota_flow(
+        io: matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        mut sessions: matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        current_version: u32,
+    ) -> Vec<u8> {
+        use matter_bdx::{CounterMessage, DataBlock, ReceiveAccept, TransferControl, TransferInit};
+        use matter_clusters::gen::ota_software_update_provider as prov;
+        use matter_commissioning::driver::secured_round_trip;
+        use matter_interaction::{
+            build_invoke_request, parse_invoke_response, CommandPath, InvokeResponse,
+        };
+        use matter_transport::{MrpFlags, ProtocolId};
+        use std::time::Instant;
+
+        const IM: u8 = 0x08; // InvokeRequest
 
         // 1. QueryImage → QueryImageResponse (UpdateAvailable).
         let qi = prov::encode_query_image(
