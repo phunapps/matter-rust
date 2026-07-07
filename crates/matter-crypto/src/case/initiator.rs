@@ -215,6 +215,10 @@ enum State {
         session_keys: CaseSessionKeys,
         peer: PeerInfo,
         local: LocalInfo,
+        /// Record built in `process_sigma2` from the responder's fresh
+        /// `resumption_id` (`TBEData2`) + this session's ECDH secret; carried
+        /// through to `Complete` for the caller to persist.
+        resumption_record: Option<ResumptionRecord>,
     },
 
     /// `next_message()` has emitted Sigma3 (or `handle_sigma2_resume` completed
@@ -723,7 +727,7 @@ impl CaseInitiator {
                 sigma1_bytes,
                 resumption_attempt: _, // Responder declined (or never attempted) — discard.
             } => {
-                let (sigma3_bytes, session_keys, peer, local) = process_sigma2(
+                let (sigma3_bytes, session_keys, peer, local, resumption_record) = process_sigma2(
                     bytes,
                     &credentials,
                     &trusted_roots,
@@ -740,6 +744,7 @@ impl CaseInitiator {
                     session_keys,
                     peer,
                     local,
+                    resumption_record: Some(resumption_record),
                 };
                 Ok(())
             }
@@ -917,16 +922,13 @@ impl CaseInitiator {
                 session_keys,
                 peer,
                 local,
+                resumption_record,
             } => {
                 self.state = State::Complete {
                     session_keys,
                     peer,
                     local,
-                    // New-session path: resumption record comes from M4.2 responder
-                    // session params. For now, M4.2 populates this in
-                    // handle_sigma2_resume; the new-session path stores None here.
-                    // M6 commissioning will plumb the full record.
-                    resumption_record: None,
+                    resumption_record,
                 };
                 Ok(sigma3_bytes)
             }
@@ -976,7 +978,10 @@ impl CaseInitiator {
 /// Extracted from `CaseInitiator::handle_sigma2` to keep that method's
 /// line count within the `clippy::too_many_lines` limit.
 ///
-/// Returns `(sigma3_bytes, session_keys, peer, local)` on success.
+/// Returns `(sigma3_bytes, session_keys, peer, local, resumption_record)` on
+/// success. The `resumption_record` pairs the responder's fresh
+/// `resumption_id` (from `TBEData2`) with this session's ECDH `SharedSecret`;
+/// the caller persists it for a future `Sigma1` resumption fast-path.
 ///
 /// # Errors
 ///
@@ -997,7 +1002,13 @@ fn process_sigma2(
     initiator_session_id: u16,
     sigma1_bytes: &[u8],
     now: MatterTime,
-) -> Result<(Vec<u8>, CaseSessionKeys, PeerInfo, LocalInfo)> {
+) -> Result<(
+    Vec<u8>,
+    CaseSessionKeys,
+    PeerInfo,
+    LocalInfo,
+    ResumptionRecord,
+)> {
     let sigma2 = Sigma2::decode(sigma2_bytes)?;
 
     // Step 1: ECDH shared secret from our eph secret + peer's eph pub.
@@ -1175,7 +1186,19 @@ fn process_sigma2(
         session_id: initiator_session_id,
     };
 
-    Ok((sigma3_bytes, session_keys, peer, local))
+    // Step 11: Build the resumption record for the caller to persist.
+    // The responder's fresh resumption id arrived (encrypted) in TBEData2;
+    // the record's IKM is this session's raw ECDH SharedSecret — the same
+    // (id, secret) pair chip's SessionResumptionStorage and matter.js store,
+    // so either peer can later initiate resumption against the other.
+    let resumption_record = ResumptionRecord {
+        id: ResumptionId(peer_tbe.resumption_id),
+        shared_secret: *shared_secret,
+        peer: peer.clone(),
+        expires_at: None,
+    };
+
+    Ok((sigma3_bytes, session_keys, peer, local, resumption_record))
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,7 +1516,7 @@ mod tests {
 
     /// Helper: build a `ResumptionRecord` with given `shared_secret` and id.
     fn make_resumption_record(
-        secret: [u8; 16],
+        secret: [u8; 32],
         id: [u8; 16],
         node_id: u64,
         fabric_id: u64,
@@ -1510,7 +1533,7 @@ mod tests {
     #[test]
     fn new_with_resumption_succeeds() {
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let record = make_resumption_record([0x01u8; 16], [0x02u8; 16], 0x1234, 0x5678);
+        let record = make_resumption_record([0x01u8; 32], [0x02u8; 16], 0x1234, 0x5678);
         let _initiator = CaseInitiator::new_with_resumption(
             creds,
             empty_roots(),
@@ -1529,7 +1552,7 @@ mod tests {
     fn start_with_resumption_populates_sigma1_resume_fields() {
         use crate::case::messages::Sigma1;
         let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
-        let record = make_resumption_record([0x01u8; 16], [0x02u8; 16], 0x1234, 0x5678);
+        let record = make_resumption_record([0x01u8; 32], [0x02u8; 16], 0x1234, 0x5678);
         let mut initiator = CaseInitiator::new_with_resumption(
             creds,
             empty_roots(),
@@ -1598,7 +1621,7 @@ mod tests {
         use crate::case::sigma::compute_sigma2_resume_mic;
         use ring::rand::SystemRandom;
 
-        let shared_secret = [0x42u8; 16];
+        let shared_secret = [0x42u8; 32];
         let old_id = [0x11u8; 16];
         let new_id = [0x22u8; 16];
 
@@ -1669,7 +1692,7 @@ mod tests {
         use crate::case::sigma::compute_sigma2_resume_mic;
         use ring::rand::SystemRandom;
 
-        let shared_secret = [0x42u8; 16];
+        let shared_secret = [0x42u8; 32];
         let old_id = [0x11u8; 16];
         let new_id = [0x22u8; 16];
 

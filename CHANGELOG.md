@@ -1230,6 +1230,35 @@ fixture file; the test assertions remain stable.
 
 ## matter-crypto
 
+### [Unreleased] — CASE resumption records on the full handshake (OTA follow-up)
+
+#### Changed
+
+- **BREAKING (pre-release): `ResumptionRecord.shared_secret` widened
+  `[u8; 16]` → `[u8; 32]`** — the record now stores the session's full raw
+  ECDH `SharedSecret` (Matter Core §4.14.8), matching what chip's
+  `SessionResumptionStorage` and matter.js persist and use as the HKDF IKM
+  for the resumption MICs and resumed session keys. The previous 16-byte
+  width was a fixture artefact and could never interoperate with a real
+  peer. All `sigma::*_resume_*` helpers take the 32-byte secret; CASE
+  resumption fixtures regenerated with a 32-byte prior-session secret.
+
+#### Added
+
+- **Full CASE handshakes now produce a `ResumptionRecord`** in
+  `CaseSessionOutput.resumption_record` on BOTH sides (previously `None` —
+  resumption was unreachable in practice). The initiator pairs the
+  responder's fresh `resumption_id` from TBEData2 with the session's ECDH
+  secret; the responder samples that id (`SystemRandom`; previously a
+  hardcoded all-zero id was sent) and keeps the same pair. Either peer can
+  later present the id in Sigma1 and the other can `accept_resumption` —
+  proven by the new role-flipped roundtrip test
+  (`full_handshake_records_flip_roles_for_resumption`), which is exactly the
+  OTA provider-server scenario (device resumes against the controller).
+- Byte-parity tests for the resumption paths un-ignored: the pinned
+  Sigma1-resume MIC and `Sigma2_Resume` bytes match our output exactly (the
+  old `#[ignore]` reasons were test-input bugs, not composition bugs).
+
 ### [Unreleased] — M9-E2 operational group crypto
 
 #### Added

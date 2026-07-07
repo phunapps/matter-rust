@@ -120,8 +120,12 @@ pub struct CaseSessionOutput {
     pub peer: PeerInfo,
     /// Our side's identity (mirror; included for symmetry).
     pub local: LocalInfo,
-    /// Resumption record for next-time fast-path. `None` if the peer
-    /// did not include resumption-supporting `responder_session_params`.
+    /// Resumption record for next-time fast-path. Populated on every
+    /// completed handshake: on the full path from the `resumption_id`
+    /// exchanged in `TBEData2` plus the session's ECDH secret, and on the
+    /// resumption path with the fresh id from `Sigma2_Resume`. The caller
+    /// persists it (keyed by peer node id) so a later `Sigma1` carrying
+    /// resumption fields can be matched and accepted.
     pub resumption_record: Option<ResumptionRecord>,
 }
 
@@ -203,9 +207,11 @@ pub struct ResumptionRecord {
     /// sent on the wire in Sigma1). Only `shared_secret` is sensitive.
     #[zeroize(skip)]
     pub id: ResumptionId,
-    /// 16-byte shared secret derived from the original session. Caller
-    /// treats this as opaque.
-    pub shared_secret: [u8; 16],
+    /// The full 32-byte ECDH `SharedSecret` of the original session (Matter
+    /// Core §4.14.8). Both chip's `SessionResumptionStorage` and matter.js
+    /// store the raw ECDH output; it is the HKDF IKM for the resumption MICs
+    /// and the resumed session keys. Caller treats this as opaque.
+    pub shared_secret: [u8; 32],
     /// Peer's identity at the time the record was created.
     ///
     /// Skipped from zeroization: non-secret identity/cert metadata, and
@@ -320,7 +326,7 @@ mod secret_hygiene_tests {
     fn resumption_record_debug_redacts_shared_secret() {
         let record = ResumptionRecord {
             id: ResumptionId([0x11; 16]),
-            shared_secret: [0xDD; 16],
+            shared_secret: [0xDD; 32],
             peer: PeerInfo {
                 node_id: 0x1234,
                 fabric_id: 0x5678,
@@ -331,7 +337,7 @@ mod secret_hygiene_tests {
         };
         let s = format!("{record:?}");
         assert!(
-            !s.contains(&format!("{:?}", [0xDDu8; 16])),
+            !s.contains(&format!("{:?}", [0xDDu8; 32])),
             "shared_secret leaked: {s}"
         );
         assert!(s.contains("<redacted>"));

@@ -19,7 +19,7 @@ use matter_cert::{MatterCertificate, MatterTime, TrustAnchor, TrustedRoots};
 use matter_crypto::{
     test_support::{
         case_initiator_with_eph_key, case_initiator_with_resumption_eph_key,
-        case_responder_with_eph_key, case_responder_with_eph_key_and_resumption_id,
+        case_responder_with_eph_key_and_resumption_id,
     },
     CaseCredentials, PeerInfo, ResumptionId, ResumptionRecord, RingSigner, Sigma1Outcome,
 };
@@ -70,6 +70,13 @@ struct FixtureInputs {
     resumption_id: Option<String>,
     #[serde(default)]
     resumption_shared_secret: Option<String>,
+    /// The fresh resumption id the capture script's responder embeds in
+    /// TBEData2 (new-session / declined paths) or `Sigma2_Resume` (accepted
+    /// path). Injected into our responder via
+    /// `case_responder_with_eph_key_and_resumption_id` so the encrypted
+    /// output is byte-comparable.
+    #[serde(default)]
+    new_resumption_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,11 +385,19 @@ fn matter_js_byte_parity_new_session() {
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
-    let mut responder = case_responder_with_eph_key(
+    // Inject the capture script's fixed fresh resumption id so the encrypted
+    // TBEData2 in our Sigma2 is byte-comparable with the fixture.
+    let mut responder = case_responder_with_eph_key_and_resumption_id(
         responder_creds,
         roots,
         hex_to_array::<32>(&fx.inputs.responder_eph_priv),
         hex_to_array::<32>(&fx.inputs.responder_random),
+        hex_to_array::<16>(
+            fx.inputs
+                .new_resumption_id
+                .as_deref()
+                .expect("fixture has new_resumption_id"),
+        ),
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
@@ -460,7 +475,7 @@ fn matter_js_byte_parity_resumption_accepted() {
             .as_deref()
             .expect("fixture has resumption_id"),
     ));
-    let shared_secret = hex_to_array::<16>(
+    let shared_secret = hex_to_array::<32>(
         fx.inputs
             .resumption_shared_secret
             .as_deref()
@@ -632,7 +647,7 @@ fn matter_js_byte_parity_resumption_declined() {
         MatterCertificate::from_tlv(&hex::decode(&fx.inputs.responder_noc).unwrap()).unwrap();
     let bogus_record = ResumptionRecord {
         id: bogus_id,
-        shared_secret: hex_to_array::<16>(
+        shared_secret: hex_to_array::<32>(
             fx.inputs
                 .resumption_shared_secret
                 .as_deref()
@@ -658,11 +673,19 @@ fn matter_js_byte_parity_resumption_declined() {
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();
-    let mut responder = case_responder_with_eph_key(
+    // Inject the capture script's fixed fresh resumption id so the encrypted
+    // TBEData2 in our Sigma2 is byte-comparable with the fixture.
+    let mut responder = case_responder_with_eph_key_and_resumption_id(
         responder_creds,
         roots,
         hex_to_array::<32>(&fx.inputs.responder_eph_priv),
         hex_to_array::<32>(&fx.inputs.responder_random),
+        hex_to_array::<16>(
+            fx.inputs
+                .new_resumption_id
+                .as_deref()
+                .expect("fixture has new_resumption_id"),
+        ),
         MatterTime::from_unix_secs(2_000_000_000),
     )
     .unwrap();

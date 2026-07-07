@@ -151,6 +151,7 @@ fn build_credentials(
 // ---------------------------------------------------------------------------
 
 #[test]
+#[allow(clippy::too_many_lines)] // long because it mirrors a multi-step protocol exchange
 fn case_roundtrip_new_session() {
     let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
 
@@ -268,6 +269,164 @@ fn case_roundtrip_new_session() {
     assert_eq!(
         resp_output.local.fabric_id, TEST_FABRIC_ID,
         "responder's local fabric_id must be correct"
+    );
+
+    // --- Resumption records ---
+    // Both sides must emerge with the SAME (id, secret) pair: the id the
+    // responder sent in TBEData2 and the session's ECDH SharedSecret. Either
+    // peer can later present it in Sigma1 to resume against the other.
+    let init_record = init_output
+        .resumption_record
+        .expect("initiator record after full handshake");
+    let resp_record = resp_output
+        .resumption_record
+        .expect("responder record after full handshake");
+    assert_eq!(
+        init_record.id, resp_record.id,
+        "both sides must store the same resumption id"
+    );
+    assert_eq!(
+        init_record.shared_secret, resp_record.shared_secret,
+        "both sides must store the same shared secret"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: records produced by a FULL handshake drive a role-flipped resumption
+// ---------------------------------------------------------------------------
+
+/// The OTA provider-server scenario: session 1 has A (controller) initiating a
+/// full handshake to B (device); session 2 has B initiating BACK to A with the
+/// resumption record it stored from session 1. A (now the responder) must be
+/// able to `accept_resumption` with ITS stored record and both sides must
+/// derive the same resumed session keys.
+#[test]
+#[allow(clippy::too_many_lines)] // long because it mirrors two full protocol exchanges
+fn full_handshake_records_flip_roles_for_resumption() {
+    let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+
+    // Two credential sets per identity: one consumed per handshake.
+    let (a_noc, a_signer) = build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (b_noc, b_signer) = build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+    let (a_noc2, a_signer2) = build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (b_noc2, b_signer2) = build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+    let now = MatterTime::from_unix_secs(2_000_000_000);
+
+    // --- Session 1: A → B, full handshake ---
+    let a_creds = build_credentials(
+        a_noc,
+        a_signer,
+        TEST_FABRIC_ID,
+        INITIATOR_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+    let b_creds = build_credentials(
+        b_noc,
+        b_signer,
+        TEST_FABRIC_ID,
+        RESPONDER_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+    let mut initiator1 = CaseInitiator::new(
+        a_creds,
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        0x0001,
+        now,
+    )
+    .expect("initiator1");
+    let mut responder1 =
+        CaseResponder::new(b_creds, trusted_roots.clone(), 0x0002, now).expect("responder1");
+
+    let sigma1 = initiator1.start().expect("sigma1");
+    assert!(matches!(
+        responder1.handle_sigma1(&sigma1).expect("handle sigma1"),
+        Sigma1Outcome::NewSession
+    ));
+    let sigma2 = responder1.next_message().expect("sigma2");
+    initiator1.handle_sigma2(&sigma2).expect("handle sigma2");
+    let sigma3 = initiator1.next_message().expect("sigma3");
+    responder1.handle_sigma3(&sigma3).expect("handle sigma3");
+
+    let a_record = initiator1
+        .finish()
+        .expect("finish1 initiator")
+        .resumption_record
+        .expect("A record");
+    let b_record = responder1
+        .finish()
+        .expect("finish1 responder")
+        .resumption_record
+        .expect("B record");
+
+    // --- Session 2: B → A, resumption (roles flipped) ---
+    let a_creds2 = build_credentials(
+        a_noc2,
+        a_signer2,
+        TEST_FABRIC_ID,
+        INITIATOR_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+    let b_creds2 = build_credentials(
+        b_noc2,
+        b_signer2,
+        TEST_FABRIC_ID,
+        RESPONDER_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+    let mut initiator2 = CaseInitiator::new_with_resumption(
+        b_creds2,
+        trusted_roots.clone(),
+        INITIATOR_NODE_ID,
+        TEST_FABRIC_ID,
+        b_record,
+        now,
+    )
+    .expect("initiator2 (B resuming)");
+    let mut responder2 =
+        CaseResponder::new(a_creds2, trusted_roots, 0x0004, now).expect("responder2 (A)");
+
+    let sigma1r = initiator2.start().expect("sigma1 (resume)");
+    let outcome = responder2.handle_sigma1(&sigma1r).expect("handle sigma1r");
+    let presented = match outcome {
+        Sigma1Outcome::ResumptionRequested { id } => id,
+        Sigma1Outcome::NewSession => panic!("expected ResumptionRequested"),
+    };
+    assert_eq!(
+        presented, a_record.id,
+        "B must present the id A stored from session 1"
+    );
+    responder2
+        .accept_resumption(a_record)
+        .expect("A accepts resumption with its stored record");
+    let sigma2_resume = responder2.next_message().expect("sigma2_resume");
+    initiator2
+        .handle_sigma2_resume(&sigma2_resume)
+        .expect("B handles sigma2_resume");
+
+    let b_out = initiator2.finish().expect("finish2 initiator");
+    let a_out = responder2.finish().expect("finish2 responder");
+    assert_eq!(
+        b_out.keys.i2r_key, a_out.keys.i2r_key,
+        "resumed i2r keys must agree"
+    );
+    assert_eq!(
+        b_out.keys.r2i_key, a_out.keys.r2i_key,
+        "resumed r2i keys must agree"
+    );
+
+    // The rotated records must again agree on both sides for the NEXT session.
+    let b_next = b_out.resumption_record.expect("B rotated record");
+    let a_next = a_out.resumption_record.expect("A rotated record");
+    assert_eq!(b_next.id, a_next.id, "rotated ids must agree");
+    assert_eq!(
+        b_next.shared_secret, a_next.shared_secret,
+        "secret carries over unchanged"
     );
 }
 
@@ -434,7 +593,7 @@ fn case_resumption_roundtrip_accepted() {
     // design; M6 commissioning fills it).  We synthesise records manually
     // using a known shared_secret and id to drive the resumption path.
     let resumption_id = matter_crypto::ResumptionId([0x42; 16]);
-    let shared_secret = [0x77u8; 16];
+    let shared_secret = [0x77u8; 32];
 
     // Step 2: Build fresh credentials for the resumption round (the first
     // round's credentials were consumed by drive_new_session_handshake).
@@ -632,7 +791,7 @@ fn case_resumption_declined_falls_back_to_new_session() {
     };
     let bogus_record = matter_crypto::ResumptionRecord {
         id: matter_crypto::ResumptionId([0x99; 16]),
-        shared_secret: [0xCC; 16],
+        shared_secret: [0xCC; 32],
         peer: bogus_peer_info,
         expires_at: None,
     };
@@ -730,7 +889,7 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
     let presented_id = matter_crypto::ResumptionId([0x42; 16]);
     let initiator_record = matter_crypto::ResumptionRecord {
         id: presented_id,
-        shared_secret: [0x77; 16],
+        shared_secret: [0x77; 32],
         peer: matter_crypto::PeerInfo {
             node_id: RESPONDER_NODE_ID,
             fabric_id: TEST_FABRIC_ID,
@@ -744,7 +903,7 @@ fn case_resumption_wrong_id_returns_invalid_parameter() {
     // accept_resumption must detect the mismatch and return InvalidParameter.
     let responder_record_wrong_id = matter_crypto::ResumptionRecord {
         id: matter_crypto::ResumptionId([0x99; 16]), // DIFFERENT from presented_id
-        shared_secret: [0x77; 16],
+        shared_secret: [0x77; 32],
         peer: matter_crypto::PeerInfo {
             node_id: INITIATOR_NODE_ID,
             fabric_id: TEST_FABRIC_ID,

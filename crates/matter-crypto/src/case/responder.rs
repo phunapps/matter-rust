@@ -159,6 +159,9 @@ enum State {
         eph_pub: [u8; 65],
         initiator_session_id: u16,
         responder_session_id: u16,
+        /// The fresh resumption id we sent (encrypted) in `TBEData2`; paired with
+        /// `shared_secret` in the `ResumptionRecord` built after Sigma3.
+        resumption_id: [u8; 16],
     },
 
     /// `next_message()` has emitted Sigma2; waiting for the initiator's Sigma3.
@@ -183,6 +186,9 @@ enum State {
         eph_pub: [u8; 65],
         initiator_session_id: u16,
         responder_session_id: u16,
+        /// The fresh resumption id we sent (encrypted) in `TBEData2`; paired with
+        /// `shared_secret` in the `ResumptionRecord` built after Sigma3.
+        resumption_id: [u8; 16],
     },
 
     /// `handle_sigma1()` surfaced a resumption request; the caller must look
@@ -227,9 +233,10 @@ enum State {
         session_keys: CaseSessionKeys,
         peer: PeerInfo,
         local: LocalInfo,
-        /// Populated with a fresh [`ResumptionRecord`] on the resumption path.
-        /// `None` on the new-session path (M6 commissioning will populate it
-        /// for the new-session path when `responder_session_params` is present).
+        /// Fresh [`ResumptionRecord`] for the caller to persist: on the
+        /// new-session path it pairs the resumption id we sent in `TBEData2`
+        /// with the session's ECDH secret; on the resumption path it carries
+        /// the updated id from `Sigma2_Resume`.
         resumption_record: Option<ResumptionRecord>,
     },
 
@@ -393,12 +400,31 @@ impl CaseResponder {
     }
 
     /// Byte-parity test seam: fix the resumption id that
-    /// [`accept_resumption`][Self::accept_resumption] would otherwise sample
-    /// from `SystemRandom`, so `Sigma2_Resume` output is deterministic.
+    /// [`accept_resumption`][Self::accept_resumption] (`Sigma2_Resume`) and the
+    /// new-session Sigma2 path (`TBEData2`) would otherwise sample from
+    /// `SystemRandom`, so the emitted message is deterministic.
     /// The only valid caller is
     /// `test_support::case_responder_with_eph_key_and_resumption_id`.
     pub(crate) fn set_new_resumption_id_override(&mut self, id: [u8; 16]) {
         self.new_resumption_id_override = Some(id);
+    }
+
+    /// Sample the fresh 16-byte resumption id this responder hands to the
+    /// initiator (in `TBEData2` on the new-session path, in `Sigma2_Resume` on
+    /// the resumption path), honouring the byte-parity override.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EphemeralKeyGenerationFailed`] if the OS RNG fails.
+    fn fresh_resumption_id(&self) -> Result<[u8; 16]> {
+        if let Some(id) = self.new_resumption_id_override {
+            return Ok(id);
+        }
+        let mut id = [0u8; 16];
+        SystemRandom::new()
+            .fill(&mut id)
+            .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
+        Ok(id)
     }
 
     // ─── State inspection ─────────────────────────────────────────────────
@@ -527,31 +553,39 @@ impl CaseResponder {
                     });
                 }
 
-                // New-session path.
-                let (sigma2_bytes, shared_secret) = match build_sigma2(
-                    bytes,
-                    &sigma1,
-                    &credentials,
-                    &eph_secret,
-                    &eph_pub,
-                    &responder_random,
-                    responder_session_id,
-                ) {
-                    // Wrap the raw ECDH secret in `Zeroizing` immediately so it
-                    // is wiped on every drop path once parked in `State`.
-                    Ok((bytes, secret)) => (bytes, Zeroizing::new(secret)),
-                    Err(e) => {
-                        self.state = State::AwaitingSigma1 {
-                            credentials,
-                            trusted_roots,
-                            eph_secret,
-                            eph_pub,
-                            responder_random,
+                // New-session path. Sample the fresh resumption id we embed in
+                // TBEData2 — sampled ONCE so the id the initiator persists and
+                // the id we keep in state are the same value. The initiator may
+                // present it in a later Sigma1 to resume this session.
+                let (sigma2_bytes, shared_secret, resumption_id) =
+                    match self.fresh_resumption_id().and_then(|rid| {
+                        build_sigma2(
+                            bytes,
+                            &sigma1,
+                            &credentials,
+                            &eph_secret,
+                            &eph_pub,
+                            &responder_random,
                             responder_session_id,
-                        };
-                        return Err(e);
-                    }
-                };
+                            &rid,
+                        )
+                        .map(|(bytes, secret)| (bytes, secret, rid))
+                    }) {
+                        // Wrap the raw ECDH secret in `Zeroizing` immediately so
+                        // it is wiped on every drop path once parked in `State`.
+                        Ok((bytes, secret, rid)) => (bytes, Zeroizing::new(secret), rid),
+                        Err(e) => {
+                            self.state = State::AwaitingSigma1 {
+                                credentials,
+                                trusted_roots,
+                                eph_secret,
+                                eph_pub,
+                                responder_random,
+                                responder_session_id,
+                            };
+                            return Err(e);
+                        }
+                    };
 
                 self.state = State::ReadyToSendSigma2 {
                     credentials,
@@ -565,6 +599,7 @@ impl CaseResponder {
                     eph_pub,
                     initiator_session_id,
                     responder_session_id,
+                    resumption_id,
                 };
 
                 Ok(Sigma1Outcome::NewSession)
@@ -661,15 +696,7 @@ impl CaseResponder {
                 // The NEW id is what goes into Sigma2_Resume and into the caller's
                 // persisted record after the handshake completes. Byte-parity
                 // tests inject a fixed id via `new_resumption_id_override`.
-                let new_resumption_id = if let Some(id) = self.new_resumption_id_override {
-                    id
-                } else {
-                    let mut id = [0u8; 16];
-                    SystemRandom::new()
-                        .fill(&mut id)
-                        .map_err(|_| Error::EphemeralKeyGenerationFailed)?;
-                    id
-                };
+                let new_resumption_id = self.fresh_resumption_id()?;
 
                 // Step 4: Compute sigma2_resume_mic using the NEW resumption_id.
                 // Pinned from matter.js CaseServer.ts `#resume`:
@@ -796,6 +823,9 @@ impl CaseResponder {
                 // We pass a freshly decoded Sigma1 to build_sigma2; we have sigma1_bytes.
                 let sigma1 = Sigma1::decode(&sigma1_bytes)?;
 
+                // Fresh resumption id for the fallback full session (the id the
+                // initiator presented belongs to the old, declined record).
+                let resumption_id = self.fresh_resumption_id()?;
                 let (sigma2_bytes, shared_secret) = build_sigma2(
                     &sigma1_bytes,
                     &sigma1,
@@ -804,6 +834,7 @@ impl CaseResponder {
                     &eph_pub,
                     &responder_random,
                     responder_session_id,
+                    &resumption_id,
                 )?;
                 // Wrap the raw ECDH secret in `Zeroizing` immediately so it is
                 // wiped on every drop path once parked in `State`.
@@ -823,6 +854,7 @@ impl CaseResponder {
                     eph_pub,
                     initiator_session_id,
                     responder_session_id,
+                    resumption_id,
                 };
                 Ok(())
             }
@@ -868,6 +900,7 @@ impl CaseResponder {
                 eph_pub,
                 initiator_session_id,
                 responder_session_id,
+                resumption_id,
             } => {
                 self.state = State::AwaitingSigma3 {
                     credentials,
@@ -881,6 +914,7 @@ impl CaseResponder {
                     eph_pub,
                     initiator_session_id,
                     responder_session_id,
+                    resumption_id,
                 };
                 Ok(sigma2_bytes)
             }
@@ -966,6 +1000,7 @@ impl CaseResponder {
                 eph_pub,
                 initiator_session_id,
                 responder_session_id,
+                resumption_id,
             } => {
                 let (session_keys, peer, local) = match process_sigma3(
                     bytes,
@@ -987,14 +1022,21 @@ impl CaseResponder {
                     }
                 };
 
+                // Pair the resumption id we sent in TBEData2 with this
+                // session's ECDH secret — the same (id, secret) record the
+                // initiator persists, so it can resume against us later.
+                let resumption_record = ResumptionRecord {
+                    id: ResumptionId(resumption_id),
+                    shared_secret: *shared_secret,
+                    peer: peer.clone(),
+                    expires_at: None,
+                };
+
                 self.state = State::Complete {
                     session_keys,
                     peer,
                     local,
-                    // New-session path: resumption record would be populated here
-                    // in M6 if the responder session params contained resumption
-                    // support. For now, it is always None on this path.
-                    resumption_record: None,
+                    resumption_record: Some(resumption_record),
                 };
                 Ok(())
             }
@@ -1063,6 +1105,7 @@ fn build_sigma2(
     eph_pub: &[u8; 65],
     responder_random: &[u8; 32],
     responder_session_id: u16,
+    resumption_id: &[u8; 16],
 ) -> Result<(Vec<u8>, [u8; 32])> {
     // Step 1: ECDH shared secret from our eph secret + initiator's eph pub.
     let shared_secret = ecdh_shared_secret(eph_secret, &sigma1.initiator_eph_pub)?;
@@ -1107,14 +1150,14 @@ fn build_sigma2(
         .sign_p256_sha256(&tbs_data2)
         .map_err(Error::SigningFailed)?;
 
-    // Step 4: Encode TBEData2, encrypt with S2K.
-    // resumptionId is 16 zero bytes in M4.1.
-    let resumption_id = [0u8; 16];
+    // Step 4: Encode TBEData2, encrypt with S2K. `resumption_id` is the fresh
+    // id the caller sampled (see `fresh_resumption_id`); the initiator persists
+    // it alongside this session's ECDH secret for a later resumption attempt.
     let tbedata2_plaintext = encode_tbedata2(
         &our_noc_tlv,
         our_icac_tlv.as_deref(),
         &our_signature,
-        &resumption_id,
+        resumption_id,
     )?;
     let encrypted2 = aead_encrypt(&s2k, NONCE_TBE_DATA2, b"", &tbedata2_plaintext)?;
 
@@ -1670,7 +1713,7 @@ mod tests {
     ) -> (Vec<u8>, ResumptionRecord, [u8; 32]) {
         use crate::case::sigma::compute_sigma1_resume_mic;
 
-        let shared_secret = [0x55u8; 16];
+        let shared_secret = [0x55u8; 32];
         let resumption_id = [0xAA; 16];
         let initiator_random = [0x11; 32];
 
@@ -1756,7 +1799,7 @@ mod tests {
         assert!(matches!(outcome, Sigma1Outcome::ResumptionRequested { .. }));
 
         // Tamper with the shared secret — the MIC verification will fail.
-        record.shared_secret = [0xFF; 16];
+        record.shared_secret = [0xFF; 32];
         assert!(matches!(
             responder.accept_resumption(record),
             Err(Error::ResumptionMacMismatch)
