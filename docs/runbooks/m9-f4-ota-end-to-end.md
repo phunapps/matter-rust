@@ -3,13 +3,25 @@
 **What this validates:** the complete OTA Provider flow on a real network — we
 announce ourselves to a commissioned requestor, it resolves us via operational
 mDNS, opens CASE, invokes `QueryImage`, downloads a real `.ota` image over BDX,
-and applies it. This is the operator-gated finale for sub-project F; the CI floor
-is the in-process `serve_ota_once_full_flow_over_loopback` test (a full flow with
-byte-exact image reassembly, no external apps).
+and applies it. The CI floor is the in-process
+`serve_ota_once_full_flow_over_loopback` / `..._resumed_session_over_loopback`
+tests (full flows with byte-exact image reassembly, no external apps).
 
-> As with every prior live/hardware validation (M6, M9-D/E, H6), the real-app run
-> lives here as a manual runbook — the connectedhomeip build + OTA download are
-> too heavy/slow for CI.
+> **This flow is now AUTOMATED: `just integration-ota`** builds/launches the
+> requestor, commissions it, announces, and serves end-to-end (~16s once the
+> app is built) — see `crates/integration-tests/tests/ota_flow.rs`. This
+> runbook remains for manual/operator runs. Live-validated 2026-07-09;
+> findings baked into the automation:
+>
+> - The requestor **resumes** the CASE session established by the announce
+>   connect; the provider seeds the persisted resumption record and answers
+>   with `Sigma2_Resume` (unknown ids fall back to a full handshake).
+> - Launch the requestor with **`--autoApplyImage`** or it idles after the
+>   download and never sends `ApplyUpdateRequest`.
+> - `NotifyUpdateApplied` arrives only after the app REBOOTS into the new
+>   image (it execs the downloaded file), over a fresh CASE session — the
+>   single-session `serve_ota` completes at `ApplyUpdateResponse (Proceed)`
+>   after a short same-session grace window instead of waiting for it.
 
 ## Prerequisites
 
