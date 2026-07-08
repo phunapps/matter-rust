@@ -60,7 +60,19 @@ jobs:
             python3 python3-venv python3-dev python3-pip unzip \
             libssl-dev libdbus-1-dev libglib2.0-dev \
             libgirepository1.0-dev libcairo2-dev libreadline-dev \
-            libavahi-client-dev libevent-dev
+            libavahi-client-dev libevent-dev avahi-daemon
+
+      # The ICD step's lit-icd-app is built with the `-platform-mdns` variant
+      # (advertises + resolves via avahi). A running avahi-daemon then mediates
+      # between chip and the controller's mdns-sd — the role macOS's system
+      # mDNSResponder plays locally. Without it, chip's minimal-mDNS resolver
+      # never sees the controller's mdns-sd operational advertisement and the
+      # ICD Check-In times out resolving us.
+      - name: Start avahi-daemon
+        run: |
+          sudo systemctl unmask avahi-daemon || true
+          sudo systemctl start avahi-daemon
+          systemctl status avahi-daemon --no-pager | head -5
 
       - name: Fetch Linux submodules
         working-directory: connectedhomeip
@@ -83,14 +95,11 @@ jobs:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
         run: just integration
 
-      # ICD Check-In flow vs lit-icd-app. Passes locally on macOS (the
-      # controller-advertising mDNS direction fixed in `local_advertise_addrs`),
-      # but currently FAILS on the headless Linux runner: chip's minimal-mDNS
-      # resolver does not pick up our mdns-sd operational advertisement (the
-      # reverse direction — our resolver finding chip during commissioning —
-      # works). No mediating Bonjour/avahi as on macOS. Marked informational
-      # (continue-on-error) so this known mdns-sd↔minmdns interop gap does not red
-      # the nightly's all-clusters regression signal; it flips green when fixed.
+      # ICD Check-In flow vs lit-icd-app (built `-platform-mdns`, mediated by
+      # the avahi-daemon started above so the device can resolve the
+      # controller's mdns-sd advertisement). Still informational
+      # (continue-on-error) while the avahi mediation is being validated on
+      # the runner; drop the flag once this step is green.
       - name: Run ICD Check-In sweep (just integration-icd) [informational]
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -98,8 +107,11 @@ jobs:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
         run: just integration-icd
 
-      - name: Upload DUT log on failure
-        if: failure()
+      # `always()` (not `failure()`): the informational ICD step does not mark
+      # the job failed, but its DUT log is exactly what the next iteration
+      # needs to inspect.
+      - name: Upload DUT log
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: dut-app-log

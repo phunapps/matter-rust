@@ -43,6 +43,13 @@ struct AppSpec {
     /// If set, generate a `.ota` image before the tests and export its path as
     /// `MATTER_INTEGRATION_OTA_IMAGE` (the OTA requestor test consumes it).
     needs_ota_image: bool,
+    /// On Linux, build/run the app's `-platform-mdns` target variant (chip
+    /// advertises + resolves via avahi instead of its minimal-mDNS). Needed
+    /// when the app must RESOLVE the controller's mdns-sd advertisement: on a
+    /// headless runner there is no mediating responder, and chip's minmdns
+    /// resolver does not see mdns-sd records (macOS's system mDNSResponder
+    /// mediates, so the plain target works there). No effect on macOS.
+    linux_platform_mdns: bool,
 }
 
 /// Resolve the DUT app spec from the optional `xtask integration <app>` argument.
@@ -56,6 +63,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             test_filter: None,
             extra_args: &[],
             needs_ota_image: false,
+            linux_platform_mdns: false,
         },
         "lock" => AppSpec {
             name: "lock",
@@ -65,6 +73,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             test_filter: Some("clusters_door_lock"),
             extra_args: &[],
             needs_ota_image: false,
+            linux_platform_mdns: false,
         },
         "evse" => AppSpec {
             name: "evse",
@@ -74,6 +83,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             test_filter: Some("clusters_electrical"),
             extra_args: &[],
             needs_ota_image: false,
+            linux_platform_mdns: false,
         },
         "icd" => AppSpec {
             name: "icd",
@@ -91,6 +101,10 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
                 "15",
             ],
             needs_ota_image: false,
+            // The ICD flow's Check-In requires the DEVICE to resolve the
+            // controller's operational advertisement — the direction that
+            // needs avahi mediation on a headless Linux runner.
+            linux_platform_mdns: true,
         },
         "ota" => AppSpec {
             name: "ota",
@@ -103,6 +117,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             // NotifyUpdateApplied, so the provider-side flow can't complete.
             extra_args: &["--autoApplyImage"],
             needs_ota_image: true,
+            linux_platform_mdns: false,
         },
         other => {
             return Err(format!(
@@ -229,7 +244,11 @@ fn host_target() -> &'static str {
 /// build it first.
 fn locate_or_build_binary(chip_root: &Path, spec: &AppSpec) -> Result<PathBuf, String> {
     let target = host_target();
-    let suffix = spec.target_suffix;
+    let suffix = if spec.linux_platform_mdns && cfg!(target_os = "linux") {
+        format!("{}-platform-mdns", spec.target_suffix)
+    } else {
+        spec.target_suffix.to_string()
+    };
     let binary = chip_root
         .join("out")
         .join(format!("{target}-{suffix}"))
@@ -467,9 +486,16 @@ fn resolve_multicast_if() -> Option<u32> {
         }
     }
 
-    // Shell out to Python3 (macOS / Linux standard library).
+    // Shell out to Python3 (macOS / Linux standard library). Try the
+    // platform-typical primary interfaces in order: en0 (macOS), then
+    // eth0 / ens5 (Linux runners). Exits non-zero (StopIteration) when none
+    // exist, which maps to `None` below.
     let out = Command::new("python3")
-        .args(["-c", "import socket; print(socket.if_nametoindex('en0'))"])
+        .args([
+            "-c",
+            "import socket; m = {n: i for i, n in socket.if_nameindex()}; \
+             print(next(m[n] for n in ('en0', 'eth0', 'ens5') if n in m))",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .output()
