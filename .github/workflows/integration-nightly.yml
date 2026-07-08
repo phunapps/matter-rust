@@ -97,12 +97,10 @@ jobs:
 
       # ICD Check-In flow vs lit-icd-app (built `-platform-mdns`, mediated by
       # the avahi-daemon started above so the device can resolve the
-      # controller's mdns-sd advertisement). Still informational
-      # (continue-on-error) while the avahi mediation is being validated on
-      # the runner; drop the flag once this step is green.
-      - name: Run ICD Check-In sweep (just integration-icd) [informational]
+      # controller's mdns-sd advertisement). Gating: validated green on the
+      # runner 2026-07-08 (run 28954777425, Check-In received + verified).
+      - name: Run ICD Check-In sweep (just integration-icd)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         env:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
         run: just integration-icd
