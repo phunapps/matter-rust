@@ -835,18 +835,21 @@ impl CaseInitiator {
                 // Step 2: Derive resumed session keys.
                 // Salt uses initiatorRandom || OLD resumptionId (record.id.0).
                 // info = "SessionResumptionKeys", len = 48.
-                // Key layout: [0..16]=r2i, [16..32]=i2r, [32..48]=attestation.
-                // This is OPPOSITE to the new-session layout.
+                // Key layout: [0..16]=i2r, [16..32]=r2i, [32..48]=attestation —
+                // the SAME as the new-session layout (chip's
+                // CryptoContext::InitFromSecret splits I2RKey || R2IKey ||
+                // AttestationChallenge for kSessionResumption too; live-verified
+                // against chip's OTA requestor).
                 let blob = derive_resume_session_keys(
                     &record.shared_secret,
                     &initiator_random,
                     &record.id.0,
                 )?;
-                let mut r2i_key = [0u8; 16];
                 let mut i2r_key = [0u8; 16];
+                let mut r2i_key = [0u8; 16];
                 let mut attestation_challenge = [0u8; 16];
-                r2i_key.copy_from_slice(&blob[0..16]);
-                i2r_key.copy_from_slice(&blob[16..32]);
+                i2r_key.copy_from_slice(&blob[0..16]);
+                r2i_key.copy_from_slice(&blob[16..32]);
                 attestation_challenge.copy_from_slice(&blob[32..48]);
                 let session_keys = CaseSessionKeys {
                     i2r_key,

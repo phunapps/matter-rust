@@ -710,21 +710,26 @@ impl CaseResponder {
                 )?;
 
                 // Step 5: Derive the resumed session keys using the OLD resumption ID.
-                // Pinned from matter.js NodeSession.create (isResumption=true):
                 //   salt = initiatorRandom || OLD_resumption_id
                 //   info = "SessionResumptionKeys"
                 //   len  = 48
-                //   layout: [0..16]=r2i_key, [16..32]=i2r_key, [32..48]=attestation
+                //   layout: [0..16]=i2r_key, [16..32]=r2i_key, [32..48]=attestation
+                // The byte layout is the SAME as the new-session path — chip's
+                // CryptoContext::InitFromSecret splits I2RKey || R2IKey ||
+                // AttestationChallenge for kSessionResumption exactly as for
+                // session establishment (live-verified against chip's OTA
+                // requestor; the earlier r2i-first reading only survived because
+                // both of our own sides agreed with each other).
                 let blob = derive_resume_session_keys(
                     &record.shared_secret,
                     &initiator_random,
                     &resumption_id_presented,
                 )?;
-                let mut r2i_key = [0u8; 16];
                 let mut i2r_key = [0u8; 16];
+                let mut r2i_key = [0u8; 16];
                 let mut attestation_challenge = [0u8; 16];
-                r2i_key.copy_from_slice(&blob[0..16]);
-                i2r_key.copy_from_slice(&blob[16..32]);
+                i2r_key.copy_from_slice(&blob[0..16]);
+                r2i_key.copy_from_slice(&blob[16..32]);
                 attestation_challenge.copy_from_slice(&blob[32..48]);
                 let session_keys = CaseSessionKeys {
                     i2r_key,

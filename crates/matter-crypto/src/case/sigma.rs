@@ -386,7 +386,7 @@ pub(crate) fn verify_mac(expected: &[u8; 16], received: &[u8; 16]) -> Result<()>
 //   salt = initiatorRandom || resumptionId   (the OLD id, from the record)
 //   info = "SessionResumptionKeys"            (not "SessionKeys")
 //   len  = 48 bytes
-//   layout: [0..16] = r2i_key, [16..32] = i2r_key, [32..48] = attestation_challenge
+//   layout: [0..16] = i2r_key, [16..32] = r2i_key, [32..48] = attestation_challenge
 // =============================================================================
 
 /// Derive the resumption key used to compute or verify `sigma1_resume_mic`.
@@ -556,9 +556,9 @@ pub(crate) fn verify_sigma2_resume_mic(
 ///     info:  "SessionResumptionKeys",
 ///     len:   48,
 /// )
-/// // layout (same for both sides — direction swapped by isInitiator flag):
-/// // [0..16]  = r2i_key
-/// // [16..32] = i2r_key
+/// // layout (same as the new-session path; chip CryptoContext::InitFromSecret):
+/// // [0..16]  = i2r_key
+/// // [16..32] = r2i_key
 /// // [32..48] = attestation_challenge
 /// ```
 ///
@@ -570,8 +570,8 @@ pub(crate) fn verify_sigma2_resume_mic(
 /// # Returns
 ///
 /// 48-byte array. Slices:
-/// - `[0..16]`  — r2i encryption key (responder-to-initiator)
-/// - `[16..32]` — i2r encryption key (initiator-to-responder)
+/// - `[0..16]`  — i2r encryption key (initiator-to-responder)
+/// - `[16..32]` — r2i encryption key (responder-to-initiator)
 /// - `[32..48]` — attestation challenge
 ///
 /// # Errors
