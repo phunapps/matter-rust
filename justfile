@@ -116,3 +116,7 @@ integration-energy:
 # Build + launch lit-icd-app (short ICD timers) and run the ICD Check-In test.
 integration-icd:
     cargo run -p xtask -- integration icd
+
+# Build + launch ota-requestor-app and run the OTA provider end-to-end test.
+integration-ota:
+    cargo run -p xtask -- integration ota

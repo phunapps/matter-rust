@@ -98,7 +98,10 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             binary: "chip-ota-requestor-app",
             fixed_qr: None,
             test_filter: Some("ota_flow"),
-            extra_args: &[],
+            // Without --autoApplyImage the app stops after the BDX download
+            // (StateTransition -> idle) and never sends ApplyUpdateRequest /
+            // NotifyUpdateApplied, so the provider-side flow can't complete.
+            extra_args: &["--autoApplyImage"],
             needs_ota_image: true,
         },
         other => {

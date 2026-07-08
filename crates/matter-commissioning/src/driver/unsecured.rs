@@ -22,9 +22,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use matter_transport::{
-    decode_header, decode_protocol_header, encode_header, encode_protocol_header, ExchangeFlags,
-    MessageCounter, NodeId, ProtocolHeader, ProtocolId, SecuredMessageFlags, SecuredMessageHeader,
-    SecurityFlags, SessionId,
+    decode_header, decode_protocol_header, encode_header, encode_protocol_header, DestNodeId,
+    ExchangeFlags, MessageCounter, NodeId, ProtocolHeader, ProtocolId, SecuredMessageFlags,
+    SecuredMessageHeader, SecurityFlags, SessionId,
 };
 
 use crate::driver::datagram::AsyncDatagram;
@@ -174,6 +174,60 @@ pub fn encode_unsecured(
     if initiator {
         exchange_flags |= ExchangeFlags::INITIATOR;
     }
+    if reliable {
+        exchange_flags |= ExchangeFlags::RELIABLE;
+    }
+    let protocol_header = ProtocolHeader {
+        exchange_flags,
+        opcode,
+        exchange_id,
+        protocol_id,
+        ack_counter: ack.map(MessageCounter),
+    };
+    encode_protocol_header(&protocol_header, &mut buf);
+    buf.extend_from_slice(app_payload);
+    buf
+}
+
+/// Encode an unsecured **responder-side reply**: like [`encode_unsecured`]
+/// (initiator flag clear) but carrying the DESTINATION node id instead of a
+/// source node id.
+///
+/// Matter Core §4.4.1 / chip `SessionManager::UnauthenticatedMessageDispatch`
+/// require an unsecured message to carry **exactly one** of {source,
+/// destination} node id: the session-establishment initiator stamps a random
+/// ephemeral *source* node id on its messages, and every responder reply must
+/// echo that value as the *destination* node id — chip drops replies without
+/// it as "malformed unsecure packet". Pass the initiator's
+/// [`UnsecuredMessage::source_node_id`] as `destination_node_id`; `None`
+/// degrades to a bare header for loopback peers that sent no source id.
+#[allow(clippy::too_many_arguments)] // Threaded header inputs; matches encode_unsecured's shape.
+#[must_use]
+pub fn encode_unsecured_reply(
+    message_counter: u32,
+    exchange_id: u16,
+    opcode: u8,
+    protocol_id: ProtocolId,
+    reliable: bool,
+    ack: Option<u32>,
+    destination_node_id: Option<u64>,
+    app_payload: &[u8],
+) -> Vec<u8> {
+    let mut flags = SecuredMessageFlags::empty();
+    if destination_node_id.is_some() {
+        flags |= SecuredMessageFlags::DEST_UNICAST;
+    }
+    let header = SecuredMessageHeader {
+        flags,
+        session_id: SessionId(0),
+        security_flags: SecurityFlags::empty(),
+        message_counter: MessageCounter(message_counter),
+        source_node_id: None,
+        destination_node_id: destination_node_id.map(|n| DestNodeId::Node(NodeId(n))),
+    };
+    let mut buf = encode_header(&header);
+
+    let mut exchange_flags = ExchangeFlags::empty();
     if reliable {
         exchange_flags |= ExchangeFlags::RELIABLE;
     }

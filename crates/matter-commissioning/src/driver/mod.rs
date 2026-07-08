@@ -25,6 +25,6 @@ pub use exchange::{
 };
 pub use pase::run_pase;
 pub use unsecured::{
-    decode_unsecured, encode_unsecured, parse_status_report, require_handshake_opcode,
-    SecureChannelStatus, UnsecuredExchange, UnsecuredMessage,
+    decode_unsecured, encode_unsecured, encode_unsecured_reply, parse_status_report,
+    require_handshake_opcode, SecureChannelStatus, UnsecuredExchange, UnsecuredMessage,
 };

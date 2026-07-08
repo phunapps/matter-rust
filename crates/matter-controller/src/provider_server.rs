@@ -10,7 +10,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 use matter_cert::{MatterTime, TrustedRoots};
-use matter_commissioning::driver::{decode_unsecured, encode_unsecured, AsyncDatagram};
+use matter_commissioning::driver::{decode_unsecured, encode_unsecured_reply, AsyncDatagram};
 use matter_crypto::{CaseCredentials, CaseResponder, ResumptionRecord, Sigma1Outcome};
 use matter_interaction::{
     build_invoke_response_command, build_invoke_response_status, parse_invoke_request, CommandPath,
@@ -146,6 +146,42 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             .map_err(|e| Error::Operational(format!("provider send: {e}")))
     }
 
+    /// Receive the next datagram while driving the session's MRP timers, so
+    /// scheduled standalone acks (and retransmits) fire even while we sit in
+    /// `recv`. Load-bearing for the OTA flow: the requestor's `BlockAckEOF`
+    /// is MRP-reliable and we reply with nothing — without the pumped
+    /// standalone ack, chip retransmits it, marks the session defunct, and
+    /// abandons the update before `ApplyUpdateRequest` (observed live).
+    async fn recv_secured(
+        &self,
+        sessions: &mut SessionManager,
+        peer: SocketAddr,
+    ) -> Result<(Vec<u8>, SocketAddr), Error> {
+        use matter_transport::MrpEvent;
+        loop {
+            let Some(deadline) = sessions.poll_timeout() else {
+                return self.recv().await;
+            };
+            let wait = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(wait, self.recv()).await {
+                Ok(result) => return result,
+                Err(_deadline_hit) => {
+                    for event in sessions.handle_timeout(Instant::now()) {
+                        match event {
+                            MrpEvent::Retransmit { packet, .. }
+                            | MrpEvent::SendStandaloneAck { packet, .. } => {
+                                self.send(&packet, peer).await?;
+                            }
+                            // Single-session server: nothing to resolve on
+                            // expiry; `MrpEvent` is non_exhaustive.
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Accept ONE inbound CASE session as the responder, returning an
     /// established [`SessionManager`] + the secured `SessionId` + the peer's
     /// address + the fresh [`ResumptionRecord`] the handshake produced (for
@@ -238,15 +274,14 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             .next_message()
             .map_err(|e| Error::Operational(format!("sigma2_resume: {e}")))?;
         let c = self.next_handshake_counter();
-        let wire = encode_unsecured(
+        let wire = encode_unsecured_reply(
             c,
             m1.exchange_id,
             OP_SIGMA2_RESUME,
             ProtocolId::SECURE_CHANNEL,
-            false,
             true,
             Some(m1.message_counter),
-            None,
+            m1.source_node_id,
             &sigma2_resume,
         );
         self.send(&wire, peer).await?;
@@ -274,15 +309,14 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     }
                     // Ack the reliable report so the initiator's MRP settles.
                     let c = self.next_handshake_counter();
-                    let ack = encode_unsecured(
+                    let ack = encode_unsecured_reply(
                         c,
                         m.exchange_id,
                         OP_MRP_STANDALONE_ACK,
                         ProtocolId::SECURE_CHANNEL,
                         false,
-                        false,
                         Some(m.message_counter),
-                        None,
+                        m.source_node_id.or(m1.source_node_id),
                         &[],
                     );
                     self.send(&ack, peer).await?;
@@ -292,15 +326,14 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 // re-send it on the same exchange.
                 OP_SIGMA1 => {
                     let c = self.next_handshake_counter();
-                    let wire = encode_unsecured(
+                    let wire = encode_unsecured_reply(
                         c,
                         m.exchange_id,
                         OP_SIGMA2_RESUME,
                         ProtocolId::SECURE_CHANNEL,
-                        false,
                         true,
                         Some(m.message_counter),
-                        None,
+                        m.source_node_id.or(m1.source_node_id),
                         &sigma2_resume,
                     );
                     self.send(&wire, peer).await?;
@@ -331,15 +364,14 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             .next_message()
             .map_err(|e| Error::Operational(format!("sigma2: {e}")))?;
         let c = self.next_handshake_counter();
-        let wire = encode_unsecured(
+        let wire = encode_unsecured_reply(
             c,
             m1.exchange_id,
             OP_SIGMA2,
             ProtocolId::SECURE_CHANNEL,
-            false,
             true,
             Some(m1.message_counter),
-            None,
+            m1.source_node_id,
             &sigma2,
         );
         self.send(&wire, peer).await?;
@@ -361,15 +393,14 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         body.extend_from_slice(&0u32.to_le_bytes()); // ProtocolId: SecureChannel
         body.extend_from_slice(&0u16.to_le_bytes()); // ProtocolCode: 0
         let c = self.next_handshake_counter();
-        let report = encode_unsecured(
+        let report = encode_unsecured_reply(
             c,
             m3.exchange_id,
             OP_STATUS_REPORT,
             ProtocolId::SECURE_CHANNEL,
-            false,
             true,
             Some(m3.message_counter),
-            None,
+            m3.source_node_id.or(m1.source_node_id),
             &body,
         );
         self.send(&report, peer).await?;
@@ -407,7 +438,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
         let mut dispatched = 0usize;
         while dispatched < max_invokes {
-            let (wire, _) = self.recv().await?;
+            let (wire, _) = self.recv_secured(&mut sessions, peer).await?;
             if let DecodeInboundOutput::AppMessage {
                 exchange_id,
                 opcode,
@@ -439,11 +470,15 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
     /// Accept ONE CASE session, then serve `image` to the requestor over the
     /// full OTA flow: `QueryImage` → `QueryImageResponse`, a BDX transfer, then
-    /// `ApplyUpdateRequest` → `ApplyUpdateResponse` and `NotifyUpdateApplied` →
-    /// Success. Returns once `NotifyUpdateApplied` is handled, yielding the
-    /// fresh [`ResumptionRecord`] the accept handshake produced (rotated on
-    /// the resumed path, brand-new on the full path) for the caller to
-    /// persist — the requestor's NEXT session presents this record's id.
+    /// `ApplyUpdateRequest` → `ApplyUpdateResponse` (Proceed). Completes once
+    /// the apply is delivered — after a short same-session grace window for an
+    /// in-process requestor's `NotifyUpdateApplied` (answered with Success). A
+    /// real requestor reboots into the new image and sends
+    /// `NotifyUpdateApplied` over a FRESH session on its next boot, which this
+    /// single-session server intentionally does not serve. Yields the fresh
+    /// [`ResumptionRecord`] the accept handshake produced (rotated on the
+    /// resumed path, brand-new on the full path) for the caller to persist —
+    /// the requestor's NEXT session presents this record's id.
     ///
     /// `offer` shapes the `QueryImageResponse` (its `ImageURI`/`UpdateToken`);
     /// `max_block_size` caps each BDX block. All replies are unreliable
@@ -454,9 +489,9 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// # Errors
     ///
     /// [`Error::Operational`] on a CASE/transport/codec failure, a BDX abort, an
-    /// unexpected OTA command, or if the flow ends without `NotifyUpdateApplied`;
-    /// [`Error::Transport`] / [`Error::InteractionModel`] from the session / IM
-    /// layers.
+    /// unexpected OTA command, or if the flow ends without reaching
+    /// `ApplyUpdateRequest`; [`Error::Transport`] / [`Error::InteractionModel`]
+    /// from the session / IM layers.
     #[allow(clippy::too_many_lines)] // Linear OTA protocol-dispatch loop; splitting hurts clarity.
     pub async fn serve_ota_once(
         mut self,
@@ -469,6 +504,16 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         let (mut sessions, sid, peer, record) = self.accept_case().await?;
         let mut bdx: Option<BlockSender> = None;
         let mut applied = false;
+        let mut apply_confirmed = false;
+
+        // Same-session NotifyUpdateApplied grace window. A REAL requestor
+        // (chip's app and real devices alike) sends NotifyUpdateApplied only
+        // AFTER rebooting into the new image — over a fresh CASE session this
+        // single-session server does not serve — so once ApplyUpdateResponse
+        // (Proceed) is delivered the provider's job is done. We linger briefly
+        // for an in-process requestor's same-session Notify (the loopback
+        // floor), then complete successfully.
+        let notify_grace = std::time::Duration::from_secs(3);
 
         // Generous step bound: one per OTA command + one per block + slack.
         let max_steps = image.len() / usize::from(max_block_size.max(1)) + 64;
@@ -476,7 +521,18 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
         while !applied && steps < max_steps {
             steps += 1;
-            let (wire, _) = self.recv().await?;
+            let (wire, _) = if apply_confirmed {
+                match tokio::time::timeout(notify_grace, self.recv_secured(&mut sessions, peer))
+                    .await
+                {
+                    Ok(result) => result?,
+                    // Grace expired with the apply delivered: the requestor is
+                    // rebooting into the image — done.
+                    Err(_) => break,
+                }
+            } else {
+                self.recv_secured(&mut sessions, peer).await?
+            };
             let DecodeInboundOutput::AppMessage {
                 exchange_id,
                 protocol_id,
@@ -507,6 +563,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                         &fields,
                     )
                 } else if cmd.path.command == CMD_APPLY_UPDATE_REQUEST {
+                    apply_confirmed = true;
                     let fields = matter_ota::handle_apply_update_request(&cmd.fields_tlv)
                         .map_err(|e| Error::Operational(format!("ApplyUpdateRequest: {e}")))?;
                     build_invoke_response_command(
@@ -584,11 +641,11 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             }
         }
 
-        if applied {
+        if applied || apply_confirmed {
             Ok(record)
         } else {
             Err(Error::Operational(
-                "OTA flow ended without NotifyUpdateApplied".into(),
+                "OTA flow ended without ApplyUpdateRequest or NotifyUpdateApplied".into(),
             ))
         }
     }

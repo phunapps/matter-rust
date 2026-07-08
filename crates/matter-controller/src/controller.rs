@@ -290,8 +290,11 @@ impl MatterController {
 
         let server = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now)
             .with_resumption_records(records);
+        // 960 keeps each BDX DataBlock (block + 4-byte counter + BDX/IM
+        // framing) under the transport's 1024-byte secured-payload budget —
+        // 1024 here overflows it by 14 bytes once framed.
         let serve_res = server
-            .serve_ota_once(offer, image, /* max_block_size */ 1024)
+            .serve_ota_once(offer, image, /* max_block_size */ 960)
             .await;
 
         let _ = matter_transport::Discovery::unpublish(

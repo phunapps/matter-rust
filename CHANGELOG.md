@@ -224,6 +224,20 @@ unchanged — its full test suite passes with zero test edits.
   still falls back to `reject_resumption` + full handshake. The rotated
   record returned by `serve_ota_once` is persisted after the serve so the
   requestor's next session can resume again.
+- **OTA provider LIVE-VALIDATED vs chip's `ota-requestor-app`**
+  (`just integration-ota` / `crates/integration-tests/tests/ota_flow.rs`):
+  commission → announce → the requestor resumes the announce session
+  against the provider (`Sigma2_Resume`) → `QueryImage` → 64 KiB BDX
+  download → `ApplyUpdateRequest` → Proceed → the app applies (execs the
+  image). Live-interop fixes shipped alongside: the provider pumps MRP
+  timers while receiving (`SessionManager::handle_timeout`), so the
+  requestor's reliable `BlockAckEOF` gets its standalone ack — without it
+  chip marks the session defunct and never applies; served BDX block size
+  is 960 (1024 overflowed the secured-payload budget once framed); and
+  `serve_ota_once` completes at ApplyUpdateResponse after a short
+  same-session `NotifyUpdateApplied` grace window — real requestors send
+  NotifyUpdateApplied only after REBOOTING into the new image over a fresh
+  session, which a single-session server intentionally does not serve.
 
 ### [Unreleased] — M9-E3 group multicast send
 
@@ -462,6 +476,21 @@ migration step is needed for snapshots from M9-E1 or earlier.
   uses `open_commissioning_window`.
 
 ## matter-commissioning
+
+### [Unreleased] — responder-side unsecured replies (OTA provider interop)
+
+#### Added
+
+- **`driver::encode_unsecured_reply`** — encodes a responder-side unsecured
+  message carrying the DESTINATION node id (the initiator's ephemeral source
+  node id echoed back). Matter Core §4.4.1 / chip's
+  `SessionManager::UnauthenticatedMessageDispatch` require exactly one of
+  {source, destination} node id on unsecured messages; chip silently drops
+  responder replies without the destination id as "malformed unsecure
+  packet". This was the root cause of chip's OTA requestor never processing
+  our Sigma2/`Sigma2_Resume` (it MRP-retransmitted Sigma1 forever) — the
+  provider server's handshake replies now interop. (Our own initiator-side
+  driver was unaffected: it always stamped a source node id.)
 
 ### [Unreleased] — M6.1 setup payload codec, M6.2.x attestation, M6.3.x NOC issuance, M6.4 commissioning state machine (M6.4.1 → M6.4.6, complete), M6.5 network commissioning (M6.5.1 → M6.5.3, complete), M6.6.1 IM framing, M6.6.2 driver skeleton, M6.6.3b PASE/CASE bridges, M6.6.4 commission() orchestrator + loopback E2E gate, M6.6.5 example + runbook (M6.6 / M6 complete), M6.6.5a production CD-root ingestion, M7.5 control_onoff example
 
@@ -1280,6 +1309,18 @@ fixture file; the test assertions remain stable.
   `initiator_session_id: u16`** (mirroring `new`) — it previously hardcoded
   session id 0, which collides with the unsecured session and made the
   resumption initiator unusable for real secured traffic.
+
+#### Fixed
+
+- **Resumed-session key split corrected to i2r-first** — both resumption
+  paths assigned `r2i = keys[0..16], i2r = keys[16..32]` (a misreading of
+  matter.js's `isResumption` branch), the reverse of what chip's
+  `CryptoContext::InitFromSecret` does for `kSessionResumption` (identical
+  to session establishment: `I2RKey || R2IKey || AttestationChallenge`).
+  Self-consistent loopback tests could never catch this (both sides agreed
+  with each other); chip's OTA requestor rejected every secured message on
+  a resumed session with a decryption failure. Live-verified against
+  `chip-ota-requestor-app`.
 
 ### [Unreleased] — M9-E2 operational group crypto
 
