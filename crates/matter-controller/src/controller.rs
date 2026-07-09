@@ -209,14 +209,21 @@ impl MatterController {
 
     /// Announce ourselves as an OTA provider to `target_node_id`, advertise our
     /// operational service, and serve `image` over the full OTA flow (the
-    /// requestor resolves us, opens CASE, queries, BDX-downloads, applies).
-    /// Returns once the requestor sends `NotifyUpdateApplied`.
+    /// requestor resolves us, opens CASE, queries, BDX-downloads, applies, and
+    /// — possibly after rebooting into the new image — sends
+    /// `NotifyUpdateApplied`). Returns once `NotifyUpdateApplied` is received.
     ///
     /// `software_version` is offered in `QueryImageResponse` (must exceed the
     /// requestor's current version for it to update — and match the version
     /// baked into the `.ota` header for a live requestor). `port` binds the
     /// provider socket (0 = ephemeral). The image is served verbatim over BDX
     /// (unsigned; the requestor parses the `OTAImageHeader`).
+    ///
+    /// Because a real requestor reboots into the new image before notifying,
+    /// the call may block for an extended period. Callers should bound the wait
+    /// with [`tokio::time::timeout`]. Each accepted CASE session's resumption
+    /// record is persisted immediately via an internal sink (best-effort: a
+    /// failed store only costs a future fast path).
     ///
     /// # Errors
     ///
@@ -231,6 +238,10 @@ impl MatterController {
     ) -> Result<(), Error> {
         use crate::provider_server::{build_operational_service, ProviderServer};
 
+        // Credential pool: one identity per CASE accept (first session +
+        // post-reboot session + retry slack — see the spec).
+        const PROVIDER_CREDENTIAL_POOL: usize = 4;
+
         // Identity + offer.
         let state = match self.store.load()? {
             Some(bytes) => snapshot::deserialize(&bytes)?,
@@ -240,7 +251,16 @@ impl MatterController {
             .fabrics
             .first()
             .ok_or_else(|| Error::NotCommissioned("no fabric to serve from".into()))?;
-        let (credentials, roots, compressed) = crate::credentials::operational_credentials(fabric)?;
+        let mut pool = Vec::with_capacity(PROVIDER_CREDENTIAL_POOL);
+
+        let mut roots_compressed = None;
+        for _ in 0..PROVIDER_CREDENTIAL_POOL {
+            let (c, r, comp) = crate::credentials::operational_credentials(fabric)?;
+            pool.push(c);
+            roots_compressed = Some((r, comp));
+        }
+        let (roots, compressed) =
+            roots_compressed.ok_or_else(|| Error::Operational("empty credential pool".into()))?;
         let node_id = fabric.commissioner.node_id;
         let now = crate::actor::current_matter_time()?;
         let offer = matter_ota::ImageOffer {
@@ -294,14 +314,17 @@ impl MatterController {
             Ok(None) | Err(_) => Vec::new(),
         };
 
-        let server = ProviderServer::new(
-            socket,
-            vec![credentials],
-            roots,
-            /* base_session_id */ 0x01,
-            now,
-        )
-        .with_resumption_records(records);
+        let sink_controller = self.clone();
+        let server = ProviderServer::new(socket, pool, roots, /* base_session_id */ 0x01, now)
+            .with_resumption_records(records)
+            .with_record_sink(Box::new(move |record| {
+                let c = sink_controller.clone();
+                tokio::spawn(async move {
+                    // Best-effort: a failed store only costs a future fast path.
+                    let node = record.peer.node_id;
+                    let _ = c.store_resumption_record(node, &record).await;
+                });
+            }));
         // 960 keeps each BDX DataBlock (block + 4-byte counter + BDX/IM
         // framing) under the transport's 1024-byte secured-payload budget —
         // 1024 here overflows it by 14 bytes once framed.
@@ -553,7 +576,6 @@ impl MatterController {
     /// [`Error::ControllerStopped`] if the owning task stopped,
     /// [`Error::NotCommissioned`] if no sole fabric exists, or
     /// [`Error::Operational`] if the device has no entry on the fabric.
-    #[allow(dead_code)]
     pub(crate) async fn store_resumption_record(
         &self,
         node_id: u64,

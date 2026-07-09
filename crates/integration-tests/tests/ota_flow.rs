@@ -11,7 +11,8 @@
 /// requestor, then `serve_ota` — announce ourselves as its OTA provider,
 /// accept its inbound CASE session (the requestor resumes the announce
 /// session), answer `QueryImage` with the generated `.ota` image, stream it
-/// over BDX, and return once the requestor sends `NotifyUpdateApplied`.
+/// over BDX, and return once the requestor reboots into the new image and
+/// sends `NotifyUpdateApplied` over a fresh post-reboot CASE session.
 ///
 /// The DUT is launched by `just integration-ota`, which also generates the
 /// image via chip's `ota_image_tool.py` (vendor 0xFFF1 / product 0x8000 /
@@ -50,5 +51,5 @@ async fn serve_ota_to_requestor() {
     .await
     .expect("OTA flow did not complete within 180s")
     .expect("serve_ota");
-    eprintln!("[ota] serve_ota completed — requestor downloaded + applied the image");
+    eprintln!("[ota] serve_ota completed — requestor rebooted into the image and sent NotifyUpdateApplied");
 }

@@ -207,6 +207,28 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-controller
 
+### [Unreleased] — multi-session OTA provider
+
+#### Added
+
+- **`serve_ota` runs a sequential session loop** backed by a **4-entry
+  credential pool** (first session + post-reboot session + retry slack, per
+  spec). Each accepted CASE session is served with its own credential entry,
+  and the loop continues until the requestor sends `NotifyUpdateApplied`.
+- **Per-session resumption record persistence via sink** — each accepted
+  session's fresh `ResumptionRecord` is immediately stored (best-effort, off
+  the serve loop via `tokio::spawn`) through the provider server's
+  `record_sink`. A failed store only costs the fast path on the next connect.
+
+#### Changed
+
+- **BREAKING (pre-release):** `serve_ota` now completes when the requestor
+  sends `NotifyUpdateApplied` — which for a real chip requestor arrives only
+  after the device reboots into the new image over a fresh CASE session.
+  Previously the call completed at `ApplyUpdateResponse` with a short
+  same-session grace window and did not cover the post-reboot notification.
+  Callers should bound the wait with `tokio::time::timeout`.
+
 ### [Unreleased] — OTA provider accepts CASE resumption
 
 #### Added

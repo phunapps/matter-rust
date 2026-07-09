@@ -518,7 +518,6 @@ pub(crate) enum Command {
     /// `node_id` (best-effort persist). Wired back in Task 5 via the provider
     /// server's `record_sink`; kept here so the actor handler and controller
     /// helper are available when the sink is installed.
-    #[allow(dead_code)]
     StoreResumptionRecord {
         node_id: u64,
         record_bytes: Vec<u8>,
