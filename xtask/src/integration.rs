@@ -117,7 +117,11 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             // NotifyUpdateApplied, so the provider-side flow can't complete.
             extra_args: &["--autoApplyImage"],
             needs_ota_image: true,
-            linux_platform_mdns: false,
+            // The requestor must resolve the CONTROLLER's provider
+            // advertisement to query it — the same advertise→resolve
+            // direction that needs avahi mediation on a headless Linux
+            // runner (see the icd spec above).
+            linux_platform_mdns: true,
         },
         other => {
             return Err(format!(

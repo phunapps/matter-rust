@@ -105,6 +105,17 @@ jobs:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
         run: just integration-icd
 
+      # OTA provider flow vs ota-requestor-app (also `-platform-mdns`: the
+      # requestor resolves the controller's provider advertisement, the same
+      # direction avahi mediates for ICD). Informational until validated
+      # green on the runner; drop the flag then.
+      - name: Run OTA provider sweep (just integration-ota) [informational]
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
+        run: just integration-ota
+
       # `always()` (not `failure()`): the informational ICD step does not mark
       # the job failed, but its DUT log is exactly what the next iteration
       # needs to inspect.
