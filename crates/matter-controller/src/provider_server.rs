@@ -42,6 +42,13 @@ const CMD_APPLY_UPDATE_REQUEST: u32 = 0x02;
 const CMD_APPLY_UPDATE_RESPONSE: u32 = 0x03;
 const CMD_NOTIFY_UPDATE_APPLIED: u32 = 0x04;
 
+/// True when `frame` is an unsecured (session id 0) message — i.e. a new
+/// session-establishment attempt arriving while a secured session is being
+/// served. Bytes 1..3 are the little-endian session id (Matter Core §4.4.1).
+fn is_unsecured_frame(frame: &[u8]) -> bool {
+    frame.len() >= 3 && frame[1] == 0 && frame[2] == 0
+}
+
 /// Build the operational `_matter._tcp` mDNS record to advertise so a requestor
 /// can resolve us. Instance name is `<compressed-fabric-id>-<node-id>` in
 /// uppercase hex (Matter Core §4.3.1), matching what the controller's initiator
@@ -525,14 +532,23 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         Ok(dispatched)
     }
 
-    /// Accept ONE CASE session, then serve `image` to the requestor over the
-    /// full OTA flow: `QueryImage` → `QueryImageResponse`, a BDX transfer, then
-    /// `ApplyUpdateRequest` → `ApplyUpdateResponse` (Proceed). Completes once
-    /// the apply is delivered — after a short same-session grace window for an
-    /// in-process requestor's `NotifyUpdateApplied` (answered with Success). A
-    /// real requestor reboots into the new image and sends
-    /// `NotifyUpdateApplied` over a FRESH session on its next boot, which this
-    /// single-session server intentionally does not serve.
+    /// Accept CASE sessions in sequence, serving `image` to the requestor over the
+    /// full OTA flow — `QueryImage` → `QueryImageResponse`, a BDX transfer, then
+    /// `ApplyUpdateRequest` → `ApplyUpdateResponse` (Proceed) — and completing once
+    /// `NotifyUpdateApplied` is received on ANY session. A real requestor downloads
+    /// and applies on its first session, reboots into the new image, and sends
+    /// `NotifyUpdateApplied` on a fresh session; this method spans that reboot by
+    /// running an outer loop over `accept_case` calls.
+    ///
+    /// Unsecured frames (session id 0) arriving while a secured session is being
+    /// served are recognised as new-session-establishment attempts; they are
+    /// carried into the next outer iteration as the `first_frame` for the next
+    /// `accept_case` call, so no handshake bytes are lost.
+    ///
+    /// The caller owns the deadline: wrap `serve_ota_once` in
+    /// `tokio::time::timeout` (or similar) to bound a requestor that never
+    /// returns. Pool exhaustion (all credentials consumed) and a per-session step
+    /// budget are the two error paths.
     ///
     /// The fresh [`ResumptionRecord`] the accept handshake produced is re-seeded
     /// and forwarded to the `record_sink` (if set via
@@ -548,8 +564,8 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// # Errors
     ///
     /// [`Error::Operational`] on a CASE/transport/codec failure, a BDX abort, an
-    /// unexpected OTA command, or if the flow ends without reaching
-    /// `ApplyUpdateRequest`; [`Error::Transport`] / [`Error::InteractionModel`]
+    /// unexpected OTA command, or if a session exhausts its step budget without
+    /// an unsecured carry-frame; [`Error::Transport`] / [`Error::InteractionModel`]
     /// from the session / IM layers.
     #[allow(clippy::too_many_lines)] // Linear OTA protocol-dispatch loop; splitting hurts clarity.
     pub async fn serve_ota_once(
@@ -560,152 +576,166 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     ) -> Result<(), Error> {
         use matter_bdx::{BdxMessage, BlockSender, MessageType, SenderOutcome};
 
-        let (mut sessions, sid, peer) = self.accept_case(None).await?;
+        // Flow state spans sessions: the requestor downloads + applies on its
+        // first session, REBOOTS into the image, and sends NotifyUpdateApplied
+        // on a fresh session (usually resuming the record rotated during the
+        // first accept — re-seeded by accept_case).
         let mut bdx: Option<BlockSender> = None;
-        let mut applied = false;
-        let mut apply_confirmed = false;
+        let mut carried: Option<(Vec<u8>, SocketAddr)> = None;
 
-        // Same-session NotifyUpdateApplied grace window. A REAL requestor
-        // (chip's app and real devices alike) sends NotifyUpdateApplied only
-        // AFTER rebooting into the new image — over a fresh CASE session this
-        // single-session server does not serve — so once ApplyUpdateResponse
-        // (Proceed) is delivered the provider's job is done. We linger briefly
-        // for an in-process requestor's same-session Notify (the loopback
-        // floor), then complete successfully.
-        let notify_grace = std::time::Duration::from_secs(3);
-
-        // Generous step bound: one per OTA command + one per block + slack.
-        let max_steps = image.len() / usize::from(max_block_size.max(1)) + 64;
-        let mut steps = 0usize;
-
-        while !applied && steps < max_steps {
-            steps += 1;
-            let (wire, _) = if apply_confirmed {
-                match tokio::time::timeout(notify_grace, self.recv_secured(&mut sessions, peer))
-                    .await
-                {
-                    Ok(result) => result?,
-                    // Grace expired with the apply delivered: the requestor is
-                    // rebooting into the image — done.
-                    Err(_) => break,
+        // Outer: one iteration per CASE session; bounded by the credential
+        // pool (accept_case errors when it is exhausted). A failed mid-flow
+        // handshake poisons only that accept (spec: Error handling) — it
+        // consumed one pooled credential, and the loop waits for the peer's
+        // next attempt; only pool exhaustion (or the caller's deadline) ends
+        // the serve.
+        loop {
+            let (mut sessions, sid, peer) = match self.accept_case(carried.take()).await {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    if self.credentials.is_empty() {
+                        return Err(e); // exhausted (or the last credential's failure)
+                    }
+                    continue; // retry with the next pooled credential
                 }
-            } else {
-                self.recv_secured(&mut sessions, peer).await?
-            };
-            let DecodeInboundOutput::AppMessage {
-                exchange_id,
-                protocol_id,
-                opcode,
-                payload,
-                ..
-            } = sessions.decode_inbound(&wire, Instant::now())?
-            else {
-                continue;
             };
 
-            if protocol_id == ProtocolId::INTERACTION_MODEL && opcode == OP_INVOKE_REQUEST {
-                let parsed = parse_invoke_request(&payload)?;
-                let cmd = parsed
-                    .commands
-                    .first()
-                    .ok_or_else(|| Error::Operational("OTA invoke had no command".into()))?;
-                let response = if cmd.path.command == CMD_QUERY_IMAGE {
-                    bdx = Some(BlockSender::new(image.clone(), max_block_size));
-                    let fields = matter_ota::handle_query_image(&cmd.fields_tlv, Some(&offer))
-                        .map_err(|e| Error::Operational(format!("QueryImage: {e}")))?;
-                    build_invoke_response_command(
-                        CommandPath {
-                            endpoint: 0,
-                            cluster: OTA_PROVIDER_CLUSTER,
-                            command: CMD_QUERY_IMAGE_RESPONSE,
-                        },
-                        &fields,
-                    )
-                } else if cmd.path.command == CMD_APPLY_UPDATE_REQUEST {
-                    apply_confirmed = true;
-                    let fields = matter_ota::handle_apply_update_request(&cmd.fields_tlv)
-                        .map_err(|e| Error::Operational(format!("ApplyUpdateRequest: {e}")))?;
-                    build_invoke_response_command(
-                        CommandPath {
-                            endpoint: 0,
-                            cluster: OTA_PROVIDER_CLUSTER,
-                            command: CMD_APPLY_UPDATE_RESPONSE,
-                        },
-                        &fields,
-                    )
-                } else if cmd.path.command == CMD_NOTIFY_UPDATE_APPLIED {
-                    matter_ota::parse_notify_update_applied(&cmd.fields_tlv)
-                        .map_err(|e| Error::Operational(format!("NotifyUpdateApplied: {e}")))?;
-                    applied = true;
-                    build_invoke_response_status(
-                        CommandPath {
-                            endpoint: 0,
-                            cluster: OTA_PROVIDER_CLUSTER,
-                            command: CMD_NOTIFY_UPDATE_APPLIED,
-                        },
-                        ImStatus::Success,
-                    )
-                } else {
-                    return Err(Error::Operational(format!(
-                        "unexpected OTA command {:#04x}",
-                        cmd.path.command
-                    )));
+            // Per-session step bound: one per OTA command + one per block + slack.
+            let max_steps = image.len() / usize::from(max_block_size.max(1)) + 64;
+            let mut steps = 0usize;
+
+            // Inner: serve this session until Notify (done), a new handshake
+            // frame (roll into the next accept), or the step bound.
+            while steps < max_steps {
+                steps += 1;
+                let (wire, from) = self.recv_secured(&mut sessions, peer).await?;
+                if is_unsecured_frame(&wire) {
+                    carried = Some((wire, from));
+                    break;
+                }
+                let DecodeInboundOutput::AppMessage {
+                    exchange_id,
+                    protocol_id,
+                    opcode,
+                    payload,
+                    ..
+                } = sessions.decode_inbound(&wire, Instant::now())?
+                else {
+                    continue;
                 };
-                let out = sessions.encode_outbound(
-                    sid,
-                    Some(exchange_id),
-                    OP_INVOKE_RESPONSE,
-                    ProtocolId::INTERACTION_MODEL,
-                    &response,
-                    MrpFlags { reliable: false },
-                    Instant::now(),
-                )?;
-                self.send(&out.wire_bytes, peer).await?;
-            } else if protocol_id == ProtocolId::BDX {
-                let mt = MessageType::from_u8(opcode).ok_or_else(|| {
-                    Error::Operational(format!("unknown BDX opcode {opcode:#04x}"))
-                })?;
-                let msg = BdxMessage::decode(mt, &payload)
-                    .map_err(|e| Error::Operational(format!("BDX decode: {e}")))?;
-                let sender = bdx
-                    .as_mut()
-                    .ok_or_else(|| Error::Operational("BDX message before QueryImage".into()))?;
-                let outcome = match msg {
-                    BdxMessage::ReceiveInit(init) => sender.accept_receive_init(&init),
-                    BdxMessage::BlockQuery(q) => sender.handle_block_query(&q),
-                    BdxMessage::BlockAckEof(a) => sender.handle_block_ack_eof(&a),
-                    _ => return Err(Error::Operational("unexpected inbound BDX message".into())),
-                };
-                match outcome {
-                    SenderOutcome::Send(out) => {
-                        let w = sessions.encode_outbound(
+
+                if protocol_id == ProtocolId::INTERACTION_MODEL && opcode == OP_INVOKE_REQUEST {
+                    let parsed = parse_invoke_request(&payload)?;
+                    let cmd = parsed
+                        .commands
+                        .first()
+                        .ok_or_else(|| Error::Operational("OTA invoke had no command".into()))?;
+                    let response = if cmd.path.command == CMD_QUERY_IMAGE {
+                        bdx = Some(BlockSender::new(image.clone(), max_block_size));
+                        let fields = matter_ota::handle_query_image(&cmd.fields_tlv, Some(&offer))
+                            .map_err(|e| Error::Operational(format!("QueryImage: {e}")))?;
+                        build_invoke_response_command(
+                            CommandPath {
+                                endpoint: 0,
+                                cluster: OTA_PROVIDER_CLUSTER,
+                                command: CMD_QUERY_IMAGE_RESPONSE,
+                            },
+                            &fields,
+                        )
+                    } else if cmd.path.command == CMD_APPLY_UPDATE_REQUEST {
+                        let fields = matter_ota::handle_apply_update_request(&cmd.fields_tlv)
+                            .map_err(|e| Error::Operational(format!("ApplyUpdateRequest: {e}")))?;
+                        build_invoke_response_command(
+                            CommandPath {
+                                endpoint: 0,
+                                cluster: OTA_PROVIDER_CLUSTER,
+                                command: CMD_APPLY_UPDATE_RESPONSE,
+                            },
+                            &fields,
+                        )
+                    } else if cmd.path.command == CMD_NOTIFY_UPDATE_APPLIED {
+                        matter_ota::parse_notify_update_applied(&cmd.fields_tlv)
+                            .map_err(|e| Error::Operational(format!("NotifyUpdateApplied: {e}")))?;
+                        let r = build_invoke_response_status(
+                            CommandPath {
+                                endpoint: 0,
+                                cluster: OTA_PROVIDER_CLUSTER,
+                                command: CMD_NOTIFY_UPDATE_APPLIED,
+                            },
+                            ImStatus::Success,
+                        );
+                        let out = sessions.encode_outbound(
                             sid,
                             Some(exchange_id),
-                            out.message_type.to_u8(),
-                            ProtocolId::BDX,
-                            &out.payload,
+                            OP_INVOKE_RESPONSE,
+                            ProtocolId::INTERACTION_MODEL,
+                            &r,
                             MrpFlags { reliable: false },
                             Instant::now(),
                         )?;
-                        self.send(&w.wire_bytes, peer).await?;
-                    }
-                    SenderOutcome::Done => {}
-                    SenderOutcome::Abort(code) => {
+                        self.send(&out.wire_bytes, peer).await?;
+                        return Ok(());
+                    } else {
                         return Err(Error::Operational(format!(
-                            "BDX transfer aborted: status {:#06x}",
-                            code.to_u16()
-                        )))
+                            "unexpected OTA command {:#04x}",
+                            cmd.path.command
+                        )));
+                    };
+                    let out = sessions.encode_outbound(
+                        sid,
+                        Some(exchange_id),
+                        OP_INVOKE_RESPONSE,
+                        ProtocolId::INTERACTION_MODEL,
+                        &response,
+                        MrpFlags { reliable: false },
+                        Instant::now(),
+                    )?;
+                    self.send(&out.wire_bytes, peer).await?;
+                } else if protocol_id == ProtocolId::BDX {
+                    let mt = MessageType::from_u8(opcode).ok_or_else(|| {
+                        Error::Operational(format!("unknown BDX opcode {opcode:#04x}"))
+                    })?;
+                    let msg = BdxMessage::decode(mt, &payload)
+                        .map_err(|e| Error::Operational(format!("BDX decode: {e}")))?;
+                    let sender = bdx.as_mut().ok_or_else(|| {
+                        Error::Operational("BDX message before QueryImage".into())
+                    })?;
+                    let outcome = match msg {
+                        BdxMessage::ReceiveInit(init) => sender.accept_receive_init(&init),
+                        BdxMessage::BlockQuery(q) => sender.handle_block_query(&q),
+                        BdxMessage::BlockAckEof(a) => sender.handle_block_ack_eof(&a),
+                        _ => {
+                            return Err(Error::Operational("unexpected inbound BDX message".into()))
+                        }
+                    };
+                    match outcome {
+                        SenderOutcome::Send(out) => {
+                            let w = sessions.encode_outbound(
+                                sid,
+                                Some(exchange_id),
+                                out.message_type.to_u8(),
+                                ProtocolId::BDX,
+                                &out.payload,
+                                MrpFlags { reliable: false },
+                                Instant::now(),
+                            )?;
+                            self.send(&w.wire_bytes, peer).await?;
+                        }
+                        SenderOutcome::Done => {}
+                        SenderOutcome::Abort(code) => {
+                            return Err(Error::Operational(format!(
+                                "BDX transfer aborted: status {:#06x}",
+                                code.to_u16()
+                            )))
+                        }
                     }
                 }
             }
-        }
-
-        if applied || apply_confirmed {
-            Ok(())
-        } else {
-            Err(Error::Operational(
-                "OTA flow ended without ApplyUpdateRequest or NotifyUpdateApplied".into(),
-            ))
+            if carried.is_none() {
+                return Err(Error::Operational(
+                    "OTA session exceeded its step budget without progress".into(),
+                ));
+            }
         }
     }
 }
@@ -728,6 +758,40 @@ mod tests {
         // <16-hex compressed>-<16-hex node>, uppercase.
         assert_eq!(svc.instance_name, "DEADBEEFCAFEBABE-0000000000000001");
         assert_eq!(svc.addresses, vec![addr]);
+    }
+
+    /// `is_unsecured_frame` returns true for session id 0 (unsecured), false
+    /// for a non-zero session id (secured), and false for a short slice.
+    #[test]
+    fn is_unsecured_frame_classifies_correctly() {
+        // True: encode_unsecured_reply always sets session id to 0.
+        let unsecured = encode_unsecured_reply(
+            1,
+            1,
+            0x30,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            None,
+            None,
+            &[],
+        );
+        assert!(
+            is_unsecured_frame(&unsecured),
+            "unsecured reply must have session id 0"
+        );
+
+        // False: hand-built frame with session id 0x1234 (LE at bytes[1..3]).
+        let secured = vec![0x00u8, 0x34, 0x12, 0x00, 0x00, 0x00];
+        assert!(
+            !is_unsecured_frame(&secured),
+            "non-zero session id must not be classified as unsecured"
+        );
+
+        // False: slice shorter than 3 bytes.
+        assert!(
+            !is_unsecured_frame(&[0x00u8, 0x00]),
+            "2-byte slice must return false"
+        );
     }
 
     /// An empty credential pool must fail fast (before any IO) with the
