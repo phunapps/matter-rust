@@ -515,10 +515,10 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<Option<Vec<u8>>, Error>>,
     },
     /// Store `record_bytes` as the sole fabric's CASE resumption record for
-    /// `node_id` (best-effort persist). Used by `serve_ota` after the provider
-    /// server accepts a resumption: `Sigma2_Resume` rotates the id, and the
-    /// stored record must follow or the requestor's NEXT resumption attempt
-    /// presents an id we no longer recognise.
+    /// `node_id` (best-effort persist). Wired back in Task 5 via the provider
+    /// server's `record_sink`; kept here so the actor handler and controller
+    /// helper are available when the sink is installed.
+    #[allow(dead_code)]
     StoreResumptionRecord {
         node_id: u64,
         record_bytes: Vec<u8>,
@@ -6714,6 +6714,9 @@ mod tests {
         // Provider serves on dev_io; requestor drives from ctrl_io.
         let provider_addr = dev_io.local_addr();
         let image_for_assert = image.clone();
+        let sunk: std::sync::Arc<std::sync::Mutex<Vec<matter_crypto::ResumptionRecord>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sunk_in = sunk.clone();
         let server = tokio::spawn(async move {
             ProviderServer::new(
                 dev_io,
@@ -6722,6 +6725,7 @@ mod tests {
                 /* base_session_id */ 0x55,
                 MatterTime::from_unix_secs(2_000_000_000),
             )
+            .with_record_sink(Box::new(move |r| sunk_in.lock().unwrap().push(r)))
             .serve_ota_once(offer, image, /* max_block_size */ 256)
             .await
         });
@@ -6741,9 +6745,11 @@ mod tests {
             reassembled, image_for_assert,
             "requestor reassembled the served image"
         );
-        let record = server.await.unwrap().expect("provider served OTA");
-        assert!(
-            record.is_some(),
+        server.await.unwrap().expect("provider served OTA");
+        let records = sunk.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            1,
             "full-path accept must yield a resumption record to persist"
         );
     }
@@ -6816,6 +6822,9 @@ mod tests {
 
         let provider_addr = dev_io.local_addr();
         let image_for_assert = image.clone();
+        let sunk: std::sync::Arc<std::sync::Mutex<Vec<matter_crypto::ResumptionRecord>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sunk_in = sunk.clone();
         let server = tokio::spawn(async move {
             ProviderServer::new(
                 dev_io,
@@ -6825,6 +6834,7 @@ mod tests {
                 MatterTime::from_unix_secs(2_000_000_000),
             )
             .with_resumption_records(vec![provider_record])
+            .with_record_sink(Box::new(move |r| sunk_in.lock().unwrap().push(r)))
             .serve_ota_once(offer, image, /* max_block_size */ 256)
             .await
         });
@@ -6845,14 +6855,15 @@ mod tests {
             reassembled, image_for_assert,
             "requestor reassembled the served image over the RESUMED session"
         );
-        let rotated = server
+        server
             .await
             .unwrap()
-            .expect("provider served OTA on resumed session")
-            .expect("resumed accept must yield the rotated record");
-        assert_ne!(rotated.id, prior_id, "Sigma2_Resume rotates the id");
+            .expect("provider served OTA on resumed session");
+        let records = sunk.lock().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_ne!(records[0].id, prior_id, "Sigma2_Resume rotates the id");
         assert_eq!(
-            rotated.shared_secret, prior_secret,
+            records[0].shared_secret, prior_secret,
             "the shared secret carries over unchanged"
         );
     }

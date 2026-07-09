@@ -105,6 +105,12 @@ pub struct ProviderServer<D> {
     /// connect's persisted record. No match falls back to
     /// `reject_resumption` + full handshake.
     resumption_records: Vec<ResumptionRecord>,
+    /// Invoked with the fresh [`ResumptionRecord`] each accept produces
+    /// (rotated on the resumed path, brand-new on the full path), so the
+    /// caller can persist it IMMEDIATELY — a caller-side timeout that drops
+    /// the serve future must not lose the rotation. Best-effort: the sink
+    /// must not block (spawn if it needs async work).
+    record_sink: Option<Box<dyn Fn(ResumptionRecord) + Send + Sync>>,
 }
 
 impl<D: AsyncDatagram> ProviderServer<D> {
@@ -137,7 +143,21 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             now,
             handshake_counter: 1,
             resumption_records: Vec::new(),
+            record_sink: None,
         }
+    }
+
+    /// Register a callback that is invoked once per completed accept with the
+    /// fresh [`ResumptionRecord`] the handshake produced (rotated on the resumed
+    /// path, brand-new on the full path). The caller can use this to persist the
+    /// record immediately — a future that is cancelled after `accept_case`
+    /// completes but before the caller stores the record would otherwise lose the
+    /// rotation. The sink is called synchronously and **must not block**; spawn
+    /// an async task if async work is needed.
+    #[must_use]
+    pub fn with_record_sink(mut self, sink: Box<dyn Fn(ResumptionRecord) + Send + Sync>) -> Self {
+        self.record_sink = Some(sink);
+        self
     }
 
     /// Seed the server with known CASE resumption records (see the field
@@ -208,22 +228,23 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
     /// Accept ONE inbound CASE session as the responder, returning an
     /// established [`SessionManager`] + the secured `SessionId` + the peer's
-    /// address + the fresh [`ResumptionRecord`] the handshake produced (for
-    /// the caller to persist). Mirrors the proven `run_loopback_device`
-    /// accept-flow on the full path; a Sigma1 carrying resumption fields that
-    /// match a seeded record (see [`Self::with_resumption_records`]) takes the
-    /// `Sigma2_Resume` fast path instead.
+    /// address. Mirrors the proven `run_loopback_device` accept-flow on the full
+    /// path; a Sigma1 carrying resumption fields that match a seeded record (see
+    /// [`Self::with_resumption_records`]) takes the `Sigma2_Resume` fast path
+    /// instead.
+    ///
+    /// The fresh [`ResumptionRecord`] the handshake produces is handled
+    /// internally: it is re-seeded into `self.resumption_records` (so the NEXT
+    /// accept can match it) and passed to the `record_sink` (if set) before this
+    /// method returns.
+    ///
+    /// If `first_frame` is `Some`, that datagram is used as the Sigma1 instead
+    /// of calling `recv` — useful for callers that have already peeked the first
+    /// packet (e.g., a multi-session loop that demuxes by session id).
     async fn accept_case(
         &mut self,
-    ) -> Result<
-        (
-            SessionManager,
-            SessionId,
-            SocketAddr,
-            Option<ResumptionRecord>,
-        ),
-        Error,
-    > {
+        first_frame: Option<(Vec<u8>, SocketAddr)>,
+    ) -> Result<(SessionManager, SessionId, SocketAddr), Error> {
         let credentials = if self.credentials.is_empty() {
             return Err(Error::Operational(
                 "provider server: credential pool exhausted".into(),
@@ -242,7 +263,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         .map_err(|e| Error::Operational(format!("CASE responder init: {e}")))?;
 
         // Sigma1 → decide between the resumed and full paths.
-        let (s1, peer) = self.recv().await?;
+        let (s1, peer) = match first_frame {
+            Some(f) => f,
+            None => self.recv().await?,
+        };
         let m1 = decode_unsecured(&s1).map_err(|e| Error::Operational(format!("sigma1: {e}")))?;
         if m1.opcode != OP_SIGMA1 {
             return Err(Error::Operational(format!(
@@ -282,10 +306,17 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         let output = responder
             .finish()
             .map_err(|e| Error::Operational(format!("CASE finish: {e}")))?;
-        let record = output.resumption_record.clone();
+        if let Some(record) = output.resumption_record.clone() {
+            // Re-seed so the NEXT accept (the post-reboot requestor resumes
+            // with the id rotated during THIS handshake) can match it.
+            self.resumption_records.push(record.clone());
+            if let Some(sink) = &self.record_sink {
+                sink(record);
+            }
+        }
         let mut sessions = SessionManager::new();
         let sid = sessions.register_case(&output, SessionRole::Responder);
-        Ok((sessions, sid, peer, record))
+        Ok((sessions, sid, peer))
     }
 
     /// Resumed path: send `Sigma2_Resume` on Sigma1's exchange, then await the
@@ -460,10 +491,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     where
         H: FnMut(&ParsedInvokeRequest) -> Vec<u8>,
     {
-        // The handshake's fresh resumption record is discarded here: this F3
-        // handler API carries no device identity to persist it under (the OTA
-        // flow, which does, uses `serve_ota_once`).
-        let (mut sessions, sid, peer, _record) = self.accept_case().await?;
+        let (mut sessions, sid, peer) = self.accept_case(None).await?;
 
         let mut dispatched = 0usize;
         while dispatched < max_invokes {
@@ -504,10 +532,12 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// in-process requestor's `NotifyUpdateApplied` (answered with Success). A
     /// real requestor reboots into the new image and sends
     /// `NotifyUpdateApplied` over a FRESH session on its next boot, which this
-    /// single-session server intentionally does not serve. Yields the fresh
-    /// [`ResumptionRecord`] the accept handshake produced (rotated on the
-    /// resumed path, brand-new on the full path) for the caller to persist —
-    /// the requestor's NEXT session presents this record's id.
+    /// single-session server intentionally does not serve.
+    ///
+    /// The fresh [`ResumptionRecord`] the accept handshake produced is re-seeded
+    /// and forwarded to the `record_sink` (if set via
+    /// [`Self::with_record_sink`]) before the OTA dispatch loop begins — the
+    /// caller need not wait for the full OTA flow to persist the rotation.
     ///
     /// `offer` shapes the `QueryImageResponse` (its `ImageURI`/`UpdateToken`);
     /// `max_block_size` caps each BDX block. All replies are unreliable
@@ -527,10 +557,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         offer: matter_ota::ImageOffer,
         image: Vec<u8>,
         max_block_size: u16,
-    ) -> Result<Option<ResumptionRecord>, Error> {
+    ) -> Result<(), Error> {
         use matter_bdx::{BdxMessage, BlockSender, MessageType, SenderOutcome};
 
-        let (mut sessions, sid, peer, record) = self.accept_case().await?;
+        let (mut sessions, sid, peer) = self.accept_case(None).await?;
         let mut bdx: Option<BlockSender> = None;
         let mut applied = false;
         let mut apply_confirmed = false;
@@ -671,7 +701,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         }
 
         if applied || apply_confirmed {
-            Ok(record)
+            Ok(())
         } else {
             Err(Error::Operational(
                 "OTA flow ended without ApplyUpdateRequest or NotifyUpdateApplied".into(),

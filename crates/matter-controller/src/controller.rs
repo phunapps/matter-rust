@@ -315,13 +315,7 @@ impl MatterController {
             matter_transport::ServiceKind::Operational,
         );
 
-        // Persist the rotated record so the requestor's NEXT session (which
-        // presents the fresh id from this handshake) can also resume.
-        // Best-effort: a failed store only costs that future fast path.
-        let rotated = serve_res?;
-        if let Some(record) = rotated {
-            let _ = self.store_resumption_record(target_node_id, &record).await;
-        }
+        serve_res?;
         Ok(())
     }
 
@@ -550,14 +544,16 @@ impl MatterController {
     }
 
     /// Store `record` as the CASE resumption record for `node_id` (replacing
-    /// any prior one; best-effort persist). Used by [`Self::serve_ota`] after
-    /// the provider server rotates the record via `Sigma2_Resume`.
+    /// any prior one; best-effort persist). Wired back in Task 5 via the
+    /// provider server's `record_sink`; kept here so the call is available when
+    /// the sink is installed.
     ///
     /// # Errors
     ///
     /// [`Error::ControllerStopped`] if the owning task stopped,
     /// [`Error::NotCommissioned`] if no sole fabric exists, or
     /// [`Error::Operational`] if the device has no entry on the fabric.
+    #[allow(dead_code)]
     pub(crate) async fn store_resumption_record(
         &self,
         node_id: u64,
