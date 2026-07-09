@@ -515,9 +515,8 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<Option<Vec<u8>>, Error>>,
     },
     /// Store `record_bytes` as the sole fabric's CASE resumption record for
-    /// `node_id` (best-effort persist). Wired back in Task 5 via the provider
-    /// server's `record_sink`; kept here so the actor handler and controller
-    /// helper are available when the sink is installed.
+    /// `node_id` (best-effort persist). Invoked from `serve_ota` via the provider
+    /// server's `record_sink`, once per completed CASE accept.
     StoreResumptionRecord {
         node_id: u64,
         record_bytes: Vec<u8>,

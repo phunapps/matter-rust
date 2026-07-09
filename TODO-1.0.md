@@ -492,3 +492,27 @@ for operational reads. No real-device regression observed.
 `u64`, regenerate affected structs, update any decode/encode call sites. Revisit
 when the generated `OperationalCredentials` codec is wired into a typed read
 path.
+
+## matter-controller
+
+### OTA provider server availability hardening (multi-session, 2026-07-10 final review)
+
+**Status:** open. Follow-ups from the multi-session provider's whole-branch
+review (all fail-closed today; the live flow is green):
+
+1. **Unauthenticated frames burn pooled credentials** — `accept_case` pops a
+   credential before validating the first frame, so stray LAN datagrams to the
+   advertised port can exhaust the 4-entry pool and end the serve. Fix:
+   discard undecodable / non-Sigma1 frames while awaiting Sigma1 instead of
+   erroring the accept.
+2. **Stale secured frame errors a live serve** — the session loop propagates
+   `decode_inbound` failures; a late retransmit from a prior (discarded)
+   session should be skipped (`continue`) instead.
+3. **Peer identity not pinned** — `serve_ota` never compares the accepted
+   session's peer node id against `target_node_id`; any fabric member can
+   consume the serve. Compare the accept's peer identity (pre-existing in the
+   single-session server; slightly wider now).
+4. `complete_full`'s closing ack-absorb `recv` could swallow a fast post-reboot
+   Sigma1 (costs one retry credential); a cross-session BDX `ReceiveInit`
+   without a fresh `QueryImage` aborts the serve (chip re-queries after
+   reconnect — acceptable, documented here).

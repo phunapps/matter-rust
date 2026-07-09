@@ -567,9 +567,8 @@ impl MatterController {
     }
 
     /// Store `record` as the CASE resumption record for `node_id` (replacing
-    /// any prior one; best-effort persist). Wired back in Task 5 via the
-    /// provider server's `record_sink`; kept here so the call is available when
-    /// the sink is installed.
+    /// any prior one; best-effort persist). Invoked by [`Self::serve_ota`]'s
+    /// provider server's `record_sink`, once per completed CASE accept.
     ///
     /// # Errors
     ///
