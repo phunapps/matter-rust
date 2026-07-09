@@ -188,9 +188,15 @@ impl MatterController {
         matter_transport::Discovery::publish(&mut discovery, &service)?;
 
         // 3. Accept one session + dispatch up to `max_invokes` invokes.
-        let result = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now)
-            .accept_and_dispatch_once(handler, max_invokes)
-            .await;
+        let result = ProviderServer::new(
+            socket,
+            vec![credentials],
+            roots,
+            /* base_session_id */ 0x01,
+            now,
+        )
+        .accept_and_dispatch_once(handler, max_invokes)
+        .await;
 
         // 4. Withdraw the advertisement regardless of outcome.
         let _ = matter_transport::Discovery::unpublish(
@@ -288,8 +294,14 @@ impl MatterController {
             Ok(None) | Err(_) => Vec::new(),
         };
 
-        let server = ProviderServer::new(socket, credentials, roots, /* sid */ 0x01, now)
-            .with_resumption_records(records);
+        let server = ProviderServer::new(
+            socket,
+            vec![credentials],
+            roots,
+            /* base_session_id */ 0x01,
+            now,
+        )
+        .with_resumption_records(records);
         // 960 keeps each BDX DataBlock (block + 4-byte counter + BDX/IM
         // framing) under the transport's 1024-byte secured-payload budget —
         // 1024 here overflows it by 14 bytes once framed.

@@ -6631,9 +6631,9 @@ mod tests {
         let server = tokio::spawn(async move {
             ProviderServer::new(
                 dev_io,
-                device_creds,
+                vec![device_creds],
                 device_roots,
-                /* responder_session_id */ 0x55,
+                /* base_session_id */ 0x55,
                 MatterTime::from_unix_secs(2_000_000_000),
             )
             .accept_and_dispatch_once(
@@ -6717,9 +6717,9 @@ mod tests {
         let server = tokio::spawn(async move {
             ProviderServer::new(
                 dev_io,
-                provider_creds,
+                vec![provider_creds],
                 provider_roots,
-                0x55,
+                /* base_session_id */ 0x55,
                 MatterTime::from_unix_secs(2_000_000_000),
             )
             .serve_ota_once(offer, image, /* max_block_size */ 256)
@@ -6819,9 +6819,9 @@ mod tests {
         let server = tokio::spawn(async move {
             ProviderServer::new(
                 dev_io,
-                provider_creds,
+                vec![provider_creds],
                 provider_roots,
-                0x55,
+                /* base_session_id */ 0x55,
                 MatterTime::from_unix_secs(2_000_000_000),
             )
             .with_resumption_records(vec![provider_record])

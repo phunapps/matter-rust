@@ -67,19 +67,34 @@ pub fn build_operational_service(
     )
 }
 
-/// A single-session OTA provider server: accepts one inbound CASE session as the
-/// responder, then dispatches server-side `InvokeRequest`s. Generic over the
-/// datagram transport so it runs over `TokioUdpTransport` in production and
-/// `InMemoryDatagram` in tests.
+/// A multi-session OTA provider server: accepts inbound CASE sessions as the
+/// responder (one per pooled credential), then dispatches server-side
+/// `InvokeRequest`s. Generic over the datagram transport so it runs over
+/// `TokioUdpTransport` in production and `InMemoryDatagram` in tests.
 ///
 /// This productionizes the responder accept-flow proven in the actor's loopback
 /// tests (`run_loopback_device`): Sigma1→Sigma2→Sigma3→`SessionManager` register,
 /// then secured IM dispatch on the established session.
+///
+/// The credential pool is consumed one entry per `accept_case` call. When the
+/// pool is exhausted, `accept_case` (and any caller such as `serve_ota_once`)
+/// returns [`Error::Operational`] with the message
+/// `"provider server: credential pool exhausted"`. The pool is sized by the
+/// caller — `serve_ota` mints four entries (first session + post-reboot session
+/// + retry slack) from the persisted fabric.
 pub struct ProviderServer<D> {
     io: D,
-    credentials: Option<CaseCredentials>,
+    /// Pool of operational identities, one consumed per CASE accept (the
+    /// responder state machine takes ownership of its credentials).
+    /// `serve_ota` mints these from the persisted fabric — see the spec's
+    /// sizing rationale (first session + post-reboot session + retry slack).
+    credentials: Vec<CaseCredentials>,
     roots: TrustedRoots,
-    responder_session_id: u16,
+    /// Base secured session id; accept N advertises `base.wrapping_add(N)` so
+    /// consecutive sessions never share a local id.
+    base_session_id: u16,
+    /// Number of accepts performed so far (also indexes the session id).
+    accepts: u16,
     now: MatterTime,
     handshake_counter: u32,
     /// Known CASE resumption records. When an inbound Sigma1 carries
@@ -93,23 +108,32 @@ pub struct ProviderServer<D> {
 }
 
 impl<D: AsyncDatagram> ProviderServer<D> {
-    /// Build a provider server bound to `io`, authenticating as `credentials`
-    /// (our operational identity) and validating the peer's certificate chain
-    /// against `roots` at `now`. `responder_session_id` is the non-zero secured
-    /// session id we advertise in Sigma2.
+    /// Build a provider server bound to `io`, authenticating from the
+    /// `credentials` pool (our operational identities). `roots` and `now` are
+    /// used to validate the peer's certificate chain on each accept.
+    ///
+    /// `base_session_id` is the first secured session id advertised in Sigma2;
+    /// the Nth accept uses `base_session_id.wrapping_add(N)` so consecutive
+    /// sessions never reuse the same local id.
+    ///
+    /// The pool is consumed one entry per accept. When it is empty, the next
+    /// call to [`Self::serve_ota_once`] (or any method that calls `accept_case`)
+    /// returns an [`Error::Operational`] containing
+    /// `"provider server: credential pool exhausted"`.
     #[must_use]
     pub fn new(
         io: D,
-        credentials: CaseCredentials,
+        credentials: Vec<CaseCredentials>,
         roots: TrustedRoots,
-        responder_session_id: u16,
+        base_session_id: u16,
         now: MatterTime,
     ) -> Self {
         Self {
             io,
-            credentials: Some(credentials),
+            credentials,
             roots,
-            responder_session_id,
+            base_session_id,
+            accepts: 0,
             now,
             handshake_counter: 1,
             resumption_records: Vec::new(),
@@ -200,14 +224,19 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         ),
         Error,
     > {
-        let credentials = self
-            .credentials
-            .take()
-            .ok_or_else(|| Error::Operational("provider server already consumed".into()))?;
+        let credentials = if self.credentials.is_empty() {
+            return Err(Error::Operational(
+                "provider server: credential pool exhausted".into(),
+            ));
+        } else {
+            self.credentials.remove(0)
+        };
+        let responder_session_id = self.base_session_id.wrapping_add(self.accepts);
+        self.accepts = self.accepts.wrapping_add(1);
         let mut responder = CaseResponder::new(
             credentials,
             self.roots.clone(),
-            self.responder_session_id,
+            responder_session_id,
             self.now,
         )
         .map_err(|e| Error::Operational(format!("CASE responder init: {e}")))?;
@@ -669,5 +698,34 @@ mod tests {
         // <16-hex compressed>-<16-hex node>, uppercase.
         assert_eq!(svc.instance_name, "DEADBEEFCAFEBABE-0000000000000001");
         assert_eq!(svc.addresses, vec![addr]);
+    }
+
+    /// An empty credential pool must fail fast (before any IO) with the
+    /// canonical error message. This exercises the pool-exhaustion guard in
+    /// `accept_case` without requiring a real CASE peer.
+    #[tokio::test]
+    async fn empty_credential_pool_errors_before_any_io() {
+        let (io, _peer) = matter_commissioning::driver::InMemoryDatagram::pair();
+        let server = ProviderServer::new(
+            io,
+            Vec::new(),
+            TrustedRoots::new(),
+            0x10,
+            MatterTime::from_unix_secs(2_000_000_000),
+        );
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: "bdx://0/fw.ota".into(),
+            update_token: vec![0xAB; 16],
+        };
+        let err = server
+            .serve_ota_once(offer, vec![0u8; 16], 960)
+            .await
+            .expect_err("empty pool must fail fast");
+        assert!(
+            err.to_string().contains("credential pool exhausted"),
+            "unexpected error: {err}"
+        );
     }
 }
