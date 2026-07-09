@@ -19,9 +19,18 @@ tests (full flows with byte-exact image reassembly, no external apps).
 > - Launch the requestor with **`--autoApplyImage`** or it idles after the
 >   download and never sends `ApplyUpdateRequest`.
 > - `NotifyUpdateApplied` arrives only after the app REBOOTS into the new
->   image (it execs the downloaded file), over a fresh CASE session — the
->   single-session `serve_ota` completes at `ApplyUpdateResponse (Proceed)`
->   after a short same-session grace window instead of waiting for it.
+>   image (it execs the downloaded file), over a fresh CASE session.
+>   `serve_ota` now serves sessions until that Notify arrives (multi-session
+>   provider, 2026-07-10): the harness's `.ota` payload is a trampoline
+>   script that boots a VERSION-2 requestor build
+>   (`out/<host>-ota-requestor-v2`, built automatically by the harness via
+>   `gn_build_example.sh` with `chip_device_config_device_software_version=2`)
+>   — chip's `GetSoftwareVersion` is compile-time, and the rebooted process
+>   only notifies when its running version equals the persisted target
+>   (`ConfirmCurrentImage`). Manual runs serving a REAL image to a REAL
+>   device get the same semantics: `serve_ota` returns once the device
+>   reboots into the new firmware and notifies; bound it with a timeout
+>   sized to the device's reboot time.
 
 ## Prerequisites
 

@@ -188,7 +188,8 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
     // OTA requestor needs a real `.ota` image to download; generate it now and
     // hand its path to the test via env.
     let ota_image = if spec.needs_ota_image {
-        let img = generate_ota_image(&chip_root, &dut_dir)?;
+        let v2 = locate_or_build_v2_requestor(&chip_root)?;
+        let img = generate_ota_image(&chip_root, &dut_dir, &v2)?;
         eprintln!("integration: OTA image → {}", img.display());
         Some(img)
     } else {
@@ -300,6 +301,51 @@ fn locate_or_build_binary(chip_root: &Path, spec: &AppSpec) -> Result<PathBuf, S
     Ok(binary)
 }
 
+/// Locate (or build) the VERSION-2 ota-requestor-app: chip's
+/// `GetSoftwareVersion` is the compile-time constant
+/// `CHIP_DEVICE_CONFIG_DEVICE_SOFTWARE_VERSION`, and the post-reboot
+/// `NotifyUpdateApplied` is sent only when the running version equals the
+/// persisted target (`ConfirmCurrentImage`) — so the image the requestor
+/// boots into must BE a v2 build. No `build_examples.py` token exists for
+/// the version; build directly via `gn_build_example.sh`.
+fn locate_or_build_v2_requestor(chip_root: &Path) -> Result<PathBuf, String> {
+    let out_dir = format!("out/{}-ota-requestor-v2", host_target());
+    let binary = chip_root.join(&out_dir).join("chip-ota-requestor-app");
+    if binary.exists() {
+        eprintln!("integration: found v2 requestor at {}", binary.display());
+        return Ok(binary);
+    }
+
+    eprintln!("integration: building v2 ota-requestor (this takes a while)");
+    let script = format!(
+        "source scripts/activate.sh && \
+         ./scripts/examples/gn_build_example.sh examples/ota-requestor-app/linux {out_dir} \
+             'chip_device_config_device_software_version=2 \
+              chip_device_config_device_software_version_string=\"2.0\"'"
+    );
+    let status = Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .current_dir(chip_root)
+        .status()
+        .map_err(|e| format!("failed to spawn v2 build shell: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "v2 ota-requestor build failed (exit {status})\n\
+             Build command: bash -c \"{script}\"\n\
+             in directory: {}",
+            chip_root.display()
+        ));
+    }
+    if !binary.exists() {
+        return Err(format!(
+            "v2 build succeeded but binary still missing: {}",
+            binary.display()
+        ));
+    }
+    Ok(binary)
+}
+
 // ---------------------------------------------------------------------------
 // Stale-process cleanup
 // ---------------------------------------------------------------------------
@@ -369,13 +415,27 @@ fn spawn_dut(
     Ok(child)
 }
 
-/// Generate a throwaway `.ota` image under `dut_dir` with chip's image tool and
-/// return its path. The requestor validates only the `OTAImageHeader` (vendor
-/// 0xFFF1 / product 0x8000 / version 2, above the requestor's built-in
-/// software version 1), not the payload, so a fixed zero payload is fine.
-fn generate_ota_image(chip_root: &Path, dut_dir: &Path) -> Result<PathBuf, String> {
+/// Generate a `.ota` image under `dut_dir` with chip's image tool and return
+/// its path. Header: vendor 0xFFF1 / product 0x8000 / version 2 (above the
+/// requestor's built-in software version 1). The payload is a trampoline
+/// script that boots `v2_binary` — the version-2 requestor build — so the
+/// post-reboot `NotifyUpdateApplied` leg runs for real (see
+/// [`locate_or_build_v2_requestor`]).
+fn generate_ota_image(
+    chip_root: &Path,
+    dut_dir: &Path,
+    v2_binary: &Path,
+) -> Result<PathBuf, String> {
+    // Trampoline payload: chip's OTAImageProcessor strips the OTA header,
+    // renames the payload to its image path, chmods it executable, and
+    // main.cpp execv()s it with the ORIGINAL argv — so this script boots the
+    // v2 binary with the same --KVS (persisted state kApplying + the rotated
+    // resumption record carry over) and the rebooted app sends
+    // NotifyUpdateApplied. execv preserves the pid, so the harness's
+    // kill-guard and the redirected app.log still apply.
     let payload = dut_dir.join("ota-payload.bin");
-    fs::write(&payload, vec![0u8; 64 * 1024])
+    let script = format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", v2_binary.display());
+    fs::write(&payload, script)
         .map_err(|e| format!("write ota payload {}: {e}", payload.display()))?;
     let image = dut_dir.join("test.ota");
     let tool = chip_root.join("src/app/ota_image_tool.py");
