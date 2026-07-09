@@ -6900,14 +6900,13 @@ mod tests {
         )
         .await
         .unwrap();
-        drive_ota_flow(io, provider_addr, sessions, sid, current_version).await
+        drive_ota_flow(&io, provider_addr, &mut sessions, sid, current_version).await
     }
 
     /// In-process OTA requestor that RESUMES a prior CASE session instead of
-    /// running the full handshake: sends a Sigma1 with resumption fields built
-    /// from `record`, expects `Sigma2_Resume`, closes with a success
-    /// `StatusReport` (absorbing the provider's standalone ack), then drives the
-    /// same OTA flow. Mirrors chip's requestor behaviour after
+    /// running the full handshake: delegates to `resume_case_handshake` (which
+    /// does Sigma1-with-resumption → `Sigma2_Resume` → `StatusReport` → ack) and
+    /// then drives the same OTA flow. Mirrors chip's requestor behaviour after
     /// `AnnounceOTAProvider` (it always tries to resume the announce session).
     #[allow(clippy::too_many_arguments)] // Test driver mirroring ota_test_requestor + a record.
     async fn ota_test_requestor_resumed(
@@ -6920,84 +6919,57 @@ mod tests {
         current_version: u32,
         record: matter_crypto::ResumptionRecord,
     ) -> Vec<u8> {
-        use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
-        use matter_transport::{ProtocolId, SessionManager};
-
-        const OP_SIGMA1: u8 = 0x30;
-        const OP_SIGMA2_RESUME: u8 = 0x33;
-        const OP_STATUS_REPORT: u8 = 0x40;
-        const EXCHANGE: u16 = 0x7001;
-
-        let now = MatterTime::from_unix_secs(2_000_000_000);
-        let mut initiator = matter_crypto::CaseInitiator::new_with_resumption(
+        let (mut sessions, sid) = resume_case_handshake(
+            &io,
+            provider_addr,
             creds,
             roots,
             provider_node_id,
             fabric_id,
             record,
-            /* initiator_session_id */ 0x0021,
-            now,
+            0x0021,
         )
-        .unwrap();
-
-        // Sigma1 (with resumption fields).
-        let sigma1 = initiator.start().unwrap();
-        let wire = encode_unsecured(
-            1,
-            EXCHANGE,
-            OP_SIGMA1,
-            ProtocolId::SECURE_CHANNEL,
-            true,
-            true,
-            None,
-            None,
-            &sigma1,
-        );
-        io.send_to(&wire, provider_addr).await.unwrap();
-
-        // Sigma2_Resume.
-        let (bytes, _) = io.recv_from().await.unwrap();
-        let m = decode_unsecured(&bytes).unwrap();
-        assert_eq!(m.opcode, OP_SIGMA2_RESUME, "expected Sigma2_Resume");
-        initiator.handle_sigma2_resume(&m.payload).unwrap();
-
-        // SigmaFinished: success StatusReport (reliable, piggyback-acks
-        // Sigma2_Resume), then absorb the provider's standalone ack.
-        let mut body = Vec::with_capacity(8);
-        body.extend_from_slice(&0u16.to_le_bytes()); // GeneralCode: success
-        body.extend_from_slice(&0u32.to_le_bytes()); // ProtocolId: SecureChannel
-        body.extend_from_slice(&0u16.to_le_bytes()); // ProtocolCode: 0
-        let report = encode_unsecured(
-            2,
-            EXCHANGE,
-            OP_STATUS_REPORT,
-            ProtocolId::SECURE_CHANNEL,
-            true,
-            true,
-            Some(m.message_counter),
-            None,
-            &body,
-        );
-        io.send_to(&report, provider_addr).await.unwrap();
-        let _ack = io.recv_from().await.unwrap();
-
-        let output = initiator.finish().unwrap();
-        let mut sessions = SessionManager::new();
-        let sid = sessions.register_case(&output, matter_transport::SessionRole::Initiator);
-        drive_ota_flow(io, provider_addr, sessions, sid, current_version).await
+        .await;
+        drive_ota_flow(&io, provider_addr, &mut sessions, sid, current_version).await
     }
 
-    /// Drive `QueryImage` → BDX download → `ApplyUpdateRequest` →
-    /// `NotifyUpdateApplied` over an already-established secured session,
-    /// returning the reassembled image bytes.
-    #[allow(clippy::too_many_lines)] // Linear OTA-requestor test driver; kept as one flow.
+    /// Drive the full OTA flow on an already-established session, splitting the
+    /// work across [`drive_ota_download_and_apply`] (steps 1-3) and
+    /// [`send_notify_update_applied`] (step 4). Returns the reassembled image.
     async fn drive_ota_flow(
-        io: matter_commissioning::driver::InMemoryDatagram,
+        io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
-        mut sessions: matter_transport::SessionManager,
+        sessions: &mut matter_transport::SessionManager,
         sid: matter_transport::SessionId,
         current_version: u32,
     ) -> Vec<u8> {
+        let (reassembled, token) =
+            drive_ota_download_and_apply(io, provider_addr, sessions, sid, current_version).await;
+        send_notify_update_applied(
+            io,
+            provider_addr,
+            sessions,
+            sid,
+            &token,
+            current_version + 1,
+        )
+        .await;
+        reassembled
+    }
+
+    /// Drive `QueryImage` → `QueryImageResponse` → BDX download →
+    /// `ApplyUpdateRequest` → `ApplyUpdateResponse` (Proceed) on an
+    /// already-established secured session, returning `(reassembled_image,
+    /// update_token)`. The token is needed for `NotifyUpdateApplied` which may
+    /// run on a DIFFERENT session (the post-reboot shape).
+    #[allow(clippy::too_many_lines)] // Linear OTA-requestor test driver; kept as one flow.
+    async fn drive_ota_download_and_apply(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        current_version: u32,
+    ) -> (Vec<u8>, Vec<u8>) {
         use matter_bdx::{CounterMessage, DataBlock, ReceiveAccept, TransferControl, TransferInit};
         use matter_clusters::gen::ota_software_update_provider as prov;
         use matter_commissioning::driver::secured_round_trip;
@@ -7029,8 +7001,8 @@ mod tests {
             &qi,
         );
         let resp = secured_round_trip(
-            &io,
-            &mut sessions,
+            io,
+            sessions,
             sid,
             provider_addr,
             IM,
@@ -7061,8 +7033,8 @@ mod tests {
             metadata: Vec::new(),
         };
         let acc = secured_round_trip(
-            &io,
-            &mut sessions,
+            io,
+            sessions,
             sid,
             provider_addr,
             matter_bdx::MessageType::ReceiveInit.to_u8(),
@@ -7082,8 +7054,8 @@ mod tests {
             }
             .encode();
             let blk = secured_round_trip(
-                &io,
-                &mut sessions,
+                io,
+                sessions,
                 sid,
                 provider_addr,
                 matter_bdx::MessageType::BlockQuery.to_u8(),
@@ -7125,8 +7097,8 @@ mod tests {
             &aur,
         );
         let ar = secured_round_trip(
-            &io,
-            &mut sessions,
+            io,
+            sessions,
             sid,
             provider_addr,
             IM,
@@ -7145,8 +7117,32 @@ mod tests {
             }
         }
 
-        // 4. NotifyUpdateApplied → Success status.
-        let nua = prov::encode_notify_update_applied(&update_token, current_version + 1);
+        (reassembled, update_token)
+    }
+
+    /// Send `NotifyUpdateApplied` on an already-established secured session and
+    /// assert the provider returns a success status. `token` and
+    /// `software_version` come from the download phase (possibly on a different
+    /// session — the post-reboot shape).
+    async fn send_notify_update_applied(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        token: &[u8],
+        software_version: u32,
+    ) {
+        use matter_clusters::gen::ota_software_update_provider as prov;
+        use matter_commissioning::driver::secured_round_trip;
+        use matter_interaction::{
+            build_invoke_request, parse_invoke_response, CommandPath, InvokeResponse,
+        };
+        use matter_transport::ProtocolId;
+
+        const IM: u8 = 0x08;
+
+        let token_vec = token.to_vec();
+        let nua = prov::encode_notify_update_applied(&token_vec, software_version);
         let nua_req = build_invoke_request(
             CommandPath {
                 endpoint: 0,
@@ -7156,8 +7152,8 @@ mod tests {
             &nua,
         );
         let nr = secured_round_trip(
-            &io,
-            &mut sessions,
+            io,
+            sessions,
             sid,
             provider_addr,
             IM,
@@ -7170,8 +7166,309 @@ mod tests {
             parse_invoke_response(&nr.payload).unwrap(),
             InvokeResponse::Status(matter_interaction::ImStatus::Success)
         ));
+    }
 
-        reassembled
+    /// CASE resumption handshake: sends a Sigma1 with resumption fields built
+    /// from `record`, expects `Sigma2_Resume`, closes with a success
+    /// `StatusReport` (absorbing the provider's standalone ack), and returns
+    /// the registered `(SessionManager, SessionId)`. `session_id` is the
+    /// initiator's advertised secured session id; the exchange id is derived
+    /// from it (`0x7000 | session_id`) so two concurrent handshakes on the
+    /// same socket never share an exchange. Mirrors chip's requestor behaviour
+    /// after `AnnounceOTAProvider`.
+    #[allow(clippy::too_many_arguments)] // Protocol-mirroring handshake driver; each arg maps to a distinct CASE parameter.
+    async fn resume_case_handshake(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        creds: matter_crypto::CaseCredentials,
+        roots: matter_cert::TrustedRoots,
+        provider_node_id: u64,
+        fabric_id: u64,
+        record: matter_crypto::ResumptionRecord,
+        session_id: u16,
+    ) -> (
+        matter_transport::SessionManager,
+        matter_transport::SessionId,
+    ) {
+        use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
+        use matter_transport::{ProtocolId, SessionManager};
+
+        const OP_SIGMA1: u8 = 0x30;
+        const OP_SIGMA2_RESUME: u8 = 0x33;
+        const OP_STATUS_REPORT: u8 = 0x40;
+        let exchange: u16 = 0x7000 | session_id;
+
+        let now = MatterTime::from_unix_secs(2_000_000_000);
+        let mut initiator = matter_crypto::CaseInitiator::new_with_resumption(
+            creds,
+            roots,
+            provider_node_id,
+            fabric_id,
+            record,
+            session_id,
+            now,
+        )
+        .unwrap();
+
+        // Sigma1 (with resumption fields).
+        let sigma1 = initiator.start().unwrap();
+        let wire = encode_unsecured(
+            1,
+            exchange,
+            OP_SIGMA1,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            None,
+            None,
+            &sigma1,
+        );
+        io.send_to(&wire, provider_addr).await.unwrap();
+
+        // Sigma2_Resume.
+        let (bytes, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&bytes).unwrap();
+        assert_eq!(m.opcode, OP_SIGMA2_RESUME, "expected Sigma2_Resume");
+        initiator.handle_sigma2_resume(&m.payload).unwrap();
+
+        // SigmaFinished: success StatusReport (reliable, piggyback-acks
+        // Sigma2_Resume), then absorb the provider's standalone ack.
+        let mut body = Vec::with_capacity(8);
+        body.extend_from_slice(&0u16.to_le_bytes()); // GeneralCode: success
+        body.extend_from_slice(&0u32.to_le_bytes()); // ProtocolId: SecureChannel
+        body.extend_from_slice(&0u16.to_le_bytes()); // ProtocolCode: 0
+        let report = encode_unsecured(
+            2,
+            exchange,
+            OP_STATUS_REPORT,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, provider_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+
+        let output = initiator.finish().unwrap();
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, matter_transport::SessionRole::Initiator);
+        (sessions, sid)
+    }
+
+    /// Build a fresh set of device CASE credentials under `fabric` (a new key
+    /// pair + a newly issued NOC). The NOC is signed by `fabric`'s RCAC so the
+    /// provider will accept it on a full handshake; on the resumed path the NOC
+    /// is not re-verified (the resumption id suffices). Calling this function
+    /// twice on the same fabric produces two independent credential sets, which
+    /// the cross-session test needs (the first is consumed by session-1's
+    /// handshake; the second is needed for session 2).
+    fn make_device_creds_for_fabric(
+        fabric: &crate::state::FabricEntry,
+    ) -> (matter_crypto::CaseCredentials, matter_cert::TrustedRoots) {
+        let device_node_id: u64 = 0x0000_0000_0000_0042;
+        let device_record = fabric.to_fabric_record().unwrap();
+        let (device_signer, _pkcs8) = RingSigner::generate().unwrap();
+        let device_noc = issue_noc(
+            &device_record,
+            &VerifiedCsr {
+                public_key: device_signer.public_key().clone(),
+            },
+            device_node_id,
+            &[],
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+        let compressed =
+            derive_compressed_fabric_id(fabric.rcac_cert.public_key().as_bytes(), fabric.fabric_id)
+                .unwrap();
+        let device_ipk = derive_operational_ipk(&fabric.ipk, &compressed).unwrap();
+        let mut device_roots = TrustedRoots::new();
+        device_roots.add(TrustAnchor::from_root_cert(&fabric.rcac_cert));
+        let device_creds = CaseCredentials {
+            noc: device_noc,
+            icac: None,
+            signer: Box::new(device_signer),
+            fabric_id: fabric.fabric_id,
+            node_id: device_node_id,
+            ipk: device_ipk,
+            rcac_public_key: *fabric.rcac_cert.public_key().as_bytes(),
+        };
+        (device_creds, device_roots)
+    }
+
+    /// The post-reboot shape: session 1 resumes CASE, downloads the image,
+    /// and sends `ApplyUpdateRequest` (no same-session `NotifyUpdateApplied`);
+    /// the requestor then "reboots" — a SECOND resumption handshake using the
+    /// record rotated during accept 1 (captured via the sink) — and sends
+    /// `NotifyUpdateApplied` on session 2. The `serve_ota_once` loop must
+    /// complete `Ok` and the sink must show two rotations (one per accept).
+    ///
+    /// This mirrors the real chip OTA requestor shape: it reboots into the
+    /// new image before sending `NotifyUpdateApplied`, so the notification
+    /// arrives on a fresh session.
+    #[allow(clippy::too_many_lines)] // Linear cross-session OTA protocol test; splitting hurts clarity.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_ota_spans_sessions_for_post_reboot_notify() {
+        use crate::provider_server::ProviderServer;
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        // TWO provider credential sets: session 1 (download + apply) and
+        // session 2 (post-reboot Notify). accept_case consumes one per accept.
+        let (provider_creds1, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let (provider_creds2, _, _) = crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+        // Save the provider NOC before creds1 is moved into the server spawn.
+        let provider_noc = provider_creds1.noc.clone();
+
+        // Second requestor credential set for session 2 (session 1 consumes
+        // device_creds). Same fabric/RCAC, fresh key pair — same identity is
+        // fine on the resumed path (the provider validates the resumption id,
+        // not the NOC chain again).
+        let (device_creds2, device_roots2) = make_device_creds_for_fabric(fabric);
+
+        // Matched record pair for a synthetic prior session.
+        let prior_id = ResumptionId([0x42; 16]);
+        let prior_secret = [0x24u8; 32];
+        let provider_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: device_node_id,
+                fabric_id,
+                noc: device_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let requestor_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+
+        let image: Vec<u8> = (0..2500u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        let provider_addr = dev_io.local_addr();
+        let image_for_assert = image.clone();
+        let sunk: std::sync::Arc<std::sync::Mutex<Vec<matter_crypto::ResumptionRecord>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sunk_in = sunk.clone();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                vec![provider_creds1, provider_creds2],
+                provider_roots,
+                /* base_session_id */ 0x55,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_records(vec![provider_record])
+            .with_record_sink(Box::new(move |r| sunk_in.lock().unwrap().push(r)))
+            .serve_ota_once(offer, image, /* max_block_size */ 256)
+            .await
+        });
+
+        // Session 1: resume CASE, download the image, apply — but no
+        // same-session Notify (the requestor "reboots" first).
+        let (mut s1, sid1) = resume_case_handshake(
+            &ctrl_io,
+            provider_addr,
+            device_creds,
+            device_roots,
+            provider_node_id,
+            fabric_id,
+            requestor_record,
+            0x0021,
+        )
+        .await;
+        let (reassembled, token) =
+            drive_ota_download_and_apply(&ctrl_io, provider_addr, &mut s1, sid1, 1).await;
+        assert_eq!(
+            reassembled, image_for_assert,
+            "session-1 download must reassemble the full image"
+        );
+
+        // "Reboot": the requestor builds its session-2 record from the rotated
+        // resumption id captured by the sink during accept 1. The sink is
+        // called synchronously by accept_case before the IM dispatch loop, so
+        // sunk[0] is guaranteed to be present by the time
+        // drive_ota_download_and_apply returns (that flow requires many IM
+        // round-trips that happen AFTER accept_case returns).
+        let rotated = sunk.lock().unwrap()[0].clone();
+        let requestor_record2 = ResumptionRecord {
+            id: rotated.id,
+            shared_secret: rotated.shared_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_noc, // same provider identity as session 1
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let (mut s2, sid2) = resume_case_handshake(
+            &ctrl_io,
+            provider_addr,
+            device_creds2,
+            device_roots2,
+            provider_node_id,
+            fabric_id,
+            requestor_record2,
+            0x0022,
+        )
+        .await;
+        // Session 2: send NotifyUpdateApplied with the token from session 1.
+        // software_version = 2 (the newly applied version = current_version + 1 = 1 + 1).
+        send_notify_update_applied(&ctrl_io, provider_addr, &mut s2, sid2, &token, 2).await;
+
+        server
+            .await
+            .unwrap()
+            .expect("serve_ota_once must complete on cross-session Notify");
+        let records = sunk.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            2,
+            "one record per accept (one per CASE session)"
+        );
+        assert_ne!(
+            records[0].id, records[1].id,
+            "each accept rotates the resumption id"
+        );
     }
 
     #[tokio::test]
