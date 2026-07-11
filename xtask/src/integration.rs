@@ -317,11 +317,21 @@ fn locate_or_build_v2_requestor(chip_root: &Path) -> Result<PathBuf, String> {
     }
 
     eprintln!("integration: building v2 ota-requestor (this takes a while)");
+    // On Linux the v2 image must ALSO resolve via avahi (chip_mdns="platform"),
+    // matching the -platform-mdns variant the launcher binary uses: the
+    // REBOOTED process re-resolves the controller's provider advertisement,
+    // and minmdns cannot see mdns-sd records on a headless runner (nightly
+    // run 29033957877: post-reboot "Timeout waiting for mDNS resolution").
+    let mdns_arg = if cfg!(target_os = "linux") {
+        " chip_mdns=\"platform\""
+    } else {
+        ""
+    };
     let script = format!(
         "source scripts/activate.sh && \
          ./scripts/examples/gn_build_example.sh examples/ota-requestor-app/linux {out_dir} \
              'chip_device_config_device_software_version=2 \
-              chip_device_config_device_software_version_string=\"2.0\"'"
+              chip_device_config_device_software_version_string=\"2.0\"{mdns_arg}'"
     );
     let status = Command::new("bash")
         .arg("-c")
