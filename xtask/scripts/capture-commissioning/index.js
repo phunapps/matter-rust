@@ -70,6 +70,9 @@ function installCapture(outPath) {
   function record(dir, message) {
     const line = {
       seq: seq++,
+      // Monotonic milliseconds — lets post-analysis derive protocol-phase
+      // wall-clock durations (e.g. the full CASE handshake) from the trace.
+      ts_ms: performance.now(),
       dir,
       session_id: message.packetHeader.sessionId,
       exchange: message.payloadHeader.exchangeId,

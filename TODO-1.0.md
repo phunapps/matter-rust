@@ -136,8 +136,10 @@ not part of the gate). Criterion suites now cover:
   32 B and 960 B payloads).
 
 **Remaining:** a `matter-cert` suite when a parse/validate hot path is
-identified, and an actual captured matter.js CASE number to compare
-`case/full_handshake` against.
+identified. The matter.js CASE comparison landed 2026-07-12: full CASE
+0.64 ms (ours, state-machine criterion) vs ≈5.1 ms (matter.js 0.17.1
+in-process loopback wall-clock) — methodology + caveats in
+`docs/matter-js-comparison.md`.
 
 ### no_std posture
 

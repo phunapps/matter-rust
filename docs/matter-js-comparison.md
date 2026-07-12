@@ -55,3 +55,22 @@ investigate. Add the divergence as a test vector, then fix the Rust side.
   rather than callback registration.
 
 These are language-idiomatic differences. They do not affect interop.
+
+## CASE handshake performance (measured 2026-07-12)
+
+The load-bearing perf comparison for the "embedded-grade performance"
+positioning. Same machine (Apple M-series), both sides measuring the full
+SIGMA-I exchange (Sigma1 → Sigma2 → Sigma3 → session keys):
+
+| implementation | measurement basis | full CASE handshake |
+|---|---|---|
+| matter-rust (`just bench-one matter-crypto`, `case/full_handshake`) | state machines only, in-memory, criterion median | **0.64 ms** |
+| matter.js 0.17.1 (`cargo xtask capture-commissioning` trace timestamps, Sigma1 tx → SigmaFinished StatusReport tx) | in-process loopback UDP wall-clock, 5-run range | **4.2–5.7 ms (median ≈ 5.1 ms)** |
+
+The bases differ: the matter.js number includes loopback UDP + MRP +
+event-loop scheduling that the criterion number excludes, so the ~8×
+ratio *overstates* matter.js's cost by some transport overhead — the
+honest claim is "several times faster", not a precise multiplier. Both
+sides pay the same ECDH/ECDSA/HKDF work; the gap is the surrounding
+runtime. Per-step Rust costs (sigma1/2/3 handle: 227 / 336 / 101 µs)
+live in the criterion output.
