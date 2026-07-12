@@ -317,6 +317,7 @@ impl MatterController {
         let sink_controller = self.clone();
         let server = ProviderServer::new(socket, pool, roots, /* base_session_id */ 0x01, now)
             .with_resumption_records(records)
+            .with_expected_peer(target_node_id)
             .with_record_sink(Box::new(move |record| {
                 let c = sink_controller.clone();
                 tokio::spawn(async move {

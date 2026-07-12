@@ -111,6 +111,11 @@ pub struct ProviderServer<D> {
     accepts: u16,
     now: MatterTime,
     handshake_counter: u32,
+    /// When set, an accepted session whose authenticated peer node id is not
+    /// this value fails the accept (its pooled credential is consumed — that
+    /// is the point: a fabric member other than the OTA target must not be
+    /// able to hijack the serve). `serve_ota` pins its `target_node_id`.
+    expected_peer: Option<u64>,
     /// Known CASE resumption records. When an inbound Sigma1 carries
     /// resumption fields whose id matches one of these, the session is
     /// resumed (`Sigma2_Resume`) instead of a full handshake — chip's OTA
@@ -156,6 +161,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             accepts: 0,
             now,
             handshake_counter: 1,
+            expected_peer: None,
             resumption_records: Vec::new(),
             record_sink: None,
         }
@@ -181,6 +187,15 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     #[must_use]
     pub fn with_resumption_records(mut self, records: Vec<ResumptionRecord>) -> Self {
         self.resumption_records = records;
+        self
+    }
+
+    /// Pin the peer: an accepted session must authenticate as `node_id` or
+    /// the accept fails (consuming its pooled credential). Without this, any
+    /// member of the fabric could consume the serve.
+    #[must_use]
+    pub fn with_expected_peer(mut self, node_id: u64) -> Self {
+        self.expected_peer = Some(node_id);
         self
     }
 
@@ -334,6 +349,16 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         let output = responder
             .finish()
             .map_err(|e| Error::Operational(format!("CASE finish: {e}")))?;
+        // Enforce the pin BEFORE re-seeding/sinking the record: a rejected
+        // peer must leave no resumption state behind.
+        if let Some(expected) = self.expected_peer {
+            if output.peer.node_id != expected {
+                return Err(Error::Operational(format!(
+                    "provider server: accepted peer node {:#x} is not the expected {expected:#x}",
+                    output.peer.node_id
+                )));
+            }
+        }
         if let Some(record) = output.resumption_record.clone() {
             // Re-seed so the NEXT accept (the post-reboot requestor resumes
             // with the id rotated during THIS handshake) can match it.

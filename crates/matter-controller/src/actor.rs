@@ -7418,6 +7418,108 @@ mod tests {
             .expect("serve completed despite stray frames");
     }
 
+    /// Hardening regression: a serve pinned to a target node must reject an
+    /// authenticated session from a DIFFERENT fabric member (here the pin is
+    /// set to an id the requestor does not hold), consuming the credential
+    /// but leaving no resumption state behind.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_ota_rejects_unpinned_peer() {
+        use crate::provider_server::ProviderServer;
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+
+        let prior_id = ResumptionId([0x44; 16]);
+        let prior_secret = [0x26u8; 32];
+        let provider_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: device_node_id,
+                fabric_id,
+                noc: device_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let requestor_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        let provider_addr = dev_io.local_addr();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                vec![provider_creds], // one credential: the rejected accept ends the serve
+                provider_roots,
+                /* base_session_id */ 0x57,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_records(vec![provider_record])
+            // Pin to an id the requestor does NOT authenticate as.
+            .with_expected_peer(device_node_id + 1)
+            .serve_ota_once(offer, vec![0u8; 64], /* max_block_size */ 256)
+            .await
+        });
+
+        // The requestor's resumed handshake completes from ITS side (the peer
+        // check runs after the responder finishes); it never gets served.
+        let requestor = tokio::spawn(async move {
+            let _ = resume_case_handshake(
+                &ctrl_io,
+                provider_addr,
+                device_creds,
+                device_roots,
+                provider_node_id,
+                fabric_id,
+                requestor_record,
+                /* session_id */ 0x0031,
+            )
+            .await;
+        });
+
+        let err = server
+            .await
+            .unwrap()
+            .expect_err("pinned serve must reject the wrong peer");
+        assert!(
+            err.to_string().contains("not the expected"),
+            "unexpected error: {err}"
+        );
+        requestor.abort();
+    }
+
     /// The post-reboot shape: session 1 resumes CASE, downloads the image,
     /// and sends `ApplyUpdateRequest` (no same-session `NotifyUpdateApplied`);
     /// the requestor then "reboots" — a SECOND resumption handshake using the
