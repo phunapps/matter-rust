@@ -16,33 +16,7 @@ re-architecture and a perf follow-up — independent of the codegen work. Audit
 backlog (uncommitted, local): `docs/audit/2026-06-12-backlog.md` +
 `2026-06-12-findings.json`.
 
-### 1. Controller actor serializes long commission/connect handlers — RESOLVED (M9-G-d)
-
-**Status:** ✅ resolved in M9-G-d (commits `4b8a6028` commission, `bc309e39` +
-`a50a8bc3` connect). See the `Actor::run` rustdoc in
-`crates/matter-controller/src/actor.rs`.
-
-Both multi-round-trip flows now run off the actor loop on `tokio::spawn`ed tasks
-that report back over channels the `select!` drains, so other sessions' MRP +
-liveness continue for the whole handshake window:
-- **Commission** runs on its own freshly bound socket + discovery
-  (`spawn_commission` → `handle_commission_completion`).
-- **CASE connect** parks the triggering verb and drives the handshake off-loop
-  through the actor's own socket via `HandshakeSocket` (no second socket, no
-  session migration); `run_connect_task` → `handle_connect_done` registers the
-  session and re-dispatches the parked verbs. Device resolution stays inline (a
-  brief bounded mDNS poll) to preserve the discovery seam.
-
-Proven by hermetic concurrency tests
-(`commission_completion_drains_while_loop_stays_responsive`,
-`connect_handshake_runs_off_loop_which_stays_responsive`) — a stalled
-commission/handshake no longer blocks unrelated commands.
-
-**Residual (minor):** the two low-frequency *recovery* connects (a pending
-round-trip's post-timeout reconnect and a stranded resubscribe, both from the
-timer arm) still use the inline `connect()`. Not a steady-state concern.
-
-### 2. matter-codec per-element budget check has a measurable decode cost
+### matter-codec per-element budget check has a measurable decode cost
 
 **Status:** open perf follow-up; not blocking.
 
@@ -111,39 +85,6 @@ scenario against matter.js (M4.1 + M4.2 + M4.3).
 
 New-session byte-parity passes byte-for-byte for Sigma1, Sigma2, and
 Sigma3 against matter.js's `CaseClient.ts` / `CaseServer.ts`.
-
-### CASE resumption byte-parity — OPEN
-
-**Status:** open follow-up. Two specific divergences from matter.js.
-
-**Why it matters:** The resumption fast-path (Sigma1 with resume fields
-→ Sigma2_Resume) works correctly in local roundtrip (all M4.2 tests
-pass). However, two byte-parity issues remain that prevent the
-fixture-driven `tests/case_byte_parity.rs` resumption tests from
-passing. Both tests are `#[ignore]`d with inline TODO comments.
-
-**Issue 1 — `sigma1_resume_mic` composition:**
-Our `compute_sigma1_resume_mic` in `initiator.rs` uses
-`HKDF(shared_secret, salt=initiatorRandom||resumptionId, info="...")`.
-matter.js's `CaseClient.ts` derives the MIC differently — the exact
-HKDF input / AEAD construction needs realignment against the TypeScript
-reference. The captured fixture's `initiator_resume_mic` field
-diverges from our output for the same inputs.
-
-**Issue 2 — fresh `resumption_id` in Sigma2_Resume:**
-Our `CaseResponder::accept_resumption` generates a fresh
-`resumption_id` via `SystemRandom::fill`. For byte-parity testing we
-need a `_with_new_resumption_id` constructor on `CaseResponder`
-(under the `test-support` feature) so the fixture's known
-`new_resumption_id` value can be injected. Without this, the random
-field causes Sigma2_Resume to differ from the fixture on every run.
-
-**Concrete deliverable before publish:**
-1. Align `compute_sigma1_resume_mic` with matter.js's derivation and
-   update the `handshake-resumption-accepted` fixture accordingly.
-2. Add `responder_with_new_resumption_id` to the `test-support` feature
-   and wire it into `case_byte_parity.rs`'s resumption tests.
-3. Remove the `#[ignore]` from both resumption byte-parity tests.
 
 ### matter.js capture-pase / capture-case RNG patching
 
@@ -495,24 +436,15 @@ path.
 
 ## matter-controller
 
-### OTA provider server availability hardening (multi-session, 2026-07-10 final review)
+### OTA provider server — residual hardening notes
 
-**Status:** open. Follow-ups from the multi-session provider's whole-branch
-review (all fail-closed today; the live flow is green):
+**Status:** the three Importants from the multi-session final review are
+FIXED (2026-07-12: stray frames no longer burn pooled credentials
+`4a26ab31`; stale secured frames are skipped, not fatal `77815604`; the
+serve is pinned to its target peer `47357b61`). Residuals, all
+fail-closed and low-frequency:
 
-1. **Unauthenticated frames burn pooled credentials** — `accept_case` pops a
-   credential before validating the first frame, so stray LAN datagrams to the
-   advertised port can exhaust the 4-entry pool and end the serve. Fix:
-   discard undecodable / non-Sigma1 frames while awaiting Sigma1 instead of
-   erroring the accept.
-2. **Stale secured frame errors a live serve** — the session loop propagates
-   `decode_inbound` failures; a late retransmit from a prior (discarded)
-   session should be skipped (`continue`) instead.
-3. **Peer identity not pinned** — `serve_ota` never compares the accepted
-   session's peer node id against `target_node_id`; any fabric member can
-   consume the serve. Compare the accept's peer identity (pre-existing in the
-   single-session server; slightly wider now).
-4. `complete_full`'s closing ack-absorb `recv` could swallow a fast post-reboot
-   Sigma1 (costs one retry credential); a cross-session BDX `ReceiveInit`
-   without a fresh `QueryImage` aborts the serve (chip re-queries after
-   reconnect — acceptable, documented here).
+1. `complete_full`'s closing ack-absorb `recv` could swallow a fast
+   post-reboot Sigma1 (costs one retry credential).
+2. A cross-session BDX `ReceiveInit` without a fresh `QueryImage` aborts the
+   serve (chip re-queries after reconnect — acceptable, by design).
