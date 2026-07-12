@@ -32,6 +32,13 @@ const OP_STATUS_REPORT: u8 = 0x40;
 const OP_MRP_STANDALONE_ACK: u8 = 0x10;
 // Interaction Model opcodes.
 const OP_INVOKE_REQUEST: u8 = 0x08;
+
+/// Frames discarded while awaiting a Sigma1 before the accept fails. Stray
+/// LAN datagrams to the advertised port (undecodable noise, stale acks,
+/// leftovers from a discarded session) must not consume pooled credentials —
+/// but a flooder should still hit a bound rather than spin the accept
+/// forever.
+const MAX_AWAIT_SIGMA1_DISCARDS: usize = 64;
 const OP_INVOKE_RESPONSE: u8 = 0x09;
 
 // OtaSoftwareUpdateProvider (0x0029) command ids (Matter Core §11.20).
@@ -252,13 +259,39 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         &mut self,
         first_frame: Option<(Vec<u8>, SocketAddr)>,
     ) -> Result<(SessionManager, SessionId, SocketAddr), Error> {
-        let credentials = if self.credentials.is_empty() {
+        // Fast-fail an exhausted pool before any IO. The check does NOT pop:
+        // a credential is consumed only once a valid Sigma1 is in hand, so
+        // stray datagrams to the advertised port cannot burn the pool.
+        if self.credentials.is_empty() {
             return Err(Error::Operational(
                 "provider server: credential pool exhausted".into(),
             ));
-        } else {
-            self.credentials.remove(0)
+        }
+
+        // Await a valid Sigma1, discarding anything else (undecodable noise,
+        // stray acks, stale secured frames) within a bounded budget.
+        let mut carried = first_frame;
+        let mut discarded = 0usize;
+        let (m1, peer) = loop {
+            let (bytes, from) = match carried.take() {
+                Some(f) => f,
+                None => self.recv().await?,
+            };
+            match decode_unsecured(&bytes) {
+                Ok(m) if m.opcode == OP_SIGMA1 => break (m, from),
+                _ => {
+                    discarded += 1;
+                    if discarded >= MAX_AWAIT_SIGMA1_DISCARDS {
+                        return Err(Error::Operational(format!(
+                            "no Sigma1 within {MAX_AWAIT_SIGMA1_DISCARDS} frames"
+                        )));
+                    }
+                }
+            }
         };
+
+        // A real handshake attempt is starting: consume one pooled identity.
+        let credentials = self.credentials.remove(0);
         let responder_session_id = self.base_session_id.wrapping_add(self.accepts);
         self.accepts = self.accepts.wrapping_add(1);
         let mut responder = CaseResponder::new(
@@ -269,18 +302,6 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         )
         .map_err(|e| Error::Operational(format!("CASE responder init: {e}")))?;
 
-        // Sigma1 → decide between the resumed and full paths.
-        let (s1, peer) = match first_frame {
-            Some(f) => f,
-            None => self.recv().await?,
-        };
-        let m1 = decode_unsecured(&s1).map_err(|e| Error::Operational(format!("sigma1: {e}")))?;
-        if m1.opcode != OP_SIGMA1 {
-            return Err(Error::Operational(format!(
-                "expected Sigma1 (0x30), got {:#04x}",
-                m1.opcode
-            )));
-        }
         let outcome = responder
             .handle_sigma1(&m1.payload)
             .map_err(|e| Error::Operational(format!("handle_sigma1: {e}")))?;

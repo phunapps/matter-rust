@@ -7300,6 +7300,124 @@ mod tests {
         (device_creds, device_roots)
     }
 
+    /// Hardening regression: stray datagrams arriving BEFORE the requestor's
+    /// Sigma1 (undecodable noise + a stale unsecured ack) must not consume
+    /// pooled credentials — the pool here is a SINGLE credential, so the old
+    /// pop-before-validate behavior would exhaust it and fail the serve.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_ota_survives_stray_frames_before_sigma1() {
+        use crate::provider_server::ProviderServer;
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+
+        let prior_id = ResumptionId([0x43; 16]);
+        let prior_secret = [0x25u8; 32];
+        let provider_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: device_node_id,
+                fabric_id,
+                noc: device_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let requestor_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+
+        let image: Vec<u8> = (0..500u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        let provider_addr = dev_io.local_addr();
+        let image_for_assert = image.clone();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                vec![provider_creds], // ONE credential — strays must not burn it
+                provider_roots,
+                /* base_session_id */ 0x56,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_records(vec![provider_record])
+            .serve_ota_once(offer, image, /* max_block_size */ 256)
+            .await
+        });
+
+        // Stray traffic first: undecodable garbage + a stale unsecured
+        // standalone ack. Neither is a Sigma1.
+        ctrl_io
+            .send_to(&[0xDE, 0xAD, 0xBE, 0xEF], provider_addr)
+            .await
+            .unwrap();
+        let stray_ack = matter_commissioning::driver::encode_unsecured(
+            1,
+            0x7777,
+            0x10, // MRP standalone ack
+            matter_transport::ProtocolId::SECURE_CHANNEL,
+            true,
+            false,
+            Some(1),
+            None,
+            &[],
+        );
+        ctrl_io.send_to(&stray_ack, provider_addr).await.unwrap();
+
+        let reassembled = ota_test_requestor_resumed(
+            ctrl_io,
+            provider_addr,
+            device_creds,
+            device_roots,
+            provider_node_id,
+            fabric_id,
+            /* current_version */ 1,
+            requestor_record,
+        )
+        .await;
+
+        assert_eq!(
+            reassembled, image_for_assert,
+            "the single-credential serve must survive pre-Sigma1 strays"
+        );
+        server
+            .await
+            .unwrap()
+            .expect("serve completed despite stray frames");
+    }
+
     /// The post-reboot shape: session 1 resumes CASE, downloads the image,
     /// and sends `ApplyUpdateRequest` (no same-session `NotifyUpdateApplied`);
     /// the requestor then "reboots" — a SECOND resumption handshake using the
