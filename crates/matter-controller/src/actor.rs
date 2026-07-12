@@ -7020,7 +7020,7 @@ mod tests {
         (reassembled, update_token)
     }
 
-    /// `QueryImage` → `QueryImageResponse` (UpdateAvailable), returning the
+    /// `QueryImage` → `QueryImageResponse` (`UpdateAvailable`), returning the
     /// update token (needed later by Apply/Notify, possibly cross-session).
     async fn ota_query_image(
         io: &matter_commissioning::driver::InMemoryDatagram,
@@ -7807,7 +7807,7 @@ mod tests {
     /// Full (non-resumed) CASE handshake driver: Sigma1 → Sigma2 → Sigma3 →
     /// success `StatusReport`. The `resume_case_handshake` counterpart for the
     /// full path. When `send_final_ack` is false the closing standalone ack of
-    /// the provider's StatusReport is NOT sent — the caller controls what the
+    /// the provider's `StatusReport` is NOT sent — the caller controls what the
     /// provider's ack-absorb `recv` sees next (the fast-Sigma1 regression puts
     /// a new Sigma1 there).
     #[allow(clippy::too_many_arguments)] // Protocol-mirroring handshake driver; each arg maps to a distinct CASE parameter.
