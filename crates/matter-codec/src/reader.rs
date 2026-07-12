@@ -79,8 +79,12 @@ pub struct TlvReader<'a> {
     depth: usize,
     /// Remaining element budget for a tree-builder decode. Decremented once
     /// per materialised [`Value`] in [`Self::read_container_body`] /
-    /// [`Self::read_value`]; the streaming [`Self::next`] path does not touch
-    /// it because it allocates nothing per element.
+    /// [`Self::read_value`] — but only on *charged* decodes, i.e. when the
+    /// remaining input is larger than this budget; a smaller input provably
+    /// cannot exceed it (each element consumes ≥ 1 input byte), so the fast
+    /// path skips accounting without weakening the bound (see
+    /// [`Self::read_value`]). The streaming [`Self::next`] path does not
+    /// touch it because it allocates nothing per element.
     element_budget: usize,
 }
 
@@ -252,14 +256,48 @@ impl<'a> TlvReader<'a> {
     ///   than the configured element budget (see [`DEFAULT_ELEMENT_BUDGET`]).
     /// - Any error returned by [`Self::next`].
     pub fn read_value(&mut self) -> Result<(Tag, Value)> {
+        // Budget fast path: every materialised element consumes at least one
+        // input byte (a null is one control byte; a container is a control
+        // byte plus its end marker), so when the remaining input is no larger
+        // than the remaining budget this decode CANNOT exceed it — decode
+        // with per-element accounting compiled out entirely. Real Matter
+        // payloads (≲ 1.5 KiB) against the 2^20 default budget always take
+        // this path; the charged path serves oversized or custom-budget
+        // inputs.
+        //
+        // This is observably equivalent to charging every element: a call is
+        // only admitted uncharged when the byte bound proves it cannot fail,
+        // and from such a call onward every future element from this reader
+        // is covered by the same bound (the remaining input only shrinks), so
+        // sequences of `read_value` calls fail on exactly the same element —
+        // with the same error — as the always-charged implementation. The
+        // lifetime invariant is unchanged: one reader never materialises more
+        // than its configured budget's worth of live `Value` elements.
+        let remaining_input = self.bytes.len().saturating_sub(self.pos);
+        if remaining_input <= self.element_budget {
+            self.read_value_inner::<false>()
+        } else {
+            self.read_value_inner::<true>()
+        }
+    }
+
+    /// Tree-builder body of [`Self::read_value`], monomorphised over whether
+    /// per-element budget accounting is active (see the fast-path comment
+    /// there — `CHARGE == false` is only reachable when the byte bound proves
+    /// the budget cannot be exceeded).
+    fn read_value_inner<const CHARGE: bool>(&mut self) -> Result<(Tag, Value)> {
         match self.next()? {
             Some(Element::Scalar { tag, value }) => {
-                self.charge_element()?;
+                if CHARGE {
+                    self.charge_element()?;
+                }
                 Ok((tag, value))
             }
             Some(Element::ContainerStart { tag, kind }) => {
-                self.charge_element()?;
-                let value = self.read_container_body(kind)?;
+                if CHARGE {
+                    self.charge_element()?;
+                }
+                let value = self.read_container_body::<CHARGE>(kind)?;
                 Ok((tag, value))
             }
             Some(Element::ContainerEnd) => Err(Error::UnexpectedEndOfContainer),
@@ -268,7 +306,10 @@ impl<'a> TlvReader<'a> {
     }
 
     /// Charge one element against the tree-builder budget. Returns
-    /// [`Error::ElementBudgetExceeded`] once the budget is exhausted.
+    /// [`Error::ElementBudgetExceeded`] once the budget is exhausted. Only
+    /// called on charged decodes ([`Self::read_value`]'s slow path); the
+    /// container loops mirror the same arithmetic in a local for speed (see
+    /// [`Self::read_container_body`]).
     fn charge_element(&mut self) -> Result<()> {
         self.element_budget = self
             .element_budget
@@ -277,7 +318,34 @@ impl<'a> TlvReader<'a> {
         Ok(())
     }
 
-    fn read_container_body(&mut self, kind: ContainerKind) -> Result<Value> {
+    /// Decode a container's children into a [`Value`] tree.
+    ///
+    /// # Element-budget accounting (denial-of-service bound)
+    ///
+    /// When `CHARGE` is false (the [`Self::read_value`] fast path: the byte
+    /// bound already proves the budget cannot be exceeded) no accounting code
+    /// is compiled into this copy at all.
+    ///
+    /// When `CHARGE` is true, the check is the hot path of tree-builder
+    /// decoding, so instead of calling [`Self::charge_element`] (a
+    /// read-modify-write of `self.element_budget` that the compiler cannot
+    /// keep in a register across the `self.next()` calls) each loop mirrors
+    /// the remaining budget in a local, charges the local per element, and
+    /// syncs it back to `self.element_budget` around recursion and at
+    /// container close.
+    ///
+    /// The preserved invariant: **a charged decode never materialises more
+    /// than the configured element budget's worth of [`Value`] elements, and
+    /// it fails (`Error::ElementBudgetExceeded`) on exactly the same element
+    /// as a per-element field update would** — every element is still
+    /// individually charged before it is pushed, and the field is up to date
+    /// whenever recursion (the only other consumer) runs. The one observable
+    /// difference is on *error* returns: charges made since the last sync are
+    /// not written back — which cannot weaken the bound, because the failed
+    /// call's partially built tree is dropped with it (the budget bounds live
+    /// memory amplification, and a subsequent `read_value` on the same reader
+    /// starts from a tree of zero live elements).
+    fn read_container_body<const CHARGE: bool>(&mut self, kind: ContainerKind) -> Result<Value> {
         // Branch on the container kind once, before the loop, so arrays decode
         // straight into a `Vec<Value>` without first building a `Vec<(Tag,
         // Value)>` and re-collecting. Structures and lists keep their members'
@@ -285,6 +353,7 @@ impl<'a> TlvReader<'a> {
         match kind {
             ContainerKind::Array => {
                 let mut elements: Vec<Value> = Vec::new();
+                let mut budget = self.element_budget;
                 loop {
                     match self.next()? {
                         None => return Err(Error::UnclosedContainer),
@@ -295,7 +364,10 @@ impl<'a> TlvReader<'a> {
                             if tag != Tag::Anonymous {
                                 return Err(Error::NonAnonymousArrayTag);
                             }
-                            self.charge_element()?;
+                            if CHARGE {
+                                budget =
+                                    budget.checked_sub(1).ok_or(Error::ElementBudgetExceeded)?;
+                            }
                             elements.push(value);
                         }
                         Some(Element::ContainerStart {
@@ -305,32 +377,56 @@ impl<'a> TlvReader<'a> {
                             if tag != Tag::Anonymous {
                                 return Err(Error::NonAnonymousArrayTag);
                             }
-                            self.charge_element()?;
-                            elements.push(self.read_container_body(inner_kind)?);
+                            if CHARGE {
+                                budget =
+                                    budget.checked_sub(1).ok_or(Error::ElementBudgetExceeded)?;
+                                self.element_budget = budget;
+                            }
+                            elements.push(self.read_container_body::<CHARGE>(inner_kind)?);
+                            if CHARGE {
+                                budget = self.element_budget;
+                            }
                         }
                     }
+                }
+                if CHARGE {
+                    self.element_budget = budget;
                 }
                 Ok(Value::Array(elements))
             }
             ContainerKind::Structure | ContainerKind::List => {
                 let mut members: Vec<(Tag, Value)> = Vec::new();
+                let mut budget = self.element_budget;
                 loop {
                     match self.next()? {
                         None => return Err(Error::UnclosedContainer),
                         Some(Element::ContainerEnd) => break,
                         Some(Element::Scalar { tag, value }) => {
-                            self.charge_element()?;
+                            if CHARGE {
+                                budget =
+                                    budget.checked_sub(1).ok_or(Error::ElementBudgetExceeded)?;
+                            }
                             members.push((tag, value));
                         }
                         Some(Element::ContainerStart {
                             tag,
                             kind: inner_kind,
                         }) => {
-                            self.charge_element()?;
-                            let inner = self.read_container_body(inner_kind)?;
+                            if CHARGE {
+                                budget =
+                                    budget.checked_sub(1).ok_or(Error::ElementBudgetExceeded)?;
+                                self.element_budget = budget;
+                            }
+                            let inner = self.read_container_body::<CHARGE>(inner_kind)?;
                             members.push((tag, inner));
+                            if CHARGE {
+                                budget = self.element_budget;
+                            }
                         }
                     }
+                }
+                if CHARGE {
+                    self.element_budget = budget;
                 }
                 Ok(match kind {
                     ContainerKind::List => Value::List(members),
@@ -1157,10 +1253,40 @@ mod tests {
     #[test]
     fn read_value_errors_when_element_budget_is_exceeded() {
         // Array of three uint8 children = 4 elements total (array + 3 scalars).
-        // A budget of 3 cannot fit them.
+        // A budget of 3 cannot fit them. The 8-byte input is larger than the
+        // budget, so this takes the CHARGED path (the fast path is provably
+        // unreachable for a violating input: more elements than budget implies
+        // more input bytes than budget).
         let bytes = [0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18];
         let mut r = TlvReader::with_element_budget(&bytes, 3);
         assert!(matches!(r.read_value(), Err(Error::ElementBudgetExceeded)));
+    }
+
+    #[test]
+    fn read_value_fast_path_at_budget_equal_to_input_len() {
+        // Boundary of the uncharged fast path: remaining input (8 bytes) equal
+        // to the budget — the byte bound proves the 4 materialised elements
+        // cannot exceed it, so the decode succeeds without accounting.
+        let bytes = [0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18];
+        let mut r = TlvReader::with_element_budget(&bytes, bytes.len());
+        let (_, value) = r.read_value().unwrap();
+        assert_eq!(
+            value,
+            Value::Array(vec![Value::Uint(1), Value::Uint(2), Value::Uint(3)])
+        );
+    }
+
+    #[test]
+    fn read_value_charged_path_at_budget_one_below_input_len() {
+        // One below the fast-path boundary: input (8 bytes) > budget (7) takes
+        // the charged path, which still admits the 4-element tree.
+        let bytes = [0x16, 0x04, 0x01, 0x04, 0x02, 0x04, 0x03, 0x18];
+        let mut r = TlvReader::with_element_budget(&bytes, 7);
+        let (_, value) = r.read_value().unwrap();
+        assert_eq!(
+            value,
+            Value::Array(vec![Value::Uint(1), Value::Uint(2), Value::Uint(3)])
+        );
     }
 
     #[test]

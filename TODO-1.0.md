@@ -18,19 +18,28 @@ backlog (uncommitted, local): `docs/audit/2026-06-12-backlog.md` +
 
 ### matter-codec per-element budget check has a measurable decode cost
 
-**Status:** open perf follow-up; not blocking.
+**Status:** CLOSED 2026-07-12.
 
-The element-budget DoS defense added in the audit (`b4ab6a65`, `charge_element`
-in `read_container_body`) is charged once per materialised `Value`, including
-struct/scalar fields. Benchmarking audit-HEAD vs pre-audit (`f362533a`) showed
-report parsing **-22%** and array decode **-9%** (faster), but a
-`struct_500_uint` micro-bench **+10% slower** — the per-element charge with no
-offsetting array-alloc win. Only bites pathological tiny-scalar-heavy containers
-(atypical for Matter). If a real profile flags it: charge the budget per
-*container* rather than per *scalar*, or skip fixed-width scalars. The criterion
-benches live in `crates/matter-codec/benches/decode.rs` and
-`crates/matter-interaction/benches/report_parse.rs` (added during the audit;
-partially closes the "Benchmark suite" cross-cutting item below).
+The element-budget DoS defense added in the audit (`b4ab6a65`) charged a
+`self.element_budget` read-modify-write once per materialised `Value`,
+costing the `struct_500_uint` micro-bench +10% vs pre-audit. Fixed two ways
+without weakening the bound (invariant statements live in the
+`read_value` / `read_container_body` rustdoc):
+
+1. **Byte-bound fast path:** every materialised element consumes ≥ 1 input
+   byte, so a `read_value` whose remaining input is no larger than the
+   remaining budget provably cannot exceed it — the decode monomorphises
+   with accounting compiled out (`read_container_body::<CHARGE=false>`).
+   Real Matter payloads (≲ 1.5 KiB vs the 2^20 default budget) always take
+   this path; observably equivalent error behaviour, proven in the rustdoc.
+2. **Local budget mirror on the charged path:** the counter lives in a
+   register across `next()` calls, synced to the field around recursion.
+
+Measured vs the `pre_budget_opt` criterion baseline (two stable runs):
+`struct_500_uint` **-8.4/-8.7%** (recovers the audit's +10%),
+`struct_5_uint` -2.5/-2.8%, arrays ±1%, `report_170attr_64B` improved in
+every clean run (-4.8% to -15%). Byte-parity vectors, proptest roundtrip and
+a 2M-iteration local `fuzz_decode` run all green.
 
 ## matter-cert
 
