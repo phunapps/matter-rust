@@ -634,13 +634,22 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     carried = Some((wire, from));
                     break;
                 }
+                // A frame that fails secured decode is a stale leftover — e.g.
+                // a late retransmit keyed to a PRIOR session's id after the
+                // requestor re-established (the reboot window) — not a fault
+                // of the live session. Skip it; the step budget bounds a
+                // pathological stream of them.
+                let decoded = match sessions.decode_inbound(&wire, Instant::now()) {
+                    Ok(output) => output,
+                    Err(_) => continue,
+                };
                 let DecodeInboundOutput::AppMessage {
                     exchange_id,
                     protocol_id,
                     opcode,
                     payload,
                     ..
-                } = sessions.decode_inbound(&wire, Instant::now())?
+                } = decoded
                 else {
                     continue;
                 };
