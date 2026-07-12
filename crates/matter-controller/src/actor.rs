@@ -8021,6 +8021,162 @@ mod tests {
         );
     }
 
+    /// Residual-hardening regression (TODO-1.0 "OTA provider" residual 2): a
+    /// requestor that reconnects mid-download re-initiates BDX with a
+    /// `ReceiveInit` on its new session WITHOUT re-querying (its cached
+    /// `QueryImageResponse` URI is still valid). The `BlockSender` armed by
+    /// session 1's `QueryImage` is mid-transfer; the serve must re-arm it and
+    /// serve the transfer from the start — pre-fix it aborted the whole serve
+    /// with "BDX transfer aborted".
+    #[allow(clippy::too_many_lines)] // Linear cross-session OTA protocol test; splitting hurts clarity.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_ota_rearms_bdx_for_cross_session_receive_init() {
+        use crate::provider_server::ProviderServer;
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds1, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let (provider_creds2, _, _) = crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+        let provider_noc = provider_creds1.noc.clone();
+        let (device_creds2, device_roots2) = make_device_creds_for_fabric(fabric);
+
+        let prior_id = ResumptionId([0x45; 16]);
+        let prior_secret = [0x27u8; 32];
+        let provider_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: device_node_id,
+                fabric_id,
+                noc: device_creds.noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let requestor_record = ResumptionRecord {
+            id: prior_id,
+            shared_secret: prior_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_noc.clone(),
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+
+        let image: Vec<u8> = (0..2500u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        let provider_addr = dev_io.local_addr();
+        let image_for_assert = image.clone();
+        let sunk: std::sync::Arc<std::sync::Mutex<Vec<matter_crypto::ResumptionRecord>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sunk_in = sunk.clone();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                vec![provider_creds1, provider_creds2],
+                provider_roots,
+                /* base_session_id */ 0x58,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_records(vec![provider_record])
+            .with_record_sink(Box::new(move |r| sunk_in.lock().unwrap().push(r)))
+            .serve_ota_once(offer, image, /* max_block_size */ 256)
+            .await
+        });
+
+        // Session 1: resume CASE, QueryImage, START the download (one block)
+        // — then "reboot" mid-transfer, leaving the BlockSender in Sending.
+        let (mut s1, sid1) = resume_case_handshake(
+            &ctrl_io,
+            provider_addr,
+            device_creds,
+            device_roots,
+            provider_node_id,
+            fabric_id,
+            requestor_record,
+            0x0023,
+        )
+        .await;
+        let token = ota_query_image(&ctrl_io, provider_addr, &mut s1, sid1, 1).await;
+        let length = bdx_receive_init(&ctrl_io, provider_addr, &mut s1, sid1).await;
+        let first_block = bdx_query_one_block(&ctrl_io, provider_addr, &mut s1, sid1, 0).await;
+        assert!(
+            !first_block.is_empty() && first_block.len() < length,
+            "session 1 must stop mid-transfer"
+        );
+
+        // "Reboot": session 2 resumes with the record rotated during accept 1
+        // and re-initiates BDX directly — NO fresh QueryImage.
+        let rotated = sunk.lock().unwrap()[0].clone();
+        let requestor_record2 = ResumptionRecord {
+            id: rotated.id,
+            shared_secret: rotated.shared_secret,
+            peer: PeerInfo {
+                node_id: provider_node_id,
+                fabric_id,
+                noc: provider_noc,
+                session_id: 0,
+            },
+            expires_at: None,
+        };
+        let (mut s2, sid2) = resume_case_handshake(
+            &ctrl_io,
+            provider_addr,
+            device_creds2,
+            device_roots2,
+            provider_node_id,
+            fabric_id,
+            requestor_record2,
+            0x0024,
+        )
+        .await;
+        let length2 = bdx_receive_init(&ctrl_io, provider_addr, &mut s2, sid2).await;
+        assert_eq!(
+            length2,
+            image_for_assert.len(),
+            "re-armed transfer serves the full image"
+        );
+        let reassembled =
+            bdx_pull_blocks_and_ack_eof(&ctrl_io, provider_addr, &mut s2, sid2, length2).await;
+        assert_eq!(
+            reassembled, image_for_assert,
+            "the re-initiated transfer must serve the image from the start"
+        );
+        // Apply + Notify on session 2 with session 1's token.
+        ota_apply_update(&ctrl_io, provider_addr, &mut s2, sid2, &token, 2).await;
+        send_notify_update_applied(&ctrl_io, provider_addr, &mut s2, sid2, &token, 2).await;
+
+        server
+            .await
+            .unwrap()
+            .expect("serve must survive the cross-session ReceiveInit");
+    }
+
     #[tokio::test]
     async fn set_utc_time_over_loopback() {
         let Harness {

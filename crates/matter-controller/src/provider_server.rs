@@ -790,6 +790,22 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     })?;
                     let msg = BdxMessage::decode(mt, &payload)
                         .map_err(|e| Error::Operational(format!("BDX decode: {e}")))?;
+                    // A `ReceiveInit` is a request to START a transfer. When a
+                    // sender is already armed but mid-transfer, the requestor
+                    // reconnected mid-download (reboot, link loss) and is
+                    // re-initiating BDX from its cached `QueryImageResponse`
+                    // URI without re-querying — re-arm and serve from the
+                    // start rather than aborting the serve (tolerant choice:
+                    // the image is static and the session authenticated — and
+                    // peer-pinned under `with_expected_peer` — so re-serving
+                    // the same bytes discloses nothing new). The DoS bound is
+                    // preserved: BDX still NEVER starts before this serve's
+                    // first `QueryImage` (`bdx` stays `None` until then), and
+                    // the per-session step budget bounds a requestor that
+                    // loops `ReceiveInit`.
+                    if matches!(msg, BdxMessage::ReceiveInit(_)) && bdx.is_some() {
+                        bdx = Some(BlockSender::new(image.clone(), max_block_size));
+                    }
                     let sender = bdx.as_mut().ok_or_else(|| {
                         Error::Operational("BDX message before QueryImage".into())
                     })?;

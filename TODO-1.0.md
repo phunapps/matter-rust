@@ -438,13 +438,16 @@ path.
 
 ### OTA provider server — residual hardening notes
 
-**Status:** the three Importants from the multi-session final review are
-FIXED (2026-07-12: stray frames no longer burn pooled credentials
-`4a26ab31`; stale secured frames are skipped, not fatal `77815604`; the
-serve is pinned to its target peer `47357b61`). Residuals, all
-fail-closed and low-frequency:
+**Status:** CLOSED 2026-07-12. The three Importants from the multi-session
+final review were fixed first (stray frames no longer burn pooled
+credentials `4a26ab31`; stale secured frames are skipped, not fatal
+`77815604`; the serve is pinned to its target peer `47357b61`), and both
+remaining fail-closed residuals are now fixed with loopback regressions:
 
-1. `complete_full`'s closing ack-absorb `recv` could swallow a fast
-   post-reboot Sigma1 (costs one retry credential).
-2. A cross-session BDX `ReceiveInit` without a fresh `QueryImage` aborts the
-   serve (chip re-queries after reconnect — acceptable, by design).
+1. `complete_full`'s closing ack-absorb hands a fast post-reboot Sigma1
+   back into the next accept instead of swallowing it (no retry
+   credential burned; same-exchange Sigma1 duplicates still absorbed).
+2. A cross-session BDX `ReceiveInit` without a fresh `QueryImage` re-arms
+   the `BlockSender` and serves the transfer from the start (tolerant
+   choice; BDX still never starts before the serve's first `QueryImage`,
+   and the per-session step budget still bounds re-init loops).
