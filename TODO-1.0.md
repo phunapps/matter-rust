@@ -430,7 +430,12 @@ fixtures via the public API.
 
 ### Codegen scalar narrowing: `fabric-id` fields emitted as `u32` instead of `u64`
 
-**Status:** open. Documented residual from M9-D2 final review 2026-06-25.
+**Status:** CLOSED 2026-07-12. The scalar table now maps `fabric-id` → `u64`
+(Matter Core §2.5.1); the dead `fabric-id64` alias was removed and
+`FabricDescriptorStruct` regenerated. Regression-guarded by a `base_type`
+unit test in `xtask/src/codegen/rustgen/types.rs`.
+
+Original finding, for history:
 
 The generated `FabricDescriptorStruct.fabric_id` (and any other
 `fabric-id`-typed field produced by the codegen scalar table) is emitted as

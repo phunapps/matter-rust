@@ -110,7 +110,7 @@ pub struct FabricDescriptorStruct {
     /// Field VendorId (tag 2).
     pub vendor_id: u16,
     /// Field FabricId (tag 3).
-    pub fabric_id: u32,
+    pub fabric_id: u64,
     /// Field NodeId (tag 4).
     pub node_id: u64,
     /// Field Label (tag 5).
@@ -208,7 +208,7 @@ impl FabricDescriptorStruct {
     pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
         let mut f_root_public_key: Option<Vec<u8>> = None;
         let mut f_vendor_id: Option<u16> = None;
-        let mut f_fabric_id: Option<u32> = None;
+        let mut f_fabric_id: Option<u64> = None;
         let mut f_node_id: Option<u64> = None;
         let mut f_label: Option<String> = None;
         let mut f_vid_verification_statement: Option<Vec<u8>> = None;
@@ -233,7 +233,7 @@ impl FabricDescriptorStruct {
                     value: Value::Uint(v),
                 }) => {
                     f_fabric_id = Some(
-                        u32::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricId"))?,
+                        u64::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricId"))?,
                     )
                 }
                 Some(Element::Scalar {

@@ -34,10 +34,13 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         "octstr" | "hwadr" | "ipadr" | "ipv4adr" | "ipv6adr" => "Vec<u8>",
         // u32: primitive + semantic globals
         "uint24" | "uint32" | "cluster-id" | "attrib-id" | "command-id" | "event-id"
-        | "devtype-id" | "epoch-s" | "elapsed-s" | "map32" | "fabric-id" => "u32",
-        // u64: primitive + semantic globals
+        | "devtype-id" | "epoch-s" | "elapsed-s" | "map32" => "u32",
+        // u64: primitive + semantic globals. `fabric-id` is the 64-bit
+        // FabricID (Matter Core §2.5.1); the scalar table wrongly narrowed it
+        // to u32 until the 2026-06 audit residual was fixed (the former
+        // `fabric-id64` alias was dead — no model field uses it).
         "uint40" | "uint48" | "uint56" | "uint64" | "node-id" | "epoch-us" | "posix-ms"
-        | "systime-us" | "systime-ms" | "fabric-id64" | "subject-id" => "u64",
+        | "systime-us" | "systime-ms" | "fabric-id" | "subject-id" => "u64",
         _ => return None,
     })
 }
@@ -199,6 +202,9 @@ mod tests {
         assert_eq!(base_type("cluster-id", None), "u32");
         assert_eq!(base_type("endpoint-no", None), "u16");
         assert_eq!(base_type("fabric-idx", None), "u8");
+        // FabricID is uint64 (Matter Core §2.5.1) — regression guard for the
+        // audit-found u32 narrowing.
+        assert_eq!(base_type("fabric-id", None), "u64");
         assert_eq!(base_type("epoch-s", None), "u32");
         assert_eq!(base_type("enum8", None), "u8");
         // M9-A2.2 energy/electrical semantic globals (all int64-based)…
