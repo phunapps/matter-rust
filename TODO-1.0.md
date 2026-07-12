@@ -7,12 +7,15 @@ crate.
 ## Deferred from the 2026-06-12 full-codebase audit → fold into M9
 
 The 2026-06-12 audit (29 fixes landed on `main`, commits `3d1bb405`..`34457ecc`)
-deferred four items into M9. **M9-A (2026-06-14) resolved the two matter-clusters
-codegen forward-compat items** — unknown-nested-container skip (now drained via
-`TlvReader::skip_container`), bitmap `from_bits_retain`, and `#[non_exhaustive]` on
-generated data structs, all proven by synthetic forward-compat fixtures (commits
-`143a2c15`..`6179aa31`). The two remaining items below are a large async
-re-architecture and a perf follow-up — independent of the codegen work. Audit
+deferred four items into M9 — ALL FOUR are now resolved. **M9-A (2026-06-14)
+resolved the two matter-clusters codegen forward-compat items** —
+unknown-nested-container skip (now drained via `TlvReader::skip_container`),
+bitmap `from_bits_retain`, and `#[non_exhaustive]` on generated data structs,
+all proven by synthetic forward-compat fixtures (commits
+`143a2c15`..`6179aa31`). **M9-G-d resolved the actor async re-architecture**
+(off-loop connect + spawned commission, `bc309e39`..`143180cd` — no inline
+CASE handshake left). **The matter-codec per-element budget perf follow-up
+closed 2026-07-12** (byte-bound fast path; see the entry below). Audit
 backlog (uncommitted, local): `docs/audit/2026-06-12-backlog.md` +
 `2026-06-12-findings.json`.
 
