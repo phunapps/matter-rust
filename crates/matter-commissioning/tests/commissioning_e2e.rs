@@ -1,34 +1,44 @@
-//! M6.4.5 — end-to-end public-API drive-through: `SecurePairing` →
-//! `Action::Done(CommissionedFabric)` in a single test, using only the
-//! re-exports at `matter_commissioning::*`.
+//! End-to-end happy path through the PUBLIC state-machine API, driven by
+//! the captured matter.js fixture (`xtask capture-commissioning`): every
+//! stage's response is the real captured device's bytes, attestation runs
+//! the full verifier chain, and the walk must terminate in `Action::Done`
+//! with the commissioned fabric's identity matching the fixture.
 //!
-//! Currently `#[ignore]`'d because driving the full state machine
-//! end-to-end via the public API requires synthetic-but-self-consistent
-//! DAC + PAI + `AttestationResponse` + NOCSR fixtures. The in-source
-//! glass-box tests at `src/state_machine/commissioner.rs::tests`
-//! already cover every stage's dispatch + response handler in
-//! isolation. M6.4.6's `xtask capture-commissioning` will land
-//! captured fixtures from matter.js, at which point this test gets
-//! its body and drops the `#[ignore]`.
+//! Byte-parity on the emitted payloads is asserted separately by
+//! `commissioning_byte_parity.rs`; this test pins COMPLETION via the same
+//! public surface a production driver uses.
 
 // Test-code carve-out: see CLAUDE.md.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod e2e_fixture;
+
+use matter_commissioning::state_machine::Action;
+
 #[test]
-#[ignore = "needs synthetic / captured fixtures (M6.4.6 xtask capture-commissioning)"]
 fn happy_path_reaches_done() {
-    // Placeholder — see module doc.
-    //
-    // When fixtures land:
-    // 1. Construct fabric + setup + PaaTrustStore::with_csa_test_roots()
-    //    + CdSigningRoots::with_csa_test_roots() + an RNG seed pinned to
-    //    matter.js's capture-time RNG (so nonces are reproducible).
-    // 2. In a `loop`, match on `sm.poll()`:
-    //    - Invoke / ReadAttribute → feed the captured response bytes
-    //      back via `on_response`.
-    //    - EstablishCase → call `on_case_established()` (the test
-    //      pretends mDNS + SIGMA succeeded instantly).
-    //    - Abort → panic (unexpected).
-    //    - Done(cf) → assert peer_node_id + terminated_at + break.
-    //    - EvictCase → unreachable in new-fabric flow.
+    let Some(fixture) = e2e_fixture::load("happy-path.json") else {
+        return; // SKIP already printed
+    };
+    let harness = e2e_fixture::Harness::from_fixture(&fixture);
+    let mut sm = harness.commissioner();
+
+    e2e_fixture::drive(&mut sm, &fixture.stages, None)
+        .unwrap_or_else(|(stage, e)| panic!("walk failed at stage {stage}: {e}"));
+
+    match sm.poll().expect("final poll") {
+        Action::Done(cf) => {
+            assert_eq!(
+                cf.peer_node_id,
+                e2e_fixture::parse_hex_u64(&fixture.assigned_node_id),
+                "commissioned peer node id must match the fixture"
+            );
+            assert_eq!(
+                cf.fabric.fabric_id,
+                e2e_fixture::parse_hex_u64(&fixture.fabric_id),
+                "commissioned fabric id must match the fixture"
+            );
+        }
+        other => panic!("expected Done after walking the fixture, got {other:?}"),
+    }
 }

@@ -378,62 +378,32 @@ Compliance Ledger client (or scheduled snapshot refresh) removes that staleness 
 
 ### `xtask capture-commissioning` — matter.js operator wiring
 
-**Status:** open. Operator-touch wiring deferred from M6.4.6.
+**Status:** CLOSED 2026-07-12. `cargo xtask capture-commissioning` is fully
+wired: the matter.js half runs a virtual ethernet device (ServerNode) and a
+CommissioningController IN-PROCESS over loopback, captures every decrypted
+message at the MessageCodec boundary plus the out-of-wire inputs (PASE
+attestation challenge via a NodeSession patch, capture timestamp, CD-signer
+SPKI), and the Rust half maps the dialogue onto the Commissioner stage
+sequence and writes `happy-path.json` + `tampered-dac.json` under
+`test-vectors/commissioning/e2e/` (committed).
 
-The M6.4.6 byte-parity gate's infrastructure (xtask dispatcher,
-placeholder JS script, integration test that skips on empty fixture)
-is in place — see commits introducing
-`xtask/scripts/capture-commissioning/` and
-`crates/matter-commissioning/tests/commissioning_byte_parity.rs`.
-Activation requires:
+The parity test byte-asserts ArmFailSafe, both CertificateChainRequests,
+AttestationRequest and CSRRequest (the capture-time nonces ride in the
+fixture and script the test's `NocRng`, so RNG-bearing payloads are now
+STRICT) plus CommissioningComplete. Only AddTrustedRootCertificate and
+AddNOC stay unasserted (locally-minted certificates, necessarily
+different keys per run). ConfigRegulatory carries no expected payload:
+matter.js per spec §5.5 sends SetRegulatoryConfig only to Wi-Fi/Thread
+devices, so against the ethernet virtual device the fixture synthesizes a
+success response (regulatory byte-parity was validated live by the M6.6
+trace-diff run against the P110M).
 
-1. Pin a known-good `@matter/protocol` version in
-   `xtask/scripts/capture-commissioning/package.json`. The
-   `@matter/protocol` commissioner / controller API has shifted
-   meaningfully between minor versions, so pinning matters.
-2. Run `npm install` in `xtask/scripts/capture-commissioning/`.
-3. Replace the placeholder `index.js` with real capture logic:
-   - Construct a `CommissionerNode` (or the current top-level
-     commissioner symbol) pointing at matter.js's `device-simulator`
-     (or a real device's IP + setup code).
-   - Monkey-patch the device-network layer to capture every outgoing
-     Invoke + ReadAttribute payload + the corresponding device
-     responses.
-   - Write `test-vectors/commissioning/e2e/happy-path.json` matching
-     the schema documented in
-     `crates/matter-commissioning/tests/commissioning_byte_parity.rs`
-     (top-level keys: `fabric_id`, `commissioner_node_id`,
-     `assigned_node_id`, `ipk_epoch_key_b64`,
-     `pase_attestation_challenge_b64`, `stages[]`).
-4. Run `cargo xtask capture-commissioning` to drive the script.
-5. Run `cargo test -p matter-commissioning --test commissioning_byte_parity`
-   — the test stops skipping and asserts byte-parity on emitted
-   RNG-free Invoke + ReadAttribute payloads.
-
-**RNG-bearing payloads** (SendAttestationRequest nonce,
-SendOpCertSigningRequest nonce, SendNoc IPK) are walked but NOT
-byte-asserted in the current test — see the `rng_bearing` allow-list
-inside the test. Promoting them to strict byte-parity requires
-injecting a deterministic RNG into `Commissioner` that mirrors
-matter.js's capture-time RNG state. A follow-up commit can add a
-`test-support` feature on `matter-commissioning` exposing a
-`SeededTestRng: NocRng` and a `Commissioner::new_with_rng(...)` or
-similar constructor accepting an `Arc<dyn NocRng>` derived from
-fixture-side metadata (the capture script writes the seed bytes
-alongside the trace).
-
-**Negative byte-parity** (the M6.4.6 T57 tampered-DAC verdict-parity
-check) is also deferred until the happy-path wiring lands — the
-operator extends `index.js` with a `--tamper=dac` mode that flips one
-byte in the DAC DER + writes a sibling `tampered-dac.json` fixture
-that the byte-parity test consumes as a `verdict_only_reject` case.
-
-Once both happy-path + tampered-DAC fixtures land, drop the
-`#[ignore]`-d placeholders in
-`tests/commissioning_e2e.rs`,
-`tests/state_machine_noc.rs`, and
-`tests/state_machine_attestation.rs` — they'll exercise the captured
-fixtures via the public API.
+The tampered-DAC sibling (one bit flipped inside the captured DAC) is
+asserted to be REJECTED during attestation verification
+(`tampered_dac_is_rejected_during_attestation`), and the three formerly
+`#[ignore]`d public-API placeholders (`commissioning_e2e.rs`,
+`state_machine_noc.rs`, `state_machine_attestation.rs`) now run for real
+against the fixture via the shared `tests/e2e_fixture` harness.
 
 ## matter-clusters
 

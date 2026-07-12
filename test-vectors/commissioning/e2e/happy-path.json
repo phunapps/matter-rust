@@ -1,0 +1,114 @@
+{
+  "captured_at_unix": 1783856905,
+  "fabric_id": "0xce9a4d4f0c4cbd94",
+  "commissioner_node_id": "0x9e5e2cf04b130e5b",
+  "assigned_node_id": "0x1",
+  "ipk_epoch_key_b64": "bbljwypRhMMU9StnwvcGLw==",
+  "pase_attestation_challenge_b64": "wT2Tbd01PuNgyGP1335kfA==",
+  "attestation_nonce_b64": "Ll31C4SAt7VMal3TD0H+ua6d2gZLwTqVcEGrhYoO7/0=",
+  "csr_nonce_b64": "VWIu/ZkAQIN61bXlqs96eh4n2ilE28vulMRLKO7RshY=",
+  "cd_signing_spki_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPDmJIkUrVcrzicJb0bykZWlSzLkO\niGkkmthHRlMBTL+V1oeWXgNrUhxRA35rjO3vyh60QEZpT6CIgu7WUZ3sug==\n-----END PUBLIC KEY-----\n",
+  "stages": [
+    {
+      "stage": "ReadCommissioningInfo",
+      "action": "ReadAttribute",
+      "cluster": "0x0030",
+      "attribute_ids": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "expected_payload_b64": null,
+      "response_payload_b64": "FSQAPCUBhAMY"
+    },
+    {
+      "stage": "ArmFailsafe",
+      "action": "Invoke",
+      "cluster": "0x0030",
+      "command": "0x00",
+      "expected_payload_b64": "FSQAPCQBARg=",
+      "response_payload_b64": "FSQAACwBABg="
+    },
+    {
+      "stage": "ConfigRegulatory",
+      "action": "Invoke",
+      "cluster": "0x0030",
+      "command": "0x02",
+      "expected_payload_b64": null,
+      "response_payload_b64": "FSQAACwBABg="
+    },
+    {
+      "stage": "SendPaiCertRequest",
+      "action": "Invoke",
+      "cluster": "0x003e",
+      "command": "0x02",
+      "expected_payload_b64": "FSQAAhg=",
+      "response_payload_b64": "FTEAtgEwggGyMIIBV6ADAgECAgEBMAoGCCqGSM49BAMCMBoxGDAWBgNVBAMMD01hdHRlciBUZXN0IFBBQTAeFw0yNTA3MTIxMTQ4MjVaFw0zNjA3MDkxMTQ4MjVaMEIxKjAoBgNVBAMMIW5vZGUtbWF0dGVyIERldiBQQUkgMHhGRkYxIG5vIFBJRDEUMBIGCisGAQQBgqJ8AgEMBEZGRjEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASMyn03NSRvy516+aVHsYgoV3jomGlwy0BGR2g2OeRME1XJdipwQ2xbs/XqcuqIMMLJvuHdwSh3LDoLOj3/1or7o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUiVO+LnSMEjXHC0VQhkFWXQ/lQRwwHwYDVR0jBBgwFoAUeFznBbhrj05vx5OqYMtD6mlogtUwCgYIKoZIzj0EAwIDSQAwRgIhANXb4LQiW13yJDhZqX+5TOsG6kz5S9KKproKTixF7gXVAiEAiD0pwPwMWhC/FOHG1byNH3xbVhoLYJxLL41aqFgC+PAY"
+    },
+    {
+      "stage": "SendDacCertRequest",
+      "action": "Invoke",
+      "cluster": "0x003e",
+      "command": "0x02",
+      "expected_payload_b64": "FSQAARg=",
+      "response_payload_b64": "FTEA7QEwggHpMIIBj6ADAgECAgECMAoGCCqGSM49BAMCMEIxKjAoBgNVBAMMIW5vZGUtbWF0dGVyIERldiBQQUkgMHhGRkYxIG5vIFBJRDEUMBIGCisGAQQBgqJ8AgEMBEZGRjEwHhcNMjUwNzEyMTE0ODI1WhcNMzYwNzA5MTE0ODI1WjBYMSowKAYDVQQDDCFub2RlLW1hdHRlciBEZXYgREFDIDB4RkZGMS8weDgwMDExFDASBgorBgEEAYKifAIBDARGRkYxMRQwEgYKKwYBBAGConwCAgwEODAwMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMgSUp1W1enqaKIfdADTq76Nv6B3KNEVqCUyd9Lel21WeKrjup9WhaJlskO3Z2vYOloGkSx4U5JKeUZyTpXbDsGjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBSYK36KHSxDucWlEi94rNdCtwAEyzAfBgNVHSMEGDAWgBSJU74udIwSNccLRVCGQVZdD+VBHDAKBggqhkjOPQQDAgNIADBFAiEA4wpgtBzWkhajPsehloFRSpTkcjClyzTkyJfmO2MBHmUCICQibF4R7q4rO5nNJ9hGjgw5p5kd+xoXGNiDqnP30O+8GA=="
+    },
+    {
+      "stage": "SendAttestationRequest",
+      "action": "Invoke",
+      "cluster": "0x003e",
+      "command": "0x00",
+      "expected_payload_b64": "FTAAIC5d9QuEgLe1TGpd0w9B/rmundoGS8E6lXBBq4WKDu/9GA==",
+      "response_payload_b64": "FTEAFQEVMAHqMIHnBgkqhkiG9w0BBwKggdkwgdYCAQMxDTALBglghkgBZQMEAgEwQwYJKoZIhvcNAQcBoDYENBUkAAElAfH/NgIFAYAYJAMWLAQTQ1NBMDAwMDBTV0MwMDAwMC0wMCQFACQGACQHASQIABgxfTB7AgEDgBRi+oIzWaz6qZY+HPoUCt31BPNxYDALBglghkgBZQMEAgEwCgYIKoZIzj0EAwIERzBFAiEAmfcB3NS+nuCQAzRNNzRrjlLab8RzVmDR4KcJ6UKyTo0CIDnUSK8l9WwHt5tcBf0BDTzkqvy2ee7/WzGhjG/56HbHMAIgLl31C4SAt7VMal3TD0H+ua6d2gZLwTqVcEGrhYoO7/0kAwAYMAFAAPIjeVvfmOUZY41KgcKm2gvkI3DEahG+GuHZYmYF0CgolF8P5ygltbJz7WfGr0SWlXA6Xc1vS+lC810/NXkybxg="
+    },
+    {
+      "stage": "SendOpCertSigningRequest",
+      "action": "Invoke",
+      "cluster": "0x003e",
+      "command": "0x04",
+      "expected_payload_b64": "FTAAIFViLv2ZAECDetW15arPenoeJ9opRNvL7pTESyju0bIWGA==",
+      "response_payload_b64": "FTAA9BUwAcwwgckwcAIBADAOMQwwCgYDVQQKDANDU1IwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQZ7GDE9MNP2aQ+9ScuEHV3k0ygfT2HCe9aGbVlJRkcyeFskxROMNDCDczZM9Ec7LTKqemB9zs/HTywD/K8wHoGoAAwCgYIKoZIzj0EAwIDSQAwRgIhAKGo2dCc0uRXrOnz63VXj7wron3fqDGZX//5QOTyP/AkAiEAwlsPrPkLily1i/11KOSB+JIpAd4gitrnNHwaMU1V3KwwAiBVYi79mQBAg3rVteWqz3p6HifaKUTby+6UxEso7tGyFhgwAUByWv2dOax0EtXIU1Q6fk9vZW2mOBY/KCizwt10AbtbAWdLFGcmx7oJqbR9me4/Ad96NWJM4X+PDMKxtFNR9AGzGA=="
+    },
+    {
+      "stage": "SendTrustedRootCert",
+      "action": "Invoke",
+      "cluster": "0x003e",
+      "command": "0x0b",
+      "expected_payload_b64": "FTAA5xUwAQEAJAIBNwMkFAAYJgQJCAUwJgWJPrJENwYkFAAYJAcBJAgBMAlBBPhTf1ERHoyMHgn3eSuFsiaoir1YI8JqDzKhd4kUiutTKExFq3LcWo/X/35LqmJvYtN/KU74GI5esGmQXVOlKPQ3CjUBKQEYJAJgMAQUHxXK/3T/H/aClr49TKUJCFN3yrkwBRQfFcr/dP8f9oKWvj1MpQkIU3fKuRgwC0BnUPBPdgQHOIH0Df/aXjJW6jknSntZBi0vH3uPH+4a37mSH1ztC3JbGwT2cAYRcCkgxrb37wf+9NFVdQNNe904GBg=",
+      "response_payload_b64": "AA=="
+    },
+    {
+      "stage": "SendNoc",
+      "action": "Invoke",
+      "cluster": "0x003e",
+      "command": "0x06",
+      "expected_payload_b64": "FTAA+BUwAQECJAIBNwMkFAAYJgQJCAUwJgWJPrJENwYnFZS9TAxPTZrOJBEBGCQHASQIATAJQQQZ7GDE9MNP2aQ+9ScuEHV3k0ygfT2HCe9aGbVlJRkcyeFskxROMNDCDczZM9Ec7LTKqemB9zs/HTywD/K8wHoGNwo1ASgBGCQCATYDBAIEARgwBBR7L5DPHwUvP4D45AqN8lXvUCbplDAFFB8Vyv90/x/2gpa+PUylCQhTd8q5GDALQNKiTpgLwlgsRWHuO3X+2CHGg7qBI++CQMOFmpXv5s7Po+oWa+5TfBZABiSQy1WnW0l83xPEsAhTwpbg6UyDyx0YMAEAMAIQbbljwypRhMMU9StnwvcGLycDWw4TS/AsXp4lBPH/GA==",
+      "response_payload_b64": "FSQAACQBARg="
+    },
+    {
+      "stage": "ReadNetworkCommissioningInfo",
+      "action": "ReadAttribute",
+      "cluster": "0x0031",
+      "attribute_ids": [
+        65532
+      ],
+      "expected_payload_b64": null,
+      "response_payload_b64": "BAQ="
+    },
+    {
+      "stage": "EstablishCase",
+      "action": "EstablishCase",
+      "expected_payload_b64": null,
+      "response_payload_b64": null
+    },
+    {
+      "stage": "SendComplete",
+      "action": "Invoke",
+      "cluster": "0x0030",
+      "command": "0x04",
+      "expected_payload_b64": "FRg=",
+      "response_payload_b64": "FSQAACwBABg="
+    }
+  ]
+}
