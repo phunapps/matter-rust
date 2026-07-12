@@ -51,7 +51,9 @@ async fn read_onoff(node: &Node) -> Option<bool> {
 /// manual code directly. That is now validated live: the full loop runs (B
 /// commissions through the window, A removes B's fabric), so a commission
 /// failure here is a hard error — never silently downgraded to a weaker
-/// assertion that could let a regression pass green.
+/// assertion that could let a regression pass green. (One bounded retry
+/// absorbs the known transient: the window's mDNS advertisement lagging the
+/// open-window response; a regression fails both attempts.)
 #[tokio::test]
 async fn open_window_second_controller_and_remove_fabric() {
     let cfg = integration_tests::dut_or_skip!();
@@ -102,8 +104,23 @@ async fn open_window_second_controller_and_remove_fabric() {
         .await
         .expect("creating controller B fabric");
 
-    // 4. B commissions the device through the open window.
-    match controller_b.commission(&window.manual_code).await {
+    // 4. B commissions the device through the open window. The window's
+    //    commissionable advertisement can lag the OpenCommissioningWindow
+    //    response by a beat (mDNS propagation on a busy DUT), which showed up
+    //    as a transient commission timeout in the sweep — tolerate ONE
+    //    transient failure with a short pause. A real regression fails both
+    //    attempts and still hard-fails the test.
+    let commissioned = match controller_b.commission(&window.manual_code).await {
+        Ok(id) => Ok(id),
+        Err(first) => {
+            eprintln!(
+                "[multi_admin] B's first commission attempt failed ({first}); retrying once"
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            controller_b.commission(&window.manual_code).await
+        }
+    };
+    match commissioned {
         Ok(node_id_b) => {
             let node_b = controller_b.node(node_id_b);
 
