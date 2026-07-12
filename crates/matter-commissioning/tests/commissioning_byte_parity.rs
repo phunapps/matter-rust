@@ -56,8 +56,8 @@ struct Fixture {
     ipk_epoch_key_b64: String,
     pase_attestation_challenge_b64: String,
     /// matter.js's capture-time nonces. The walk scripts the state
-    /// machine's `NocRng` with these so our AttestationRequest /
-    /// CSRRequest reproduce matter.js's payloads byte-for-byte AND the
+    /// machine's `NocRng` with these so our `AttestationRequest` /
+    /// `CSRRequest` reproduce matter.js's payloads byte-for-byte AND the
     /// captured responses' nonce echoes verify.
     attestation_nonce_b64: String,
     csr_nonce_b64: String,
@@ -288,10 +288,10 @@ fn matter_js_happy_path_byte_parity() {
 }
 
 /// Verdict-only negative gate (M6.4.6 T57): the sibling fixture flips one
-/// bit inside the DAC certificate of the captured CertificateChainResponse.
+/// bit inside the DAC certificate of the captured `CertificateChainResponse`.
 /// The walk must FAIL during attestation — the DAC's signature no longer
 /// verifies against its PAI — rather than complete, and must fail no later
-/// than the AttestationRequest response (the stage where the chain is
+/// than the `AttestationRequest` response (the stage where the chain is
 /// verified). No byte-parity is asserted on a rejection path.
 #[test]
 fn tampered_dac_is_rejected_during_attestation() {

@@ -10,8 +10,9 @@
 //! Production code must never depend on anything here.
 
 // Shared across several integration-test binaries; each compiles this module
-// independently and uses a different subset.
-#![allow(dead_code)]
+// independently and uses a different subset (same carve-outs as
+// tests/support/mod.rs).
+#![allow(dead_code, unreachable_pub)]
 // Test-code carve-out: see CLAUDE.md.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
