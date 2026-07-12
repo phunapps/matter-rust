@@ -944,6 +944,7 @@ version = "0.1.0-pre"
 dependencies = [
  "aes",
  "ccm",
+ "criterion",
  "hex",
  "matter-cert",
  "matter-codec",
@@ -988,6 +989,7 @@ name = "matter-transport"
 version = "0.1.0-pre"
 dependencies = [
  "bitflags",
+ "criterion",
  "hex",
  "matter-codec",
  "matter-crypto",

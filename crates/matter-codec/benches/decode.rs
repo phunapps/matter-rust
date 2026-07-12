@@ -59,6 +59,55 @@ fn build_wide_struct(n: usize) -> Vec<u8> {
     buf
 }
 
+/// `depth` nested structures, each level carrying one uint field beside the
+/// nested container. Exercises the recursive tree-builder path (bounded by
+/// the codec's `MAX_DEPTH` of 32).
+fn build_nested(depth: usize) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    for i in 0..depth {
+        w.start_structure(if i == 0 {
+            Tag::Anonymous
+        } else {
+            Tag::Context(0)
+        })
+        .expect("start struct");
+        w.put_uint(Tag::Context(1), i as u64).expect("put uint");
+    }
+    for _ in 0..depth {
+        w.end_container().expect("end struct");
+    }
+    buf
+}
+
+/// The 170-attribute wildcard-read `ReportData` shape at the raw TLV layer
+/// (the matter-interaction `report_parse` bench covers the IM layer on top).
+/// Layout mirrors that bench's builder: per attribute an AttributeReportIB
+/// structure holding an AttributeData structure with a path list and a
+/// `val_len`-byte octet-string value.
+fn build_report_shape(n_attrs: usize, val_len: usize) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous).expect("msg");
+    w.start_array(Tag::Context(1)).expect("AttributeReports");
+    let data = vec![0xCDu8; val_len];
+    for i in 0..n_attrs {
+        w.start_structure(Tag::Anonymous).expect("IB");
+        w.start_structure(Tag::Context(1)).expect("AttributeData");
+        w.start_list(Tag::Context(1)).expect("Path");
+        w.put_uint(Tag::Context(2), 1).expect("endpoint");
+        w.put_uint(Tag::Context(3), 0x0006).expect("cluster");
+        w.put_uint(Tag::Context(4), i as u64).expect("attribute");
+        w.end_container().expect("end path");
+        w.put_bytes(Tag::Context(2), &data).expect("Data");
+        w.end_container().expect("end AttributeData");
+        w.end_container().expect("end IB");
+    }
+    w.end_container().expect("end array");
+    w.end_container().expect("end msg");
+    buf
+}
+
 fn bench_decode(c: &mut Criterion) {
     let arr_bytes = build_byte_array(1000, 32);
     c.bench_function("decode/array_1000x32B", |b| {
@@ -83,6 +132,34 @@ fn bench_decode(c: &mut Criterion) {
             black_box(r.read_value().expect("decode"))
         });
     });
+
+    let small = build_small_struct();
+    c.bench_function("decode/struct_5_uint", |b| {
+        b.iter(|| {
+            let mut r = TlvReader::new(black_box(&small));
+            black_box(r.read_value().expect("decode"))
+        });
+    });
+
+    let nested = build_nested(30);
+    c.bench_function("decode/nested_30deep", |b| {
+        b.iter(|| {
+            let mut r = TlvReader::new(black_box(&nested));
+            black_box(r.read_value().expect("decode"))
+        });
+    });
+
+    let report = build_report_shape(170, 64);
+    c.bench_function("decode/report_170attr_64B", |b| {
+        b.iter(|| {
+            let mut r = TlvReader::new(black_box(&report));
+            black_box(r.read_value().expect("decode"))
+        });
+    });
+}
+
+fn build_small_struct() -> Vec<u8> {
+    build_wide_struct(5)
 }
 
 criterion_group!(benches, bench_decode);

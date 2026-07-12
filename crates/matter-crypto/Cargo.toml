@@ -45,3 +45,8 @@ matter-crypto = { path = ".", version = "0.1.0-pre", features = ["test-support"]
 # can construct synthetic MatterCertificate values via
 # `matter_cert::test_support::build_unsigned`.
 matter-cert = { path = "../matter-cert", version = "0.2.0-pre", features = ["test-support"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "case"
+harness = false

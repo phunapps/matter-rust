@@ -99,6 +99,17 @@ audit:
 gate: fmt-check lint test doctest codegen-check docs embedded deny audit
     @echo "gate: all green ✓"
 
+# ------------------------------------------------------------ benchmarks ---
+
+# Criterion benchmarks (NOT part of the gate; compare runs with
+# `cargo bench ... -- --save-baseline <name>` / `--baseline <name>`).
+bench:
+    cargo bench --workspace
+
+# Benchmarks for a single crate, e.g. `just bench-one matter-codec`.
+bench-one CRATE:
+    cargo bench -p {{CRATE}}
+
 # ---------------------------------------------------------- integration ---
 
 # Build + launch all-clusters-app and run the integration sweep (local/nightly).

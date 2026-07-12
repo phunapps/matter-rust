@@ -105,17 +105,21 @@ clearly enough that they can be re-pinned against new matter.js /
 
 ### Benchmark suite
 
-**Status:** open.
+**Status:** stood up 2026-07-12 (`just bench` / `just bench-one <crate>`;
+not part of the gate). Criterion suites now cover:
 
-**Why it matters:** matter.js is slow (TypeScript + Node). One of our
-positioning claims for matter-rust is "embedded-grade performance."
-Without benchmarks, we won't know when we regress or whether the
-claim holds. CASE handshake throughput vs matter.js is the most
-load-bearing comparison.
+- `matter-codec`: `benches/decode.rs` (arrays, wide struct, small scalar
+  struct, 30-deep nesting, the 170-attr wildcard-report shape) +
+  `benches/encode.rs` (writer counterparts).
+- `matter-interaction`: `benches/report_parse.rs` (IM-layer report parse).
+- `matter-crypto`: `benches/case.rs` (per-step SIGMA costs + full
+  handshake — the load-bearing matter.js comparison workload).
+- `matter-transport`: `benches/frame.rs` (secured frame encode/decode,
+  32 B and 960 B payloads).
 
-**Concrete deliverable:** a `benches/` directory under each substantive
-crate (`matter-codec`, `matter-cert`, `matter-crypto` once it lands)
-running representative workloads via `criterion`.
+**Remaining:** a `matter-cert` suite when a parse/validate hot path is
+identified, and an actual captured matter.js CASE number to compare
+`case/full_handshake` against.
 
 ### no_std posture
 
