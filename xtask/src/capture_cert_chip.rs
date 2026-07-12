@@ -21,7 +21,7 @@
 //! ```
 //!
 //! The `.tbs.bin` files are the exact bytes chip-cert's CA signed (the
-//! TBSCertificate element of its X.509 DER), so
+//! `TBSCertificate` element of its X.509 DER), so
 //! `MatterCertificate::to_x509_tbs_der()` matching them byte-for-byte is the
 //! same strict gate the matter.js `asUnsignedDer()` fixtures provide.
 //!
@@ -54,6 +54,7 @@ const NOC_NODE_ID: &str = "DEDEDEDE00010001";
 const FABRIC_ID: &str = "000000000000001D";
 
 /// Entry point for `cargo xtask capture-cert-chip`.
+#[allow(clippy::too_many_lines)] // Linear gen→convert→validate→write capture pipeline; splitting hurts clarity.
 pub(crate) fn run() -> Result<(), String> {
     let chip_cert = locate_chip_cert()?;
     let root = workspace_root()?;

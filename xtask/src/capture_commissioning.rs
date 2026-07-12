@@ -75,7 +75,7 @@ pub(crate) fn run() -> Result<(), String> {
 struct TraceRow {
     dir: String,
     exchange: u16,
-    /// 16-bit protocol short id: 0 = SecureChannel, 1 = InteractionModel.
+    /// 16-bit protocol short id: 0 = `SecureChannel`, 1 = `InteractionModel`.
     protocol: u16,
     opcode: u8,
     payload: String,
@@ -125,7 +125,7 @@ struct FixtureOut {
     pase_attestation_challenge_b64: String,
     /// matter.js's capture-time nonces: the parity test scripts its
     /// `NocRng` with these so the Rust state machine reproduces the exact
-    /// AttestationRequest / CSRRequest payloads (and accepts the captured
+    /// `AttestationRequest` / `CSRRequest` payloads (and accepts the captured
     /// responses' nonce echoes).
     attestation_nonce_b64: String,
     csr_nonce_b64: String,
@@ -145,9 +145,10 @@ fn b64(bytes: &[u8]) -> String {
 ///
 /// matter.js's own step order differs from ours (it configures the
 /// regulatory domain after the NOC, we do it before attestation), so
-/// invokes are matched by `(cluster, command)` — plus the CertChainRequest
+/// invokes are matched by `(cluster, command)` — plus the `CertChainRequest`
 /// type field — rather than by position. matter.js-only invokes (e.g. its
 /// post-CASE `UpdateFabricLabel`) are reported and skipped.
+#[allow(clippy::too_many_lines)] // Linear trace→stages mapping; splitting hurts clarity.
 fn post_process(root: &std::path::Path, out_dir: &std::path::Path) -> Result<(), String> {
     use matter_interaction::InvokeResponse;
 
@@ -348,31 +349,31 @@ fn post_process(root: &std::path::Path, out_dir: &std::path::Path) -> Result<(),
     // test asserts only when one is present; regulatory byte-parity was
     // separately validated live by the M6.6 trace-diff run) and a
     // synthesized success response to keep the walk moving.
-    let config_regulatory = match find_invoke(0x0030, 0x02, 0) {
-        Ok(iv) => inv_stage("ConfigRegulatory", iv),
-        Err(_) => {
-            eprintln!(
-                "capture-commissioning: ethernet-only device — matter.js skipped \
+    let config_regulatory = if let Ok(iv) = find_invoke(0x0030, 0x02, 0) {
+        inv_stage("ConfigRegulatory", iv)
+    } else {
+        eprintln!(
+            "capture-commissioning: ethernet-only device — matter.js skipped \
                  SetRegulatoryConfig; synthesizing a success response (no parity assert)"
-            );
-            let mut buf = Vec::new();
-            let mut w = matter_codec::TlvWriter::new(&mut buf);
-            w.start_structure(matter_codec::Tag::Anonymous)
+        );
+        let mut buf = Vec::new();
+        let mut w = matter_codec::TlvWriter::new(&mut buf);
+        w.start_structure(matter_codec::Tag::Anonymous)
                 .and_then(|()| w.put_uint(matter_codec::Tag::Context(0), 0)) // ErrorCode: OK
                 .and_then(|()| w.put_utf8(matter_codec::Tag::Context(1), "")) // DebugText
                 .and_then(|()| w.end_container())
                 .map_err(|e| format!("synthesize SetRegulatoryConfigResponse: {e}"))?;
-            StageOut {
-                stage: "ConfigRegulatory",
-                action: "Invoke",
-                cluster: Some("0x0030".into()),
-                command: Some("0x02".into()),
-                attribute_ids: Vec::new(),
-                expected_payload_b64: None,
-                response_payload_b64: Some(b64(&buf)),
-            }
+        StageOut {
+            stage: "ConfigRegulatory",
+            action: "Invoke",
+            cluster: Some("0x0030".into()),
+            command: Some("0x02".into()),
+            attribute_ids: Vec::new(),
+            expected_payload_b64: None,
+            response_payload_b64: Some(b64(&buf)),
         }
     };
+
     let stages = vec![
         StageOut {
             stage: "ReadCommissioningInfo",
