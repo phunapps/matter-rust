@@ -17,6 +17,7 @@ pub struct MatterControllerBuilder {
     store: Arc<dyn ControllerStore>,
     trust: Option<AttestationTrust>,
     admin_vendor_id: u16,
+    multicast_if: Option<u32>,
 }
 
 impl MatterControllerBuilder {
@@ -25,6 +26,7 @@ impl MatterControllerBuilder {
             store,
             trust: None,
             admin_vendor_id: DEFAULT_ADMIN_VENDOR_ID,
+            multicast_if: None,
         }
     }
 
@@ -42,6 +44,18 @@ impl MatterControllerBuilder {
         self
     }
 
+    /// Set the IPv6 multicast egress interface (an `if_nametoindex` value)
+    /// used for group commands (`invoke_group`). On a multi-homed host the
+    /// kernel default has no route for the admin-local `ff35:` group address
+    /// and group sends fail with "No route to host" — pick the LAN-facing
+    /// interface. When unset, the `MATTER_MULTICAST_IF` env var is honored as
+    /// a compat fallback, then the kernel default.
+    #[must_use]
+    pub fn multicast_interface(mut self, if_index: u32) -> Self {
+        self.multicast_if = Some(if_index);
+        self
+    }
+
     /// Bind the socket + discovery, load persisted state, and spawn the actor.
     ///
     /// # Errors
@@ -49,6 +63,12 @@ impl MatterControllerBuilder {
     /// [`Error::Store`] / [`Error::Snapshot`] on load failure, or
     /// [`Error::Operational`] if the socket / mDNS cannot start.
     pub async fn build(self) -> Result<MatterController, Error> {
-        MatterController::spawn_default(self.store, self.trust, self.admin_vendor_id).await
+        MatterController::spawn_default(
+            self.store,
+            self.trust,
+            self.admin_vendor_id,
+            self.multicast_if,
+        )
+        .await
     }
 }

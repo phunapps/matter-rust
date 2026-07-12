@@ -76,6 +76,21 @@ impl TokioUdpTransport {
         Self::bind_addr(addr).await
     }
 
+    /// [`Self::bind`] with an explicit IPv6 multicast egress interface
+    /// (`IPV6_MULTICAST_IF`). On a multi-homed host the kernel default has no
+    /// route for the admin-local `ff35:` group address and group sends fail
+    /// with "No route to host" — pass `if_nametoindex`'s value for the LAN
+    /// interface. `None` (or `Some(0)`) falls back to the
+    /// `MATTER_MULTICAST_IF` env var, then the kernel default.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] on bind failure or an invalid interface index.
+    pub async fn bind_with_multicast_if(port: u16, multicast_if: Option<u32>) -> Result<Self> {
+        let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0));
+        Self::bind_addr_with_multicast_if(addr, multicast_if).await
+    }
+
     /// Bind on a specific address. Useful for tests with `[::1]:0`.
     ///
     /// # Errors
@@ -86,6 +101,20 @@ impl TokioUdpTransport {
     // (which IS async). All current operations inside are synchronous.
     #[allow(clippy::unused_async)]
     pub async fn bind_addr(addr: SocketAddr) -> Result<Self> {
+        Self::bind_addr_with_multicast_if(addr, None).await
+    }
+
+    /// [`Self::bind_addr`] with an explicit IPv6 multicast egress interface —
+    /// see [`Self::bind_with_multicast_if`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Io`] on bind failure or an invalid interface index.
+    #[allow(clippy::unused_async)] // symmetry with `bind`; see `bind_addr`.
+    pub async fn bind_addr_with_multicast_if(
+        addr: SocketAddr,
+        multicast_if: Option<u32>,
+    ) -> Result<Self> {
         let domain = match addr {
             SocketAddr::V4(_) => Domain::IPV4,
             SocketAddr::V6(_) => Domain::IPV6,
@@ -99,18 +128,21 @@ impl TokioUdpTransport {
             // left at the kernel default (unset) — see module-level
             // doc for why we do NOT call `set_multicast_if_v6(0)`.
             raw.set_multicast_hops_v6(MATTER_GROUP_MULTICAST_HOPS)?;
-            // Interim multicast egress-interface selection (a proper builder
-            // option is the follow-up): on a multi-homed/macOS host the kernel
-            // default has no route for the admin-local `ff35:` group address, so
-            // a group send fails with "No route to host". `MATTER_MULTICAST_IF`
-            // (a non-zero interface index, e.g. `if_nametoindex("en0")`) sets
-            // `IPV6_MULTICAST_IF` explicitly. A real index is accepted on macOS
-            // (only index 0 is rejected).
-            if let Some(idx) = std::env::var("MATTER_MULTICAST_IF")
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .filter(|&i| i != 0)
-            {
+            // Multicast egress-interface selection: an explicit `multicast_if`
+            // (the `MatterControllerBuilder::multicast_interface` path) wins;
+            // the `MATTER_MULTICAST_IF` env var remains as a compat fallback
+            // for the runbooks that predate the builder option. On a
+            // multi-homed/macOS host the kernel default has no route for the
+            // admin-local `ff35:` group address, so a group send fails with
+            // "No route to host" without one of these. A real index is
+            // accepted on macOS (only index 0 is rejected).
+            let idx = multicast_if.filter(|&i| i != 0).or_else(|| {
+                std::env::var("MATTER_MULTICAST_IF")
+                    .ok()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .filter(|&i| i != 0)
+            });
+            if let Some(idx) = idx {
                 raw.set_multicast_if_v6(idx)?;
             }
         }
@@ -165,6 +197,25 @@ impl Transport for TokioUdpTransport {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
+
+    #[tokio::test]
+    async fn bind_with_multicast_if_none_is_plain_bind() {
+        let t = TokioUdpTransport::bind_with_multicast_if(0, None)
+            .await
+            .expect("bind with None must behave like plain bind");
+        assert_ne!(t.socket().local_addr().unwrap().port(), 0);
+    }
+
+    #[tokio::test]
+    async fn bind_with_bogus_multicast_if_errors() {
+        // Interface indexes are small; 0x00FF_FFF0 does not exist, so
+        // IPV6_MULTICAST_IF must be rejected by the kernel and surface as Io.
+        let err = TokioUdpTransport::bind_with_multicast_if(0, Some(0x00FF_FFF0))
+            .await
+            .expect_err("bogus interface index must fail the bind");
+        assert!(matches!(err, crate::Error::Io(_)), "unexpected: {err:?}");
+    }
+
     use super::*;
     use std::net::{Ipv6Addr, SocketAddr};
 

@@ -64,26 +64,29 @@ impl MatterController {
     ///
     /// As [`MatterControllerBuilder::build`].
     pub async fn open(store: Arc<dyn ControllerStore>) -> Result<Self, Error> {
-        Self::spawn_default(store, None, crate::builder::DEFAULT_ADMIN_VENDOR_ID).await
+        Self::spawn_default(store, None, crate::builder::DEFAULT_ADMIN_VENDOR_ID, None).await
     }
 
     pub(crate) async fn spawn_default(
         store: Arc<dyn ControllerStore>,
         trust: Option<AttestationTrust>,
         admin_vendor_id: u16,
+        multicast_if: Option<u32>,
     ) -> Result<Self, Error> {
-        let transport = matter_transport::TokioUdpTransport::bind(0)
-            .await
-            .map_err(|e| Error::Operational(format!("bind: {e}")))?;
+        let transport =
+            matter_transport::TokioUdpTransport::bind_with_multicast_if(0, multicast_if)
+                .await
+                .map_err(|e| Error::Operational(format!("bind: {e}")))?;
         let discovery = matter_transport::MdnsSdDiscovery::new()
             .map_err(|e| Error::Operational(format!("mdns: {e}")))?;
-        Self::with_components(
+        Self::with_components_and_multicast_if(
             store,
             transport,
             discovery,
             Arc::new(SystemNocRng),
             trust,
             admin_vendor_id,
+            multicast_if,
         )
     }
 
@@ -101,6 +104,31 @@ impl MatterController {
         rng: Arc<dyn NocRng>,
         trust: Option<AttestationTrust>,
         admin_vendor_id: u16,
+    ) -> Result<Self, Error>
+    where
+        T: AsyncDatagram + Send + Sync + 'static,
+        D: Discovery + Send + 'static,
+    {
+        Self::with_components_and_multicast_if(
+            store,
+            transport,
+            discovery,
+            rng,
+            trust,
+            admin_vendor_id,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Component-injection seam; mirrors Actor::new.
+    pub(crate) fn with_components_and_multicast_if<T, D>(
+        store: Arc<dyn ControllerStore>,
+        transport: T,
+        discovery: D,
+        rng: Arc<dyn NocRng>,
+        trust: Option<AttestationTrust>,
+        admin_vendor_id: u16,
+        multicast_if: Option<u32>,
     ) -> Result<Self, Error>
     where
         // `Sync` because the spawned actor future holds `&self.transport`
@@ -122,7 +150,8 @@ impl MatterController {
             state,
             trust,
             admin_vendor_id,
-        );
+        )
+        .with_multicast_if(multicast_if);
         tokio::spawn(actor.run(rx));
         Ok(Self { tx, store })
     }

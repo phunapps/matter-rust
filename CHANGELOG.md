@@ -207,6 +207,18 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-controller
 
+### [Unreleased] — multicast interface builder option
+
+#### Added
+
+- **`MatterControllerBuilder::multicast_interface(if_index: u32)`** — sets
+  the IPv6 multicast egress interface for group commands (`invoke_group`):
+  the transport binds with `IPV6_MULTICAST_IF` and group destinations carry
+  the scope id. On a multi-homed host the kernel default has no route for
+  the admin-local `ff35:` group address ("No route to host") without it.
+  The `MATTER_MULTICAST_IF` env var remains as a compat fallback when the
+  builder option is unset (promoting the M9-E3 stopgap to a real API).
+
 ### [Unreleased] — multi-session OTA provider
 
 #### Added
@@ -1296,6 +1308,18 @@ fixture file; the test assertions remain stable.
 - TCP transport (post-1.0).
 - BLE commissioning transport (post-1.0).
 - Group messaging (post-1.0).
+
+## matter-transport
+
+### [Unreleased] — explicit multicast egress interface
+
+#### Added
+
+- **`TokioUdpTransport::bind_with_multicast_if` / `bind_addr_with_multicast_if`**
+  — bind variants taking an explicit IPv6 multicast egress interface index
+  (`IPV6_MULTICAST_IF`); `None`/`Some(0)` falls back to the
+  `MATTER_MULTICAST_IF` env var, then the kernel default. Consumed by
+  `MatterControllerBuilder::multicast_interface`.
 
 ## matter-crypto
 

@@ -623,6 +623,10 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// completes. See [`Self::enqueue_connect_waiter`] /
     /// [`Self::handle_connect_done`].
     pending_connects: HashMap<u64, Vec<ConnectWaiter>>,
+    /// IPv6 multicast egress interface for group sends (destination scope
+    /// id). Set via `MatterControllerBuilder::multicast_interface`; `None`
+    /// falls back to the `MATTER_MULTICAST_IF` env var, then kernel default.
+    multicast_if: Option<u32>,
     /// Per-in-flight-connect inbound queue (keyed by node id): the actor forwards
     /// the device's unsecured handshake replies here for the spawned task to
     /// consume via its [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket).
@@ -853,6 +857,36 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         trust: Option<crate::trust::AttestationTrust>,
         admin_vendor_id: u16,
     ) -> Self {
+        Self::new_inner(
+            transport,
+            discovery,
+            store,
+            rng,
+            state,
+            trust,
+            admin_vendor_id,
+        )
+    }
+
+    /// Set the IPv6 multicast egress interface for group sends (the
+    /// destination scope id). `None` falls back to `MATTER_MULTICAST_IF`,
+    /// then the kernel default. See
+    /// `MatterControllerBuilder::multicast_interface`.
+    pub(crate) fn with_multicast_if(mut self, multicast_if: Option<u32>) -> Self {
+        self.multicast_if = multicast_if;
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)] // mirrors `new`.
+    fn new_inner(
+        transport: T,
+        discovery: D,
+        store: Arc<dyn ControllerStore>,
+        rng: Arc<dyn NocRng>,
+        state: ControllerState,
+        trust: Option<crate::trust::AttestationTrust>,
+        admin_vendor_id: u16,
+    ) -> Self {
         let (commission_tx, commission_rx) = mpsc::channel(8);
         let (connect_outbound_tx, connect_outbound_rx) = mpsc::channel(64);
         let (connect_done_tx, connect_done_rx) = mpsc::channel(8);
@@ -874,6 +908,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             commission_tx,
             commission_rx,
             pending_connects: HashMap::new(),
+            multicast_if: None,
             connect_inbound: HashMap::new(),
             connect_routes: HashMap::new(),
             connect_outbound_tx,
@@ -1571,13 +1606,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // Egress interface for the admin-local `ff35:` group address: on a
         // multi-homed/macOS host the kernel resolves the outgoing interface from
         // the destination's scope id; without it the send fails with "No route
-        // to host". `MATTER_MULTICAST_IF` (a non-zero interface index, e.g.
-        // `if_nametoindex("en0")`) supplies it. (A proper builder option is the
-        // follow-up; 0 = kernel default.)
-        let scope_id = std::env::var("MATTER_MULTICAST_IF")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
+        // to host". The builder's `multicast_interface` supplies it; the
+        // `MATTER_MULTICAST_IF` env var remains a compat fallback
+        // (0 = kernel default).
+        let scope_id = self.multicast_if.filter(|&i| i != 0).unwrap_or_else(|| {
+            std::env::var("MATTER_MULTICAST_IF")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(0)
+        });
         let dest = SocketAddr::V6(std::net::SocketAddrV6::new(
             mcast,
             MATTER_GROUP_PORT,
