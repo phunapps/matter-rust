@@ -181,7 +181,7 @@ fn every_certificate_signature_verifies_against_its_issuer() {
             cert.public_key().clone()
         } else {
             let issuer_id = entry.signed_by_id.as_ref().unwrap_or_else(|| {
-                panic!("non-self-signed entry {} missing signed_by_id", &entry.id)
+                panic!("non-self-signed entry {} missing signed_by_id", entry.id)
             });
             let issuer_entry = entries
                 .iter()
