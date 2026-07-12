@@ -33,8 +33,20 @@ impl ControllerStore for FileStore {
 
     fn save(&self, snapshot: &[u8]) -> Result<(), StoreError> {
         use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
-        let tmp = self.path.with_extension("tmp");
+        // Unique temp file per save: the controller runs best-effort persists
+        // (address hints, resumption records) on detached blocking threads
+        // that can overlap a durable save. With a SHARED temp path, writer B
+        // truncates writer A's temp mid-write and whoever renames second gets
+        // ENOENT — the intermittent "store-persist ENOENT" seen in the
+        // integration sweep. Unique names keep each rename atomic and
+        // last-writer-wins.
+        static SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = self
+            .path
+            .with_extension(format!("tmp.{}.{seq}", std::process::id()));
         {
             let mut f = std::fs::File::create(&tmp)?;
             #[cfg(unix)]
@@ -45,7 +57,11 @@ impl ControllerStore for FileStore {
             f.write_all(snapshot)?;
             f.sync_all()?;
         }
-        std::fs::rename(&tmp, &self.path)?;
+        if let Err(e) = std::fs::rename(&tmp, &self.path) {
+            // Don't leave key material lying around in a stray temp file.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(StoreError::Io(e));
+        }
         Ok(())
     }
 }
@@ -96,8 +112,41 @@ mod tests {
         store.save(b"first").expect("save 1");
         store.save(b"second value longer").expect("save 2");
         assert_eq!(store.load().expect("load").unwrap(), b"second value longer");
-        // temp file must not linger
-        assert!(!path.with_extension("tmp").exists());
+        // no temp file may linger (unique names: check the parent dir)
+        let stem = path.file_name().unwrap().to_string_lossy().into_owned();
+        let stray = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.starts_with(&stem) && n.contains(".tmp")
+            });
+        assert!(!stray, "stray temp file left behind");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Regression for the shared-temp-path race: concurrent saves from
+    /// multiple threads (the controller's overlapping best-effort + durable
+    /// persist shape) must ALL succeed, and the surviving file must be one
+    /// of the written values, intact.
+    #[test]
+    fn concurrent_saves_all_succeed() {
+        let path = temp_path("concurrent");
+        let mut handles = Vec::new();
+        for i in 0..8u8 {
+            let store = FileStore::new(&path);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..25 {
+                    store.save(&[i; 64]).expect("concurrent save must not race");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("saver thread");
+        }
+        let survivor = FileStore::new(&path).load().expect("load").unwrap();
+        assert_eq!(survivor.len(), 64, "no torn write");
+        assert!(survivor.iter().all(|b| *b == survivor[0]), "intact value");
         let _ = std::fs::remove_file(&path);
     }
 
