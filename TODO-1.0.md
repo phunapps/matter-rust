@@ -106,7 +106,14 @@ Sigma3 against matter.js's `CaseClient.ts` / `CaseServer.ts`.
 
 ### matter.js capture-pase / capture-case RNG patching
 
-**Status:** working, but fragile.
+**Status:** CLOSED 2026-07-12 — documented to the <30-minute re-pin
+standard in `docs/runbooks/capture-rng-repinning.md` (per-seam checklist:
+the capture-pase `randomBytes` queue, capture-case's fixed-scalar
+`ECDH.setPrivateKey` + `@noble/curves` RFC 6979 signing + absolute-path
+internal imports). New captures should prefer the capture-commissioning
+pattern (fixture-carried nonces scripting the Rust RNG) over RNG patching.
+
+Original finding, for history:
 
 **Why it matters:** `xtask capture-pase` monkey-patches matter.js's
 `Crypto.randomBytes` to inject fixed scalars; `xtask capture-case`
@@ -143,7 +150,14 @@ in-process loopback wall-clock) — methodology + caveats in
 
 ### no_std posture
 
-**Status:** open.
+**Status:** DECIDED 2026-07-12 — ADR 0002 (`docs/decisions/0002-no-std-posture.md`):
+1.0 ships std-only; no_std stays deferred-until-requested per CLAUDE.md.
+Codec/bdx are the designated first candidates, matter-transport's sans-io
+core is protected by the CI `embedded` job, crypto/cert are gated on a
+ring-replacement decision. No `std` cargo features until a real consumer
+defines the profile.
+
+Original finding, for history:
 
 **Why it matters:** the embedded device makers who'd most want a
 Rust Matter library typically require `no_std`. The current crates
