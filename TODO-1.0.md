@@ -45,7 +45,16 @@ a 2M-iteration local `fuzz_decode` run all green.
 
 ### Cross-verification against `project-chip/connectedhomeip`
 
-**Status:** open.
+**Status:** CLOSED 2026-07-12. `cargo xtask capture-cert-chip` generates a
+3-tier RCAC→ICAC→NOC fixture set with `chip-cert` (chain-validated by the
+tool itself) under `test-vectors/certs/connectedhomeip/` — raw CHIP TLV plus
+the TBSCertificate slice of chip-cert's X.509 DER (the exact signed bytes).
+Every test in `crates/matter-cert/tests/certificates.rs` (parse, TLV
+round-trip, X.509 TBS byte-parity, signature chain) now runs against BOTH
+the matter.js and connectedhomeip sets; all passed byte-for-byte on the
+first capture.
+
+Original finding, for history:
 
 **Why it matters:** `matter-cert`'s byte-parity gate currently runs
 against matter.js's `Certificate.asUnsignedDer()` only. matter.js is

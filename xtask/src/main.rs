@@ -6,6 +6,8 @@
 //! - `check`         — run every gate CI runs, locally.
 //! - `capture-tlv`   — drive `matter.js` to capture TLV vectors (Milestone 0).
 //! - `capture-cert`  — drive `matter.js` to capture certificate vectors (Milestone 2).
+//! - `capture-cert-chip` — generate the second (connectedhomeip `chip-cert`)
+//!   certificate fixture set for cross-verification.
 //! - `capture-pase`  — drive matter.js to capture PASE handshakes with
 //!   fixed scalars (Milestone 3).
 //! - `capture-case`  — drive matter.js to capture CASE handshakes with
@@ -36,6 +38,7 @@
 //! - `release`       — workspace release helper (post-Milestone 1).
 
 mod capture_cd;
+mod capture_cert_chip;
 mod capture_commissioning;
 mod integration;
 mod trace_diff;
@@ -128,6 +131,13 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("xtask capture-noc: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("capture-cert-chip") => match capture_cert_chip::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("xtask capture-cert-chip: {err}");
                 ExitCode::FAILURE
             }
         },

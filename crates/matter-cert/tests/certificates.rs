@@ -72,15 +72,22 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn load_manifest() -> Manifest {
-    let path = workspace_root().join("test-vectors/certs/manifest.toml");
+/// The captured fixture sets: matter.js (`@matter/protocol`) and the CSA
+/// C++ reference (`connectedhomeip`'s chip-cert, via
+/// `cargo xtask capture-cert-chip`). Every test below runs against BOTH —
+/// matter.js has diverged from the C++ canonical implementation before, so
+/// the byte-parity gate holds against each independently.
+const FIXTURE_DIRS: [&str; 2] = ["test-vectors/certs", "test-vectors/certs/connectedhomeip"];
+
+fn load_manifest(dir: &str) -> Manifest {
+    let path = workspace_root().join(dir).join("manifest.toml");
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read manifest at {}: {e}", path.display()));
     toml::from_str(&text).expect("manifest.toml must be valid TOML matching the Manifest schema")
 }
 
-fn load_bin(file: &str) -> Vec<u8> {
-    let path = workspace_root().join("test-vectors/certs").join(file);
+fn load_bin(dir: &str, file: &str) -> Vec<u8> {
+    let path = workspace_root().join(dir).join(file);
     fs::read(&path).unwrap_or_else(|e| panic!("failed to read cert file {}: {e}", path.display()))
 }
 
@@ -90,42 +97,44 @@ fn load_bin(file: &str) -> Vec<u8> {
 
 #[test]
 fn every_certificate_parses_and_round_trips() {
-    let manifest = load_manifest();
-    assert!(
-        !manifest.certificate.is_empty(),
-        "manifest contains no certificates — capture must have failed or the file is empty",
-    );
-
-    let mut processed = 0usize;
-    for entry in &manifest.certificate {
-        let bytes = load_bin(&entry.file);
-
-        // Step 1: parse.
-        let cert = MatterCertificate::from_tlv(&bytes).unwrap_or_else(|e| {
-            panic!(
-                "MatterCertificate::from_tlv failed for cert '{}' (file: {}): {e}",
-                entry.id, entry.file,
-            );
-        });
-
-        // Step 2: re-serialise and assert byte-for-byte equality.
-        let re_serialised = cert.to_tlv().unwrap_or_else(|e| {
-            panic!(
-                "MatterCertificate::to_tlv failed for cert '{}': {e}",
-                entry.id,
-            );
-        });
-        assert_eq!(
-            re_serialised, bytes,
-            "cert '{}' parsed successfully but re-serialised to different bytes \
-             (check for missed fields or wrong emission order in to_tlv)",
-            entry.id,
+    for dir in FIXTURE_DIRS {
+        let manifest = load_manifest(dir);
+        assert!(
+            !manifest.certificate.is_empty(),
+            "manifest contains no certificates — capture must have failed or the file is empty",
         );
 
-        processed += 1;
-    }
+        let mut processed = 0usize;
+        for entry in &manifest.certificate {
+            let bytes = load_bin(dir, &entry.file);
 
-    eprintln!("processed {processed} certificate(s) — all parsed and round-tripped");
+            // Step 1: parse.
+            let cert = MatterCertificate::from_tlv(&bytes).unwrap_or_else(|e| {
+                panic!(
+                    "MatterCertificate::from_tlv failed for cert '{}' (file: {}): {e}",
+                    entry.id, entry.file,
+                );
+            });
+
+            // Step 2: re-serialise and assert byte-for-byte equality.
+            let re_serialised = cert.to_tlv().unwrap_or_else(|e| {
+                panic!(
+                    "MatterCertificate::to_tlv failed for cert '{}': {e}",
+                    entry.id,
+                );
+            });
+            assert_eq!(
+                re_serialised, bytes,
+                "cert '{}' parsed successfully but re-serialised to different bytes \
+             (check for missed fields or wrong emission order in to_tlv)",
+                entry.id,
+            );
+
+            processed += 1;
+        }
+
+        eprintln!("[{dir}] processed {processed} certificate(s) — all parsed and round-tripped");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,30 +147,32 @@ fn every_certificate_parses_and_round_trips() {
 /// This is the strict correctness gate for the X.509 encoder.  If it fails,
 /// the first differing byte identifies which encoder function to fix.
 #[test]
-fn every_certificate_x509_tbs_matches_matter_js() {
-    let entries = load_manifest().certificate;
+fn every_certificate_x509_tbs_matches_reference() {
+    for dir in FIXTURE_DIRS {
+        let entries = load_manifest(dir).certificate;
 
-    for entry in &entries {
-        let cert_bytes = load_bin(&entry.file);
-        let cert = MatterCertificate::from_tlv(&cert_bytes).unwrap_or_else(|e| {
-            panic!("parse {}: {e}", entry.id);
-        });
+        for entry in &entries {
+            let cert_bytes = load_bin(dir, &entry.file);
+            let cert = MatterCertificate::from_tlv(&cert_bytes).unwrap_or_else(|e| {
+                panic!("parse {}: {e}", entry.id);
+            });
 
-        let our_tbs = cert.to_x509_tbs_der().unwrap_or_else(|e| {
-            panic!("to_x509_tbs_der for {}: {e}", entry.id);
-        });
+            let our_tbs = cert.to_x509_tbs_der().unwrap_or_else(|e| {
+                panic!("to_x509_tbs_der for {}: {e}", entry.id);
+            });
 
-        let tbs_file = entry
-            .tbs_file
-            .as_ref()
-            .unwrap_or_else(|| panic!("manifest entry {} missing tbs_file", entry.id));
-        let captured_tbs = load_bin(tbs_file);
+            let tbs_file = entry
+                .tbs_file
+                .as_ref()
+                .unwrap_or_else(|| panic!("manifest entry {} missing tbs_file", entry.id));
+            let captured_tbs = load_bin(dir, tbs_file);
 
-        assert_eq!(
+            assert_eq!(
             our_tbs, captured_tbs,
-            "byte-parity mismatch for {}: our TBS differs from matter.js's asUnsignedDer()",
+            "byte-parity mismatch for {} in {dir}: our TBS differs from the reference's signed TBS",
             entry.id
         );
+        }
     }
 }
 
@@ -169,31 +180,37 @@ fn every_certificate_x509_tbs_matches_matter_js() {
 /// public key (or the cert's own key if self-signed).
 #[test]
 fn every_certificate_signature_verifies_against_its_issuer() {
-    let entries = load_manifest().certificate;
+    for dir in FIXTURE_DIRS {
+        let entries = load_manifest(dir).certificate;
 
-    for entry in &entries {
-        let cert_bytes = load_bin(&entry.file);
-        let cert = MatterCertificate::from_tlv(&cert_bytes).unwrap_or_else(|e| {
-            panic!("parse {}: {e}", entry.id);
-        });
-
-        let issuer_key = if entry.is_self_signed {
-            cert.public_key().clone()
-        } else {
-            let issuer_id = entry.signed_by_id.as_ref().unwrap_or_else(|| {
-                panic!("non-self-signed entry {} missing signed_by_id", entry.id)
+        for entry in &entries {
+            let cert_bytes = load_bin(dir, &entry.file);
+            let cert = MatterCertificate::from_tlv(&cert_bytes).unwrap_or_else(|e| {
+                panic!("parse {}: {e}", entry.id);
             });
-            let issuer_entry = entries
-                .iter()
-                .find(|e| &e.id == issuer_id)
-                .unwrap_or_else(|| panic!("issuer {issuer_id} not in manifest"));
-            let issuer_bytes = load_bin(&issuer_entry.file);
-            let issuer_cert = MatterCertificate::from_tlv(&issuer_bytes).unwrap();
-            issuer_cert.public_key().clone()
-        };
 
-        cert.verify_signed_by(&issuer_key)
-            .unwrap_or_else(|e| panic!("signature verification failed for {}: {e}", entry.id));
+            let issuer_key = if entry.is_self_signed {
+                cert.public_key().clone()
+            } else {
+                let issuer_id = entry.signed_by_id.as_ref().unwrap_or_else(|| {
+                    panic!("non-self-signed entry {} missing signed_by_id", entry.id)
+                });
+                let issuer_entry = entries
+                    .iter()
+                    .find(|e| &e.id == issuer_id)
+                    .unwrap_or_else(|| panic!("issuer {issuer_id} not in manifest"));
+                let issuer_bytes = load_bin(dir, &issuer_entry.file);
+                let issuer_cert = MatterCertificate::from_tlv(&issuer_bytes).unwrap();
+                issuer_cert.public_key().clone()
+            };
+
+            cert.verify_signed_by(&issuer_key).unwrap_or_else(|e| {
+                panic!(
+                    "signature verification failed for {} in {dir}: {e}",
+                    entry.id
+                )
+            });
+        }
     }
 }
 
@@ -201,24 +218,26 @@ fn every_certificate_signature_verifies_against_its_issuer() {
 /// wrong issuer key is provided (NOC signed by ICAC, verified against RCAC).
 #[test]
 fn signature_verification_rejects_wrong_issuer() {
-    let entries = load_manifest().certificate;
-    let noc_entry = entries
-        .iter()
-        .find(|e| e.id == "noc")
-        .expect("noc in manifest");
-    let rcac_entry = entries
-        .iter()
-        .find(|e| e.id == "rcac")
-        .expect("rcac in manifest");
+    for dir in FIXTURE_DIRS {
+        let entries = load_manifest(dir).certificate;
+        let noc_entry = entries
+            .iter()
+            .find(|e| e.id == "noc")
+            .expect("noc in manifest");
+        let rcac_entry = entries
+            .iter()
+            .find(|e| e.id == "rcac")
+            .expect("rcac in manifest");
 
-    let noc_bytes = load_bin(&noc_entry.file);
-    let noc = MatterCertificate::from_tlv(&noc_bytes).unwrap();
-    let rcac_bytes = load_bin(&rcac_entry.file);
-    let rcac = MatterCertificate::from_tlv(&rcac_bytes).unwrap();
+        let noc_bytes = load_bin(dir, &noc_entry.file);
+        let noc = MatterCertificate::from_tlv(&noc_bytes).unwrap();
+        let rcac_bytes = load_bin(dir, &rcac_entry.file);
+        let rcac = MatterCertificate::from_tlv(&rcac_bytes).unwrap();
 
-    let err = noc.verify_signed_by(rcac.public_key()).unwrap_err();
-    assert!(
-        matches!(err, matter_cert::Error::SignatureVerificationFailed),
-        "expected SignatureVerificationFailed, got {err:?}"
-    );
+        let err = noc.verify_signed_by(rcac.public_key()).unwrap_err();
+        assert!(
+            matches!(err, matter_cert::Error::SignatureVerificationFailed),
+            "expected SignatureVerificationFailed, got {err:?}"
+        );
+    }
 }
