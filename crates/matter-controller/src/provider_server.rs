@@ -664,9 +664,8 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 // requestor re-established (the reboot window) — not a fault
                 // of the live session. Skip it; the step budget bounds a
                 // pathological stream of them.
-                let decoded = match sessions.decode_inbound(&wire, Instant::now()) {
-                    Ok(output) => output,
-                    Err(_) => continue,
+                let Ok(decoded) = sessions.decode_inbound(&wire, Instant::now()) else {
+                    continue;
                 };
                 let DecodeInboundOutput::AppMessage {
                     exchange_id,

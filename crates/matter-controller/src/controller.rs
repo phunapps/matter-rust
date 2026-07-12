@@ -97,6 +97,7 @@ impl MatterController {
     ///
     /// [`Error::Store`] / [`Error::Snapshot`] if the persisted snapshot is
     /// unreadable.
+    #[cfg(test)] // production construction goes through `with_components_and_multicast_if`.
     pub(crate) fn with_components<T, D>(
         store: Arc<dyn ControllerStore>,
         transport: T,

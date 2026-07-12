@@ -113,9 +113,7 @@ async fn open_window_second_controller_and_remove_fabric() {
     let commissioned = match controller_b.commission(&window.manual_code).await {
         Ok(id) => Ok(id),
         Err(first) => {
-            eprintln!(
-                "[multi_admin] B's first commission attempt failed ({first}); retrying once"
-            );
+            eprintln!("[multi_admin] B's first commission attempt failed ({first}); retrying once");
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             controller_b.commission(&window.manual_code).await
         }
