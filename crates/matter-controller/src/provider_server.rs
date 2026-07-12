@@ -56,6 +56,10 @@ fn is_unsecured_frame(frame: &[u8]) -> bool {
     frame.len() >= 3 && frame[1] == 0 && frame[2] == 0
 }
 
+/// A raw datagram (frame bytes + sender) handed from one accept to the next,
+/// so no handshake bytes are lost across session boundaries.
+type CarriedFrame = (Vec<u8>, SocketAddr);
+
 /// Build the operational `_matter._tcp` mDNS record to advertise so a requestor
 /// can resolve us. Instance name is `<compressed-fabric-id>-<node-id>` in
 /// uppercase hex (Matter Core §4.3.1), matching what the controller's initiator
@@ -270,10 +274,15 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// If `first_frame` is `Some`, that datagram is used as the Sigma1 instead
     /// of calling `recv` — useful for callers that have already peeked the first
     /// packet (e.g., a multi-session loop that demuxes by session id).
+    ///
+    /// The returned [`CarriedFrame`] is `Some` when the full-handshake close
+    /// saw a NEW Sigma1 in place of the initiator's standalone ack (see
+    /// [`Self::complete_full`]); the caller must feed it into its next accept
+    /// or the handshake attempt it opens is lost.
     async fn accept_case(
         &mut self,
-        first_frame: Option<(Vec<u8>, SocketAddr)>,
-    ) -> Result<(SessionManager, SessionId, SocketAddr), Error> {
+        first_frame: Option<CarriedFrame>,
+    ) -> Result<(SessionManager, SessionId, SocketAddr, Option<CarriedFrame>), Error> {
         // Fast-fail an exhausted pool before any IO. The check does NOT pop:
         // a credential is consumed only once a valid Sigma1 is in hand, so
         // stray datagrams to the advertised port cannot burn the pool.
@@ -340,11 +349,12 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             }
         };
 
-        if resumed {
+        let carry = if resumed {
             self.complete_resumed(&mut responder, &m1, peer).await?;
+            None
         } else {
-            self.complete_full(&mut responder, &m1, peer).await?;
-        }
+            self.complete_full(&mut responder, &m1, peer).await?
+        };
 
         let output = responder
             .finish()
@@ -369,7 +379,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         }
         let mut sessions = SessionManager::new();
         let sid = sessions.register_case(&output, SessionRole::Responder);
-        Ok((sessions, sid, peer))
+        Ok((sessions, sid, peer, carry))
     }
 
     /// Resumed path: send `Sigma2_Resume` on Sigma1's exchange, then await the
@@ -467,12 +477,21 @@ impl<D: AsyncDatagram> ProviderServer<D> {
 
     /// Full-handshake path (Sigma2 → Sigma3 → our success `StatusReport`), used
     /// for a plain Sigma1 and as the fallback after `reject_resumption`.
+    ///
+    /// Returns the frame to carry into the next accept when the closing
+    /// ack-absorb `recv` saw a NEW Sigma1 instead of the initiator's
+    /// standalone ack: a requestor that applies and reboots fast can have its
+    /// next handshake's Sigma1 in flight before the ack — eating it would
+    /// force the peer through an MRP retransmit round AND burn one pooled
+    /// retry credential on this side. Everything else (the ack, noise, a
+    /// same-exchange Sigma1 — a stale duplicate of `m1`, provably already
+    /// answered because Sigma3 arrived) is absorbed as before.
     async fn complete_full(
         &mut self,
         responder: &mut CaseResponder,
         m1: &matter_commissioning::driver::UnsecuredMessage,
         peer: SocketAddr,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<CarriedFrame>, Error> {
         let sigma2 = responder
             .next_message()
             .map_err(|e| Error::Operational(format!("sigma2: {e}")))?;
@@ -518,9 +537,16 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         );
         self.send(&report, peer).await?;
 
-        // Absorb the initiator's standalone ack of our StatusReport.
-        let _ack = self.recv().await?;
-        Ok(())
+        // Absorb the initiator's standalone ack of our StatusReport — but hand
+        // a fresh Sigma1 (new handshake, new exchange) back to the caller
+        // instead of eating it (see the method docs).
+        let (bytes, from) = self.recv().await?;
+        if let Ok(m) = decode_unsecured(&bytes) {
+            if m.opcode == OP_SIGMA1 && m.exchange_id != m1.exchange_id {
+                return Ok(Some((bytes, from)));
+            }
+        }
+        Ok(None)
     }
 
     /// Accept ONE inbound CASE session, then dispatch up to `max_invokes`
@@ -544,7 +570,10 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     where
         H: FnMut(&ParsedInvokeRequest) -> Vec<u8>,
     {
-        let (mut sessions, sid, peer) = self.accept_case(None).await?;
+        // Single-session API: there is no next accept to feed a carried
+        // Sigma1 into, so it is dropped (the peer's MRP retransmit covers it)
+        // — the pre-multi-session behavior.
+        let (mut sessions, sid, peer, _fast_sigma1) = self.accept_case(None).await?;
 
         let mut dispatched = 0usize;
         while dispatched < max_invokes {
@@ -636,15 +665,25 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         // next attempt; only pool exhaustion (or the caller's deadline) ends
         // the serve.
         loop {
-            let (mut sessions, sid, peer) = match self.accept_case(carried.take()).await {
-                Ok(accepted) => accepted,
-                Err(e) => {
-                    if self.credentials.is_empty() {
-                        return Err(e); // exhausted (or the last credential's failure)
+            let (mut sessions, sid, peer, fast_sigma1) =
+                match self.accept_case(carried.take()).await {
+                    Ok(accepted) => accepted,
+                    Err(e) => {
+                        if self.credentials.is_empty() {
+                            return Err(e); // exhausted (or the last credential's failure)
+                        }
+                        continue; // retry with the next pooled credential
                     }
-                    continue; // retry with the next pooled credential
-                }
-            };
+                };
+            if let Some(frame) = fast_sigma1 {
+                // The peer opened a NEW handshake instead of acking this one's
+                // close (fast post-reboot Sigma1 in place of the standalone
+                // ack): the session just established is already abandoned —
+                // roll the Sigma1 straight into the next accept rather than
+                // blocking the inner loop on a dead session.
+                carried = Some(frame);
+                continue;
+            }
 
             // Per-session step bound: one per OTA command + one per block + slack.
             let max_steps = image.len() / usize::from(max_block_size.max(1)) + 64;

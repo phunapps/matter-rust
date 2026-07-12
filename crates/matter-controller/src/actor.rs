@@ -6997,7 +6997,6 @@ mod tests {
     /// already-established secured session, returning `(reassembled_image,
     /// update_token)`. The token is needed for `NotifyUpdateApplied` which may
     /// run on a DIFFERENT session (the post-reboot shape).
-    #[allow(clippy::too_many_lines)] // Linear OTA-requestor test driver; kept as one flow.
     async fn drive_ota_download_and_apply(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -7005,18 +7004,40 @@ mod tests {
         sid: matter_transport::SessionId,
         current_version: u32,
     ) -> (Vec<u8>, Vec<u8>) {
-        use matter_bdx::{CounterMessage, DataBlock, ReceiveAccept, TransferControl, TransferInit};
+        let update_token = ota_query_image(io, provider_addr, sessions, sid, current_version).await;
+        let length = bdx_receive_init(io, provider_addr, sessions, sid).await;
+        let reassembled =
+            bdx_pull_blocks_and_ack_eof(io, provider_addr, sessions, sid, length).await;
+        ota_apply_update(
+            io,
+            provider_addr,
+            sessions,
+            sid,
+            &update_token,
+            current_version + 1,
+        )
+        .await;
+        (reassembled, update_token)
+    }
+
+    /// `QueryImage` → `QueryImageResponse` (UpdateAvailable), returning the
+    /// update token (needed later by Apply/Notify, possibly cross-session).
+    async fn ota_query_image(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        current_version: u32,
+    ) -> Vec<u8> {
         use matter_clusters::gen::ota_software_update_provider as prov;
         use matter_commissioning::driver::secured_round_trip;
         use matter_interaction::{
             build_invoke_request, parse_invoke_response, CommandPath, InvokeResponse,
         };
-        use matter_transport::{MrpFlags, ProtocolId};
-        use std::time::Instant;
+        use matter_transport::ProtocolId;
 
         const IM: u8 = 0x08; // InvokeRequest
 
-        // 1. QueryImage → QueryImageResponse (UpdateAvailable).
         let qi = prov::encode_query_image(
             0xFFF1,
             0x8000,
@@ -7046,7 +7067,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let update_token = match parse_invoke_response(&resp.payload).unwrap() {
+        match parse_invoke_response(&resp.payload).unwrap() {
             InvokeResponse::Command { fields_tlv, .. } => {
                 let qir = prov::QueryImageResponse::decode(&fields_tlv).unwrap();
                 assert_eq!(qir.status, prov::StatusEnum::UpdateAvailable);
@@ -7055,9 +7076,22 @@ mod tests {
             other @ InvokeResponse::Status(_) => {
                 panic!("expected QueryImageResponse command, got {other:?}")
             }
-        };
+        }
+    }
 
-        // 2. BDX: ReceiveInit → ReceiveAccept, then pull blocks until `length`.
+    /// BDX `ReceiveInit` → `ReceiveAccept`, returning the accepted transfer
+    /// length. Callable mid-serve (no preceding `QueryImage` on THIS session)
+    /// — the cross-session re-init regression needs exactly that shape.
+    async fn bdx_receive_init(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+    ) -> usize {
+        use matter_bdx::{ReceiveAccept, TransferControl, TransferInit};
+        use matter_commissioning::driver::secured_round_trip;
+        use matter_transport::ProtocolId;
+
         let init = TransferInit {
             control: TransferControl::RECEIVER_DRIVE,
             version: 0,
@@ -7079,28 +7113,54 @@ mod tests {
         .await
         .unwrap();
         let accept = ReceiveAccept::decode(&acc.payload).unwrap();
-        let length = usize::try_from(accept.length).unwrap();
+        usize::try_from(accept.length).unwrap()
+    }
+
+    /// One `BlockQuery` → `Block` round, returning the block's data bytes.
+    async fn bdx_query_one_block(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        block_counter: u32,
+    ) -> Vec<u8> {
+        use matter_bdx::{CounterMessage, DataBlock};
+        use matter_commissioning::driver::secured_round_trip;
+        use matter_transport::ProtocolId;
+
+        let q = CounterMessage { block_counter }.encode();
+        let blk = secured_round_trip(
+            io,
+            sessions,
+            sid,
+            provider_addr,
+            matter_bdx::MessageType::BlockQuery.to_u8(),
+            ProtocolId::BDX,
+            &q,
+        )
+        .await
+        .unwrap();
+        DataBlock::decode(&blk.payload).unwrap().data
+    }
+
+    /// Pull `BlockQuery`/`Block` rounds until `length` bytes are reassembled,
+    /// then fire the closing `BlockAckEOF`. Returns the reassembled image.
+    async fn bdx_pull_blocks_and_ack_eof(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        length: usize,
+    ) -> Vec<u8> {
+        use matter_bdx::CounterMessage;
+        use matter_transport::{MrpFlags, ProtocolId};
+        use std::time::Instant;
 
         let mut reassembled = Vec::new();
         let mut counter = 0u32;
         while reassembled.len() < length {
-            let q = CounterMessage {
-                block_counter: counter,
-            }
-            .encode();
-            let blk = secured_round_trip(
-                io,
-                sessions,
-                sid,
-                provider_addr,
-                matter_bdx::MessageType::BlockQuery.to_u8(),
-                ProtocolId::BDX,
-                &q,
-            )
-            .await
-            .unwrap();
-            let block = DataBlock::decode(&blk.payload).unwrap();
-            reassembled.extend_from_slice(&block.data);
+            let data = bdx_query_one_block(io, provider_addr, sessions, sid, counter).await;
+            reassembled.extend_from_slice(&data);
             counter += 1;
         }
         // BlockAckEOF (fire-and-forget; final block counter = counter - 1).
@@ -7120,9 +7180,29 @@ mod tests {
             )
             .unwrap();
         io.send_to(&out.wire_bytes, provider_addr).await.unwrap();
+        reassembled
+    }
 
-        // 3. ApplyUpdateRequest → ApplyUpdateResponse (Proceed).
-        let aur = prov::encode_apply_update_request(&update_token, current_version + 1);
+    /// `ApplyUpdateRequest` → `ApplyUpdateResponse` (Proceed). `target_version`
+    /// is the version being applied (download's `current_version + 1`).
+    async fn ota_apply_update(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        sessions: &mut matter_transport::SessionManager,
+        sid: matter_transport::SessionId,
+        update_token: &[u8],
+        target_version: u32,
+    ) {
+        use matter_clusters::gen::ota_software_update_provider as prov;
+        use matter_commissioning::driver::secured_round_trip;
+        use matter_interaction::{
+            build_invoke_request, parse_invoke_response, CommandPath, InvokeResponse,
+        };
+        use matter_transport::ProtocolId;
+
+        const IM: u8 = 0x08; // InvokeRequest
+
+        let aur = prov::encode_apply_update_request(&update_token.to_vec(), target_version);
         let aur_req = build_invoke_request(
             CommandPath {
                 endpoint: 0,
@@ -7151,8 +7231,6 @@ mod tests {
                 panic!("expected ApplyUpdateResponse command, got {other:?}")
             }
         }
-
-        (reassembled, update_token)
     }
 
     /// Send `NotifyUpdateApplied` on an already-established secured session and
@@ -7723,6 +7801,223 @@ mod tests {
         assert_ne!(
             records[0].id, records[1].id,
             "each accept rotates the resumption id"
+        );
+    }
+
+    /// Full (non-resumed) CASE handshake driver: Sigma1 → Sigma2 → Sigma3 →
+    /// success `StatusReport`. The `resume_case_handshake` counterpart for the
+    /// full path. When `send_final_ack` is false the closing standalone ack of
+    /// the provider's StatusReport is NOT sent — the caller controls what the
+    /// provider's ack-absorb `recv` sees next (the fast-Sigma1 regression puts
+    /// a new Sigma1 there).
+    #[allow(clippy::too_many_arguments)] // Protocol-mirroring handshake driver; each arg maps to a distinct CASE parameter.
+    async fn full_case_handshake(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        creds: matter_crypto::CaseCredentials,
+        roots: matter_cert::TrustedRoots,
+        provider_node_id: u64,
+        fabric_id: u64,
+        session_id: u16,
+        send_final_ack: bool,
+    ) -> (
+        matter_transport::SessionManager,
+        matter_transport::SessionId,
+    ) {
+        use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
+        use matter_transport::{ProtocolId, SessionManager};
+
+        const OP_SIGMA1: u8 = 0x30;
+        const OP_SIGMA2: u8 = 0x31;
+        const OP_SIGMA3: u8 = 0x32;
+        const OP_STATUS_REPORT: u8 = 0x40;
+        const OP_MRP_STANDALONE_ACK: u8 = 0x10;
+        // Distinct exchange space from resume_case_handshake's 0x7000 |.
+        let exchange: u16 = 0x6000 | session_id;
+
+        let now = MatterTime::from_unix_secs(2_000_000_000);
+        let mut initiator = matter_crypto::CaseInitiator::new(
+            creds,
+            roots,
+            provider_node_id,
+            fabric_id,
+            session_id,
+            now,
+        )
+        .unwrap();
+
+        // Sigma1 (no resumption fields — plain full handshake).
+        let sigma1 = initiator.start().unwrap();
+        let wire = encode_unsecured(
+            1,
+            exchange,
+            OP_SIGMA1,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            None,
+            None,
+            &sigma1,
+        );
+        io.send_to(&wire, provider_addr).await.unwrap();
+
+        // Sigma2 → Sigma3 (piggyback-acks Sigma2).
+        let (bytes, _) = io.recv_from().await.unwrap();
+        let m2 = decode_unsecured(&bytes).unwrap();
+        assert_eq!(m2.opcode, OP_SIGMA2, "expected Sigma2");
+        initiator.handle_sigma2(&m2.payload).unwrap();
+        let sigma3 = initiator.next_message().unwrap();
+        let wire = encode_unsecured(
+            2,
+            exchange,
+            OP_SIGMA3,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            true,
+            Some(m2.message_counter),
+            None,
+            &sigma3,
+        );
+        io.send_to(&wire, provider_addr).await.unwrap();
+
+        // Success StatusReport; ack it only when asked to.
+        let (bytes, _) = io.recv_from().await.unwrap();
+        let report = decode_unsecured(&bytes).unwrap();
+        assert_eq!(report.opcode, OP_STATUS_REPORT, "expected StatusReport");
+        assert_eq!(
+            report.payload.get(0..2),
+            Some(&[0u8, 0u8][..]),
+            "handshake must close with a success StatusReport"
+        );
+        if send_final_ack {
+            let ack = encode_unsecured(
+                3,
+                exchange,
+                OP_MRP_STANDALONE_ACK,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                false,
+                Some(report.message_counter),
+                None,
+                &[],
+            );
+            io.send_to(&ack, provider_addr).await.unwrap();
+        }
+
+        let output = initiator.finish().unwrap();
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, matter_transport::SessionRole::Initiator);
+        (sessions, sid)
+    }
+
+    /// Residual-hardening regression (TODO-1.0 "OTA provider" residual 1): a
+    /// fast NEW Sigma1 arriving where `complete_full` absorbs the initiator's
+    /// closing standalone ack must be handed back and carried into the next
+    /// accept — not eaten. Pre-fix, the Sigma1 was consumed as if it were the
+    /// ack: the requestor here would hang awaiting a Sigma2 that never comes
+    /// (bounded by the timeout below), and a live requestor's Sigma1
+    /// retransmit would burn a retry credential this two-entry pool does not
+    /// have.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn serve_ota_carries_sigma1_arriving_in_place_of_close_ack() {
+        use crate::provider_server::ProviderServer;
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id: _,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        // EXACTLY two credentials: one per legitimate accept. An eaten Sigma1
+        // would need a third for the retransmit.
+        let (provider_creds1, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let (provider_creds2, _, _) = crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+        // Session 2 needs its own credential set (session 1 consumes device_creds).
+        let (device_creds2, device_roots2) = make_device_creds_for_fabric(fabric);
+
+        let image: Vec<u8> = (0..2500u32)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let offer = matter_ota::ImageOffer {
+            software_version: 2,
+            software_version_string: "2.0".into(),
+            image_uri: format!("bdx://{provider_node_id:016X}/fw.ota"),
+            update_token: vec![0xAB; 16],
+        };
+
+        let provider_addr = dev_io.local_addr();
+        let image_for_assert = image.clone();
+        let sunk: std::sync::Arc<std::sync::Mutex<Vec<matter_crypto::ResumptionRecord>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sunk_in = sunk.clone();
+        let server = tokio::spawn(async move {
+            ProviderServer::new(
+                dev_io,
+                vec![provider_creds1, provider_creds2],
+                provider_roots,
+                /* base_session_id */ 0x55,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_record_sink(Box::new(move |r| sunk_in.lock().unwrap().push(r)))
+            .serve_ota_once(offer, image, /* max_block_size */ 256)
+            .await
+        });
+
+        // Session 1: full handshake whose closing standalone ack is never
+        // sent — the requestor "reboots" and moves straight to a new
+        // handshake instead (the fast post-reboot shape).
+        let (_s1, _sid1) = full_case_handshake(
+            &ctrl_io,
+            provider_addr,
+            device_creds,
+            device_roots,
+            provider_node_id,
+            fabric_id,
+            /* session_id */ 0x0021,
+            /* send_final_ack */ false,
+        )
+        .await;
+
+        // Session 2: its Sigma1 lands exactly where the provider absorbs
+        // session 1's close ack. Bounded so the pre-fix swallow fails the
+        // test instead of hanging it.
+        let (mut s2, sid2) = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            full_case_handshake(
+                &ctrl_io,
+                provider_addr,
+                device_creds2,
+                device_roots2,
+                provider_node_id,
+                fabric_id,
+                /* session_id */ 0x0022,
+                /* send_final_ack */ true,
+            ),
+        )
+        .await
+        .expect("provider must answer the fast Sigma1 (pre-fix it was absorbed as the close ack)");
+
+        // The whole OTA flow (download, apply, notify) runs on session 2.
+        let reassembled = drive_ota_flow(&ctrl_io, provider_addr, &mut s2, sid2, 1).await;
+        assert_eq!(reassembled, image_for_assert);
+        server
+            .await
+            .unwrap()
+            .expect("serve must complete on session 2's Notify");
+        assert_eq!(
+            sunk.lock().unwrap().len(),
+            2,
+            "one resumption record per accept"
         );
     }
 
