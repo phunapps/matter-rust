@@ -15,8 +15,13 @@ mod exchange;
 mod pase;
 mod unsecured;
 
-pub use case::{operational_instance_name, resolve_operational, run_case, run_case_establish};
-pub use commission::{commission, resolve_commissionable, DriverConfig};
+pub use case::{
+    operational_instance_name, resolve_operational, resolve_operational_with_attempts, run_case,
+    run_case_establish, BLE_RESOLVE_POLL_ATTEMPTS,
+};
+pub use commission::{
+    commission, commission_ble, resolve_commissionable, BleDriverConfig, DriverConfig, STREAM_PEER,
+};
 pub use datagram::{AsyncDatagram, InMemoryDatagram};
 pub use error::DriverError;
 pub use exchange::{

@@ -28,13 +28,23 @@ pub fn operational_instance_name(compressed_fabric_id: [u8; 8], node_id: u64) ->
     format!("{cfid:016X}-{node_id:016X}")
 }
 
-/// How many times to poll discovery before giving up, and the gap between
-/// polls (~30 s total) — bounded so the driver doesn't hang forever. The
-/// operational record only appears after `AddNOC`, so mDNS propagation can
-/// take several seconds on a real LAN (observed during M6.6.5 validation);
-/// chip's session-establishment discovery budget is of the same order.
-const RESOLVE_POLL_ATTEMPTS: usize = 300;
+/// How many times [`resolve_operational`] polls discovery before giving up, and
+/// the gap between polls (~30 s total) — bounded so the driver doesn't hang
+/// forever. The operational record only appears after `AddNOC`, so mDNS
+/// propagation can take several seconds on a real LAN (observed during M6.6.5
+/// validation); chip's session-establishment discovery budget is of the same
+/// order. `pub(crate)` so `commission()` (the IP path) can pass this exact
+/// budget into [`resolve_operational_with_attempts`] via `establish_case_session`.
+pub(crate) const RESOLVE_POLL_ATTEMPTS: u32 = 300;
 const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Operational-resolve budget for the BLE (BTP) commissioning path: ~60 s at
+/// `RESOLVE_POLL_INTERVAL` (100 ms) per poll. Over BLE the device has only
+/// just been handed Wi-Fi credentials when `commission_ble` reaches
+/// `EstablishCase`, so it must still associate to the AP, obtain a DHCP lease,
+/// and announce its `_matter._tcp` operational record before the resolve can
+/// succeed — a materially longer window than the IP path's ~30 s (design D11.2).
+pub const BLE_RESOLVE_POLL_ATTEMPTS: u32 = 600;
 
 /// Pick the most routable address from an mDNS record: IPv4 first, then any
 /// non-link-local IPv6, then whatever is left. A `fe80::` IPv6 needs an
@@ -71,12 +81,41 @@ pub async fn resolve_operational<D: Discovery>(
     compressed_fabric_id: [u8; 8],
     node_id: u64,
 ) -> Result<SocketAddr, DriverError> {
+    // The IP path's ~30 s budget. Delegates to the parameterized form so the
+    // BLE path can raise the budget without duplicating the poll loop.
+    resolve_operational_with_attempts(
+        discovery,
+        compressed_fabric_id,
+        node_id,
+        RESOLVE_POLL_ATTEMPTS,
+    )
+    .await
+}
+
+/// Like [`resolve_operational`], but with an explicit poll-attempt budget
+/// (each poll is spaced by `RESOLVE_POLL_INTERVAL` = 100 ms). The IP path uses
+/// [`resolve_operational`] (`RESOLVE_POLL_ATTEMPTS` = 300, ~30 s); the BLE path
+/// passes [`BLE_RESOLVE_POLL_ATTEMPTS`] (600, ~60 s) because a just-provisioned
+/// device needs longer to associate to Wi-Fi and announce its operational
+/// record (design D11.2).
+///
+/// # Errors
+///
+/// - [`DriverError::Transport`] if the discovery query fails.
+/// - [`DriverError::Discovery`] if no matching record with an address appears
+///   within the `attempts` budget.
+pub async fn resolve_operational_with_attempts<D: Discovery>(
+    discovery: &mut D,
+    compressed_fabric_id: [u8; 8],
+    node_id: u64,
+    attempts: u32,
+) -> Result<SocketAddr, DriverError> {
     let target = operational_instance_name(compressed_fabric_id, node_id);
     let handle = discovery
         .query(ServiceKind::Operational)
         .map_err(DriverError::Transport)?;
 
-    for _ in 0..RESOLVE_POLL_ATTEMPTS {
+    for _ in 0..attempts {
         for svc in discovery.poll_results(handle) {
             if svc.instance_name.eq_ignore_ascii_case(&target) {
                 if let Some(addr) = preferred_address(&svc.addresses) {
@@ -351,6 +390,97 @@ mod tests {
         };
         let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
         assert_eq!(addr, std::net::SocketAddr::new(ula, 5540));
+    }
+
+    /// A [`Discovery`] stub that returns no results for the first
+    /// `succeed_on - 1` polls and the matching operational record on poll
+    /// `succeed_on`, counting every `poll_results` call. Lets a test assert the
+    /// attempt budget is respected exactly.
+    struct CountingDiscovery {
+        service: MatterService,
+        succeed_on: u32,
+        polls: u32,
+    }
+
+    impl Discovery for CountingDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(1))
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+            self.polls += 1;
+            if self.polls >= self.succeed_on {
+                vec![self.service.clone()]
+            } else {
+                vec![]
+            }
+        }
+    }
+
+    fn counting_discovery(cfid: [u8; 8], node_id: u64, succeed_on: u32) -> CountingDiscovery {
+        CountingDiscovery {
+            service: MatterService::new(
+                operational_instance_name(cfid, node_id),
+                ServiceKind::Operational,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9))],
+                5540,
+                HashMap::new(),
+            ),
+            succeed_on,
+            polls: 0,
+        }
+    }
+
+    /// The record appears on the 3rd poll; a budget of 3 succeeds and stops
+    /// polling exactly when it finds it. Paused time auto-advances the two
+    /// 100 ms inter-poll sleeps so the test runs instantly.
+    #[tokio::test(start_paused = true)]
+    async fn resolve_operational_with_attempts_succeeds_within_budget() {
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let mut disc = counting_discovery(cfid, node_id, 3);
+        let addr = resolve_operational_with_attempts(&mut disc, cfid, node_id, 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)), 5540)
+        );
+        assert_eq!(disc.polls, 3, "must poll exactly until the record appears");
+    }
+
+    /// The record would appear on the 5th poll, but a budget of 4 gives up
+    /// first — proving the attempt count is the hard bound.
+    #[tokio::test(start_paused = true)]
+    async fn resolve_operational_with_attempts_respects_budget() {
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let mut disc = counting_discovery(cfid, node_id, 5);
+        let err = resolve_operational_with_attempts(&mut disc, cfid, node_id, 4)
+            .await
+            .expect_err("a 4-poll budget must give up before the 5th-poll record");
+        assert!(matches!(err, DriverError::Discovery(_)), "got {err:?}");
+        assert_eq!(disc.polls, 4, "must poll exactly the budget then stop");
+    }
+
+    /// The existing `resolve_operational` entry point still resolves via its
+    /// delegated 300-attempt budget.
+    #[tokio::test]
+    async fn resolve_operational_still_resolves_via_delegation() {
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let mut disc = counting_discovery(cfid, node_id, 1);
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 9)), 5540)
+        );
     }
 
     // -----------------------------------------------------------------------

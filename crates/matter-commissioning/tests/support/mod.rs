@@ -1298,9 +1298,66 @@ pub fn respond(
         //   on_response(AddTrustedRootResponse, &[0x00]).
         (0x003E, 0x0B) => DeviceReply::Status(0),
 
+        // ── NetworkCommissioning cluster (0x0031) — Wi-Fi path (BLE test) ──────
+        //
+        // Additive arms exercised only by the dual-transport `commission_ble`
+        // harness (the Ethernet loopback reports FeatureMap = ETHERNET and never
+        // reaches these). Safe for the Ethernet path, which never invokes 0x0031.
+
+        // AddOrUpdateWiFiNetwork (0x0031/0x02) → NetworkConfigResponse (0x0031/0x05)
+        // Commissioner decoder: decode_network_config_response
+        //   expects: anonymous struct { ctx(0): NetworkingStatus u8 } (0 = Success).
+        (0x0031, 0x02) => {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 0_u64).unwrap(); // ctx(0): NetworkingStatus = 0 (Success)
+            w.end_container().unwrap();
+            DeviceReply::Command(buf)
+        }
+
+        // ConnectNetwork (0x0031/0x06) → ConnectNetworkResponse (0x0031/0x07)
+        // Commissioner decoder: decode_connect_network_response
+        //   expects: anonymous struct { ctx(0): NetworkingStatus u8 } (0 = Success).
+        (0x0031, 0x06) => {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 0_u64).unwrap(); // ctx(0): NetworkingStatus = 0 (Success)
+            w.end_container().unwrap();
+            DeviceReply::Command(buf)
+        }
+
         (c, cmd) => panic!(
-            "respond: unrecognised (cluster=0x{c:04X}, command=0x{cmd:02X}) — not in Ethernet happy path"
+            "respond: unrecognised (cluster=0x{c:04X}, command=0x{cmd:02X}) — not in the commissioning happy path"
         ),
+    }
+}
+
+/// Wi-Fi-flavored read responder for the dual-transport `commission_ble`
+/// harness: returns `FeatureMap = WIFI` for `NetworkCommissioning` (0x0031)
+/// `0xFFFC` so the commissioner takes the Wi-Fi provisioning path; delegates
+/// every other attribute to [`respond_read_attribute`]. Kept separate so the
+/// shared Ethernet responder (and the loopback test that depends on it) is
+/// untouched.
+///
+/// # Panics
+///
+/// Panics on unrecognised `(cluster, attribute)` pairs via the delegate.
+pub fn respond_read_attribute_wifi(attr_path: matter_commissioning::im::AttributePath) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+
+    if attr_path.cluster == 0x0031 && attr_path.attribute == 0xFFFC {
+        let wifi_feature: u32 =
+            matter_commissioning::clusters::network_commissioning::NetworkCommissioningFeature::WIFI
+                .bits();
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf)
+            .put_uint(Tag::Anonymous, u64::from(wifi_feature))
+            .unwrap();
+        buf
+    } else {
+        respond_read_attribute(attr_path)
     }
 }
 
@@ -2523,6 +2580,335 @@ pub async fn run_mock_device(
             {
                 // Serviced CommissioningComplete on CASE — the controller's
                 // commission() will return Action::Done next; we're finished.
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Service one inbound secured IM packet on a given session/transport (the
+/// module-level twin of `run_mock_device`'s nested `service_secured_im`, so the
+/// dual-transport harness can reuse it without disturbing the single-transport
+/// harness). Decodes, builds the reply, sends it on the same exchange id;
+/// returns the `(cluster, command)` of a serviced Invoke (None for reads/acks).
+///
+/// # Errors
+///
+/// Propagates datagram / framing failures as [`DriverError`].
+async fn service_secured_im_dual(
+    dev_io: &InMemoryDatagram,
+    peer: std::net::SocketAddr,
+    sessions: &mut SessionManager,
+    session_id: SessionId,
+    packet: &[u8],
+    challenge: [u8; 16],
+    pki: &MockDevicePki,
+) -> Result<Option<(u32, u32)>, DriverError> {
+    use std::time::Instant;
+
+    let decoded = sessions.decode_inbound(packet, Instant::now())?;
+    let (exchange_id, payload) = match decoded {
+        DecodeInboundOutput::AppMessage {
+            exchange_id,
+            payload,
+            ..
+        } => (exchange_id, payload),
+        DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } => {
+            dev_io.send_to(&ack_packet, peer).await?;
+            return Ok(None);
+        }
+        _ => return Ok(None),
+    };
+
+    if is_read_request(&payload) {
+        let paths = parse_read_request(&payload);
+        // Wi-Fi-flavored: the dual harness commissions a Wi-Fi device, so
+        // FeatureMap must report WIFI to drive the network-provisioning path.
+        let values: Vec<Vec<u8>> = paths
+            .iter()
+            .map(|p| respond_read_attribute_wifi(*p))
+            .collect();
+        let pairs: Vec<(matter_commissioning::im::AttributePath, &[u8])> = paths
+            .iter()
+            .zip(values.iter())
+            .map(|(p, v)| (*p, v.as_slice()))
+            .collect();
+        let reply_bytes = build_report_data(&pairs);
+        let out = sessions.encode_outbound(
+            session_id,
+            Some(exchange_id),
+            op::IM_REPORT_DATA,
+            ProtocolId::INTERACTION_MODEL,
+            &reply_bytes,
+            MrpFlags { reliable: true },
+            Instant::now(),
+        )?;
+        dev_io.send_to(&out.wire_bytes, peer).await?;
+        Ok(None)
+    } else {
+        let decoded_req = parse_invoke_request(&payload);
+        let path = decoded_req.path;
+        let serviced = (path.cluster, path.command);
+        let reply_bytes = match respond(path, &decoded_req.fields_tlv, challenge, pki) {
+            DeviceReply::Command(fields_tlv) => build_invoke_response(path, &fields_tlv),
+            DeviceReply::Status(code) => build_invoke_status_response(path, code),
+        };
+        let out = sessions.encode_outbound(
+            session_id,
+            Some(exchange_id),
+            op::IM_INVOKE_RESPONSE,
+            ProtocolId::INTERACTION_MODEL,
+            &reply_bytes,
+            MrpFlags { reliable: true },
+            Instant::now(),
+        )?;
+        dev_io.send_to(&out.wire_bytes, peer).await?;
+        Ok(Some(serviced))
+    }
+}
+
+/// Two-transport device twin for `driver::commission_ble`: PASE and every
+/// pre-operational IM stage run over `btp_dev`; CASE and the operational IM run
+/// over `udp_dev`.
+///
+/// The single-transport [`run_mock_device`] detects the PASE→CASE transition by
+/// an unsecured packet arriving on its one socket. Here the transition is
+/// implicit in the transport split — the controller stops sending on `btp_dev`
+/// and sends CASE Sigma1 on `udp_dev` — so the PASE-phase IM loop watches BOTH
+/// sockets and breaks to CASE handling when Sigma1 lands on `udp_dev`.
+///
+/// The BTP path runs under `TransportReliability::TransportProvides`, so the
+/// controller neither sets the R-flag nor sends a standalone ack for the PASE
+/// closing `StatusReport`; the device therefore sends that report and does NOT
+/// wait for an ack. The CASE handshake on `udp_dev` runs under MRP exactly as in
+/// `run_mock_device` (the controller acks the closing report).
+///
+/// # Errors
+///
+/// - [`DriverError::Io`] if a datagram recv/send fails or a channel closes.
+/// - [`DriverError::Crypto`] / [`DriverError::Transport`] on a PASE/CASE step or
+///   secured-framing failure.
+///
+/// # Panics
+///
+/// Panics (via the `respond`/`build_*`/`parse_*` helpers) on any malformed
+/// controller message — acceptable in test-support code.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+pub async fn run_mock_device_dual(
+    btp_dev: &InMemoryDatagram,
+    udp_dev: &InMemoryDatagram,
+    btp_peer: std::net::SocketAddr,
+    udp_peer: std::net::SocketAddr,
+    pki: &MockDevicePki,
+    pase_pin: u32,
+    pase_params: PasePbkdfParams,
+    pase_responder_session_id: u16,
+    case_setup: MockDeviceCaseSetup,
+) -> Result<(), DriverError> {
+    const CTRL_PASE_SESSION_ID: u16 = 1;
+
+    let mut sessions = SessionManager::new();
+
+    // ── 1. PASE over btp_dev (device = verifier, unsecured, MRP off) ──────────
+    let mut verifier = PaseVerifier::new_from_pin(pase_pin, pase_params, pase_responder_session_id)
+        .map_err(DriverError::Crypto)?;
+    let mut unsecured_ctr: u32 = 100;
+
+    // PBKDFParamRequest → PBKDFParamResponse.
+    let (p, _) = btp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PBKDF_PARAM_REQUEST);
+    verifier
+        .handle_pbkdf_request(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let resp = verifier.next_message().map_err(DriverError::Crypto)?;
+    btp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::PBKDF_PARAM_RESPONSE,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false, // MRP off on BTP
+                Some(m.message_counter),
+                None,
+                &resp,
+            ),
+            btp_peer,
+        )
+        .await?;
+    unsecured_ctr += 1;
+
+    // Pake1 → Pake2.
+    let (p, _) = btp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PASE_PAKE1);
+    verifier
+        .handle_pake1(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let pake2 = verifier.next_message().map_err(DriverError::Crypto)?;
+    btp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::PASE_PAKE2,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                Some(m.message_counter),
+                None,
+                &pake2,
+            ),
+            btp_peer,
+        )
+        .await?;
+    unsecured_ctr += 1;
+
+    // Pake3 → success StatusReport (NOT acked on a reliable transport) → finish.
+    let (p, _) = btp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PASE_PAKE3);
+    verifier
+        .handle_pake3(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&0u16.to_le_bytes()); // SUCCESS
+    body.extend_from_slice(&0u32.to_le_bytes()); // SecureChannel
+    body.extend_from_slice(&0u16.to_le_bytes()); // SessionEstablishmentSuccess
+    btp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::STATUS_REPORT,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false, // not reliable — controller sends no ack under TransportProvides
+                Some(m.message_counter),
+                None,
+                &body,
+            ),
+            btp_peer,
+        )
+        .await?;
+    unsecured_ctr += 1;
+    let pase_keys = verifier.finish().map_err(DriverError::Crypto)?;
+    let attestation_challenge: [u8; 16] = pase_keys.attestation_key;
+
+    let pase_sid = SessionId(pase_responder_session_id);
+    sessions.register_pase_with_local_id(
+        pase_sid,
+        pase_keys,
+        SessionRole::Responder,
+        CTRL_PASE_SESSION_ID,
+        PeerHint::default(),
+    );
+
+    // ── 2. PASE-phase secured IM over btp_dev, until CASE Sigma1 on udp_dev ───
+    let sigma1_packet: Vec<u8> = loop {
+        tokio::select! {
+            // Pre-operational IM on the PASE session over BTP.
+            r = btp_dev.recv_from() => {
+                let (packet, _from) = r?;
+                service_secured_im_dual(
+                    btp_dev,
+                    btp_peer,
+                    &mut sessions,
+                    pase_sid,
+                    &packet,
+                    attestation_challenge,
+                    pki,
+                )
+                .await?;
+            }
+            // The controller's CASE Sigma1 lands on the UDP transport — the
+            // PASE→CASE transition. Capture it and hand it to the responder.
+            r = udp_dev.recv_from() => {
+                let (packet, _from) = r?;
+                break packet;
+            }
+        }
+    };
+
+    // ── 3. CASE over udp_dev (device = responder, unsecured, MRP on) ──────────
+    let MockDeviceCaseSetup {
+        credentials,
+        trusted_roots,
+        responder_session_id,
+        now: case_now,
+    } = case_setup;
+
+    let mut responder =
+        CaseResponder::new(credentials, trusted_roots, responder_session_id, case_now)
+            .map_err(DriverError::Crypto)?;
+    let m = decode_unsecured(&sigma1_packet)?;
+    debug_assert_eq!(m.opcode, op::CASE_SIGMA1);
+    match responder
+        .handle_sigma1(&m.payload)
+        .map_err(DriverError::Crypto)?
+    {
+        Sigma1Outcome::NewSession => {}
+        Sigma1Outcome::ResumptionRequested { .. } => {
+            return Err(DriverError::Handshake(
+                "mock dual device CASE Sigma1 was not a fresh session",
+            ));
+        }
+    }
+    let sigma2 = responder.next_message().map_err(DriverError::Crypto)?;
+    udp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::CASE_SIGMA2,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                true, // MRP on over UDP
+                Some(m.message_counter),
+                None,
+                &sigma2,
+            ),
+            udp_peer,
+        )
+        .await?;
+
+    let (p, _) = udp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::CASE_SIGMA3);
+    responder
+        .handle_sigma3(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    unsecured_ctr += 1;
+    close_handshake_with_status_report(
+        udp_dev,
+        udp_peer,
+        unsecured_ctr,
+        m.exchange_id,
+        m.message_counter,
+    )
+    .await?;
+    let case_output = responder.finish().map_err(DriverError::Crypto)?;
+    let case_sid = sessions.register_case(&case_output, SessionRole::Responder);
+
+    // ── 4. Operational secured IM over udp_dev until CommissioningComplete ────
+    loop {
+        let (packet, _from) = udp_dev.recv_from().await?;
+        let serviced = service_secured_im_dual(
+            udp_dev,
+            udp_peer,
+            &mut sessions,
+            case_sid,
+            &packet,
+            attestation_challenge,
+            pki,
+        )
+        .await?;
+        if let Some((cluster, command)) = serviced {
+            if cluster == matter_commissioning::clusters::general_commissioning::CLUSTER_ID
+                && command == CMD_COMMISSIONING_COMPLETE
+            {
                 return Ok(());
             }
         }

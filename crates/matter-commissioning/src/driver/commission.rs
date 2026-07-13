@@ -1,19 +1,51 @@
 //! The async `commission()` orchestrator (M6.6.4): drive the sans-IO
 //! `Commissioner` cursor over the M6.6.2/M6.6.3 driver, end to end.
 
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::time::Duration;
 
 use matter_cert::{MatterTime, TrustedRoots};
 use matter_crypto::{derive_compressed_fabric_id, CaseCredentials};
 use matter_transport::{Discovery, MrpEvent, ProtocolId, ServiceKind, SessionId, SessionManager};
 
-use crate::driver::case::{resolve_operational, run_case};
+use crate::driver::case::{resolve_operational_with_attempts, run_case};
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
 use crate::driver::exchange::secured_round_trip;
+use crate::driver::TransportReliability;
 use crate::im::{CommandPath, ImStatus};
 use crate::CommissionedFabric;
 use crate::CommissionerConfig;
+
+/// Sentinel peer for message-stream transports (BTP) where the
+/// [`AsyncDatagram`] `SocketAddr` is routing-irrelevant — a BTP `AsyncDatagram`
+/// is wired to exactly one GATT peer at construction and ignores the send
+/// destination. This value is **never dereferenced as a real address**; it only
+/// satisfies the `SocketAddr` parameter of the shared driver helpers on the
+/// BLE path (design D1). IPv6 localhost:5540 (the Matter UDP port) is a
+/// deliberately obvious, non-routing placeholder.
+pub const STREAM_PEER: SocketAddr =
+    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 5540, 0, 0));
+
+/// Response deadline for a secured commissioning dispatch on the BLE path when
+/// the invoke is **not** `NetworkCommissioning::ConnectNetwork`. With MRP off
+/// over BTP (design D3), nothing at the exchange layer ever times out, so this
+/// wrapper is the only guard against an unbounded hang if the device stops
+/// responding. 30 s matches the unsecured PASE path's response window and
+/// chip's BTP-ack-derived exchange response timeout.
+const RESPONSE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Response deadline for `NetworkCommissioning::ConnectNetwork` on the BLE path.
+/// Longer than [`RESPONSE_DEADLINE`] because the device performs the (slow)
+/// Wi-Fi association + DHCP inline before replying (design D3).
+const CONNECT_NETWORK_RESPONSE_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Placeholder exchange id reported when a BLE-path response deadline fires.
+/// Unlike an MRP retransmit-budget [`DriverError::Timeout`] (which knows the
+/// exchange that expired), a response-deadline timeout cancels the in-flight
+/// dispatch future, so the concrete exchange id is not recoverable; the
+/// rollback path does not consult it.
+const RESPONSE_DEADLINE_EXCHANGE_SENTINEL: u16 = 0;
 
 /// Attribute IDs used by the commissioning read path.
 ///
@@ -417,13 +449,17 @@ pub(crate) async fn rollback<T: AsyncDatagram>(
 }
 
 /// Resolve the device's operational address via mDNS and complete a CASE
-/// handshake, returning the new [`SessionId`].
+/// handshake, returning the new [`SessionId`] **and the resolved operational
+/// [`SocketAddr`]** so the caller can direct post-CASE secured traffic at the
+/// operational address (over the operational transport) rather than the
+/// commissionable one.
 ///
 /// Steps:
 /// 1. Derive the 8-byte compressed fabric id from `root_public_key` +
 ///    `fabric_id` via [`derive_compressed_fabric_id`].
-/// 2. Call [`resolve_operational`] to discover the device's operational
-///    address.
+/// 2. Call [`resolve_operational_with_attempts`] to discover the device's
+///    operational address within `resolve_attempts` poll rounds (the IP path
+///    passes the ~30 s budget, the BLE path the ~60 s budget).
 /// 3. Call [`run_case`] to complete the SIGMA-I handshake and register the
 ///    resulting session.
 ///
@@ -440,7 +476,7 @@ pub(crate) async fn rollback<T: AsyncDatagram>(
 ///   within the poll budget.
 /// - [`DriverError::Transport`] / [`DriverError::Io`] / [`DriverError::Timeout`]
 ///   / [`DriverError::Crypto`] propagated from [`run_case`].
-#[allow(clippy::too_many_arguments)] // 8 params reflect the CASE setup split; the caller (commission()) bundles them from a config struct.
+#[allow(clippy::too_many_arguments)] // 9 params reflect the CASE setup split; the caller (commission()) bundles them from a config struct.
 pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
     transport: &T,
     sessions: &mut SessionManager,
@@ -451,12 +487,15 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
     trusted_roots: TrustedRoots,
     peer_node_id: u64,
     now: MatterTime,
-) -> Result<SessionId, DriverError> {
+    resolve_attempts: u32,
+) -> Result<(SessionId, SocketAddr), DriverError> {
     let compressed =
         derive_compressed_fabric_id(root_public_key, fabric_id).map_err(DriverError::Crypto)?;
-    let peer_addr = resolve_operational(discovery, compressed, peer_node_id).await?;
+    let peer_addr =
+        resolve_operational_with_attempts(discovery, compressed, peer_node_id, resolve_attempts)
+            .await?;
     let peer_fabric_id = credentials.fabric_id;
-    run_case(
+    let sid = run_case(
         transport,
         sessions,
         peer_addr,
@@ -466,7 +505,33 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
         peer_fabric_id,
         now,
     )
-    .await
+    .await?;
+    Ok((sid, peer_addr))
+}
+
+/// Inputs for one BLE-transport commissioning run.
+///
+/// Mirrors [`DriverConfig`]'s parameter set exactly, minus
+/// [`DriverConfig::commissionable_addr`]: on the BLE path the BTP
+/// `AsyncDatagram` is already connected to the target peripheral (there is no
+/// commissionable mDNS resolve step — discovery and BTP connect happen in the
+/// controller layer before `commission_ble` is called), so a commissionable
+/// address is never needed. Reuses the same `CommissionerConfig` and persistent
+/// commissioner-identity types as `commission()`.
+pub struct BleDriverConfig<'a> {
+    /// The sans-IO commissioner configuration (fabric, trust stores, node ids,
+    /// wifi creds, rng, etc.). Its `wifi_credentials` **must** be `Some` for a
+    /// Wi-Fi device: a BLE-only device with no network credentials to install
+    /// is unprovisionable (design D7). Mirrors [`DriverConfig::commissioner`].
+    pub commissioner: CommissionerConfig<'a>,
+    /// Device passcode (from the setup payload). Mirrors [`DriverConfig::passcode`].
+    pub passcode: u32,
+    /// The controller's **persistent** commissioner operational identity NOC,
+    /// signed by the fabric RCAC. Mirrors [`DriverConfig::commissioner_noc`].
+    pub commissioner_noc: &'a matter_cert::MatterCertificate,
+    /// PKCS#8 DER of the commissioner operational private key (pairs with
+    /// `commissioner_noc`). Mirrors [`DriverConfig::commissioner_signer_pkcs8`].
+    pub commissioner_signer_pkcs8: &'a [u8],
 }
 
 /// Commission a device end to end, returning the resulting [`CommissionedFabric`].
@@ -478,37 +543,21 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 ///    directly for testing.
 /// 2. **PASE.** Runs the SPAKE2+ handshake using `config.passcode`, producing
 ///    a secured PASE session.
-/// 3. **Issue controller NOC.** Mints the commissioner's own Node Operational
-///    Certificate under the fabric's RCAC so CASE credentials are available
-///    when the state machine later emits `Action::EstablishCase`.
-/// 4. **Command loop.** Polls the [`crate::Commissioner`] cursor until it emits
+/// 3. **Command loop.** Polls the [`crate::Commissioner`] cursor until it emits
 ///    `Action::Done` or `Action::Abort`, dispatching each action over the
-///    correct session (PASE or CASE):
-///    - `Invoke` → `dispatch_invoke`, map outcome to `on_response` payload.
-///    - `ReadAttribute` → `dispatch_read` + `extract_read_payload`, feed
-///      result via `on_response`.
-///    - `EstablishCase` → `establish_case_session`, advance cursor via
-///      `on_case_established` or `on_response(CaseFailed, &[])`.
-///    - `Done(fabric)` → return `Ok(fabric)`.
-///    - `Abort` → optionally send `ArmFailSafe(0)` rollback, return
-///      [`DriverError::Aborted`].
-///    - `EvictCase` → unreachable in M6; returns
-///      [`DriverError::Handshake`].
+///    correct session (PASE or CASE) — see `run_poll_loop`.
 ///
-/// ## CASE credential sourcing
+/// This is a thin wrapper around the shared `run_commission` body with the
+/// **same transport used for both** the PASE/pre-operational phase and the
+/// operational CASE phase, [`TransportReliability::Mrp`] (UDP/MRP throughout),
+/// and the IP operational-resolve budget. The BLE sibling is [`commission_ble`].
 ///
-/// During commissioning the controller issues a NOC for the *device*
-/// (`assigned_node_id`). The **controller's own** operational identity for CASE
-/// is a separate NOC minted here under the same RCAC, keyed by a freshly
-/// generated P-256 keypair. The `FabricRecord` only carries the RCAC signer
-/// (used to sign both NOCs) plus the root cert and IPK — it does not carry a
-/// pre-existing controller NOC.
+/// ## Behavior note (intended change vs. earlier revisions)
 ///
-/// **M6.6.4 simplification (deferred to M8):** minting the controller NOC inline
-/// means the controller has no *stable* operational identity — a fresh keypair
-/// is generated per `commission()` call. This is correct for a single
-/// commissioning run; persisting one admin identity across runs is M8
-/// (fabric create/persist/restore) work. See the `FLAG` at the minting site.
+/// Post-CASE secured traffic now targets the **resolved operational address**
+/// (returned by `establish_case_session`) instead of the commissionable
+/// address. Same device, same socket on the IP path — strictly more correct;
+/// it also makes the two-transport BLE split possible.
 ///
 /// # Errors
 ///
@@ -523,12 +572,6 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 /// - [`DriverError::Aborted`] if the state machine emits `Action::Abort` (device
 ///   returned a non-OK commissioning result, attestation failure, etc.).
 /// - [`DriverError::Handshake`] if `Action::EvictCase` is unexpectedly emitted.
-// The poll loop has one arm per Action variant; each arm is short but the
-// total length exceeds the default lint threshold.  Extracting each arm into
-// a sub-function would require passing the entire mutable state through
-// parameter lists, obscuring the control flow.  The function is
-// intentionally kept as a single readable loop.
-#[allow(clippy::too_many_lines)]
 pub async fn commission<T, D>(
     transport: &T,
     discovery: &mut D,
@@ -538,16 +581,13 @@ where
     T: AsyncDatagram,
     D: matter_transport::Discovery,
 {
-    use matter_crypto::RingSigner;
-
-    // Bind the persisted identity fields BEFORE the partial move of
-    // config.commissioner below (Rust partial-move rules: these are distinct
-    // fields, so the borrows are fine in either order, but binding them first
-    // keeps the borrow checker unambiguous).
-    let commissioner_noc = config.commissioner_noc.clone();
+    // Bind the Copy identity fields before the partial move of
+    // `config.commissioner` below (both are references — Copy — so reading them
+    // alongside the move of a *different* field is fine).
+    let commissioner_noc = config.commissioner_noc;
     let commissioner_pkcs8 = config.commissioner_signer_pkcs8;
 
-    // 1. Resolve the commissionable address.
+    // 1. Resolve the commissionable address (or use the pre-resolved one).
     let peer = if let Some(addr) = config.commissionable_addr {
         addr
     } else {
@@ -555,21 +595,144 @@ where
         resolve_commissionable(discovery, disc).await?
     };
 
-    // 2. Run PASE.
-    let mut sessions = SessionManager::new();
-    let pase_sid =
-        crate::driver::pase::run_pase(transport, &mut sessions, peer, config.passcode).await?;
+    // Same transport carries both phases; MRP throughout; IP resolve budget.
+    run_commission(
+        transport,
+        peer,
+        transport,
+        discovery,
+        config.commissioner,
+        config.passcode,
+        commissioner_noc,
+        commissioner_pkcs8,
+        TransportReliability::Mrp,
+        crate::driver::case::RESOLVE_POLL_ATTEMPTS,
+    )
+    .await
+}
 
-    // 2a. Source the attestation challenge from the LIVE PASE-derived session.
+/// Commission a device over BLE/BTP: PASE and every pre-operational stage run
+/// over `btp` (an already-connected BTP [`AsyncDatagram`]); the operational
+/// CASE handshake and all post-CASE secured traffic run over `udp` at the
+/// device's mDNS-resolved operational address. `discovery` is used **only** for
+/// the operational resolve — the commissionable device was already discovered
+/// and BTP-connected by the controller layer (design D2).
+///
+/// Differs from [`commission`] in exactly three ways, all threaded through the
+/// shared `run_commission` body:
+///
+/// 1. **Two transports.** `btp` for PASE + pre-operational IM, `udp` for CASE
+///    onward. The sentinel [`STREAM_PEER`] is the BTP send destination (a BTP
+///    `AsyncDatagram` ignores it).
+/// 2. **Reliability off.** [`TransportReliability::TransportProvides`]: BTP
+///    self-reliabilizes, so the PASE handshake and the secured PASE session
+///    suppress MRP (no R-flag, retransmits, or standalone acks; Matter spec
+///    §4.12). With MRP off nothing at the exchange layer times out, so
+///    pre-operational secured dispatches are wrapped in a response deadline
+///    (30 s, or 60 s for `ConnectNetwork`) inside `run_poll_loop`. The
+///    operational CASE session runs over `udp` with MRP as usual.
+/// 3. **Longer operational resolve.** [`crate::driver::BLE_RESOLVE_POLL_ATTEMPTS`]
+///    (~60 s) because a just-provisioned device must still join Wi-Fi and
+///    announce its operational record.
+///
+/// # Errors
+///
+/// Same error set as [`commission`], plus a [`DriverError::Timeout`] if a
+/// pre-operational secured dispatch exceeds its BLE-path response deadline.
+pub async fn commission_ble<B, U, D>(
+    btp: &B,
+    udp: &U,
+    discovery: &mut D,
+    config: BleDriverConfig<'_>,
+) -> Result<CommissionedFabric, DriverError>
+where
+    B: AsyncDatagram,
+    U: AsyncDatagram,
+    D: matter_transport::Discovery,
+{
+    run_commission(
+        btp,
+        STREAM_PEER,
+        udp,
+        discovery,
+        config.commissioner,
+        config.passcode,
+        config.commissioner_noc,
+        config.commissioner_signer_pkcs8,
+        TransportReliability::TransportProvides,
+        crate::driver::case::BLE_RESOLVE_POLL_ATTEMPTS,
+    )
+    .await
+}
+
+/// Shared body of [`commission`] and [`commission_ble`]: run PASE over the
+/// `pase_transport` (at `pase_peer`, with the given `reliability`), then drive
+/// the commissioning poll loop with CASE and post-CASE traffic over
+/// `op_transport`, funnelling every exit through one best-effort failsafe-disarm
+/// point.
+///
+/// The two entry points differ only in what they pass here:
+/// - `commission`: `(transport, peer, transport, Mrp, RESOLVE_POLL_ATTEMPTS)`.
+/// - `commission_ble`: `(btp, STREAM_PEER, udp, TransportProvides, BLE_RESOLVE_POLL_ATTEMPTS)`.
+///
+/// ## Failsafe disarm on failure
+///
+/// Once PASE is up the device has (or is about to have) its failsafe armed; any
+/// FAILED exit best-effort DISARMs it (over the `pase_transport`/`pase_peer` —
+/// the PASE session is the only one guaranteed to exist) so a half-finished run
+/// does not leave the device stuck until its own timer expires. `Action::Abort`
+/// carries `send_disarm_failsafe`; an abort that knows the failsafe was never
+/// armed skips the disarm. RESIDUAL GAP (documented, low severity): this only
+/// disarms on explicit error *return* paths — a dropped (cancelled) future runs
+/// no disarm.
+///
+/// # Errors
+///
+/// See [`commission`] / [`commission_ble`].
+#[allow(clippy::too_many_arguments)] // The two transports + reliability + resolve budget are the axes that distinguish the IP and BLE paths; bundling them into a struct would just move the arity.
+async fn run_commission<P, O, D>(
+    pase_transport: &P,
+    pase_peer: SocketAddr,
+    op_transport: &O,
+    discovery: &mut D,
+    commissioner_cfg: CommissionerConfig<'_>,
+    passcode: u32,
+    commissioner_noc: &matter_cert::MatterCertificate,
+    commissioner_pkcs8: &[u8],
+    reliability: TransportReliability,
+    resolve_attempts: u32,
+) -> Result<CommissionedFabric, DriverError>
+where
+    P: AsyncDatagram,
+    O: AsyncDatagram,
+    D: matter_transport::Discovery,
+{
+    use matter_crypto::RingSigner;
+
+    let commissioner_noc = commissioner_noc.clone();
+
+    // 1. Run PASE over the PASE transport with the requested reliability.
+    //    (`run_pase_with(.., Mrp)` == `run_pase`, so the IP path is byte-for-byte
+    //    unchanged; the BLE path passes `TransportProvides`.)
+    let mut sessions = SessionManager::new();
+    let pase_sid = crate::driver::pase::run_pase_with(
+        pase_transport,
+        &mut sessions,
+        pase_peer,
+        passcode,
+        reliability,
+    )
+    .await?;
+
+    // 2. Source the attestation challenge from the LIVE PASE-derived session.
     //
-    //     The attestation challenge that the device signs AttestationResponse /
-    //     CSRResponse over is the SPAKE2+-derived `attestation_key`, NOT a static
-    //     config input. Both sides derive it from the same PASE handshake, so the
-    //     device's signature and the Commissioner's verification only agree if the
-    //     Commissioner uses THIS live value. We take ownership of the caller's
-    //     `CommissionerConfig` and overwrite `pase_attestation_challenge` with the
-    //     session's `attestation_key` before constructing the state machine. Any
-    //     value the caller put there is intentionally discarded.
+    //    The attestation challenge the device signs AttestationResponse /
+    //    CSRResponse over is the SPAKE2+-derived `attestation_key`, NOT a static
+    //    config input. Both sides derive it from the same PASE handshake, so the
+    //    device's signature and the Commissioner's verification only agree if the
+    //    Commissioner uses THIS live value. Overwrite `pase_attestation_challenge`
+    //    with the session's `attestation_key`; any value the caller put there is
+    //    intentionally discarded.
     let pase_attestation_challenge = sessions
         .get(pase_sid)
         .ok_or(DriverError::Handshake(
@@ -577,20 +740,18 @@ where
         ))?
         .keys
         .attestation_key;
-    let mut commissioner_cfg = config.commissioner;
+    let mut commissioner_cfg = commissioner_cfg;
     commissioner_cfg.pase_attestation_challenge = pase_attestation_challenge;
 
     // 3. Load the caller's PERSISTENT commissioner operational identity so we
     //    have CASE credentials ready when Action::EstablishCase arrives. The
     //    NOC is signed by the fabric RCAC (the same RCAC the device receives
-    //    via AddTrustedRootCertificate), so the device validates it during
-    //    CASE. One stable identity is used here and for all later operational
-    //    sessions — see matter-controller's persisted CommissionerIdentity.
+    //    via AddTrustedRootCertificate), so the device validates it during CASE.
     let fabric = commissioner_cfg.fabric;
     let commissioner_node_id = commissioner_cfg.commissioner_node_id;
     let ipk_epoch_key = commissioner_cfg.ipk_epoch_key;
     // Validation clock for the device's operational cert chain during CASE.
-    // Captured here before `commissioner_cfg` is moved into the state machine.
+    // Captured before `commissioner_cfg` is moved into the state machine.
     let validation_time = commissioner_cfg.now;
     let commissioner_signer_value =
         RingSigner::from_pkcs8(commissioner_pkcs8).map_err(DriverError::Crypto)?;
@@ -598,58 +759,81 @@ where
     // (EstablishCase fires at most once per run).
     let mut commissioner_signer: Option<RingSigner> = Some(commissioner_signer_value);
 
-    let mut case_sid: Option<SessionId> = None;
+    // The CASE session slot carries both the local session id and the resolved
+    // operational address so post-CASE dispatches target the operational node.
+    let mut case_slot: Option<(SessionId, SocketAddr)> = None;
 
     // 4. Build the state machine cursor.
     let mut sm = crate::Commissioner::new(commissioner_cfg)?;
 
-    // 5. Poll loop.
-    //
-    // Run the loop in `run_poll_loop` so EVERY exit path — a `?`-propagated
-    // error, an `Action::Abort`, or `Action::Done` — funnels through one
-    // return below. Once PASE is up the device has (or is about to have) its
-    // failsafe armed; any FAILED exit must best-effort DISARM it so a
-    // half-finished or failed commission does not leave the device stuck in a
-    // failsafe-armed state until its own timer expires.
-    //
-    // `Action::Abort` carries `send_disarm_failsafe`: when the state machine
-    // says the device's failsafe was never armed (or already rolled back) it
-    // returns `LoopExit::Aborted { disarm: false }` and we skip the disarm.
-    // Every other error path disarms unconditionally (best-effort).
-    //
-    // RESIDUAL GAP (documented, low severity): this disarms on explicit error
-    // RETURN paths only. If the `commission()` future is *dropped* (cancelled)
-    // mid-flight, no disarm is sent — running async IO from `Drop` is not
-    // possible here, and a Drop-based guard would need a separate runtime
-    // handle. Callers that cancel a commission must rely on the device's own
-    // failsafe timer to expire, or re-arm-then-disarm on a fresh session.
+    // 5. Poll loop (single-return so every exit funnels through the disarm below).
     let outcome = run_poll_loop(
         &mut sm,
-        transport,
+        pase_transport,
+        op_transport,
         discovery,
         &mut sessions,
         pase_sid,
-        peer,
-        &mut case_sid,
+        pase_peer,
+        &mut case_slot,
         &mut commissioner_signer,
         &commissioner_noc,
         commissioner_node_id,
         &ipk_epoch_key,
         fabric,
         validation_time,
+        reliability,
+        resolve_attempts,
     )
     .await;
 
     match outcome {
         Ok(fabric) => Ok(fabric),
         Err(exit) => {
-            // Best-effort disarm before surfacing the error: once PASE is up the
-            // device may have an armed failsafe from an earlier successful
-            // ArmFailSafe. `disarm_on_exit` honors an abort that asked to skip it.
+            // Best-effort disarm over the PASE transport/peer before surfacing
+            // the error. `disarm_on_exit` honors an abort that asked to skip it.
             if disarm_on_exit(&exit) {
-                rollback(transport, &mut sessions, pase_sid, peer).await;
+                rollback(pase_transport, &mut sessions, pase_sid, pase_peer).await;
             }
             Err(exit.into_driver_error())
+        }
+    }
+}
+
+/// Apply a BLE-path response deadline to a secured dispatch future.
+///
+/// Under [`TransportReliability::Mrp`] (the IP path) this is a transparent
+/// `fut.await` — MRP's own retransmit/expiry timers bound the wait, so the
+/// behavior of `commission()` is unchanged. Under
+/// [`TransportReliability::TransportProvides`] (BLE) MRP is off and nothing at
+/// the exchange layer times out, so the future is wrapped in a
+/// [`tokio::time::timeout`]: [`CONNECT_NETWORK_RESPONSE_DEADLINE`] (60 s) when
+/// `is_connect_network`, else [`RESPONSE_DEADLINE`] (30 s). A fired deadline
+/// maps to [`DriverError::Timeout`] and routes through the normal rollback path.
+///
+/// # Errors
+///
+/// - Any error the wrapped `fut` produces.
+/// - [`DriverError::Timeout`] if the deadline fires (BLE path only).
+async fn with_response_deadline<T>(
+    reliability: TransportReliability,
+    is_connect_network: bool,
+    fut: impl std::future::Future<Output = Result<T, DriverError>>,
+) -> Result<T, DriverError> {
+    match reliability {
+        TransportReliability::Mrp => fut.await,
+        TransportReliability::TransportProvides => {
+            let deadline = if is_connect_network {
+                CONNECT_NETWORK_RESPONSE_DEADLINE
+            } else {
+                RESPONSE_DEADLINE
+            };
+            match tokio::time::timeout(deadline, fut).await {
+                Ok(result) => result,
+                Err(_elapsed) => Err(DriverError::Timeout {
+                    exchange_id: RESPONSE_DEADLINE_EXCHANGE_SENTINEL,
+                }),
+            }
         }
     }
 }
@@ -710,30 +894,49 @@ impl From<crate::CommissioningError> for LoopExit {
     }
 }
 
-/// The commissioning command loop, factored out of [`commission`] so every exit
-/// path returns through one place (letting the caller best-effort disarm the
-/// device failsafe on failure — see the call site).
+/// The commissioning command loop, factored out of [`run_commission`] so every
+/// exit path returns through one place (letting the caller best-effort disarm
+/// the device failsafe on failure — see the call site).
+///
+/// Two transports are threaded so a BLE run can split the phases:
+/// `SessionContext::Pase` dispatches go over `pase_transport` at `pase_peer`;
+/// `Action::EstablishCase` and every post-CASE `SessionContext::Case` dispatch
+/// go over `op_transport` at the mDNS-resolved operational address (stored in
+/// `case_slot` alongside the session id). On the IP path `commission()` passes
+/// the same transport for both and `pase_peer` for both, so behavior is
+/// identical except that post-CASE traffic now targets the resolved operational
+/// address rather than the commissionable one (a no-op on a single socket).
+///
+/// `reliability` selects the response-deadline policy for PASE-session
+/// dispatches via [`with_response_deadline`] (transparent under `Mrp`, wrapped
+/// under `TransportProvides`); `resolve_attempts` is the operational-resolve
+/// budget passed to `establish_case_session`. CASE-session dispatches always run
+/// over `op_transport` with MRP, so they are never deadline-wrapped.
 ///
 /// Returns the [`CommissionedFabric`] on `Action::Done`, or a [`LoopExit`]
 /// describing the failure otherwise.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-async fn run_poll_loop<T, D>(
+async fn run_poll_loop<P, O, D>(
     sm: &mut crate::Commissioner,
-    transport: &T,
+    pase_transport: &P,
+    op_transport: &O,
     discovery: &mut D,
     sessions: &mut SessionManager,
     pase_sid: SessionId,
-    peer: SocketAddr,
-    case_sid: &mut Option<SessionId>,
+    pase_peer: SocketAddr,
+    case_slot: &mut Option<(SessionId, SocketAddr)>,
     commissioner_signer: &mut Option<matter_crypto::RingSigner>,
     commissioner_noc: &matter_cert::MatterCertificate,
     commissioner_node_id: u64,
     ipk_epoch_key: &[u8; 16],
     fabric: &crate::FabricRecord,
     validation_time: MatterTime,
+    reliability: TransportReliability,
+    resolve_attempts: u32,
 ) -> Result<CommissionedFabric, LoopExit>
 where
-    T: AsyncDatagram,
+    P: AsyncDatagram,
+    O: AsyncDatagram,
     D: matter_transport::Discovery,
 {
     use crate::{Action, SessionContext};
@@ -750,19 +953,44 @@ where
                 payload,
                 expect,
             } => {
-                let sid = match session {
-                    SessionContext::Pase => pase_sid,
-                    SessionContext::Case => case_sid.ok_or(DriverError::Handshake(
-                        "CASE session required but not yet established",
-                    ))?,
-                };
                 let path = crate::im::CommandPath {
                     endpoint,
                     cluster,
                     command,
                 };
-                let outcome =
-                    dispatch_invoke(transport, sessions, sid, peer, path, &payload).await?;
+                // NetworkCommissioning::ConnectNetwork gets the longer BLE-path
+                // response deadline (device does slow Wi-Fi assoc + DHCP inline).
+                let is_connect_network = cluster
+                    == crate::clusters::network_commissioning::CLUSTER_ID
+                    && command
+                        == crate::clusters::network_commissioning::command_id::CONNECT_NETWORK;
+                let outcome = match session {
+                    // PASE-session dispatch → PASE transport; under
+                    // `TransportProvides` it is bounded by a response deadline.
+                    SessionContext::Pase => {
+                        with_response_deadline(
+                            reliability,
+                            is_connect_network,
+                            dispatch_invoke(
+                                pase_transport,
+                                sessions,
+                                pase_sid,
+                                pase_peer,
+                                path,
+                                &payload,
+                            ),
+                        )
+                        .await?
+                    }
+                    // CASE-session dispatch → operational transport at the
+                    // resolved address; always MRP, so MRP bounds the wait.
+                    SessionContext::Case => {
+                        let (sid, addr) = case_slot.ok_or(DriverError::Handshake(
+                            "CASE session required but not yet established",
+                        ))?;
+                        dispatch_invoke(op_transport, sessions, sid, addr, path, &payload).await?
+                    }
+                };
                 // Map InvokeOutcome → the byte slice on_response expects:
                 //   Command(fields) → the response-command TLV bytes verbatim.
                 //   Status(Success) → [0x00] (single byte; state machine checks first byte).
@@ -785,12 +1013,6 @@ where
                 attributes,
                 expect,
             } => {
-                let sid = match session {
-                    SessionContext::Pase => pase_sid,
-                    SessionContext::Case => case_sid.ok_or(DriverError::Handshake(
-                        "CASE session required but not yet established for ReadAttribute",
-                    ))?,
-                };
                 // Build one AttributePath per attribute id in the slice.
                 let paths: Vec<crate::im::AttributePath> = attributes
                     .iter()
@@ -800,7 +1022,25 @@ where
                         attribute: attr,
                     })
                     .collect();
-                let report = dispatch_read(transport, sessions, sid, peer, &paths).await?;
+                let report = match session {
+                    // Reads occur during the PASE (pre-operational) phase; under
+                    // `TransportProvides` they are deadline-bounded (never a
+                    // ConnectNetwork, so the standard deadline).
+                    SessionContext::Pase => {
+                        with_response_deadline(
+                            reliability,
+                            false,
+                            dispatch_read(pase_transport, sessions, pase_sid, pase_peer, &paths),
+                        )
+                        .await?
+                    }
+                    SessionContext::Case => {
+                        let (sid, addr) = case_slot.ok_or(DriverError::Handshake(
+                            "CASE session required but not yet established for ReadAttribute",
+                        ))?;
+                        dispatch_read(op_transport, sessions, sid, addr, &paths).await?
+                    }
+                };
                 let read_payload = extract_read_payload(expect, &report)?;
                 sm.on_response(expect, &read_payload)?;
             }
@@ -814,8 +1054,9 @@ where
                 // CASE exchange — otherwise the device retransmits that
                 // response into the Sigma handshake (exchange.rs documents
                 // the deferred ack; observed on a real device: Tapo P110M,
-                // M6.6.5 validation).
-                flush_pending_acks(transport, sessions, peer).await?;
+                // M6.6.5 validation). Over the PASE transport/peer. Under
+                // `TransportProvides` no MRP timers exist, so this is a no-op.
+                flush_pending_acks(pase_transport, sessions, pase_peer).await?;
                 // Build CASE credentials for the commissioner's own identity.
                 // commissioner_signer is moved out of the Option here — it can
                 // only be taken once; a second EstablishCase would return an
@@ -852,8 +1093,10 @@ where
                 let mut trusted_roots = TrustedRoots::new();
                 trusted_roots.add(TrustAnchor::from_root_cert(&fabric.root_cert));
 
+                // CASE runs over the OPERATIONAL transport; the resolved address
+                // is captured into `case_slot` so post-CASE dispatches target it.
                 match establish_case_session(
-                    transport,
+                    op_transport,
                     sessions,
                     discovery,
                     fabric.root_public_key.as_bytes(),
@@ -862,11 +1105,12 @@ where
                     trusted_roots,
                     peer_node_id,
                     validation_time,
+                    resolve_attempts,
                 )
                 .await
                 {
-                    Ok(sid) => {
-                        *case_sid = Some(sid);
+                    Ok((sid, addr)) => {
+                        *case_slot = Some((sid, addr));
                         sm.on_case_established()?;
                     }
                     Err(e) => {
@@ -1674,6 +1918,81 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // with_response_deadline — the BLE-path hang guard (D3/D11.1)
+    // -----------------------------------------------------------------------
+
+    /// Under `Mrp` the wrapper is transparent: a ready future's value passes
+    /// straight through with no deadline (MRP's own timers bound the wait). A
+    /// *pending* future under `Mrp` would hang forever, which is exactly the
+    /// unchanged `commission()` behavior — so we only assert the pass-through.
+    #[tokio::test]
+    async fn with_response_deadline_mrp_is_transparent() {
+        let out = with_response_deadline(
+            TransportReliability::Mrp,
+            false,
+            std::future::ready(Ok::<u8, DriverError>(7)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, 7);
+    }
+
+    /// Under `TransportProvides` a ready future still passes through (no timeout
+    /// fires when the reply is already available).
+    #[tokio::test]
+    async fn with_response_deadline_transport_provides_passes_ready_value() {
+        let out = with_response_deadline(
+            TransportReliability::TransportProvides,
+            false,
+            std::future::ready(Ok::<u8, DriverError>(9)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, 9);
+    }
+
+    /// Under `TransportProvides`, a non-`ConnectNetwork` dispatch that never
+    /// replies fails with `DriverError::Timeout` at exactly the 30 s deadline
+    /// (measured on the paused virtual clock — no real sleep).
+    #[tokio::test(start_paused = true)]
+    async fn with_response_deadline_transport_provides_times_out_at_30s() {
+        let start = tokio::time::Instant::now();
+        let err = with_response_deadline(
+            TransportReliability::TransportProvides,
+            false,
+            std::future::pending::<Result<(), DriverError>>(),
+        )
+        .await
+        .expect_err("a never-replying dispatch must hit the response deadline");
+        assert!(matches!(err, DriverError::Timeout { .. }), "got {err:?}");
+        assert_eq!(
+            start.elapsed(),
+            RESPONSE_DEADLINE,
+            "non-ConnectNetwork deadline must be 30 s"
+        );
+    }
+
+    /// A `ConnectNetwork` dispatch gets the longer 60 s deadline (slow Wi-Fi
+    /// assoc + DHCP inline).
+    #[tokio::test(start_paused = true)]
+    async fn with_response_deadline_connect_network_times_out_at_60s() {
+        let start = tokio::time::Instant::now();
+        let err = with_response_deadline(
+            TransportReliability::TransportProvides,
+            true,
+            std::future::pending::<Result<(), DriverError>>(),
+        )
+        .await
+        .expect_err("a never-replying ConnectNetwork must hit the longer deadline");
+        assert!(matches!(err, DriverError::Timeout { .. }), "got {err:?}");
+        assert_eq!(
+            start.elapsed(),
+            CONNECT_NETWORK_RESPONSE_DEADLINE,
+            "ConnectNetwork deadline must be 60 s"
+        );
+    }
+
     #[tokio::test]
     async fn rollback_sends_arm_fail_safe_zero_over_pase() {
         use crate::im::CommandPath;
@@ -1965,7 +2284,8 @@ mod tests {
             responder.finish().unwrap()
         };
 
-        // Controller side: establish_case_session.
+        // Controller side: establish_case_session. Now returns (SessionId,
+        // resolved operational SocketAddr) and takes an explicit resolve budget.
         let controller = establish_case_session(
             &ctrl_io,
             &mut sessions,
@@ -1976,10 +2296,15 @@ mod tests {
             ctrl_roots,
             T_RESPONDER_NODE,
             MatterTime::from_unix_secs(2_000_000_000),
+            crate::driver::case::RESOLVE_POLL_ATTEMPTS,
         );
 
         let (ctrl_result, dev_out) = tokio::join!(controller, device);
-        let sid = ctrl_result.unwrap();
+        let (sid, resolved_addr) = ctrl_result.unwrap();
+        assert_eq!(
+            resolved_addr, dev_addr,
+            "establish_case_session must return the mDNS-resolved operational address"
+        );
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
     }
