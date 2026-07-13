@@ -1,0 +1,19 @@
+[package]
+name = "matter-ble"
+version = "0.0.0"
+description = "Matter BLE commissioning transport: BTP (Bluetooth Transport Protocol) sans-IO engine and BLE central role"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["matter", "ble", "btp", "commissioning", "iot"]
+categories = ["network-programming", "embedded"]
+
+[lints]
+workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+thiserror = { workspace = true }

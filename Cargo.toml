@@ -11,6 +11,7 @@ members = [
     "crates/matter-controller",
     "crates/matter-ota",
     "crates/matter-bdx",
+    "crates/matter-ble",
     "crates/integration-tests",
     "xtask",
 ]
