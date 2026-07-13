@@ -8,6 +8,7 @@
 //! `BleLayer`) and `test-vectors/btp/`.
 
 pub mod advert;
+pub mod handshake;
 
 mod error;
 pub use error::BtpError;
