@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout matter-rust
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -45,7 +45,7 @@ jobs:
           tool: just
 
       - name: Checkout connectedhomeip
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: project-chip/connectedhomeip
           ref: ${{ env.CHIP_REF }}
