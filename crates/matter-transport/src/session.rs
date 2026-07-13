@@ -122,6 +122,12 @@ pub struct Session {
     /// Per-session MRP state. Holds the exchange table, pending retransmits,
     /// pending piggyback-ack slot, and recent-reliable cache.
     pub mrp: MrpState,
+    /// True when the underlying transport is reliable and ordered (BTP).
+    /// Forces MRP off for this session per Matter spec 4.12: outbound R-flag
+    /// suppressed, no retransmit registration, no inbound ack scheduling.
+    /// Mirrors chip's `SecureSession::AllowsMRP()`, which returns `false`
+    /// whenever the session's transport type is not UDP.
+    pub transport_reliable: bool,
 }
 
 /// Structured output of [`SessionManager::encode_outbound`]. Carries the
@@ -338,6 +344,10 @@ impl SessionManager {
             local_nonce_node_id: 0,
             peer_nonce_node_id: 0,
             mrp: MrpState::new(MrpConfig::default()),
+            // Default false everywhere sessions are constructed: MRP stays
+            // on unless the caller explicitly opts a session into a
+            // reliable transport via `set_transport_reliable`.
+            transport_reliable: false,
         };
         self.sessions.insert(local_id, session);
     }
@@ -372,6 +382,30 @@ impl SessionManager {
     /// failure).
     pub fn remove(&mut self, id: SessionId) -> Option<Session> {
         self.sessions.remove(&id)
+    }
+
+    /// Mark a session as running over a reliable, ordered transport (BTP).
+    /// Forces MRP off for the session per Matter spec 4.12 (see
+    /// [`Session::transport_reliable`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownSession`] if `id` does not name a registered session.
+    pub fn set_transport_reliable(&mut self, id: SessionId, reliable: bool) -> Result<()> {
+        let session = self
+            .sessions
+            .get_mut(&id)
+            .ok_or(Error::UnknownSession(id.0))?;
+        session.transport_reliable = reliable;
+        Ok(())
+    }
+
+    /// Read a session's [`Session::transport_reliable`] flag.
+    ///
+    /// Returns `None` if `id` does not name a registered session.
+    #[must_use]
+    pub fn is_transport_reliable(&self, id: SessionId) -> Option<bool> {
+        self.sessions.get(&id).map(|s| s.transport_reliable)
     }
 
     /// Encode an outbound Matter message via the named session.
@@ -414,13 +448,22 @@ impl SessionManager {
             return Err(Error::CounterOverflow);
         }
 
+        // A transport_reliable session (BTP) forces MRP off regardless of
+        // what the caller asked for: the underlying transport already
+        // guarantees ordered, reliable delivery, so we never set the R bit
+        // and never register a retransmit for this send. Mirrors chip's
+        // `SecureSession::AllowsMRP()`.
+        let effective_mrp_flags = MrpFlags {
+            reliable: mrp_flags.reliable && !session.transport_reliable,
+        };
+
         // 1. MRP builds the wire payload (protocol header || app_payload).
         let prepared = session.mrp.prepare_outbound(
             opcode,
             protocol_id,
             exchange_id,
             app_payload,
-            mrp_flags,
+            effective_mrp_flags,
             now,
         )?;
 
@@ -445,12 +488,14 @@ impl SessionManager {
 
         // 3. Record the send. mark_packet_sent always updates the
         //    idle/active timing baseline; pending-ack registration is gated
-        //    internally by the `reliable` flag. The retransmit buffer is only
+        //    internally by the `reliable` flag (already folded down to
+        //    `effective_mrp_flags` above, so a transport_reliable session
+        //    never registers a retransmit). The retransmit buffer is only
         //    retained for reliable messages, so we clone the wire bytes ONLY
         //    when `reliable` is set — an unreliable send hands `mark_packet_sent`
         //    an empty Vec (which it drops without copying), avoiding a full
         //    packet copy on every fire-and-forget datagram.
-        let retransmit_copy = if mrp_flags.reliable {
+        let retransmit_copy = if effective_mrp_flags.reliable {
             wire_bytes.clone()
         } else {
             Vec::new()
@@ -459,7 +504,7 @@ impl SessionManager {
             counter,
             prepared.exchange_id,
             retransmit_copy,
-            mrp_flags.reliable,
+            effective_mrp_flags.reliable,
             now,
         );
 
@@ -516,6 +561,17 @@ impl SessionManager {
         ) {
             Ok((_, decrypted)) => {
                 let outcome = session.mrp.process_inbound(decrypted, peer_counter, now)?;
+                // A transport_reliable session (BTP) skips ack scheduling
+                // entirely, even if the peer's message carried R=1:
+                // `process_inbound` above unconditionally arms a
+                // standalone-ack deadline for a reliable-flagged inbound, so
+                // undo that here rather than threading the flag through MRP.
+                // Defensive only — a well-behaved BTP peer never sets R.
+                if session.transport_reliable {
+                    if let InboundOutcome::AppMessage { exchange_id, .. } = &outcome {
+                        session.mrp.cancel_pending_outbound_ack(*exchange_id);
+                    }
+                }
                 Ok(match outcome {
                     InboundOutcome::AppMessage {
                         exchange_id,
@@ -890,5 +946,114 @@ mod tests {
             )),
             "counter-overflow standalone-ack must surface SessionCounterExhausted, got {events:?}"
         );
+    }
+
+    /// A `transport_reliable` session must never set the protocol header's
+    /// R (reliable) bit, even when the caller passes `mrp_flags.reliable =
+    /// true` — the underlying transport (BTP) already guarantees ordered,
+    /// reliable delivery, so MRP's own reliability layer must stay off.
+    #[test]
+    fn transport_reliable_suppresses_r_bit() {
+        let (mut a, b) = paired_sessions();
+        a.get_mut(SessionId(1)).unwrap().transport_reliable = true;
+        let now = Instant::now();
+        let out = a
+            .encode_outbound(
+                SessionId(1),
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"payload",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+
+        let b_session = b.get(SessionId(1)).unwrap();
+        let mut replay_window = ReplayWindow::new();
+        let (_, plaintext) = crate::framing::decode_secured(
+            &out.wire_bytes,
+            &b_session.keys,
+            SessionRole::Responder,
+            &mut replay_window,
+            0,
+        )
+        .unwrap();
+        let (header, _) = crate::protocol_header::decode_protocol_header(&plaintext).unwrap();
+        assert!(
+            !header
+                .exchange_flags
+                .contains(crate::protocol_header::ExchangeFlags::RELIABLE),
+            "transport_reliable session must suppress the R bit, got flags {:?}",
+            header.exchange_flags
+        );
+    }
+
+    /// A `transport_reliable` outbound must not register a retransmit entry
+    /// even when `mrp_flags.reliable` is true — no pending deadline
+    /// afterwards.
+    #[test]
+    fn transport_reliable_skips_retransmit_registration() {
+        let (mut a, _b) = paired_sessions();
+        a.get_mut(SessionId(1)).unwrap().transport_reliable = true;
+        let now = Instant::now();
+        a.encode_outbound(
+            SessionId(1),
+            None,
+            0x08,
+            ProtocolId::INTERACTION_MODEL,
+            b"payload",
+            MrpFlags { reliable: true },
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            a.poll_timeout(),
+            None,
+            "a transport_reliable session must not register a retransmit even when mrp_flags.reliable is set"
+        );
+    }
+
+    /// Defensive check: even if a (buggy) peer sets R=1 on an inbound
+    /// message, a `transport_reliable` receiving session must not arm a
+    /// standalone-ack timer for it.
+    #[test]
+    fn transport_reliable_skips_inbound_ack_scheduling() {
+        let (mut a, mut b) = paired_sessions();
+        b.get_mut(SessionId(1)).unwrap().transport_reliable = true;
+        let now = Instant::now();
+        let out = a
+            .encode_outbound(
+                SessionId(1),
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"payload",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        b.decode_inbound(&out.wire_bytes, now).unwrap();
+        assert_eq!(
+            b.poll_timeout(),
+            None,
+            "a transport_reliable session must not arm a standalone-ack timer even for a reliable-flagged inbound"
+        );
+    }
+
+    #[test]
+    fn set_transport_reliable_unknown_session_errors() {
+        let mut a = SessionManager::new();
+        let err = a.set_transport_reliable(SessionId(42), true).unwrap_err();
+        assert!(matches!(err, Error::UnknownSession(42)));
+    }
+
+    #[test]
+    fn is_transport_reliable_reflects_flag_and_unknown_session() {
+        let (mut a, _b) = paired_sessions();
+        assert_eq!(a.is_transport_reliable(SessionId(1)), Some(false));
+        a.set_transport_reliable(SessionId(1), true).unwrap();
+        assert_eq!(a.is_transport_reliable(SessionId(1)), Some(true));
+        assert_eq!(a.is_transport_reliable(SessionId(99)), None);
     }
 }

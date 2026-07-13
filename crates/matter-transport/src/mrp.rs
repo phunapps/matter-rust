@@ -668,6 +668,18 @@ impl MrpState {
         })
     }
 
+    /// Cancel a pending piggyback/standalone-ack registration for
+    /// `exchange_id`, if any.
+    ///
+    /// Used by [`crate::session::SessionManager::decode_inbound`] when the
+    /// owning session's `transport_reliable` flag is set: the underlying
+    /// transport (BTP) already guarantees ordered, reliable delivery, so no
+    /// local ack bookkeeping should be armed — defensively, even if a
+    /// (possibly buggy) peer sets the R flag on an inbound message.
+    pub(crate) fn cancel_pending_outbound_ack(&mut self, exchange_id: u16) {
+        self.pending_outbound_acks.remove(&exchange_id);
+    }
+
     /// Look up `peer_counter` in the 32-entry recent-reliable cache.
     /// Returns `Some(view)` if the counter was seen on a recent reliable
     /// inbound (the wider system uses this to trigger an ack-resend
