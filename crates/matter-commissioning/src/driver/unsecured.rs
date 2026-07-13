@@ -29,6 +29,15 @@ use matter_transport::{
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
+use crate::driver::TransportReliability;
+
+/// Response deadline used by the [`TransportReliability::TransportProvides`]
+/// path: after the single send, wait this long for the peer's reply before
+/// surfacing a [`DriverError::Timeout`]. There is no stop-and-wait retransmit
+/// on a reliable transport, so this is the *only* deadline (unlike the MRP
+/// path, where it is the shorter post-ack response window). 30 s matches the
+/// MRP path's post-ack response timeout.
+const UNSECURED_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// `SecureChannel` `MRP Standalone Acknowledgement` opcode (spec §4.12.8).
 /// Devices send one when a reliable message's response is not immediately
@@ -294,6 +303,12 @@ pub struct UnsecuredExchange {
     /// has no `ReplayWindow` (that lives only in the secured `SessionManager`),
     /// so we track it here. `None` until the first response is consumed.
     last_consumed_peer_counter: Option<u32>,
+    /// How reliability is provided under this exchange. Under
+    /// [`TransportReliability::Mrp`] (UDP) the sender sets the R-flag,
+    /// retransmits with stop-and-wait, and emits standalone acks. Under
+    /// [`TransportReliability::TransportProvides`] (BTP/in-memory) all three
+    /// are suppressed and the sender does a single send + long response wait.
+    reliability: TransportReliability,
 }
 
 impl UnsecuredExchange {
@@ -310,9 +325,12 @@ impl UnsecuredExchange {
             exchange_id,
             source_node_id,
             retransmit: Duration::from_millis(300),
-            response_timeout: Duration::from_secs(30),
+            response_timeout: UNSECURED_RESPONSE_TIMEOUT,
             max_attempts: 5,
             last_consumed_peer_counter: None,
+            // Default to the historical UDP/MRP behavior; the BTP path opts in
+            // via `new_ephemeral_with` / `run_pase_with`.
+            reliability: TransportReliability::Mrp,
         }
     }
 
@@ -330,6 +348,25 @@ impl UnsecuredExchange {
     /// - [`DriverError::Handshake`] if the system CSPRNG fails (ring reports
     ///   no detail; this is effectively unreachable on supported platforms).
     pub fn new_ephemeral(exchange_id: u16) -> Result<Self, DriverError> {
+        Self::new_ephemeral_with(exchange_id, TransportReliability::Mrp)
+    }
+
+    /// Like [`Self::new_ephemeral`], but with an explicit
+    /// [`TransportReliability`]. Under [`TransportReliability::TransportProvides`]
+    /// the exchange does a single send + 30 s response wait (no 300 ms × 5
+    /// stop-and-wait), never sets the R-flag, never attaches an ack, and
+    /// [`Self::send_standalone_ack`] becomes a no-op — the reliability the
+    /// suppressed MRP would have provided is supplied by the transport (Matter
+    /// spec §4.12: MRP off over BLE/BTP).
+    ///
+    /// # Errors
+    ///
+    /// - [`DriverError::Handshake`] if the system CSPRNG fails (ring reports
+    ///   no detail; this is effectively unreachable on supported platforms).
+    pub fn new_ephemeral_with(
+        exchange_id: u16,
+        reliability: TransportReliability,
+    ) -> Result<Self, DriverError> {
         let rng = ring::rand::SystemRandom::new();
         let mut bytes = [0u8; 12];
         ring::rand::SecureRandom::fill(&rng, &mut bytes).map_err(|_| {
@@ -342,13 +379,19 @@ impl UnsecuredExchange {
         ];
         let counter = (u32::from_le_bytes(counter_seed) & 0x0FFF_FFFF) + 1;
         let source_node_id = (u64::from_le_bytes(node_seed) & 0x0FFF_FFFF_FFFF_FFFF).max(1);
-        Ok(Self::new(counter, exchange_id, source_node_id))
+        let mut exch = Self::new(counter, exchange_id, source_node_id);
+        exch.reliability = reliability;
+        Ok(exch)
     }
 
     /// Send an MRP standalone acknowledgement (`SecureChannel 0x10`) for the
     /// peer's reliable message `peer_counter` — used to ack the handshake's
     /// closing `StatusReport` so the device stops retransmitting it. Fire and
     /// forget (an ack is itself never acked); advances the message counter.
+    ///
+    /// Under [`TransportReliability::TransportProvides`] MRP is off (spec
+    /// §4.12), so this is a no-op: it sends nothing and leaves the message
+    /// counter unchanged.
     ///
     /// # Errors
     ///
@@ -359,6 +402,12 @@ impl UnsecuredExchange {
         peer: SocketAddr,
         peer_counter: u32,
     ) -> Result<(), DriverError> {
+        // Under a reliable transport MRP is off (spec §4.12): there is nothing
+        // to acknowledge at the exchange layer, so this is a no-op that sends
+        // nothing and does not advance the message counter.
+        if self.reliability == TransportReliability::TransportProvides {
+            return Ok(());
+        }
         let counter = self.counter;
         self.counter = self.counter.wrapping_add(1);
         let wire = encode_unsecured(
@@ -437,14 +486,20 @@ impl UnsecuredExchange {
     ) -> Result<UnsecuredMessage, DriverError> {
         let counter = self.counter;
         self.counter = self.counter.wrapping_add(1);
+        // Under TransportProvides (BTP) the transport carries reliability, so
+        // MRP is off (spec §4.12): the R-flag is never set and no ack is
+        // piggybacked. Under Mrp both are used exactly as before.
+        let transport_provides = self.reliability == TransportReliability::TransportProvides;
+        let reliable_bit = !transport_provides;
+        let ack_field = if transport_provides { None } else { ack };
         let wire = encode_unsecured(
             counter,
             self.exchange_id,
             opcode,
             ProtocolId::SECURE_CHANNEL,
             true,
-            true,
-            ack,
+            reliable_bit,
+            ack_field,
             Some(self.source_node_id),
             app_payload,
         );
@@ -474,11 +529,21 @@ impl UnsecuredExchange {
         // device has the message and is computing its reply (observed: real
         // devices standalone-ack a PASE message before the SPAKE2+ response).
         let mut acked = false;
+        // TransportProvides sends exactly once (the transport is reliable), so
+        // track whether the single send has gone out.
+        let mut sent = false;
         loop {
-            if !acked {
+            // Send decision: MRP retransmits the same bytes until the peer
+            // acks; TransportProvides sends once and never retransmits.
+            let should_send = if transport_provides { !sent } else { !acked };
+            if should_send {
                 transport.send_to(&wire, peer).await?;
+                sent = true;
             }
-            let wait = if acked {
+            // Wait decision: TransportProvides always waits the full response
+            // deadline (no retransmit). MRP waits the short retransmit interval
+            // until the peer acks, then the response deadline.
+            let wait = if transport_provides || acked {
                 self.response_timeout
             } else {
                 self.retransmit
@@ -554,10 +619,12 @@ impl UnsecuredExchange {
                     return Ok(msg);
                 }
                 Err(_elapsed) => {
-                    if acked {
-                        // Delivery was acknowledged but no response came: the
-                        // peer abandoned the exchange. Retransmitting cannot
-                        // help (it would be deduplicated); surface a timeout.
+                    if transport_provides || acked {
+                        // TransportProvides: the single send's response never
+                        // arrived. MRP-acked: delivery was acknowledged but no
+                        // response came (the peer abandoned the exchange, and a
+                        // retransmit would only be deduplicated). Either way,
+                        // surface a timeout.
                         return Err(DriverError::Timeout {
                             exchange_id: self.exchange_id,
                         });
@@ -1027,5 +1094,194 @@ mod tests {
 
         let (got, ()) = tokio::join!(controller, device);
         assert_eq!(got.unwrap().opcode, 0x21);
+    }
+
+    /// Under `TransportProvides` the sent frame must NOT set the R-flag and
+    /// must NOT attach an ack — the transport carries reliability, so MRP is
+    /// off (spec §4.12). The `Mrp` case (next test) guards the default.
+    #[tokio::test]
+    async fn transport_provides_sets_no_r_bit() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch =
+            UnsecuredExchange::new_ephemeral_with(7, TransportReliability::TransportProvides)
+                .unwrap();
+
+        // Pass an ack the MRP path would normally attach, to prove it is stripped.
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", Some(5));
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            // Parse the exchange flags with the transport's own header parser.
+            let (_hdr, rest) = decode_header(&pkt).unwrap();
+            let (ph, _) = decode_protocol_header(rest).unwrap();
+            assert!(
+                !ph.exchange_flags.contains(ExchangeFlags::RELIABLE),
+                "R-flag must be clear under TransportProvides"
+            );
+            assert!(
+                ph.ack_counter.is_none(),
+                "ack must not be attached under TransportProvides"
+            );
+            let m = decode_unsecured(&pkt).unwrap();
+            let reply = encode_unsecured(
+                100,
+                m.exchange_id,
+                0x21,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                None,
+                None,
+                b"resp",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().opcode, 0x21);
+    }
+
+    /// Guard against regressing the default: under `Mrp` the sent frame SHALL
+    /// set the R-flag and carry the piggybacked ack.
+    #[tokio::test]
+    async fn mrp_sets_r_bit_and_ack() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new_ephemeral_with(7, TransportReliability::Mrp).unwrap();
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", Some(5));
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let (_hdr, rest) = decode_header(&pkt).unwrap();
+            let (ph, _) = decode_protocol_header(rest).unwrap();
+            assert!(
+                ph.exchange_flags.contains(ExchangeFlags::RELIABLE),
+                "R-flag must be set under Mrp"
+            );
+            assert_eq!(
+                ph.ack_counter.map(|c| c.0),
+                Some(5),
+                "ack must be attached under Mrp"
+            );
+            let m = decode_unsecured(&pkt).unwrap();
+            let reply = encode_unsecured(
+                100,
+                m.exchange_id,
+                0x21,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                None,
+                None,
+                b"resp",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().opcode, 0x21);
+    }
+
+    /// Under `TransportProvides` there is no stop-and-wait retransmit: even
+    /// when the responder delays well past the 300 ms MRP retransmit interval,
+    /// exactly one packet is sent. Virtual time (`start_paused`) keeps the test
+    /// instant.
+    #[tokio::test(start_paused = true)]
+    async fn transport_provides_sends_exactly_once() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch =
+            UnsecuredExchange::new_ephemeral_with(7, TransportReliability::TransportProvides)
+                .unwrap();
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&pkt).unwrap();
+            // Delay past the MRP 300 ms retransmit interval; an MRP sender would
+            // retransmit by now, a TransportProvides sender must not.
+            tokio::time::sleep(Duration::from_millis(450)).await;
+            let reply = encode_unsecured(
+                100,
+                m.exchange_id,
+                0x21,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                None,
+                None,
+                b"resp",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+            // No retransmit must ever arrive on the wire.
+            let extra = tokio::time::timeout(Duration::from_millis(500), dev_io.recv_from()).await;
+            assert!(
+                extra.is_err(),
+                "TransportProvides must send exactly one packet (no retransmit)"
+            );
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().opcode, 0x21);
+    }
+
+    /// Under `TransportProvides` a non-answering peer must time out at the
+    /// 30 s response deadline (`UNSECURED_RESPONSE_TIMEOUT`), not at the shorter
+    /// MRP retransmit budget. Virtual time verifies the 30 s constant without a
+    /// real 30 s wait.
+    #[tokio::test(start_paused = true)]
+    async fn transport_provides_times_out_at_30s() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = ctrl_io.local_addr(); // peer arg is ignored by InMemoryDatagram
+        let _keep_peer_alive = dev_io; // keep the channel open so recv stays pending
+        let mut exch =
+            UnsecuredExchange::new_ephemeral_with(7, TransportReliability::TransportProvides)
+                .unwrap();
+
+        let start = tokio::time::Instant::now();
+        let res = exch
+            .send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", None)
+            .await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(res, Err(DriverError::Timeout { exchange_id: 7 })),
+            "expected a Timeout, got: {res:?}"
+        );
+        assert!(
+            elapsed >= Duration::from_secs(30),
+            "TransportProvides must wait the full 30 s response deadline, waited {elapsed:?}"
+        );
+    }
+
+    /// Under `TransportProvides` `send_standalone_ack` is a no-op: nothing is
+    /// put on the wire and the message counter does not advance.
+    #[tokio::test(start_paused = true)]
+    async fn standalone_ack_noop_under_transport_provides() {
+        let (a, b) = InMemoryDatagram::pair();
+        let b_addr = b.local_addr();
+        let mut exch =
+            UnsecuredExchange::new_ephemeral_with(9, TransportReliability::TransportProvides)
+                .unwrap();
+        let counter_before = exch.counter;
+
+        exch.send_standalone_ack(&a, b_addr, 7).await.unwrap();
+
+        // Nothing may arrive at the peer.
+        let got = tokio::time::timeout(Duration::from_millis(50), b.recv_from()).await;
+        assert!(
+            got.is_err(),
+            "send_standalone_ack must be a no-op under TransportProvides"
+        );
+        assert_eq!(
+            exch.counter, counter_before,
+            "the no-op must not advance the message counter"
+        );
     }
 }

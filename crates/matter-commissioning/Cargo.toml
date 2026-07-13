@@ -67,7 +67,7 @@ proptest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 p256 = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 # Enable matter-cert test-support so the #[cfg(test)] blocks in driver/case.rs
 # can use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields}.
 matter-cert = { path = "../matter-cert", version = "0.2.0-pre", features = ["test-support"] }

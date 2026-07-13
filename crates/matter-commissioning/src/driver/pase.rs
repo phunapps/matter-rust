@@ -15,6 +15,7 @@ use matter_transport::{PeerHint, SessionId, SessionManager, SessionRole};
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
 use crate::driver::unsecured::{parse_status_report, require_handshake_opcode, UnsecuredExchange};
+use crate::driver::TransportReliability;
 
 // SecureChannel opcodes for the PASE handshake (Matter Core Spec §4.14.1).
 const OP_PBKDF_PARAM_REQUEST: u8 = 0x20;
@@ -46,11 +47,49 @@ pub async fn run_pase<T: AsyncDatagram>(
     peer: SocketAddr,
     passcode: u32,
 ) -> Result<SessionId, DriverError> {
+    // Delegate with MRP — the historical UDP behavior, byte-for-byte unchanged
+    // for existing callers.
+    run_pase_with(
+        transport,
+        sessions,
+        peer,
+        passcode,
+        TransportReliability::Mrp,
+    )
+    .await
+}
+
+/// Drive a full PASE handshake against `peer` with explicit
+/// [`TransportReliability`] and register the resulting secured session in
+/// `sessions`, returning its local [`SessionId`].
+///
+/// Under [`TransportReliability::TransportProvides`] the unsecured handshake
+/// frames carry no R-flag, are sent exactly once (the transport is reliable),
+/// and no standalone acks are emitted; on success the new session is marked
+/// [`SessionManager::set_transport_reliable`] so the secured phase likewise
+/// suppresses MRP (Matter spec §4.12: MRP off over BLE/BTP).
+///
+/// # Errors
+///
+/// - [`DriverError::Crypto`] if a SPAKE2+ step fails (e.g. wrong passcode).
+/// - [`DriverError::Io`] / [`DriverError::Transport`] / [`DriverError::Timeout`]
+///   on datagram, framing, or reply-timeout failure.
+/// - [`DriverError::Handshake`] if negotiation produced no responder session
+///   id or the handshake did not close with a `StatusReport`.
+/// - [`DriverError::SessionEstablishmentFailed`] if the device's closing
+///   `StatusReport` reports failure.
+pub async fn run_pase_with<T: AsyncDatagram>(
+    transport: &T,
+    sessions: &mut SessionManager,
+    peer: SocketAddr,
+    passcode: u32,
+    reliability: TransportReliability,
+) -> Result<SessionId, DriverError> {
     let local = sessions.allocate_session_id();
     let mut prover = PaseProver::new_with_negotiation(passcode, local.0)?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — devices drop session-establishment frames without them.
-    let mut exch = UnsecuredExchange::new_ephemeral(PASE_EXCHANGE_ID)?;
+    let mut exch = UnsecuredExchange::new_ephemeral_with(PASE_EXCHANGE_ID, reliability)?;
 
     let request = prover.start()?;
     let resp = exch
@@ -131,6 +170,11 @@ pub async fn run_pase<T: AsyncDatagram>(
         peer_session_id,
         PeerHint::default(),
     );
+    // On a reliable transport, flag the freshly registered session so the
+    // secured phase suppresses MRP too (R-flag, retransmits, standalone acks).
+    if reliability == TransportReliability::TransportProvides {
+        sessions.set_transport_reliable(local, true)?;
+    }
     Ok(local)
 }
 
@@ -248,6 +292,118 @@ mod tests {
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from(dev_keys));
         assert_eq!(registered.peer_id, matter_transport::SessionId(0x00BB));
+        // The default UDP/MRP path must NOT flag the session reliable.
+        assert_eq!(sessions.is_transport_reliable(sid), Some(false));
+    }
+
+    #[tokio::test]
+    async fn run_pase_with_marks_session_reliable() {
+        // Under TransportProvides the PASE handshake runs without R-flags,
+        // retransmits, or standalone acks, and on success the new session is
+        // flagged transport_reliable so the secured phase suppresses MRP too.
+        let pin = 20_202_021;
+        let params = PasePbkdfParams {
+            iterations: 1000,
+            salt: vec![0x55; 16],
+        };
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut sessions = SessionManager::new();
+
+        let device = async {
+            let mut verifier = PaseVerifier::new_from_pin(pin, params, 0x00BB).unwrap();
+            let mut ctr: u32 = 100;
+
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            verifier.handle_pbkdf_request(&m.payload).unwrap();
+            let resp = verifier.next_message().unwrap();
+            dev_io
+                .send_to(
+                    &encode_unsecured(
+                        ctr,
+                        m.exchange_id,
+                        OP_PBKDF_RESP,
+                        matter_transport::ProtocolId::SECURE_CHANNEL,
+                        false,
+                        true,
+                        Some(m.message_counter),
+                        None,
+                        &resp,
+                    ),
+                    ctrl_addr,
+                )
+                .await
+                .unwrap();
+            ctr += 1;
+
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            verifier.handle_pake1(&m.payload).unwrap();
+            let pake2 = verifier.next_message().unwrap();
+            dev_io
+                .send_to(
+                    &encode_unsecured(
+                        ctr,
+                        m.exchange_id,
+                        OP_PAKE2,
+                        matter_transport::ProtocolId::SECURE_CHANNEL,
+                        false,
+                        true,
+                        Some(m.message_counter),
+                        None,
+                        &pake2,
+                    ),
+                    ctrl_addr,
+                )
+                .await
+                .unwrap();
+            ctr += 1;
+
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            verifier.handle_pake3(&m.payload).unwrap();
+            // Close with a success StatusReport. Under TransportProvides the
+            // controller does NOT ack it (no standalone acks on a reliable
+            // transport), so the device does not wait for one.
+            dev_io
+                .send_to(
+                    &encode_unsecured(
+                        ctr,
+                        m.exchange_id,
+                        OP_STATUS_REPORT,
+                        matter_transport::ProtocolId::SECURE_CHANNEL,
+                        false,
+                        true,
+                        Some(m.message_counter),
+                        None,
+                        &status_report_body(0, 0),
+                    ),
+                    ctrl_addr,
+                )
+                .await
+                .unwrap();
+
+            verifier.finish().unwrap()
+        };
+
+        let controller = run_pase_with(
+            &ctrl_io,
+            &mut sessions,
+            dev_addr,
+            pin,
+            TransportReliability::TransportProvides,
+        );
+        let (ctrl_result, _dev_keys) = tokio::join!(controller, device);
+        let sid = ctrl_result.unwrap();
+
+        assert_eq!(
+            sessions.is_transport_reliable(sid),
+            Some(true),
+            "a TransportProvides PASE must flag the session transport_reliable"
+        );
     }
 
     #[tokio::test]
