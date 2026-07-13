@@ -9,6 +9,7 @@
 
 pub mod advert;
 pub mod handshake;
+pub mod session;
 
 mod error;
 pub use error::BtpError;

@@ -30,6 +30,12 @@ pub enum BtpError {
     /// Ack for a sequence number that is not outstanding.
     #[error("invalid ack {0}")]
     InvalidAck(u8),
+    /// A fragment arrived that the reassembler cannot accept in its current
+    /// state (chip `BLE_ERROR_REASSEMBLER_INCORRECT_STATE`): a new `Begin`
+    /// while a message is already in progress or completed-but-unacknowledged,
+    /// or a `Continue`/`End` with no message in progress.
+    #[error("reassembler in incorrect state")]
+    ReassemblerInvalidState,
     /// `queue_message` called while a message is still in flight.
     #[error("a message is already in flight")]
     MessageInFlight,

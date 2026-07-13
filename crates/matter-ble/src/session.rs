@@ -1,0 +1,623 @@
+//! Sans-IO BTP session engine — RX reassembly + acknowledgement generation.
+//!
+//! Byte-grounded against connectedhomeip `src/ble/BtpEngine.cpp`
+//! (`HandleCharacteristicReceived`, `HandleAckReceived`, `IsValidAck`,
+//! `EncodeStandAloneAck`) and `BLEEndPoint.cpp` timer semantics. Vectors:
+//! `test-vectors/btp/segments_rx.json` + `test-vectors/btp/standalone_ack.json`.
+//!
+//! # Sans-IO discipline
+//! [`BtpSession::on_indication`] NEVER returns outbound bytes. When a received
+//! fragment makes an acknowledgement due (2.5 s send-ack timer, or immediately
+//! when the local receive window is exhausted) it records that state so
+//! [`BtpSession::poll_timeout`] surfaces the deadline and
+//! [`BtpSession::handle_timeout`] emits the standalone ack. This mirrors
+//! `matter-transport`'s MRP engine. A standalone ack CONSUMES a TX sequence
+//! number (chip `EncodeStandAloneAck` calls `GetAndIncrementNextTxSeqNum`).
+//!
+//! # RX error mapping (chip error name → [`BtpError`])
+//! Each RX vector maps to exactly one variant:
+//! - `reassembler_incorrect_state` (a `Begin`/data fragment while a message is
+//!   already in progress or completed-but-unacknowledged) → [`BtpError::ReassemblerInvalidState`].
+//! - `invalid_btp_sequence_number` (a fragment/ack whose own sequence byte
+//!   != `RxNext`) → [`BtpError::InvalidSequence`]. Chip checks this AFTER the
+//!   piggyback ack, so a valid ack in the same packet is applied before the
+//!   sequence check fails (`handle_ack_received_incorrect_sequence`).
+//! - `invalid_ack` (standalone/piggyback ack when none is outstanding, or an
+//!   ack for a sequence number outside the outstanding TX interval) →
+//!   [`BtpError::InvalidAck`].
+//!
+//! # Fused receive+take divergence (documented, deliberate)
+//! Chip's engine holds a completed message in `kState_Complete` until the
+//! upper layer calls `TakeRxPacket` (which resets it to `kState_Idle`); a new
+//! `Begin` arriving before that take triggers `REASSEMBLER_INCORRECT_STATE`.
+//! Our [`BtpSession::on_indication`] fuses receive-and-take: the reassembled
+//! SDU is returned to the caller in the same call. We preserve chip's guard by
+//! keeping `rx_complete_unacked` set until the completing message is
+//! acknowledged (standalone ack here; piggyback ack in Task 6). A well-behaved
+//! BTP peer — and chip's own window mechanics — always interpose an
+//! acknowledgement between fully-received messages, so this only bites a peer
+//! that streams a second message with zero acknowledgement in between.
+
+use std::time::{Duration, Instant};
+
+use crate::handshake::MIN_SEGMENT_SIZE;
+use crate::BtpError;
+
+/// Time a receiver may buffer a pending acknowledgement before it must emit a
+/// standalone ack (chip `BTP_ACK_SEND_TIMEOUT_MS`).
+pub const ACK_SEND_TIMEOUT: Duration = Duration::from_millis(2500);
+/// Time a sender waits for an acknowledgement of an outstanding fragment
+/// before declaring the session dead (chip `BTP_ACK_TIMEOUT_MS`).
+pub const ACK_TIMEOUT: Duration = Duration::from_secs(15);
+/// When the local receive window drops to this many free slots (with nothing
+/// outbound to piggyback on), an acknowledgement is sent immediately
+/// (chip `BLE_CONFIG_IMMEDIATE_ACK_WINDOW_THRESHOLD`).
+pub const IMMEDIATE_ACK_THRESHOLD: u8 = 1;
+/// Upper bound on a single reassembled BTP SDU (one chip pbuf).
+pub const RX_REASSEMBLY_CAP: usize = 2048;
+
+const FLAG_START: u8 = 0x01;
+const FLAG_CONTINUE: u8 = 0x02;
+const FLAG_END: u8 = 0x04;
+const FLAG_ACK: u8 = 0x08;
+
+/// Which side of the BTP connection this engine models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// The commissioner (GATT client). Receives the handshake response as an
+    /// implicit sequence 0, arming the 2.5 s send-ack timer at construction.
+    Central,
+    /// The commissionee (GATT server). Starts with its handshake response
+    /// (sequence 0) outstanding and awaiting acknowledgement.
+    Peripheral,
+}
+
+/// Sans-IO BTP session engine (chip `BtpEngine` + `BLEEndPoint` timer
+/// semantics). All time is injected via [`Instant`] — no tokio, no clocks.
+#[derive(Debug)]
+pub struct BtpSession {
+    role: Role,
+    segment_size: u16,
+    local_window_max: u8,
+    local_window: u8,
+
+    // RX reassembly.
+    rx_next_seq: u8,
+    rx_buf: Vec<u8>,
+    rx_expected_len: Option<u16>,
+    rx_complete_unacked: bool,
+    unacked_rx: Option<u8>,
+    ack_due_at: Option<Instant>,
+
+    // TX outstanding-acknowledgement tracking (Task 6 extends the send path;
+    // the RX half needs these to validate inbound acks).
+    tx_next_seq: u8,
+    tx_oldest_unacked: u8,
+    tx_newest_unacked: u8,
+    expecting_ack: bool,
+    tx_unacked_since: Option<Instant>,
+}
+
+impl BtpSession {
+    /// Construct a session for `role` with the negotiated `segment_size` and
+    /// receive `window`.
+    ///
+    /// Central construction arms the 2.5 s send-ack timer for sequence 0 (the
+    /// handshake response indication implicitly occupies sequence 0 — chip
+    /// `BLEEndPoint.cpp:1084-1091`) and debits the local receive window by 1.
+    /// Peripheral construction starts with TX sequence 0 outstanding (15 s ack
+    /// deadline).
+    #[must_use]
+    pub fn new(role: Role, segment_size: u16, window: u8, now: Instant) -> Self {
+        let segment_size = segment_size.max(MIN_SEGMENT_SIZE);
+        let window = window.max(1);
+        match role {
+            Role::Central => Self {
+                role,
+                segment_size,
+                local_window_max: window,
+                local_window: window.saturating_sub(1),
+                rx_next_seq: 1,
+                rx_buf: Vec::new(),
+                rx_expected_len: None,
+                rx_complete_unacked: false,
+                unacked_rx: Some(0),
+                ack_due_at: Some(now + ACK_SEND_TIMEOUT),
+                tx_next_seq: 0,
+                tx_oldest_unacked: 0,
+                tx_newest_unacked: 0,
+                expecting_ack: false,
+                tx_unacked_since: None,
+            },
+            Role::Peripheral => Self {
+                role,
+                segment_size,
+                local_window_max: window,
+                local_window: window,
+                rx_next_seq: 0,
+                rx_buf: Vec::new(),
+                rx_expected_len: None,
+                rx_complete_unacked: false,
+                unacked_rx: None,
+                ack_due_at: None,
+                tx_next_seq: 1,
+                tx_oldest_unacked: 0,
+                tx_newest_unacked: 0,
+                expecting_ack: true,
+                tx_unacked_since: Some(now),
+            },
+        }
+    }
+
+    /// Feed one C2 indication (central) / C1 write (peripheral, tests only).
+    ///
+    /// Returns `Ok(Some(sdu))` when a Matter message completes reassembly,
+    /// `Ok(None)` when more fragments are expected or the packet was a pure
+    /// standalone ack. Never returns outbound bytes (see the module-level
+    /// sans-IO note); a due acknowledgement is surfaced via [`Self::poll_timeout`].
+    ///
+    /// # Errors
+    /// - [`BtpError::PacketTooShort`]: fewer bytes than the flags imply.
+    /// - [`BtpError::InvalidAck`]: a piggyback ack outside the outstanding TX range.
+    /// - [`BtpError::InvalidSequence`]: the fragment's sequence byte != `RxNext`.
+    /// - [`BtpError::ReassemblerInvalidState`]: a fragment illegal for the
+    ///   current reassembly state.
+    /// - [`BtpError::ReassemblyOverflow`]: a declared or accumulated length
+    ///   exceeding [`RX_REASSEMBLY_CAP`].
+    pub fn on_indication(
+        &mut self,
+        packet: &[u8],
+        now: Instant,
+    ) -> Result<Option<Vec<u8>>, BtpError> {
+        // Truncate to the negotiated fragment size: the BLE characteristic may
+        // be larger than what was negotiated (chip truncates to mRxFragmentSize).
+        let packet = &packet[..packet.len().min(self.segment_size as usize)];
+
+        let flags = *packet.first().ok_or(BtpError::PacketTooShort)?;
+        let mut idx = 1usize;
+
+        // Piggyback / standalone ack — parsed and validated BEFORE the sequence
+        // number, matching chip's HandleCharacteristicReceived ordering.
+        if flags & FLAG_ACK != 0 {
+            let ack = *packet.get(idx).ok_or(BtpError::PacketTooShort)?;
+            idx += 1;
+            self.receive_ack(ack)?;
+        }
+
+        // Sequence number: must equal RxNext exactly (chip
+        // BLE_ERROR_INVALID_BTP_SEQUENCE_NUMBER).
+        let seq = *packet.get(idx).ok_or(BtpError::PacketTooShort)?;
+        idx += 1;
+        if seq != self.rx_next_seq {
+            return Err(BtpError::InvalidSequence {
+                expected: self.rx_next_seq,
+                got: seq,
+            });
+        }
+        self.rx_next_seq = self.rx_next_seq.wrapping_add(1);
+
+        let is_data = flags & (FLAG_START | FLAG_CONTINUE | FLAG_END) != 0;
+        if !is_data {
+            // Pure standalone ack: no payload, no reassembly, no window debit.
+            return Ok(None);
+        }
+
+        let begin = flags & FLAG_START != 0;
+        let end = flags & FLAG_END != 0;
+        let cont = flags & FLAG_CONTINUE != 0;
+
+        if self.rx_expected_len.is_some() {
+            // Reassembly in progress: a new Begin, or a fragment carrying
+            // neither Continue nor End, is illegal.
+            if begin || !(cont || end) {
+                return Err(BtpError::ReassemblerInvalidState);
+            }
+            let payload = &packet[idx..];
+            if self.rx_buf.len() + payload.len() > RX_REASSEMBLY_CAP {
+                return Err(BtpError::ReassemblyOverflow);
+            }
+            self.rx_buf.extend_from_slice(payload);
+        } else if self.rx_complete_unacked {
+            // A completed message still awaits acknowledgement (chip's
+            // kState_Complete guard). No new fragment may start.
+            return Err(BtpError::ReassemblerInvalidState);
+        } else {
+            // Idle: only a Begin fragment may start a new message.
+            if !begin {
+                return Err(BtpError::ReassemblerInvalidState);
+            }
+            let len_bytes = packet.get(idx..idx + 2).ok_or(BtpError::PacketTooShort)?;
+            let msg_len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]);
+            idx += 2;
+            if msg_len as usize > RX_REASSEMBLY_CAP {
+                return Err(BtpError::ReassemblyOverflow);
+            }
+            self.rx_expected_len = Some(msg_len);
+            self.rx_buf.clear();
+            self.rx_buf.extend_from_slice(&packet[idx..]);
+        }
+
+        // Every received data fragment counts against the local receive window
+        // and becomes something we owe an acknowledgement for.
+        self.local_window = self.local_window.saturating_sub(1);
+        self.unacked_rx = Some(seq);
+        self.arm_ack_timer(now);
+
+        if !end {
+            return Ok(None);
+        }
+
+        // End fragment: trim sender-declared padding, verify completeness.
+        let expected = self.rx_expected_len.take().unwrap_or(0) as usize;
+        if self.rx_buf.len() < expected {
+            // Missing data (chip BLE_ERROR_REASSEMBLER_MISSING_DATA).
+            return Err(BtpError::ReassemblerInvalidState);
+        }
+        self.rx_buf.truncate(expected);
+        self.rx_complete_unacked = true;
+        Ok(Some(std::mem::take(&mut self.rx_buf)))
+    }
+
+    /// The role this session was constructed for.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// Earliest deadline among the send-ack (2.5 s) and ack-timeout (15 s)
+    /// timers. Returns an [`Instant`] in the past (the indication time) when an
+    /// acknowledgement is due immediately. `None` when idle.
+    #[must_use]
+    pub fn poll_timeout(&self) -> Option<Instant> {
+        let ack_timeout = if self.expecting_ack {
+            self.tx_unacked_since.map(|since| since + ACK_TIMEOUT)
+        } else {
+            None
+        };
+        match (self.ack_due_at, ack_timeout) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
+    }
+
+    /// Validate and apply an inbound acknowledgement (chip `HandleAckReceived`
+    /// with `IsValidAck`): `ack` must fall within the outstanding TX interval
+    /// from `tx_oldest_unacked` to `tx_newest_unacked` (which may wrap mod 256).
+    fn receive_ack(&mut self, ack: u8) -> Result<(), BtpError> {
+        if !self.expecting_ack {
+            return Err(BtpError::InvalidAck(ack));
+        }
+        let valid = if self.tx_newest_unacked >= self.tx_oldest_unacked {
+            ack <= self.tx_newest_unacked && ack >= self.tx_oldest_unacked
+        } else {
+            // Interval wraps past 255.
+            ack <= self.tx_newest_unacked || ack >= self.tx_oldest_unacked
+        };
+        if !valid {
+            return Err(BtpError::InvalidAck(ack));
+        }
+        if self.tx_newest_unacked == ack {
+            // Everything outstanding is now acknowledged.
+            self.tx_oldest_unacked = ack;
+            self.expecting_ack = false;
+            self.tx_unacked_since = None;
+        } else {
+            self.tx_oldest_unacked = ack.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    /// Mark that an acknowledgement is due. Immediately when the local receive
+    /// window has reached the immediate-ack threshold (and nothing outbound is
+    /// pending to piggyback on); otherwise on the 2.5 s send-ack timer. The
+    /// earliest of any already-armed deadline is kept.
+    fn arm_ack_timer(&mut self, now: Instant) {
+        // Task 6 will also suppress the immediate ack when outbound data is
+        // queued to piggyback on; the RX-only half never has any.
+        let candidate = if self.local_window <= IMMEDIATE_ACK_THRESHOLD {
+            now
+        } else {
+            now + ACK_SEND_TIMEOUT
+        };
+        self.ack_due_at = Some(match self.ack_due_at {
+            Some(existing) => existing.min(candidate),
+            None => candidate,
+        });
+    }
+
+    /// Fire any timers due at `now`.
+    ///
+    /// Returns `Ok(Some(packet))` with a standalone ack to send now, or
+    /// `Ok(None)` when nothing is due.
+    ///
+    /// # Errors
+    /// [`BtpError::AckTimedOut`]: an outstanding TX fragment went 15 s without
+    /// acknowledgement; the session is dead and the caller must close it.
+    pub fn handle_timeout(&mut self, now: Instant) -> Result<Option<Vec<u8>>, BtpError> {
+        // A TX fragment that has gone unacknowledged for 15 s kills the session.
+        if self.expecting_ack {
+            if let Some(since) = self.tx_unacked_since {
+                if now >= since + ACK_TIMEOUT {
+                    return Err(BtpError::AckTimedOut);
+                }
+            }
+        }
+
+        // Send-ack timer: emit a standalone ack for the newest received seq.
+        if let Some(due) = self.ack_due_at {
+            if now >= due {
+                self.ack_due_at = None;
+                if let Some(ack_num) = self.unacked_rx {
+                    // Standalone ack: 08 | ack_num | our-own-tx-seq. The ack
+                    // consumes a TX sequence number (chip GetAndIncrementNextTxSeqNum).
+                    let packet = vec![FLAG_ACK, ack_num, self.tx_next_seq];
+                    self.tx_next_seq = self.tx_next_seq.wrapping_add(1);
+                    self.unacked_rx = None;
+                    self.rx_complete_unacked = false;
+                    // Acknowledging frees the local receive window again.
+                    self.local_window = self.local_window_max;
+                    return Ok(Some(packet));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    use super::*;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn central(t0: Instant) -> BtpSession {
+        BtpSession::new(Role::Central, 20, 6, t0)
+    }
+
+    // ---- segments_rx.json ---------------------------------------------------
+
+    // Vector: handle_characteristic_received_one_packet
+    #[test]
+    fn handle_characteristic_received_one_packet() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(
+            s.on_indication(&hex("05010100ff"), t0).unwrap(),
+            Some(hex("ff"))
+        );
+    }
+
+    // Vector: handle_characteristic_received_two_packet
+    #[test]
+    fn handle_characteristic_received_two_packet() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(s.on_indication(&hex("01010200fe"), t0).unwrap(), None);
+        assert_eq!(
+            s.on_indication(&hex("0402ff"), t0).unwrap(),
+            Some(hex("feff"))
+        );
+    }
+
+    // Vector: handle_characteristic_received_three_packet
+    #[test]
+    fn handle_characteristic_received_three_packet() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(s.on_indication(&hex("01010300fd"), t0).unwrap(), None);
+        assert_eq!(s.on_indication(&hex("0202fe"), t0).unwrap(), None);
+        assert_eq!(
+            s.on_indication(&hex("0403ff"), t0).unwrap(),
+            Some(hex("fdfeff"))
+        );
+    }
+
+    // Vector: handle_characteristic_received_with_padding
+    #[test]
+    fn handle_characteristic_received_with_padding() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Declared msgLen 1; 5 trailing 0x00 padding bytes must be ignored.
+        assert_eq!(
+            s.on_indication(&hex("05010100ff0000000000"), t0).unwrap(),
+            Some(hex("ff"))
+        );
+    }
+
+    // Vector: handle_characteristic_received_incorrect_sequence
+    // chip reassembler_incorrect_state: second Begin|End arrives while the
+    // first completed message is still unacknowledged.
+    #[test]
+    fn handle_characteristic_received_incorrect_sequence() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(
+            s.on_indication(&hex("05010100ff"), t0).unwrap(),
+            Some(hex("ff"))
+        );
+        assert_eq!(
+            s.on_indication(&hex("05020100ff"), t0),
+            Err(BtpError::ReassemblerInvalidState)
+        );
+    }
+
+    // Vector: handle_characteristic_received_unexpected_standalone_ack
+    // chip invalid_ack: standalone ack (ack_num 0) with nothing outstanding.
+    #[test]
+    fn handle_characteristic_received_unexpected_standalone_ack() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(
+            s.on_indication(&hex("080001"), t0),
+            Err(BtpError::InvalidAck(0))
+        );
+    }
+
+    // Vector: handle_ack_received_incorrect_sequence
+    // chip invalid_btp_sequence_number: the ack (0x00) is VALID and applied,
+    // then the packet's own seq byte (0x02) fails against RxNext (1).
+    // Precondition: 2 fragments sent (seq 0,1), expecting ack, tx_next at 2.
+    #[test]
+    fn handle_ack_received_incorrect_sequence() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Inject the TX-outstanding precondition (Task 6 owns the send path).
+        s.expecting_ack = true;
+        s.tx_oldest_unacked = 0;
+        s.tx_newest_unacked = 1;
+        s.tx_next_seq = 2;
+        s.tx_unacked_since = Some(t0);
+        assert_eq!(
+            s.on_indication(&hex("080002"), t0),
+            Err(BtpError::InvalidSequence {
+                expected: 1,
+                got: 2
+            })
+        );
+    }
+
+    // Vector: handle_characteristic_received_sequence_wraparound_invalid_ack
+    // chip invalid_ack: after a full tx wraparound, ack_num 95 (0x5f) is not in
+    // the outstanding interval [250..=255, 0].
+    #[test]
+    fn handle_characteristic_received_sequence_wraparound_invalid_ack() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Outstanding interval after 257 sends w/ acks every 10th: oldest 250,
+        // newest 0 (wrapped), tx_next 1. 95 falls outside -> InvalidAck(95).
+        s.expecting_ack = true;
+        s.tx_oldest_unacked = 250;
+        s.tx_newest_unacked = 0;
+        s.tx_next_seq = 1;
+        s.tx_unacked_since = Some(t0);
+        assert_eq!(
+            s.on_indication(&hex("085f1a"), t0),
+            Err(BtpError::InvalidAck(95))
+        );
+    }
+
+    // ---- standalone_ack.json ------------------------------------------------
+
+    // Vector: encode_standalone_ack_one_packet -> 08 01 00
+    #[test]
+    fn encode_standalone_ack_one_packet() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(
+            s.on_indication(&hex("05010100ff"), t0).unwrap(),
+            Some(hex("ff"))
+        );
+        let due = s.poll_timeout().unwrap();
+        assert_eq!(s.handle_timeout(due).unwrap(), Some(hex("080100")));
+    }
+
+    // Vector: encode_standalone_ack_no_unacked_data -> 08 00 00
+    #[test]
+    fn encode_standalone_ack_no_unacked_data() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // seq 0 (handshake response) is the newest unacked; ack_num 0.
+        assert_eq!(
+            s.handle_timeout(t0 + ACK_SEND_TIMEOUT).unwrap(),
+            Some(hex("080000"))
+        );
+    }
+
+    // Vector: encode_standalone_ack_multi_fragment_message -> 08 03 00
+    #[test]
+    fn encode_standalone_ack_multi_fragment_message() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        assert_eq!(s.on_indication(&hex("01010300fd"), t0).unwrap(), None);
+        assert_eq!(s.on_indication(&hex("0202fe"), t0).unwrap(), None);
+        assert_eq!(
+            s.on_indication(&hex("0403ff"), t0).unwrap(),
+            Some(hex("fdfeff"))
+        );
+        let due = s.poll_timeout().unwrap();
+        assert_eq!(s.handle_timeout(due).unwrap(), Some(hex("080300")));
+    }
+
+    // ---- behaviour ----------------------------------------------------------
+
+    #[test]
+    fn central_arms_seq0_ack_timer_at_construction() {
+        let t0 = Instant::now();
+        let s = central(t0);
+        assert_eq!(s.poll_timeout(), Some(t0 + ACK_SEND_TIMEOUT));
+    }
+
+    #[test]
+    fn ack_timer_fires_standalone_ack_for_seq0() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        let pkt = s.handle_timeout(t0 + ACK_SEND_TIMEOUT).unwrap().unwrap();
+        assert_eq!(pkt, vec![0x08, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn window_exhaustion_forces_immediate_ack() {
+        // window 2: handshake debit leaves 1 free slot; the next data fragment
+        // drops the local window to the immediate-ack threshold.
+        let t0 = Instant::now();
+        let mut s = BtpSession::new(Role::Central, 20, 2, t0);
+        // seq must be 1 (RxNext=1 for Central): 05 01 0100 78.
+        let _ = s.on_indication(&hex("0501010078"), t0).unwrap();
+        assert_eq!(s.poll_timeout(), Some(t0)); // due now
+    }
+
+    #[test]
+    fn seq_wraps_mod_256() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Central RxNext starts at 1. Drive single-fragment messages seq
+        // 1,2,...,255,0 (256 messages), acknowledging between each so the
+        // completed-unacked guard clears. The seq 0 message (RxNext wrapped
+        // 255 -> 0) must be accepted.
+        for i in 0u16..256 {
+            let seq = ((1 + i) & 0xff) as u8;
+            let pkt = format!("05{seq:02x}0100{seq:02x}");
+            let out = s.on_indication(&hex(&pkt), t0).unwrap();
+            assert_eq!(out, Some(vec![seq]), "message seq {seq} should complete");
+            // Standalone-ack to clear the completed-unacked guard.
+            let due = s.poll_timeout().unwrap();
+            let _ = s.handle_timeout(due).unwrap().unwrap();
+        }
+    }
+
+    #[test]
+    fn reassembly_cap_enforced() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Begin (flags 01, seq 01, msgLen 4000 = 0x0fa0 LE) > RX_REASSEMBLY_CAP.
+        assert_eq!(
+            s.on_indication(&hex("0101a00f"), t0),
+            Err(BtpError::ReassemblyOverflow)
+        );
+    }
+
+    #[test]
+    fn peripheral_arms_15s_ack_timeout() {
+        let t0 = Instant::now();
+        let s = BtpSession::new(Role::Peripheral, 20, 6, t0);
+        assert_eq!(s.poll_timeout(), Some(t0 + ACK_TIMEOUT));
+    }
+
+    #[test]
+    fn peripheral_ack_timeout_kills_session() {
+        let t0 = Instant::now();
+        let mut s = BtpSession::new(Role::Peripheral, 20, 6, t0);
+        assert_eq!(
+            s.handle_timeout(t0 + ACK_TIMEOUT),
+            Err(BtpError::AckTimedOut)
+        );
+    }
+}
