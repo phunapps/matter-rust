@@ -11,13 +11,19 @@
 //! when the local receive window is exhausted) it records that state so
 //! [`BtpSession::poll_timeout`] surfaces the deadline and
 //! [`BtpSession::handle_timeout`] emits the standalone ack. This mirrors
-//! `matter-transport`'s MRP engine. A standalone ack CONSUMES a TX sequence
-//! number (chip `EncodeStandAloneAck` calls `GetAndIncrementNextTxSeqNum`).
+//! `matter-transport`'s MRP engine. A standalone ack is a full outbound
+//! fragment: it consumes a TX sequence number and registers itself as an
+//! outstanding unacknowledged fragment (chip `EncodeStandAloneAck` →
+//! `GetAndIncrementNextTxSeqNum`, then `DoSendStandAloneAck` →
+//! `StartAckReceivedTimer`), so it is itself subject to the 15 s ack-timeout
+//! and a subsequent inbound ack for it is valid.
 //!
 //! # RX error mapping (chip error name → [`BtpError`])
 //! Each RX vector maps to exactly one variant:
 //! - `reassembler_incorrect_state` (a `Begin`/data fragment while a message is
-//!   already in progress or completed-but-unacknowledged) → [`BtpError::ReassemblerInvalidState`].
+//!   already mid-reassembly) → [`BtpError::ReassemblerInvalidState`]. We also
+//!   fold chip's idle-non-`Begin` case (chip `INVALID_BTP_HEADER_FLAGS`) into
+//!   this variant — a documented simplification; both kill the session.
 //! - `invalid_btp_sequence_number` (a fragment/ack whose own sequence byte
 //!   != `RxNext`) → [`BtpError::InvalidSequence`]. Chip checks this AFTER the
 //!   piggyback ack, so a valid ack in the same packet is applied before the
@@ -26,17 +32,22 @@
 //!   ack for a sequence number outside the outstanding TX interval) →
 //!   [`BtpError::InvalidAck`].
 //!
-//! # Fused receive+take divergence (documented, deliberate)
-//! Chip's engine holds a completed message in `kState_Complete` until the
-//! upper layer calls `TakeRxPacket` (which resets it to `kState_Idle`); a new
-//! `Begin` arriving before that take triggers `REASSEMBLER_INCORRECT_STATE`.
-//! Our [`BtpSession::on_indication`] fuses receive-and-take: the reassembled
-//! SDU is returned to the caller in the same call. We preserve chip's guard by
-//! keeping `rx_complete_unacked` set until the completing message is
-//! acknowledged (standalone ack here; piggyback ack in Task 6). A well-behaved
-//! BTP peer — and chip's own window mechanics — always interpose an
-//! acknowledgement between fully-received messages, so this only bites a peer
-//! that streams a second message with zero acknowledgement in between.
+//! # Fused receive+take (BLEEndPoint-stack semantics)
+//! Chip's *engine* holds a completed message in `kState_Complete` until the
+//! upper layer calls `TakeRxPacket`, which resets it to `kState_Idle`
+//! (`BtpEngine.cpp:395-397`). In chip's *real* stack the take is synchronous:
+//! `BLEEndPoint::HandleCharacteristicReceived` calls `TakeRxPacket` in the same
+//! turn it observes `kState_Complete` (`BLEEndPoint.cpp:1278`), so a fresh
+//! `Begin` for the next message is legal immediately after a completed one —
+//! BTP flow control is fragment-based, so a peer may send up to `window`
+//! fragments (hence two back-to-back single-fragment messages) before any ack.
+//! Our [`BtpSession::on_indication`] fuses receive-and-take: it returns the
+//! reassembled SDU and resets reassembly to idle in the same call, matching the
+//! stack. A `Begin` arriving *mid-reassembly* (before the `End`) is still an
+//! error. The `handle_characteristic_received_incorrect_sequence` vector
+//! documents the engine-ISOLATION semantics (chip's unit test never calls
+//! `TakeRxPacket`), which do not apply to a fused receive+take; its test is
+//! rewritten to exercise the mid-reassembly `Begin` that IS reachable here.
 
 use std::time::{Duration, Instant};
 
@@ -85,7 +96,6 @@ pub struct BtpSession {
     rx_next_seq: u8,
     rx_buf: Vec<u8>,
     rx_expected_len: Option<u16>,
-    rx_complete_unacked: bool,
     unacked_rx: Option<u8>,
     ack_due_at: Option<Instant>,
 
@@ -120,7 +130,6 @@ impl BtpSession {
                 rx_next_seq: 1,
                 rx_buf: Vec::new(),
                 rx_expected_len: None,
-                rx_complete_unacked: false,
                 unacked_rx: Some(0),
                 ack_due_at: Some(now + ACK_SEND_TIMEOUT),
                 tx_next_seq: 0,
@@ -137,7 +146,6 @@ impl BtpSession {
                 rx_next_seq: 0,
                 rx_buf: Vec::new(),
                 rx_expected_len: None,
-                rx_complete_unacked: false,
                 unacked_rx: None,
                 ack_due_at: None,
                 tx_next_seq: 1,
@@ -198,7 +206,16 @@ impl BtpSession {
 
         let is_data = flags & (FLAG_START | FLAG_CONTINUE | FLAG_END) != 0;
         if !is_data {
-            // Pure standalone ack: no payload, no reassembly, no window debit.
+            // Pure standalone ack. Chip still debits the local receive window on
+            // every accepted characteristic (`BLEEndPoint.cpp:1198`) and, having
+            // advanced `RxNext` past the ack's own sequence number, now owes an
+            // ack-of-ack (`HasUnackedData` becomes true — chip `BtpEngine.cpp`
+            // GetAndRecordRxAckSeqNum / HandleCharacteristicReceived). Mirror
+            // that: debit the window, record this seq as owed, arm the send-ack
+            // timer.
+            self.local_window = self.local_window.saturating_sub(1);
+            self.unacked_rx = Some(seq);
+            self.arm_ack_timer(now);
             return Ok(None);
         }
 
@@ -217,12 +234,11 @@ impl BtpSession {
                 return Err(BtpError::ReassemblyOverflow);
             }
             self.rx_buf.extend_from_slice(payload);
-        } else if self.rx_complete_unacked {
-            // A completed message still awaits acknowledgement (chip's
-            // kState_Complete guard). No new fragment may start.
-            return Err(BtpError::ReassemblerInvalidState);
         } else {
-            // Idle: only a Begin fragment may start a new message.
+            // Idle: only a Begin fragment may start a new message. A completed
+            // message was already taken (fused receive+take resets to idle in
+            // the same call it returned the SDU), so a fresh Begin here is legal
+            // — no completed-but-unacked guard.
             if !begin {
                 return Err(BtpError::ReassemblerInvalidState);
             }
@@ -254,7 +270,10 @@ impl BtpSession {
             return Err(BtpError::ReassemblerInvalidState);
         }
         self.rx_buf.truncate(expected);
-        self.rx_complete_unacked = true;
+        // Fused receive+take: hand the SDU to the caller and reset reassembly to
+        // idle in the same call (chip `BLEEndPoint` TakeRxPacket →
+        // `BtpEngine.cpp:395-397` kState_Complete → kState_Idle). `rx_expected_len`
+        // was already cleared by `.take()` above; `mem::take` empties `rx_buf`.
         Ok(Some(std::mem::take(&mut self.rx_buf)))
     }
 
@@ -350,13 +369,26 @@ impl BtpSession {
             if now >= due {
                 self.ack_due_at = None;
                 if let Some(ack_num) = self.unacked_rx {
-                    // Standalone ack: 08 | ack_num | our-own-tx-seq. The ack
-                    // consumes a TX sequence number (chip GetAndIncrementNextTxSeqNum).
-                    let packet = vec![FLAG_ACK, ack_num, self.tx_next_seq];
+                    // Standalone ack: 08 | ack_num | our-own-tx-seq.
+                    let seq = self.tx_next_seq;
+                    let packet = vec![FLAG_ACK, ack_num, seq];
+                    // Full chip GetAndIncrementNextTxSeqNum (BtpEngine.cpp:107-125):
+                    // the standalone ack is itself an outbound fragment that
+                    // becomes outstanding-unacknowledged. Register it so (a) it is
+                    // subject to the 15 s ack-timeout and (b) a valid inbound ack
+                    // for `seq` passes IsValidAck instead of hitting
+                    // expecting_ack==false. DoSendStandAloneAck then starts the
+                    // ack-received timer if it is not already running.
+                    if !self.expecting_ack {
+                        self.expecting_ack = true;
+                        self.tx_oldest_unacked = seq;
+                        self.tx_unacked_since = Some(now);
+                    }
+                    self.tx_newest_unacked = seq;
                     self.tx_next_seq = self.tx_next_seq.wrapping_add(1);
                     self.unacked_rx = None;
-                    self.rx_complete_unacked = false;
-                    // Acknowledging frees the local receive window again.
+                    // Acknowledging frees the local receive window again
+                    // (chip DoSendStandAloneAck resets mLocalReceiveWindowSize).
                     self.local_window = self.local_window_max;
                     return Ok(Some(packet));
                 }
@@ -433,19 +465,56 @@ mod tests {
     }
 
     // Vector: handle_characteristic_received_incorrect_sequence
-    // chip reassembler_incorrect_state: second Begin|End arrives while the
-    // first completed message is still unacknowledged.
+    // DIVERGENCE: the vector encodes chip's engine-ISOLATION semantics (its unit
+    // test never calls TakeRxPacket, so a second Begin after a completed message
+    // errors). Our on_indication fuses receive+take (BLEEndPoint-stack
+    // semantics): a completed message is taken and reassembly reset in the same
+    // call, so a fresh Begin after completion is LEGAL (see
+    // `begin_after_complete_accepted_under_fused_take`). We instead exercise the
+    // reassembler_incorrect_state that IS reachable in the fused model — a Begin
+    // arriving MID-reassembly (before the End) — against the same error.
     #[test]
     fn handle_characteristic_received_incorrect_sequence() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Begin, seq 1, msgLen 3, one payload byte -> reassembly in progress.
+        assert_eq!(s.on_indication(&hex("01010300fd"), t0).unwrap(), None);
+        // A second Begin (seq 2) while mid-reassembly is illegal.
+        assert_eq!(
+            s.on_indication(&hex("05020100ff"), t0),
+            Err(BtpError::ReassemblerInvalidState)
+        );
+    }
+
+    // Fused receive+take: two back-to-back single-fragment messages with NO ack
+    // between them are legal (window permitting). The vector's engine-isolation
+    // scenario that used to error is now the accepted path.
+    #[test]
+    fn begin_after_complete_accepted_under_fused_take() {
         let t0 = Instant::now();
         let mut s = central(t0);
         assert_eq!(
             s.on_indication(&hex("05010100ff"), t0).unwrap(),
             Some(hex("ff"))
         );
+        // Next message's Begin arrives immediately, no interposed ack.
         assert_eq!(
-            s.on_indication(&hex("05020100ff"), t0),
-            Err(BtpError::ReassemblerInvalidState)
+            s.on_indication(&hex("05020100ee"), t0).unwrap(),
+            Some(hex("ee"))
+        );
+    }
+
+    // A Continue|End (flags 0x06) fragment completes an in-progress message.
+    #[test]
+    fn continue_end_flag_completes_reassembly() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Begin, seq 1, msgLen 3, payload "fd".
+        assert_eq!(s.on_indication(&hex("01010300fd"), t0).unwrap(), None);
+        // Continue|End (0x06), seq 2, payload "feff" -> total 3 bytes, complete.
+        assert_eq!(
+            s.on_indication(&hex("0602feff"), t0).unwrap(),
+            Some(hex("fdfeff"))
         );
     }
 
@@ -482,6 +551,11 @@ mod tests {
                 got: 2
             })
         );
+        // The ack byte (0x00) was VALID and applied BEFORE the seq check failed:
+        // 0 != newest(1), so oldest advances to 1 and we still expect the ack
+        // for seq 1 (vector `expecting_ack_after: 1`).
+        assert!(s.expecting_ack, "ack 0 applied but still awaiting seq 1");
+        assert_eq!(s.tx_oldest_unacked, 1, "oldest advanced past acked seq 0");
     }
 
     // Vector: handle_characteristic_received_sequence_wraparound_invalid_ack
@@ -563,6 +637,44 @@ mod tests {
         assert_eq!(pkt, vec![0x08, 0x00, 0x00]);
     }
 
+    // Regression (T5 review, IMPORTANT): a standalone ack we emit registers
+    // itself as an outstanding TX fragment (full GetAndIncrementNextTxSeqNum), so
+    // (a) a valid inbound ack for that seq is accepted rather than hitting
+    // expecting_ack==false -> InvalidAck, and (b) it is subject to the 15 s
+    // ack-timeout.
+    #[test]
+    fn emitted_standalone_ack_is_registered_as_outstanding_tx() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // Emit the seq-0 standalone ack; it consumes tx seq 0.
+        assert_eq!(
+            s.handle_timeout(t0 + ACK_SEND_TIMEOUT).unwrap(),
+            Some(hex("080000"))
+        );
+        assert!(s.expecting_ack, "emitted ack must be outstanding");
+        assert_eq!(s.tx_oldest_unacked, 0);
+        assert_eq!(s.tx_newest_unacked, 0);
+        // It is now subject to the 15 s ack-timeout.
+        assert_eq!(s.poll_timeout(), Some(t0 + ACK_SEND_TIMEOUT + ACK_TIMEOUT));
+        // A valid inbound ack for tx seq 0 (packet 08 00 01: ack=0, own seq=1)
+        // must be ACCEPTED (not InvalidAck) and clear the outstanding fragment.
+        assert_eq!(s.on_indication(&hex("080001"), t0).unwrap(), None);
+        assert!(!s.expecting_ack, "inbound ack for the emitted seq accepted");
+    }
+
+    // An unacked emitted standalone ack times out the session after 15 s.
+    #[test]
+    fn emitted_standalone_ack_times_out_unacked() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        let emit_at = t0 + ACK_SEND_TIMEOUT;
+        assert_eq!(s.handle_timeout(emit_at).unwrap(), Some(hex("080000")));
+        assert_eq!(
+            s.handle_timeout(emit_at + ACK_TIMEOUT),
+            Err(BtpError::AckTimedOut)
+        );
+    }
+
     #[test]
     fn window_exhaustion_forces_immediate_ack() {
         // window 2: handshake debit leaves 1 free slot; the next data fragment
@@ -579,17 +691,15 @@ mod tests {
         let t0 = Instant::now();
         let mut s = central(t0);
         // Central RxNext starts at 1. Drive single-fragment messages seq
-        // 1,2,...,255,0 (256 messages), acknowledging between each so the
-        // completed-unacked guard clears. The seq 0 message (RxNext wrapped
+        // 1,2,...,255,0 (256 messages) back-to-back with NO interposed ack —
+        // fused receive+take resets reassembly to idle after each, so there is
+        // no completed-unacked guard to clear. The seq 0 message (RxNext wrapped
         // 255 -> 0) must be accepted.
         for i in 0u16..256 {
             let seq = ((1 + i) & 0xff) as u8;
             let pkt = format!("05{seq:02x}0100{seq:02x}");
             let out = s.on_indication(&hex(&pkt), t0).unwrap();
             assert_eq!(out, Some(vec![seq]), "message seq {seq} should complete");
-            // Standalone-ack to clear the completed-unacked guard.
-            let due = s.poll_timeout().unwrap();
-            let _ = s.handle_timeout(due).unwrap().unwrap();
         }
     }
 
