@@ -1,9 +1,31 @@
-//! Sans-IO BTP session engine — RX reassembly + acknowledgement generation.
+//! Sans-IO BTP session engine — RX reassembly + acknowledgement generation and
+//! TX segmentation + flow control.
 //!
 //! Byte-grounded against connectedhomeip `src/ble/BtpEngine.cpp`
-//! (`HandleCharacteristicReceived`, `HandleAckReceived`, `IsValidAck`,
-//! `EncodeStandAloneAck`) and `BLEEndPoint.cpp` timer semantics. Vectors:
-//! `test-vectors/btp/segments_rx.json` + `test-vectors/btp/standalone_ack.json`.
+//! (`HandleCharacteristicReceived`, `HandleCharacteristicSend`,
+//! `GetAndIncrementNextTxSeqNum`, `GetAndRecordRxAckSeqNum`, `HandleAckReceived`,
+//! `IsValidAck`, `EncodeStandAloneAck`) and `BLEEndPoint.cpp` send-path /
+//! window / timer semantics (`DriveSending`, `SendNextMessage`,
+//! `ContinueMessageSend`, `PrepareNextFragment`, `AdjustRemoteReceiveWindow`).
+//! Vectors: `test-vectors/btp/segments_rx.json`,
+//! `test-vectors/btp/segments_tx.json`, `test-vectors/btp/standalone_ack.json`.
+//!
+//! # TX segmentation and flow control
+//! [`BtpSession::queue_message`] hands one whole Matter SDU to the fragmenter;
+//! [`BtpSession::next_gatt_write`] emits the next data fragment (respecting the
+//! remote receive window and the one-GATT-op-in-flight rule) and
+//! [`BtpSession::gatt_write_completed`] releases the in-flight latch. This
+//! mirrors chip's `DriveSending`: a fragment is withheld while a GATT write is
+//! outstanding, while the remote window is 0, or while it is 1 and there is no
+//! pending acknowledgement to piggyback (chip
+//! `BTP_WINDOW_NO_ACK_SEND_THRESHOLD`). Each departing data fragment debits the
+//! remote window, consumes a TX sequence number, and (if not already awaiting
+//! one) arms the 15 s ack-timeout — the exact registration a standalone ack
+//! performs. A departing fragment piggybacks any pending receive ack (chip
+//! `PrepareNextFragment` → `GetAndRecordRxAckSeqNum`): the `0x08` flag and ack
+//! byte are added, the pending-ack state is cleared, and the local receive
+//! window is reset to its maximum. An inbound ack credits the remote window per
+//! chip `AdjustRemoteReceiveWindow`, re-opening a window that had closed.
 //!
 //! # Sans-IO discipline
 //! [`BtpSession::on_indication`] NEVER returns outbound bytes. When a received
@@ -64,6 +86,10 @@ pub const ACK_TIMEOUT: Duration = Duration::from_secs(15);
 /// outbound to piggyback on), an acknowledgement is sent immediately
 /// (chip `BLE_CONFIG_IMMEDIATE_ACK_WINDOW_THRESHOLD`).
 pub const IMMEDIATE_ACK_THRESHOLD: u8 = 1;
+/// Remote-window level at or below which a data fragment is withheld unless the
+/// same fragment also carries a piggyback acknowledgement (which re-opens the
+/// remote's window). Chip `BTP_WINDOW_NO_ACK_SEND_THRESHOLD`.
+pub const WINDOW_NO_ACK_SEND_THRESHOLD: u8 = 1;
 /// Upper bound on a single reassembled BTP SDU (one chip pbuf).
 pub const RX_REASSEMBLY_CAP: usize = 2048;
 
@@ -99,13 +125,33 @@ pub struct BtpSession {
     unacked_rx: Option<u8>,
     ack_due_at: Option<Instant>,
 
-    // TX outstanding-acknowledgement tracking (Task 6 extends the send path;
-    // the RX half needs these to validate inbound acks).
+    // TX outstanding-acknowledgement tracking (shared by the send path and the
+    // inbound-ack validator).
     tx_next_seq: u8,
     tx_oldest_unacked: u8,
     tx_newest_unacked: u8,
     expecting_ack: bool,
     tx_unacked_since: Option<Instant>,
+
+    // TX flow control and segmentation.
+    /// Free slots in the remote peer's receive window: how many more data
+    /// fragments we may put on the wire before we must wait for an ack. Debited
+    /// per departing fragment, credited by inbound acks (chip
+    /// `mRemoteReceiveWindowSize`). Both directions share the negotiated window,
+    /// so `local_window_max` is also the remote window's maximum.
+    remote_window: u8,
+    /// The whole SDU currently being fragmented, or `None` when the fragmenter
+    /// is idle. `Some` with `tx_sent < len` means fragments remain unsent
+    /// (chip `kState_InProgress`); it is cleared the moment the final fragment
+    /// departs (fused with chip's `TakeTxPacket`).
+    tx_pending: Option<Vec<u8>>,
+    /// Payload bytes of `tx_pending` already emitted (chip advances `mTxBuf` /
+    /// shrinks `mTxLength`; we track the forward offset instead).
+    tx_sent: usize,
+    /// A GATT write we issued is awaiting its completion callback; no further
+    /// fragment may depart until [`BtpSession::gatt_write_completed`]
+    /// (chip `ConnectionStateFlag::kGattOperationInFlight`).
+    gatt_in_flight: bool,
 }
 
 impl BtpSession {
@@ -137,6 +183,10 @@ impl BtpSession {
                 tx_newest_unacked: 0,
                 expecting_ack: false,
                 tx_unacked_since: None,
+                remote_window: window,
+                tx_pending: None,
+                tx_sent: 0,
+                gatt_in_flight: false,
             },
             Role::Peripheral => Self {
                 role,
@@ -153,6 +203,10 @@ impl BtpSession {
                 tx_newest_unacked: 0,
                 expecting_ack: true,
                 tx_unacked_since: Some(now),
+                remote_window: window,
+                tx_pending: None,
+                tx_sent: 0,
+                gatt_in_flight: false,
             },
         }
     }
@@ -325,7 +379,170 @@ impl BtpSession {
         } else {
             self.tx_oldest_unacked = ack.wrapping_add(1);
         }
+        // Re-open the remote peer's receive window by the sequence numbers it
+        // just acknowledged (chip `AdjustRemoteReceiveWindow` /
+        // `BLEEndPoint.cpp:1232`), letting `next_gatt_write` resume if it was
+        // paused on a closed window. (On an error path later in the same
+        // `on_indication` the session is torn down, so the credit is moot.)
+        self.remote_window = self.adjust_remote_window(ack);
         Ok(())
+    }
+
+    /// Recompute the remote receive-window credit after acknowledgement `ack`
+    /// (chip `AdjustRemoteReceiveWindow`): the window boundary sits at
+    /// `ack + max_window`; the credit is the distance from the newest fragment
+    /// we have sent to that boundary, with the same wrap correction chip applies
+    /// when the boundary would exceed 255 but the newest sent seq has already
+    /// wrapped. `local_window_max` is the negotiated window, shared by both
+    /// directions.
+    fn adjust_remote_window(&self, ack: u8) -> u8 {
+        let boundary = u16::from(ack) + u16::from(self.local_window_max);
+        let newest = u16::from(self.tx_newest_unacked);
+        let credit = if boundary > u16::from(u8::MAX) && newest < u16::from(ack) {
+            boundary.wrapping_sub(newest + u16::from(u8::MAX))
+        } else {
+            boundary.wrapping_sub(newest)
+        };
+        // Low 8 bits — chip casts the u16 boundary difference back to a
+        // SequenceNumber_t (uint8, mod 256).
+        (credit & 0xff) as u8
+    }
+
+    /// Register a just-emitted outbound sequence number as outstanding-unacked
+    /// (chip `GetAndIncrementNextTxSeqNum`): begin expecting an ack (anchoring
+    /// the 15 s ack-timeout at `now`) if we were not already, advance the
+    /// newest-unacked marker, and increment the next-TX counter (wrapping u8).
+    /// Shared by the standalone-ack emitter and the data-fragment send path so
+    /// both register identically.
+    fn register_outbound_seq(&mut self, seq: u8, now: Instant) {
+        if !self.expecting_ack {
+            self.expecting_ack = true;
+            self.tx_oldest_unacked = seq;
+            self.tx_unacked_since = Some(now);
+        }
+        self.tx_newest_unacked = seq;
+        self.tx_next_seq = self.tx_next_seq.wrapping_add(1);
+    }
+
+    /// Queue one whole Matter message SDU for segmentation.
+    ///
+    /// # Errors
+    /// - [`BtpError::MessageInFlight`]: a previously queued SDU still has unsent
+    ///   fragments (chip fragments one message at a time; a new whole message
+    ///   waits until the prior one is fully on the wire).
+    /// - [`BtpError::ReassemblyOverflow`]: `sdu` is longer than the 16-bit BTP
+    ///   message-length field can encode (`u16::MAX`).
+    pub fn queue_message(&mut self, sdu: &[u8]) -> Result<(), BtpError> {
+        if self.tx_pending.is_some() {
+            return Err(BtpError::MessageInFlight);
+        }
+        if sdu.len() > usize::from(u16::MAX) {
+            return Err(BtpError::ReassemblyOverflow);
+        }
+        self.tx_pending = Some(sdu.to_vec());
+        self.tx_sent = 0;
+        Ok(())
+    }
+
+    /// The next GATT write (one BTP data fragment) to put on the wire, or `None`
+    /// when nothing may be sent right now.
+    ///
+    /// Returns `None` while a GATT write is still in flight (until
+    /// [`Self::gatt_write_completed`]), while the remote receive window is 0,
+    /// while it is at [`WINDOW_NO_ACK_SEND_THRESHOLD`] with no pending ack to
+    /// piggyback, or when the fragmenter is idle (nothing queued). Otherwise it
+    /// builds the next fragment: `flags [ack] seq [msgLen_LE] payload`, total
+    /// length ≤ the negotiated segment size. A departing fragment debits the
+    /// remote window, registers its sequence for the 15 s ack-timeout, latches
+    /// the one-op-in-flight flag, and — if a receive ack is pending — piggybacks
+    /// it (OR-ing the `0x08` flag, inserting the ack byte, clearing the pending
+    /// ack, and resetting the local receive window to its maximum).
+    #[must_use]
+    pub fn next_gatt_write(&mut self, now: Instant) -> Option<Vec<u8>> {
+        if self.gatt_in_flight {
+            return None;
+        }
+        let msg = self.tx_pending.as_ref()?;
+        let msg_len = msg.len();
+
+        // Window gate — chip `DriveSending` (`BLEEndPoint.cpp:898`).
+        let have_ack = self.unacked_rx.is_some();
+        if self.remote_window == 0 {
+            return None;
+        }
+        if self.remote_window <= WINDOW_NO_ACK_SEND_THRESHOLD && !have_ack {
+            return None;
+        }
+
+        let first = self.tx_sent == 0;
+        let send_ack = have_ack;
+        // Header cursor size = flags + [ack] + seq + [msgLen] (chip `cursor`).
+        let header_len = 1 + usize::from(send_ack) + 1 + if first { 2 } else { 0 };
+        let segment = self.segment_size as usize;
+        let max_payload = segment.saturating_sub(header_len);
+        let remaining = msg_len - self.tx_sent;
+        // chip: `(mTxLength + cursor) <= mTxFragmentSize` ⇒ this fragment ends
+        // the message and carries all remaining bytes; otherwise it fills the
+        // segment.
+        let (payload_len, end) = if remaining + header_len <= segment {
+            (remaining, true)
+        } else {
+            (max_payload, false)
+        };
+        let payload: Vec<u8> = msg[self.tx_sent..self.tx_sent + payload_len].to_vec();
+
+        let seq = self.tx_next_seq;
+        let mut flags = if first { FLAG_START } else { FLAG_CONTINUE };
+        if end {
+            flags |= FLAG_END;
+        }
+        if send_ack {
+            flags |= FLAG_ACK;
+        }
+
+        let mut packet = Vec::with_capacity(header_len + payload_len);
+        packet.push(flags);
+        if send_ack {
+            // Piggyback the pending receive ack (chip `PrepareNextFragment` +
+            // `GetAndRecordRxAckSeqNum`): emit the newest unacked receive seq,
+            // clear the pending-ack state, and reset the local receive window.
+            let ack = self.unacked_rx.take().unwrap_or(0);
+            packet.push(ack);
+            self.ack_due_at = None;
+            self.local_window = self.local_window_max;
+        }
+        packet.push(seq);
+        if first {
+            // msgLen u16 LE. `queue_message` bounds `msg_len` to `u16::MAX`, so
+            // the conversion never saturates in practice.
+            let len = u16::try_from(msg_len).unwrap_or(u16::MAX);
+            packet.extend_from_slice(&len.to_le_bytes());
+        }
+        packet.extend_from_slice(&payload);
+
+        // Post-send bookkeeping (chip `GetAndIncrementNextTxSeqNum` +
+        // `SendCharacteristic` window debit + `SendWrite` GATT latch).
+        self.register_outbound_seq(seq, now);
+        self.remote_window = self.remote_window.saturating_sub(1);
+        self.gatt_in_flight = true;
+        if end {
+            // Final fragment departed: the fragmenter is idle again (fused with
+            // chip `TakeTxPacket`), so a new message may be queued.
+            self.tx_pending = None;
+            self.tx_sent = 0;
+        } else {
+            self.tx_sent += payload_len;
+        }
+        Some(packet)
+    }
+
+    /// Signal that the GATT write returned by [`Self::next_gatt_write`] has
+    /// completed, releasing the one-op-in-flight latch so the next fragment may
+    /// depart (chip `HandleGattSendConfirmation` clears
+    /// `kGattOperationInFlight`). Completion is time-independent in this engine;
+    /// `_now` is accepted for signature symmetry with the other send verbs.
+    pub fn gatt_write_completed(&mut self, _now: Instant) {
+        self.gatt_in_flight = false;
     }
 
     /// Mark that an acknowledgement is due. Immediately when the local receive
@@ -374,18 +591,13 @@ impl BtpSession {
                     let packet = vec![FLAG_ACK, ack_num, seq];
                     // Full chip GetAndIncrementNextTxSeqNum (BtpEngine.cpp:107-125):
                     // the standalone ack is itself an outbound fragment that
-                    // becomes outstanding-unacknowledged. Register it so (a) it is
-                    // subject to the 15 s ack-timeout and (b) a valid inbound ack
-                    // for `seq` passes IsValidAck instead of hitting
-                    // expecting_ack==false. DoSendStandAloneAck then starts the
-                    // ack-received timer if it is not already running.
-                    if !self.expecting_ack {
-                        self.expecting_ack = true;
-                        self.tx_oldest_unacked = seq;
-                        self.tx_unacked_since = Some(now);
-                    }
-                    self.tx_newest_unacked = seq;
-                    self.tx_next_seq = self.tx_next_seq.wrapping_add(1);
+                    // becomes outstanding-unacknowledged. Register it (identically
+                    // to a data fragment) so (a) it is subject to the 15 s
+                    // ack-timeout and (b) a valid inbound ack for `seq` passes
+                    // IsValidAck instead of hitting expecting_ack==false.
+                    // DoSendStandAloneAck then starts the ack-received timer if it
+                    // is not already running.
+                    self.register_outbound_seq(seq, now);
                     self.unacked_rx = None;
                     // Acknowledging frees the local receive window again
                     // (chip DoSendStandAloneAck resets mLocalReceiveWindowSize).
@@ -729,5 +941,210 @@ mod tests {
             s.handle_timeout(t0 + ACK_TIMEOUT),
             Err(BtpError::AckTimedOut)
         );
+    }
+
+    // ---- segments_tx.json (TX segmentation) ---------------------------------
+
+    /// A Central just after its post-handshake ack has been flushed: TX seq 0,
+    /// no receive ack pending, remote window open. This matches the bare-engine
+    /// precondition of the `segments_tx.json` vectors (chip
+    /// `Init(nullptr, false)`, `mTxNextSeqNum` starts at 0, nothing to ack).
+    fn tx_central(t0: Instant) -> BtpSession {
+        let mut s = central(t0);
+        s.unacked_rx = None;
+        s.ack_due_at = None;
+        s
+    }
+
+    // The 40-byte sequential SDU 0x00..0x27 shared by the multi-fragment vectors.
+    fn sdu40() -> Vec<u8> {
+        hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252627")
+    }
+
+    // Vector: one_byte_sdu_frag20_no_ack -> 05 00 0100 78
+    #[test]
+    fn one_byte_sdu_frag20_no_ack() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.queue_message(&hex("78")).unwrap();
+        assert_eq!(s.next_gatt_write(t0), Some(hex("0500010078")));
+    }
+
+    // Vector: one_byte_sdu_frag20_piggyback_ack1 -> 0d 01 00 0100 78
+    #[test]
+    fn one_byte_sdu_frag20_piggyback_ack1() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        // Feed one inbound single-fragment message (seq 1 = Central RxNext) so a
+        // receive ack (ack_num 1) is pending to piggyback.
+        assert_eq!(
+            s.on_indication(&hex("0501010042"), t0).unwrap(),
+            Some(hex("42"))
+        );
+        s.queue_message(&hex("78")).unwrap();
+        // flags 0d = Start|Ack|End, ack 01, seq 00, msgLen 0001 LE, payload 78.
+        assert_eq!(s.next_gatt_write(t0), Some(hex("0d0100010078")));
+    }
+
+    // Vector: forty_byte_sdu_frag20 -> three fragments, no ack.
+    #[test]
+    fn forty_byte_sdu_frag20() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.queue_message(&sdu40()).unwrap();
+        assert_eq!(
+            s.next_gatt_write(t0),
+            Some(hex("01002800000102030405060708090a0b0c0d0e0f"))
+        );
+        s.gatt_write_completed(t0);
+        assert_eq!(
+            s.next_gatt_write(t0),
+            Some(hex("0201101112131415161718191a1b1c1d1e1f2021"))
+        );
+        s.gatt_write_completed(t0);
+        // Final fragment flags 0x06 = Continue|End (chip ORs End onto the
+        // Continue base — BtpEngine.cpp:499,514 — it is NOT bare 0x04).
+        assert_eq!(s.next_gatt_write(t0), Some(hex("0602222324252627")));
+    }
+
+    // Vector: forty_byte_sdu_frag20_midstream_ack -> ack piggybacked on frag 2.
+    #[test]
+    fn forty_byte_sdu_frag20_midstream_ack() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.queue_message(&sdu40()).unwrap();
+        // Fragment 0: no ack pending yet (identical to the no-ack vector).
+        assert_eq!(
+            s.next_gatt_write(t0),
+            Some(hex("01002800000102030405060708090a0b0c0d0e0f"))
+        );
+        s.gatt_write_completed(t0);
+        // A pending rx ack (ack_num 2) becomes available before fragment 2: feed
+        // two inbound single-fragment messages (seq 1 then seq 2), legal
+        // back-to-back under fused receive+take.
+        assert_eq!(
+            s.on_indication(&hex("0501010011"), t0).unwrap(),
+            Some(hex("11"))
+        );
+        assert_eq!(
+            s.on_indication(&hex("0502010022"), t0).unwrap(),
+            Some(hex("22"))
+        );
+        // Fragment 1: flags 0a = Continue|Ack, ack 02, seq 01, payload SDU[16:33]
+        // (17 bytes — the ack byte grows the mid-fragment header 2->3).
+        assert_eq!(
+            s.next_gatt_write(t0),
+            Some(hex("0a0201101112131415161718191a1b1c1d1e1f20"))
+        );
+        s.gatt_write_completed(t0);
+        // Fragment 2: flags 0x06 = Continue|End, seq 02, payload SDU[33:40].
+        assert_eq!(s.next_gatt_write(t0), Some(hex("060221222324252627")));
+    }
+
+    // ---- TX behaviour -------------------------------------------------------
+
+    // One GATT op in flight: no further fragment departs until completion.
+    #[test]
+    fn tx_one_gatt_op_in_flight_blocks_next_fragment() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.queue_message(&sdu40()).unwrap();
+        assert!(s.next_gatt_write(t0).is_some(), "fragment 0 departs");
+        assert_eq!(
+            s.next_gatt_write(t0),
+            None,
+            "blocked while the write is in flight"
+        );
+        s.gatt_write_completed(t0);
+        assert!(
+            s.next_gatt_write(t0).is_some(),
+            "fragment 1 departs after ack"
+        );
+    }
+
+    // Remote window 0: nothing may be sent.
+    #[test]
+    fn tx_remote_window_zero_blocks() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.remote_window = 0;
+        s.queue_message(&hex("78")).unwrap();
+        assert_eq!(s.next_gatt_write(t0), None);
+    }
+
+    // Remote window 1 with no pending ack: withheld (keep one slot in reserve).
+    #[test]
+    fn tx_remote_window_one_without_ack_blocks() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.remote_window = 1;
+        s.queue_message(&hex("78")).unwrap();
+        assert_eq!(s.next_gatt_write(t0), None);
+    }
+
+    // Remote window 1 WITH a pending ack: sends (the piggyback re-opens the
+    // peer's window), consuming the last slot.
+    #[test]
+    fn tx_remote_window_one_with_pending_ack_sends() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        assert_eq!(
+            s.on_indication(&hex("0501010042"), t0).unwrap(),
+            Some(hex("42"))
+        );
+        s.remote_window = 1;
+        s.queue_message(&hex("78")).unwrap();
+        assert_eq!(s.next_gatt_write(t0), Some(hex("0d0100010078")));
+        assert_eq!(s.remote_window, 0, "the send consumed the last window slot");
+    }
+
+    // Queueing a new SDU while the prior one still has unsent fragments errors.
+    #[test]
+    fn tx_queue_while_fragments_unsent_is_message_in_flight() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.queue_message(&sdu40()).unwrap();
+        let _ = s.next_gatt_write(t0).unwrap(); // frag 0; frags 1,2 still unsent.
+        assert_eq!(s.queue_message(&hex("99")), Err(BtpError::MessageInFlight));
+    }
+
+    // A data fragment unacknowledged for 15 s kills the session (the ack-timeout
+    // is armed by the departing fragment, exactly as for a standalone ack).
+    #[test]
+    fn tx_data_fragment_ack_timeout_kills_session() {
+        let t0 = Instant::now();
+        let mut s = tx_central(t0);
+        s.queue_message(&hex("78")).unwrap();
+        let _ = s.next_gatt_write(t0).unwrap();
+        assert_eq!(s.poll_timeout(), Some(t0 + ACK_TIMEOUT));
+        assert_eq!(
+            s.handle_timeout(t0 + ACK_TIMEOUT),
+            Err(BtpError::AckTimedOut)
+        );
+    }
+
+    // An inbound ack credits the remote window (chip AdjustRemoteReceiveWindow)
+    // and disarms the 15 s deadline.
+    #[test]
+    fn tx_inbound_ack_credits_remote_window_and_disarms_deadline() {
+        let t0 = Instant::now();
+        let mut s = BtpSession::new(Role::Central, 20, 4, t0);
+        s.unacked_rx = None;
+        s.ack_due_at = None;
+        s.queue_message(&hex("78")).unwrap();
+        let _ = s.next_gatt_write(t0).unwrap(); // seq 0 departs; remote 4 -> 3.
+        assert_eq!(s.remote_window, 3);
+        s.gatt_write_completed(t0);
+        // Inbound ack for tx seq 0 (08 00 01: ack=0, own seq=1 == RxNext).
+        assert_eq!(s.on_indication(&hex("080001"), t0).unwrap(), None);
+        // AdjustRemoteReceiveWindow(ack=0, max=4, newest=0) = 4.
+        assert_eq!(
+            s.remote_window, 4,
+            "inbound ack re-opened the remote window"
+        );
+        assert!(!s.expecting_ack, "outstanding fragment acknowledged");
+        // The 15 s ack-timeout is gone; only the receive-ack timer remains (the
+        // inbound ack packet itself now owes an ack-of-ack).
+        assert_eq!(s.poll_timeout(), Some(t0 + ACK_SEND_TIMEOUT));
     }
 }

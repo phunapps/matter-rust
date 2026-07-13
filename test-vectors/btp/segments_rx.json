@@ -67,7 +67,7 @@
     "expect": {
       "error": "reassembler_incorrect_state"
     },
-    "note": "DISCREPANCY vs brief: brief implied error 'invalid_sequence'. Despite the chip test's own name (HandleCharacteristicReceivedIncorrectSequence), both packets carry valid/expected sequence numbers (0x01 then 0x02) -- chip's own inline comment at TestBtpEngine.cpp:461 says this fails 'due to engine state (unacked previous message), not sequence number.' The engine has already completed message #1 (RxState==Complete, unacked) when message #2's Begin|End packet (seq 0x02) arrives; HandleCharacteristicReceived rejects a new Begin fragment while RxState is not Idle, returning BLE_ERROR_REASSEMBLER_INCORRECT_STATE (chip source wins).",
+    "note": "This vector encodes chip BtpEngine-ISOLATION semantics (chip's unit test never calls TakeRxPacket, so a completed-but-untaken message rejects a fresh Begin). Our fused receive+take engine takes the SDU synchronously, so it reproduces the same reassembler_incorrect_state via a Begin arriving MID-reassembly instead (see session.rs module docs). DISCREPANCY vs brief: brief implied error 'invalid_sequence'. Despite the chip test's own name (HandleCharacteristicReceivedIncorrectSequence), both packets carry valid/expected sequence numbers (0x01 then 0x02) -- chip's own inline comment at TestBtpEngine.cpp:461 says this fails 'due to engine state (unacked previous message), not sequence number.' The engine has already completed message #1 (RxState==Complete, unacked) when message #2's Begin|End packet (seq 0x02) arrives; HandleCharacteristicReceived rejects a new Begin fragment while RxState is not Idle, returning BLE_ERROR_REASSEMBLER_INCORRECT_STATE (chip source wins).",
     "provisional": false
   },
   {
