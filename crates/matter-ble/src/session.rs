@@ -382,7 +382,11 @@ impl BtpSession {
         // Re-open the remote peer's receive window by the sequence numbers it
         // just acknowledged (chip `AdjustRemoteReceiveWindow` /
         // `BLEEndPoint.cpp:1232`), letting `next_gatt_write` resume if it was
-        // paused on a closed window. (On an error path later in the same
+        // paused on a closed window. This credit is also one of the two events
+        // that unblock a standalone ack whose emission `handle_timeout` deferred
+        // because the remote window was 0 (the other is `gatt_write_completed`):
+        // the deferred ack stays pending, so the caller's next `handle_timeout`
+        // after this credit emits it. (On an error path later in the same
         // `on_indication` the session is torn down, so the credit is moot.)
         self.remote_window = self.adjust_remote_window(ack);
         Ok(())
@@ -541,6 +545,12 @@ impl BtpSession {
     /// depart (chip `HandleGattSendConfirmation` clears
     /// `kGattOperationInFlight`). Completion is time-independent in this engine;
     /// `_now` is accepted for signature symmetry with the other send verbs.
+    ///
+    /// This is also one of the two events that unblock a standalone ack whose
+    /// emission [`Self::handle_timeout`] deferred because the GATT slot was busy
+    /// (the other is a remote-window credit from `receive_ack`): the
+    /// deferred ack stays pending with its send-ack deadline in the past, so the
+    /// caller's next [`Self::handle_timeout`] after this call emits it.
     pub fn gatt_write_completed(&mut self, _now: Instant) {
         self.gatt_in_flight = false;
     }
@@ -568,11 +578,31 @@ impl BtpSession {
     /// Returns `Ok(Some(packet))` with a standalone ack to send now, or
     /// `Ok(None)` when nothing is due.
     ///
+    /// # Standalone-ack flow control (chip `DriveSending` → `DoSendStandAloneAck`)
+    /// Chip does not emit a due standalone ack unconditionally: it routes it
+    /// through `DriveSending`, which withholds *any* send while the remote
+    /// receive window is 0 or a GATT operation is in flight
+    /// (`BLEEndPoint.cpp:898-921`), and `DoSendStandAloneAck → SendCharacteristic`
+    /// debits `mRemoteReceiveWindowSize` and latches the GATT slot like any other
+    /// characteristic write (`BLEEndPoint.cpp:570,883`). We mirror this: when the
+    /// send-ack timer is due but `gatt_in_flight` is set or `remote_window == 0`,
+    /// the ack is **deferred, not dropped** — `unacked_rx` and `ack_due_at` are
+    /// left untouched (the deadline is now in the past, so [`Self::poll_timeout`]
+    /// keeps reporting it due). The deferral is cleared by whichever comes first:
+    /// a queued data fragment piggybacking it in [`Self::next_gatt_write`], or the
+    /// caller's next `handle_timeout` after the GATT slot frees
+    /// ([`Self::gatt_write_completed`]) or the remote window is credited
+    /// (`receive_ack`) — the two natural unblock events. The 15 s
+    /// ack-timeout check runs *before* this gate, so a blocked standalone ack
+    /// never starves the session-death deadline.
+    ///
     /// # Errors
     /// [`BtpError::AckTimedOut`]: an outstanding TX fragment went 15 s without
     /// acknowledgement; the session is dead and the caller must close it.
     pub fn handle_timeout(&mut self, now: Instant) -> Result<Option<Vec<u8>>, BtpError> {
         // A TX fragment that has gone unacknowledged for 15 s kills the session.
+        // Checked FIRST so a standalone ack blocked on flow control (below) can
+        // never starve this deadline.
         if self.expecting_ack {
             if let Some(since) = self.tx_unacked_since {
                 if now >= since + ACK_TIMEOUT {
@@ -584,8 +614,19 @@ impl BtpSession {
         // Send-ack timer: emit a standalone ack for the newest received seq.
         if let Some(due) = self.ack_due_at {
             if now >= due {
-                self.ack_due_at = None;
                 if let Some(ack_num) = self.unacked_rx {
+                    // Flow-control gate (chip `DriveSending`): a standalone ack is
+                    // a C1 characteristic write like any other, so it may not go
+                    // out while a GATT op is in flight or the remote window is
+                    // closed. Defer WITHOUT clearing `ack_due_at`/`unacked_rx`:
+                    // the deadline stays in the past so `poll_timeout` remains due,
+                    // and the next `handle_timeout` after `gatt_write_completed` or
+                    // a `receive_ack` window credit (or a piggyback in
+                    // `next_gatt_write`) delivers it.
+                    if self.gatt_in_flight || self.remote_window == 0 {
+                        return Ok(None);
+                    }
+                    self.ack_due_at = None;
                     // Standalone ack: 08 | ack_num | our-own-tx-seq.
                     let seq = self.tx_next_seq;
                     let packet = vec![FLAG_ACK, ack_num, seq];
@@ -599,11 +640,18 @@ impl BtpSession {
                     // is not already running.
                     self.register_outbound_seq(seq, now);
                     self.unacked_rx = None;
+                    // The ack write debits the remote receive window and occupies
+                    // the single GATT slot exactly like a data fragment (chip
+                    // `SendCharacteristic` window debit + `kStandAloneAckInFlight`).
+                    self.remote_window = self.remote_window.saturating_sub(1);
+                    self.gatt_in_flight = true;
                     // Acknowledging frees the local receive window again
                     // (chip DoSendStandAloneAck resets mLocalReceiveWindowSize).
                     self.local_window = self.local_window_max;
                     return Ok(Some(packet));
                 }
+                // Timer due but nothing to acknowledge: clear the spurious deadline.
+                self.ack_due_at = None;
             }
         }
         Ok(None)
@@ -1146,5 +1194,109 @@ mod tests {
         // The 15 s ack-timeout is gone; only the receive-ack timer remains (the
         // inbound ack packet itself now owes an ack-of-ack).
         assert_eq!(s.poll_timeout(), Some(t0 + ACK_SEND_TIMEOUT));
+    }
+
+    // ---- standalone-ack flow control (T6 review) ----------------------------
+
+    // Regression (T6 review, IMPORTANT): chip routes standalone acks through
+    // DriveSending -> DoSendStandAloneAck -> SendCharacteristic, gated on GATT-op
+    // in flight. A due send-ack timer with a GATT write outstanding must DEFER
+    // (emit nothing, leave the ack pending, keep the timer due), then deliver on
+    // the next handle_timeout once gatt_write_completed frees the slot.
+    #[test]
+    fn standalone_ack_deferred_while_gatt_in_flight_then_emitted() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // A GATT write is outstanding (e.g. a data fragment already on the wire).
+        s.gatt_in_flight = true;
+        let due = s.poll_timeout().unwrap(); // seq-0 send-ack deadline.
+                                             // Blocked: nothing emitted, the seq-0 ack stays pending, timer stays due.
+        assert_eq!(s.handle_timeout(due).unwrap(), None);
+        assert_eq!(s.unacked_rx, Some(0), "ack still pending");
+        assert_eq!(s.poll_timeout(), Some(due), "deadline unchanged, still due");
+        assert!(!s.expecting_ack, "nothing registered as outstanding TX");
+        // The write completes -> the natural unblock event -> next handle_timeout
+        // emits the identical standalone ack.
+        s.gatt_write_completed(due);
+        assert_eq!(s.handle_timeout(due).unwrap(), Some(hex("080000")));
+    }
+
+    // Same deferral when the remote receive window is closed; a window credit
+    // (chip AdjustRemoteReceiveWindow) is the other natural unblock event.
+    #[test]
+    fn standalone_ack_deferred_while_remote_window_zero_then_emitted_on_credit() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        s.remote_window = 0;
+        let due = s.poll_timeout().unwrap();
+        assert_eq!(
+            s.handle_timeout(due).unwrap(),
+            None,
+            "blocked: window closed"
+        );
+        assert_eq!(s.unacked_rx, Some(0), "ack still pending");
+        assert_eq!(s.poll_timeout(), Some(due), "deadline unchanged, still due");
+        // A window credit arrives; the next handle_timeout emits.
+        s.remote_window = 1;
+        assert_eq!(s.handle_timeout(due).unwrap(), Some(hex("080000")));
+        assert_eq!(
+            s.remote_window, 0,
+            "the emitted ack debited the credited slot"
+        );
+    }
+
+    // An emitted standalone ack is a characteristic write: it debits the remote
+    // window and latches the GATT slot (chip SendCharacteristic +
+    // kStandAloneAckInFlight), so a queued message cannot depart until the ack
+    // write completes.
+    #[test]
+    fn emitted_standalone_ack_debits_remote_window_and_latches_gatt() {
+        let t0 = Instant::now();
+        let mut s = central(t0); // window 6 -> remote_window 6, slot free.
+        let emit_at = t0 + ACK_SEND_TIMEOUT;
+        assert_eq!(s.handle_timeout(emit_at).unwrap(), Some(hex("080000")));
+        assert_eq!(
+            s.remote_window, 5,
+            "standalone ack debited the remote window"
+        );
+        assert!(
+            s.gatt_in_flight,
+            "standalone ack occupies the single GATT slot"
+        );
+        // The GATT slot is busy: a queued message is withheld until completion.
+        s.queue_message(&hex("78")).unwrap();
+        assert_eq!(
+            s.next_gatt_write(emit_at),
+            None,
+            "queued fragment withheld behind the in-flight ack write"
+        );
+        s.gatt_write_completed(emit_at);
+        assert!(
+            s.next_gatt_write(emit_at).is_some(),
+            "fragment departs once the ack write completes"
+        );
+    }
+
+    // The 15 s AckTimedOut check must fire even when standalone-ack emission is
+    // blocked on flow control — the timeout check runs before the send-ack gate
+    // and must not be starved by the blocked-emission early return.
+    #[test]
+    fn blocked_standalone_ack_does_not_starve_ack_timeout() {
+        let t0 = Instant::now();
+        let mut s = central(t0);
+        // A TX fragment is outstanding (15 s deadline live) AND a GATT op is in
+        // flight, so the due send-ack emission is blocked.
+        s.expecting_ack = true;
+        s.tx_unacked_since = Some(t0);
+        s.tx_oldest_unacked = 0;
+        s.tx_newest_unacked = 0;
+        s.tx_next_seq = 1;
+        s.gatt_in_flight = true;
+        // At 15 s both timers are due; the ack-timeout must win (checked first)
+        // despite the blocked standalone ack.
+        assert_eq!(
+            s.handle_timeout(t0 + ACK_TIMEOUT),
+            Err(BtpError::AckTimedOut)
+        );
     }
 }
