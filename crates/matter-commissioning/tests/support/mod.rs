@@ -2915,6 +2915,177 @@ pub async fn run_mock_device_dual(
     }
 }
 
+/// Dual-transport device twin that answers PASE and the first
+/// `service_pre_op_stages` pre-operational IM round-trips over `btp_dev`, then
+/// **goes silent** — it holds both endpoints open (so neither channel closes)
+/// but never sends another datagram.
+///
+/// This is the D11.3 coverage twin of [`run_mock_device_dual`]: it forces the
+/// controller's poll loop to hit its response deadline on a stalled BTP session
+/// (a `TransportProvides` dispatch that never gets a reply → the loop exits with
+/// `DriverError::Timeout`), and then keeps stalling so the *failure-exit rollback*
+/// (`ArmFailSafe(0)` over the same dead BTP session) also gets no reply. It never
+/// reaches the CASE phase, so `udp_dev`/`udp_peer` are unused past the signature;
+/// they are kept for parity with [`run_mock_device_dual`].
+///
+/// Because the tail never resolves, drive this under a `tokio::select!` against
+/// `commission_ble` (not `tokio::join!`): when `commission_ble` returns, the
+/// device future — and its borrowed endpoints — is dropped. Run the test under
+/// `#[tokio::test(start_paused = true)]` so the two 30 s response deadlines
+/// (loop + rollback) elapse in ~60 s of *virtual* time rather than wall time.
+///
+/// The PASE ping-pong is duplicated verbatim from [`run_mock_device_dual`] rather
+/// than shared, to keep this addition strictly non-invasive to the existing
+/// dual-transport harness.
+///
+/// # Errors
+///
+/// - [`DriverError::Io`] if a datagram recv/send fails.
+/// - [`DriverError::Crypto`] on a PASE step or secured-framing failure.
+///
+/// # Panics
+///
+/// Panics (via the `respond`/`build_*`/`parse_*` helpers) on any malformed
+/// controller message — acceptable in test-support code.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub async fn run_mock_device_dual_silent_after(
+    btp_dev: &InMemoryDatagram,
+    _udp_dev: &InMemoryDatagram,
+    btp_peer: std::net::SocketAddr,
+    _udp_peer: std::net::SocketAddr,
+    pki: &MockDevicePki,
+    pase_pin: u32,
+    pase_params: PasePbkdfParams,
+    pase_responder_session_id: u16,
+    service_pre_op_stages: usize,
+) -> Result<(), DriverError> {
+    const CTRL_PASE_SESSION_ID: u16 = 1;
+
+    let mut sessions = SessionManager::new();
+
+    // ── 1. PASE over btp_dev (device = verifier, unsecured, MRP off) ──────────
+    let mut verifier = PaseVerifier::new_from_pin(pase_pin, pase_params, pase_responder_session_id)
+        .map_err(DriverError::Crypto)?;
+    let mut unsecured_ctr: u32 = 100;
+
+    // PBKDFParamRequest → PBKDFParamResponse.
+    let (p, _) = btp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PBKDF_PARAM_REQUEST);
+    verifier
+        .handle_pbkdf_request(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let resp = verifier.next_message().map_err(DriverError::Crypto)?;
+    btp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::PBKDF_PARAM_RESPONSE,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false, // MRP off on BTP
+                Some(m.message_counter),
+                None,
+                &resp,
+            ),
+            btp_peer,
+        )
+        .await?;
+    unsecured_ctr += 1;
+
+    // Pake1 → Pake2.
+    let (p, _) = btp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PASE_PAKE1);
+    verifier
+        .handle_pake1(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let pake2 = verifier.next_message().map_err(DriverError::Crypto)?;
+    btp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::PASE_PAKE2,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                Some(m.message_counter),
+                None,
+                &pake2,
+            ),
+            btp_peer,
+        )
+        .await?;
+    unsecured_ctr += 1;
+
+    // Pake3 → success StatusReport (NOT acked on a reliable transport) → finish.
+    let (p, _) = btp_dev.recv_from().await?;
+    let m = decode_unsecured(&p)?;
+    debug_assert_eq!(m.opcode, op::PASE_PAKE3);
+    verifier
+        .handle_pake3(&m.payload)
+        .map_err(DriverError::Crypto)?;
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&0u16.to_le_bytes()); // SUCCESS
+    body.extend_from_slice(&0u32.to_le_bytes()); // SecureChannel
+    body.extend_from_slice(&0u16.to_le_bytes()); // SessionEstablishmentSuccess
+    btp_dev
+        .send_to(
+            &encode_unsecured(
+                unsecured_ctr,
+                m.exchange_id,
+                op::STATUS_REPORT,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                false, // not reliable — controller sends no ack under TransportProvides
+                Some(m.message_counter),
+                None,
+                &body,
+            ),
+            btp_peer,
+        )
+        .await?;
+    let pase_keys = verifier.finish().map_err(DriverError::Crypto)?;
+    let attestation_challenge: [u8; 16] = pase_keys.attestation_key;
+
+    let pase_sid = SessionId(pase_responder_session_id);
+    sessions.register_pase_with_local_id(
+        pase_sid,
+        pase_keys,
+        SessionRole::Responder,
+        CTRL_PASE_SESSION_ID,
+        PeerHint::default(),
+    );
+
+    // ── 2. Service `service_pre_op_stages` pre-op IM round-trips, then STALL ───
+    // Each iteration answers exactly one secured IM request over the PASE session
+    // on BTP (an Invoke or a Read). After the configured count, the device stops
+    // replying but keeps both endpoints alive by parking on a never-ready future.
+    // The next controller dispatch (still a `TransportProvides` PASE-session
+    // dispatch) then hits its response deadline, and so does the rollback.
+    for _ in 0..service_pre_op_stages {
+        let (packet, _from) = btp_dev.recv_from().await?;
+        service_secured_im_dual(
+            btp_dev,
+            btp_peer,
+            &mut sessions,
+            pase_sid,
+            &packet,
+            attestation_challenge,
+            pki,
+        )
+        .await?;
+    }
+
+    // Go silent. Parking this future keeps every borrowed endpoint (including
+    // `_udp_dev`) alive for the duration of the caller's `select!`. `pending`
+    // never resolves; the caller drops us when `commission_ble` returns.
+    std::future::pending::<()>().await;
+    unreachable!("run_mock_device_dual_silent_after parks forever until dropped")
+}
+
 /// Discriminate a decrypted IM message payload: `true` for a
 /// `ReadRequestMessage`, `false` for an `InvokeRequestMessage`.
 ///

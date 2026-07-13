@@ -35,7 +35,8 @@ use std::sync::{Arc, Mutex};
 use matter_cert::{MatterTime, TrustAnchor, TrustedRoots};
 use matter_commissioning::attestation::CdSigningRoots;
 use matter_commissioning::driver::{
-    commission_ble, operational_instance_name, AsyncDatagram, BleDriverConfig, InMemoryDatagram,
+    commission_ble, operational_instance_name, AsyncDatagram, BleDriverConfig, DriverError,
+    InMemoryDatagram,
 };
 use matter_commissioning::noc::{issue_noc, FabricRecord, NocRng, SystemNocRng, VerifiedCsr};
 use matter_commissioning::setup::{
@@ -45,7 +46,10 @@ use matter_commissioning::state_machine::{CommissionerConfig, Stage, WiFiCredent
 use matter_crypto::{derive_compressed_fabric_id, CaseCredentials, RingSigner, Signer};
 use matter_transport::{Discovery, ExchangeFlags, MatterService, QueryHandle, ServiceKind};
 
-use support::{build_mock_device_pki, run_mock_device_dual, MockDeviceCaseSetup, PID, VID};
+use support::{
+    build_mock_device_pki, run_mock_device_dual, run_mock_device_dual_silent_after,
+    MockDeviceCaseSetup, PID, VID,
+};
 
 // ── Fixed run parameters (mirror commission_loopback) ──────────────────────────
 
@@ -418,10 +422,110 @@ async fn commission_ble_reaches_done_over_two_transports() {
     );
 }
 
-// NOTE: the BLE-path response-deadline itself (a `TransportProvides` dispatch
-// that never gets a reply → `DriverError::Timeout` at 30 s / 60 s) is covered by
-// a focused, deterministic paused-time unit test on `with_response_deadline` in
-// `driver/commission.rs`. A full-flow integration stall test would require real
-// 30 s sleeps (the existing loopback suite does not use paused virtual time, and
-// nesting the deadline inside the whole PASE ping-pong under `pause()` does not
-// reliably auto-advance), which the task brief explicitly says to avoid.
+// ── D11.3: rollback over a dead BTP session must never mask the original error ──
+//
+// The focused paused-time unit tests on `with_response_deadline` in
+// `driver/commission.rs` cover the loop dispatch deadline in isolation. This
+// full-flow test covers the *failure-exit rollback*: after the poll loop times
+// out on a stalled `TransportProvides` (BLE) session, the best-effort
+// `ArmFailSafe(0)` rollback is dispatched over that same still-dead BTP session.
+// Before the fix it had no deadline, so `commission_ble` hung forever and never
+// surfaced the original `Timeout`. The fix wraps that rollback in the same 30 s
+// response deadline; a rollback timeout is swallowed so the ORIGINAL error wins.
+
+/// The device answers PASE + the first pre-operational IM round-trip over BTP,
+/// then goes silent. The controller's next PASE-session dispatch hits its 30 s
+/// response deadline (`LoopExit::Failed(Timeout)`), then the failure-exit
+/// rollback `ArmFailSafe(0)` over the same dead BTP session also gets no reply.
+///
+/// Asserts, under paused virtual time:
+/// - `commission_ble` returns `Err(DriverError::Timeout { .. })` — the ORIGINAL
+///   loop-deadline error, NOT a rollback error and NOT a hang;
+/// - it returns within a bounded amount of virtual time (both the 30 s loop
+///   deadline and the 30 s rollback deadline elapse ≈ 60 s of virtual time),
+///   proving the rollback is now deadline-bounded rather than unbounded.
+#[tokio::test(start_paused = true)]
+async fn commission_ble_rollback_over_dead_btp_returns_original_timeout() {
+    let fx = build_controller_fixture();
+
+    // Two transport pairs, exactly as the headline gate — but the device never
+    // reaches the CASE phase, so the UDP pair stays idle.
+    let (ctrl_btp, dev_btp) = InMemoryDatagram::pair();
+    let (ctrl_udp, dev_udp) = InMemoryDatagram::pair();
+    let ctrl_btp_addr = ctrl_btp.local_addr();
+    let ctrl_udp_addr = ctrl_udp.local_addr();
+    let dev_udp_addr = dev_udp.local_addr();
+
+    // No recording needed here; drive the raw endpoints.
+    let btp = ctrl_btp;
+    let udp = ctrl_udp;
+
+    // Operational discovery is never consulted (the run fails before CASE), but
+    // build a well-formed stub for signature parity with the happy path.
+    let mut fake_disc = FakeDiscovery {
+        service: MatterService::new(
+            fx.op_instance_name.clone(),
+            ServiceKind::Operational,
+            vec![dev_udp_addr.ip()],
+            dev_udp_addr.port(),
+            std::collections::HashMap::new(),
+        ),
+    };
+
+    let config = BleDriverConfig {
+        commissioner: fx.commissioner_config(),
+        passcode: PASSCODE,
+        commissioner_noc: &fx.commissioner_noc,
+        commissioner_signer_pkcs8: &fx.commissioner_pkcs8,
+    };
+
+    // Device answers PASE + 1 pre-op IM stage, then goes silent (holds both
+    // endpoints open, never replies again).
+    let device = run_mock_device_dual_silent_after(
+        &dev_btp,
+        &dev_udp,
+        ctrl_btp_addr,
+        ctrl_udp_addr,
+        &fx.mock_pki,
+        PASSCODE,
+        matter_crypto::pase::PasePbkdfParams {
+            iterations: 1000,
+            salt: vec![0x55; 16],
+        },
+        PASE_RESPONDER_SESSION_ID,
+        1,
+    );
+
+    let start = tokio::time::Instant::now();
+
+    // `select!` (not `join!`): the silent device parks forever, so we take
+    // `commission_ble`'s result the moment it returns and drop the device future
+    // (releasing its borrowed endpoints).
+    let result = tokio::select! {
+        r = commission_ble(&btp, &udp, &mut fake_disc, config) => r,
+        _ = device => unreachable!("silent device future never resolves"),
+    };
+
+    let elapsed = start.elapsed();
+
+    // 1. The ORIGINAL loop-deadline Timeout is returned — not masked by the
+    //    rollback (which also timed out), and not a hang.
+    match result {
+        Err(DriverError::Timeout { .. }) => {}
+        other => panic!("expected the original DriverError::Timeout, got {other:?}"),
+    }
+
+    // 2. Bounded virtual time: both 30 s deadlines (loop + rollback) elapsed, so
+    //    ~60 s of virtual time passed. The rollback being deadline-bounded is the
+    //    whole point — an unbounded rollback would hang here forever. Assert the
+    //    lower bound (both deadlines fired) and a generous upper bound (no extra
+    //    stalls / not hung).
+    assert!(
+        elapsed >= std::time::Duration::from_secs(60),
+        "expected both 30 s deadlines to elapse (~60 s virtual), got {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(120),
+        "commission_ble took too long ({elapsed:?}) — rollback deadline not bounding the stall"
+    );
+}

@@ -793,7 +793,22 @@ where
             // Best-effort disarm over the PASE transport/peer before surfacing
             // the error. `disarm_on_exit` honors an abort that asked to skip it.
             if disarm_on_exit(&exit) {
-                rollback(pase_transport, &mut sessions, pase_sid, pase_peer).await;
+                // Bound the rollback dispatch with the SAME response deadline the
+                // poll loop uses. Under `Mrp` (IP path) `with_response_deadline`
+                // is a transparent pass-through — MRP's own timers bound the
+                // wait, so IP-path behavior is byte-for-byte unchanged. Under
+                // `TransportProvides` (BLE) MRP is off, so an unbounded rollback
+                // over a stalled BTP session would hang forever (D11.3); the
+                // 30 s deadline (rollback is an `ArmFailSafe` invoke, never a
+                // ConnectNetwork) caps it. A rollback timeout is swallowed by the
+                // outer `let _` exactly like any other best-effort rollback
+                // failure — the ORIGINAL `exit` error is what we return, so a
+                // rollback timeout must never mask it.
+                let _ = with_response_deadline(reliability, false, async {
+                    rollback(pase_transport, &mut sessions, pase_sid, pase_peer).await;
+                    Ok(())
+                })
+                .await;
             }
             Err(exit.into_driver_error())
         }
