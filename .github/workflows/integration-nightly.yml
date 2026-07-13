@@ -81,7 +81,7 @@ jobs:
       # Pigweed/CIPD env is large; cache it keyed on the connectedhomeip ref and
       # the bootstrap scripts so most nightly runs skip the slow bootstrap.
       - name: Cache pigweed environment
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: connectedhomeip/.environment
           key: chip-env-${{ env.CHIP_REF }}-${{ hashFiles('connectedhomeip/scripts/setup/*', 'connectedhomeip/scripts/bootstrap.sh') }}
