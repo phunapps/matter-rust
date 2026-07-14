@@ -145,12 +145,19 @@ pub(crate) async fn run_commission_ble_task(
     // Prefer an exact long-discriminator match; fall back to the upper-4-bit
     // short match — mirroring `resolve_commissionable`'s long-then-short
     // preference on the IP path. A QR / full setup code exact-matches long
-    // immediately; a manual pairing code (low 8 bits zero-extended) fails the
-    // long pass and takes the short fallback.
+    // immediately; a manual pairing code (which only carries the short
+    // discriminator) fails the long pass and takes the short fallback.
+    //
+    // The short pass must pass the *extracted* 4-bit value (`short()`), not the
+    // raw u16: `advert_matches(short=true)` reads the requested short from the
+    // request's low nibble, exactly as `resolve_commissionable` does with
+    // `(discriminator >> 8) & 0x0F`. Passing `disc` here would compare the
+    // wrong nibble and never match a real device.
+    let short_disc = u16::from(setup_payload.discriminator.short());
     let device = match central.find_device(disc, false, SCAN_TIMEOUT).await {
         Ok(dev) => dev,
         Err(CentralError::ScanTimeout) => central
-            .find_device(disc, true, SCAN_TIMEOUT)
+            .find_device(short_disc, true, SCAN_TIMEOUT)
             .await
             .map_err(|e| ble_err(&e))?,
         Err(e) => return Err(ble_err(&e)),
