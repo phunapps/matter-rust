@@ -120,7 +120,7 @@ jobs:
       # needs to inspect.
       - name: Upload DUT log
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dut-app-log
           path: target/integration-dut/app.log
