@@ -902,6 +902,7 @@ dependencies = [
  "const-oid",
  "der",
  "hex",
+ "matter-ble",
  "matter-cert",
  "matter-clusters",
  "matter-codec",
