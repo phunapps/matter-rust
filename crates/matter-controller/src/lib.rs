@@ -108,6 +108,8 @@ pub(crate) mod acl;
 pub(crate) mod actor;
 pub(crate) mod admin;
 pub(crate) mod binding;
+#[cfg(feature = "ble")]
+pub(crate) mod ble_commission;
 pub mod builder;
 pub(crate) mod commission;
 pub mod controller;
@@ -143,6 +145,9 @@ pub use icd::{IcdClientType, IcdRegistration};
 pub use icd_listener::CheckIn;
 pub use matter_cert::MatterTime;
 pub use matter_codec::Value;
+/// Wi-Fi credentials for `MatterController::commission_ble` (feature `ble`),
+/// re-exported from `matter-commissioning`.
+pub use matter_commissioning::WiFiCredentials;
 pub use matter_interaction::{
     AttributePath, CommandPath, EventFilter, EventPath, EventPriority, EventReport,
     EventReportItem, EventTimestamp, ImStatus, ReadPath,

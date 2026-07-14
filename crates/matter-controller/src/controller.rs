@@ -474,6 +474,48 @@ impl MatterController {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
+    /// Commission a Wi-Fi device over **BLE/BTP** (feature `ble`): scan for the
+    /// device by discriminator, open a BTP session, run PASE and every
+    /// pre-operational stage (attestation, NOC install, Wi-Fi provisioning) over
+    /// BTP, then complete the operational CASE session over IP once the device
+    /// joins Wi-Fi. Brings the device onto the controller's fabric, persists it,
+    /// and returns its node id.
+    ///
+    /// `wifi` is **required** — a BLE-only Wi-Fi device with no network
+    /// credentials to install is unprovisionable (design D7).
+    ///
+    /// **Requires macOS Bluetooth permission (TCC).** The first call
+    /// instantiates `CoreBluetooth` and may raise the one-time Bluetooth prompt,
+    /// attributed to the terminal application — see
+    /// `docs/runbooks/ble-commissioning.md`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTrust`] if no attestation trust was configured,
+    /// [`Error::SetupCode`] if the code is invalid, [`Error::ControllerStopped`]
+    /// if the task stopped (including a btleplug-internal panic in the spawned
+    /// commission task), [`Error::Operational`] for a BLE-layer failure (no
+    /// adapter / denied permission, scan timeout, connect, GATT, or BTP
+    /// handshake), or any driver/commissioning error.
+    #[cfg(feature = "ble")]
+    pub async fn commission_ble(
+        &self,
+        setup_code: &str,
+        wifi: matter_commissioning::WiFiCredentials,
+    ) -> Result<u64, Error> {
+        let setup_payload = parse_setup_code(setup_code)?;
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::CommissionBle {
+                setup_payload,
+                wifi,
+                reply,
+            })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Handle addressing a device by node id (single-fabric in M8.2).
     #[must_use]
     pub fn node(&self, node_id: u64) -> Node {

@@ -448,6 +448,16 @@ pub(crate) enum Command {
         setup_payload: matter_commissioning::SetupPayload,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// Commission a device over BLE/BTP from a parsed setup payload and required
+    /// Wi-Fi credentials; returns its node id (feature `ble`). Runs on its own
+    /// spawned task exactly like [`Command::Commission`], but the task first
+    /// scans BLE, opens a BTP session, and drives `commission_ble`.
+    #[cfg(feature = "ble")]
+    CommissionBle {
+        setup_payload: matter_commissioning::SetupPayload,
+        wifi: matter_commissioning::WiFiCredentials,
+        reply: oneshot::Sender<Result<u64, Error>>,
+    },
     /// Establish a subscription to `paths` on `node_id`; returns the report
     /// receiver + `(session, exchange)` key for the `Node` to wrap.
     Subscribe {
@@ -1121,6 +1131,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // sessions' MRP/liveness.
                 self.spawn_commission(setup_payload, reply);
             }
+            #[cfg(feature = "ble")]
+            Command::CommissionBle {
+                setup_payload,
+                wifi,
+                reply,
+            } => {
+                // Same off-loop pattern as `Command::Commission`, but the
+                // spawned task scans BLE + opens a BTP session first.
+                self.spawn_commission_ble(setup_payload, wifi, reply);
+            }
             Command::Subscribe {
                 node_id,
                 paths,
@@ -1346,6 +1366,93 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 admin_vendor_id,
                 now,
                 rng,
+            )
+            .await;
+            let _ = tx
+                .send(CommissionCompletion {
+                    fabric_id,
+                    result,
+                    reply,
+                })
+                .await;
+        });
+    }
+
+    /// Spawn a BLE/BTP commission on its own task (feature `ble`), mirroring
+    /// [`Self::spawn_commission`]: snapshot the same fabric inputs, then
+    /// `tokio::spawn` [`crate::ble_commission::run_commission_ble_task`] (which
+    /// constructs its own `BleCentral` — the macOS TCC point — plus BTP channel,
+    /// UDP socket, and mDNS discovery). The completion is reported over the same
+    /// [`CommissionCompletion`] channel as the IP path, so persistence + reply
+    /// resolution reuse [`Self::handle_commission_completion`] unchanged. A
+    /// btleplug-internal panic in the task drops the `reply`, surfacing to the
+    /// caller as [`Error::ControllerStopped`] rather than hanging.
+    #[cfg(feature = "ble")]
+    fn spawn_commission_ble(
+        &mut self,
+        setup_payload: matter_commissioning::SetupPayload,
+        wifi: matter_commissioning::WiFiCredentials,
+        reply: oneshot::Sender<Result<u64, Error>>,
+    ) {
+        let Some(trust) = self.trust.clone() else {
+            let _ = reply.send(Err(Error::NoTrust));
+            return;
+        };
+        let admin_vendor_id = self.admin_vendor_id;
+        let snapshot = match self.sole_fabric() {
+            Ok(fabric) => match fabric.to_fabric_record() {
+                Ok(fabric_record) => Ok((
+                    fabric_record,
+                    fabric.fabric_id,
+                    fabric.commissioner.node_id,
+                    fabric.ipk,
+                    fabric.commissioner.noc.clone(),
+                    fabric.commissioner.operational_pkcs8.clone(),
+                    crate::commission::next_device_node_id(fabric),
+                )),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        let (
+            fabric_record,
+            fabric_id,
+            commissioner_node_id,
+            ipk_epoch_key,
+            commissioner_noc,
+            commissioner_pkcs8,
+            assigned_node_id,
+        ) = match snapshot {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let now = match current_matter_time() {
+            Ok(n) => n,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        let rng = self.rng.clone();
+        let tx = self.commission_tx.clone();
+
+        tokio::spawn(async move {
+            let result = crate::ble_commission::run_commission_ble_task(
+                setup_payload,
+                trust,
+                fabric_record,
+                commissioner_node_id,
+                ipk_epoch_key,
+                commissioner_noc,
+                commissioner_pkcs8,
+                assigned_node_id,
+                admin_vendor_id,
+                now,
+                rng,
+                wifi,
             )
             .await;
             let _ = tx

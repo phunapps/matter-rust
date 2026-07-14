@@ -321,7 +321,12 @@ where
 }
 
 /// A command sent to the pump task.
-enum PumpCommand {
+///
+/// Exposed `#[doc(hidden)]` so out-of-crate adapters (e.g. matter-controller's
+/// `BtpDatagram`) can unit-test against a [`BtpChannel::from_channels`] seam
+/// without a live peripheral. Not part of the stable public API.
+#[doc(hidden)]
+pub enum PumpCommand {
     /// Queue a whole Matter message for segmentation; the pump acks once it is
     /// accepted by the BTP session.
     Send(Vec<u8>, oneshot::Sender<Result<(), CentralError>>),
@@ -363,6 +368,32 @@ impl BtpChannel {
         match self.inbound.recv().await {
             Some(result) => result,
             None => Err(CentralError::Disconnected),
+        }
+    }
+
+    /// Build a `BtpChannel` directly from raw channel halves, with **no pump
+    /// task** (`pump: None`).
+    ///
+    /// This is a `#[doc(hidden)]` test seam: it lets code in other crates
+    /// unit-test adapters layered over a `BtpChannel` (matter-controller's
+    /// `BtpDatagram`) by driving the command and inbound sides by hand — no
+    /// live BLE peripheral, no `BleCentral`/`Manager`/`Adapter`. Not part of
+    /// the stable public API.
+    ///
+    /// The caller owns the peer halves: the receiver of `commands` observes
+    /// each [`PumpCommand`] produced by [`Self::send`] (and must reply on the
+    /// embedded ack channel for `send` to resolve), and the sender of `inbound`
+    /// feeds [`Self::recv`].
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_channels(
+        commands: mpsc::Sender<PumpCommand>,
+        inbound: mpsc::Receiver<Result<Vec<u8>, CentralError>>,
+    ) -> Self {
+        Self {
+            commands,
+            inbound,
+            pump: None,
         }
     }
 
