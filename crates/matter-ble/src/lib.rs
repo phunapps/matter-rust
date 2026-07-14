@@ -11,5 +11,11 @@ pub mod advert;
 pub mod handshake;
 pub mod session;
 
+/// btleplug-based BLE central role: scan for commissionable devices, open a GATT
+/// C1/C2 BTP session, and drive it via an async pump task. Behind the `central`
+/// feature because btleplug is heavy and platform-specific.
+#[cfg(feature = "central")]
+pub mod central;
+
 mod error;
 pub use error::BtpError;
