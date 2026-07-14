@@ -257,7 +257,24 @@ impl BleCentral {
         let now = Instant::now();
         let session = BtpSession::new(Role::Central, response.segment_size, response.window, now);
 
-        Ok(spawn_pump(peripheral, c1, indications, session))
+        // Adapter event stream, used by the pump to observe DeviceDisconnected
+        // for this peripheral (the notification stream alone does not reliably
+        // close on link loss — spec §D8).
+        let events = self
+            .adapter
+            .events()
+            .await
+            .map_err(|e| CentralError::Gatt(e.to_string()))?;
+
+        Ok(spawn_pump(
+            peripheral,
+            c1,
+            c2,
+            device.peripheral_id.clone(),
+            indications,
+            events,
+            session,
+        ))
     }
 }
 
@@ -368,10 +385,14 @@ impl Drop for BtpChannel {
 
 /// Spawn the pump task that owns the [`BtpSession`] and bridges it to the GATT
 /// characteristics. Returns the [`BtpChannel`] wired to it.
+#[allow(clippy::too_many_arguments)] // Pump wiring: all inputs are load-bearing.
 fn spawn_pump(
     peripheral: Peripheral,
     c1: Characteristic,
+    c2: Characteristic,
+    peripheral_id: PeripheralId,
     indications: impl Stream<Item = btleplug::api::ValueNotification> + Unpin + Send + 'static,
+    events: impl Stream<Item = CentralEvent> + Unpin + Send + 'static,
     session: BtpSession,
 ) -> BtpChannel {
     let (cmd_tx, cmd_rx) = mpsc::channel::<PumpCommand>(8);
@@ -379,7 +400,10 @@ fn spawn_pump(
     let pump = tokio::spawn(pump_loop(
         peripheral,
         c1,
+        c2,
+        peripheral_id,
         Box::pin(indications),
+        Box::pin(events),
         session,
         cmd_rx,
         sdu_tx,
@@ -411,43 +435,66 @@ async fn write_fragment(
     Ok(())
 }
 
+/// What the pump should wait on after draining outbound work.
+enum Wake {
+    /// A future timer deadline (deferred send-ack, or the 15 s ack-timeout).
+    At(Instant),
+    /// A due action is blocked on a closed window / in-flight GATT slot. Park on
+    /// IO but re-check after a bounded delay so the blocked ack is retried and
+    /// the 15 s ack-timeout still fires — without hot-spinning on a past-due
+    /// deadline (`sleep_until(past)` returns instantly).
+    Retry,
+    /// Nothing is pending; block on IO only.
+    Idle,
+}
+
+/// Bounded fallback re-check delay for a blocked send-ack (see [`Wake::Retry`]).
+/// Normal operation unblocks far sooner via an inbound indication crediting the
+/// window; this only bounds the pathological silent-window case.
+const BLOCKED_ACK_RETRY: Duration = Duration::from_millis(250);
+
 /// Flush every fragment the session currently permits, then emit any
-/// immediately-due standalone ack. Returns the next timer deadline, if any.
+/// immediately-due standalone ack. Returns what the pump should wait on next.
 async fn drive_outbound(
     peripheral: &Peripheral,
     c1: &Characteristic,
     session: &mut BtpSession,
-) -> Result<Option<Instant>, CentralError> {
+) -> Result<Wake, CentralError> {
     while let Some(fragment) = session.next_gatt_write(Instant::now()) {
         write_fragment(peripheral, c1, session, &fragment).await?;
     }
-    while let Some(due) = session.poll_timeout() {
-        if due > Instant::now() {
-            return Ok(Some(due));
-        }
-        match session.handle_timeout(Instant::now())? {
-            Some(ack) => write_fragment(peripheral, c1, session, &ack).await?,
-            // Emission is deferred (blocked on window/GATT slot): wait for the
-            // next IO event rather than spinning.
-            None => break,
+    loop {
+        match session.poll_timeout() {
+            None => return Ok(Wake::Idle),
+            Some(due) if due > Instant::now() => return Ok(Wake::At(due)),
+            Some(_) => match session.handle_timeout(Instant::now())? {
+                Some(ack) => write_fragment(peripheral, c1, session, &ack).await?,
+                // Emission is deferred (blocked on window / GATT slot): do not
+                // spin on the past-due deadline — bounded-retry and park on IO.
+                None => return Ok(Wake::Retry),
+            },
         }
     }
-    Ok(session.poll_timeout())
 }
 
 /// The pump: owns the [`BtpSession`], services outbound fragments/acks, feeds
-/// inbound C2 indications, and surfaces completed messages.
+/// inbound C2 indications, surfaces completed messages, and closes on a
+/// `DeviceDisconnected` event for this peripheral.
+#[allow(clippy::too_many_arguments)] // Pump wiring: all inputs are load-bearing.
 async fn pump_loop(
     peripheral: Peripheral,
     c1: Characteristic,
+    c2: Characteristic,
+    peripheral_id: PeripheralId,
     mut indications: std::pin::Pin<Box<dyn Stream<Item = btleplug::api::ValueNotification> + Send>>,
+    mut events: std::pin::Pin<Box<dyn Stream<Item = CentralEvent> + Send>>,
     mut session: BtpSession,
     mut commands: mpsc::Receiver<PumpCommand>,
     sdu_tx: mpsc::Sender<Result<Vec<u8>, CentralError>>,
 ) {
     loop {
-        let deadline = match drive_outbound(&peripheral, &c1, &mut session).await {
-            Ok(deadline) => deadline,
+        let wake = match drive_outbound(&peripheral, &c1, &mut session).await {
+            Ok(wake) => wake,
             Err(e) => {
                 let _ = sdu_tx.send(Err(e)).await;
                 return;
@@ -455,9 +502,10 @@ async fn pump_loop(
         };
 
         let timer = async {
-            match deadline {
-                Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
-                None => std::future::pending::<()>().await,
+            match wake {
+                Wake::At(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+                Wake::Retry => tokio::time::sleep(BLOCKED_ACK_RETRY).await,
+                Wake::Idle => std::future::pending::<()>().await,
             }
         };
 
@@ -466,7 +514,13 @@ async fn pump_loop(
                 Some(PumpCommand::Send(message, ack)) => {
                     let _ = ack.send(session.queue_message(&message).map_err(CentralError::from));
                 }
-                Some(PumpCommand::Close) | None => return,
+                Some(PumpCommand::Close) | None => {
+                    // Graceful close: drop the C2 subscription and the link
+                    // (best-effort — the caller is done regardless).
+                    let _ = peripheral.unsubscribe(&c2).await;
+                    let _ = peripheral.disconnect().await;
+                    return;
+                }
             },
             note = indications.next() => match note {
                 Some(note) if note.uuid == C2_UUID => {
@@ -488,6 +542,16 @@ async fn pump_loop(
                     let _ = sdu_tx.send(Err(CentralError::Disconnected)).await;
                     return;
                 }
+            },
+            event = events.next() => match event {
+                Some(CentralEvent::DeviceDisconnected(id)) if id == peripheral_id => {
+                    let _ = sdu_tx.send(Err(CentralError::Disconnected)).await;
+                    return;
+                }
+                // Other events (and other peripherals) are irrelevant here; a
+                // closed event stream is not itself fatal (the notification
+                // stream / ack-timeout still detect a dead link).
+                Some(_) | None => {}
             },
             () = timer => {}
         }
