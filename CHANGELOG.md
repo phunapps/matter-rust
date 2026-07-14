@@ -16,6 +16,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that skip unknown nested containers from newer Matter revisions. Additive
   (non-breaking); satisfies dependents' existing `^0.1.0` requirement.
 
+## matter-ble
+
+### [Unreleased] — M9-C1 crate created: BTP engine + BLE central role
+
+#### Added
+
+- **New crate `matter-ble`** — Matter BLE commissioning transport. Always
+  compiled: the sans-IO BTP (Bluetooth Transport Protocol) core —
+  commissionable-advertisement parsing (`advert`), the handshake
+  request/response codec (`handshake`), and `BtpSession` (RX reassembly +
+  TX segmentation, window/ack-timeout accounting, sequence wraparound) —
+  proven byte-for-byte against chip's `TestBleLayer`/`TestBtpEngine` vectors
+  and dual-grounded hand-encodes (`test-vectors/btp/`).
+- **`central` feature** (opt-in; pulls `btleplug` pinned `=0.12.0`, plus
+  `tokio`, `uuid`, `futures`) — `BleCentral`: scan for a commissionable
+  device by discriminator, connect, discover the C1/C2 GATT characteristics,
+  and pump a `BtpChannel` (continuous `notifications()` drain feeding
+  `BtpSession`, strictly-serialized C1 writes, disconnect detection). Needs
+  a Tokio runtime (`Manager::adapters()` panics outside one). Off-CLAUDE.md-list
+  deps `uuid`/`futures` are confined to this optional feature (flagged for
+  review per the M9-C1 design).
+- **macOS TCC handling** — `BleCentral::new()` explicitly checks
+  `adapter_state() == PoweredOn` and returns an error pointing at
+  `docs/runbooks/ble-commissioning.md` rather than silently finding no
+  devices (a known `btleplug` gap on an unauthorized/undecided permission).
+
 ## matter-clusters
 
 ### [Unreleased] — M9-D2 OperationalCredentials cluster
@@ -206,6 +232,26 @@ unchanged — its full test suite passes with zero test edits.
   variants map to generic FAILURE (0x01), never success.
 
 ## matter-controller
+
+### [Unreleased] — M9-C1 `commission_ble`
+
+#### Added
+
+- **`MatterController::commission_ble(setup_code, wifi)`** (feature `ble`,
+  pulls in `matter-ble`'s `central` role) — commissions a factory-fresh
+  Wi-Fi device over BLE/BTP: scans by discriminator, opens a BTP session,
+  and drives the full pre-operational sequence over BLE before completing
+  the operational CASE handshake over IP once the device joins Wi-Fi.
+  `wifi: matter_commissioning::WiFiCredentials` is required — a BLE-only
+  Wi-Fi device with no network credentials to install is unprovisionable.
+  Requires the one-time macOS Bluetooth permission (TCC) — see
+  `docs/runbooks/ble-commissioning.md`.
+- **`examples/ble_scan.rs`** (feature `ble`) — a hardware/permission
+  diagnostic: sweeps all 16 short-discriminator nibbles for answering
+  commissionable devices. Gated behind `MATTER_BLE_LIVE=1` so it never
+  touches Bluetooth (and never raises the TCC prompt) in a default run or
+  CI; this is also the one-time flow used to grant the macOS Bluetooth
+  permission itself.
 
 ### [Unreleased] — multicast interface builder option
 
@@ -510,6 +556,52 @@ migration step is needed for snapshots from M9-E1 or earlier.
   uses `open_commissioning_window`.
 
 ## matter-commissioning
+
+### [Unreleased] — M9-C1 BLE/BTP commissioning driver
+
+#### Added
+
+- **`driver::TransportReliability`** (`Mrp` / `TransportProvides`) — lets the
+  unsecured-exchange path (PASE, and the unsecured phase of CASE) defer
+  reliability to the underlying transport instead of always driving MRP.
+  `TransportProvides` is used for BTP: the session's
+  `Session::transport_reliable` flag (matter-transport) is set so the R-flag,
+  retransmits, and standalone acks are all suppressed for that session.
+- **`driver::run_pase_with`** — generalises the PASE driver over
+  `TransportReliability` and an explicit `(SessionId, SocketAddr)` /
+  `AsyncDatagram`, so the same PASE state machine drives over UDP+MRP or
+  over a BTP channel with MRP off. The existing UDP-path `run_pase` now
+  delegates to it with `TransportReliability::Mrp`.
+- **`driver::commission_ble`** — the BLE/BTP commissioning driver fn: scans
+  and opens a BTP session (via the caller-supplied `BleDriverConfig`), drives
+  PASE and every pre-operational stage (attestation, NOC install, Wi-Fi
+  network commissioning) over BTP with MRP off, then hands off to the
+  existing operational-CASE path over IP once the device joins Wi-Fi and is
+  reachable by mDNS. Bounds every BLE-path stage with an explicit response
+  deadline (unbounded hangs are a documented BTP failure mode with MRP off),
+  and widens `resolve_operational`'s poll-attempt budget for the BLE path
+  (~60 s, vs. the UDP path's ~30 s) since the device has only just started
+  Wi-Fi association + DHCP + mDNS announce. BTP teardown happens only after
+  `commission_ble` returns, and a failed post-PASE rollback over an
+  already-dead BTP channel surfaces the original driver error rather than
+  masking it with a transport error.
+- **`STREAM_PEER`** — sentinel `SocketAddr` used as the nominal "peer
+  address" for BTP sends (a BTP channel has no IP peer; the underlying
+  `AsyncDatagram` impl for a BTP channel ignores the address and always
+  targets the connected GATT peer).
+
+#### Changed
+
+- **Behavior change:** on the **IP** path, post-CASE secured traffic now
+  targets the device's **mDNS-resolved operational address** (discovered via
+  `resolve_operational`) rather than the commissionable address the PASE
+  phase used. This is the same physical device and socket on IP — strictly
+  more correct, since the commissionable and operational mDNS records are not
+  guaranteed to resolve to the same address — but it is a behavior change for
+  anything that was relying on post-CASE traffic reusing the commissionable
+  address. Required groundwork for the BLE path, where PASE happens over BTP
+  (no IP address at all) and CASE must dial the freshly-Wi-Fi-joined device's
+  real operational address.
 
 ### [Unreleased] — responder-side unsecured replies (OTA provider interop)
 
@@ -1186,6 +1278,21 @@ fixture file; the test assertions remain stable.
   high VID/PID, 11- and 21-digit manual codes).
 - Fuzz targets for `parse_qr` and `parse_manual_code` (no-panic property).
 - Proptest roundtrip suite (3 properties × 256 cases default).
+
+## matter-transport
+
+### [Unreleased] — M9-C1 `transport_reliable` (BTP prep)
+
+#### Added
+
+- **`Session::transport_reliable` flag** + `SessionManager::set_transport_reliable`/
+  `is_transport_reliable` — marks a session as riding a transport that is
+  itself reliable and ordered (BTP over BLE, or an in-memory channel), per
+  Matter Core §4.12 ("MRP off over BLE"). When set, the MRP layer never sets
+  the R-flag on outbound messages, never registers a retransmit, and never
+  arms a standalone-ack timer for that session, regardless of the peer's own
+  `mrp_flags.reliable` bit. UDP sessions are unaffected — the flag defaults
+  `false` and existing MRP behavior is unchanged.
 
 ## matter-transport
 

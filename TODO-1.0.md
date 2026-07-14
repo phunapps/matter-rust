@@ -380,12 +380,25 @@ skips with `eprintln!` when fixtures are absent or carry empty
 
 ### BLE commissioning transport
 
-**Status:** open (deferred post-v1.0 per CLAUDE.md).
+**Status:** landed pending live validation (M9-C1, 2026-07-13/14). BLE/BTP
+commissioning is implemented and gate-green: `matter-ble` (sans-IO BTP engine
++ `btleplug` central role), `matter-transport`'s `transport_reliable` (MRP
+off over BTP), `matter-commissioning`'s `TransportReliability`/
+`run_pase_with`/`commission_ble` driver, and
+`MatterController::commission_ble` (feature `ble`) all merged with a
+byte-parity BTP test-vector suite and an in-process PASE-over-BTP floor test.
+What remains is the live hardware pass — first-ever BLE central-vs-DUT
+handshake, macOS TCC approval, and an end-to-end BLE commission with real
+Wi-Fi credentials — which is **operator-gated** (needs a Mac + a BLE-capable
+Pi DUT in the same room) and walked step-by-step in
+`docs/runbooks/ble-commissioning.md`'s morning checklist (Pi DUT bring-up:
+`docs/runbooks/ble-dut-pi.md`). One BTP test vector
+(`test-vectors/btp/handshake.json`'s `expected_chip_peripheral_response`) is
+still `provisional: true` (a hand-encoded fragment-size assumption) until
+that live capture confirms or corrects it.
 
-Factory-fresh Wi-Fi devices are BLE-only until they receive network credentials.
-Until BLE lands, `commission_ip` requires an IP-reachable device (already on the
-network, in an open commissioning window). The Tuya-plug-over-BLE validation is
-blocked on this.
+C1 (this work) is **BLE-only**. Thread commissioning (C2) remains deferred
+per the M9-C BLE-first split decision — no radio hardware available yet.
 
 ### Live DCL client
 
