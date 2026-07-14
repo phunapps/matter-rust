@@ -84,7 +84,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 # Benchmarks only (dev-dependency in the benched crates). `just bench` runs
 # them; they are NOT part of the gate.
-criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "ansi"] }
 x509-parser = { version = "0.18", default-features = false }
 
