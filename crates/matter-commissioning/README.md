@@ -358,7 +358,7 @@ NOC public key, and the terminal stage cursor (always
 ## Wi-Fi commissioning configuration (M6.5+)
 
 ```rust
-use matter_commissioning::{CommissionerConfig, WiFiCredentials};
+use matter_commissioning::{CommissionerConfig, NetworkCredentials, WiFiCredentials};
 
 let config = CommissionerConfig {
     pase_attestation_challenge,
@@ -373,7 +373,7 @@ let config = CommissionerConfig {
     admin_vendor_id: 0xFFF1,
     now: MatterTime::from_unix_secs(1_704_067_200),
     rng,
-    wifi_credentials: Some(WiFiCredentials {
+    network: NetworkCredentials::WiFi(WiFiCredentials {
         ssid: b"matter".to_vec(),
         credentials: b"hunter22".to_vec(),
     }),
@@ -381,9 +381,10 @@ let config = CommissionerConfig {
 let mut sm = Commissioner::new(config)?;
 ```
 
-For Ethernet-only devices, set `wifi_credentials: None` — the state
-machine detects Ethernet at `Stage::ReadNetworkCommissioningInfo` and
-skips the Wi-Fi sub-cursor.
+For Ethernet-only devices (or devices already on their operational
+network), set `network: NetworkCredentials::AlreadyOnNetwork` — the state
+machine detects the network shape at `Stage::ReadNetworkCommissioningInfo`
+and skips the Wi-Fi sub-cursor.
 
 Thread-only devices currently fail commissioning with
 `CommissioningError::NetworkFeatureUnsupported { needed: NetworkKind::Thread }`.

@@ -365,7 +365,7 @@ async fn main() -> anyhow::Result<()> {
         admin_vendor_id: ADMIN_VENDOR_ID,
         now,
         rng,
-        wifi_credentials: None, // ECM/Ethernet path; see runbook.
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork, // ECM/Ethernet path; see runbook.
     };
 
     // Optional direct-dial address (skips the mDNS commissionable browse).

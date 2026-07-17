@@ -215,7 +215,7 @@ fn matter_js_happy_path_byte_parity() {
         admin_vendor_id: 0xFFF1,
         now,
         rng,
-        wifi_credentials: None,
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork,
     };
     let mut sm = Commissioner::new(cfg).expect("valid config");
 
@@ -372,7 +372,7 @@ fn tampered_dac_is_rejected_during_attestation() {
         admin_vendor_id: 0xFFF1,
         now,
         rng,
-        wifi_credentials: None,
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork,
     };
     let mut sm = Commissioner::new(cfg).expect("valid config");
 

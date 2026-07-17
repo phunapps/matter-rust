@@ -192,7 +192,7 @@ pub(crate) async fn run_commission_ble_task(
         admin_vendor_id,
         now,
         rng,
-        wifi_credentials: Some(wifi),
+        network: matter_commissioning::NetworkCredentials::WiFi(wifi),
     };
     let config = BleDriverConfig {
         commissioner,

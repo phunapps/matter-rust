@@ -24,8 +24,9 @@ use matter_commissioning::setup::{
     CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
 };
 use matter_commissioning::{
-    Action, Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkKind,
-    PaaTrustStore, RemediationHint, SessionContext, Stage, TestStateSeeds, WiFiCredentials,
+    Action, Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkCredentials,
+    NetworkKind, PaaTrustStore, RemediationHint, SessionContext, Stage, TestStateSeeds,
+    WiFiCredentials,
 };
 use matter_crypto::{RingSigner, Signer};
 
@@ -90,7 +91,7 @@ fn make_wifi_config() -> CommissionerConfig<'static> {
         admin_vendor_id: 0xFFF1,
         now: MatterTime::from_unix_secs(1_704_067_200),
         rng,
-        wifi_credentials: Some(WiFiCredentials {
+        network: NetworkCredentials::WiFi(WiFiCredentials {
             ssid: b"matter".to_vec(),
             credentials: b"hunter22".to_vec(),
         }),
@@ -113,7 +114,7 @@ fn make_ethernet_config() -> CommissionerConfig<'static> {
         admin_vendor_id: 0xFFF1,
         now: MatterTime::from_unix_secs(1_704_067_200),
         rng,
-        wifi_credentials: None,
+        network: NetworkCredentials::AlreadyOnNetwork,
     }
 }
 

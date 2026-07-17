@@ -264,7 +264,7 @@ async fn run_loopback_commission() {
         admin_vendor_id: VID,
         now: now(),
         rng,
-        wifi_credentials: None, // Ethernet path
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork, // Ethernet path
     };
     // Persistent commissioner operational identity (replaces the former
     // per-call throwaway mint inside commission()).

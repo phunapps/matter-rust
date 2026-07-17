@@ -491,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
         admin_vendor_id: ADMIN_VENDOR_ID,
         now,
         rng,
-        wifi_credentials: None, // ECM/Ethernet path; see runbook.
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork, // ECM/Ethernet path; see runbook.
     };
 
     // Mint the commissioner's operational NOC ONCE here — used both for the

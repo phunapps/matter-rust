@@ -42,7 +42,9 @@ use matter_commissioning::noc::{issue_noc, FabricRecord, NocRng, SystemNocRng, V
 use matter_commissioning::setup::{
     CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
 };
-use matter_commissioning::state_machine::{CommissionerConfig, Stage, WiFiCredentials};
+use matter_commissioning::state_machine::{
+    CommissionerConfig, NetworkCredentials, Stage, WiFiCredentials,
+};
 use matter_crypto::{derive_compressed_fabric_id, CaseCredentials, RingSigner, Signer};
 use matter_transport::{Discovery, ExchangeFlags, MatterService, QueryHandle, ServiceKind};
 
@@ -252,7 +254,7 @@ impl ControllerFixture {
             admin_vendor_id: VID,
             now: now(),
             rng: self.rng.clone(),
-            wifi_credentials: Some(WiFiCredentials {
+            network: NetworkCredentials::WiFi(WiFiCredentials {
                 ssid: b"test-ssid".to_vec(),
                 credentials: b"test-passphrase".to_vec(),
             }),

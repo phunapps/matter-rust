@@ -46,6 +46,32 @@ impl core::fmt::Debug for WiFiCredentials {
     }
 }
 
+/// Operational-network credentials for the commissionee, selecting which
+/// network-provisioning sub-cursor the state machine runs after `AddNOC`.
+///
+/// Mirrors chip's `AutoCommissioner`: network provisioning runs only for
+/// the concrete network type whose credentials are supplied.
+///
+/// - [`NetworkCredentials::WiFi`] provisions Wi-Fi via
+///   `AddOrUpdateWiFiNetwork` + `ConnectNetwork`.
+/// - [`NetworkCredentials::Thread`] provisions Thread from an operational
+///   dataset (dispatch/routing is wired in a later task; the dataset is
+///   self-validated at [`ThreadDataset`](crate::ThreadDataset)
+///   construction).
+/// - [`NetworkCredentials::AlreadyOnNetwork`] skips network provisioning
+///   entirely — correct both for Ethernet-only devices and for devices
+///   already reachable on their operational network (the usual
+///   IP-commissioning case, e.g. a second-fabric commission).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NetworkCredentials {
+    /// Provision Wi-Fi using the supplied station credentials.
+    WiFi(WiFiCredentials),
+    /// Provision Thread using the supplied operational dataset.
+    Thread(crate::thread_dataset::ThreadDataset),
+    /// Device is already on an operational network; skip provisioning.
+    AlreadyOnNetwork,
+}
+
 /// Configuration passed to [`Commissioner::new`].
 ///
 /// All fields are by-reference where possible so the state machine
@@ -98,15 +124,17 @@ pub struct CommissionerConfig<'a> {
     pub now: MatterTime,
     /// RNG for nonces (`CSRNonce`, `AttestationNonce`) and NOC serials.
     pub rng: Arc<dyn NocRng>,
-    /// Wi-Fi credentials for `AddOrUpdateWiFiNetwork`.
+    /// Operational-network credentials for the commissionee.
     ///
-    /// `None` skips the Wi-Fi sub-cursor entirely, mirroring chip's
-    /// `AutoCommissioner`: network provisioning runs ONLY when credentials
-    /// are supplied. `None` is correct both for Ethernet-only devices and
-    /// for Wi-Fi devices that are already on the network (the usual case
-    /// for IP commissioning, e.g. a second-fabric commission). Supplying
-    /// credentials forces provisioning via `Stage::WiFiNetworkSetup`.
-    pub wifi_credentials: Option<WiFiCredentials>,
+    /// [`NetworkCredentials::AlreadyOnNetwork`] skips the network
+    /// sub-cursor entirely, mirroring chip's `AutoCommissioner`: network
+    /// provisioning runs ONLY when concrete credentials are supplied. It is
+    /// correct both for Ethernet-only devices and for devices already
+    /// reachable on their operational network (the usual case for IP
+    /// commissioning, e.g. a second-fabric commission). Supplying
+    /// [`NetworkCredentials::WiFi`] forces provisioning via
+    /// `Stage::WiFiNetworkSetup`.
+    pub network: NetworkCredentials,
 }
 
 /// The commissioning state machine cursor.
@@ -167,9 +195,11 @@ pub struct Commissioner {
     issued_noc: Option<matter_cert::MatterCertificate>,
     issued_noc_public_key: Option<[u8; 65]>,
 
-    /// Wi-Fi credentials captured from config at construction; consumed
-    /// by `Stage::WiFiNetworkSetup`. `None` for Ethernet-only paths.
-    wifi_credentials: Option<WiFiCredentials>,
+    /// Operational-network credentials captured from config at
+    /// construction; consumed by the network-provisioning sub-cursor
+    /// (`Stage::WiFiNetworkSetup` for Wi-Fi).
+    /// [`NetworkCredentials::AlreadyOnNetwork`] skips provisioning.
+    network: NetworkCredentials,
 
     /// Maximum failsafe expiry the device accepts, in seconds.
     /// Initialised to 60 (the M6.4 fallback) and updated from
@@ -237,7 +267,10 @@ impl Commissioner {
                 "ipk_epoch_key must not be all-zero",
             ));
         }
-        if let Some(creds) = cfg.wifi_credentials.as_ref() {
+        // Only Wi-Fi credentials carry length bounds here; `Thread`
+        // datasets are self-validated at `ThreadDataset` construction and
+        // `AlreadyOnNetwork` carries no data to check.
+        if let NetworkCredentials::WiFi(creds) = &cfg.network {
             if creds.ssid.is_empty() {
                 return Err(CommissioningError::InvalidConfig(
                     "wifi_credentials.ssid must not be empty",
@@ -277,7 +310,7 @@ impl Commissioner {
             verified_csr: None,
             issued_noc: None,
             issued_noc_public_key: None,
-            wifi_credentials: cfg.wifi_credentials,
+            network: cfg.network,
             failsafe_expiry_seconds: 60,
             breadcrumb_counter: 1,
             awaiting_case_session: false,
@@ -291,6 +324,14 @@ impl Commissioner {
     #[must_use]
     pub fn stage(&self) -> Stage {
         self.stage
+    }
+
+    /// The operational-network credentials captured at construction.
+    /// Read by tests and by the network-provisioning dispatch/routing
+    /// (Task 5 consumes this to select the Thread sub-cursor).
+    #[allow(dead_code)] // Consumed by tests now; by Thread routing in Task 5.
+    pub(crate) fn network(&self) -> &NetworkCredentials {
+        &self.network
     }
 
     /// **Test-only.** Jumps the cursor to `stage` and applies any opt-in
@@ -581,10 +622,9 @@ impl Commissioner {
             }
             Stage::WiFiNetworkSetup => {
                 use crate::clusters::network_commissioning as nc;
-                let creds = self
-                    .wifi_credentials
-                    .as_ref()
-                    .ok_or(CommissioningError::WifiCredentialsRequired)?;
+                let NetworkCredentials::WiFi(creds) = &self.network else {
+                    return Err(CommissioningError::WifiCredentialsRequired);
+                };
                 let ssid = creds.ssid.clone();
                 let credentials = creds.credentials.clone();
                 let breadcrumb = self.next_breadcrumb();
@@ -602,10 +642,9 @@ impl Commissioner {
             }
             Stage::WiFiNetworkEnable => {
                 use crate::clusters::network_commissioning as nc;
-                let creds = self
-                    .wifi_credentials
-                    .as_ref()
-                    .ok_or(CommissioningError::WifiCredentialsRequired)?;
+                let NetworkCredentials::WiFi(creds) = &self.network else {
+                    return Err(CommissioningError::WifiCredentialsRequired);
+                };
                 let ssid = creds.ssid.clone();
                 let breadcrumb = self.next_breadcrumb();
                 let payload = nc::encode_connect_network(&ssid, breadcrumb);
@@ -861,11 +900,14 @@ impl Commissioner {
                 use crate::clusters::network_commissioning as nc;
                 let features = nc::decode_feature_map(payload)?;
                 if features.contains(nc::NetworkCommissioningFeature::WIFI) {
-                    if self.wifi_credentials.is_none() {
-                        // No credentials supplied: the device is already on
-                        // the network (IP commissioning reached it there —
-                        // e.g. a second-fabric commission). Mirror chip's
-                        // AutoCommissioner: provision Wi-Fi ONLY when
+                    if !matches!(self.network, NetworkCredentials::WiFi(_)) {
+                        // No Wi-Fi credentials supplied
+                        // (`AlreadyOnNetwork`, and — until Thread routing
+                        // lands — a `Thread` dataset on a Wi-Fi device):
+                        // the device is already on the network (IP
+                        // commissioning reached it there — e.g. a
+                        // second-fabric commission). Mirror chip's
+                        // AutoCommissioner: provision Wi-Fi ONLY when Wi-Fi
                         // credentials are supplied; otherwise skip the
                         // Wi-Fi sub-cursor (observed necessary on a real
                         // device: Tapo P110M, M6.6.5 validation).
@@ -1215,7 +1257,7 @@ mod tests {
             admin_vendor_id: 0xFFF1,
             now: MatterTime::from_unix_secs(1_704_067_200),
             rng,
-            wifi_credentials: None,
+            network: NetworkCredentials::AlreadyOnNetwork,
         }
     }
 
@@ -2145,14 +2187,14 @@ mod tests {
             admin_vendor_id: 0xFFF1,
             now: MatterTime::from_unix_secs(1_704_067_200),
             rng,
-            wifi_credentials: None,
+            network: NetworkCredentials::AlreadyOnNetwork,
         }
     }
 
     #[test]
     fn empty_ssid_is_rejected() {
         let mut config = sample_valid_config();
-        config.wifi_credentials = Some(WiFiCredentials {
+        config.network = NetworkCredentials::WiFi(WiFiCredentials {
             ssid: vec![],
             credentials: vec![],
         });
@@ -2168,7 +2210,7 @@ mod tests {
     #[test]
     fn oversize_ssid_is_rejected() {
         let mut config = sample_valid_config();
-        config.wifi_credentials = Some(WiFiCredentials {
+        config.network = NetworkCredentials::WiFi(WiFiCredentials {
             ssid: vec![b'a'; 33],
             credentials: vec![],
         });
@@ -2184,7 +2226,7 @@ mod tests {
     #[test]
     fn oversize_credentials_is_rejected() {
         let mut config = sample_valid_config();
-        config.wifi_credentials = Some(WiFiCredentials {
+        config.network = NetworkCredentials::WiFi(WiFiCredentials {
             ssid: b"matter".to_vec(),
             credentials: vec![0u8; 65],
         });
@@ -2200,8 +2242,21 @@ mod tests {
     #[test]
     fn wifi_credentials_none_is_accepted() {
         let mut config = sample_valid_config();
-        config.wifi_credentials = None;
-        Commissioner::new(config).expect("None wifi_credentials should pass validation");
+        config.network = NetworkCredentials::AlreadyOnNetwork;
+        Commissioner::new(config).expect("AlreadyOnNetwork should pass validation");
+    }
+
+    #[test]
+    fn network_credentials_thread_variant_accepted() {
+        // Minimal well-formed dataset: a single Extended PAN ID TLV
+        // (type 0x02, length 8). ThreadDataset::new self-validates.
+        let ds =
+            crate::thread_dataset::ThreadDataset::new(vec![0x02, 0x08, 0, 0, 0, 0, 0, 0, 0, 0])
+                .expect("minimal ext-pan-id dataset is valid");
+        let mut config = sample_valid_config();
+        config.network = NetworkCredentials::Thread(ds);
+        let c = Commissioner::new(config).expect("Thread network should pass validation");
+        assert!(matches!(c.network(), NetworkCredentials::Thread(_)));
     }
 
     #[test]

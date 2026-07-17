@@ -520,9 +520,10 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 /// commissioner-identity types as `commission()`.
 pub struct BleDriverConfig<'a> {
     /// The sans-IO commissioner configuration (fabric, trust stores, node ids,
-    /// wifi creds, rng, etc.). Its `wifi_credentials` **must** be `Some` for a
-    /// Wi-Fi device: a BLE-only device with no network credentials to install
-    /// is unprovisionable (design D7). Mirrors [`DriverConfig::commissioner`].
+    /// network creds, rng, etc.). Its `network` **must** be
+    /// `NetworkCredentials::WiFi` for a Wi-Fi device: a BLE-only device with no
+    /// network credentials to install is unprovisionable (design D7). Mirrors
+    /// [`DriverConfig::commissioner`].
     pub commissioner: CommissionerConfig<'a>,
     /// Device passcode (from the setup payload). Mirrors [`DriverConfig::passcode`].
     pub passcode: u32,

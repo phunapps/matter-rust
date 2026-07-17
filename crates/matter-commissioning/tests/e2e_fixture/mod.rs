@@ -216,7 +216,7 @@ impl Harness {
             admin_vendor_id: 0xFFF1,
             now: self.now,
             rng: self.rng.clone(),
-            wifi_credentials: None,
+            network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork,
         };
         Commissioner::new(cfg).expect("valid config")
     }

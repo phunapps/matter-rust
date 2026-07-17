@@ -843,7 +843,7 @@ async fn run_commission_task(
         admin_vendor_id,
         now,
         rng,
-        wifi_credentials: None,
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork,
     };
     let config = DriverConfig {
         commissioner,

@@ -158,7 +158,7 @@ pub use im::{
 pub use state_machine::TestStateSeeds;
 pub use state_machine::{
     Action, CommissionedFabric, Commissioner, CommissionerConfig, CommissioningError, Expectation,
-    NetworkKind, RemediationHint, SessionContext, Stage, WiFiCredentials,
+    NetworkCredentials, NetworkKind, RemediationHint, SessionContext, Stage, WiFiCredentials,
 };
 
 pub use thread_dataset::{ThreadDataset, ThreadDatasetError};

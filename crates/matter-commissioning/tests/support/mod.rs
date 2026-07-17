@@ -1627,7 +1627,7 @@ mod mock_device_response_table {
             admin_vendor_id: 0xFFF1,
             now: MatterTime::from_unix_secs(1_800_000_000),
             rng,
-            wifi_credentials: None,
+            network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork,
         })
         .unwrap();
 
