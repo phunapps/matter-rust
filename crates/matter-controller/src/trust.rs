@@ -21,9 +21,19 @@ pub struct AttestationTrust {
 }
 
 impl AttestationTrust {
-    /// Construct from the bundled CSA **test** roots. Suitable for CSA-test
-    /// devices and the hermetic loopback; real certified devices need
-    /// [`Self::from_dirs`] pointed at production roots.
+    /// Construct from the bundled CSA **test / example** roots: the PAA
+    /// test roots plus the CD signing roots that verify chip's example
+    /// devices — the synthetic loopback root, chip's test CD signing
+    /// authority, and CSA production "CD Signing Key 001" (which signs the
+    /// VID=0xFFF1 CD served by every example-DAC device, including the
+    /// esp-matter ESP32-C6). Suitable for CSA-test / dev / example devices
+    /// and the hermetic loopback.
+    ///
+    /// This is **not** the full CSA production trust set: an arbitrary
+    /// certified product may present a DAC chained to a PAA, or a CD signed
+    /// by a CSA production key, that is not bundled here. Commissioners for
+    /// arbitrary certified devices use [`Self::from_dirs`] pointed at the
+    /// production roots.
     #[must_use]
     pub fn csa_test_roots() -> Self {
         Self {

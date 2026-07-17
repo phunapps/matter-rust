@@ -30,6 +30,20 @@ use crate::attestation::{AttestationError, ProductId, VendorId};
 const CSA_TEST_CD_SIGNING_ROOT_PEM: &[u8] =
     include_bytes!("./csa_cd_signing_roots/csa-test-cd-signing-root.pem");
 
+/// chip's real **test** CD signing authority (X.509 DER). Signs the CDs
+/// of chip's example/test devices that use the test signer (e.g.
+/// `Chip-Test-CD-FFF2-8001`). Vendored from connectedhomeip
+/// `credentials/test/certification-declaration/`.
+const CHIP_TEST_CD_SIGNING_CERT_DER: &[u8] =
+    include_bytes!("./csa_cd_signing_roots/Chip-Test-CD-Signing-Cert.der");
+
+/// CSA **production** "CD Signing Key 001" (X.509 DER). Signs the
+/// VID=0xFFF1 CD every `CONFIG_EXAMPLE_DAC_PROVIDER` device serves,
+/// including the esp-matter ESP32-C6. Vendored from connectedhomeip
+/// `credentials/production/cd-certs/`.
+const CSA_CD_SIGNING_KEY_001_DER: &[u8] =
+    include_bytes!("./csa_cd_signing_roots/CSA-CD-Signing-Key-001.der");
+
 /// Trusted CSA Certification Declaration signing roots.
 ///
 /// Built from production roots via [`Self::from_cert_der`] (X.509 CD
@@ -50,24 +64,42 @@ pub struct CdSigningRoots {
 }
 
 impl CdSigningRoots {
-    /// Build a trust store seeded with the bundled synthetic CSA-test
-    /// CD signing root.
+    /// Build a trust store seeded with the CD signing roots that verify
+    /// CSA **test / example** devices and the hermetic loopback:
     ///
-    /// **Tests and examples only — do not use in production.** Real
-    /// commissioners supply CSA-published roots via
-    /// [`Self::from_pem`].
+    /// - the bundled **synthetic** root — its private half signs the
+    ///   loopback and fixture CDs the verifier tests consume;
+    /// - chip's real **test** CD signing authority; and
+    /// - CSA **production** "CD Signing Key 001" — the key that signs the
+    ///   VID=0xFFF1 CD every `CONFIG_EXAMPLE_DAC_PROVIDER` device serves,
+    ///   including the esp-matter ESP32-C6. (chip's own
+    ///   `DefaultDeviceAttestationVerifier` trusts the test *and*
+    ///   production keys; trusting only the test key rejects the C6, which
+    ///   cost a live commission to learn — see `chip_cd_vector.rs`.)
     ///
-    /// The bundled PEM is a compile-time constant, so parsing it should
-    /// never fail at runtime; if it ever does (e.g. someone replaces
-    /// the file with garbage), the store is returned empty rather than
-    /// panicking, and the verifier will reject every signature with
+    /// This verifies test / dev / example devices — **not** the full set
+    /// of CSA production-certified products, which may present CDs signed
+    /// by other CSA production keys. A commissioner for arbitrary
+    /// certified devices loads the whole CSA root set via
+    /// [`Self::from_cert_der`] / [`Self::from_pem`] (e.g.
+    /// `matter_controller::AttestationTrust::from_dirs`).
+    ///
+    /// Each bundled root is a compile-time constant; one that fails to
+    /// parse is skipped rather than panicking, and the verifier then
+    /// rejects any CD that needed it with
     /// [`AttestationError::CertificationDeclarationSignatureInvalid`].
     #[must_use]
     pub fn with_csa_test_roots() -> Self {
-        let pk = parse_pem_public_key(CSA_TEST_CD_SIGNING_ROOT_PEM).ok();
-        Self {
-            public_keys: pk.into_iter().collect(),
+        let mut public_keys = Vec::with_capacity(3);
+        if let Ok(pk) = parse_pem_public_key(CSA_TEST_CD_SIGNING_ROOT_PEM) {
+            public_keys.push(pk);
         }
+        for der in [CHIP_TEST_CD_SIGNING_CERT_DER, CSA_CD_SIGNING_KEY_001_DER] {
+            if let Some(pk) = cert_der_public_key(der) {
+                public_keys.push(pk);
+            }
+        }
+        Self { public_keys }
     }
 
     /// Build a trust store from PEM-encoded P-256
@@ -110,18 +142,12 @@ impl CdSigningRoots {
     /// input fails to parse as an X.509 certificate, or does not carry a
     /// 65-byte SEC1-uncompressed P-256 public key.
     pub fn from_cert_der(certs: &[&[u8]]) -> Result<Self, AttestationError> {
-        use x509_parser::prelude::{FromDer, X509Certificate};
-
         let mut public_keys = Vec::with_capacity(certs.len());
         for der in certs {
-            let (_, cert) = X509Certificate::from_der(der)
-                .map_err(|_| AttestationError::CertificationDeclarationMalformed)?;
-            let pk = cert.public_key().subject_public_key.data.as_ref().to_vec();
             // CD signatures are ECDSA-P256; the trust root must carry a
             // SEC1-uncompressed P-256 point (`0x04` || X || Y, 65 bytes).
-            if pk.len() != 65 || pk[0] != 0x04 {
-                return Err(AttestationError::CertificationDeclarationMalformed);
-            }
+            let pk = cert_der_public_key(der)
+                .ok_or(AttestationError::CertificationDeclarationMalformed)?;
             public_keys.push(pk);
         }
         Ok(Self { public_keys })
@@ -463,6 +489,19 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
 /// STRING`). The point's `0x04` marker byte is checked here; ring's
 /// `UnparsedPublicKey` rejects any malformed point at signature-verify
 /// time as a second line of defense.
+/// Extract the 65-byte SEC1-uncompressed P-256 subject public key from
+/// an X.509 certificate DER, or `None` if it does not parse as X.509 or
+/// does not carry a P-256 point. Used to ingest CD signing roots that
+/// are published as certificates (CSA DCL / `connectedhomeip`
+/// `credentials/`) rather than as bare `SubjectPublicKeyInfo` PEMs.
+fn cert_der_public_key(der: &[u8]) -> Option<Vec<u8>> {
+    use x509_parser::prelude::{FromDer, X509Certificate};
+
+    let (_, cert) = X509Certificate::from_der(der).ok()?;
+    let pk = cert.public_key().subject_public_key.data.as_ref().to_vec();
+    (pk.len() == 65 && pk[0] == 0x04).then_some(pk)
+}
+
 fn parse_pem_public_key(pem: &[u8]) -> Result<Vec<u8>, AttestationError> {
     use base64::Engine;
 
@@ -583,9 +622,12 @@ mod tests {
     }
 
     #[test]
-    fn with_csa_test_roots_loads_bundled_root() {
+    fn with_csa_test_roots_loads_bundled_roots() {
+        // ATT-3: three roots — synthetic (loopback), chip test authority,
+        // CSA production key 001 (verifies the ESP32-C6). All three DERs
+        // parse, so none are silently skipped.
         let trust = CdSigningRoots::with_csa_test_roots();
-        assert_eq!(trust.len(), 1);
+        assert_eq!(trust.len(), 3);
         assert!(!trust.is_empty());
     }
 
