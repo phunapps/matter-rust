@@ -510,3 +510,45 @@ remaining fail-closed residuals are now fixed with loopback regressions:
    the `BlockSender` and serves the transfer from the start (tolerant
    choice; BDX still never starts before the serve's first `QueryImage`,
    and the per-session step budget still bounds re-init loops).
+
+## matter-ble
+
+### BLE central hangs on macOS (`CoreBluetooth`) — Linux-only for live commissioning
+
+**Status:** open; found 2026-07-17 during the M9-C live validation, not investigated.
+
+Live BLE commissioning works from Linux/`BlueZ` (both C1/Wi-Fi and C2/Thread
+were commissioned from the Pi against the ESP32-C6). The same binary run from
+**macOS hangs**: it gets past the scan and far enough to install a NOC — the
+device's NVS held a fabric afterwards, which is how we know it reached AddNOC —
+then stalls indefinitely. It ran >5 minutes, past every deadline in the
+commissioning driver, so this is a **stalled BTP pump, not a rejected
+response**: the driver's response deadlines only bound *awaited* responses, and
+nothing bounds a pump that never delivers.
+
+**Scanning on macOS is fine** (`ble_scan` finds the DUT reliably, and the
+`ScanFilter` fix `a8e07c72` was about the opposite platform). It is GATT/BTP
+that hangs.
+
+Candidate causes, none confirmed:
+
+- The known GATT-slot invariant: `gatt_in_flight` latches on ack emission and
+  the pump must call `gatt_write_completed` after **every** C1 write including
+  standalone acks, or the slot sticks and the session deadlocks (this bit us
+  once already, in the C1 floor test). `CoreBluetooth`'s write-completion
+  semantics differ from `BlueZ`'s and could re-open it.
+- `CoreBluetooth` write/indication behaviour generally: the same rig has
+  long-standing "macOS chip-tool BLE is broken (0x407 GATT write fail)"
+  behaviour, so the platform is suspect — but that is chip's stack, not
+  evidence about ours.
+
+**Why it matters:** macOS is a first-class dev platform for this library, and
+`BleCentral::new`'s whole TCC story is written for it. A central that hangs
+makes `commission_ble` unusable there.
+
+**How to attack it:** macOS has no `btmon`, and the examples print nothing
+between "commissioning…" and the result, so the first step is visibility —
+tracing through the pump (which C1 write was issued, which indication arrived,
+what the session/window/GATT-slot state is), then decide from a real trace. A
+watchdog bounding the whole handshake/pump would turn the hang into a
+diagnosable error, but is a symptom fix, not the cause.
