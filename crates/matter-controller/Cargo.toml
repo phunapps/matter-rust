@@ -69,3 +69,7 @@ name = "open_window"
 [[example]]
 name = "ble_scan"
 required-features = ["ble"]
+
+[[example]]
+name = "commission_ble_thread"
+required-features = ["ble"]
