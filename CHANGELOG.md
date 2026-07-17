@@ -233,6 +233,19 @@ unchanged — its full test suite passes with zero test edits.
 
 ## matter-controller
 
+### [Unreleased] — M9-C2 `commission_ble` Thread support
+
+#### Changed
+
+- **BREAKING (pre-release):** `MatterController::commission_ble(setup_code,
+  wifi: WiFiCredentials)` is now `commission_ble(setup_code, network:
+  matter_commissioning::NetworkCredentials)`. `NetworkCredentials` is an
+  enum (`WiFi(WiFiCredentials)` / `Thread(ThreadDataset)` /
+  `AlreadyOnNetwork`), so a Wi-Fi caller updates by wrapping its existing
+  `WiFiCredentials` in `NetworkCredentials::WiFi(..)`. All callers are
+  ours (examples + the actor spawn) and are already updated. See
+  `docs/runbooks/c2-thread-commission.md` for the Thread call shape.
+
 ### [Unreleased] — M9-C1 `commission_ble`
 
 #### Added
@@ -556,6 +569,76 @@ migration step is needed for snapshots from M9-E1 or earlier.
   uses `open_commissioning_window`.
 
 ## matter-commissioning
+
+### [Unreleased] — M9-C2 Thread commissioning
+
+#### Added
+
+- **`NetworkCredentials` enum** (`state_machine/commissioner.rs`) —
+  replaces `CommissionerConfig`'s `wifi_credentials: Option<WiFiCredentials>`
+  field with `network: NetworkCredentials`, an enum of `WiFi(WiFiCredentials)`
+  / `Thread(ThreadDataset)` / `AlreadyOnNetwork`. `AlreadyOnNetwork` makes
+  the previously-implicit "no credentials = skip provisioning" behavior
+  explicit. `Commissioner::new` validates the variant (existing Wi-Fi
+  bounds; Thread dataset validation lives in `ThreadDataset::new`) and
+  routes network provisioning by the supplied variant, cross-checked
+  against the device's `NetworkCommissioning.FeatureMap` — a mismatch
+  (e.g. `Thread(..)` supplied against a Wi-Fi-only device) surfaces as
+  `CommissioningError::NetworkFeatureUnsupported`.
+- **`ThreadDataset`** (new module `thread_dataset.rs`) — wraps and
+  validates a Thread operational dataset (Thread's own flat TLV format,
+  *not* Matter TLV; obtained from a border router, e.g. `ot-ctl dataset
+  active -x`, hex-decoded by the caller). `ThreadDataset::new` validates
+  non-empty, ≤254 bytes, well-formed TLVs, and the presence of an
+  Extended PAN ID TLV (type `0x02`, length 8). `as_bytes()` returns the
+  opaque dataset for `AddOrUpdateThreadNetwork`; `ext_pan_id()` returns
+  the cached 8-byte Extended PAN ID used as `ConnectNetwork`'s
+  `network_id` for Thread.
+- **`encode_add_or_update_thread_network(operational_dataset, breadcrumb)`**
+  (`clusters/network_commissioning.rs`) — `NetworkCommissioning` cluster
+  `0x0031`, command `ADD_OR_UPDATE_THREAD_NETWORK` (`0x03`), TLV struct
+  `{ ctx0: dataset octet-string, ctx1: breadcrumb uint }` per spec
+  §11.9.6.4. `ConnectNetwork` (`0x06`) is reused unchanged — only the
+  caller-supplied `network_id` differs (Extended PAN ID for Thread vs.
+  SSID for Wi-Fi).
+- **Genericized network stages** (`state_machine/stage.rs`) — the two
+  Wi-Fi-specific stages are renamed to the network-agnostic
+  `NetworkSetup` / `NetworkEnable` (the shared failsafe-extension stage
+  becomes `FailsafeBeforeNetworkEnable`), dispatched by
+  `NetworkCredentials` variant to build either
+  `AddOrUpdateWiFiNetwork`/`AddOrUpdateThreadNetwork`. Internal rename
+  only (`Stage` is `#[non_exhaustive]`, not a wire contract);
+  `EvictPreviousCaseSessions` remains the shared convergence point after
+  either network type.
+- **`ConnectMaxTimeSeconds`-sized failsafe/response deadlines** — Thread
+  attach + SRP registration is slower than Wi-Fi association, so
+  `ReadNetworkCommissioningInfo` now also reads
+  `NetworkCommissioning.ConnectMaxTimeSeconds` (attribute `0x0009`)
+  alongside `FeatureMap`, and both the `FailsafeBeforeNetworkEnable`
+  extension and the `ConnectNetwork` response deadline are sized from it
+  (chip-faithful), falling back to a generous 90 s default
+  (`DEFAULT_CONNECT_MAX_TIME_SECONDS`) if unread or zero. **Behavior
+  change:** this default replaces the C1 path's previous fixed 60 s
+  `ConnectNetwork` deadline; the Wi-Fi path adopts the same
+  `ConnectMaxTimeSeconds`-aware sizing harmlessly (strictly larger
+  default), but has not yet been re-exercised live against a real Wi-Fi
+  device since the change — see `docs/runbooks/c2-thread-commission.md`'s
+  carry-forward note.
+- **Hermetic Thread loopback proof** — `commission_ble_loopback.rs` gains
+  a Thread-FeatureMap mock device (M9-C2 Task 7) exercising the full fork
+  end-to-end (FeatureMap→Thread route, dataset provisioning via
+  `AddOrUpdateThreadNetwork`, `ConnectNetwork` keyed by Extended PAN ID,
+  convergence to CASE) without hardware.
+- **Byte-parity vectors** — `test-vectors/thread/network_commissioning.json`
+  covers `ThreadDataset::ext_pan_id` extraction and
+  `encode_add_or_update_thread_network` wire bytes against a captured
+  OTBR dataset. Live validation procedure (real C6 DUT, chip-tool
+  reference trace diff): `docs/runbooks/c2-thread-commission.md`.
+
+This completes M9 sub-project C (BLE commissioning transport): C1 (Wi-Fi,
+shipped 2026-07-13/14) + C2 (Thread, this entry) — both landed, live
+hardware validation for C2 is the one remaining operator-gated step (see
+the runbook above).
 
 ### [Unreleased] — M9-C1 BLE/BTP commissioning driver
 

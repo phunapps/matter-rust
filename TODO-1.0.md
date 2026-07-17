@@ -380,25 +380,55 @@ skips with `eprintln!` when fixtures are absent or carry empty
 
 ### BLE commissioning transport
 
-**Status:** landed pending live validation (M9-C1, 2026-07-13/14). BLE/BTP
-commissioning is implemented and gate-green: `matter-ble` (sans-IO BTP engine
-+ `btleplug` central role), `matter-transport`'s `transport_reliable` (MRP
-off over BTP), `matter-commissioning`'s `TransportReliability`/
-`run_pase_with`/`commission_ble` driver, and
-`MatterController::commission_ble` (feature `ble`) all merged with a
-byte-parity BTP test-vector suite and an in-process PASE-over-BTP floor test.
-What remains is the live hardware pass — first-ever BLE central-vs-DUT
-handshake, macOS TCC approval, and an end-to-end BLE commission with real
-Wi-Fi credentials — which is **operator-gated** (needs a Mac + a BLE-capable
-Pi DUT in the same room) and walked step-by-step in
-`docs/runbooks/ble-commissioning.md`'s morning checklist (Pi DUT bring-up:
-`docs/runbooks/ble-dut-pi.md`). One BTP test vector
-(`test-vectors/btp/handshake.json`'s `expected_chip_peripheral_response`) is
-still `provisional: true` (a hand-encoded fragment-size assumption) until
-that live capture confirms or corrects it.
+**Status:** C1 (Wi-Fi) landed pending live validation (2026-07-13/14); C2
+(Thread) landed pending live validation (2026-07-17) — **both halves of M9
+sub-project C now landed**; each still has its own operator-gated live
+hardware pass outstanding.
 
-C1 (this work) is **BLE-only**. Thread commissioning (C2) remains deferred
-per the M9-C BLE-first split decision — no radio hardware available yet.
+**C1 — Wi-Fi (M9-C1):** BLE/BTP commissioning is implemented and gate-green:
+`matter-ble` (sans-IO BTP engine + `btleplug` central role),
+`matter-transport`'s `transport_reliable` (MRP off over BTP),
+`matter-commissioning`'s `TransportReliability`/`run_pase_with`/
+`commission_ble` driver, and `MatterController::commission_ble` (feature
+`ble`) all merged with a byte-parity BTP test-vector suite and an
+in-process PASE-over-BTP floor test. What remains is the live hardware pass
+— first-ever BLE central-vs-DUT handshake, macOS TCC approval, and an
+end-to-end BLE commission with real Wi-Fi credentials — which is
+**operator-gated** (needs a Mac + a BLE-capable Pi DUT in the same room)
+and walked step-by-step in `docs/runbooks/ble-commissioning.md`'s morning
+checklist (Pi DUT bring-up: `docs/runbooks/ble-dut-pi.md`). One BTP test
+vector (`test-vectors/btp/handshake.json`'s
+`expected_chip_peripheral_response`) is still `provisional: true` (a
+hand-encoded fragment-size assumption) until that live capture confirms or
+corrects it.
+
+**C2 — Thread (M9-C2):** Thread network provisioning over the same BLE/BTP
+path is implemented and gate-green: `NetworkCredentials` enum (replacing
+the Wi-Fi-only `wifi_credentials` field) + `ThreadDataset` (Thread TLV
+dataset validation + Extended PAN ID extraction) in `matter-commissioning`,
+`encode_add_or_update_thread_network` + genericized `NetworkSetup`/
+`NetworkEnable`/`FailsafeBeforeNetworkEnable` stages routing by the
+supplied credential variant cross-checked against the device's
+`FeatureMap`, `ConnectMaxTimeSeconds`-sized failsafe/response deadlines
+(90 s default, up from the prior fixed 60 s — see the CHANGELOG behavior
+note), and `MatterController::commission_ble`'s signature widened to
+`NetworkCredentials` (a breaking pre-release API change; all callers
+updated). Byte-parity vectors
+(`test-vectors/thread/network_commissioning.json`) and a hermetic
+Thread-mock loopback test (`commission_ble_loopback.rs`) both pass. The
+rig is validated (a chip-tool `pairing ble-thread` reference commission
+already succeeded against the Pi OTBR + ESP32-C6 DUT) but the **live
+matter-rust commission itself has not yet been run** — walked step-by-step
+in `docs/runbooks/c2-thread-commission.md` (re-derive the current dataset's
+Extended PAN ID before every attempt; the OTBR's rotates on network
+re-form). That runbook also flags a real-device Wi-Fi recheck against C1
+now that the failsafe default changed, and notes there is no packaged
+`commission_ble`-with-Thread example binary yet (follow-up after the first
+live run).
+
+With C1 + C2 both landed (code-complete, live-validation-pending), M9
+sub-project C's BLE-first split decision is resolved: BLE commissioning now
+covers both Wi-Fi and Thread network provisioning.
 
 ### Live DCL client
 
