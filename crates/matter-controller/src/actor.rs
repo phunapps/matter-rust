@@ -449,13 +449,14 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<u64, Error>>,
     },
     /// Commission a device over BLE/BTP from a parsed setup payload and required
-    /// Wi-Fi credentials; returns its node id (feature `ble`). Runs on its own
-    /// spawned task exactly like [`Command::Commission`], but the task first
-    /// scans BLE, opens a BTP session, and drives `commission_ble`.
+    /// network (Wi-Fi or Thread) credentials; returns its node id (feature
+    /// `ble`). Runs on its own spawned task exactly like [`Command::Commission`],
+    /// but the task first scans BLE, opens a BTP session, and drives
+    /// `commission_ble`.
     #[cfg(feature = "ble")]
     CommissionBle {
         setup_payload: matter_commissioning::SetupPayload,
-        wifi: matter_commissioning::WiFiCredentials,
+        network: matter_commissioning::NetworkCredentials,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
     /// Establish a subscription to `paths` on `node_id`; returns the report
@@ -1134,12 +1135,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             #[cfg(feature = "ble")]
             Command::CommissionBle {
                 setup_payload,
-                wifi,
+                network,
                 reply,
             } => {
                 // Same off-loop pattern as `Command::Commission`, but the
                 // spawned task scans BLE + opens a BTP session first.
-                self.spawn_commission_ble(setup_payload, wifi, reply);
+                self.spawn_commission_ble(setup_payload, network, reply);
             }
             Command::Subscribe {
                 node_id,
@@ -1391,7 +1392,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     fn spawn_commission_ble(
         &mut self,
         setup_payload: matter_commissioning::SetupPayload,
-        wifi: matter_commissioning::WiFiCredentials,
+        network: matter_commissioning::NetworkCredentials,
         reply: oneshot::Sender<Result<u64, Error>>,
     ) {
         let Some(trust) = self.trust.clone() else {
@@ -1452,7 +1453,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 admin_vendor_id,
                 now,
                 rng,
-                wifi,
+                network,
             )
             .await;
             let _ = tx

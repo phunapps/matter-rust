@@ -145,9 +145,9 @@ pub use icd::{IcdClientType, IcdRegistration};
 pub use icd_listener::CheckIn;
 pub use matter_cert::MatterTime;
 pub use matter_codec::Value;
-/// Wi-Fi credentials for `MatterController::commission_ble` (feature `ble`),
-/// re-exported from `matter-commissioning`.
-pub use matter_commissioning::WiFiCredentials;
+/// Network (Wi-Fi/Thread) credentials for `MatterController::commission_ble`
+/// (feature `ble`), re-exported from `matter-commissioning`.
+pub use matter_commissioning::{NetworkCredentials, ThreadDataset, WiFiCredentials};
 pub use matter_interaction::{
     AttributePath, CommandPath, EventFilter, EventPath, EventPriority, EventReport,
     EventReportItem, EventTimestamp, ImStatus, ReadPath,

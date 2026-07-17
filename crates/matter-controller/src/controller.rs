@@ -474,15 +474,23 @@ impl MatterController {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
-    /// Commission a Wi-Fi device over **BLE/BTP** (feature `ble`): scan for the
-    /// device by discriminator, open a BTP session, run PASE and every
-    /// pre-operational stage (attestation, NOC install, Wi-Fi provisioning) over
-    /// BTP, then complete the operational CASE session over IP once the device
-    /// joins Wi-Fi. Brings the device onto the controller's fabric, persists it,
-    /// and returns its node id.
+    /// Commission a Wi-Fi or Thread device over **BLE/BTP** (feature `ble`):
+    /// scan for the device by discriminator, open a BTP session, run PASE and
+    /// every pre-operational stage (attestation, NOC install, network
+    /// provisioning) over BTP, then complete the operational CASE session over
+    /// IP once the device joins the operational network. Brings the device
+    /// onto the controller's fabric, persists it, and returns its node id.
     ///
-    /// `wifi` is **required** — a BLE-only Wi-Fi device with no network
-    /// credentials to install is unprovisionable (design D7).
+    /// `network` selects which provisioning sub-flow runs after `AddNOC`:
+    /// [`NetworkCredentials::WiFi`](matter_commissioning::NetworkCredentials::WiFi)
+    /// or
+    /// [`NetworkCredentials::Thread`](matter_commissioning::NetworkCredentials::Thread).
+    /// Some network credentials are **required** for a BLE-only device with no
+    /// operational connectivity yet — a BLE-only device with no network to
+    /// join is unprovisionable (design D7);
+    /// [`NetworkCredentials::AlreadyOnNetwork`](matter_commissioning::NetworkCredentials::AlreadyOnNetwork)
+    /// only makes sense for a device that already has operational connectivity
+    /// independent of BLE (e.g. Ethernet).
     ///
     /// **Requires macOS Bluetooth permission (TCC).** The first call
     /// instantiates `CoreBluetooth` and may raise the one-time Bluetooth prompt,
@@ -501,14 +509,14 @@ impl MatterController {
     pub async fn commission_ble(
         &self,
         setup_code: &str,
-        wifi: matter_commissioning::WiFiCredentials,
+        network: matter_commissioning::NetworkCredentials,
     ) -> Result<u64, Error> {
         let setup_payload = parse_setup_code(setup_code)?;
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Command::CommissionBle {
                 setup_payload,
-                wifi,
+                network,
                 reply,
             })
             .await

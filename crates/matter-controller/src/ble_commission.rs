@@ -24,7 +24,7 @@ use tokio::sync::Mutex;
 
 use matter_ble::central::{BleCentral, BtpChannel, CentralError};
 use matter_commissioning::driver::{commission_ble, AsyncDatagram, BleDriverConfig, STREAM_PEER};
-use matter_commissioning::WiFiCredentials;
+use matter_commissioning::NetworkCredentials;
 
 use crate::error::Error;
 
@@ -134,7 +134,7 @@ pub(crate) async fn run_commission_ble_task(
     admin_vendor_id: u16,
     now: matter_cert::MatterTime,
     rng: Arc<dyn matter_commissioning::NocRng>,
-    wifi: WiFiCredentials,
+    network: NetworkCredentials,
 ) -> Result<matter_commissioning::CommissionedFabric, Error> {
     use matter_commissioning::CommissionerConfig;
 
@@ -177,8 +177,10 @@ pub(crate) async fn run_commission_ble_task(
     let mut discovery = matter_transport::MdnsSdDiscovery::new()
         .map_err(|e| Error::Operational(format!("commission mdns: {e}")))?;
 
-    // 4. Drive the BLE commissioning run. Wi-Fi credentials are required: a
-    //    BLE-only Wi-Fi device with no credentials is unprovisionable (D7).
+    // 4. Drive the BLE commissioning run. Network credentials are required: a
+    //    BLE-only device with no Wi-Fi/Thread credentials to install is
+    //    unprovisionable (D7) — `network` may still be `AlreadyOnNetwork` for a
+    //    device that's already joined.
     let commissioner = CommissionerConfig {
         pase_attestation_challenge: [0u8; 16], // commission_ble overwrites from live PASE
         fabric: &fabric_record,
@@ -192,7 +194,7 @@ pub(crate) async fn run_commission_ble_task(
         admin_vendor_id,
         now,
         rng,
-        network: matter_commissioning::NetworkCredentials::WiFi(wifi),
+        network,
     };
     let config = BleDriverConfig {
         commissioner,
