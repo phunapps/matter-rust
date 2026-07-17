@@ -73,3 +73,7 @@ required-features = ["ble"]
 [[example]]
 name = "commission_ble_thread"
 required-features = ["ble"]
+
+[[example]]
+name = "commission_ble_wifi"
+required-features = ["ble"]
