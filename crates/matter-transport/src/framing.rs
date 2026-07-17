@@ -291,11 +291,15 @@ impl ReplayWindow {
     /// Check whether `counter` WOULD be rejected, without recording it or
     /// otherwise mutating the window. Takes `&self` and never writes.
     ///
-    /// This exists so a caller can cheaply reject obvious replays before
-    /// spending AES-CCM cycles — but, crucially, the window is only
-    /// *advanced* by [`Self::check_and_record`] AFTER the message has been
-    /// authenticated. A non-mutating pre-check cannot be poisoned by a
-    /// forged datagram carrying an unauthenticated counter.
+    /// **Not used to gate the inbound path** (see TRAN-1 / [`decode_secured`]):
+    /// classifying a replay from the *unauthenticated* header — before the
+    /// AES-CCM tag is verified — let a forged datagram drive the caller's MRP
+    /// duplicate-ack logic. Replay classification on inbound traffic is done
+    /// only by [`Self::check_and_record`], after authentication. This
+    /// non-mutating classifier remains for callers that genuinely want a
+    /// read-only window query (and for tests); it must never be the basis for
+    /// an ack, a counter increment, or any other side effect on an
+    /// unauthenticated message.
     ///
     /// # Errors
     ///
@@ -408,14 +412,17 @@ pub fn encode_secured(
 ///
 /// On success returns the parsed header and the decrypted payload.
 ///
-/// Replay state is COMMITTED only after the message authenticates: the
-/// header (session id, counter) is unauthenticated plaintext, so advancing
-/// the replay window before verifying the AES-CCM tag would let a forged
-/// datagram poison it (a far-future counter could strand later genuine
-/// traffic — a remote single-packet `DoS`). We therefore authenticate first,
-/// then call [`ReplayWindow::check_and_record`]. An optional non-mutating
-/// fast-path ([`ReplayWindow::would_reject`]) rejects obvious replays up
-/// front to avoid burning AES-CCM cycles, but it never mutates the window.
+/// Replay is classified ONLY after the message authenticates: the header
+/// (session id, counter) is unauthenticated plaintext, so both advancing the
+/// window *and reporting a replay* before verifying the AES-CCM tag are
+/// unsafe. Advancing early would let a forged far-future counter poison the
+/// window (stranding later genuine traffic — a remote single-packet `DoS`);
+/// reporting a replay early (TRAN-1) would let a forged datagram carrying a
+/// previously-seen reliable counter drive the caller's MRP duplicate-ack path
+/// into emitting an encrypted ack and burning a counter. We therefore
+/// authenticate first, then call [`ReplayWindow::check_and_record`] — the sole
+/// replay gate on this path. A forged datagram fails the AEAD tag and returns
+/// [`Error::DecryptionFailed`] before any replay/ack decision is reached.
 ///
 /// # Errors
 ///
@@ -436,10 +443,17 @@ pub fn decode_secured(
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
     let (header, rest) = decode_header(bytes)?;
 
-    // Non-mutating fast-path: reject obvious replays before spending AES
-    // cycles. This MUST NOT advance the window — the header counter is
-    // unauthenticated at this point.
-    replay_window.would_reject(header.message_counter.0)?;
+    // TRAN-1: replay classification happens AFTER authentication, never
+    // before. The header (session id, counter) is unauthenticated cleartext,
+    // so we do NOT run a pre-decrypt reject here — an attacker who replays a
+    // previously-seen reliable counter with any ciphertext would otherwise be
+    // reported to the caller as `ReplayedCounter`, which drives the MRP
+    // duplicate-ack path (`SessionManager::decode_inbound`) into emitting an
+    // encrypted standalone ack and burning an outbound counter for a datagram
+    // that never authenticated. We decrypt first; only an authenticated
+    // duplicate reaches `check_and_record` below and yields `ReplayedCounter`.
+    // (chip does the same: decrypt+verify before message-counter verification,
+    // `SessionManager.cpp:963`.)
 
     // The AAD is the on-the-wire header — the leading bytes of `bytes` up to
     // where the encrypted payload (`rest`) begins. `decode_header` returns

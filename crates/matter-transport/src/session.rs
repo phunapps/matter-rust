@@ -1056,4 +1056,86 @@ mod tests {
         assert_eq!(a.is_transport_reliable(SessionId(1)), Some(true));
         assert_eq!(a.is_transport_reliable(SessionId(99)), None);
     }
+
+    // TRAN-1: the duplicate-reliable re-ack decision must be made only AFTER
+    // the message authenticates. An attacker who has observed a reliable
+    // frame's plaintext header (session id + counter are cleartext) must not
+    // be able to replay that header with any ciphertext and make us emit an
+    // encrypted standalone ack + burn an outbound counter.
+    #[test]
+    fn tran1_forged_replay_emits_no_ack_and_burns_no_counter() {
+        let (mut a, mut b) = paired_sessions();
+        let now = Instant::now();
+        // a -> b, RELIABLE: b records the counter and owes a reliable ack.
+        let out = a
+            .encode_outbound(
+                SessionId(1),
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"payload",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        let _ = b.decode_inbound(&out.wire_bytes, now).unwrap();
+
+        let before = b.sessions[&SessionId(1)].outbound_counter;
+
+        // Forged: same header (valid session id + already-used reliable
+        // counter) but a corrupted AEAD tag — never authenticates.
+        let mut forged = out.wire_bytes.clone();
+        let n = forged.len();
+        forged[n - 1] ^= 0xFF;
+        forged[n - 2] ^= 0xFF;
+
+        let result = b.decode_inbound(&forged, now);
+        assert!(
+            !matches!(
+                result,
+                Ok(DecodeInboundOutput::DuplicateReliableAckResent { .. })
+            ),
+            "an unauthenticated replay must not emit a standalone ack; got {result:?}"
+        );
+        assert!(
+            matches!(result, Err(Error::DecryptionFailed)),
+            "forged ciphertext must fail authentication; got {result:?}"
+        );
+        assert_eq!(
+            before,
+            b.sessions[&SessionId(1)].outbound_counter,
+            "no outbound counter may be burned by an unauthenticated replay"
+        );
+    }
+
+    // Regression guard for the TRAN-1 fix: a genuine, AUTHENTICATED reliable
+    // duplicate (a lost-ack retransmit) must still be re-acked — the fix must
+    // not break MRP's legitimate duplicate handling.
+    #[test]
+    fn tran1_authentic_reliable_duplicate_is_still_reacked() {
+        let (mut a, mut b) = paired_sessions();
+        let now = Instant::now();
+        let out = a
+            .encode_outbound(
+                SessionId(1),
+                None,
+                0x08,
+                ProtocolId::INTERACTION_MODEL,
+                b"payload",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        let first = b.decode_inbound(&out.wire_bytes, now).unwrap();
+        assert!(matches!(first, DecodeInboundOutput::AppMessage { .. }));
+        // Authentic retransmit of the exact same (authenticated) bytes.
+        let second = b.decode_inbound(&out.wire_bytes, now).unwrap();
+        assert!(
+            matches!(
+                second,
+                DecodeInboundOutput::DuplicateReliableAckResent { .. }
+            ),
+            "an authenticated reliable duplicate must be re-acked; got {second:?}"
+        );
+    }
 }
