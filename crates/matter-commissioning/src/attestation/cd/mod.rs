@@ -29,4 +29,6 @@
 
 mod verifier;
 
-pub use verifier::{verify_certification_declaration, CdSigningRoots};
+pub use verifier::{
+    verify_certification_declaration, verify_certification_declaration_with_paa, CdSigningRoots,
+};

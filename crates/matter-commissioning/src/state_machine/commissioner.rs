@@ -1194,11 +1194,12 @@ impl Commissioner {
             cd_cms = %crate::hexdump::hex(&fields.certification_declaration),
             "verifying certification declaration"
         );
-        crate::attestation::verify_certification_declaration(
+        crate::attestation::verify_certification_declaration_with_paa(
             &fields.certification_declaration,
             chain.vendor_id,
             chain.product_id,
             &self.cd_signing_roots,
+            chain.paa_skid.as_deref(),
         )?;
         Ok(())
     }

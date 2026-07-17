@@ -107,6 +107,11 @@ pub struct ChainVerification {
     /// DER-encoded PAA subject Name. Opaque to most callers; kept for
     /// audit logging ("attested by PAA `<subject>`").
     pub paa_subject: Vec<u8>,
+    /// `SubjectKeyIdentifier` of the PAA that anchored the chain, if it
+    /// carries one. Used to enforce a Certification Declaration's
+    /// `authorized_paa_list` (Matter §6.2.3): the CD may restrict which
+    /// PAAs are allowed to attest the device, matched on this SKID.
+    pub paa_skid: Option<Vec<u8>>,
 }
 
 /// Verify a Matter attestation chain.
@@ -272,6 +277,7 @@ pub fn verify_chain(
         product_id: dac.subject_pid(),
         dac_public_key: dac.public_key().to_vec(),
         paa_subject,
+        paa_skid: anchoring_paa.subject_key_identifier(),
     })
 }
 

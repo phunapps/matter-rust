@@ -249,6 +249,26 @@ impl Paa {
     pub fn public_key(&self) -> &[u8] {
         &self.public_key
     }
+
+    /// The PAA's `SubjectKeyIdentifier` extension value, if present.
+    ///
+    /// Used to match a Certification Declaration's `authorized_paa_list`
+    /// (Matter §6.2.3) against the PAA that anchored the DAC chain. Matter
+    /// PAAs carry a 20-byte SKID, but this returns whatever is present
+    /// (or `None` if the extension is absent or the DER no longer parses).
+    #[must_use]
+    pub fn subject_key_identifier(&self) -> Option<Vec<u8>> {
+        use x509_parser::extensions::ParsedExtension;
+        use x509_parser::prelude::{FromDer, X509Certificate};
+
+        let (_, cert) = X509Certificate::from_der(&self.der).ok()?;
+        cert.extensions()
+            .iter()
+            .find_map(|ext| match ext.parsed_extension() {
+                ParsedExtension::SubjectKeyIdentifier(kid) => Some(kid.0.to_vec()),
+                _ => None,
+            })
+    }
 }
 
 /// Internal error: a required DN attribute was missing. Wrapped into

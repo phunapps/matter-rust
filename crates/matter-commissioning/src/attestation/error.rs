@@ -156,6 +156,17 @@ pub enum AttestationError {
     #[error("certification declaration PID list does not contain expected {0:?}")]
     CertificationDeclarationPidMismatch(crate::attestation::ProductId),
 
+    /// The Certification Declaration carries an `authorized_paa_list`
+    /// (Matter Core Spec §6.3.1 tag 11) that does not include the
+    /// `SubjectKeyIdentifier` of the PAA that anchored the device's DAC
+    /// chain. Per Matter §6.2.3 the device may only be attested under a
+    /// PAA the CD authorizes, so this is a counterfeit-detection reject
+    /// (chip `DefaultDeviceAttestationVerifier.cpp:738`). Also raised when
+    /// the CD scopes its PAAs but the anchoring PAA carries no SKID to
+    /// match.
+    #[error("certification declaration authorized_paa_list does not include the device's PAA")]
+    CertificationDeclarationPaaNotAuthorized,
+
     /// ECDSA verification of the device's attestation-response signature
     /// over `attestation_elements || attestation_challenge` did not
     /// succeed against the DAC public key.

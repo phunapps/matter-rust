@@ -75,7 +75,9 @@ pub mod response;
 pub mod trust_store;
 pub mod x509;
 
-pub use cd::{verify_certification_declaration, CdSigningRoots};
+pub use cd::{
+    verify_certification_declaration, verify_certification_declaration_with_paa, CdSigningRoots,
+};
 pub use chain::{verify_chain, ChainVerification};
 pub use error::AttestationError;
 pub use extensions::{ProductId, VendorId};

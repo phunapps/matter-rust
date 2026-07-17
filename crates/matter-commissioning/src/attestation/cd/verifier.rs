@@ -173,11 +173,39 @@ impl CdSigningRoots {
     }
 }
 
+/// Verify a Certification Declaration against a trust store and an
+/// expected VID / PID pair, without enforcing the CD's
+/// `authorized_paa_list`.
+///
+/// Equivalent to [`verify_certification_declaration_with_paa`] with no
+/// device PAA `SubjectKeyIdentifier`: a CD carrying an `authorized_paa_list`
+/// (tag 11) is **not** enforced. Prefer the `_with_paa` form during
+/// commissioning, where the anchoring PAA's SKID is known — otherwise a
+/// device may present a CD that restricts itself to PAAs it does not
+/// actually chain to.
+///
+/// # Errors
+///
+/// See [`verify_certification_declaration_with_paa`].
+#[allow(
+    clippy::similar_names,
+    reason = "expected_vid/expected_pid mirror the crate-wide VendorId/ProductId vocabulary"
+)]
+pub fn verify_certification_declaration(
+    cd_bytes: &[u8],
+    expected_vid: VendorId,
+    expected_pid: ProductId,
+    trust: &CdSigningRoots,
+) -> Result<(), AttestationError> {
+    verify_certification_declaration_with_paa(cd_bytes, expected_vid, expected_pid, trust, None)
+}
+
 /// Verify a Certification Declaration extracted from
 /// `attestation_elements` (Matter Core Spec §6.3.1) against a trust
-/// store and an expected VID / PID pair.
+/// store, an expected VID / PID pair, and — when supplied — the
+/// `SubjectKeyIdentifier` of the PAA that anchored the device's DAC chain.
 ///
-/// Performs five checks in order:
+/// Performs six checks in order:
 ///
 /// 1. CMS `SignedData` DER parse via the `cms` crate.
 /// 2. Structural validation: a single `SignerInfo`, attached
@@ -191,6 +219,11 @@ impl CdSigningRoots {
 ///    `dac_origin_vendor_id` (tag 9) and `dac_origin_product_id`
 ///    (tag 10), those override fields are compared instead of the CD's
 ///    own `vendor_id` / `product_id_array`.
+/// 6. If the CD carries an `authorized_paa_list` (tag 11), require
+///    `device_paa_skid` to be one of its entries (Matter §6.2.3, chip
+///    `DefaultDeviceAttestationVerifier.cpp:738`). Passing `None` for
+///    `device_paa_skid` skips this check only when the CD omits tag 11;
+///    a CD that *does* carry tag 11 is rejected when no SKID is supplied.
 ///
 /// # Errors
 ///
@@ -204,17 +237,23 @@ impl CdSigningRoots {
 ///   declared VID does not equal `expected_vid`.
 /// - [`AttestationError::CertificationDeclarationPidMismatch`] —
 ///   declared PID list does not contain `expected_pid`.
+/// - [`AttestationError::CertificationDeclarationPaaNotAuthorized`] —
+///   the CD's `authorized_paa_list` does not include the device's PAA
+///   `SubjectKeyIdentifier`.
 #[allow(
     clippy::similar_names,
+    clippy::too_many_lines,
     reason = "the `expected_vid`/`expected_pid` pair mirrors the public-API \
      vocabulary used elsewhere in this crate (VendorId/ProductId); \
-     renaming would obscure intent at the call site."
+     renaming would obscure intent at the call site. The function is a \
+     single linear six-step CMS+TLV verification, clearer inline than split."
 )]
-pub fn verify_certification_declaration(
+pub fn verify_certification_declaration_with_paa(
     cd_bytes: &[u8],
     expected_vid: VendorId,
     expected_pid: ProductId,
     trust: &CdSigningRoots,
+    device_paa_skid: Option<&[u8]>,
 ) -> Result<(), AttestationError> {
     use cms::content_info::ContentInfo;
     use cms::signed_data::SignedData;
@@ -333,6 +372,12 @@ pub fn verify_certification_declaration(
         }
     }
 
+    // 7. authorized_paa_list (tag 11): if the CD scopes itself to specific
+    //    PAAs, the device's anchoring PAA SKID SHALL be one of them.
+    if !paa_is_authorized(parsed.authorized_paa_list.as_deref(), device_paa_skid) {
+        return Err(AttestationError::CertificationDeclarationPaaNotAuthorized);
+    }
+
     Ok(())
 }
 
@@ -354,20 +399,33 @@ struct ParsedCd {
     ///
     /// The PID counterpart to [`Self::dac_origin_vendor_id`]; see its docs.
     dac_origin_product_id: Option<ProductId>,
+    /// `authorized_paa_list` (Matter Core Spec §6.3.1 tag 11, optional):
+    /// the `SubjectKeyIdentifiers` of the PAAs permitted to anchor this
+    /// device's DAC chain. When present (`Some`, possibly empty), the
+    /// anchoring PAA's SKID MUST be one of these values (Matter §6.2.3);
+    /// each entry is exactly 20 bytes. `None` means the CD imposes no PAA
+    /// constraint.
+    authorized_paa_list: Option<Vec<[u8; 20]>>,
 }
 
 /// Decode the inner CD TLV per Matter Core Spec §6.3.1: an anonymous
 /// outer structure with context-tagged fields including tag 1
-/// (`vendor_id`, u16), tag 2 (`product_id_array`, array of u16), and the
+/// (`vendor_id`, u16), tag 2 (`product_id_array`, array of u16), the
 /// optional override fields tag 9 (`dac_origin_vendor_id`, u16) and tag
-/// 10 (`dac_origin_product_id`, u16).
+/// 10 (`dac_origin_product_id`, u16), and the optional tag 11
+/// (`authorized_paa_list`, array of 20-byte PAA `SubjectKeyIdentifiers`).
 ///
 /// All other context-tagged fields (`format_version`, `device_type_id`,
 /// `certificate_id`, `security_level`, `security_information`,
-/// `version_number`, `certification_type`, `authorized_paa_list`) and
-/// any future-extension fields are forward-compat ignored — the verifier
-/// only needs VID + PID (and the optional `dac_origin_*` overrides) for
+/// `version_number`, `certification_type`) and any future-extension
+/// fields are forward-compat ignored — the verifier only needs VID + PID
+/// (and the optional `dac_origin_*` overrides + `authorized_paa_list`) for
 /// cross-checking against the DAC subject.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one linear tag-dispatch loop over the CD's context-tagged fields; \
+     splitting the per-tag arms into helpers would scatter the decode logic."
+)]
 fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
     use matter_codec::{ContainerKind, Element, Tag, TlvReader, Value};
 
@@ -387,6 +445,7 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
     let mut pids: Vec<ProductId> = Vec::new();
     let mut origin_vendor: Option<VendorId> = None;
     let mut origin_product: Option<ProductId> = None;
+    let mut authorized_paa_list: Option<Vec<[u8; 20]>> = None;
 
     loop {
         match reader
@@ -460,6 +519,41 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
                     .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?;
                 origin_product = Some(ProductId::new(p16));
             }
+            // authorized_paa_list (tag 11) — optional; array of 20-byte PAA
+            // SubjectKeyIdentifiers (chip `CertificationDeclaration.cpp:285`).
+            Some(Element::ContainerStart {
+                tag: Tag::Context(11),
+                kind: ContainerKind::Array,
+            }) => {
+                if authorized_paa_list.is_some() {
+                    return Err(AttestationError::CertificationDeclarationTlvMalformed);
+                }
+                let mut list: Vec<[u8; 20]> = Vec::new();
+                loop {
+                    match reader
+                        .next()
+                        .map_err(|_| AttestationError::CertificationDeclarationTlvMalformed)?
+                    {
+                        None => return Err(AttestationError::CertificationDeclarationTlvMalformed),
+                        Some(Element::ContainerEnd) => break,
+                        Some(Element::Scalar {
+                            tag: Tag::Anonymous,
+                            value: Value::Bytes(b),
+                        }) => {
+                            // chip requires each entry to be exactly a 20-byte
+                            // key identifier; anything else is a structural error.
+                            let skid: [u8; 20] = b.as_slice().try_into().map_err(|_| {
+                                AttestationError::CertificationDeclarationTlvMalformed
+                            })?;
+                            list.push(skid);
+                        }
+                        Some(_) => {
+                            return Err(AttestationError::CertificationDeclarationTlvMalformed)
+                        }
+                    }
+                }
+                authorized_paa_list = Some(list);
+            }
             // Forward-compat: ignore other context-tagged scalars / containers.
             Some(_) => {}
         }
@@ -475,7 +569,26 @@ fn parse_inner_cd_tlv(tlv: &[u8]) -> Result<ParsedCd, AttestationError> {
         product_ids: pids,
         dac_origin_vendor_id: origin_vendor,
         dac_origin_product_id: origin_product,
+        authorized_paa_list,
     })
+}
+
+/// Whether a device's anchoring-PAA `SubjectKeyIdentifier` is authorized by
+/// a CD's `authorized_paa_list` (Matter §6.2.3, chip
+/// `DefaultDeviceAttestationVerifier.cpp:738`).
+///
+/// - `None` list → the CD imposes no PAA constraint → authorized.
+/// - `Some(list)` → `device_paa_skid` must be present and byte-equal to
+///   one of the 20-byte entries. A missing device SKID, or a SKID not in
+///   the list, is unauthorized.
+fn paa_is_authorized(list: Option<&[[u8; 20]]>, device_paa_skid: Option<&[u8]>) -> bool {
+    match list {
+        None => true,
+        Some(entries) => match device_paa_skid {
+            Some(skid) => entries.iter().any(|e| e.as_slice() == skid),
+            None => false,
+        },
+    }
 }
 
 /// Parse a PEM-encoded `SubjectPublicKeyInfo` for a P-256 public key
@@ -739,6 +852,74 @@ mod tests {
             parsed.product_ids,
             vec![ProductId::new(0x8001), ProductId::new(0x8002)]
         );
+        assert!(
+            parsed.authorized_paa_list.is_none(),
+            "no tag 11 → no PAA constraint"
+        );
+    }
+
+    /// Build a minimal valid CD inner TLV, optionally carrying an
+    /// `authorized_paa_list` (tag 11) of the given SKID entries.
+    #[cfg(test)]
+    fn cd_tlv_with_paa_list(entries: Option<&[&[u8]]>) -> Vec<u8> {
+        #![allow(clippy::unwrap_used)]
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8000).unwrap();
+        w.end_container().unwrap();
+        if let Some(entries) = entries {
+            w.start_array(Tag::Context(11)).unwrap();
+            for e in entries {
+                w.put_bytes(Tag::Anonymous, e).unwrap();
+            }
+            w.end_container().unwrap();
+        }
+        w.end_container().unwrap();
+        buf
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+    fn parse_inner_cd_tlv_extracts_authorized_paa_list() {
+        let a = [0xAAu8; 20];
+        let b = [0xBBu8; 20];
+        let buf = cd_tlv_with_paa_list(Some(&[&a, &b]));
+        let parsed = parse_inner_cd_tlv(&buf).expect("tag 11 decodes");
+        assert_eq!(parsed.authorized_paa_list, Some(vec![a, b]));
+    }
+
+    #[test]
+    fn parse_inner_cd_tlv_rejects_wrong_length_paa_entry() {
+        // chip requires each authorized_paa_list entry to be exactly 20
+        // bytes; a 19-byte entry is a structural error.
+        let short = [0xAAu8; 19];
+        let buf = cd_tlv_with_paa_list(Some(&[&short]));
+        assert!(matches!(
+            parse_inner_cd_tlv(&buf),
+            Err(AttestationError::CertificationDeclarationTlvMalformed)
+        ));
+    }
+
+    #[test]
+    fn paa_is_authorized_matrix() {
+        let a = [0xAAu8; 20];
+        let b = [0xBBu8; 20];
+        // No list → always authorized (CD imposes no constraint).
+        assert!(paa_is_authorized(None, Some(&a)));
+        assert!(paa_is_authorized(None, None));
+        // List present, SKID in it → authorized.
+        assert!(paa_is_authorized(Some(&[a, b]), Some(&a)));
+        // List present, SKID not in it → rejected.
+        let c = [0xCCu8; 20];
+        assert!(!paa_is_authorized(Some(&[a, b]), Some(&c)));
+        // List present, no device SKID → rejected.
+        assert!(!paa_is_authorized(Some(&[a, b]), None));
+        // Empty list → nothing authorized.
+        assert!(!paa_is_authorized(Some(&[]), Some(&a)));
     }
 
     #[test]

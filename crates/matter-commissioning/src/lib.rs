@@ -130,9 +130,9 @@ pub use setup::{
 
 pub use attestation::{
     extract_attestation_elements_fields, verify_attestation_response,
-    verify_certification_declaration, verify_chain, verify_dac_signed_elements,
-    AttestationElementsFields, AttestationError, AttestationResponse, CdSigningRoots,
-    ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
+    verify_certification_declaration, verify_certification_declaration_with_paa, verify_chain,
+    verify_dac_signed_elements, AttestationElementsFields, AttestationError, AttestationResponse,
+    CdSigningRoots, ChainVerification, Dac, Paa, PaaTrustStore, Pai, ProductId, VendorId,
 };
 
 pub use noc::{
