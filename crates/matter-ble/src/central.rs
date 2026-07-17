@@ -212,9 +212,21 @@ impl BleCentral {
     /// Connect to `device`, open the Matter BTP GATT service, run the BTP
     /// handshake, and return a live [`BtpChannel`].
     ///
-    /// The C2 notification stream is drained by a spawned pump task started
-    /// before the handshake write, so the handshake response cannot be lost to
-    /// btleplug's bounded notification buffer.
+    /// **Ordering is protocol-critical: the C1 handshake request must be
+    /// written before subscribing to C2.** chip's peripheral stashes its
+    /// capabilities response and only indicates it upon receiving the
+    /// subscription (`BLEEndPoint::HandleSubscribeReceived`), which additionally
+    /// requires the endpoint to already be in `kState_Connecting` with a
+    /// non-empty send queue — the state the capabilities request establishes.
+    /// Subscribing first therefore makes the peripheral reject the subscribe as
+    /// `CHIP_ERROR_INCORRECT_STATE` and leaves the queued response with no
+    /// trigger: the device goes silent and the handshake times out. Real
+    /// hardware is the only thing that catches this; a loopback peer that
+    /// answers a request immediately accepts either order.
+    ///
+    /// The local notification stream is still opened *before* the write (it
+    /// writes no CCCD and the peripheral cannot observe it), so the response
+    /// cannot be lost to btleplug's bounded notification buffer.
     ///
     /// # Errors
     /// [`CentralError`] variants for connect, GATT discovery, subscription, or
@@ -237,11 +249,9 @@ impl BleCentral {
         let c1 = find_char(&peripheral, C1_UUID).ok_or(CentralError::GattNotFound("C1"))?;
         let c2 = find_char(&peripheral, C2_UUID).ok_or(CentralError::GattNotFound("C2"))?;
 
-        // Subscribe and open the notification stream BEFORE the handshake write.
-        peripheral
-            .subscribe(&c2)
-            .await
-            .map_err(|e| CentralError::Gatt(e.to_string()))?;
+        // Open the local notification stream before anything can be indicated,
+        // so the response cannot be lost to btleplug's bounded buffer. This is
+        // local only — it writes no CCCD and is invisible to the peripheral.
         let mut indications = peripheral
             .notifications()
             .await
@@ -255,6 +265,13 @@ impl BleCentral {
         };
         peripheral
             .write(&c1, &request.encode(), WriteType::WithResponse)
+            .await
+            .map_err(|e| CentralError::Gatt(e.to_string()))?;
+
+        // Subscribe AFTER the request: the CCCD write is what makes the
+        // peripheral emit the response (see this method's doc comment).
+        peripheral
+            .subscribe(&c2)
             .await
             .map_err(|e| CentralError::Gatt(e.to_string()))?;
 
