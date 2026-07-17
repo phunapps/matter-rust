@@ -42,8 +42,8 @@ use std::path::PathBuf;
 use base64::Engine;
 use matter_cert::test_support::{build_x509_der, TestCertFields};
 use matter_cert::{
-    BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyUsage, MatterTime, Signature,
-    TrustedRoots,
+    BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyIdentifier, KeyUsage,
+    MatterTime, Signature, TrustedRoots,
 };
 use matter_commissioning::attestation::{AttestationResponse, Paa, PaaTrustStore};
 use matter_commissioning::driver::{
@@ -154,6 +154,7 @@ pub fn build_mock_device_pki(now: MatterTime) -> MockDevicePki {
             extensions: Extensions::builder()
                 .basic_constraints(Some(BasicConstraints::new(true, Some(1))))
                 .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+                .subject_key_identifier(Some(KeyIdentifier([0xA0; 20])))
                 .build(),
             signature: Signature::new([0u8; 64]),
         },
@@ -180,6 +181,8 @@ pub fn build_mock_device_pki(now: MatterTime) -> MockDevicePki {
             extensions: Extensions::builder()
                 .basic_constraints(Some(BasicConstraints::new(true, Some(0))))
                 .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+                .subject_key_identifier(Some(KeyIdentifier([0xB0; 20])))
+                .authority_key_identifier(Some(KeyIdentifier([0xA0; 20])))
                 .build(),
             signature: Signature::new([0u8; 64]),
         },
@@ -212,6 +215,8 @@ pub fn build_mock_device_pki(now: MatterTime) -> MockDevicePki {
                 .basic_constraints(Some(BasicConstraints::new(false, None)))
                 .key_usage(Some(KeyUsage::DIGITAL_SIGNATURE))
                 .extended_key_usage(Some(vec![EKU_CLIENT_AUTH]))
+                .subject_key_identifier(Some(KeyIdentifier([0xC0; 20])))
+                .authority_key_identifier(Some(KeyIdentifier([0xB0; 20])))
                 .build(),
             signature: Signature::new([0u8; 64]),
         },

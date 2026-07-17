@@ -1124,6 +1124,7 @@ impl Commissioner {
     ///    [`crate::attestation::CdSigningRoots`] and confirm the
     ///    declared VID/PID match what the DAC subject claimed.
     fn run_attestation_verification(&mut self) -> Result<(), CommissioningError> {
+        use crate::attestation::profile::{verify_attestation_cert_format, CertRole};
         use crate::attestation::{
             extract_attestation_elements_fields, verify_attestation_response, verify_chain,
             AttestationError, Dac, Pai,
@@ -1154,6 +1155,16 @@ impl Commissioner {
             pai_der = %crate::hexdump::hex(pai_der),
             "verifying attestation chain"
         );
+
+        // 1b. Certificate format profile (Matter §6.2.2) — mirrors chip's
+        //     `VerifyAttestationCertificateFormat`. `rustls-webpki` ignores
+        //     the KeyUsage extension and never requires SKID/AKID, so a
+        //     counterfeit DAC carrying `keyUsage = keyCertSign` (a signing
+        //     key posing as a device leaf) would pass path validation. We
+        //     enforce the DAC/PAI X.509 profile ourselves, before trusting
+        //     the chain. PAI first, then DAC — chip's order.
+        verify_attestation_cert_format(pai.der(), CertRole::Pai)?;
+        verify_attestation_cert_format(dac.der(), CertRole::Dac)?;
 
         // 2. Chain validation (M6.2.2 — webpki path validation + VID/PID overlay).
         //    The returned `ChainVerification` carries the VID/PID that

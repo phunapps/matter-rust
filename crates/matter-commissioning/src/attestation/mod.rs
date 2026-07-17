@@ -67,6 +67,10 @@ pub mod cd;
 pub mod chain;
 pub mod error;
 pub mod extensions;
+/// X.509 attestation-certificate profile enforcement (Matter §6.2.2),
+/// mirroring chip's `VerifyAttestationCertificateFormat`. Crate-internal:
+/// the commissioner runs it automatically during attestation.
+pub(crate) mod profile;
 pub mod response;
 pub mod trust_store;
 pub mod x509;

@@ -112,11 +112,24 @@ pub struct ChainVerification {
 /// Verify a Matter attestation chain.
 ///
 /// Runs `rustls-webpki`'s RFC 5280 path validation (signature, name
-/// chaining, validity windows, `BasicConstraints`, `KeyUsage`, and the
-/// `id-kp-clientAuth` EKU per Matter §6.5), then layers Matter
-/// §6.2.3's VID/PID equality overlay on top. The DAC is treated as
-/// the end-entity, the PAI as the sole intermediate, and the trust
-/// store as the set of candidate PAAs.
+/// chaining, validity windows, and `BasicConstraints` cA/path-length),
+/// then layers Matter §6.2.3's VID/PID equality overlay on top. The DAC
+/// is treated as the end-entity, the PAI as the sole intermediate, and
+/// the trust store as the set of candidate PAAs.
+///
+/// **What webpki does *not* check.** `rustls-webpki` deliberately
+/// **ignores the `KeyUsage` extension** for validation (see its
+/// `verify_cert.rs`: *"For cert validation, we ignore the `KeyUsage`
+/// extension"*), and it treats `ExtendedKeyUsage` as
+/// *required-if-present* only — an absent EKU passes. We pass
+/// [`KeyUsage::client_auth`] below, so a present EKU that lacks
+/// `id-kp-clientAuth` is still rejected, but an EKU-less cert is not.
+/// The full Matter attestation-certificate *profile* — the `KeyUsage`
+/// bits, `SubjectKeyIdentifier`/`AuthorityKeyIdentifier` presence, the
+/// certificate version, the signature algorithm, and the role-correct
+/// `BasicConstraints` — is enforced separately by the crate-internal
+/// `verify_attestation_cert_format`, which the commissioner runs
+/// alongside this function (as chip's device attestation verifier does).
 ///
 /// Pure sans-I/O: no clock reads, no network, no internal state.
 /// Time is supplied via [`MatterTime`] so tests can pin behaviour to

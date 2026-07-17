@@ -44,6 +44,23 @@ pub enum AttestationError {
     #[error("BasicConstraints violation")]
     BasicConstraintsViolation,
 
+    /// The certificate breaches the Matter attestation certificate
+    /// *profile* (Matter Core Spec §6.2.2) in a way other than
+    /// `BasicConstraints`: a wrong version or signature algorithm, or a
+    /// `KeyUsage` / `SubjectKeyIdentifier` / `AuthorityKeyIdentifier`
+    /// extension that is absent, mis-flagged (wrong criticality or
+    /// bits), duplicated, or malformed. Mirrors connectedhomeip's
+    /// `VerifyAttestationCertificateFormat`; `rustls-webpki` enforces
+    /// none of these (it ignores `KeyUsage` and never requires
+    /// SKID/AKID), so this check runs in our own code as a peer of
+    /// [`crate::attestation::verify_chain`]. (`BasicConstraints`
+    /// breaches surface as [`AttestationError::BasicConstraintsViolation`].)
+    #[error("attestation certificate format violation: {reason}")]
+    CertFormatViolation {
+        /// Human-readable description of which profile rule failed.
+        reason: &'static str,
+    },
+
     /// No PAA in the supplied [`crate::attestation::PaaTrustStore`]
     /// matched the PAI's issuer.
     #[error("PAA not in trust store")]
