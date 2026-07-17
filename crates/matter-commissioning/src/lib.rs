@@ -46,8 +46,9 @@
 //!   infrastructure shipped — see [`state_machine`] for the API.
 //! - **M6.5 (current):** Wi-Fi network commissioning. Expands the
 //!   `NetworkCommissioning` no-op slot into the real Wi-Fi sub-cursor
-//!   (`ReadNetworkCommissioningInfo` → `WiFiNetworkSetup` →
-//!   `FailsafeBeforeWiFiEnable` → `WiFiNetworkEnable`). Ethernet-only
+//!   (`ReadNetworkCommissioningInfo` → `NetworkSetup` →
+//!   `FailsafeBeforeNetworkEnable` → `NetworkEnable`; the generic stages
+//!   also carry the M9-C2 Thread provisioning path). Ethernet-only
 //!   devices skip the Wi-Fi sub-cursor entirely; Thread-only devices
 //!   fail fast with a typed `NetworkFeatureUnsupported` error. New
 //!   `RemediationHint` enum surfaces actionable categories for

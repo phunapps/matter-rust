@@ -36,6 +36,11 @@ pub mod response_id {
 pub mod attribute_id {
     /// Universal Matter cluster meta-attribute. Spec §7.13.
     pub const FEATURE_MAP: u32 = 0xFFFC;
+    /// `ConnectMaxTimeSeconds` (spec §11.9.5.4). Maximum time, in
+    /// seconds, the device may take to connect to an operational network
+    /// after `ConnectNetwork`. Used to size the failsafe extension before
+    /// `ConnectNetwork` (Thread attach is slower than Wi-Fi association).
+    pub const CONNECT_MAX_TIME_SECONDS: u32 = 0x0009;
 }
 
 bitflags::bitflags! {
@@ -161,6 +166,40 @@ pub fn decode_feature_map(tlv: &[u8]) -> Result<NetworkCommissioningFeature, Com
     }
 }
 
+/// Decode the `NetworkCommissioning::ConnectMaxTimeSeconds` attribute
+/// value (spec §11.9.5.4).
+///
+/// Expects the bare TLV encoding of the unsigned attribute value (no
+/// `AttributeReportIB` envelope) — the same single-attribute shape
+/// [`decode_feature_map`] parses. The state machine's driver unwraps the
+/// Interaction Model report and delivers just the value TLV.
+///
+/// The attribute is a `u16` seconds count on the wire; a value that does
+/// not fit `u16` is clamped to [`u16::MAX`] rather than rejected, since
+/// the value only sizes a local timeout (over-large is harmless, and a
+/// hostile device cannot use it to reject a well-formed read).
+///
+/// # Errors
+///
+/// Returns `CommissioningError::MalformedResponse(Stage::ReadNetworkCommissioningInfo)`
+/// if the bytes are not a well-formed unsigned-integer TLV element.
+pub fn decode_connect_max_time_seconds(tlv: &[u8]) -> Result<u16, CommissioningError> {
+    use matter_codec::{Element, TlvReader, Value};
+    let mut reader = TlvReader::new(tlv);
+    match reader
+        .next()
+        .map_err(|_| CommissioningError::MalformedResponse(Stage::ReadNetworkCommissioningInfo))?
+    {
+        Some(Element::Scalar {
+            value: Value::Uint(raw),
+            ..
+        }) => Ok(u16::try_from(raw).unwrap_or(u16::MAX)),
+        _ => Err(CommissioningError::MalformedResponse(
+            Stage::ReadNetworkCommissioningInfo,
+        )),
+    }
+}
+
 /// Decoded `NetworkConfigResponse` (spec §11.9.6.5). Emitted by
 /// `AddOrUpdateWiFiNetwork`, `RemoveNetwork`, `ReorderNetworks`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +229,7 @@ pub struct ConnectNetworkResponse {
 ///
 /// `stage` is plumbed through so any error includes the right cursor
 /// position in `CommissioningError::MalformedResponse(_)`. Callers
-/// pass `Stage::WiFiNetworkSetup` in production.
+/// pass `Stage::NetworkSetup` in production.
 ///
 /// # Errors
 ///
@@ -490,11 +529,39 @@ mod tests {
     }
 
     #[test]
+    fn decode_connect_max_time_seconds_round_trips() {
+        // 1-byte uint: { 0x04, 30 } → 30 seconds.
+        assert_eq!(decode_connect_max_time_seconds(&[0x04, 30]).unwrap(), 30);
+        // 2-byte uint: 0x05 <lo> <hi> → 300 seconds (0x012C).
+        assert_eq!(
+            decode_connect_max_time_seconds(&[0x05, 0x2C, 0x01]).unwrap(),
+            300
+        );
+    }
+
+    #[test]
+    fn decode_connect_max_time_seconds_clamps_oversize_to_u16_max() {
+        // 4-byte uint 0x0001_0000 (65536) exceeds u16 → clamped, not rejected.
+        let tlv = vec![0x06, 0x00, 0x00, 0x01, 0x00];
+        assert_eq!(decode_connect_max_time_seconds(&tlv).unwrap(), u16::MAX);
+    }
+
+    #[test]
+    fn decode_connect_max_time_seconds_rejects_non_uint() {
+        // Octet-string TLV — wrong element type.
+        let err = decode_connect_max_time_seconds(&[0x10, 0x00]).expect_err("should fail");
+        assert!(
+            matches!(err, CommissioningError::MalformedResponse(_)),
+            "got {err:?}",
+        );
+    }
+
+    #[test]
     fn network_config_response_ok_round_trips() {
         // { 0: 0_u8 }
         let tlv = vec![0x15, 0x24, 0x00, 0x00, 0x18];
-        let decoded = decode_network_config_response(Stage::WiFiNetworkSetup, &tlv)
-            .expect("happy path decodes");
+        let decoded =
+            decode_network_config_response(Stage::NetworkSetup, &tlv).expect("happy path decodes");
         assert_eq!(decoded.networking_status, 0);
         assert_eq!(decoded.debug_text, None);
     }
@@ -506,16 +573,16 @@ mod tests {
             0x15, 0x24, 0x00, 0x07, 0x2C, 0x01, 0x08, b'w', b'r', b'o', b'n', b'g', b'-', b'p',
             b'w', 0x18,
         ];
-        let decoded = decode_network_config_response(Stage::WiFiNetworkSetup, &tlv)
-            .expect("happy path decodes");
+        let decoded =
+            decode_network_config_response(Stage::NetworkSetup, &tlv).expect("happy path decodes");
         assert_eq!(decoded.networking_status, 7);
         assert_eq!(decoded.debug_text.as_deref(), Some("wrong-pw"));
     }
 
     #[test]
     fn network_config_response_malformed_returns_error() {
-        let err = decode_network_config_response(Stage::WiFiNetworkSetup, &[0xFF])
-            .expect_err("should fail");
+        let err =
+            decode_network_config_response(Stage::NetworkSetup, &[0xFF]).expect_err("should fail");
         assert!(
             matches!(err, CommissioningError::MalformedResponse(_)),
             "got {err:?}"
@@ -525,7 +592,7 @@ mod tests {
     #[test]
     fn connect_network_response_ok_round_trips() {
         let tlv = vec![0x15, 0x24, 0x00, 0x00, 0x18];
-        let decoded = decode_connect_network_response(Stage::WiFiNetworkEnable, &tlv)
+        let decoded = decode_connect_network_response(Stage::NetworkEnable, &tlv)
             .expect("happy path decodes");
         assert_eq!(decoded.networking_status, 0);
         assert_eq!(decoded.debug_text, None);
@@ -540,15 +607,14 @@ mod tests {
             0x20, 0x02, 0x0A, // signed-int 1B, value +10
             0x18,
         ];
-        let decoded =
-            decode_connect_network_response(Stage::WiFiNetworkEnable, &tlv).expect("decodes");
+        let decoded = decode_connect_network_response(Stage::NetworkEnable, &tlv).expect("decodes");
         assert_eq!(decoded.networking_status, 9);
         assert_eq!(decoded.error_value, Some(10));
     }
 
     #[test]
     fn connect_network_response_malformed_returns_error() {
-        let err = decode_connect_network_response(Stage::WiFiNetworkEnable, &[0xFF])
+        let err = decode_connect_network_response(Stage::NetworkEnable, &[0xFF])
             .expect_err("should fail");
         assert!(
             matches!(err, CommissioningError::MalformedResponse(_)),

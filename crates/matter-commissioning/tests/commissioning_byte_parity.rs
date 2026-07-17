@@ -15,9 +15,9 @@
 //! `AddTrustedRootCertificate`). M6.5.3 extends scope to the new
 //! Wi-Fi sub-cursor: when the operator-captured fixture grows
 //! `ReadNetworkCommissioningInfo` (`FeatureMap` read),
-//! `WiFiNetworkSetup` (`AddOrUpdateWiFiNetwork`),
-//! `FailsafeBeforeWiFiEnable` (second `ArmFailSafe`), and
-//! `WiFiNetworkEnable` (`ConnectNetwork`) stage records, this test
+//! `NetworkSetup` (`AddOrUpdateWiFiNetwork`),
+//! `FailsafeBeforeNetworkEnable` (second `ArmFailSafe`), and
+//! `NetworkEnable` (`ConnectNetwork`) stage records, this test
 //! will replay them via the existing data-driven match arms — no
 //! Rust-side schema change required. All four new stages are
 //! RNG-free; they are NOT added to the `rng_bearing` allowlist.

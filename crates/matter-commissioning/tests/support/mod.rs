@@ -1455,7 +1455,7 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
         // Wire shape after extract_read_payload re-encoding:
         //   anonymous uint (what decode_feature_map expects).
         // ETHERNET only = bit 2 = value 4. No WIFI (bit 0) or THREAD (bit 1) bits.
-        // With only ETHERNET set, the Commissioner skips Stage::WiFiNetworkSetup.
+        // With only ETHERNET set, the Commissioner skips Stage::NetworkSetup.
         (0x0031, 0xFFFC) => {
             let ethernet_feature: u32 =
                 matter_commissioning::clusters::network_commissioning::NetworkCommissioningFeature::ETHERNET
@@ -1463,6 +1463,19 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
             let mut buf = Vec::new();
             TlvWriter::new(&mut buf)
                 .put_uint(Tag::Anonymous, u64::from(ethernet_feature))
+                .unwrap();
+            buf
+        }
+
+        // ConnectMaxTimeSeconds (0x0031/0x0009): read alongside FeatureMap at
+        // Stage::ReadNetworkCommissioningInfo (D7). u16 seconds; sizes the
+        // FailsafeBeforeNetworkEnable extension. Value is irrelevant on the
+        // Ethernet loopback (AlreadyOnNetwork skips network setup), but the
+        // device must answer the requested path — return a plausible 30 s.
+        (0x0031, 0x0009) => {
+            let mut buf = Vec::new();
+            TlvWriter::new(&mut buf)
+                .put_uint(Tag::Anonymous, 30)
                 .unwrap();
             buf
         }

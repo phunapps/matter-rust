@@ -46,27 +46,39 @@ pub enum Stage {
     SendTrustedRootCert,
     /// `OperationalCredentials::AddNOC` (command `0x06`).
     SendNoc,
-    /// Read `NetworkCommissioning::FeatureMap` (attribute `0xFFFC`) on
-    /// endpoint 0. Determines whether the device supports Wi-Fi,
+    /// Read `NetworkCommissioning::FeatureMap` (attribute `0xFFFC`) and
+    /// `ConnectMaxTimeSeconds` (attribute `0x0009`) on endpoint 0.
+    /// `FeatureMap` determines whether the device supports Wi-Fi,
     /// Ethernet, or Thread (or some combination). Branching at this
-    /// stage's response routes to `WiFiNetworkSetup` (Wi-Fi),
-    /// `EvictPreviousCaseSessions` (Ethernet-only), or `Failed`
-    /// (Thread-only / malformed).
+    /// stage's response routes by the *supplied*
+    /// [`super::NetworkCredentials`] variant, cross-checked against the
+    /// device `FeatureMap`: matching credentials advance to
+    /// `NetworkSetup`, `AlreadyOnNetwork` skips to
+    /// `EvictPreviousCaseSessions`, and a credential type absent from the
+    /// `FeatureMap` fails with `NetworkFeatureUnsupported`.
     ReadNetworkCommissioningInfo,
-    /// `NetworkCommissioning::AddOrUpdateWiFiNetwork` (cluster `0x0031`
-    /// command `0x02`). Skipped for Ethernet-only devices.
-    WiFiNetworkSetup,
+    /// Network provisioning: `NetworkCommissioning::AddOrUpdateWiFiNetwork`
+    /// (cluster `0x0031` command `0x02`) for Wi-Fi credentials, or
+    /// `AddOrUpdateThreadNetwork` (command `0x03`) for a Thread dataset.
+    /// The stage is generic; the command is selected by the supplied
+    /// [`super::NetworkCredentials`] variant. Skipped for `AlreadyOnNetwork`
+    /// / Ethernet-only devices.
+    NetworkSetup,
     /// Second `GeneralCommissioning::ArmFailSafe` (cluster `0x0030`
     /// command `0x00`). Extends the failsafe window before
     /// `ConnectNetwork` so the device has room to associate with the
     /// operational network and re-discover the commissioner via mDNS.
-    /// Re-uses the existing `Expectation::ArmFailsafeResponse`.
-    FailsafeBeforeWiFiEnable,
+    /// The extension is sized from the device's `ConnectMaxTimeSeconds`
+    /// (Thread attach is slower than Wi-Fi association), falling back to
+    /// a generous default. Re-uses the existing
+    /// `Expectation::ArmFailsafeResponse`.
+    FailsafeBeforeNetworkEnable,
     /// `NetworkCommissioning::ConnectNetwork` (cluster `0x0031`
     /// command `0x06`). The device associates with the operational
     /// network and (typically) returns `ConnectNetworkResponse` over
-    /// PASE before switching networks.
-    WiFiNetworkEnable,
+    /// PASE before switching networks. The `network_id` is the SSID for
+    /// Wi-Fi and the Extended PAN ID for Thread.
+    NetworkEnable,
     /// Evict any prior CASE session for this fabric/peer pair. M6.4
     /// only supports new-fabric commissioning — no eviction needed —
     /// so the stage advances immediately. Slot reserved for M8
@@ -117,10 +129,10 @@ pub fn next_stage(current: Stage) -> Option<Stage> {
         Stage::GenerateNocChain => Stage::SendTrustedRootCert,
         Stage::SendTrustedRootCert => Stage::SendNoc,
         Stage::SendNoc => Stage::ReadNetworkCommissioningInfo,
-        Stage::ReadNetworkCommissioningInfo => Stage::WiFiNetworkSetup,
-        Stage::WiFiNetworkSetup => Stage::FailsafeBeforeWiFiEnable,
-        Stage::FailsafeBeforeWiFiEnable => Stage::WiFiNetworkEnable,
-        Stage::WiFiNetworkEnable => Stage::EvictPreviousCaseSessions,
+        Stage::ReadNetworkCommissioningInfo => Stage::NetworkSetup,
+        Stage::NetworkSetup => Stage::FailsafeBeforeNetworkEnable,
+        Stage::FailsafeBeforeNetworkEnable => Stage::NetworkEnable,
+        Stage::NetworkEnable => Stage::EvictPreviousCaseSessions,
         Stage::EvictPreviousCaseSessions => Stage::FindOperationalForComplete,
         Stage::FindOperationalForComplete => Stage::SendComplete,
         Stage::SendComplete => Stage::Cleanup,
@@ -151,9 +163,9 @@ mod tests {
             Stage::SendTrustedRootCert,
             Stage::SendNoc,
             Stage::ReadNetworkCommissioningInfo,
-            Stage::WiFiNetworkSetup,
-            Stage::FailsafeBeforeWiFiEnable,
-            Stage::WiFiNetworkEnable,
+            Stage::NetworkSetup,
+            Stage::FailsafeBeforeNetworkEnable,
+            Stage::NetworkEnable,
             Stage::EvictPreviousCaseSessions,
             Stage::FindOperationalForComplete,
             Stage::SendComplete,

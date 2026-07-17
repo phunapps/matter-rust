@@ -347,8 +347,8 @@ proptest! {
     /// `ReadCommissioningInfo` waiting state on top of the existing
     /// `on_response_never_panics` + `poll_never_panics` coverage from
     /// M6.4.1 T10. Updated to 21 stages in M6.5.2 (adds
-    /// `ReadNetworkCommissioningInfo`, `WiFiNetworkSetup`,
-    /// `FailsafeBeforeWiFiEnable`, and `WiFiNetworkEnable`).
+    /// `ReadNetworkCommissioningInfo`, `NetworkSetup`,
+    /// `FailsafeBeforeNetworkEnable`, and `NetworkEnable`).
     #[test]
     fn transitions_are_total(
         target_stage_index in 0_usize..21,

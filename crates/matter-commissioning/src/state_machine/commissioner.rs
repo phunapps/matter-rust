@@ -16,6 +16,14 @@ use crate::state_machine::stage::Stage;
 #[cfg(feature = "tracing")]
 use tracing::instrument;
 
+/// Fallback failsafe extension (seconds) applied at
+/// `Stage::FailsafeBeforeNetworkEnable` when the device did not report a
+/// usable `ConnectMaxTimeSeconds`. Chosen generously (Thread attach +
+/// SRP registration is slower than Wi-Fi association); the C1 Wi-Fi path
+/// adopts it harmlessly. Matter Core Spec §11.9.5.4 defines the attribute
+/// but does not mandate a minimum, so a conservative default is safest.
+const DEFAULT_CONNECT_MAX_TIME_SECONDS: u16 = 90;
+
 /// Wi-Fi station credentials supplied to `AddOrUpdateWiFiNetwork`.
 ///
 /// `ssid` must be 1–32 bytes (Matter Core Spec §11.9 constraints).
@@ -55,9 +63,10 @@ impl core::fmt::Debug for WiFiCredentials {
 /// - [`NetworkCredentials::WiFi`] provisions Wi-Fi via
 ///   `AddOrUpdateWiFiNetwork` + `ConnectNetwork`.
 /// - [`NetworkCredentials::Thread`] provisions Thread from an operational
-///   dataset (dispatch/routing is wired in a later task; the dataset is
+///   dataset via `AddOrUpdateThreadNetwork` + `ConnectNetwork` (the
+///   Extended PAN ID is the `ConnectNetwork` `network_id`); the dataset is
 ///   self-validated at [`ThreadDataset`](crate::ThreadDataset)
-///   construction).
+///   construction.
 /// - [`NetworkCredentials::AlreadyOnNetwork`] skips network provisioning
 ///   entirely — correct both for Ethernet-only devices and for devices
 ///   already reachable on their operational network (the usual
@@ -132,8 +141,8 @@ pub struct CommissionerConfig<'a> {
     /// correct both for Ethernet-only devices and for devices already
     /// reachable on their operational network (the usual case for IP
     /// commissioning, e.g. a second-fabric commission). Supplying
-    /// [`NetworkCredentials::WiFi`] forces provisioning via
-    /// `Stage::WiFiNetworkSetup`.
+    /// [`NetworkCredentials::WiFi`] or [`NetworkCredentials::Thread`]
+    /// forces provisioning via `Stage::NetworkSetup`.
     pub network: NetworkCredentials,
 }
 
@@ -197,16 +206,27 @@ pub struct Commissioner {
 
     /// Operational-network credentials captured from config at
     /// construction; consumed by the network-provisioning sub-cursor
-    /// (`Stage::WiFiNetworkSetup` for Wi-Fi).
+    /// (`Stage::NetworkSetup`, `AddOrUpdateWiFiNetwork` for Wi-Fi or
+    /// `AddOrUpdateThreadNetwork` for Thread).
     /// [`NetworkCredentials::AlreadyOnNetwork`] skips provisioning.
     network: NetworkCredentials,
 
     /// Maximum failsafe expiry the device accepts, in seconds.
     /// Initialised to 60 (the M6.4 fallback) and updated from
     /// `BasicCommissioningInfo::failsafe_expiry_length_seconds` once
-    /// the `Expectation::CommissioningInfo` response arrives. Both
-    /// `ArmFailsafe` and `FailsafeBeforeWiFiEnable` consume this.
+    /// the `Expectation::CommissioningInfo` response arrives. The first
+    /// `Stage::ArmFailsafe` consumes this.
     failsafe_expiry_seconds: u16,
+
+    /// Device-declared `ConnectMaxTimeSeconds` (`NetworkCommissioning`
+    /// attribute `0x0009`), captured from the
+    /// `Expectation::NetworkCommissioningInfo` read. `0` means unread /
+    /// absent, in which case [`Self::network_enable_failsafe_seconds`]
+    /// falls back to [`DEFAULT_CONNECT_MAX_TIME_SECONDS`]. Sizes the
+    /// `Stage::FailsafeBeforeNetworkEnable` failsafe extension so Thread
+    /// attach (slower than Wi-Fi association) has room to complete before
+    /// the failsafe expires.
+    connect_max_time_seconds: u16,
 
     /// Monotonically-increasing breadcrumb attached to every
     /// breadcrumb-bearing cluster command. Matter Core Spec §11.10
@@ -312,6 +332,7 @@ impl Commissioner {
             issued_noc_public_key: None,
             network: cfg.network,
             failsafe_expiry_seconds: 60,
+            connect_max_time_seconds: 0,
             breadcrumb_counter: 1,
             awaiting_case_session: false,
             awaiting: None,
@@ -376,15 +397,48 @@ impl Commissioner {
         Ok(action)
     }
 
+    /// Failsafe extension (seconds) for `Stage::FailsafeBeforeNetworkEnable`.
+    ///
+    /// Uses the device-reported `ConnectMaxTimeSeconds` when non-zero,
+    /// else [`DEFAULT_CONNECT_MAX_TIME_SECONDS`]. Sized to give the device
+    /// room to associate with the operational network (Thread attach is
+    /// slower than Wi-Fi association) before the failsafe expires.
+    fn network_enable_failsafe_seconds(&self) -> u16 {
+        if self.connect_max_time_seconds > 0 {
+            self.connect_max_time_seconds
+        } else {
+            DEFAULT_CONNECT_MAX_TIME_SECONDS
+        }
+    }
+
+    /// Record the device's `ConnectMaxTimeSeconds` (`NetworkCommissioning`
+    /// attribute `0x0009`), read alongside the `FeatureMap` at
+    /// `Stage::ReadNetworkCommissioningInfo`. Consumed by
+    /// [`Self::network_enable_failsafe_seconds`] to size the
+    /// `FailsafeBeforeNetworkEnable` extension. Called by the driver's
+    /// read-dispatch after the `FeatureMap` response is applied; a `0`
+    /// value (unread/absent) leaves the default in force.
+    pub(crate) fn set_connect_max_time_seconds(&mut self, seconds: u16) {
+        self.connect_max_time_seconds = seconds;
+    }
+
     /// Helper: emit an `ArmFailsafe` action at the current stage.
     ///
-    /// Used by both `ArmFailsafe` and `FailsafeBeforeWiFiEnable` stages,
-    /// which share identical payload and action logic.
+    /// Used by both `Stage::ArmFailsafe` and
+    /// `Stage::FailsafeBeforeNetworkEnable`, which share identical action
+    /// logic. The failsafe expiry differs: the first arm uses the
+    /// device's `failsafe_expiry_length_seconds`; the pre-`ConnectNetwork`
+    /// extension uses [`Self::network_enable_failsafe_seconds`].
     fn arm_failsafe_action(&mut self) -> Action {
         use crate::clusters::general_commissioning as gc;
         use crate::state_machine::action::SessionContext;
+        let expiry_seconds = if self.stage == Stage::FailsafeBeforeNetworkEnable {
+            self.network_enable_failsafe_seconds()
+        } else {
+            self.failsafe_expiry_seconds
+        };
         let breadcrumb = self.next_breadcrumb();
-        let payload = gc::encode_arm_fail_safe(self.failsafe_expiry_seconds, breadcrumb);
+        let payload = gc::encode_arm_fail_safe(expiry_seconds, breadcrumb);
         self.awaiting = Some(Expectation::ArmFailsafeResponse);
         Action::Invoke {
             session: SessionContext::Pase,
@@ -434,7 +488,9 @@ impl Commissioner {
                     expect: Expectation::CommissioningInfo,
                 })
             }
-            Stage::ArmFailsafe | Stage::FailsafeBeforeWiFiEnable => Ok(self.arm_failsafe_action()),
+            Stage::ArmFailsafe | Stage::FailsafeBeforeNetworkEnable => {
+                Ok(self.arm_failsafe_action())
+            }
             Stage::ConfigRegulatory => {
                 let breadcrumb = self.next_breadcrumb();
                 // FIXME(temp, uncommitted): hardcoding IndoorOutdoor(2) exceeds
@@ -616,38 +672,67 @@ impl Commissioner {
                     cluster: crate::clusters::network_commissioning::CLUSTER_ID,
                     attributes: &[
                         crate::clusters::network_commissioning::attribute_id::FEATURE_MAP,
+                        // ConnectMaxTimeSeconds (spec §11.9.5.4) — sizes the
+                        // FailsafeBeforeNetworkEnable extension (D7). Thread
+                        // attach is slower than Wi-Fi association.
+                        crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS,
                     ],
                     expect: Expectation::NetworkCommissioningInfo,
                 })
             }
-            Stage::WiFiNetworkSetup => {
+            Stage::NetworkSetup => {
                 use crate::clusters::network_commissioning as nc;
-                let NetworkCredentials::WiFi(creds) = &self.network else {
-                    return Err(CommissioningError::WifiCredentialsRequired);
-                };
-                let ssid = creds.ssid.clone();
-                let credentials = creds.credentials.clone();
+                // Select the provisioning command by the supplied
+                // credential type. The FeatureMap-cross-check at
+                // `Expectation::NetworkCommissioningInfo` guarantees the
+                // device actually supports this network type before we
+                // reach here, so `AlreadyOnNetwork` never lands in this
+                // arm — treat it as an out-of-order state, not a silent
+                // skip.
                 let breadcrumb = self.next_breadcrumb();
-                let payload =
-                    nc::encode_add_or_update_wifi_network(&ssid, &credentials, breadcrumb);
+                let (command, payload) = match &self.network {
+                    NetworkCredentials::WiFi(creds) => (
+                        nc::command_id::ADD_OR_UPDATE_WIFI_NETWORK,
+                        nc::encode_add_or_update_wifi_network(
+                            &creds.ssid,
+                            &creds.credentials,
+                            breadcrumb,
+                        ),
+                    ),
+                    NetworkCredentials::Thread(dataset) => (
+                        nc::command_id::ADD_OR_UPDATE_THREAD_NETWORK,
+                        nc::encode_add_or_update_thread_network(dataset.as_bytes(), breadcrumb),
+                    ),
+                    NetworkCredentials::AlreadyOnNetwork => {
+                        return Err(CommissioningError::OutOfOrderResponse(self.stage));
+                    }
+                };
                 self.awaiting = Some(Expectation::NetworkConfigResponse);
                 Ok(Action::Invoke {
                     session: SessionContext::Pase,
                     endpoint: 0,
                     cluster: nc::CLUSTER_ID,
-                    command: nc::command_id::ADD_OR_UPDATE_WIFI_NETWORK,
+                    command,
                     payload,
                     expect: Expectation::NetworkConfigResponse,
                 })
             }
-            Stage::WiFiNetworkEnable => {
+            Stage::NetworkEnable => {
                 use crate::clusters::network_commissioning as nc;
-                let NetworkCredentials::WiFi(creds) = &self.network else {
-                    return Err(CommissioningError::WifiCredentialsRequired);
-                };
-                let ssid = creds.ssid.clone();
+                // `ConnectNetwork` takes an opaque `network_id`: the SSID
+                // for Wi-Fi, the Extended PAN ID for Thread (spec §11.9.6.6).
                 let breadcrumb = self.next_breadcrumb();
-                let payload = nc::encode_connect_network(&ssid, breadcrumb);
+                let payload = match &self.network {
+                    NetworkCredentials::WiFi(creds) => {
+                        nc::encode_connect_network(&creds.ssid, breadcrumb)
+                    }
+                    NetworkCredentials::Thread(dataset) => {
+                        nc::encode_connect_network(&dataset.ext_pan_id(), breadcrumb)
+                    }
+                    NetworkCredentials::AlreadyOnNetwork => {
+                        return Err(CommissioningError::OutOfOrderResponse(self.stage));
+                    }
+                };
                 self.awaiting = Some(Expectation::ConnectNetworkResponse);
                 Ok(Action::Invoke {
                     session: SessionContext::Pase,
@@ -828,7 +913,7 @@ impl Commissioner {
                 }
                 let next = match self.stage {
                     Stage::ArmFailsafe => Stage::ConfigRegulatory,
-                    Stage::FailsafeBeforeWiFiEnable => Stage::WiFiNetworkEnable,
+                    Stage::FailsafeBeforeNetworkEnable => Stage::NetworkEnable,
                     other => {
                         return Err(CommissioningError::OutOfOrderResponse(other));
                     }
@@ -898,60 +983,75 @@ impl Commissioner {
             }
             Expectation::NetworkCommissioningInfo => {
                 use crate::clusters::network_commissioning as nc;
+                use crate::state_machine::NetworkKind;
                 let features = nc::decode_feature_map(payload)?;
-                if features.contains(nc::NetworkCommissioningFeature::WIFI) {
-                    if !matches!(self.network, NetworkCredentials::WiFi(_)) {
-                        // No Wi-Fi credentials supplied
-                        // (`AlreadyOnNetwork`, and — until Thread routing
-                        // lands — a `Thread` dataset on a Wi-Fi device):
-                        // the device is already on the network (IP
-                        // commissioning reached it there — e.g. a
-                        // second-fabric commission). Mirror chip's
-                        // AutoCommissioner: provision Wi-Fi ONLY when Wi-Fi
-                        // credentials are supplied; otherwise skip the
-                        // Wi-Fi sub-cursor (observed necessary on a real
-                        // device: Tapo P110M, M6.6.5 validation).
-                        self.advance(Stage::EvictPreviousCaseSessions);
-                        return Ok(());
-                    }
-                    self.advance(Stage::WiFiNetworkSetup);
-                } else if features.contains(nc::NetworkCommissioningFeature::ETHERNET)
-                    && !features.contains(nc::NetworkCommissioningFeature::THREAD)
-                {
-                    // Ethernet-only — skip the Wi-Fi sub-cursor entirely.
-                    self.advance(Stage::EvictPreviousCaseSessions);
-                } else if features.contains(nc::NetworkCommissioningFeature::THREAD) {
-                    return Err(CommissioningError::NetworkFeatureUnsupported {
-                        needed: crate::state_machine::NetworkKind::Thread,
-                    });
-                } else {
-                    // No recognised bits set — treat as malformed.
+                // A FeatureMap with no recognised interface bit is
+                // malformed regardless of the supplied credentials — a
+                // NetworkCommissioning cluster always exposes at least one
+                // of Wi-Fi / Thread / Ethernet.
+                if features.is_empty() {
                     return Err(CommissioningError::MalformedResponse(
                         Stage::ReadNetworkCommissioningInfo,
                     ));
+                }
+                // Route by the *supplied* credential type, cross-checked
+                // against the device FeatureMap. This resolves the
+                // dual-stack ordering ambiguity (a Wi-Fi+Thread device is
+                // provisioned per the caller's chosen credential type, not
+                // by feature-bit order) and rejects a mismatch (credential
+                // type absent from the FeatureMap) instead of silently
+                // skipping provisioning.
+                match &self.network {
+                    NetworkCredentials::WiFi(_) => {
+                        if !features.contains(nc::NetworkCommissioningFeature::WIFI) {
+                            return Err(CommissioningError::NetworkFeatureUnsupported {
+                                needed: NetworkKind::WiFi,
+                            });
+                        }
+                        self.advance(Stage::NetworkSetup);
+                    }
+                    NetworkCredentials::Thread(_) => {
+                        if !features.contains(nc::NetworkCommissioningFeature::THREAD) {
+                            return Err(CommissioningError::NetworkFeatureUnsupported {
+                                needed: NetworkKind::Thread,
+                            });
+                        }
+                        self.advance(Stage::NetworkSetup);
+                    }
+                    NetworkCredentials::AlreadyOnNetwork => {
+                        // No credentials to provision: the device is
+                        // already reachable on its operational network (IP
+                        // commissioning reached it there — e.g. a
+                        // second-fabric commission of an already-provisioned
+                        // device, or an Ethernet-only device). Mirror
+                        // chip's AutoCommissioner: skip the network
+                        // sub-cursor entirely (observed necessary on a real
+                        // device: Tapo P110M, M6.6.5 validation).
+                        self.advance(Stage::EvictPreviousCaseSessions);
+                    }
                 }
                 Ok(())
             }
             Expectation::NetworkConfigResponse => {
                 use crate::clusters::network_commissioning as nc;
-                let resp = nc::decode_network_config_response(Stage::WiFiNetworkSetup, payload)?;
+                let resp = nc::decode_network_config_response(Stage::NetworkSetup, payload)?;
                 if resp.networking_status != 0 {
                     return Err(CommissioningError::NetworkRejected {
-                        stage: Stage::WiFiNetworkSetup,
+                        stage: Stage::NetworkSetup,
                         networking_status: resp.networking_status,
                         debug_text: resp.debug_text,
                         remediation_hint: nc::remediation_for(resp.networking_status),
                     });
                 }
-                self.advance(Stage::FailsafeBeforeWiFiEnable);
+                self.advance(Stage::FailsafeBeforeNetworkEnable);
                 Ok(())
             }
             Expectation::ConnectNetworkResponse => {
                 use crate::clusters::network_commissioning as nc;
-                let resp = nc::decode_connect_network_response(Stage::WiFiNetworkEnable, payload)?;
+                let resp = nc::decode_connect_network_response(Stage::NetworkEnable, payload)?;
                 if resp.networking_status != 0 {
                     return Err(CommissioningError::NetworkRejected {
-                        stage: Stage::WiFiNetworkEnable,
+                        stage: Stage::NetworkEnable,
                         networking_status: resp.networking_status,
                         debug_text: resp.debug_text,
                         remediation_hint: nc::remediation_for(resp.networking_status),

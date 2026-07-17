@@ -67,6 +67,12 @@ mod attr_id {
     /// `crate::clusters::network_commissioning::attribute_id::FEATURE_MAP`.
     pub(super) const FEATURE_MAP: u32 =
         crate::clusters::network_commissioning::attribute_id::FEATURE_MAP;
+
+    /// `NetworkCommissioning::ConnectMaxTimeSeconds` — attribute 0x0009
+    /// (spec §11.9.5.4). Read alongside `FeatureMap` to size the
+    /// failsafe extension before `ConnectNetwork` (D7).
+    pub(super) const CONNECT_MAX_TIME_SECONDS: u32 =
+        crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS;
 }
 
 /// Outcome of a single `dispatch_invoke` round-trip.
@@ -223,6 +229,36 @@ pub(crate) fn extract_read_payload(
             "extract_read_payload called with a non-read Expectation",
         ))),
     }
+}
+
+/// Extract `ConnectMaxTimeSeconds` (`NetworkCommissioning` cluster
+/// `0x0031`, attribute `0x0009`) from a `ReportData`, if present.
+///
+/// Returns `None` when the attribute is absent or is not an unsigned
+/// value — the state machine then keeps its generous default. Mirrors the
+/// `FeatureMap` branch of [`extract_read_payload`]: the report's parsed
+/// `Value` is re-encoded as a bare anonymous uint TLV and routed through
+/// [`crate::clusters::network_commissioning::decode_connect_max_time_seconds`]
+/// so a single decoder governs the wire → `u16` mapping.
+fn extract_connect_max_time_seconds(report: &crate::im::ReportData) -> Option<u16> {
+    use crate::clusters::network_commissioning as nc;
+    use matter_codec::{Tag, TlvWriter, Value};
+    let raw = report
+        .attributes()
+        .find(|(p, _)| {
+            p.cluster == nc::CLUSTER_ID && p.attribute == attr_id::CONNECT_MAX_TIME_SECONDS
+        })
+        .and_then(|(_, v)| match v {
+            Value::Uint(n) => Some(*n),
+            _ => None,
+        })?;
+    let mut buf = Vec::new();
+    // Vec-backed TlvWriter is infallible; a write error would just drop
+    // the optional hint (default kept), so map it to `None`.
+    TlvWriter::new(&mut buf)
+        .put_uint(Tag::Anonymous, raw)
+        .ok()?;
+    nc::decode_connect_max_time_seconds(&buf).ok()
 }
 
 /// Drive any *imminent* pending MRP deadlines (within ~500 ms — in practice
@@ -1059,6 +1095,17 @@ where
                 };
                 let read_payload = extract_read_payload(expect, &report)?;
                 sm.on_response(expect, &read_payload)?;
+                // D7: the NetworkCommissioning read also carries
+                // `ConnectMaxTimeSeconds` (attr 0x0009). It rides in the
+                // same `ReportData` but does not route the state machine,
+                // so it is applied out-of-band here (after the FeatureMap
+                // response) to size the FailsafeBeforeNetworkEnable
+                // extension. Absent / non-uint → left at the default.
+                if expect == crate::Expectation::NetworkCommissioningInfo {
+                    if let Some(secs) = extract_connect_max_time_seconds(&report) {
+                        sm.set_connect_max_time_seconds(secs);
+                    }
+                }
             }
 
             Action::EstablishCase {

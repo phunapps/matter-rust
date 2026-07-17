@@ -26,7 +26,7 @@ use matter_commissioning::setup::{
 use matter_commissioning::{
     Action, Commissioner, CommissionerConfig, CommissioningError, Expectation, NetworkCredentials,
     NetworkKind, PaaTrustStore, RemediationHint, SessionContext, Stage, TestStateSeeds,
-    WiFiCredentials,
+    ThreadDataset, WiFiCredentials,
 };
 use matter_crypto::{RingSigner, Signer};
 
@@ -178,7 +178,7 @@ fn wifi_only_feature_map_advances_to_wifi_setup() {
         &feature_map_tlv(0b001),
     )
     .expect("WiFi-only FeatureMap accepted");
-    assert_eq!(sm.stage(), Stage::WiFiNetworkSetup);
+    assert_eq!(sm.stage(), Stage::NetworkSetup);
 }
 
 #[test]
@@ -194,20 +194,25 @@ fn ethernet_only_feature_map_skips_to_evict_case() {
 }
 
 #[test]
-fn thread_only_feature_map_fails_fast() {
+fn wifi_creds_thread_only_featuremap_rejects_mismatch() {
+    // Wi-Fi credentials against a Thread-only device: routing keys off the
+    // *supplied* credential type, so the mismatch is reported as the
+    // supplied type being unsupported by the device — `needed: WiFi`, NOT
+    // `Thread`. (M9-C2 D6 routing; the pre-C2 behaviour reported the
+    // device's offered type here.)
     let mut sm = drive_to_read_network_info(make_wifi_config());
     let _ = sm.poll().expect("emit ReadAttribute");
     let Err(err) = sm.on_response(
         Expectation::NetworkCommissioningInfo,
         &feature_map_tlv(0b010),
     ) else {
-        panic!("Thread-only FeatureMap should fail");
+        panic!("Wi-Fi creds on a Thread-only device should fail");
     };
     assert!(
         matches!(
             err,
             CommissioningError::NetworkFeatureUnsupported {
-                needed: NetworkKind::Thread,
+                needed: NetworkKind::WiFi,
             },
         ),
         "got {err:?}",
@@ -250,13 +255,13 @@ fn empty_feature_map_is_malformed() {
 }
 
 // ---------------------------------------------------------------------------
-// WiFiNetworkSetup cursor helper
+// NetworkSetup cursor helper (Wi-Fi path)
 // ---------------------------------------------------------------------------
 
 /// Drive the state machine from `ReadNetworkCommissioningInfo` all the
-/// way to `Stage::WiFiNetworkSetup` using Task 16's composition pattern.
+/// way to `Stage::NetworkSetup` using Task 16's composition pattern.
 ///
-/// Avoids adding a new `position_at_stage_for_test(Stage::WiFiNetworkSetup, …)` call:
+/// Avoids adding a new `position_at_stage_for_test(Stage::NetworkSetup, …)` call:
 /// the `__test_shortcuts` surface stays minimal and the full flow through
 /// `Expectation::NetworkCommissioningInfo` is exercised as a by-product.
 fn drive_to_wifi_network_setup() -> Commissioner {
@@ -271,7 +276,7 @@ fn drive_to_wifi_network_setup() -> Commissioner {
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 17 — WiFiNetworkSetup dispatch + NetworkConfigResponse handler
+// M6.5.2 Task 17 — NetworkSetup dispatch (Wi-Fi) + NetworkConfigResponse handler
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -308,7 +313,7 @@ fn wifi_network_setup_ok_response_advances_to_failsafe_before_wifi_enable() {
     let response = vec![0x15, 0x24, 0x00, 0x00, 0x18]; // { 0: 0_u8 } — OK
     sm.on_response(Expectation::NetworkConfigResponse, &response)
         .expect("ok response accepted");
-    assert_eq!(sm.stage(), Stage::FailsafeBeforeWiFiEnable);
+    assert_eq!(sm.stage(), Stage::FailsafeBeforeNetworkEnable);
 }
 
 #[test]
@@ -327,7 +332,7 @@ fn wifi_network_setup_auth_failure_carries_remediation_hint() {
             remediation_hint,
             ..
         } => {
-            assert_eq!(stage, Stage::WiFiNetworkSetup);
+            assert_eq!(stage, Stage::NetworkSetup);
             assert_eq!(networking_status, 7);
             assert_eq!(remediation_hint, RemediationHint::CheckPassphrase);
         }
@@ -354,7 +359,7 @@ fn wifi_network_setup_bounds_exceeded_maps_to_slots_full() {
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 18 — FailsafeBeforeWiFiEnable dispatch + second ArmFailSafe
+// M6.5.2 Task 18 — FailsafeBeforeNetworkEnable dispatch + second ArmFailSafe
 // ---------------------------------------------------------------------------
 
 fn drive_to_failsafe_before_wifi_enable() -> Commissioner {
@@ -386,11 +391,11 @@ fn failsafe_before_wifi_enable_emits_second_arm_failsafe() {
     let ok = vec![0x15, 0x24, 0x00, 0x00, 0x18];
     sm.on_response(Expectation::ArmFailsafeResponse, &ok)
         .expect("ok accepted");
-    assert_eq!(sm.stage(), Stage::WiFiNetworkEnable);
+    assert_eq!(sm.stage(), Stage::NetworkEnable);
 }
 
 // ---------------------------------------------------------------------------
-// M6.5.2 Task 19 — WiFiNetworkEnable dispatch + ConnectNetworkResponse handler
+// M6.5.2 Task 19 — NetworkEnable dispatch (Wi-Fi) + ConnectNetworkResponse handler
 // ---------------------------------------------------------------------------
 
 fn drive_to_wifi_network_enable() -> Commissioner {
@@ -448,7 +453,7 @@ fn wifi_network_enable_network_not_found_maps_to_check_ssid() {
             remediation_hint,
             ..
         } => {
-            assert_eq!(stage, Stage::WiFiNetworkEnable);
+            assert_eq!(stage, Stage::NetworkEnable);
             assert_eq!(networking_status, 5);
             assert_eq!(remediation_hint, RemediationHint::CheckSsid);
         }
@@ -544,4 +549,149 @@ fn ethernet_only_e2e_reaches_done() {
         Action::Done(_) => {}
         other => panic!("expected Done, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// M9-C2 Task 5 — Thread network provisioning (route + dispatch)
+// ---------------------------------------------------------------------------
+
+/// Reference OTBR operational dataset (111 bytes, `ot-ctl dataset active -x`).
+/// Vector: `test-vectors/thread/network_commissioning.json`
+/// (`reference_operational_dataset`). Extended PAN ID (TLV `02 08`) =
+/// `7896217f787f6ebe`.
+const THREAD_DS_HEX: &str = "0e08000000000001000000030000184a0300001235060004001fffe0\
+02087896217f787f6ebe0708fdec3f34f3cd2020051071dccee3f164f15da92254e0b9c8a3a5030f4f706\
+56e5468726561642d38396437010289d70410dc4b544c7a58671a2ce4f876f5d6dcd90c0402a0f7f8";
+
+/// Extended PAN ID extracted from `THREAD_DS_HEX` — the `ConnectNetwork`
+/// `network_id` for the Thread path (NOT an SSID).
+const THREAD_EXT_PAN_ID: [u8; 8] = [0x78, 0x96, 0x21, 0x7f, 0x78, 0x7f, 0x6e, 0xbe];
+
+/// A `CommissionerConfig<'static>` carrying a validated Thread operational
+/// dataset (`NetworkCredentials::Thread`).
+fn make_thread_config() -> CommissionerConfig<'static> {
+    let dataset = ThreadDataset::new(hex::decode(THREAD_DS_HEX).expect("valid dataset hex"))
+        .expect("valid Thread dataset");
+    let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+    CommissionerConfig {
+        pase_attestation_challenge: [0u8; 16],
+        fabric: static_fabric(),
+        setup_payload: static_setup(),
+        paa_trust_store: static_paa(),
+        cd_signing_roots: static_cd(),
+        commissioner_node_id: 0x1,
+        assigned_node_id: 0x2,
+        ipk_epoch_key: [0x42_u8; 16],
+        case_admin_subject: 0x1,
+        admin_vendor_id: 0xFFF1,
+        now: MatterTime::from_unix_secs(1_704_067_200),
+        rng,
+        network: NetworkCredentials::Thread(dataset),
+    }
+}
+
+/// Thread creds + a Thread-only `FeatureMap` route to `NetworkSetup`, emit
+/// `AddOrUpdateThreadNetwork` bytes matching the captured vector, then
+/// `ConnectNetwork` with the Extended PAN ID as the `network_id`.
+#[test]
+fn thread_creds_thread_featuremap_routes_and_provisions() {
+    let mut sm = drive_to_read_network_info(make_thread_config());
+    let _ = sm.poll().expect("emit ReadAttribute");
+    // THREAD bit only (0b010).
+    sm.on_response(
+        Expectation::NetworkCommissioningInfo,
+        &feature_map_tlv(0b010),
+    )
+    .expect("Thread FeatureMap accepted for Thread creds");
+    assert_eq!(sm.stage(), Stage::NetworkSetup);
+
+    // NetworkSetup emits AddOrUpdateThreadNetwork == the vector (breadcrumb 1,
+    // since position_at_stage_for_test skipped the breadcrumb-bearing M6.4
+    // stages, so NetworkSetup is the first breadcrumb consumer).
+    let action = sm.poll().expect("emit AddOrUpdateThreadNetwork");
+    match action {
+        Action::Invoke {
+            session,
+            cluster,
+            command,
+            payload,
+            expect,
+            ..
+        } => {
+            assert_eq!(session, SessionContext::Pase);
+            assert_eq!(cluster, 0x0031);
+            assert_eq!(command, 0x03, "ADD_OR_UPDATE_THREAD_NETWORK");
+            assert_eq!(expect, Expectation::NetworkConfigResponse);
+            // Vector: test-vectors/thread/network_commissioning.json
+            // "add_or_update_thread_network" (dataset + breadcrumb=1).
+            let expected = "1530006f0e08000000000001000000030000184a0300001235060004001\
+fffe002087896217f787f6ebe0708fdec3f34f3cd2020051071dccee3f164f15da92254e0b9c8a3a5030f4\
+f70656e5468726561642d38396437010289d70410dc4b544c7a58671a2ce4f876f5d6dcd90c0402a0f7f82\
+4010118";
+            assert_eq!(hex::encode(&payload), expected, "payload: {payload:02x?}");
+        }
+        other => panic!("expected Invoke, got {other:?}"),
+    }
+
+    // Accept the NetworkConfigResponse → FailsafeBeforeNetworkEnable.
+    let ok = vec![0x15, 0x24, 0x00, 0x00, 0x18];
+    sm.on_response(Expectation::NetworkConfigResponse, &ok)
+        .expect("ok NetworkConfigResponse");
+    assert_eq!(sm.stage(), Stage::FailsafeBeforeNetworkEnable);
+
+    // Second ArmFailSafe → NetworkEnable.
+    let _ = sm.poll().expect("emit second ArmFailSafe");
+    sm.on_response(Expectation::ArmFailsafeResponse, &ok)
+        .expect("ok ArmFailsafeResponse");
+    assert_eq!(sm.stage(), Stage::NetworkEnable);
+
+    // NetworkEnable emits ConnectNetwork with network_id = Extended PAN ID.
+    let action = sm.poll().expect("emit ConnectNetwork");
+    match action {
+        Action::Invoke {
+            cluster,
+            command,
+            payload,
+            expect,
+            ..
+        } => {
+            assert_eq!(cluster, 0x0031);
+            assert_eq!(command, 0x06, "CONNECT_NETWORK");
+            assert_eq!(expect, Expectation::ConnectNetworkResponse);
+            // network_id is the Ext-PAN-ID (the "connect_network_thread"
+            // vector's network_id), NOT an SSID. The breadcrumb differs from
+            // that vector (it is the 3rd breadcrumb here), so assert the
+            // network_id field is present rather than the whole payload.
+            assert!(
+                payload.windows(8).any(|w| w == THREAD_EXT_PAN_ID),
+                "ConnectNetwork network_id must be the Ext-PAN-ID: {payload:02x?}",
+            );
+        }
+        other => panic!("expected Invoke, got {other:?}"),
+    }
+}
+
+/// Thread creds against a Wi-Fi-only `FeatureMap` must fail fast with
+/// `NetworkFeatureUnsupported{ needed: Thread }` — NOT silently skip
+/// provisioning (the T4 review carry-forward).
+#[test]
+fn thread_creds_wifi_only_featuremap_rejects_mismatch() {
+    let mut sm = drive_to_read_network_info(make_thread_config());
+    let _ = sm.poll().expect("emit ReadAttribute");
+    // WIFI bit only (0b001) — Thread not offered.
+    let Err(err) = sm.on_response(
+        Expectation::NetworkCommissioningInfo,
+        &feature_map_tlv(0b001),
+    ) else {
+        panic!("Thread creds on a Wi-Fi-only device must fail");
+    };
+    assert!(
+        matches!(
+            err,
+            CommissioningError::NetworkFeatureUnsupported {
+                needed: NetworkKind::Thread,
+            },
+        ),
+        "got {err:?}",
+    );
 }

@@ -34,8 +34,11 @@ fn happy_path_drives_through_csr_and_noc_to_read_network_commissioning_info() {
             assert_eq!(cluster, 0x0031, "reads NetworkCommissioning");
             assert_eq!(
                 attributes,
-                &[0xFFFC],
-                "reads the FeatureMap global attribute"
+                // FeatureMap (0xFFFC) + ConnectMaxTimeSeconds (0x0009);
+                // the latter sizes the FailsafeBeforeNetworkEnable
+                // extension (M9-C2 D7).
+                &[0xFFFC, 0x0009],
+                "reads FeatureMap + ConnectMaxTimeSeconds"
             );
         }
         other => panic!("expected the FeatureMap read after AddNOC, got {other:?}"),
