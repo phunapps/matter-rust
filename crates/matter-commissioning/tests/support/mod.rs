@@ -1467,12 +1467,13 @@ pub fn respond_read_attribute(attr_path: matter_commissioning::im::AttributePath
             buf
         }
 
-        // ConnectMaxTimeSeconds (0x0031/0x0009): read alongside FeatureMap at
-        // Stage::ReadNetworkCommissioningInfo (D7). u16 seconds; sizes the
-        // FailsafeBeforeNetworkEnable extension. Value is irrelevant on the
-        // Ethernet loopback (AlreadyOnNetwork skips network setup), but the
-        // device must answer the requested path — return a plausible 30 s.
-        (0x0031, 0x0009) => {
+        // ConnectMaxTimeSeconds (0x0031/0x0003): read alongside FeatureMap at
+        // Stage::ReadNetworkCommissioningInfo (D7). int8u seconds (spec
+        // §11.9.5.4); sizes the FailsafeBeforeNetworkEnable extension.
+        // Value is irrelevant on the Ethernet loopback (AlreadyOnNetwork
+        // skips network setup), but the device must answer the requested
+        // path — return a plausible 30 s.
+        (0x0031, 0x0003) => {
             let mut buf = Vec::new();
             TlvWriter::new(&mut buf)
                 .put_uint(Tag::Anonymous, 30)

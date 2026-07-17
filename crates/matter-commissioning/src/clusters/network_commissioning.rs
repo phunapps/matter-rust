@@ -36,11 +36,13 @@ pub mod response_id {
 pub mod attribute_id {
     /// Universal Matter cluster meta-attribute. Spec §7.13.
     pub const FEATURE_MAP: u32 = 0xFFFC;
-    /// `ConnectMaxTimeSeconds` (spec §11.9.5.4). Maximum time, in
-    /// seconds, the device may take to connect to an operational network
-    /// after `ConnectNetwork`. Used to size the failsafe extension before
-    /// `ConnectNetwork` (Thread attach is slower than Wi-Fi association).
-    pub const CONNECT_MAX_TIME_SECONDS: u32 = 0x0009;
+    /// `ConnectMaxTimeSeconds` (spec §11.9.5.4; chip
+    /// `network-commissioning-cluster.xml` `code="0x0003"`). Type
+    /// `int8u` — maximum time, in seconds (0-255), the device may take
+    /// to connect to an operational network after `ConnectNetwork`.
+    /// Used to size the failsafe extension before `ConnectNetwork`
+    /// (Thread attach is slower than Wi-Fi association).
+    pub const CONNECT_MAX_TIME_SECONDS: u32 = 0x0003;
 }
 
 bitflags::bitflags! {
@@ -174,10 +176,13 @@ pub fn decode_feature_map(tlv: &[u8]) -> Result<NetworkCommissioningFeature, Com
 /// [`decode_feature_map`] parses. The state machine's driver unwraps the
 /// Interaction Model report and delivers just the value TLV.
 ///
-/// The attribute is a `u16` seconds count on the wire; a value that does
-/// not fit `u16` is clamped to [`u16::MAX`] rather than rejected, since
-/// the value only sizes a local timeout (over-large is harmless, and a
-/// hostile device cannot use it to reject a well-formed read).
+/// The attribute is a `u8` (`int8u`) seconds count on the wire; the
+/// value is widened into a `u16` return type for decoder headroom, and
+/// any value that does not fit `u16` (which a spec-conformant `u8`
+/// device will never send) is clamped to [`u16::MAX`] rather than
+/// rejected, since the value only sizes a local timeout (over-large is
+/// harmless, and a hostile device cannot use it to reject a
+/// well-formed read).
 ///
 /// # Errors
 ///

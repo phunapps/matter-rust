@@ -68,7 +68,7 @@ mod attr_id {
     pub(super) const FEATURE_MAP: u32 =
         crate::clusters::network_commissioning::attribute_id::FEATURE_MAP;
 
-    /// `NetworkCommissioning::ConnectMaxTimeSeconds` — attribute 0x0009
+    /// `NetworkCommissioning::ConnectMaxTimeSeconds` — attribute 0x0003
     /// (spec §11.9.5.4). Read alongside `FeatureMap` to size the
     /// failsafe extension before `ConnectNetwork` (D7).
     pub(super) const CONNECT_MAX_TIME_SECONDS: u32 =
@@ -232,7 +232,7 @@ pub(crate) fn extract_read_payload(
 }
 
 /// Extract `ConnectMaxTimeSeconds` (`NetworkCommissioning` cluster
-/// `0x0031`, attribute `0x0009`) from a `ReportData`, if present.
+/// `0x0031`, attribute `0x0003`) from a `ReportData`, if present.
 ///
 /// Returns `None` when the attribute is absent or is not an unsigned
 /// value — the state machine then keeps its generous default. Mirrors the
@@ -1096,7 +1096,7 @@ where
                 let read_payload = extract_read_payload(expect, &report)?;
                 sm.on_response(expect, &read_payload)?;
                 // D7: the NetworkCommissioning read also carries
-                // `ConnectMaxTimeSeconds` (attr 0x0009). It rides in the
+                // `ConnectMaxTimeSeconds` (attr 0x0003). It rides in the
                 // same `ReportData` but does not route the state machine,
                 // so it is applied out-of-band here (after the FeatureMap
                 // response) to size the FailsafeBeforeNetworkEnable

@@ -219,7 +219,7 @@ pub struct Commissioner {
     failsafe_expiry_seconds: u16,
 
     /// Device-declared `ConnectMaxTimeSeconds` (`NetworkCommissioning`
-    /// attribute `0x0009`), captured from the
+    /// attribute `0x0003`), captured from the
     /// `Expectation::NetworkCommissioningInfo` read. `0` means unread /
     /// absent, in which case [`Self::network_enable_failsafe_seconds`]
     /// falls back to [`DEFAULT_CONNECT_MAX_TIME_SECONDS`]. Sizes the
@@ -412,7 +412,7 @@ impl Commissioner {
     }
 
     /// Record the device's `ConnectMaxTimeSeconds` (`NetworkCommissioning`
-    /// attribute `0x0009`), read alongside the `FeatureMap` at
+    /// attribute `0x0003`), read alongside the `FeatureMap` at
     /// `Stage::ReadNetworkCommissioningInfo`. Consumed by
     /// [`Self::network_enable_failsafe_seconds`] to size the
     /// `FailsafeBeforeNetworkEnable` extension. Called by the driver's

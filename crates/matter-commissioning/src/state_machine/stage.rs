@@ -47,7 +47,7 @@ pub enum Stage {
     /// `OperationalCredentials::AddNOC` (command `0x06`).
     SendNoc,
     /// Read `NetworkCommissioning::FeatureMap` (attribute `0xFFFC`) and
-    /// `ConnectMaxTimeSeconds` (attribute `0x0009`) on endpoint 0.
+    /// `ConnectMaxTimeSeconds` (attribute `0x0003`) on endpoint 0.
     /// `FeatureMap` determines whether the device supports Wi-Fi,
     /// Ethernet, or Thread (or some combination). Branching at this
     /// stage's response routes by the *supplied*
