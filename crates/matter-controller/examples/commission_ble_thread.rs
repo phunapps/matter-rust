@@ -9,7 +9,7 @@
 //! dataset's Extended PAN ID) → operational CASE over IP once the device joins
 //! the mesh. Then it reads and toggles `OnOff` to confirm operational control.
 //!
-//! Run it from the Thread border-router host (the Pi's BlueZ is the proven BLE
+//! Run it from the Thread border-router host (the Pi's `BlueZ` is the proven BLE
 //! path against the C6 rig). Capture the dataset **fresh** first — the Extended
 //! PAN ID rotates if the Thread network re-forms:
 //! ```text
@@ -20,9 +20,21 @@
 //!     --dataset "$DATASET"
 //! ```
 //!
-//! Real certified devices need production attestation roots — pass
-//! `--paa-dir <dir> --cd-dir <dir>`. The esp-matter reference C6 uses the CSA
-//! **test** roots (the default here), so no flags are needed for it.
+//! **Attestation roots are required for any real device, including the
+//! esp-matter C6** — pass `--paa-dir <dir> --cd-dir <dir>`. The bundled default
+//! ([`AttestationTrust::csa_test_roots`]) carries a *synthetic* CD signing root
+//! that no real device's CD is signed against, so it is only good for our own
+//! tests. From a connectedhomeip checkout:
+//!
+//! * `--paa-dir` — `credentials/test/attestation/` (or our vendored
+//!   `Chip-Test-PAA-*.der`) for test DACs; `credentials/production/paa-root-certs/`
+//!   for certified devices.
+//! * `--cd-dir` — `credentials/production/cd-certs/` (**yes, production**: the
+//!   VID=0xFFF1 CD that `CONFIG_EXAMPLE_DAC_PROVIDER` devices serve is signed by
+//!   the CSA's production "CD Signing Key 001", not by chip's test CD authority
+//!   — see `tests/chip_cd_vector.rs` in `matter-commissioning`). Add
+//!   `credentials/test/certification-declaration/Chip-Test-CD-Signing-Cert`
+//!   (converted to DER) to also accept test-authority-signed CDs.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -70,7 +82,7 @@ struct Args {
 /// a `hex` dependency for a single example.
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
     let s = s.trim();
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         bail!(
             "dataset hex has an odd number of characters ({} chars)",
             s.len()
@@ -89,8 +101,8 @@ fn hex_decode(s: &str) -> Result<Vec<u8>> {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // 1. Attestation trust: production roots if supplied, else bundled CSA test
-    //    roots (the esp-matter reference C6 uses the test roots).
+    // 1. Attestation trust: real roots if supplied, else the bundled test roots
+    //    — whose synthetic CD root verifies no real device (see module docs).
     let trust = match (&args.paa_dir, &args.cd_dir) {
         (Some(paa), Some(cd)) => {
             AttestationTrust::from_dirs(paa, cd).context("loading production attestation roots")?

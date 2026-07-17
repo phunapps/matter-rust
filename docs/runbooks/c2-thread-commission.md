@@ -130,42 +130,69 @@ MATTER_BLE_LIVE=1 cargo run -p matter-controller --example ble_scan --features b
 **Pass:** it finds the C6 by discriminator (`0xF00` / `3840`) once step 2's
 factory-reset has it advertising.
 
-There is no packaged `commission_ble`-with-Thread example binary yet — C1
-shipped `ble_scan` only (no packaged Wi-Fi commission example either; see
-`docs/runbooks/ble-commissioning.md` step 5's own pseudocode). Follow the
-same pattern here: adapt `examples/controller_quickstart.rs`'s controller
-setup, swapping the `commission`/`commission_ble` call for the Thread
-variant below. **Follow-up:** package this as a real
-`examples/commission_ble_thread.rs` (or extend `ble_scan`) once this first
-live run is validated — flagged here rather than done speculatively, since
-the exact operator ergonomics (dataset input format, node-id output) are
-easier to nail down after the first real run.
+Then build the packaged commission binary:
+
+```sh
+cargo build -p matter-controller --example commission_ble_thread --features ble --release
+```
+
+### Attestation roots (required — the defaults do NOT work)
+
+The bundled `AttestationTrust::csa_test_roots()` carries a **synthetic** CD
+signing root that verifies no real device. The C6 serves chip's
+`ExampleDACProvider` VID=0xFFF1 CD, which is signed by the CSA's
+**production** "CD Signing Key 001" (SKID `FE:34:3F:95:…`) — *not* by
+chip's test CD authority. Trusting only the test authority fails the run
+with `certification declaration signature does not verify against any
+trusted root`. (chip-tool trusts test + production keys, so it never
+noticed.) Pinned by `crates/matter-commissioning/tests/chip_cd_vector.rs`.
+
+From a connectedhomeip checkout, stage both stores on the Pi:
+
+```sh
+# CD roots: the CSA production mirror is the one that matters for the C6.
+scp <chip>/credentials/production/cd-certs/*.der admin@<pi>:~/cd-roots/
+# PAA roots: the C6's DAC chains to chip's test PAA (vendored in our repo).
+scp crates/matter-commissioning/src/attestation/csa_test_roots/*.der \
+    admin@<pi>:~/paa-roots/
+```
+
+`--paa-dir` and `--cd-dir` are mutually required; both take a directory of
+`.der` files (non-`.der` entries are skipped).
 
 ## 4. Commission the C6 with `NetworkCredentials::Thread`
 
-```rust
-// operator pseudocode — not compiled by `cargo test`
-use matter_commissioning::{NetworkCredentials, ThreadDataset};
+This is the exact command from the first successful live run (2026-07-17):
 
-// Hex string captured fresh in step 1 (`sudo ot-ctl dataset active -x`).
-// DO NOT reuse an old capture — the Extended PAN ID rotates on re-form.
-let dataset_hex = "<paste ot-ctl dataset active -x output here>";
-let dataset_bytes = hex_decode(dataset_hex)?; // any hex-decode helper, or `hex::decode`
-let dataset = ThreadDataset::new(dataset_bytes)?;
+```sh
+# Capture the dataset FRESH — the Ext-PAN-ID rotates if the network re-forms.
+DS=$(sudo ot-ctl dataset active -x | head -1 | tr -d '\r')
 
-println!("expecting Ext-PAN-ID: {:02x?}", dataset.ext_pan_id());
-
-let network = NetworkCredentials::Thread(dataset);
-let node_id = controller
-    .commission_ble("MT:Y.K90AFN00KA0648G00", network)
-    .await?;
-println!("commissioned over BLE as node 0x{node_id:016X}");
+MATTER_BLE_LIVE=1 ~/matter-rust/target/release/examples/commission_ble_thread \
+    --store /tmp/matter-c6.bin \
+    --commission "MT:-24J0AFN00KA0648G00" \
+    --dataset "$DS" \
+    --paa-dir ~/paa-roots \
+    --cd-dir ~/cd-roots
 ```
 
-The setup code above is a placeholder — substitute the C6's actual
-manual/QR code for discriminator `3840` / passcode `20202021` (chip's
-standard defaults; confirm against whatever the esp-matter firmware build
-actually advertises, since custom builds can override them).
+`MT:-24J0AFN00KA0648G00` is the standard test QR payload for discriminator
+`3840` / passcode `20202021` / VID `0xFFF1` / PID `0x8000`. Prefer the QR
+code over the manual pairing code: the manual code carries only the *short*
+(4-bit) discriminator, so the scan sweeps all 16 nibbles and takes longer.
+A fresh `--store` path mints a new fabric; reusing one reuses its identity.
+
+Expected output:
+
+```text
+Thread dataset accepted (111 bytes); expecting Ext-PAN-ID [78, 96, …]
+created a new fabric (stable commissioner identity persisted)
+commissioning over BLE→Thread (this can take up to ~90 s at network-enable …)
+commissioned over BLE as node 0x0000000000000002
+OnOff = false
+OnOff after Toggle = true (flipped: true)
+SUCCESS — commissioned and controlled node 0x… over Thread
+```
 
 **Pass:** the call returns `Ok(node_id)`. Internally this means: BTP
 session → PASE → attestation → NOC install all completed over BLE, then
