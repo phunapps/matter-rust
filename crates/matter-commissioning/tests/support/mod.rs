@@ -1316,9 +1316,28 @@ pub fn respond(
             DeviceReply::Command(buf)
         }
 
+        // AddOrUpdateThreadNetwork (0x0031/0x03) → NetworkConfigResponse (0x0031/0x05)
+        // Commissioner decoder: decode_network_config_response
+        //   expects: anonymous struct { ctx(0): NetworkingStatus u8 } (0 = Success).
+        //
+        // Additive Thread arm (M9-C2 Task 7). Only the Thread dual-transport
+        // harness reaches this — the Wi-Fi path sends 0x02, the Ethernet path
+        // never touches 0x0031 — so it cannot perturb the existing tests. The
+        // NetworkConfigResponse shape is identical to the Wi-Fi 0x02 arm.
+        (0x0031, 0x03) => {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 0_u64).unwrap(); // ctx(0): NetworkingStatus = 0 (Success)
+            w.end_container().unwrap();
+            DeviceReply::Command(buf)
+        }
+
         // ConnectNetwork (0x0031/0x06) → ConnectNetworkResponse (0x0031/0x07)
         // Commissioner decoder: decode_connect_network_response
         //   expects: anonymous struct { ctx(0): NetworkingStatus u8 } (0 = Success).
+        //   Reused unchanged for both Wi-Fi (network_id = SSID) and Thread
+        //   (network_id = Extended PAN ID) — the response shape is identical.
         (0x0031, 0x06) => {
             let mut buf = Vec::new();
             let mut w = TlvWriter::new(&mut buf);
@@ -1354,6 +1373,37 @@ pub fn respond_read_attribute_wifi(attr_path: matter_commissioning::im::Attribut
         let mut buf = Vec::new();
         TlvWriter::new(&mut buf)
             .put_uint(Tag::Anonymous, u64::from(wifi_feature))
+            .unwrap();
+        buf
+    } else {
+        respond_read_attribute(attr_path)
+    }
+}
+
+/// Thread-flavored read responder for the dual-transport `commission_ble`
+/// harness: returns `FeatureMap = THREAD` for `NetworkCommissioning` (0x0031)
+/// `0xFFFC` so the commissioner takes the Thread provisioning path
+/// (`AddOrUpdateThreadNetwork` + `ConnectNetwork`); delegates every other
+/// attribute — including `ConnectMaxTimeSeconds` (0x0003), which the base
+/// responder answers with 30 s — to [`respond_read_attribute`]. Mirrors
+/// [`respond_read_attribute_wifi`] so the shared Ethernet responder (and the
+/// loopback test that depends on it) stays untouched.
+///
+/// # Panics
+///
+/// Panics on unrecognised `(cluster, attribute)` pairs via the delegate.
+pub fn respond_read_attribute_thread(
+    attr_path: matter_commissioning::im::AttributePath,
+) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+
+    if attr_path.cluster == 0x0031 && attr_path.attribute == 0xFFFC {
+        let thread_feature: u32 =
+            matter_commissioning::clusters::network_commissioning::NetworkCommissioningFeature::THREAD
+                .bits();
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf)
+            .put_uint(Tag::Anonymous, u64::from(thread_feature))
             .unwrap();
         buf
     } else {
@@ -2600,15 +2650,53 @@ pub async fn run_mock_device(
     }
 }
 
+/// Which network interface the dual-transport mock advertises (via
+/// `NetworkCommissioning.FeatureMap`) and therefore which provisioning path the
+/// controller drives. Additive selector so one mock serves both the Wi-Fi
+/// (M9-C1) and Thread (M9-C2) loopbacks without diverging the wire behavior of
+/// the shared PASE/CASE scaffolding.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MockNetworkKind {
+    /// Advertise `FeatureMap = WIFI`; answer `AddOrUpdateWiFiNetwork` (0x02).
+    WiFi,
+    /// Advertise `FeatureMap = THREAD`; answer `AddOrUpdateThreadNetwork` (0x03).
+    Thread,
+}
+
+/// One `InvokeRequest` command the mock decoded on a secured IM session,
+/// captured so a test can assert *what the controller sent* — the on-wire bytes
+/// are AES-CCM-encrypted under the session key, so the decoded command fields
+/// are only observable here inside the device half.
+#[derive(Clone, Debug)]
+pub struct CapturedCommand {
+    /// Cluster id of the invoked command (e.g. `0x0031` NetworkCommissioning).
+    pub cluster: u32,
+    /// Command id (e.g. `0x03` AddOrUpdateThreadNetwork, `0x06` ConnectNetwork).
+    pub command: u32,
+    /// The anonymous-tagged command-fields TLV as decoded from the request.
+    pub fields_tlv: Vec<u8>,
+}
+
+/// Shared, cloneable capture sink the dual-transport mock appends every
+/// serviced [`CapturedCommand`] to. Tests hold a clone and inspect it after the
+/// run completes.
+pub type CommandLog = std::sync::Arc<std::sync::Mutex<Vec<CapturedCommand>>>;
+
 /// Service one inbound secured IM packet on a given session/transport (the
 /// module-level twin of `run_mock_device`'s nested `service_secured_im`, so the
 /// dual-transport harness can reuse it without disturbing the single-transport
 /// harness). Decodes, builds the reply, sends it on the same exchange id;
 /// returns the `(cluster, command)` of a serviced Invoke (None for reads/acks).
 ///
+/// `network` selects the FeatureMap the read responder advertises (WIFI vs
+/// THREAD) and thus which provisioning path the controller takes. Every
+/// serviced Invoke's `(cluster, command, fields_tlv)` is appended to
+/// `command_log` so tests can assert the controller's decrypted commands.
+///
 /// # Errors
 ///
 /// Propagates datagram / framing failures as [`DriverError`].
+#[allow(clippy::too_many_arguments)]
 async fn service_secured_im_dual(
     dev_io: &InMemoryDatagram,
     peer: std::net::SocketAddr,
@@ -2617,6 +2705,8 @@ async fn service_secured_im_dual(
     packet: &[u8],
     challenge: [u8; 16],
     pki: &MockDevicePki,
+    network: MockNetworkKind,
+    command_log: &CommandLog,
 ) -> Result<Option<(u32, u32)>, DriverError> {
     use std::time::Instant;
 
@@ -2636,11 +2726,14 @@ async fn service_secured_im_dual(
 
     if is_read_request(&payload) {
         let paths = parse_read_request(&payload);
-        // Wi-Fi-flavored: the dual harness commissions a Wi-Fi device, so
-        // FeatureMap must report WIFI to drive the network-provisioning path.
+        // Flavor the FeatureMap by the requested network kind so the controller
+        // drives the matching provisioning path.
         let values: Vec<Vec<u8>> = paths
             .iter()
-            .map(|p| respond_read_attribute_wifi(*p))
+            .map(|p| match network {
+                MockNetworkKind::WiFi => respond_read_attribute_wifi(*p),
+                MockNetworkKind::Thread => respond_read_attribute_thread(*p),
+            })
             .collect();
         let pairs: Vec<(matter_commissioning::im::AttributePath, &[u8])> = paths
             .iter()
@@ -2662,6 +2755,13 @@ async fn service_secured_im_dual(
     } else {
         let decoded_req = parse_invoke_request(&payload);
         let path = decoded_req.path;
+        // Record the decrypted command so tests can assert the controller sent
+        // exactly the expected provisioning commands + payloads.
+        command_log.lock().unwrap().push(CapturedCommand {
+            cluster: path.cluster,
+            command: path.command,
+            fields_tlv: decoded_req.fields_tlv.clone(),
+        });
         let serviced = (path.cluster, path.command);
         let reply_bytes = match respond(path, &decoded_req.fields_tlv, challenge, pki) {
             DeviceReply::Command(fields_tlv) => build_invoke_response(path, &fields_tlv),
@@ -2718,6 +2818,8 @@ pub async fn run_mock_device_dual(
     pase_params: PasePbkdfParams,
     pase_responder_session_id: u16,
     case_setup: MockDeviceCaseSetup,
+    network: MockNetworkKind,
+    command_log: &CommandLog,
 ) -> Result<(), DriverError> {
     const CTRL_PASE_SESSION_ID: u16 = 1;
 
@@ -2834,6 +2936,8 @@ pub async fn run_mock_device_dual(
                     &packet,
                     attestation_challenge,
                     pki,
+                    network,
+                    command_log,
                 )
                 .await?;
             }
@@ -2917,6 +3021,8 @@ pub async fn run_mock_device_dual(
             &packet,
             attestation_challenge,
             pki,
+            network,
+            command_log,
         )
         .await?;
         if let Some((cluster, command)) = serviced {
@@ -3079,6 +3185,10 @@ pub async fn run_mock_device_dual_silent_after(
     // replying but keeps both endpoints alive by parking on a never-ready future.
     // The next controller dispatch (still a `TransportProvides` PASE-session
     // dispatch) then hits its response deadline, and so does the rollback.
+    // This stall twin never reaches network provisioning; advertise Wi-Fi and
+    // discard the capture (a local throwaway sink) so the public signature stays
+    // unchanged for the D11.3 rollback test that calls it.
+    let discard_log: CommandLog = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     for _ in 0..service_pre_op_stages {
         let (packet, _from) = btp_dev.recv_from().await?;
         service_secured_im_dual(
@@ -3089,6 +3199,8 @@ pub async fn run_mock_device_dual_silent_after(
             &packet,
             attestation_challenge,
             pki,
+            MockNetworkKind::WiFi,
+            &discard_log,
         )
         .await?;
     }
