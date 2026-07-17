@@ -5,8 +5,11 @@
 
 A Rust implementation of the **Matter** protocol — controller side.
 
-> Status: **pre-release, Milestone 0.** Nothing here is publishable yet. The repository
-> exists so the roadmap, workspace layout, and contribution model are visible from day one.
+> Status: **feature-complete against Matter 1.4, not yet published to crates.io.**
+> The controller commissions and controls real Matter devices over IP, and over BLE
+> onto Wi-Fi or Thread — all validated against hardware, not just tests. The crates
+> are unpublished by choice, not because they are empty; see
+> [Using the crates](#using-the-crates).
 
 ## What this is
 
@@ -24,8 +27,8 @@ for the **device** side. The controller side is the gap we are filling.
 - Not a fork of `rs-matter`. The two projects may converge later; for now we ship
   separately because the design goals differ.
 - Not a quick MVP. Matter is a security-sensitive protocol. Cutting corners here
-  causes broken homes and leaked credentials. The project is paced at roughly
-  eighteen months to v1.0.
+  causes broken homes and leaked credentials. The v1.0 API took roughly eighteen
+  months, as planned, and the pace has not been compressed since.
 
 ## Workspace layout
 
@@ -34,25 +37,28 @@ matter-rust/
 ├── crates/
 │   ├── matter-codec/           # M1 — TLV encode/decode
 │   ├── matter-cert/            # M2 — Matter certificate format
-│   ├── matter-crypto/          # M3, M4 — PASE (SPAKE2+), CASE (SIGMA)
+│   ├── matter-crypto/          # M3, M4 — PASE (SPAKE2+), CASE (SIGMA), ICD check-in
 │   ├── matter-transport/       # M5 — UDP, mDNS, framing, MRP
+│   ├── matter-interaction/     # M7 — Interaction Model message framing
 │   ├── matter-commissioning/   # M6 — full commissioning state machine
-│   ├── matter-clusters/        # M7 — typed cluster definitions
+│   ├── matter-clusters/        # M7 — typed cluster definitions (generated)
+│   ├── matter-ble/             # M9 — BLE transport: BTP engine + central role
+│   ├── matter-ota/             # M9 — OTA Software Update Provider
+│   ├── matter-bdx/             # M9 — BDX (bulk data exchange, carries OTA images)
 │   └── matter-controller/      # M8 — high-level controller API
-├── test-vectors/               # binary fixtures captured from matter.js / spec
-├── examples/                   # how to use the published crates
-├── xtask/                      # codegen, vector capture, release helpers
-└── docs/                       # protocol notes, spec references, ADRs
+├── test-vectors/               # binary fixtures captured from matter.js / chip / spec
+├── examples/                   # how to use the crates
+├── xtask/                      # codegen, vector capture, integration harness
+└── docs/                       # protocol notes, runbooks, spec references, ADRs
 ```
 
-Each crate is independently versioned and independently publishable. A consumer
-who only wants TLV decoding can depend on `matter-codec` without pulling in any
-of the higher layers.
+Each crate is independently versioned and independently publishable, and depends
+only on the layers below it — so a consumer who only wants TLV decoding can take
+`matter-codec` without pulling in commissioning, BLE, or a Tokio runtime.
 
 ## Roadmap
 
-The work is sequenced so each milestone validates the previous. Each milestone
-ends with a `cargo publish` to crates.io.
+The work is sequenced so each milestone validates the previous.
 
 | Milestone | Crate                  | Goal                                                | Target |
 | --------- | ---------------------- | --------------------------------------------------- | ------ |
@@ -65,23 +71,60 @@ ends with a `cargo publish` to crates.io.
 | M6        | `matter-commissioning` | End-to-end commissioning of a real Matter device    | ✓ done |
 | M7        | `matter-clusters`      | Generated cluster definitions (OnOff, Level, …)     | ✓ done |
 | M8        | `matter-controller`    | High-level controller API. **v1.0.**                | ✓ done |
+| M9        | (all)                  | Completeness against **Matter 1.4** — see below     | ✓ done |
 
-Features deferred past v1.0: Thread network commissioning, BLE commissioning
-transport, OTA (BDX), multi-admin, groups, Scenes, Thermostat, advanced ACL,
-`no_std`, and clusters beyond the initial set. These ship in 1.x.
+### M9 — what "Matter 1.4 completeness" covered
 
-## Commissioning a real device (M6.6)
+Everything the original roadmap deferred past v1.0 has since landed:
 
-`matter-commissioning` can commission an IP-reachable Matter device end to end in
-pure Rust. See the operator runbook: [`docs/runbooks/m6.6-first-commission.md`](docs/runbooks/m6.6-first-commission.md).
+- **BLE commissioning** (`matter-ble`) — BTP engine + central role, commissioning
+  a factory-fresh device onto **Wi-Fi** or **Thread** over Bluetooth.
+- **Thread network commissioning** — `AddOrUpdateThreadNetwork` from an operational
+  dataset, through a border router.
+- **OTA** (`matter-ota` + `matter-bdx`) — this controller can act as an OTA
+  Provider: announce, serve an image over BDX, and drive Apply.
+- **Multi-admin, ACL, groups** — fabric management, `AccessControl`, and group
+  messaging including multicast.
+- **ICD** (intermittently-connected devices), TimeSync, Binding.
+- **Full Interaction Model** — events, chunked reads, subscriptions with
+  chip-faithful auto-resubscribe.
+- **37 generated clusters**, up from the initial ten.
+
+Still deferred: Scenes Management, `no_std` (see
+[ADR 0002](docs/decisions/0002-no-std-posture.md)), React Native, and Matter 1.5+
+features.
+
+Known limitation: **live BLE commissioning is Linux-only** — the BLE central hangs
+on macOS (scanning is fine; GATT/BTP is not). Tracked in
+[`TODO-1.0.md`](TODO-1.0.md).
+
+## Commissioning a real device
+
+All three commissioning paths are validated against real hardware — see
+[`docs/tested-devices.md`](docs/tested-devices.md) for what was run, when, and how
+it was independently confirmed.
+
+| Path | Device | Proof |
+| --- | --- | --- |
+| **IP** (already on-network) | TP-Link Tapo P110M | trace cross-verified against matter.js: 0 divergent |
+| **BLE → Wi-Fi** | ESP32-C6 (esp-matter) | device joined the WLAN; `OnOff` toggled over CASE |
+| **BLE → Thread** | ESP32-C6 + Raspberry Pi border router | device joined the mesh as a router; `OnOff` toggled over CASE |
 
 ```bash
-cargo run --example commission_ip --features driver -- --help
+# IP: a device already on your network
+cargo run -p matter-commissioning --example commission_ip --features driver -- --help
+
+# BLE → Wi-Fi, and BLE → Thread (run these from Linux; see the note above)
+cargo run -p matter-controller --example commission_ble_wifi   --features ble -- --help
+cargo run -p matter-controller --example commission_ble_thread --features ble -- --help
 ```
 
-The in-process loopback E2E test (`commission_loopback.rs`) proves the full
-orchestration with no hardware; the runbook performs the real-device run and
-cross-verifies the trace against matter.js.
+In-process loopback E2E tests prove each flow with no hardware; the runbooks under
+[`docs/runbooks/`](docs/runbooks/) perform the real-device runs.
+
+**Attestation roots:** commissioning any real device requires the PAA and CD trust
+roots, and they do not come from the same place — `AttestationTrust::csa_test_roots()`
+is for our own tests and verifies no real device. The runbooks give the specifics.
 
 ## How we verify correctness
 
@@ -96,10 +139,18 @@ of the spec. For every protocol layer:
 
 We also use:
 
+- `connectedhomeip` (the C++ reference) as a second source, both for test vectors
+  and as a live peer — `just integration` runs the suite against chip's
+  `all-clusters-app`, `lock-app`, and `evse-app`,
 - official spec test vectors where they exist (notably PASE/SPAKE2+ in spec §3.10),
 - [`proptest`](https://docs.rs/proptest) for roundtrip properties,
 - [`cargo-fuzz`](https://rust-fuzz.github.io/book/) for parsers,
-- real Matter hardware from Milestone 6 onwards.
+- real Matter hardware ([`docs/tested-devices.md`](docs/tested-devices.md)).
+
+Hardware earns its place here. The first BLE→Thread commission surfaced two bugs
+that every local test had passed: a scan filter that silently blinded the Linux
+Bluetooth backend, and a handshake ordering our own loopback peer was too
+forgiving to catch.
 
 If Rust output diverges from matter.js, **we are wrong by default**. Investigate
 before changing the test.
@@ -111,22 +162,28 @@ before changing the test.
   justified). We implement the Matter-defined **protocols** on top — SPAKE2+,
   SIGMA — not the math underneath.
 - Correctness is verified by byte-parity against matter.js and
-  connectedhomeip, plus real-device validation from Milestone 6 onwards.
+  connectedhomeip, plus validation against real devices.
 
-## Using the published crates
+## Using the crates
 
-Nothing is published yet. When M1 ships:
+**Not yet published to crates.io.** That is a deliberate hold, not a gap in the
+work — the maintainer will publish when the API has had more outside use. Until
+then, depend on it via git:
 
 ```toml
 [dependencies]
-matter-codec = "0.1"
+matter-controller = { git = "https://github.com/phunapps/matter-rust" }
 ```
+
+Each crate is independently usable: take `matter-codec` alone for TLV, or
+`matter-cert` for Matter certificates, without pulling in the higher layers.
 
 The high-level API (M8, `matter-controller`) looks like:
 
 ```rust,ignore
 let controller = MatterController::builder(store)
-    .attestation_trust(AttestationTrust::csa_test_roots())
+    // Real devices need real roots — csa_test_roots() is for our own tests only.
+    .attestation_trust(AttestationTrust::from_dirs(&paa_dir, &cd_dir)?)
     .build()
     .await?;
 controller.create_fabric(fabric_config).await?;
