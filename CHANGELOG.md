@@ -615,15 +615,21 @@ migration step is needed for snapshots from M9-E1 or earlier.
   `ReadNetworkCommissioningInfo` now also reads
   `NetworkCommissioning.ConnectMaxTimeSeconds` (attribute `0x0009`)
   alongside `FeatureMap`, and both the `FailsafeBeforeNetworkEnable`
-  extension and the `ConnectNetwork` response deadline are sized from it
-  (chip-faithful), falling back to a generous 90 s default
-  (`DEFAULT_CONNECT_MAX_TIME_SECONDS`) if unread or zero. **Behavior
-  change:** this default replaces the C1 path's previous fixed 60 s
-  `ConnectNetwork` deadline; the Wi-Fi path adopts the same
-  `ConnectMaxTimeSeconds`-aware sizing harmlessly (strictly larger
-  default), but has not yet been re-exercised live against a real Wi-Fi
-  device since the change — see `docs/runbooks/c2-thread-commission.md`'s
-  carry-forward note.
+  extension and the BLE-path `ConnectNetwork` response deadline are sized
+  from it (chip-faithful). The failsafe extension uses the reported value
+  as-is, falling back to a generous 90 s default
+  (`DEFAULT_CONNECT_MAX_TIME_SECONDS`) if unread or zero. The
+  `ConnectNetwork` response deadline uses the same reported value but
+  **floored at that same 90 s default** — so it can never fire before the
+  same-sized failsafe extension would expire — and falls back to the
+  original fixed 60 s deadline only when the device hasn't reported the
+  attribute (unread or zero). **Behavior change:** a device that reports
+  `ConnectMaxTimeSeconds` below 90 s (e.g. the Thread loopback mock's 30 s)
+  now gets a 90 s `ConnectNetwork` deadline instead of the raw reported
+  value; the Wi-Fi path adopts the same sizing harmlessly (unread
+  `ConnectMaxTimeSeconds` keeps the original 60 s deadline), but has not
+  yet been re-exercised live against a real Wi-Fi device since the change
+  — see `docs/runbooks/c2-thread-commission.md`'s carry-forward note.
 - **Hermetic Thread loopback proof** — `commission_ble_loopback.rs` gains
   a Thread-FeatureMap mock device (M9-C2 Task 7) exercising the full fork
   end-to-end (FeatureMap→Thread route, dataset provisioning via

@@ -35,10 +35,42 @@ pub const STREAM_PEER: SocketAddr =
 /// chip's BTP-ack-derived exchange response timeout.
 const RESPONSE_DEADLINE: Duration = Duration::from_secs(30);
 
-/// Response deadline for `NetworkCommissioning::ConnectNetwork` on the BLE path.
-/// Longer than [`RESPONSE_DEADLINE`] because the device performs the (slow)
-/// Wi-Fi association + DHCP inline before replying (design D3).
+/// Fallback response deadline for `NetworkCommissioning::ConnectNetwork` on
+/// the BLE path, used only when the device hasn't reported
+/// `ConnectMaxTimeSeconds` (attribute `0x0003`) yet — e.g. an unread or
+/// zero value. Longer than [`RESPONSE_DEADLINE`] because the device
+/// performs the (slow) network association inline before replying (design
+/// D3).
+///
+/// When the device **has** reported `ConnectMaxTimeSeconds`, the deadline
+/// is derived from that value instead (spec D7) — see
+/// [`connect_network_deadline`], which floors it at 90 s (the same floor
+/// the state machine's private `network_enable_failsafe_seconds` uses for
+/// the `FailsafeBeforeNetworkEnable` extension) so this deadline can never
+/// fire before that same-sized failsafe extension would expire.
 const CONNECT_NETWORK_RESPONSE_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Effective `NetworkCommissioning::ConnectNetwork` response deadline for
+/// the BLE path, derived from the device-reported `ConnectMaxTimeSeconds`.
+///
+/// `connect_max_time_seconds` is `0` when the device hasn't reported the
+/// attribute (unread, or the device reported `0`) — in that case this
+/// falls back to the fixed [`CONNECT_NETWORK_RESPONSE_DEADLINE`] (60 s),
+/// unchanged from the pre-D7 behavior. When the device *did* report a
+/// value, the deadline is floored at
+/// `crate::state_machine::DEFAULT_CONNECT_MAX_TIME_SECONDS` (90 s) — the
+/// same floor the state machine's failsafe-extension sizing uses — so a
+/// device that legitimately takes up to 90 s to attach is never cancelled
+/// by this deadline before its own failsafe would expire (spec D7).
+fn connect_network_deadline(connect_max_time_seconds: u16) -> Duration {
+    if connect_max_time_seconds == 0 {
+        CONNECT_NETWORK_RESPONSE_DEADLINE
+    } else {
+        let secs =
+            connect_max_time_seconds.max(crate::state_machine::DEFAULT_CONNECT_MAX_TIME_SECONDS);
+        Duration::from_secs(u64::from(secs))
+    }
+}
 
 /// Placeholder exchange id reported when a BLE-path response deadline fires.
 /// Unlike an MRP retransmit-budget [`DriverError::Timeout`] (which knows the
@@ -841,7 +873,7 @@ where
                 // outer `let _` exactly like any other best-effort rollback
                 // failure — the ORIGINAL `exit` error is what we return, so a
                 // rollback timeout must never mask it.
-                let _ = with_response_deadline(reliability, false, async {
+                let _ = with_response_deadline(reliability, None, async {
                     rollback(pase_transport, &mut sessions, pase_sid, pase_peer).await;
                     Ok(())
                 })
@@ -859,9 +891,13 @@ where
 /// behavior of `commission()` is unchanged. Under
 /// [`TransportReliability::TransportProvides`] (BLE) MRP is off and nothing at
 /// the exchange layer times out, so the future is wrapped in a
-/// [`tokio::time::timeout`]: [`CONNECT_NETWORK_RESPONSE_DEADLINE`] (60 s) when
-/// `is_connect_network`, else [`RESPONSE_DEADLINE`] (30 s). A fired deadline
-/// maps to [`DriverError::Timeout`] and routes through the normal rollback path.
+/// [`tokio::time::timeout`]. `connect_max_time_seconds` selects the deadline:
+/// `None` means this dispatch is not `ConnectNetwork`, so
+/// [`RESPONSE_DEADLINE`] (30 s) applies; `Some(secs)` means it *is*
+/// `ConnectNetwork`, so [`connect_network_deadline`] (which floors a
+/// device-reported value at 90 s, or falls back to 60 s if `secs == 0`)
+/// applies. A fired deadline maps to [`DriverError::Timeout`] and routes
+/// through the normal rollback path.
 ///
 /// # Errors
 ///
@@ -869,16 +905,15 @@ where
 /// - [`DriverError::Timeout`] if the deadline fires (BLE path only).
 async fn with_response_deadline<T>(
     reliability: TransportReliability,
-    is_connect_network: bool,
+    connect_max_time_seconds: Option<u16>,
     fut: impl std::future::Future<Output = Result<T, DriverError>>,
 ) -> Result<T, DriverError> {
     match reliability {
         TransportReliability::Mrp => fut.await,
         TransportReliability::TransportProvides => {
-            let deadline = if is_connect_network {
-                CONNECT_NETWORK_RESPONSE_DEADLINE
-            } else {
-                RESPONSE_DEADLINE
+            let deadline = match connect_max_time_seconds {
+                None => RESPONSE_DEADLINE,
+                Some(secs) => connect_network_deadline(secs),
             };
             match tokio::time::timeout(deadline, fut).await {
                 Ok(result) => result,
@@ -1011,18 +1046,24 @@ where
                     command,
                 };
                 // NetworkCommissioning::ConnectNetwork gets the longer BLE-path
-                // response deadline (device does slow Wi-Fi assoc + DHCP inline).
+                // response deadline, sized from the device-reported
+                // `ConnectMaxTimeSeconds` (spec D7; see
+                // `connect_network_deadline`) rather than a fixed constant —
+                // the device does the slow network association inline before
+                // replying.
                 let is_connect_network = cluster
                     == crate::clusters::network_commissioning::CLUSTER_ID
                     && command
                         == crate::clusters::network_commissioning::command_id::CONNECT_NETWORK;
+                let connect_max_time_seconds =
+                    is_connect_network.then(|| sm.connect_max_time_seconds());
                 let outcome = match session {
                     // PASE-session dispatch → PASE transport; under
                     // `TransportProvides` it is bounded by a response deadline.
                     SessionContext::Pase => {
                         with_response_deadline(
                             reliability,
-                            is_connect_network,
+                            connect_max_time_seconds,
                             dispatch_invoke(
                                 pase_transport,
                                 sessions,
@@ -1081,7 +1122,7 @@ where
                     SessionContext::Pase => {
                         with_response_deadline(
                             reliability,
-                            false,
+                            None,
                             dispatch_read(pase_transport, sessions, pase_sid, pase_peer, &paths),
                         )
                         .await?
@@ -1993,7 +2034,7 @@ mod tests {
     async fn with_response_deadline_mrp_is_transparent() {
         let out = with_response_deadline(
             TransportReliability::Mrp,
-            false,
+            None,
             std::future::ready(Ok::<u8, DriverError>(7)),
         )
         .await
@@ -2007,7 +2048,7 @@ mod tests {
     async fn with_response_deadline_transport_provides_passes_ready_value() {
         let out = with_response_deadline(
             TransportReliability::TransportProvides,
-            false,
+            None,
             std::future::ready(Ok::<u8, DriverError>(9)),
         )
         .await
@@ -2023,7 +2064,7 @@ mod tests {
         let start = tokio::time::Instant::now();
         let err = with_response_deadline(
             TransportReliability::TransportProvides,
-            false,
+            None,
             std::future::pending::<Result<(), DriverError>>(),
         )
         .await
@@ -2036,23 +2077,89 @@ mod tests {
         );
     }
 
-    /// A `ConnectNetwork` dispatch gets the longer 60 s deadline (slow Wi-Fi
-    /// assoc + DHCP inline).
+    /// A `ConnectNetwork` dispatch whose device hasn't reported
+    /// `ConnectMaxTimeSeconds` (`Some(0)`) falls back to the fixed 60 s
+    /// deadline — unchanged pre-D7 behavior.
     #[tokio::test(start_paused = true)]
-    async fn with_response_deadline_connect_network_times_out_at_60s() {
+    async fn with_response_deadline_connect_network_absent_falls_back_to_60s() {
         let start = tokio::time::Instant::now();
         let err = with_response_deadline(
             TransportReliability::TransportProvides,
-            true,
+            Some(0),
             std::future::pending::<Result<(), DriverError>>(),
         )
         .await
-        .expect_err("a never-replying ConnectNetwork must hit the longer deadline");
+        .expect_err("a never-replying ConnectNetwork must hit the fallback deadline");
         assert!(matches!(err, DriverError::Timeout { .. }), "got {err:?}");
         assert_eq!(
             start.elapsed(),
             CONNECT_NETWORK_RESPONSE_DEADLINE,
-            "ConnectNetwork deadline must be 60 s"
+            "ConnectNetwork deadline with no reported ConnectMaxTimeSeconds must be 60 s"
+        );
+    }
+
+    /// A `ConnectNetwork` dispatch whose device reported a
+    /// `ConnectMaxTimeSeconds` below the 90 s floor (e.g. the Thread
+    /// loopback mock's 30 s) is bounded at 90 s, not the raw 30 s — spec
+    /// D7's floor, matching the state-machine failsafe extension's default.
+    #[tokio::test(start_paused = true)]
+    async fn with_response_deadline_connect_network_floors_small_value_at_90s() {
+        let start = tokio::time::Instant::now();
+        let err = with_response_deadline(
+            TransportReliability::TransportProvides,
+            Some(30),
+            std::future::pending::<Result<(), DriverError>>(),
+        )
+        .await
+        .expect_err("a never-replying ConnectNetwork must hit the floored deadline");
+        assert!(matches!(err, DriverError::Timeout { .. }), "got {err:?}");
+        assert_eq!(
+            start.elapsed(),
+            Duration::from_secs(90),
+            "ConnectNetwork deadline must floor a small ConnectMaxTimeSeconds at 90 s"
+        );
+    }
+
+    /// A `ConnectNetwork` dispatch whose device reported a
+    /// `ConnectMaxTimeSeconds` above the 90 s floor is honored as-is.
+    #[tokio::test(start_paused = true)]
+    async fn with_response_deadline_connect_network_honors_large_reported_value() {
+        let start = tokio::time::Instant::now();
+        let err = with_response_deadline(
+            TransportReliability::TransportProvides,
+            Some(120),
+            std::future::pending::<Result<(), DriverError>>(),
+        )
+        .await
+        .expect_err("a never-replying ConnectNetwork must hit the reported deadline");
+        assert!(matches!(err, DriverError::Timeout { .. }), "got {err:?}");
+        assert_eq!(
+            start.elapsed(),
+            Duration::from_secs(120),
+            "ConnectNetwork deadline must honor a ConnectMaxTimeSeconds above the floor"
+        );
+    }
+
+    /// Unit test of the pure deadline-selection helper (no timers): the
+    /// three cases MUST-FIX 1 calls out explicitly — absent (0) → the 60 s
+    /// fallback default, a below-floor value (30) → floored at 90 s, and an
+    /// above-floor value (120) → honored as-is.
+    #[test]
+    fn connect_network_deadline_covers_floor_cases() {
+        assert_eq!(
+            connect_network_deadline(0),
+            CONNECT_NETWORK_RESPONSE_DEADLINE,
+            "absent ConnectMaxTimeSeconds falls back to the fixed 60s default"
+        );
+        assert_eq!(
+            connect_network_deadline(30),
+            Duration::from_secs(90),
+            "a reported value below the floor is raised to 90s"
+        );
+        assert_eq!(
+            connect_network_deadline(120),
+            Duration::from_secs(120),
+            "a reported value above the floor is honored as-is"
         );
     }
 

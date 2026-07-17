@@ -70,13 +70,15 @@ pub enum CommissioningError {
     #[error("CASE session establishment failed")]
     CaseEstablishmentFailed,
 
-    /// `NetworkCommissioning::FeatureMap` declared a network type the
-    /// commissioner does not support in v1.0. Currently this means a
-    /// device that only supports Thread, or a device that returned a
-    /// `FeatureMap` with no recognised bits set.
-    #[error("device requires {needed:?} network type; not supported in v1.0")]
+    /// The device's `NetworkCommissioning::FeatureMap` does not declare
+    /// the network type the caller supplied credentials for (e.g.
+    /// `NetworkCredentials::Thread` was supplied but the device's
+    /// `FeatureMap` lacks the Thread bit). Both Wi-Fi and Thread are
+    /// supported network types as of M9-C2 — this variant signals a
+    /// device/credential *mismatch*, not an unsupported network type.
+    #[error("device does not support {needed:?} network type (credential/device mismatch)")]
     NetworkFeatureUnsupported {
-        /// Which network type the device requires.
+        /// Which network type the supplied credentials required.
         needed: NetworkKind,
     },
 

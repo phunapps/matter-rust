@@ -386,9 +386,15 @@ network), set `network: NetworkCredentials::AlreadyOnNetwork` — the state
 machine detects the network shape at `Stage::ReadNetworkCommissioningInfo`
 and skips the Wi-Fi sub-cursor.
 
-Thread-only devices currently fail commissioning with
-`CommissioningError::NetworkFeatureUnsupported { needed: NetworkKind::Thread }`.
-Thread support is deferred post-v1.0.
+Thread commissioning is supported: set
+`network: NetworkCredentials::Thread(dataset)` with a
+[`ThreadDataset`](src/thread_dataset.rs) built from an operational dataset
+(e.g. `ot-ctl dataset active -x`, hex-decoded). If the supplied credential
+type doesn't match what the device actually offers — e.g. `Thread`
+credentials against a device whose `NetworkCommissioning::FeatureMap` lacks
+the Thread bit — commissioning fails fast with
+`CommissioningError::NetworkFeatureUnsupported { needed }`, naming the
+network type the device is missing.
 
 ### Optional `tracing` feature
 

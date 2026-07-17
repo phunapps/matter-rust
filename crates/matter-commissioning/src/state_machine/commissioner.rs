@@ -22,7 +22,7 @@ use tracing::instrument;
 /// SRP registration is slower than Wi-Fi association); the C1 Wi-Fi path
 /// adopts it harmlessly. Matter Core Spec §11.9.5.4 defines the attribute
 /// but does not mandate a minimum, so a conservative default is safest.
-const DEFAULT_CONNECT_MAX_TIME_SECONDS: u16 = 90;
+pub(crate) const DEFAULT_CONNECT_MAX_TIME_SECONDS: u16 = 90;
 
 /// Wi-Fi station credentials supplied to `AddOrUpdateWiFiNetwork`.
 ///
@@ -293,17 +293,17 @@ impl Commissioner {
         if let NetworkCredentials::WiFi(creds) = &cfg.network {
             if creds.ssid.is_empty() {
                 return Err(CommissioningError::InvalidConfig(
-                    "wifi_credentials.ssid must not be empty",
+                    "network: Wi-Fi ssid must not be empty",
                 ));
             }
             if creds.ssid.len() > 32 {
                 return Err(CommissioningError::InvalidConfig(
-                    "wifi_credentials.ssid must be ≤32 bytes",
+                    "network: Wi-Fi ssid must be ≤32 bytes",
                 ));
             }
             if creds.credentials.len() > 64 {
                 return Err(CommissioningError::InvalidConfig(
-                    "wifi_credentials.credentials must be ≤64 bytes",
+                    "network: Wi-Fi credentials must be ≤64 bytes",
                 ));
             }
         }
@@ -420,6 +420,20 @@ impl Commissioner {
     /// value (unread/absent) leaves the default in force.
     pub(crate) fn set_connect_max_time_seconds(&mut self, seconds: u16) {
         self.connect_max_time_seconds = seconds;
+    }
+
+    /// The device-reported `ConnectMaxTimeSeconds`, or `0` if the device
+    /// hasn't reported it yet (default before
+    /// `Stage::ReadNetworkCommissioningInfo` completes, or the device
+    /// reported `0`).
+    ///
+    /// Consumed by the driver ([`crate::driver::commission`]) to size the
+    /// BLE-path `ConnectNetwork` response deadline from the same value that
+    /// [`Self::network_enable_failsafe_seconds`] uses for the failsafe
+    /// extension (spec D7: both must be sized from `ConnectMaxTimeSeconds`).
+    #[must_use]
+    pub(crate) fn connect_max_time_seconds(&self) -> u16 {
+        self.connect_max_time_seconds
     }
 
     /// Helper: emit an `ArmFailsafe` action at the current stage.

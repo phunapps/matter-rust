@@ -50,10 +50,24 @@ pub enum ThreadDatasetError {
 /// This is **not** Matter TLV. Thread's operational dataset uses its own
 /// flat TLV encoding: each element is `type(1 byte)`, `length(1 byte)`,
 /// `value(length bytes)`, walked from offset 0 with no outer container.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written to redact `bytes` (renders only the length):
+/// the dataset contains the Thread Network Key (TLV type `0x04`) and `PSKc`
+/// — secrets that must never land in logs via a stray `{:?}`. Mirrors
+/// `WiFiCredentials`' redacted `Debug` in `state_machine::commissioner`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ThreadDataset {
     bytes: Vec<u8>,
     ext_pan_id: [u8; 8],
+}
+
+impl core::fmt::Debug for ThreadDataset {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ThreadDataset")
+            .field("len", &self.bytes.len())
+            .field("ext_pan_id", &format_args!("{:02x?}", self.ext_pan_id))
+            .finish()
+    }
 }
 
 impl ThreadDataset {
@@ -189,5 +203,29 @@ mod tests {
             ThreadDataset::new(vec![0x03, 0x00]),
             Err(ThreadDatasetError::NoExtPanId)
         ));
+    }
+
+    #[test]
+    fn debug_redacts_network_key() {
+        // DS (Task 1's capture vector) carries a type-0x04 (Network Key)
+        // TLV with value dc4b544c7a58671a2ce4f876f5d6dcd9 — a recognizable
+        // pattern that must never appear in `{:?}` output.
+        let d = ThreadDataset::new(hex(DS)).unwrap();
+        let rendered = format!("{d:?}");
+        assert!(
+            !rendered.contains("dc4b544c7a58671a2ce4f876f5d6dcd9"),
+            "Debug must not contain the raw dataset bytes (network key): {rendered}",
+        );
+        assert!(rendered.contains("ThreadDataset"), "got {rendered}");
+        assert!(
+            rendered.contains("len"),
+            "dataset length should appear: {rendered}"
+        );
+        // ext_pan_id (78:96:21:7f:78:7f:6e:be per `parses_and_extracts_ext_pan_id`)
+        // is not secret and IS expected to appear, rendered by `{:02x?}`.
+        assert!(
+            rendered.contains("78, 96, 21, 7f, 78, 7f, 6e, be"),
+            "ext_pan_id should appear in Debug output: {rendered}"
+        );
     }
 }
