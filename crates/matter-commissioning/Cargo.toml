@@ -1,6 +1,6 @@
 [package]
 name = "matter-commissioning"
-version = "0.0.0"
+version = "0.1.0"
 description = "Matter commissioning state machine: setup payload, attestation, NOC issuance, network commissioning."
 edition.workspace = true
 rust-version.workspace = true
@@ -36,10 +36,10 @@ workspace = true
 
 [dependencies]
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
-matter-cert = { path = "../matter-cert", version = "0.2.0-pre" }
-matter-crypto = { path = "../matter-crypto", version = "0.1.0-pre" }
-matter-transport = { path = "../matter-transport", version = "0.1.0-pre" }
-matter-interaction = { path = "../matter-interaction", version = "0.1.0-pre" }
+matter-cert = { path = "../matter-cert", version = "0.1.0" }
+matter-crypto = { path = "../matter-crypto", version = "0.1.0" }
+matter-transport = { path = "../matter-transport", version = "0.1.0" }
+matter-interaction = { path = "../matter-interaction", version = "0.1.0" }
 cms = { workspace = true }
 der = { workspace = true }
 x509-parser = { workspace = true }
@@ -61,12 +61,12 @@ serde_json = { workspace = true, optional = true }
 # Example-only: the `control_onoff` example exercises the generated cluster
 # codecs over an operational session. Kept out of the main dependency graph so
 # matter-clusters' own crate independence is preserved.
-matter-clusters = { path = "../matter-clusters", version = "0.0.0" }
+matter-clusters = { path = "../matter-clusters", version = "0.1.0" }
 # Test-only: the `pase_over_btp` floor test drives PASE through two real
 # `BtpSession`s to prove reassembly + MRP-off end to end. Dev-dep ONLY —
 # matter-ble must never enter the runtime graph (and a dep on matter-controller
 # would be a cycle, so the BtpSession→AsyncDatagram shim is test-local).
-matter-ble = { path = "../matter-ble", version = "0.0.0" }
+matter-ble = { path = "../matter-ble", version = "0.1.0" }
 hex = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }
@@ -75,7 +75,7 @@ p256 = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 # Enable matter-cert test-support so the #[cfg(test)] blocks in driver/case.rs
 # can use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields}.
-matter-cert = { path = "../matter-cert", version = "0.2.0-pre", features = ["test-support"] }
+matter-cert = { path = "../matter-cert", version = "0.1.0", features = ["test-support"] }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry"] }

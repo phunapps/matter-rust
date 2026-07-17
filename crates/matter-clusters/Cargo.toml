@@ -1,6 +1,6 @@
 [package]
 name = "matter-clusters"
-version = "0.0.0"
+version = "0.1.0"
 description = "Matter protocol cluster definitions (generated from the spec)."
 edition.workspace = true
 rust-version.workspace = true

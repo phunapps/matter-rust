@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "matter-bdx"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bitflags",
  "thiserror 2.0.18",
@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "matter-ble"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bitflags",
  "btleplug",
@@ -1165,7 +1165,7 @@ dependencies = [
 
 [[package]]
 name = "matter-cert"
-version = "0.2.0-pre"
+version = "0.1.0"
 dependencies = [
  "bitflags",
  "der",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "matter-clusters"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "base64",
  "bitflags",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "matter-codec"
-version = "0.1.1"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "matter-commissioning"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1238,7 +1238,7 @@ dependencies = [
 
 [[package]]
 name = "matter-controller"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "matter-crypto"
-version = "0.1.0-pre"
+version = "0.1.0"
 dependencies = [
  "aes",
  "ccm",
@@ -1282,7 +1282,7 @@ dependencies = [
 
 [[package]]
 name = "matter-interaction"
-version = "0.1.0-pre"
+version = "0.1.0"
 dependencies = [
  "base64",
  "criterion",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "matter-ota"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "hex",
  "matter-clusters",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "matter-transport"
-version = "0.1.0-pre"
+version = "0.1.0"
 dependencies = [
  "bitflags",
  "criterion",

@@ -29,8 +29,8 @@ matter-codec = { path = "../crates/matter-codec", version = "0.1.0" }
 # capture-commissioning post-processing: parse captured IM messages
 # (matter-interaction) + the AddNOC certificate (matter-cert) to build the
 # byte-parity fixture.
-matter-cert = { path = "../crates/matter-cert", version = "0.2.0-pre" }
-matter-interaction = { path = "../crates/matter-interaction", version = "0.1.0-pre" }
+matter-cert = { path = "../crates/matter-cert", version = "0.1.0" }
+matter-interaction = { path = "../crates/matter-interaction", version = "0.1.0" }
 base64 = { workspace = true }
 cms = { workspace = true }
 const-oid = "0.9"

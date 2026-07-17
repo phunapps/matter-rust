@@ -1,6 +1,6 @@
 [package]
 name = "matter-crypto"
-version = "0.1.0-pre"
+version = "0.1.0"
 description = "Matter protocol session establishment: PASE (SPAKE2+) and CASE (SIGMA)."
 edition.workspace = true
 rust-version.workspace = true
@@ -22,7 +22,7 @@ test-support = []
 workspace = true
 
 [dependencies]
-matter-cert = { path = "../matter-cert", version = "0.2.0-pre" }
+matter-cert = { path = "../matter-cert", version = "0.1.0" }
 matter-codec = { path = "../matter-codec", version = "0.1.0" }
 aes = { workspace = true }
 ccm = { workspace = true }
@@ -40,11 +40,16 @@ serde_json = "1.0"
 # Self-reference so test compilation enables the test-support feature,
 # making the test_support module visible to tests/* without exposing
 # it to downstream crates.
-matter-crypto = { path = ".", version = "0.1.0-pre", features = ["test-support"] }
+#
+# Deliberately carries NO `version` key: cargo strips a path-only
+# dev-dependency when packaging, which is what keeps this publishable.
+# With a version, `cargo publish` tries to resolve matter-crypto from
+# crates.io while packaging matter-crypto itself, and fails.
+matter-crypto = { path = ".", features = ["test-support"] }
 # Enable test-support on matter-cert so that unit tests in this crate
 # can construct synthetic MatterCertificate values via
 # `matter_cert::test_support::build_unsigned`.
-matter-cert = { path = "../matter-cert", version = "0.2.0-pre", features = ["test-support"] }
+matter-cert = { path = "../matter-cert", version = "0.1.0", features = ["test-support"] }
 criterion = { workspace = true }
 
 [[bench]]

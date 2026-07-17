@@ -6,16 +6,23 @@
 //! `QueryImage`, authorises the `ApplyUpdateRequest`, and acknowledges
 //! `NotifyUpdateApplied`) — not the device-side Requestor (0x002A).
 //!
-//! ## Scope (phase F1)
+//! ## Scope
 //!
-//! This crate currently holds only the **pure command-handler logic**: functions
-//! that take a decoded request's command-fields TLV and produce the response
-//! command-fields TLV. There is **no networking** here yet — no socket, no CASE
-//! session, no BDX transfer. Those land in later F phases (`matter-bdx`,
-//! operational mDNS advertising, and the decoupled provider-server task). The
-//! handlers are designed to be wired by that server as:
-//! `parse_invoke_request` → handler → `build_invoke_response_command`/`_status`
-//! (see [`matter_interaction::invoke_server`]).
+//! This crate holds the **pure command-handler logic**: functions that take a
+//! decoded request's command-fields TLV and produce the response command-fields
+//! TLV. There is deliberately **no networking** here — no socket, no CASE
+//! session, no BDX transfer — which keeps the protocol testable without one.
+//!
+//! The surrounding pieces live elsewhere and are complete:
+//!
+//! * the image bytes travel over BDX — see the `matter-bdx` crate;
+//! * the server that owns the socket, advertises the operational service over
+//!   mDNS, accepts CASE, and routes IM vs BDX by protocol ID lives in
+//!   `matter-controller` (`serve_ota` / `serve_provider_once`).
+//!
+//! That server wires these handlers as: `parse_invoke_request` → handler →
+//! `build_invoke_response_command`/`_status` (see
+//! [`matter_interaction::invoke_server`]).
 //!
 //! The server direction of the 0x0029 codec (decode the inbound `QueryImage`
 //! request, encode the outbound `QueryImageResponse`) is **hand-rolled here** over

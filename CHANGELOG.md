@@ -5,6 +5,23 @@ All notable changes to crates in the `matter-rust` workspace.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## About 0.1.0 — the first published release
+
+**Every crate here is published to crates.io at `0.1.0`, and that is the first
+release of each.** Nothing was published before it.
+
+The per-crate headings below record *internal* development history from before
+first publication — milestone by milestone, including version numbers
+(`0.1.0-pre`, `0.1.1`, …) that only ever existed in this repository. Everything
+listed under a crate, under any heading, is contained in that crate's `0.1.0`.
+They are kept because the reasoning is worth reading, not because those versions
+were ever installable.
+
+From `0.1.0` onward the headings mean what they say, and
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies. Note that
+while a crate is `0.x`, a **breaking change bumps the minor version** — these
+APIs have had no outside users yet and are expected to move.
+
 ## matter-codec
 
 ### [0.1.1] — M9-A

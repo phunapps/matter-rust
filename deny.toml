@@ -32,6 +32,15 @@ allow = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Permit wildcard versions on *path* dependencies within this workspace. Two
+# crates (matter-cert, matter-crypto) dev-depend on themselves by path to turn
+# on their own `test-support` feature for tests, and that self-reference must
+# carry no `version` key — cargo strips a path-only dev-dependency when
+# packaging, and with a version `cargo publish` tries to resolve the crate from
+# crates.io while packaging that very crate, and fails. The wildcard is
+# therefore load-bearing for publishing, and reaches no third-party code: these
+# are our own crates, by path, in dev-dependencies only.
+allow-wildcard-paths = true
 highlight = "all"
 
 [sources]

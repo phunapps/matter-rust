@@ -1,6 +1,6 @@
 [package]
 name = "matter-cert"
-version = "0.2.0-pre"
+version = "0.1.0"
 description = "Matter protocol certificate parsing and chain validation."
 edition.workspace = true
 rust-version.workspace = true
@@ -35,4 +35,9 @@ proptest = { workspace = true }
 # Self-reference so test compilation enables the test-support feature,
 # making the test_support module visible to tests/* without exposing
 # it to downstream crates.
-matter-cert = { path = ".", version = "0.2.0-pre", features = ["test-support"] }
+#
+# Deliberately carries NO `version` key: cargo strips a path-only
+# dev-dependency when packaging, which is what keeps this publishable.
+# With a version, `cargo publish` tries to resolve matter-cert from
+# crates.io while packaging matter-cert itself, and fails.
+matter-cert = { path = ".", features = ["test-support"] }
