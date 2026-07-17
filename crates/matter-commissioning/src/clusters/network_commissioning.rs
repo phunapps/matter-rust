@@ -17,6 +17,8 @@ pub const CLUSTER_ID: u32 = 0x0031;
 pub mod command_id {
     /// `AddOrUpdateWiFiNetwork` request.
     pub const ADD_OR_UPDATE_WIFI_NETWORK: u32 = 0x02;
+    /// `AddOrUpdateThreadNetwork` request.
+    pub const ADD_OR_UPDATE_THREAD_NETWORK: u32 = 0x03;
     /// `ConnectNetwork` request.
     pub const CONNECT_NETWORK: u32 = 0x06;
 }
@@ -74,6 +76,31 @@ pub fn encode_add_or_update_wifi_network(
     w.put_bytes(Tag::Context(1), credentials)
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(2), breadcrumb)
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode `AddOrUpdateThreadNetwork` (spec §11.9.6.4).
+///
+/// `operational_dataset` is the opaque Thread Operational Dataset TLV, in
+/// Thread's own TLV format (type-length-value, distinct from Matter TLV) —
+/// captured verbatim from the Thread Border Router (e.g. `ot-ctl dataset
+/// active -x`). The encoder does not parse or validate the dataset; it is
+/// carried as an octet string. Unlike `AddOrUpdateWiFiNetwork`, there is no
+/// credentials field, so `breadcrumb` lands at `Tag::Context(1)` here
+/// rather than `Tag::Context(2)`.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_add_or_update_thread_network(operational_dataset: &[u8], breadcrumb: u64) -> Vec<u8> {
+    use matter_codec::{Tag, TlvWriter};
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_bytes(Tag::Context(0), operational_dataset)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(1), breadcrumb)
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
@@ -369,6 +396,45 @@ mod tests {
         assert!(
             bytes.windows(window.len()).any(|w| w == window),
             "credentials should appear in the payload literal",
+        );
+    }
+
+    #[test]
+    fn add_or_update_thread_network_bytes_match_vector() {
+        // Vector: test-vectors/thread/network_commissioning.json
+        // "add_or_update_thread_network" — reference dataset from
+        // "reference_operational_dataset" in the same file (111 bytes,
+        // OTBR `ot-ctl dataset active -x` capture).
+        let ds = hex::decode(
+            "0e08000000000001000000030000184a0300001235060004001fffe0020878\
+             96217f787f6ebe0708fdec3f34f3cd2020051071dccee3f164f15da92254e0\
+             b9c8a3a5030f4f70656e5468726561642d3839643701\
+             0289d70410dc4b544c7a58671a2ce4f876f5d6dcd90c0402a0f7f8",
+        )
+        .expect("valid hex literal");
+        assert_eq!(ds.len(), 111, "reference dataset must be 111 bytes");
+        let got = encode_add_or_update_thread_network(&ds, 1);
+        assert_eq!(
+            hex::encode(&got),
+            "1530006f0e08000000000001000000030000184a0300001235060004001fff\
+             e002087896217f787f6ebe0708fdec3f34f3cd2020051071dccee3f164f15d\
+             a92254e0b9c8a3a5030f4f70656e5468726561642d383964370102\
+             89d70410dc4b544c7a58671a2ce4f876f5d6dcd90c0402a0f7f824010118",
+            "encoded bytes: {got:02x?}",
+        );
+    }
+
+    #[test]
+    fn connect_network_thread_bytes_match_vector() {
+        // Vector: test-vectors/thread/network_commissioning.json
+        // "connect_network_thread" — network_id is the Extended PAN ID
+        // (8 bytes) extracted from the reference dataset, not an SSID.
+        let ext_pan_id = [0x78, 0x96, 0x21, 0x7f, 0x78, 0x7f, 0x6e, 0xbe];
+        let got = encode_connect_network(&ext_pan_id, 1);
+        assert_eq!(
+            hex::encode(&got),
+            "153000087896217f787f6ebe24010118",
+            "encoded bytes: {got:02x?}",
         );
     }
 
