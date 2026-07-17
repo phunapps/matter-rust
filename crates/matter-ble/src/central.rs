@@ -13,7 +13,9 @@
 //!
 //! btleplug specifics relied on here are pinned against 0.12.0 (spec §D8):
 //! service-data advertisements arrive on the `events()` stream (never the stale
-//! `PeripheralProperties`), `notifications()` is a capacity-16 broadcast that
+//! `PeripheralProperties`), a service-UUID `ScanFilter` is unusable because it
+//! blinds the `BlueZ` backend (so scans are unfiltered — see
+//! `BleCentral::find_device`), `notifications()` is a capacity-16 broadcast that
 //! drops on lag (so the pump drains it continuously, started before the
 //! handshake write), and `mtu()` is unreadable on macOS (so the handshake
 //! requests MTU 0 and adopts the peripheral's advertised fragment size).
@@ -156,6 +158,14 @@ impl BleCentral {
     /// (never the stale per-peripheral properties). `short` selects short- vs
     /// long-discriminator matching (see [`advert_matches`]).
     ///
+    /// The scan is deliberately **unfiltered**, with [`MATTER_SERVICE_UUID`]
+    /// matched in `match_service_data` instead of being handed to btleplug as a
+    /// [`ScanFilter`]. Passing that filter is not portable: `CoreBluetooth`
+    /// honours it, but on `BlueZ` it suppresses the backend entirely — no
+    /// service-data events and an empty `peripherals()` — so every scan found
+    /// nothing on Linux while macOS worked. Filtering here costs only the
+    /// discarded non-Matter adverts and behaves identically on both backends.
+    ///
     /// # Errors
     /// [`CentralError::Scan`] on a scan failure, [`CentralError::ScanTimeout`]
     /// when nothing matches in time.
@@ -170,10 +180,10 @@ impl BleCentral {
             .events()
             .await
             .map_err(|e| CentralError::Scan(e.to_string()))?;
+        // Unfiltered on purpose — a service-UUID ScanFilter blinds BlueZ. See
+        // the doc comment above.
         self.adapter
-            .start_scan(ScanFilter {
-                services: vec![MATTER_SERVICE_UUID],
-            })
+            .start_scan(ScanFilter::default())
             .await
             .map_err(|e| CentralError::Scan(e.to_string()))?;
 
