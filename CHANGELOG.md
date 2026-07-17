@@ -20,6 +20,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### [Unreleased] — M9-C1 crate created: BTP engine + BLE central role
 
+#### Fixed
+
+- **BLE scanning never worked on Linux/`BlueZ`.** `BleCentral::find_device`
+  passed a service-UUID `ScanFilter` to btleplug; `CoreBluetooth` honours it,
+  but the `BlueZ` backend goes silent under it — no service-data events and an
+  empty `peripherals()` — so every scan on Linux found nothing while macOS
+  worked. The scan is now unfiltered; the Matter service UUID was already
+  matched in our own code, so the filter only ever cost portability. Found by
+  the first live commission (a Raspberry Pi could not see a device sitting
+  inches away that macOS found instantly).
+- **The BTP handshake could never complete against a real device** (all
+  platforms). We subscribed to C2 before writing the C1 capabilities request.
+  chip's peripheral stashes its response and only indicates it when the
+  subscribe arrives (`BLEEndPoint::HandleSubscribeReceived`), and requires the
+  endpoint to already be in `kState_Connecting` with a non-empty send queue —
+  the state the request establishes. Subscribing first is rejected as
+  `CHIP_ERROR_INCORRECT_STATE`, leaving the queued response with nothing to
+  trigger it: the device went silent for exactly the 15 s handshake timeout.
+  The C1 request is now written before subscribing. The local `notifications()`
+  stream still opens first (it emits no CCCD and the peripheral cannot observe
+  it), preserving the anti-drop property. Not reachable by the loopback test,
+  which drives our own `BtpSession` as the peer and accepts either order.
+
 #### Added
 
 - **New crate `matter-ble`** — Matter BLE commissioning transport. Always
@@ -571,6 +594,20 @@ migration step is needed for snapshots from M9-E1 or earlier.
 ## matter-commissioning
 
 ### [Unreleased] — M9-C2 Thread commissioning
+
+#### Documentation
+
+- **Clarified which CD signing root real devices actually need.** No code
+  change — the CD verifier was already correct — but `CdSigningRoots::with_csa_test_roots()`
+  (and `AttestationTrust::csa_test_roots()` above it) carries a *synthetic* CD
+  root that verifies no real device, which is now stated plainly. chip's example
+  CDs do not share one signer: the VID=0xFFF1 CD served by every
+  `CONFIG_EXAMPLE_DAC_PROVIDER` device is signed by the CSA's **production**
+  "CD Signing Key 001", not chip's test CD authority, so a live commission needs
+  `--cd-dir credentials/production/cd-certs`. chip's own verifier trusts both
+  keys, which is why chip-tool never surfaces the difference. Pinned by
+  `tests/chip_cd_vector.rs` (three vectors, including a negative test that fires
+  if the upstream example-CD signer ever changes).
 
 #### Added
 
