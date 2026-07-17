@@ -571,6 +571,143 @@ fn drive_new_session_handshake() -> (
 }
 
 // ---------------------------------------------------------------------------
+// CASE-1: peer-signature verification (the line that authenticates CASE).
+// ---------------------------------------------------------------------------
+//
+// The ECDSA verify over TBSData2 / TBSData3 is what proves the peer holds the
+// private key for the NOC it presented. A byte-flip anywhere in the *outer*
+// Sigma2 dies at the AEAD tag and never reaches this verify
+// (`case_random_byte_flip_in_sigma2_never_panics` only asserts "no panic").
+// Here we keep the AEAD valid but make the inner signature wrong, by signing
+// the handshake transcript with a key that does NOT match the presented NOC.
+// The NOC still chains to the trusted RCAC and the AEAD still authenticates,
+// so ONLY the peer-signature verify can catch the mismatch — it must return
+// `PeerSignatureInvalid`. Mirrors chip `TestCASESession.cpp:650`
+// (`BadSignatureFailsCASE`, which fault-injects a corrupt signature inside
+// TBEData). Without these tests the highest-consequence line in the crate had
+// zero coverage.
+
+/// A responder whose signing key does not match its NOC public key must be
+/// rejected by the initiator at Sigma2 with `PeerSignatureInvalid`.
+#[test]
+fn sigma2_peer_signature_mismatch_is_rejected() {
+    let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+    let (initiator_noc, initiator_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (responder_noc, _responder_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+    // Fresh key whose public half is NOT the one bound into `responder_noc`.
+    let (wrong_signer, _) = RingSigner::generate().expect("wrong signer");
+
+    let initiator_creds = build_credentials(
+        initiator_noc,
+        initiator_signer,
+        TEST_FABRIC_ID,
+        INITIATOR_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+    let responder_creds = build_credentials(
+        responder_noc,
+        wrong_signer, // <-- signs TBSData2 with a key the NOC does not authorize
+        TEST_FABRIC_ID,
+        RESPONDER_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+
+    let mut initiator = CaseInitiator::new(
+        initiator_creds,
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("initiator");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder");
+
+    let sigma1 = initiator.start().expect("sigma1");
+    responder.handle_sigma1(&sigma1).expect("handle sigma1");
+    let sigma2 = responder.next_message().expect("sigma2"); // AEAD valid, inner sig wrong
+
+    let err = initiator
+        .handle_sigma2(&sigma2)
+        .expect_err("a Sigma2 whose inner signature does not match the NOC must be rejected");
+    assert!(
+        matches!(err, matter_crypto::Error::PeerSignatureInvalid),
+        "expected PeerSignatureInvalid (AEAD passed; only ECDSA-verify catches this), got {err:?}"
+    );
+}
+
+/// The Sigma3 equivalent: an initiator whose signing key does not match its
+/// NOC must be rejected by the responder at Sigma3 with `PeerSignatureInvalid`.
+#[test]
+fn sigma3_peer_signature_mismatch_is_rejected() {
+    let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+    let (initiator_noc, _initiator_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (responder_noc, responder_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+    let (wrong_signer, _) = RingSigner::generate().expect("wrong signer");
+
+    let initiator_creds = build_credentials(
+        initiator_noc,
+        wrong_signer, // <-- signs TBSData3 with a key the NOC does not authorize
+        TEST_FABRIC_ID,
+        INITIATOR_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+    let responder_creds = build_credentials(
+        responder_noc,
+        responder_signer,
+        TEST_FABRIC_ID,
+        RESPONDER_NODE_ID,
+        IPK,
+        rcac_pub,
+    );
+
+    let mut initiator = CaseInitiator::new(
+        initiator_creds,
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("initiator");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder");
+
+    let sigma1 = initiator.start().expect("sigma1");
+    responder.handle_sigma1(&sigma1).expect("handle sigma1");
+    let sigma2 = responder.next_message().expect("sigma2");
+    // Responder is honest, so Sigma2 verifies fine.
+    initiator.handle_sigma2(&sigma2).expect("handle sigma2");
+    let sigma3 = initiator.next_message().expect("sigma3"); // AEAD valid, inner sig wrong
+
+    let err = responder
+        .handle_sigma3(&sigma3)
+        .expect_err("a Sigma3 whose inner signature does not match the NOC must be rejected");
+    assert!(
+        matches!(err, matter_crypto::Error::PeerSignatureInvalid),
+        "expected PeerSignatureInvalid (AEAD passed; only ECDSA-verify catches this), got {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Test: resumption accepted — 2-message fast path
 // ---------------------------------------------------------------------------
 
