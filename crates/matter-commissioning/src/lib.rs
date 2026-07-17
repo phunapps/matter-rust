@@ -118,6 +118,7 @@ pub use matter_interaction as im;
 pub mod noc;
 pub mod setup;
 pub mod state_machine;
+pub mod thread_dataset;
 #[cfg(feature = "wiretrace")]
 pub mod wiretrace;
 
@@ -159,3 +160,5 @@ pub use state_machine::{
     Action, CommissionedFabric, Commissioner, CommissionerConfig, CommissioningError, Expectation,
     NetworkKind, RemediationHint, SessionContext, Stage, WiFiCredentials,
 };
+
+pub use thread_dataset::{ThreadDataset, ThreadDatasetError};
