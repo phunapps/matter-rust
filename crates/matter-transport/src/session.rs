@@ -128,6 +128,10 @@ pub struct Session {
     /// Mirrors chip's `SecureSession::AllowsMRP()`, which returns `false`
     /// whenever the session's transport type is not UDP.
     pub transport_reliable: bool,
+    /// Monotonic creation sequence, assigned by [`SessionManager`] on insert.
+    /// Used ONLY to pick the oldest session to evict when the table hits its
+    /// cap; not part of the wire or session identity.
+    pub(crate) created_seq: u64,
 }
 
 /// Structured output of [`SessionManager::encode_outbound`]. Carries the
@@ -204,21 +208,51 @@ pub enum DecodeInboundOutput {
     },
 }
 
+/// Default cap on the number of concurrently-registered secured sessions.
+///
+/// Bounds the session table's memory as defense-in-depth: a peer (or a flood of
+/// half-open handshakes that complete) cannot grow the table without limit.
+/// Sized far above any realistic controller workload (a home has tens of
+/// devices, each typically one operational session), so legitimate use never
+/// approaches it; tune via [`SessionManager::set_max_sessions`].
+pub const DEFAULT_MAX_SESSIONS: usize = 256;
+
 /// Owns all per-session state for one Matter node.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SessionManager {
     sessions: HashMap<SessionId, Session>,
     next_local_id: u16,
+    /// Monotonic counter stamped onto each session as `created_seq`, so the
+    /// oldest can be identified for eviction when the table is full.
+    next_seq: u64,
+    /// Cap on `sessions.len()`; inserting into a full table evicts the oldest.
+    max_sessions: usize,
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionManager {
-    /// Create an empty manager.
+    /// Create an empty manager with the default session cap
+    /// ([`DEFAULT_MAX_SESSIONS`]).
     #[must_use]
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
             next_local_id: 1,
+            next_seq: 0,
+            max_sessions: DEFAULT_MAX_SESSIONS,
         }
+    }
+
+    /// Override the maximum number of concurrently-registered sessions. Values
+    /// below 1 are clamped to 1 (the table must hold at least the session being
+    /// registered). Registering into a full table evicts the oldest session.
+    pub fn set_max_sessions(&mut self, max_sessions: usize) {
+        self.max_sessions = max_sessions.max(1);
     }
 
     /// Register a session whose keys came from a completed PASE handshake.
@@ -331,6 +365,21 @@ impl SessionManager {
             local_id.0, 0,
             "secured session registered under reserved id 0"
         );
+        // DoS defense: bound the table. If it is at capacity and this is a NEW
+        // local id (a replacement of an existing id does not grow the table),
+        // evict the oldest session (lowest `created_seq`) before inserting.
+        if self.sessions.len() >= self.max_sessions && !self.sessions.contains_key(&local_id) {
+            if let Some(oldest) = self
+                .sessions
+                .iter()
+                .min_by_key(|(_, s)| s.created_seq)
+                .map(|(id, _)| *id)
+            {
+                self.sessions.remove(&oldest);
+            }
+        }
+        let created_seq = self.next_seq;
+        self.next_seq = self.next_seq.wrapping_add(1);
         let session = Session {
             local_id,
             peer_id: SessionId(peer_session_id),
@@ -348,6 +397,7 @@ impl SessionManager {
             // on unless the caller explicitly opts a session into a
             // reliable transport via `set_transport_reliable`.
             transport_reliable: false,
+            created_seq,
         };
         self.sessions.insert(local_id, session);
     }
@@ -370,6 +420,13 @@ impl SessionManager {
     #[must_use]
     pub fn get(&self, id: SessionId) -> Option<&Session> {
         self.sessions.get(&id)
+    }
+
+    /// Number of currently-registered secured sessions. Never exceeds the cap
+    /// set by [`Self::set_max_sessions`] (default [`DEFAULT_MAX_SESSIONS`]).
+    #[must_use]
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
     }
 
     /// Mutable lookup.
@@ -1137,5 +1194,31 @@ mod tests {
             ),
             "an authenticated reliable duplicate must be re-acked; got {second:?}"
         );
+    }
+
+    #[test]
+    fn session_table_is_bounded_and_evicts_oldest() {
+        // DoS defense: the table never exceeds its cap; a new registration into
+        // a full table evicts the OLDEST session, keeping the newest.
+        let keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [1u8; 16],
+            r2i_key: [2u8; 16],
+            attestation_key: [3u8; 16],
+        };
+        let mut m = SessionManager::new();
+        m.set_max_sessions(3);
+        let id1 = m.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        let id2 = m.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        let id3 = m.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        assert_eq!(m.session_count(), 3);
+
+        // A 4th registration evicts the oldest (id1) and stays capped.
+        let id4 = m.register_pase(keys, SessionRole::Initiator, 1, PeerHint::default());
+        assert_eq!(m.session_count(), 3, "table stays capped at 3");
+        assert!(m.get(id1).is_none(), "oldest session (id1) was evicted");
+        assert!(m.get(id2).is_some());
+        assert!(m.get(id3).is_some());
+        assert!(m.get(id4).is_some());
     }
 }
