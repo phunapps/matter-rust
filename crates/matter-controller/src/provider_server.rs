@@ -714,6 +714,18 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     ..
                 } = decoded
                 else {
+                    // BDX-2: the requestor retransmitted a reliable message
+                    // (e.g. a BlockQuery) whose ack was lost. decode_inbound has
+                    // pre-built the standalone ack to re-send — send it and do
+                    // NOT advance BDX state (the block counter already moved).
+                    // Dropping it here (the old `continue`) left the requestor
+                    // retransmitting forever, stalling the transfer. Other
+                    // non-app outcomes (AckOnly) need no response.
+                    if let DecodeInboundOutput::DuplicateReliableAckResent { ack_packet, .. } =
+                        decoded
+                    {
+                        self.send(&ack_packet, peer).await?;
+                    }
                     continue;
                 };
 
