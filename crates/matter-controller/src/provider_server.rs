@@ -41,6 +41,34 @@ const OP_INVOKE_REQUEST: u8 = 0x08;
 const MAX_AWAIT_SIGMA1_DISCARDS: usize = 64;
 const OP_INVOKE_RESPONSE: u8 = 0x09;
 
+// Secure-Channel StatusReport general codes (Matter Core §4.11.6).
+const STATUS_GENERAL_FAILURE: u16 = 0x0001;
+
+/// Encode the fixed 8-byte Secure-Channel `StatusReport` body (Matter Core
+/// §4.11.6): `GeneralCode` (u16 LE) || `ProtocolId` (u32 LE, `vendor<<16 |
+/// protocol`) || `ProtocolStatus` (u16 LE). Used to abort a BDX transfer
+/// (BDX-3) so the peer learns the failure instead of timing out.
+fn encode_status_report_body(general: u16, proto: ProtocolId, protocol_status: u16) -> Vec<u8> {
+    let proto_id: u32 = (u32::from(proto.vendor) << 16) | u32::from(proto.protocol);
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&general.to_le_bytes());
+    body.extend_from_slice(&proto_id.to_le_bytes());
+    body.extend_from_slice(&protocol_status.to_le_bytes());
+    body
+}
+
+/// Parse the fixed 8-byte Secure-Channel `StatusReport` body into
+/// `(general_code, protocol_id, protocol_status)`. Returns `None` if the body
+/// is shorter than 8 bytes.
+fn parse_status_report_body(payload: &[u8]) -> Option<(u16, u32, u16)> {
+    let b: &[u8; 8] = payload.get(..8)?.try_into().ok()?;
+    Some((
+        u16::from_le_bytes([b[0], b[1]]),
+        u32::from_le_bytes([b[2], b[3], b[4], b[5]]),
+        u16::from_le_bytes([b[6], b[7]]),
+    ))
+}
+
 // OtaSoftwareUpdateProvider (0x0029) command ids (Matter Core §11.20).
 const OTA_PROVIDER_CLUSTER: u32 = 0x0029;
 const CMD_QUERY_IMAGE: u32 = 0x00;
@@ -796,6 +824,21 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                         Instant::now(),
                     )?;
                     self.send(&out.wire_bytes, peer).await?;
+                } else if protocol_id == ProtocolId::SECURE_CHANNEL && opcode == OP_STATUS_REPORT {
+                    // BDX-3 (receive): the requestor aborted via a Secure-Channel
+                    // StatusReport — e.g. a device-side flash-write failure. End
+                    // the transfer with a descriptive error naming the peer's
+                    // status, instead of ignoring it and spinning to the "step
+                    // budget exceeded" error (chip surfaces the peer status;
+                    // TestBdxTransferSession.cpp:629).
+                    let (general, proto, code) =
+                        parse_status_report_body(&payload).ok_or_else(|| {
+                            Error::Operational("BDX StatusReport body truncated".into())
+                        })?;
+                    return Err(Error::Operational(format!(
+                        "BDX transfer aborted by peer: StatusReport general={general:#06x} \
+                         protocol={proto:#010x} status={code:#06x}"
+                    )));
                 } else if protocol_id == ProtocolId::BDX {
                     let mt = MessageType::from_u8(opcode).ok_or_else(|| {
                         Error::Operational(format!("unknown BDX opcode {opcode:#04x}"))
@@ -851,10 +894,30 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                         }
                         SenderOutcome::Done => {}
                         SenderOutcome::Abort(code) => {
+                            // BDX-3 (send): notify the peer with a Secure-Channel
+                            // StatusReport before bailing, so the requestor learns
+                            // the transfer failed instead of timing out. Best
+                            // effort — the abort error is returned regardless.
+                            let body = encode_status_report_body(
+                                STATUS_GENERAL_FAILURE,
+                                ProtocolId::BDX,
+                                code.to_u16(),
+                            );
+                            if let Ok(w) = sessions.encode_outbound(
+                                sid,
+                                Some(exchange_id),
+                                OP_STATUS_REPORT,
+                                ProtocolId::SECURE_CHANNEL,
+                                &body,
+                                MrpFlags { reliable: true },
+                                Instant::now(),
+                            ) {
+                                let _ = self.send(&w.wire_bytes, peer).await;
+                            }
                             return Err(Error::Operational(format!(
                                 "BDX transfer aborted: status {:#06x}",
                                 code.to_u16()
-                            )))
+                            )));
                         }
                     }
                 }
@@ -886,6 +949,30 @@ mod tests {
         // <16-hex compressed>-<16-hex node>, uppercase.
         assert_eq!(svc.instance_name, "DEADBEEFCAFEBABE-0000000000000001");
         assert_eq!(svc.addresses, vec![addr]);
+    }
+
+    #[test]
+    fn status_report_body_byte_layout_and_roundtrip() {
+        // BDX-3: a BDX abort StatusReport = Failure || BDX proto id (0x00000002)
+        // || the 16-bit BDX status. Byte layout is little-endian per field
+        // (Matter Core §4.11.6).
+        let code = matter_bdx::BdxStatusCode::BadBlockCounter.to_u16(); // 0x0017
+        let body = encode_status_report_body(STATUS_GENERAL_FAILURE, ProtocolId::BDX, code);
+        assert_eq!(
+            body,
+            vec![0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x17, 0x00],
+            "GeneralCode(LE) || ProtocolId(LE u32) || ProtocolStatus(LE)"
+        );
+        assert_eq!(
+            parse_status_report_body(&body),
+            Some((STATUS_GENERAL_FAILURE, 0x0000_0002, code))
+        );
+    }
+
+    #[test]
+    fn status_report_body_rejects_truncated() {
+        assert_eq!(parse_status_report_body(&[0x01, 0x00, 0x02]), None);
+        assert_eq!(parse_status_report_body(&[]), None);
     }
 
     /// `is_unsecured_frame` returns true for session id 0 (unsecured), false
