@@ -345,7 +345,7 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
     fn paa_to_trust_anchor_works_on_bundled_csa_root() {
-        let store = PaaTrustStore::with_csa_test_roots();
+        let store = PaaTrustStore::with_example_device_roots();
         let paa = store.iter().next().unwrap();
         // Must not error; webpki should accept any well-formed
         // X.509v3 self-signed cert that Paa::from_der accepted.
@@ -357,7 +357,7 @@ mod tests {
     fn verify_chain_happy_path_on_csa_test_vectors() {
         let dac = Dac::from_der(HAPPY_DAC).unwrap();
         let pai = Pai::from_der(HAPPY_PAI).unwrap();
-        let store = PaaTrustStore::with_csa_test_roots();
+        let store = PaaTrustStore::with_example_device_roots();
 
         // CSA test DAC issued ~2022 with multi-year validity; 2024
         // sits safely inside the window. Pinning the clock keeps the

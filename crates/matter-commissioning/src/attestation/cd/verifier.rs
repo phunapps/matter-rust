@@ -17,7 +17,7 @@
 //! public keys for each trusted CSA signing root. Production callers
 //! build the store via [`CdSigningRoots::from_pem`]; tests and
 //! examples use the bundled CSA-test root via
-//! [`CdSigningRoots::with_csa_test_roots`].
+//! [`CdSigningRoots::with_example_device_roots`].
 
 #![forbid(unsafe_code)]
 
@@ -50,7 +50,7 @@ const CSA_CD_SIGNING_KEY_001_DER: &[u8] =
 /// signing certificates, as published by the CSA DCL) or
 /// [`Self::from_pem`] (bare `SubjectPublicKeyInfo` PEMs), or seeded with
 /// the bundled synthetic CSA-test root via
-/// [`Self::with_csa_test_roots`].
+/// [`Self::with_example_device_roots`].
 ///
 /// Internally stores each trusted root as a SEC1-uncompressed P-256
 /// public key (65 bytes: `0x04 || X || Y`) so signature verification
@@ -89,7 +89,7 @@ impl CdSigningRoots {
     /// rejects any CD that needed it with
     /// [`AttestationError::CertificationDeclarationSignatureInvalid`].
     #[must_use]
-    pub fn with_csa_test_roots() -> Self {
+    pub fn with_example_device_roots() -> Self {
         let mut public_keys = Vec::with_capacity(3);
         if let Ok(pk) = parse_pem_public_key(CSA_TEST_CD_SIGNING_ROOT_PEM) {
             public_keys.push(pk);
@@ -735,11 +735,11 @@ mod tests {
     }
 
     #[test]
-    fn with_csa_test_roots_loads_bundled_roots() {
+    fn with_example_device_roots_loads_bundled_roots() {
         // ATT-3: three roots — synthetic (loopback), chip test authority,
         // CSA production key 001 (verifies the ESP32-C6). All three DERs
         // parse, so none are silently skipped.
-        let trust = CdSigningRoots::with_csa_test_roots();
+        let trust = CdSigningRoots::with_example_device_roots();
         assert_eq!(trust.len(), 3);
         assert!(!trust.is_empty());
     }
@@ -999,7 +999,7 @@ mod tests {
     // ── Fix B — CD dac_origin override binding (Matter §6.2.3) ──────────────
     //
     // These tests sign a synthetic CD with the bundled CSA-test signing key
-    // (which `CdSigningRoots::with_csa_test_roots()` trusts) and run it
+    // (which `CdSigningRoots::with_example_device_roots()` trusts) and run it
     // through the public `verify_certification_declaration`, exercising the
     // dac_origin override path end-to-end:
     //
@@ -1012,7 +1012,7 @@ mod tests {
     /// PKCS#8 private key for the bundled CSA-test CD signing root. The
     /// matching public key is bundled in
     /// `csa_cd_signing_roots/csa-test-cd-signing-root.pem` and trusted by
-    /// `CdSigningRoots::with_csa_test_roots()`.
+    /// `CdSigningRoots::with_example_device_roots()`.
     const CSA_TEST_CD_SIGNING_KEY_PKCS8: &[u8] = include_bytes!(
         "../../../../../test-vectors/commissioning/cd/csa-test-cd-signing-root.pkcs8.der"
     );
@@ -1159,7 +1159,7 @@ mod tests {
         // even though it does NOT match the CD's own vendor_id.
         let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, Some(0x1234), Some(0x5678), &[0x8001]);
         let cd = sign_into_cms(&tlv);
-        let trust = CdSigningRoots::with_csa_test_roots();
+        let trust = CdSigningRoots::with_example_device_roots();
 
         verify_certification_declaration(
             &cd,
@@ -1178,7 +1178,7 @@ mod tests {
         // against dac_origin, not the CD's own fields.
         let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, Some(0x1234), Some(0x5678), &[0x8001]);
         let cd = sign_into_cms(&tlv);
-        let trust = CdSigningRoots::with_csa_test_roots();
+        let trust = CdSigningRoots::with_example_device_roots();
 
         let err = verify_certification_declaration(
             &cd,
@@ -1206,7 +1206,7 @@ mod tests {
         // own vendor_id / product_id_array (unchanged behaviour).
         let tlv = build_inner_cd_tlv(0xFFF1, 0x8001, None, None, &[0x8001, 0x8002]);
         let cd = sign_into_cms(&tlv);
-        let trust = CdSigningRoots::with_csa_test_roots();
+        let trust = CdSigningRoots::with_example_device_roots();
 
         // A PID present in the array is accepted.
         verify_certification_declaration(

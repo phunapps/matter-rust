@@ -229,7 +229,7 @@ fn build_controller_fixture() -> ControllerFixture {
         fabric,
         setup,
         mock_pki,
-        cd_signing_roots: CdSigningRoots::with_csa_test_roots(),
+        cd_signing_roots: CdSigningRoots::with_example_device_roots(),
         rng: Arc::new(SystemNocRng),
         commissioner_noc,
         commissioner_pkcs8,

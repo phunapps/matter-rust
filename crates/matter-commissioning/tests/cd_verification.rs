@@ -45,7 +45,7 @@ fn cd_bytes(f: &Fixture) -> Vec<u8> {
 #[test]
 fn happy_path_accepts() {
     let f = load("happy-path.json");
-    let trust = CdSigningRoots::with_csa_test_roots();
+    let trust = CdSigningRoots::with_example_device_roots();
     verify_certification_declaration(
         &cd_bytes(&f),
         VendorId::new(f.expected_vid),
@@ -58,7 +58,7 @@ fn happy_path_accepts() {
 #[test]
 fn tampered_signature_rejected() {
     let f = load("tampered-signature.json");
-    let trust = CdSigningRoots::with_csa_test_roots();
+    let trust = CdSigningRoots::with_example_device_roots();
     let err = verify_certification_declaration(
         &cd_bytes(&f),
         VendorId::new(f.expected_vid),
@@ -82,7 +82,7 @@ fn tampered_signature_rejected() {
 #[test]
 fn vid_mismatch_rejected() {
     let f = load("happy-path.json");
-    let trust = CdSigningRoots::with_csa_test_roots();
+    let trust = CdSigningRoots::with_example_device_roots();
     let wrong_vid = VendorId::new(f.expected_vid.wrapping_add(1));
     let err = verify_certification_declaration(
         &cd_bytes(&f),
@@ -103,7 +103,7 @@ fn vid_mismatch_rejected() {
 #[test]
 fn pid_mismatch_rejected() {
     let f = load("happy-path.json");
-    let trust = CdSigningRoots::with_csa_test_roots();
+    let trust = CdSigningRoots::with_example_device_roots();
     let wrong_pid = ProductId::new(f.expected_pid.wrapping_add(0xFF));
     let err = verify_certification_declaration(
         &cd_bytes(&f),

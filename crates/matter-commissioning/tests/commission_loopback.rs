@@ -12,7 +12,7 @@
 //!
 //! - **VID/PID:** mock DAC + CD fixture + SetupPayload all use 0xFFF1 / 0x8001
 //!   (`support::VID` / `support::PID`). The controller's `paa_trust_store` is the
-//!   mock PKI's store; `cd_signing_roots` is `CdSigningRoots::with_csa_test_roots()`.
+//!   mock PKI's store; `cd_signing_roots` is `CdSigningRoots::with_example_device_roots()`.
 //! - **Passcode / PASE:** the SetupPayload passcode, `DriverConfig.passcode`, and
 //!   the mock's `pase_pin` are the SAME value. The PBKDF params (`PasePbkdfParams`)
 //!   are supplied by the device verifier and negotiated to the controller's
@@ -223,7 +223,7 @@ async fn run_loopback_commission() {
         passcode: Passcode::new(PASSCODE).unwrap(),
     };
 
-    let cd_signing_roots = CdSigningRoots::with_csa_test_roots();
+    let cd_signing_roots = CdSigningRoots::with_example_device_roots();
     let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 
     // ── 4. Transport pair + discovery returning the operational record. ───────

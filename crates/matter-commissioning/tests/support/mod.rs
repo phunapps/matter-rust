@@ -1680,7 +1680,7 @@ mod mock_device_response_table {
             passcode: Passcode::new(20_202_021).unwrap(),
         };
         let paa = pki.paa_trust_store.clone();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 
         let mut sm = matter_commissioning::state_machine::Commissioner::new(CommissionerConfig {

@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
 
     let trust = match (&args.paa_dir, &args.cd_dir) {
         (Some(p), Some(c)) => AttestationTrust::from_dirs(p, c).context("attestation roots")?,
-        _ => AttestationTrust::csa_test_roots(),
+        _ => AttestationTrust::example_device_roots(),
     };
     let store = Arc::new(FileStore::new(&args.store));
     let controller = MatterController::builder(store)

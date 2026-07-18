@@ -57,7 +57,7 @@
 //!
 //! # Trust scope
 //!
-//! [`PaaTrustStore`]'s `with_csa_test_roots()` constructor embeds
+//! [`PaaTrustStore`]'s `with_example_device_roots()` constructor embeds
 //! **test** roots only. Production callers must build their own
 //! store via `PaaTrustStore::empty()` + `PaaTrustStore::add()`.
 

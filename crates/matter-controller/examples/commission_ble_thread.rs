@@ -22,7 +22,7 @@
 //!
 //! **Attestation roots are required for any real device, including the
 //! esp-matter C6** — pass `--paa-dir <dir> --cd-dir <dir>`. The bundled default
-//! ([`AttestationTrust::csa_test_roots`]) carries a *synthetic* CD signing root
+//! ([`AttestationTrust::example_device_roots`]) carries a *synthetic* CD signing root
 //! that no real device's CD is signed against, so it is only good for our own
 //! tests. From a connectedhomeip checkout:
 //!
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
         (Some(paa), Some(cd)) => {
             AttestationTrust::from_dirs(paa, cd).context("loading production attestation roots")?
         }
-        _ => AttestationTrust::csa_test_roots(),
+        _ => AttestationTrust::example_device_roots(),
     };
 
     // 2. Validate the Thread dataset up front and echo the Extended PAN ID the

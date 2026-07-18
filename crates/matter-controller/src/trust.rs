@@ -35,10 +35,10 @@ impl AttestationTrust {
     /// arbitrary certified devices use [`Self::from_dirs`] pointed at the
     /// production roots.
     #[must_use]
-    pub fn csa_test_roots() -> Self {
+    pub fn example_device_roots() -> Self {
         Self {
-            paa: PaaTrustStore::with_csa_test_roots(),
-            cd: CdSigningRoots::with_csa_test_roots(),
+            paa: PaaTrustStore::with_example_device_roots(),
+            cd: CdSigningRoots::with_example_device_roots(),
         }
     }
 
@@ -98,8 +98,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn csa_test_roots_constructs() {
-        let _trust = AttestationTrust::csa_test_roots();
+    fn example_device_roots_constructs() {
+        let _trust = AttestationTrust::example_device_roots();
         // Construction succeeds and yields usable PAA + CD stores; deeper
         // verification is covered by matter-commissioning's attestation tests.
     }

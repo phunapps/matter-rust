@@ -62,13 +62,13 @@ fn verifies_esp_matter_c6_cd_against_csa_production_key_001() {
     .expect("the C6's CD must verify against CSA production CD signing key 001");
 }
 
-/// ATT-3: the bundled `with_csa_test_roots()` set MUST verify the C6's real
+/// ATT-3: the bundled `with_example_device_roots()` set MUST verify the C6's real
 /// CD. Before ATT-3 it bundled only the synthetic root and rejected the C6 —
-/// the trap `csa_test_roots()`'s "suitable for CSA-test devices" doc papered
+/// the trap `example_device_roots()`'s "suitable for CSA-test devices" doc papered
 /// over. This is the check that would have caught it.
 #[test]
-fn c6_cd_verifies_against_bundled_csa_test_roots() {
-    let trust = CdSigningRoots::with_csa_test_roots();
+fn c6_cd_verifies_against_bundled_example_device_roots() {
+    let trust = CdSigningRoots::with_example_device_roots();
     assert!(
         trust.len() >= 3,
         "bundled roots must include synthetic + chip-test + CSA-prod-001"
@@ -80,7 +80,7 @@ fn c6_cd_verifies_against_bundled_csa_test_roots() {
         ProductId::new(0x8000),
         &trust,
     )
-    .expect("the C6's real CD must verify against the bundled csa_test_roots set");
+    .expect("the C6's real CD must verify against the bundled example_device_roots set");
 }
 
 /// Guards the trap itself: trusting only the test authority rejects the C6's CD.

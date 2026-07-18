@@ -35,11 +35,11 @@ fn pai_parses_with_expected_identifiers() {
 }
 
 #[test]
-fn with_csa_test_roots_contains_pai_issuer_root() {
+fn with_example_device_roots_contains_pai_issuer_root() {
     // Sanity: the bundled trust store includes a PAA that COULD chain
     // our test PAI (subject_vid matches). Actual chain validation is
     // M6.2.2 — here we just confirm the trust-store wiring lines up.
-    let store = PaaTrustStore::with_csa_test_roots();
+    let store = PaaTrustStore::with_example_device_roots();
     let has_matching_vid = store
         .iter()
         .any(|paa| paa.subject_vid() == Some(VendorId::new(0xFFF1)));

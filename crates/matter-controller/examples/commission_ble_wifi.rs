@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         (Some(paa), Some(cd)) => {
             AttestationTrust::from_dirs(paa, cd).context("loading attestation roots")?
         }
-        _ => AttestationTrust::csa_test_roots(),
+        _ => AttestationTrust::example_device_roots(),
     };
 
     // 2. Validate the credentials up front — a bad SSID/password should fail

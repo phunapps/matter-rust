@@ -108,7 +108,7 @@ pub struct CommissionerConfig<'a> {
     /// Trusted PAA roots for attestation chain validation (M6.2).
     pub paa_trust_store: &'a PaaTrustStore,
     /// Trusted CSA Certification Declaration signing roots (M6.4.3).
-    /// Tests can use `CdSigningRoots::with_csa_test_roots()`; production
+    /// Tests can use `CdSigningRoots::with_example_device_roots()`; production
     /// callers supply CSA-published roots via `CdSigningRoots::from_pem`.
     pub cd_signing_roots: &'a crate::attestation::CdSigningRoots,
     /// The commissioner's own operational node ID on this fabric.
@@ -1391,8 +1391,8 @@ mod tests {
     fn new_rejects_zero_commissioner_node_id() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.commissioner_node_id = 0;
@@ -1411,8 +1411,8 @@ mod tests {
     fn new_rejects_zero_assigned_node_id() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.assigned_node_id = 0;
@@ -1429,8 +1429,8 @@ mod tests {
     fn new_rejects_equal_commissioner_and_assigned_ids() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.commissioner_node_id = 0x42;
@@ -1448,8 +1448,8 @@ mod tests {
     fn new_rejects_zero_ipk_epoch_key() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let mut cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         cfg.ipk_epoch_key = [0u8; 16];
@@ -1466,8 +1466,8 @@ mod tests {
     fn new_returns_secure_pairing_stage() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let sm = Commissioner::new(cfg).expect("valid config should construct");
@@ -1478,8 +1478,8 @@ mod tests {
     fn poll_from_secure_pairing_emits_read_commissioning_info() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1507,8 +1507,8 @@ mod tests {
     fn poll_is_idempotent_between_responses() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1538,8 +1538,8 @@ mod tests {
     fn full_happy_path_through_config_regulatory_lands_on_send_pai_cert_request() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1589,8 +1589,8 @@ mod tests {
     fn arm_failsafe_busy_response_aborts_with_device_im_status() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1633,8 +1633,8 @@ mod tests {
     fn out_of_order_response_returns_error_without_advancing() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1650,8 +1650,8 @@ mod tests {
     fn wrong_expectation_returns_unexpected_response_kind() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1733,8 +1733,8 @@ mod tests {
     fn poll_at_send_pai_emits_certificate_chain_request_pai() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1762,8 +1762,8 @@ mod tests {
     fn poll_at_send_dac_emits_certificate_chain_request_dac() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -1795,8 +1795,8 @@ mod tests {
     fn send_attestation_request_uses_fresh_random_nonce_each_time() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
 
         let rng_a: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg_a = base_config(&fabric, &setup, &paa, &cd, rng_a);
@@ -1868,8 +1868,8 @@ mod tests {
     fn send_op_cert_signing_request_emits_csr_with_random_nonce() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
 
         let rng_a: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg_a = base_config(&fabric, &setup, &paa, &cd, rng_a);
@@ -1925,8 +1925,8 @@ mod tests {
 
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2004,8 +2004,8 @@ mod tests {
 
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2069,8 +2069,8 @@ mod tests {
     fn send_trusted_root_cert_emits_invoke_and_status_ack_advances() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2108,8 +2108,8 @@ mod tests {
     fn find_operational_for_complete_emits_establish_case() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2131,8 +2131,8 @@ mod tests {
     fn on_case_established_advances_to_send_complete() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2147,8 +2147,8 @@ mod tests {
     fn on_case_established_without_pending_emits_out_of_order() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2160,8 +2160,8 @@ mod tests {
     fn send_complete_emits_invoke_over_case_session() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2190,8 +2190,8 @@ mod tests {
     fn send_complete_success_advances_to_cleanup() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2209,8 +2209,8 @@ mod tests {
     fn cleanup_emits_done_with_noc_public_key() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2233,8 +2233,8 @@ mod tests {
     fn case_failed_response_aborts_with_case_establishment_failed() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2273,8 +2273,8 @@ mod tests {
     fn case_failed_when_not_awaiting_returns_out_of_order() {
         let fabric = make_fabric_record();
         let setup = make_setup_payload();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = crate::attestation::CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = crate::attestation::CdSigningRoots::with_example_device_roots();
         let rng: Arc<dyn crate::noc::NocRng> = Arc::new(SystemNocRng);
         let cfg = base_config(&fabric, &setup, &paa, &cd, rng);
         let mut sm = Commissioner::new(cfg).expect("valid config");
@@ -2296,8 +2296,8 @@ mod tests {
 
         let fabric = FABRIC.get_or_init(make_fabric_record);
         let setup = SETUP.get_or_init(make_setup_payload);
-        let paa = PAA.get_or_init(PaaTrustStore::with_csa_test_roots);
-        let cd = CD.get_or_init(crate::attestation::CdSigningRoots::with_csa_test_roots);
+        let paa = PAA.get_or_init(PaaTrustStore::with_example_device_roots);
+        let cd = CD.get_or_init(crate::attestation::CdSigningRoots::with_example_device_roots);
         let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 
         CommissionerConfig {

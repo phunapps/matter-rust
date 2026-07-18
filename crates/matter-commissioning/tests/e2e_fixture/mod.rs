@@ -186,7 +186,7 @@ impl Harness {
         Self {
             fabric,
             setup,
-            paa: PaaTrustStore::with_csa_test_roots(),
+            paa: PaaTrustStore::with_example_device_roots(),
             cd: CdSigningRoots::from_pem(&[fixture.cd_signing_spki_pem.as_bytes()])
                 .expect("fixture CD signing SPKI parses"),
             challenge,

@@ -66,12 +66,12 @@ fn static_setup() -> &'static SetupPayload {
 
 fn static_paa() -> &'static PaaTrustStore {
     static PAA: OnceLock<PaaTrustStore> = OnceLock::new();
-    PAA.get_or_init(PaaTrustStore::with_csa_test_roots)
+    PAA.get_or_init(PaaTrustStore::with_example_device_roots)
 }
 
 fn static_cd() -> &'static CdSigningRoots {
     static CD: OnceLock<CdSigningRoots> = OnceLock::new();
-    CD.get_or_init(CdSigningRoots::with_csa_test_roots)
+    CD.get_or_init(CdSigningRoots::with_example_device_roots)
 }
 
 /// Returns a fully-populated `CommissionerConfig<'static>` with Wi-Fi

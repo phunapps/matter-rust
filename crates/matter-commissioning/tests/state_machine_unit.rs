@@ -78,8 +78,8 @@ fn build_sm(
 fn arm_failsafe_returns_busy() {
     let fabric = make_fabric();
     let setup = make_setup();
-    let paa = PaaTrustStore::with_csa_test_roots();
-    let cd = CdSigningRoots::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
+    let cd = CdSigningRoots::with_example_device_roots();
     let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
@@ -105,8 +105,8 @@ fn arm_failsafe_returns_busy() {
 fn arm_failsafe_response_is_malformed() {
     let fabric = make_fabric();
     let setup = make_setup();
-    let paa = PaaTrustStore::with_csa_test_roots();
-    let cd = CdSigningRoots::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
+    let cd = CdSigningRoots::with_example_device_roots();
     let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
@@ -126,8 +126,8 @@ fn arm_failsafe_response_is_malformed() {
 fn config_regulatory_returns_value_outside_range() {
     let fabric = make_fabric();
     let setup = make_setup();
-    let paa = PaaTrustStore::with_csa_test_roots();
-    let cd = CdSigningRoots::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
+    let cd = CdSigningRoots::with_example_device_roots();
     let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
@@ -159,8 +159,8 @@ fn config_regulatory_returns_value_outside_range() {
 fn failed_stage_subsequent_poll_emits_abort() {
     let fabric = make_fabric();
     let setup = make_setup();
-    let paa = PaaTrustStore::with_csa_test_roots();
-    let cd = CdSigningRoots::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
+    let cd = CdSigningRoots::with_example_device_roots();
     let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     let _ = sm
@@ -182,8 +182,8 @@ fn failed_stage_subsequent_poll_emits_abort() {
 fn unexpected_response_kind_after_arm_failsafe_poll() {
     let fabric = make_fabric();
     let setup = make_setup();
-    let paa = PaaTrustStore::with_csa_test_roots();
-    let cd = CdSigningRoots::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
+    let cd = CdSigningRoots::with_example_device_roots();
     let mut sm = build_sm(&fabric, &setup, &paa, &cd);
     let _ = sm.poll().unwrap();
     sm.on_response(Expectation::CommissioningInfo, &[0x15, 0x18])
@@ -228,8 +228,8 @@ fn tampered_pai_der_returns_attestation_error() {
 
     let fabric = make_fabric();
     let setup = make_setup();
-    let paa = PaaTrustStore::with_csa_test_roots();
-    let cd = CdSigningRoots::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
+    let cd = CdSigningRoots::with_example_device_roots();
     let mut sm = build_sm(&fabric, &setup, &paa, &cd);
 
     // Drive through ReadCommissioningInfo → ArmFailsafe → ConfigRegulatory.
@@ -310,8 +310,8 @@ proptest! {
     ) {
         let fabric = make_fabric();
         let setup = make_setup();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let mut sm = build_sm(&fabric, &setup, &paa, &cd);
         // Poll once to put the state machine into a "waiting for response" position.
         let _ = sm.poll();
@@ -327,8 +327,8 @@ proptest! {
     ) {
         let fabric = make_fabric();
         let setup = make_setup();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let mut sm = build_sm(&fabric, &setup, &paa, &cd);
         let _ = sm.poll();
         let _ = sm.on_response(exp, &payload);
@@ -357,8 +357,8 @@ proptest! {
     ) {
         let fabric = make_fabric();
         let setup = make_setup();
-        let paa = PaaTrustStore::with_csa_test_roots();
-        let cd = CdSigningRoots::with_csa_test_roots();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
         let mut sm = build_sm(&fabric, &setup, &paa, &cd);
         // target_stage_index is unused by this test (the public API
         // can't jump the cursor) — it's there as a forward-compat

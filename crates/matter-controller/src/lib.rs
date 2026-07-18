@@ -65,7 +65,7 @@
 //! // certified devices).
 //! let store = Arc::new(FileStore::new("controller-state.bin"));
 //! let controller = MatterController::builder(store)
-//!     .attestation_trust(AttestationTrust::csa_test_roots())
+//!     .attestation_trust(AttestationTrust::example_device_roots())
 //!     .build()
 //!     .await?;
 //!

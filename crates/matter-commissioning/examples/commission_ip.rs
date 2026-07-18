@@ -103,7 +103,7 @@ fn build_trust_roots(cli: &Cli) -> anyhow::Result<TrustRoots> {
             .with_context(|| format!("loading PAA roots from {}", dir.display()))?
     } else {
         using_test_roots = true;
-        PaaTrustStore::with_csa_test_roots()
+        PaaTrustStore::with_example_device_roots()
     };
 
     let cd = if let Some(path) = &cli.cd_root {
@@ -111,7 +111,7 @@ fn build_trust_roots(cli: &Cli) -> anyhow::Result<TrustRoots> {
             .with_context(|| format!("loading CD signing roots from {}", path.display()))?
     } else {
         using_test_roots = true;
-        CdSigningRoots::with_csa_test_roots()
+        CdSigningRoots::with_example_device_roots()
     };
 
     Ok(TrustRoots {

@@ -70,7 +70,7 @@ use matter_commissioning::{Dac, PaaTrustStore, VendorId};
 let dac = Dac::from_der(dac_der)?;
 assert_eq!(dac.subject_vid(), VendorId::new(0xFFF1));
 
-let trust_store = PaaTrustStore::with_csa_test_roots();
+let trust_store = PaaTrustStore::with_example_device_roots();
 assert!(trust_store.len() > 0);
 # Ok(())
 # }
@@ -88,7 +88,7 @@ use matter_commissioning::{verify_chain, Dac, Pai, PaaTrustStore};
 #   -> Result<(), matter_commissioning::AttestationError> {
 let dac = Dac::from_der(dac_der)?;
 let pai = Pai::from_der(pai_der)?;
-let store = PaaTrustStore::with_csa_test_roots();
+let store = PaaTrustStore::with_example_device_roots();
 let now = MatterTime::from_unix_secs(1_704_067_200);
 
 let chain = verify_chain(&dac, &pai, &store, now)?;
@@ -98,7 +98,7 @@ println!("DAC verified for VID={} PID={}", chain.vendor_id, chain.product_id);
 ```
 
 Production callers build their own `PaaTrustStore` from CSA-published
-production roots (M8 deliverable). The bundled `with_csa_test_roots()`
+production roots (M8 deliverable). The bundled `with_example_device_roots()`
 is for examples and integration tests only.
 
 ## Example: verify an attestation response (M6.2.3)
@@ -159,8 +159,8 @@ let fabric = FabricRecord::new_root_only(
     &rng_for_fabric,
 )?;
 
-let paa = PaaTrustStore::with_csa_test_roots();
-let cd_signing_roots = CdSigningRoots::with_csa_test_roots();
+let paa = PaaTrustStore::with_example_device_roots();
+let cd_signing_roots = CdSigningRoots::with_example_device_roots();
 let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 let cfg = CommissionerConfig {
     pase_attestation_challenge,
@@ -267,7 +267,7 @@ use matter_commissioning::{
 };
 
 # fn run(cd_bytes: &[u8]) -> Result<(), AttestationError> {
-let trust = CdSigningRoots::with_csa_test_roots();
+let trust = CdSigningRoots::with_example_device_roots();
 verify_certification_declaration(
     cd_bytes,
     VendorId::new(0xFFF1),
@@ -278,7 +278,7 @@ verify_certification_declaration(
 # }
 ```
 
-Production callers replace `with_csa_test_roots()` with
+Production callers replace `with_example_device_roots()` with
 `CdSigningRoots::from_pem(&[my_root_pem])` loading the CSA-published
 signing root(s) supplied by deployment.
 

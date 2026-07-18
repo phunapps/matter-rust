@@ -2,7 +2,7 @@
 //! considers trusted roots for device-attestation chain validation.
 //!
 //! Constructed via [`PaaTrustStore::empty`] (for callers building
-//! their own trust policy) or [`PaaTrustStore::with_csa_test_roots`]
+//! their own trust policy) or [`PaaTrustStore::with_example_device_roots`]
 //! (for examples and integration tests; never use in production).
 //! There is intentionally no `Default` impl — picking the wrong
 //! default for a trust anchor list is a security footgun.
@@ -32,10 +32,10 @@ impl PaaTrustStore {
     /// Panics only if the in-crate bundled DER files
     /// (`src/attestation/csa_test_roots/*.der`) fail to parse — a
     /// build-tree integrity problem, not a runtime input. The
-    /// `with_csa_test_roots_loads_both` unit test catches this in
+    /// `with_example_device_roots_loads_both` unit test catches this in
     /// CI, so a panic here would mean the crate sources themselves
     /// have been corrupted.
-    pub fn with_csa_test_roots() -> Self {
+    pub fn with_example_device_roots() -> Self {
         // `include_bytes!` is crate-relative; the DER files live
         // inside the crate (see `csa_test_roots/README.md`) so this
         // path is stable regardless of where the crate is consumed
@@ -47,7 +47,7 @@ impl PaaTrustStore {
         // connectedhomeip and verified-parsing in the unit tests
         // below. If `Paa::from_der` ever rejects one, we want a hard
         // compile-time-ish failure (the unit test
-        // `with_csa_test_roots_loads_both` catches it), not a silent
+        // `with_example_device_roots_loads_both` catches it), not a silent
         // empty store. We propagate any parse error by panicking
         // here — only reachable if the bundled files become corrupt,
         // which is a build-tree integrity problem, not a runtime
@@ -129,14 +129,14 @@ mod tests {
     }
 
     #[test]
-    fn with_csa_test_roots_loads_both() {
-        let s = PaaTrustStore::with_csa_test_roots();
+    fn with_example_device_roots_loads_both() {
+        let s = PaaTrustStore::with_example_device_roots();
         assert_eq!(s.len(), 2, "exactly two bundled CSA test roots");
     }
 
     #[test]
-    fn with_csa_test_roots_contains_vid_scoped_fff1() {
-        let s = PaaTrustStore::with_csa_test_roots();
+    fn with_example_device_roots_contains_vid_scoped_fff1() {
+        let s = PaaTrustStore::with_example_device_roots();
         let has_fff1 = s
             .iter()
             .any(|paa| paa.subject_vid() == Some(VendorId::new(0xFFF1)));
@@ -144,8 +144,8 @@ mod tests {
     }
 
     #[test]
-    fn with_csa_test_roots_contains_unscoped() {
-        let s = PaaTrustStore::with_csa_test_roots();
+    fn with_example_device_roots_contains_unscoped() {
+        let s = PaaTrustStore::with_example_device_roots();
         let has_unscoped = s.iter().any(|paa| paa.subject_vid().is_none());
         assert!(has_unscoped, "bundled roots include a non-VID-scoped PAA");
     }

@@ -185,7 +185,7 @@ fn matter_js_happy_path_byte_parity() {
         discriminator: Discriminator::new(0x0F00).expect("valid discriminator"),
         passcode: Passcode::new(20_202_021).expect("valid passcode"),
     };
-    let paa = PaaTrustStore::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
     // Trust exactly the CD signer the captured device used (chip's test CMS
     // signer, carried in the fixture as an SPKI PEM).
     let cd = CdSigningRoots::from_pem(&[fixture.cd_signing_spki_pem.as_bytes()])
@@ -346,7 +346,7 @@ fn tampered_dac_is_rejected_during_attestation() {
         discriminator: Discriminator::new(0x0F00).expect("valid discriminator"),
         passcode: Passcode::new(20_202_021).expect("valid passcode"),
     };
-    let paa = PaaTrustStore::with_csa_test_roots();
+    let paa = PaaTrustStore::with_example_device_roots();
     let cd = CdSigningRoots::from_pem(&[fixture.cd_signing_spki_pem.as_bytes()])
         .expect("fixture CD signing SPKI parses");
     let attestation_nonce: [u8; 32] = b64(&fixture.attestation_nonce_b64)

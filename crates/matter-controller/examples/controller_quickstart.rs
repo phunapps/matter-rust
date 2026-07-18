@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
         (Some(paa), Some(cd)) => {
             AttestationTrust::from_dirs(paa, cd).context("loading production attestation roots")?
         }
-        _ => AttestationTrust::csa_test_roots(),
+        _ => AttestationTrust::example_device_roots(),
     };
 
     // 2. Open the controller over a persistent file store. A fresh store gets a
