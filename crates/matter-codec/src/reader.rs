@@ -629,8 +629,23 @@ impl<'a> TlvReader<'a> {
 
     fn read_utf8(&mut self, len: usize) -> Result<Value> {
         let bytes = self.next_bytes(len)?;
+        // Validate UTF-8 across the ENTIRE payload (a malformed suffix still
+        // fails), then present only the text before the first IS1 (0x1F)
+        // separator. Matter uses IS1 to separate a char string's text from an
+        // optional localized-string language suffix (`"Kitchen\u{1F}0409"`);
+        // chip's `TLVReader::Get(CharSpan&)` and matter.js both return only the
+        // text (chip TestTLV.cpp CheckTLVCharSpan). Returning the whole payload
+        // surfaced the raw separator+suffix on reads of localized labels
+        // (BasicInformation NodeLabel, UserLabel) — CODEC-1. The raw suffix
+        // (LSID) is not yet exposed; that is a separate additive follow-up.
         let s = core::str::from_utf8(bytes)?;
-        Ok(Value::Utf8(String::from(s)))
+        // IS1 (0x1F) is single-byte ASCII, so the split index is a valid char
+        // boundary.
+        let text = match s.find('\u{1F}') {
+            Some(i) => &s[..i],
+            None => s,
+        };
+        Ok(Value::Utf8(String::from(text)))
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<Value> {
@@ -1341,6 +1356,35 @@ mod tests {
         w.put_uint(Tag::Context(1), 42).unwrap();
         w.end_container().unwrap();
         buf
+    }
+
+    #[test]
+    fn read_utf8_truncates_at_is1_separator() {
+        // CODEC-1 / chip TestTLV.cpp CheckTLVCharSpan: a Matter char string is
+        // presented as only the text before the first IS1 (0x1F) localized-
+        // string separator. The writer keeps the raw bytes on the wire.
+        fn decode_str(s: &str) -> String {
+            let mut buf = Vec::new();
+            let mut w = crate::writer::TlvWriter::new(&mut buf);
+            w.put_utf8(Tag::Anonymous, s).unwrap();
+            match TlvReader::new(&buf).next().unwrap().unwrap() {
+                Element::Scalar {
+                    value: Value::Utf8(t),
+                    ..
+                } => t,
+                other => panic!("expected Utf8 scalar, got {other:?}"),
+            }
+        }
+        // chip's two vectors: text before the separator is returned; a string
+        // that STARTS with the separator presents as empty.
+        assert_eq!(
+            decode_str("This is a test case #1\u{1F}suffix"),
+            "This is a test case #1"
+        );
+        assert_eq!(decode_str("\u{1F} abc \u{1F} def"), "");
+        // No separator → unchanged; a real localized-label shape → just the text.
+        assert_eq!(decode_str("Kitchen"), "Kitchen");
+        assert_eq!(decode_str("Kitchen\u{1F}0409"), "Kitchen");
     }
 
     #[test]

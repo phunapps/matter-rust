@@ -44,7 +44,11 @@ fn arb_scalar_value() -> impl Strategy<Value = Value> {
             .prop_filter("no NaN", |f| !f.is_nan())
             .prop_map(Value::Double),
         Just(Value::Null),
-        prop::string::string_regex(".{0,64}")
+        // Exclude IS1 (0x1F): it is the Matter localized-string separator, so
+        // the reader presents only the text before it (CODEC-1). A value
+        // containing a raw 0x1F is therefore not in the codec's round-trip
+        // domain — `decode(encode("a\u{1F}b")) == "a"`, by design.
+        prop::string::string_regex("[^\u{1F}]{0,64}")
             .unwrap()
             .prop_map(Value::Utf8),
         prop::collection::vec(any::<u8>(), 0..=64).prop_map(Value::Bytes),
