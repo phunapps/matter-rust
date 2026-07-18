@@ -202,6 +202,26 @@ fn skip_container_body(reader: &mut TlvReader<'_>) -> Result<()> {
     }
 }
 
+/// Forward-compatibly handle a CASE-message element that matched none of the
+/// decoder's known tags.
+///
+/// chip and matter.js accept and *ignore* unknown fields in the Sigma
+/// messages, so a strict reject would make a future device that adds a
+/// spec-optional field unreachable to us. We therefore skip an unknown
+/// container's body and ignore an unknown scalar, rather than failing the whole
+/// handshake. A truncated structure (EOF before the matching `ContainerEnd`) is
+/// still malformed. Each decoder still enforces its REQUIRED fields via the
+/// `Option::ok_or` presence checks after the loop, and the inner
+/// cryptographically-authenticated structures (TBEData/TBSData) are unaffected —
+/// this only relaxes the outer, unauthenticated message envelope.
+fn skip_unknown_field(reader: &mut TlvReader<'_>, element: Option<&Element>) -> Result<()> {
+    match element {
+        None => Err(Error::InvalidParameter),
+        Some(Element::ContainerStart { .. }) => skip_container_body(reader),
+        Some(_) => Ok(()),
+    }
+}
+
 /// After a `ContainerStart` for a sub-structure has been consumed from
 /// `full_message_reader`, skip the sub-structure body to the matching
 /// `ContainerEnd`, then re-parse `full_message` to recover the raw bytes of
@@ -461,9 +481,9 @@ impl Sigma1 {
                     initiator_resume_mic = Some(arr);
                 }
 
-                // Any unrecognised tag or unexpected element type.
-                // `Element` is `#[non_exhaustive]` so `Some(_)` is required.
-                None | Some(_) => return Err(Error::InvalidParameter),
+                // Forward-compat: skip any unrecognised field instead of
+                // rejecting the message (chip/matter.js accept + ignore them).
+                other => skip_unknown_field(&mut reader, other.as_ref())?,
             }
         }
 
@@ -602,7 +622,8 @@ impl Sigma2 {
                     responder_session_params = Some(SessionParams { raw_tlv: raw });
                 }
 
-                None | Some(_) => return Err(Error::InvalidParameter),
+                // Forward-compat: skip any unrecognised field (see `skip_unknown_field`).
+                other => skip_unknown_field(&mut reader, other.as_ref())?,
             }
         }
 
@@ -747,9 +768,9 @@ impl Sigma2Resume {
                     responder_session_params = Some(SessionParams { raw_tlv: raw });
                 }
 
-                // Any unrecognised tag or unexpected element type.
-                // `Element` is `#[non_exhaustive]` so `Some(_)` is required.
-                None | Some(_) => return Err(Error::InvalidParameter),
+                // Forward-compat: skip any unrecognised field instead of
+                // rejecting the message (chip/matter.js accept + ignore them).
+                other => skip_unknown_field(&mut reader, other.as_ref())?,
             }
         }
 
@@ -822,7 +843,8 @@ impl Sigma3 {
                     encrypted = Some(b);
                 }
 
-                None | Some(_) => return Err(Error::InvalidParameter),
+                // Forward-compat: skip any unrecognised field (see `skip_unknown_field`).
+                other => skip_unknown_field(&mut reader, other.as_ref())?,
             }
         }
 
@@ -941,18 +963,26 @@ mod tests {
     }
 
     #[test]
-    fn sigma1_rejects_extra_field() {
-        // Tag 8 is outside the spec; decoder must reject it.
+    fn sigma1_ignores_unknown_forward_compat_fields() {
+        // Forward-compat: an unknown scalar tag AND an unknown container tag (a
+        // future spec-optional field) must be skipped, not rejected —
+        // chip/matter.js accept + ignore them, and strict rejection would make
+        // a future device revision unreachable.
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
         w.put_bytes(Tag::Context(1), &[0x11u8; 32]).unwrap();
-        w.put_uint(Tag::Context(2), 1_u64).unwrap();
+        w.put_uint(Tag::Context(2), 7_u64).unwrap();
         w.put_bytes(Tag::Context(3), &[0x22u8; 32]).unwrap();
         w.put_bytes(Tag::Context(4), &[0x04u8; 65]).unwrap();
-        w.put_uint(Tag::Context(8), 42_u64).unwrap(); // unknown tag
+        w.put_uint(Tag::Context(8), 42_u64).unwrap(); // unknown scalar
+        w.start_structure(Tag::Context(9)).unwrap(); // unknown container
+        w.put_uint(Tag::Context(0), 1_u64).unwrap();
         w.end_container().unwrap();
-        assert!(matches!(Sigma1::decode(&buf), Err(Error::InvalidParameter)));
+        w.end_container().unwrap();
+        let decoded = Sigma1::decode(&buf).unwrap();
+        assert_eq!(decoded.initiator_session_id, 7);
+        assert_eq!(decoded.initiator_random, [0x11; 32]);
     }
 
     #[test]
@@ -986,6 +1016,22 @@ mod tests {
     // -----------------------------------------------------------------------
     // Sigma2
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn sigma2_ignores_unknown_forward_compat_field() {
+        // Forward-compat: an unknown tag must be skipped, not rejected.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xCCu8; 32]).unwrap();
+        w.put_uint(Tag::Context(2), 0x5678_u64).unwrap();
+        w.put_bytes(Tag::Context(3), &[0x04u8; 65]).unwrap();
+        w.put_bytes(Tag::Context(4), &[0xDEu8; 80]).unwrap();
+        w.put_uint(Tag::Context(9), 42_u64).unwrap(); // unknown tag
+        w.end_container().unwrap();
+        let decoded = Sigma2::decode(&buf).unwrap();
+        assert_eq!(decoded.responder_session_id, 0x5678);
+    }
 
     #[test]
     fn sigma2_roundtrip() {
@@ -1138,8 +1184,8 @@ mod tests {
     }
 
     #[test]
-    fn sigma2resume_rejects_extra_field() {
-        // Tag 5 is outside the spec; decoder must reject it.
+    fn sigma2resume_ignores_unknown_forward_compat_field() {
+        // Forward-compat: an unknown tag must be skipped, not rejected.
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
@@ -1148,10 +1194,10 @@ mod tests {
         w.put_uint(Tag::Context(3), 0x9900_u64).unwrap();
         w.put_uint(Tag::Context(5), 42_u64).unwrap(); // unknown tag
         w.end_container().unwrap();
-        assert!(matches!(
-            Sigma2Resume::decode(&buf),
-            Err(Error::InvalidParameter)
-        ));
+        assert!(
+            Sigma2Resume::decode(&buf).is_ok(),
+            "unknown forward-compat field must be ignored"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1179,15 +1225,16 @@ mod tests {
     }
 
     #[test]
-    fn sigma3_rejects_extra_field() {
-        // Tag 2 is outside the spec; decoder must reject it.
+    fn sigma3_ignores_unknown_forward_compat_field() {
+        // Forward-compat: an unknown tag must be skipped, not rejected.
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
         w.put_bytes(Tag::Context(1), &[0xFFu8; 100]).unwrap();
-        w.put_uint(Tag::Context(2), 99_u64).unwrap(); // extra unknown tag
+        w.put_uint(Tag::Context(2), 99_u64).unwrap(); // unknown tag
         w.end_container().unwrap();
-        assert!(matches!(Sigma3::decode(&buf), Err(Error::InvalidParameter)));
+        let decoded = Sigma3::decode(&buf).unwrap();
+        assert_eq!(decoded.encrypted, vec![0xFF; 100]);
     }
 
     #[test]
