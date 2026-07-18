@@ -255,6 +255,7 @@ mod tests {
             more_chunked_messages: false,
             suppress_response: false,
             events: Vec::new(),
+            statuses: Vec::new(),
         }
     }
 

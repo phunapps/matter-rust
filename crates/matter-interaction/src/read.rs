@@ -126,6 +126,14 @@ pub struct ReportData {
     /// Every `EventReportIB` carried in `eventReports` (context tag 2), in wire
     /// order. Empty for attribute-only reports.
     pub events: Vec<crate::event::EventReport>,
+    /// Every `AttributeStatusIB` (a per-path status/error, not attribute data),
+    /// as `(path, status)` in wire order. IM-1: these were previously discarded,
+    /// so a device reporting e.g. `UnsupportedAttribute` for a requested path was
+    /// indistinguishable from the path simply being omitted. Populated by
+    /// [`parse_report_data`]; empty for all-data reports and for reports built
+    /// via [`ReportData::new`]. Mirrors the write path, which surfaces per-path
+    /// status via [`crate::parse_write_response`].
+    pub statuses: Vec<(AttributePath, crate::status::ImStatus)>,
 }
 
 impl ReportData {
@@ -153,6 +161,7 @@ impl ReportData {
             more_chunked_messages,
             suppress_response,
             events: Vec::new(),
+            statuses: Vec::new(),
         }
     }
 
@@ -243,6 +252,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
     expect_message_struct(&mut r)?;
 
     let mut items: Vec<AttributeReportItem> = Vec::new();
+    let mut statuses: Vec<(AttributePath, crate::status::ImStatus)> = Vec::new();
     let mut events: Vec<crate::event::EventReport> = Vec::new();
     let mut subscription_id: Option<u32> = None;
     let mut more_chunked_messages = false;
@@ -267,7 +277,7 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Array,
-            }) => parse_attribute_reports(&mut r, &mut items)?,
+            }) => parse_attribute_reports(&mut r, &mut items, &mut statuses)?,
             // moreChunkedMessages [3]
             Some(Element::Scalar {
                 tag: Tag::Context(3),
@@ -295,15 +305,26 @@ pub fn parse_report_data(bytes: &[u8]) -> Result<ReportData, ImError> {
         more_chunked_messages,
         suppress_response,
         events,
+        statuses,
     })
+}
+
+/// One decoded `AttributeReportIB`: either attribute data, a per-path status
+/// (IM-1), or an empty IB.
+enum ReportIb {
+    Data(AttributeReportItem),
+    Status(AttributePath, crate::status::ImStatus),
+    Empty,
 }
 
 /// Consume the `AttributeReports` array body (reader positioned just after the
 /// array-start at context tag 1), pushing one [`AttributeReportItem`] per IB
-/// that carried `AttributeData`. `AttributeStatus` (error) IBs are skipped.
+/// that carried `AttributeData`, and one `(path, status)` into `statuses` per
+/// `AttributeStatus` IB (IM-1).
 fn parse_attribute_reports(
     r: &mut TlvReader<'_>,
     items: &mut Vec<AttributeReportItem>,
+    statuses: &mut Vec<(AttributePath, crate::status::ImStatus)>,
 ) -> Result<(), ImError> {
     loop {
         match r.next()? {
@@ -312,26 +333,25 @@ fn parse_attribute_reports(
             Some(Element::ContainerStart {
                 kind: ContainerKind::Structure,
                 ..
-            }) => {
-                if let Some(item) = parse_attribute_report_ib(r)? {
-                    items.push(item);
-                }
-            }
+            }) => match parse_attribute_report_ib(r)? {
+                ReportIb::Data(item) => items.push(item),
+                ReportIb::Status(path, status) => statuses.push((path, status)),
+                ReportIb::Empty => {}
+            },
             Some(Element::ContainerStart { .. }) => skip_container(r)?,
             Some(_) => {}
         }
     }
 }
 
-/// Parse one `AttributeReportIB` body. Returns `Some(item)` if it carried
-/// `AttributeData`, `None` if it was an `AttributeStatus` (error) report.
-fn parse_attribute_report_ib(
-    r: &mut TlvReader<'_>,
-) -> Result<Option<AttributeReportItem>, ImError> {
+/// Parse one `AttributeReportIB` body — it carries EITHER `AttributeData [1]`
+/// or `AttributeStatus [0]` (IM-1: the status is surfaced, not skipped).
+fn parse_attribute_report_ib(r: &mut TlvReader<'_>) -> Result<ReportIb, ImError> {
     let mut path = None;
     let mut value = None;
     let mut data_version = None;
     let mut append = false;
+    let mut status: Option<(AttributePath, crate::status::ImStatus)> = None;
     loop {
         match r.next()? {
             None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
@@ -343,13 +363,25 @@ fn parse_attribute_report_ib(
                 // AttributeData = struct { 0:DataVersion?, 1:Path(list), 2:Data }
                 parse_attribute_data(r, &mut path, &mut value, &mut data_version, &mut append)?;
             }
-            // AttributeStatus [0] → skip (error entry).
+            // AttributeStatus [0] = struct { 0:Path(list), 1:StatusIB } — parse
+            // the per-path status instead of discarding it (IM-1). Reuses the
+            // write path's identical decoder.
+            Some(Element::ContainerStart {
+                tag: Tag::Context(0),
+                kind: ContainerKind::Structure,
+            }) => {
+                status = Some(crate::write::parse_attribute_status_ib(r)?);
+            }
+            // Any other container → skip.
             Some(Element::ContainerStart { .. }) => skip_container(r)?,
             Some(_) => {}
         }
     }
+    if let Some((p, s)) = status {
+        return Ok(ReportIb::Status(p, s));
+    }
     match (path, value) {
-        (Some(p), Some(v)) => Ok(Some(AttributeReportItem {
+        (Some(p), Some(v)) => Ok(ReportIb::Data(AttributeReportItem {
             path: p,
             op: if append {
                 ReportOp::Append
@@ -359,7 +391,7 @@ fn parse_attribute_report_ib(
             value: v,
             data_version,
         })),
-        (None, None) => Ok(None), // no AttributeData present (AttributeStatus report or empty IB)
+        (None, None) => Ok(ReportIb::Empty), // no AttributeData/Status present
         (Some(_), None) => Err(ImError::MissingField("AttributeData.Data")),
         (None, Some(_)) => Err(ImError::MissingField("AttributeData.Path")),
     }
@@ -507,23 +539,39 @@ mod tests {
     }
 
     #[test]
-    fn attribute_status_report_is_skipped() {
+    fn attribute_status_report_is_surfaced() {
+        // IM-1: a per-path AttributeStatus (here UnsupportedAttribute, 0x86)
+        // must be surfaced in `statuses`, not silently dropped — a caller must
+        // be able to tell "unsupported" from "omitted".
         use matter_codec::{Tag, TlvWriter};
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous).unwrap();
         w.start_array(Tag::Context(1)).unwrap(); // AttributeReports
         w.start_structure(Tag::Anonymous).unwrap(); // AttributeReportIB
-        w.start_structure(Tag::Context(0)).unwrap(); // AttributeStatus (no AttributeData)
-        w.put_uint(Tag::Context(0), 0x01).unwrap(); // some status field
-        w.end_container().unwrap();
+        w.start_structure(Tag::Context(0)).unwrap(); // AttributeStatus
+        w.start_list(Tag::Context(0)).unwrap(); // AttributePathIB
+        w.put_uint(Tag::Context(2), 1).unwrap(); // endpoint
+        w.put_uint(Tag::Context(3), 0x0006).unwrap(); // cluster OnOff
+        w.put_uint(Tag::Context(4), 0x4242).unwrap(); // (bogus) attribute
+        w.end_container().unwrap(); // Path
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        w.put_uint(Tag::Context(0), 0x86).unwrap(); // UnsupportedAttribute
+        w.end_container().unwrap(); // StatusIB
+        w.end_container().unwrap(); // AttributeStatus
         w.end_container().unwrap(); // AttributeReportIB
         w.end_container().unwrap(); // array
         w.put_uint(Tag::Context(0xFF), 11).unwrap();
         w.end_container().unwrap();
 
         let report = parse_report_data(&buf).unwrap();
-        assert_eq!(report.attributes().count(), 0);
+        assert_eq!(report.attributes().count(), 0, "no data items");
+        assert_eq!(report.statuses.len(), 1, "the status IB must be surfaced");
+        let (path, status) = &report.statuses[0];
+        assert_eq!(path.endpoint, 1);
+        assert_eq!(path.cluster, 0x0006);
+        assert_eq!(path.attribute, 0x4242);
+        assert_eq!(*status, crate::status::ImStatus::Failure(0x86));
     }
 
     #[test]
