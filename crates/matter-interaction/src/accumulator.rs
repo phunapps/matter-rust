@@ -187,11 +187,23 @@ impl ReportAccumulator {
                     }
                 }
                 ReportOp::Append => {
+                    // IM-3: apply the same DataVersion guard `Replace` uses — a
+                    // stale-version append (older than what we already hold for
+                    // this list) must not land on a newer list. A chunked list's
+                    // appends share one DataVersion, so same/unknown versions
+                    // proceed; only a strictly older version is dropped.
+                    if let (Some(Some(old)), Some(new)) =
+                        (self.versions.get(&key), item.data_version)
+                    {
+                        if new < *old {
+                            continue;
+                        }
+                    }
                     if !self.values.contains_key(&key) {
                         self.order.push(item.path);
                         self.values.insert(key, Value::Array(Vec::new()));
-                        self.versions.insert(key, item.data_version);
                     }
+                    self.versions.insert(key, item.data_version);
                     self.bytes = self.bytes.saturating_add(item_bytes);
                     match self.values.get_mut(&key) {
                         Some(Value::Array(list)) => list.push(item.value),
@@ -270,6 +282,37 @@ mod tests {
             value: v,
             data_version: None,
         }
+    }
+
+    fn append_v(p: AttributePath, v: Value, version: u32) -> AttributeReportItem {
+        AttributeReportItem {
+            path: p,
+            op: ReportOp::Append,
+            value: v,
+            data_version: Some(version),
+        }
+    }
+
+    #[test]
+    fn stale_version_append_is_rejected() {
+        // IM-3: a strictly-older DataVersion append must not land on a newer
+        // list. Two appends at version 5 build the list; a version-3 append is
+        // stale and must be dropped (not appended).
+        let mut acc = ReportAccumulator::new();
+        let p = ap(0, 0x1d, 0x0003);
+        acc.push(report(vec![append_v(p, Value::Uint(1), 5)]))
+            .unwrap();
+        acc.push(report(vec![append_v(p, Value::Uint(2), 5)]))
+            .unwrap();
+        acc.push(report(vec![append_v(p, Value::Uint(99), 3)]))
+            .unwrap();
+        let out = acc.finish();
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].1,
+            Value::Array(vec![Value::Uint(1), Value::Uint(2)]),
+            "the stale-version append must not land on the newer list"
+        );
     }
 
     #[test]
