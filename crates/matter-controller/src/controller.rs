@@ -266,6 +266,31 @@ impl MatterController {
         software_version: u32,
         port: u16,
     ) -> Result<(), Error> {
+        // 960 keeps each BDX DataBlock (block + counter + BDX/IM framing) under
+        // the transport's 1024-byte secured-payload budget — correct for Wi-Fi
+        // and IP. For a Thread-routed requestor use
+        // [`Self::serve_ota_with_block_size`] with ~512: at 960 a single block
+        // spans ~a dozen 802.15.4 fragments that must ALL arrive, so a smaller
+        // block cuts the per-block loss probability on the mesh (BDX-4).
+        self.serve_ota_with_block_size(target_node_id, image, software_version, port, 960)
+            .await
+    }
+
+    /// [`Self::serve_ota`] with an explicit BDX `max_block_size`. Pass a smaller
+    /// value (~512) for a Thread-routed requestor so each block fits fewer
+    /// 6LoWPAN fragments; 960 is the Wi-Fi/IP default (see [`Self::serve_ota`]).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::serve_ota`].
+    pub async fn serve_ota_with_block_size(
+        &self,
+        target_node_id: u64,
+        image: Vec<u8>,
+        software_version: u32,
+        port: u16,
+        max_block_size: u16,
+    ) -> Result<(), Error> {
         use crate::provider_server::{build_operational_service, ProviderServer};
 
         // Credential pool: one identity per CASE accept (first session +
@@ -356,12 +381,11 @@ impl MatterController {
                     let _ = c.store_resumption_record(node, &record).await;
                 });
             }));
-        // 960 keeps each BDX DataBlock (block + 4-byte counter + BDX/IM
-        // framing) under the transport's 1024-byte secured-payload budget —
-        // 1024 here overflows it by 14 bytes once framed.
-        let serve_res = server
-            .serve_ota_once(offer, image, /* max_block_size */ 960)
-            .await;
+        // `max_block_size` must keep each BDX DataBlock (block + 4-byte counter
+        // + BDX/IM framing) under the transport's 1024-byte secured-payload
+        // budget — 960 is the Wi-Fi/IP default (1024 overflows by 14 bytes once
+        // framed); a Thread caller passes ~512 (BDX-4).
+        let serve_res = server.serve_ota_once(offer, image, max_block_size).await;
 
         let _ = matter_transport::Discovery::unpublish(
             &mut discovery,

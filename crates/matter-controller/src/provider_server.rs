@@ -713,14 +713,23 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 continue;
             }
 
-            // Per-session step bound: one per OTA command + one per block + slack.
-            let max_steps = image.len() / usize::from(max_block_size.max(1)) + 64;
-            let mut steps = 0usize;
+            // BDX-4: bound progress and iteration SEPARATELY. `max_progress`
+            // caps how many transfer-ADVANCING messages (OTA commands + blocks)
+            // we serve; a larger `max_iterations` backstop bounds frames that do
+            // NOT advance the transfer (stale prior-session retransmits, the
+            // duplicate-reliable ack resends BDX-2 handles, a peer StatusReport).
+            // Counting every frame against one budget — as the old `steps`
+            // did — let a lossy mesh's retransmits exhaust it before the last
+            // block arrived, turning a recoverable loss into a spurious failure.
+            let max_progress = image.len() / usize::from(max_block_size.max(1)) + 64;
+            let max_iterations = max_progress.saturating_mul(8).max(1024);
+            let mut progress = 0usize;
+            let mut iterations = 0usize;
 
             // Inner: serve this session until Notify (done), a new handshake
-            // frame (roll into the next accept), or the step bound.
-            while steps < max_steps {
-                steps += 1;
+            // frame (roll into the next accept), or a bound.
+            while progress < max_progress && iterations < max_iterations {
+                iterations += 1;
                 let (wire, from) = self.recv_secured(&mut sessions, peer).await?;
                 if is_unsecured_frame(&wire) {
                     carried = Some((wire, from));
@@ -756,6 +765,15 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     }
                     continue;
                 };
+
+                // BDX-4: only a message that ADVANCES the transfer (an OTA
+                // invoke or a BDX message) counts against `max_progress`. A
+                // stale/duplicate frame `continue`s above without reaching here,
+                // so it burns only an `iterations` slot, never the progress
+                // budget.
+                let advanced = (protocol_id == ProtocolId::INTERACTION_MODEL
+                    && opcode == OP_INVOKE_REQUEST)
+                    || protocol_id == ProtocolId::BDX;
 
                 if protocol_id == ProtocolId::INTERACTION_MODEL && opcode == OP_INVOKE_REQUEST {
                     let parsed = parse_invoke_request(&payload)?;
@@ -921,11 +939,16 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                         }
                     }
                 }
+
+                if advanced {
+                    progress += 1;
+                }
             }
             if carried.is_none() {
-                return Err(Error::Operational(
-                    "OTA session exceeded its step budget without progress".into(),
-                ));
+                return Err(Error::Operational(format!(
+                    "OTA session ended without completing: served {progress}/{max_progress} \
+                     transfer-advancing messages in {iterations}/{max_iterations} iterations"
+                )));
             }
         }
     }
