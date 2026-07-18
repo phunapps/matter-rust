@@ -244,6 +244,16 @@ pub enum Error {
     #[error("invalid Base38 character `{0}` at position {1}")]
     InvalidBase38Char(char, usize),
 
+    /// A Base38 chunk decoded to a value too large for the number of bytes
+    /// it produces (e.g. a 2-char chunk `> 0xFF`), so the encoding is not
+    /// injective. chip rejects these (`Base38Decode.cpp:152`); silently
+    /// truncating them would map distinct QR strings to the same bytes.
+    #[error("Base38 chunk at position {position} decodes to an out-of-range value")]
+    Base38ChunkOutOfRange {
+        /// Byte offset of the offending chunk within the Base38 string.
+        position: usize,
+    },
+
     /// The Base38-decoded payload is the wrong size for a Matter QR.
     #[error("QR payload is the wrong length: {got} bytes, expected exactly {need}")]
     QrPayloadWrongLength {

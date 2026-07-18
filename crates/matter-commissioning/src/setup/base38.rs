@@ -58,6 +58,13 @@ pub(super) fn decode(s: &str) -> Result<Vec<u8>> {
             1 | 3 => return Err(Error::InvalidBase38Char('?', i + take - 1)),
             _ => unreachable!(),
         };
+        // SETUP-1: reject a chunk whose value does not fit in `byte_count`
+        // bytes (e.g. "S6" -> 256 > 0xFF). The old code silently kept only the
+        // low bytes, so distinct QR strings decoded to identical output — the
+        // decode was not injective. chip rejects these (Base38Decode.cpp:152).
+        if value >> (byte_count * 8) != 0 {
+            return Err(Error::Base38ChunkOutOfRange { position: i });
+        }
         for shift in 0..byte_count {
             out.push(((value >> (shift * 8)) & 0xff) as u8);
         }
@@ -158,5 +165,22 @@ mod tests {
         // Length 3 cannot represent any valid byte-aligned chunk.
         let err = decode("ABC").unwrap_err();
         assert!(matches!(err, crate::setup::Error::InvalidBase38Char(_, _)));
+    }
+
+    #[test]
+    fn decode_rejects_out_of_range_chunks() {
+        // SETUP-1 / chip TestQRCode.cpp: a chunk whose value exceeds its
+        // byte width must error, not silently truncate. "S6" -> 256 (>0xFF,
+        // 1 byte), "OE71" -> 65536 (>0xFFFF, 2 bytes), "QLS18" -> 0x1000000
+        // (>0xFFFFFF, 3 bytes).
+        for input in ["S6", "OE71", "QLS18"] {
+            let err = decode(input).unwrap_err();
+            assert!(
+                matches!(err, crate::setup::Error::Base38ChunkOutOfRange { .. }),
+                "{input:?} must be rejected as out-of-range, got {err:?}"
+            );
+        }
+        // Boundary: an in-range 1-byte chunk must still decode ("R6" -> 255).
+        assert_eq!(decode("R6").unwrap(), vec![0xFF]);
     }
 }
