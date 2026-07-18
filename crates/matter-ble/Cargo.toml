@@ -1,6 +1,6 @@
 [package]
 name = "matter-ble"
-version = "0.1.0"
+version = "0.2.0"
 description = "Matter BLE commissioning transport: BTP (Bluetooth Transport Protocol) sans-IO engine and BLE central role"
 edition.workspace = true
 rust-version.workspace = true

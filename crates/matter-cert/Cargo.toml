@@ -1,6 +1,6 @@
 [package]
 name = "matter-cert"
-version = "0.1.0"
+version = "0.2.0"
 description = "Matter protocol certificate parsing and chain validation."
 edition.workspace = true
 rust-version.workspace = true
@@ -24,7 +24,7 @@ workspace = true
 [dependencies]
 bitflags = { workspace = true }
 der = { workspace = true }
-matter-codec = { path = "../matter-codec", version = "0.1.0" }
+matter-codec = { path = "../matter-codec", version = "0.2.0" }
 ring = { workspace = true }
 thiserror = { workspace = true }
 

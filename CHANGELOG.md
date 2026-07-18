@@ -22,6 +22,58 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## 0.2.0
+
+The first release after `0.1.0`. Bundles a security-remediation batch (from a
+connectedhomeip test-coverage gap analysis) with a set of intentional breaking
+changes.
+
+### Security & correctness (all crates)
+
+- **Attestation (ATT-1/ATT-6):** enforce the Matter attestation-certificate
+  profile (version, signature algorithm, `KeyUsage` bits, `BasicConstraints`,
+  SKID/AKID) in our own code — `rustls-webpki` ignores `KeyUsage`; the docs
+  claiming otherwise are now true. New `verify_attestation_cert_format`, run by
+  the commissioner before `verify_chain`.
+- **Attestation (ATT-3):** `example_device_roots()` now bundles chip's real test
+  CD authority + CSA production key 001 alongside the synthetic root, so it
+  actually verifies real CSA-test / example devices (incl. the ESP32-C6).
+- **Attestation (ATT-2):** enforce the CD `authorized_paa_list` (tag 11) against
+  the anchoring PAA's SubjectKeyIdentifier.
+- **Transport (TRAN-1):** decide the MRP duplicate-ack only *after* decrypt, so
+  an unauthenticated replay can no longer emit an ack or burn a counter.
+- **Transport:** bound the session table (default 256) with oldest-first
+  eviction — closes the unbounded-`HashMap` DoS.
+- **CASE (CASE-1):** test coverage for peer-signature rejection (the auth line).
+- **Codec (CODEC-1):** truncate char strings at the IS1 (`0x1F`) localized-string
+  separator (matches chip/matter.js).
+- **Commissioning (SETUP-1):** reject out-of-range Base38 QR chunks instead of
+  silently truncating.
+- **Interaction (IM-1/IM-3):** surface read-path `AttributeStatus` IBs; apply the
+  `DataVersion` guard to list `Append`.
+- **OTA/BDX (BDX-1..4):** send BDX blocks MRP-reliable, resend the ack on a
+  duplicate `BlockQuery`, send/receive `StatusReport`, and track a progress vs
+  iteration budget + a Thread block-size path.
+
+### Changed — behaviour
+
+- **CASE forward-compatibility:** the Sigma1/Sigma2/Sigma2Resume/Sigma3 decoders
+  now accept and ignore unknown TLV fields (matching chip) instead of rejecting
+  them, so a future device revision that adds a spec-optional field stays
+  reachable.
+
+### Breaking
+
+- **Renamed** `AttestationTrust::csa_test_roots` →
+  `example_device_roots`, and `{PaaTrustStore,CdSigningRoots}::with_csa_test_roots`
+  → `with_example_device_roots`.
+- **Removed** the unused `CommissioningError::WifiCredentialsRequired` variant.
+- **Added** `verify_certification_declaration_with_paa` (the old
+  `verify_certification_declaration` delegates to it), a `paa_skid` field on
+  `ChainVerification`, and `AttestationError::{CertFormatViolation,
+  CertificationDeclarationPaaNotAuthorized}` (additive; enums are
+  `#[non_exhaustive]`).
+
 ## matter-codec
 
 ### [0.1.1] — M9-A

@@ -101,13 +101,6 @@ pub enum CommissioningError {
         /// Mapped remediation category for downstream UI rendering.
         remediation_hint: RemediationHint,
     },
-
-    /// `network` was not `NetworkCredentials::WiFi` but the device's
-    /// `FeatureMap` declared Wi-Fi at a stage that requires the SSID/PSK.
-    /// Distinct from `InvalidConfig` because it surfaces at a later
-    /// stage once the device's network shape is known.
-    #[error("device is Wi-Fi but no wifi credentials supplied")]
-    WifiCredentialsRequired,
 }
 
 /// Which Matter network-commissioning type a device declared in its

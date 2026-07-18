@@ -1,6 +1,6 @@
 [package]
 name = "matter-transport"
-version = "0.1.0"
+version = "0.2.0"
 description = "Matter protocol network transport: UDP, mDNS, framing, MRP."
 edition.workspace = true
 rust-version.workspace = true
@@ -21,8 +21,8 @@ mdns-sd = ["dep:mdns-sd"]
 workspace = true
 
 [dependencies]
-matter-codec = { path = "../matter-codec", version = "0.1.0" }
-matter-crypto = { path = "../matter-crypto", version = "0.1.0" }
+matter-codec = { path = "../matter-codec", version = "0.2.0" }
+matter-crypto = { path = "../matter-crypto", version = "0.2.0" }
 bitflags = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["net", "rt", "io-util"], optional = true }

@@ -1,6 +1,6 @@
 [package]
 name = "matter-crypto"
-version = "0.1.0"
+version = "0.2.0"
 description = "Matter protocol session establishment: PASE (SPAKE2+) and CASE (SIGMA)."
 edition.workspace = true
 rust-version.workspace = true
@@ -22,8 +22,8 @@ test-support = []
 workspace = true
 
 [dependencies]
-matter-cert = { path = "../matter-cert", version = "0.1.0" }
-matter-codec = { path = "../matter-codec", version = "0.1.0" }
+matter-cert = { path = "../matter-cert", version = "0.2.0" }
+matter-codec = { path = "../matter-codec", version = "0.2.0" }
 aes = { workspace = true }
 ccm = { workspace = true }
 p256 = { workspace = true }
@@ -49,7 +49,7 @@ matter-crypto = { path = ".", features = ["test-support"] }
 # Enable test-support on matter-cert so that unit tests in this crate
 # can construct synthetic MatterCertificate values via
 # `matter_cert::test_support::build_unsigned`.
-matter-cert = { path = "../matter-cert", version = "0.1.0", features = ["test-support"] }
+matter-cert = { path = "../matter-cert", version = "0.2.0", features = ["test-support"] }
 criterion = { workspace = true }
 
 [[bench]]
