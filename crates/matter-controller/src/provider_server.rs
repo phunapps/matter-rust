@@ -819,13 +819,20 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     };
                     match outcome {
                         SenderOutcome::Send(out) => {
+                            // BDX-1: send every BDX message MRP-reliable so a
+                            // lost block/ReceiveAccept is retransmitted (the
+                            // recv_secured loop pumps the MRP retransmit timer).
+                            // Over a lossy mesh (Thread) the first lost block
+                            // otherwise stalls the transfer forever. chip sends
+                            // every BDX message with kExpectResponse / never
+                            // kNoAutoRequestAck (AsyncTransferFacilitator.cpp:127).
                             let w = sessions.encode_outbound(
                                 sid,
                                 Some(exchange_id),
                                 out.message_type.to_u8(),
                                 ProtocolId::BDX,
                                 &out.payload,
-                                MrpFlags { reliable: false },
+                                MrpFlags { reliable: true },
                                 Instant::now(),
                             )?;
                             self.send(&w.wire_bytes, peer).await?;
