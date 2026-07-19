@@ -20,7 +20,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use matter_controller::{
-    CommandPath, FileStore, GroupKeyMapEntry, MatterController, ReadPath, Value,
+    AclAuthMode, AclEntry, AclPrivilege, CommandPath, FileStore, GroupKeyMapEntry,
+    MatterController, ReadPath, Value,
 };
 
 const ONOFF_ENDPOINT: u16 = 1;
@@ -151,7 +152,44 @@ async fn main() -> Result<()> {
         node.add_group(GROUPS_ENDPOINT, GROUP_ID, "e3-test")
             .await
             .context("add_group")?;
-        println!("    AddGroup (ep{GROUPS_ENDPOINT} → group {GROUP_ID}) ✓\n");
+        println!("    AddGroup (ep{GROUPS_ENDPOINT} → group {GROUP_ID}) ✓");
+
+        // Grant `AuthMode=Group, Operate` — without it the device DECRYPTS the
+        // group command but drops it with "AccessControl: denied" (Matter §6.6).
+        // The subject is the PLAIN group id: the ACL cluster's wire format uses
+        // group ids for Group-auth entries (chip converts to the internal
+        // 0xFFFF_FFFF_FFFF_xxxx group-node-id form itself; writing that form is
+        // rejected with CONSTRAINT_ERROR). List-writes report per-element
+        // statuses, so check them — the write succeeds transport-wise even
+        // when the device rejects an entry.
+        let mut acl: Vec<AclEntry> = node
+            .read_acl()
+            .await
+            .context("read_acl")?
+            .into_iter()
+            .map(|mut e| {
+                e.fabric_index = None; // device assigns the accessing fabric
+                e
+            })
+            .collect();
+        acl.retain(|e| e.auth_mode != AclAuthMode::Group); // idempotent re-runs
+        acl.push(AclEntry::new(
+            AclPrivilege::Operate,
+            AclAuthMode::Group,
+            Some(vec![u64::from(GROUP_ID)]),
+            None,
+        ));
+        let statuses = node
+            .write_acl(&acl)
+            .await
+            .context("write_acl group grant")?;
+        for (path, status) in &statuses {
+            anyhow::ensure!(
+                status.is_success(),
+                "group ACL grant rejected: {path:?} -> {status:?}"
+            );
+        }
+        println!("    Group ACL grant (Operate, subject = group {GROUP_ID}) ✓\n");
     } else {
         println!("[1-2] --send-only: using the already-provisioned group {GROUP_ID} / key set {KEY_SET_ID}\n");
     }

@@ -81,6 +81,12 @@ pub enum AclAuthMode {
     /// Certificate Authenticated Session Establishment (operational sessions).
     Case,
     /// Group messaging.
+    ///
+    /// Subjects for Group-auth entries are **plain group ids** on the wire
+    /// (e.g. `vec![8]`) — the internal `0xFFFF_FFFF_FFFF_xxxx` group-node-id
+    /// form used by the access engine is device-internal, and devices reject
+    /// it in a written entry with `CONSTRAINT_ERROR` (verified on real
+    /// hardware, 2026-07-20).
     Group,
     /// An auth-mode value not recognised by this version of the library.
     Unknown(u8),
