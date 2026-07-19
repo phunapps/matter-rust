@@ -55,6 +55,25 @@ changes.
   duplicate `BlockQuery`, send/receive `StatusReport`, and track a progress vs
   iteration budget + a Thread block-size path.
 
+### Added — operational cert construction & opt-in ICAC
+
+- **`matter-cert`:** a public role-aware operational-certificate API,
+  `matter_cert::operational::{rcac, icac, noc}` (each returns an
+  `UnsignedCertificate` pre-filled with the Matter §6.5 profile for that role),
+  plus `sign_with_ring` for the in-process case. The signer-agnostic flow
+  (`build → tbs_der() → sign externally → assemble`) supports HSM/offline
+  custody. New `RcacParams`/`IcacParams`/`NocParams` (`#[non_exhaustive]`).
+- **`matter-commissioning`:** `issue_icac` (RCAC-signed intermediate CA);
+  `issue_noc` refactored onto `operational::noc` so the §6.5 NOC profile lives
+  in one place, and now signs the NOC under the fabric's ICAC when the fabric
+  carries one (flat RCAC→NOC output is byte-for-byte unchanged, golden-guarded).
+  `AddNOC` transmits the ICAC (`ICACValue`, spec §11.18.5.9) for 3-tier fabrics.
+- **`matter-controller`:** opt-in per-fabric ICAC via `FabricConfig.issue_icac`
+  (default `false`); the issued ICAC cert + key persist in the fabric snapshot
+  (new optional tags) and restore into the operational identity, so a 3-tier
+  fabric's CASE sessions present the full RCAC→ICAC→NOC chain. New
+  `IcacIdentity`; additive `FabricEntry.icac`.
+
 ### Changed — behaviour
 
 - **CASE forward-compatibility:** the Sigma1/Sigma2/Sigma2Resume/Sigma3 decoders
