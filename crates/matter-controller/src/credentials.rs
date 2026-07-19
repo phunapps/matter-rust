@@ -35,7 +35,13 @@ pub(crate) fn operational_credentials(
 
     let credentials = CaseCredentials {
         noc: fabric.commissioner.noc.clone(),
-        icac: None,
+        // On a 3-tier fabric the commissioner NOC is signed under the ICAC
+        // (its issuer DN is the ICAC's subject), so the device — which trusts
+        // only the RCAC — needs the ICAC to assemble NOC -> ICAC -> RCAC and
+        // accept the operational CASE handshake. Present it whenever the
+        // fabric carries one; a flat RCAC -> NOC fabric sends `None`,
+        // unchanged.
+        icac: fabric.icac.as_ref().map(|i| i.cert.clone()),
         signer: Box::new(signer),
         fabric_id: fabric.fabric_id,
         node_id: fabric.commissioner.node_id,
@@ -66,6 +72,49 @@ mod tests {
             issue_icac: false,
         };
         create_fabric(&cfg, &SystemNocRng).expect("create_fabric")
+    }
+
+    fn sample_fabric_with_icac() -> FabricEntry {
+        let cfg = FabricConfig {
+            fabric_id: 0x1122_3344_5566_7788,
+            rcac_id: 1,
+            commissioner_node_id: 0x0000_0000_0000_0001,
+            validity: (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            issue_icac: true,
+        };
+        create_fabric(&cfg, &SystemNocRng).expect("create_fabric")
+    }
+
+    #[test]
+    fn credentials_carry_the_icac_for_a_three_tier_fabric() {
+        let fabric = sample_fabric_with_icac();
+        let icac = fabric.icac.as_ref().expect("3-tier fabric has an ICAC");
+        let (creds, _roots, _compressed) = operational_credentials(&fabric).expect("creds");
+        // Without the ICAC the device (which trusts only the RCAC) cannot
+        // validate the ICAC-signed commissioner NOC and rejects the CASE
+        // handshake, so operational sessions must present it.
+        let sent = creds
+            .icac
+            .as_ref()
+            .expect("operational creds must carry the ICAC");
+        assert_eq!(
+            sent.to_tlv().unwrap(),
+            icac.cert.to_tlv().unwrap(),
+            "the credentials must carry the fabric's ICAC certificate",
+        );
+    }
+
+    #[test]
+    fn credentials_omit_the_icac_for_a_flat_fabric() {
+        let fabric = sample_fabric();
+        let (creds, _roots, _compressed) = operational_credentials(&fabric).expect("creds");
+        assert!(
+            creds.icac.is_none(),
+            "a flat RCAC->NOC fabric must not attach an ICAC",
+        );
     }
 
     #[test]
