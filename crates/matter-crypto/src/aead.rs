@@ -93,10 +93,51 @@ pub fn decrypt(
         .map_err(|_| Error::EncryptedBlobDecryptionFailed)
 }
 
+/// AES-128-CTR keystream application (encrypt == decrypt), using the CCM
+/// counter-block convention for a 13-byte nonce — the construction chip's
+/// `AES_CTR_crypt` uses for group-message **privacy** obfuscation (Matter
+/// Core Spec §4.8.3).
+///
+/// Implemented as AES-CCM **encryption with empty AAD, discarding the tag**:
+/// CCM's payload keystream IS CTR mode with counter blocks
+/// `flags(L=2) || nonce || counter` starting at 1, which is byte-identical to
+/// chip's CTR construction for the same nonce (verified end-to-end by the
+/// full-frame privacy KAT in `matter-transport`, from connectedhomeip
+/// `TestSessionManagerDispatch.cpp`). This stays composition — the cipher
+/// itself remains the `aes`+`ccm` crates.
+///
+/// Applying the function twice with the same key + nonce returns the input
+/// (XOR keystream), so one function serves obfuscation and de-obfuscation.
+///
+/// # Errors
+///
+/// Returns [`Error::EncryptionFailed`] if the underlying cipher fails (not
+/// expected in practice for spec-bounded sizes).
+pub fn ctr_apply(
+    key: &[u8; AEAD_KEY_LEN],
+    nonce: &[u8; AEAD_NONCE_LEN],
+    data: &[u8],
+) -> Result<Vec<u8>> {
+    let mut out = encrypt(key, nonce, &[], data)?;
+    out.truncate(data.len()); // drop the CCM tag — only the keystream XOR remains
+    Ok(out)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
+
+    #[test]
+    fn ctr_apply_is_an_involution() {
+        let key = [0x42u8; AEAD_KEY_LEN];
+        let nonce = [0x17u8; AEAD_NONCE_LEN];
+        let data = b"obfuscate me please";
+        let once = ctr_apply(&key, &nonce, data).unwrap();
+        assert_ne!(&once[..], &data[..]);
+        let twice = ctr_apply(&key, &nonce, &once).unwrap();
+        assert_eq!(&twice[..], &data[..]);
+    }
 
     #[test]
     fn encrypt_decrypt_roundtrip() {

@@ -181,6 +181,43 @@ pub fn derive_group_session_id(operational_group_key: &[u8; 16]) -> Result<u16> 
     Ok(u16::from_be_bytes(out))
 }
 
+/// HKDF info label for group privacy-key derivation (Matter Core Spec
+/// §4.15.2, chip `kGroupPrivacyInfo` = the 10-byte ASCII `"PrivacyKey"`).
+const GROUP_PRIVACY_KEY_INFO: &[u8] = b"PrivacyKey";
+
+/// Derive the 16-byte group **privacy key** from an operational group key
+/// (Matter Core Spec §4.15.2; chip `Crypto::DeriveGroupPrivacyKey`).
+///
+/// The privacy key obfuscates the mutable region of a group message header
+/// (message counter + source node id + destination group id) when the `P`
+/// security flag is set — chip sets it unconditionally for group TX.
+///
+/// KDF parameters (byte-parity pinned against connectedhomeip
+/// `TestChipCryptoPAL.cpp::TestGroup_PrivacyKeyDerivation`, all three
+/// vectors — see the in-tree KAT):
+///
+/// - **IKM**: the 16-byte operational group key (NOT the epoch key).
+/// - **Salt**: empty (`&[]`).
+/// - **Info**: the 10-byte ASCII literal `"PrivacyKey"`.
+/// - **Output length**: 16 bytes.
+///
+/// # Errors
+///
+/// Returns [`Error::KeyDerivationFailed`] if the internal HKDF `expand` or
+/// `fill` call fails (effectively unreachable for the fixed 16-byte output).
+pub fn derive_group_privacy_key(operational_group_key: &[u8; 16]) -> Result<[u8; 16]> {
+    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]).extract(operational_group_key);
+
+    let okm = prk
+        .expand(&[GROUP_PRIVACY_KEY_INFO], Len16)
+        .map_err(|_| Error::KeyDerivationFailed)?;
+
+    let mut out = [0u8; 16];
+    okm.fill(&mut out).map_err(|_| Error::KeyDerivationFailed)?;
+
+    Ok(out)
+}
+
 /// Derive the operational group multicast IPv6 address for a given raw
 /// operational `fabric_id` and `group_id` (Matter Core Spec §2.5.6).
 ///
@@ -337,5 +374,48 @@ mod tests {
         let got2 = group_multicast_ipv6(0x2906_C908_D115_D362u64, 0x0007);
         let expected2: Ipv6Addr = "ff35:0040:fd29:06c9:08d1:15d3:6200:0007".parse().unwrap();
         assert_eq!(got2, expected2);
+    }
+
+    /// Known-answer tests for [`derive_group_privacy_key`], byte-for-byte
+    /// against connectedhomeip
+    /// `TestChipCryptoPAL.cpp::TestGroup_PrivacyKeyDerivation`
+    /// (`kGroupOperationalKey1/2/3` → `kGroupPrivacyKey1/2/3`).
+    ///
+    /// Confirms: IKM = the operational key, salt = empty, info = the bare
+    /// 10-byte `"PrivacyKey"` (`kGroupPrivacyInfo`), L = 16.
+    #[test]
+    fn group_privacy_key_matches_chip_vectors() {
+        // KAT #1: chip kGroupOperationalKey1 -> kGroupPrivacyKey1.
+        let op_key_1: [u8; 16] = [
+            0x1f, 0x19, 0xed, 0x3c, 0xef, 0x8a, 0x21, 0x1b, 0xaf, 0x30, 0x6f, 0xae, 0xee, 0xe7,
+            0xaa, 0xc6,
+        ];
+        let expected_1: [u8; 16] = [
+            0xb8, 0x27, 0x9f, 0x89, 0x62, 0x1e, 0xd3, 0x27, 0xa9, 0xc3, 0x9f, 0x6a, 0x27, 0x24,
+            0x73, 0x58,
+        ];
+        assert_eq!(derive_group_privacy_key(&op_key_1).unwrap(), expected_1);
+
+        // KAT #2: chip kGroupOperationalKey2 -> kGroupPrivacyKey2.
+        let op_key_2: [u8; 16] = [
+            0xaa, 0x97, 0x9a, 0x48, 0xbd, 0x8c, 0xdf, 0x29, 0x3a, 0x07, 0x09, 0xb9, 0xc1, 0xeb,
+            0x19, 0x30,
+        ];
+        let expected_2: [u8; 16] = [
+            0xf7, 0x25, 0x70, 0xc3, 0xc0, 0x89, 0xa0, 0xfe, 0x28, 0x75, 0x83, 0x57, 0xaf, 0xff,
+            0xb8, 0xd2,
+        ];
+        assert_eq!(derive_group_privacy_key(&op_key_2).unwrap(), expected_2);
+
+        // KAT #3 (spec example): chip kGroupOperationalKey3 -> kGroupPrivacyKey3.
+        let op_key_3: [u8; 16] = [
+            0xa6, 0xf5, 0x30, 0x6b, 0xaf, 0x6d, 0x05, 0x0a, 0xf2, 0x3b, 0xa4, 0xbd, 0x6b, 0x9d,
+            0xd9, 0x60,
+        ];
+        let expected_3: [u8; 16] = [
+            0x01, 0xf8, 0xd1, 0x92, 0x71, 0x26, 0xf1, 0x94, 0x08, 0x25, 0x72, 0xd4, 0x9b, 0x1f,
+            0xdc, 0x73,
+        ];
+        assert_eq!(derive_group_privacy_key(&op_key_3).unwrap(), expected_3);
     }
 }

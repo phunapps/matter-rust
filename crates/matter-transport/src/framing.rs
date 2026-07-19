@@ -484,40 +484,51 @@ pub fn decode_secured(
 /// Encode + encrypt a Matter **group** secured message (Matter Core Spec
 /// §4.15 group messaging, framing per §4.4 / §4.8.2).
 ///
-/// A group message differs from the unicast secured path in five ways, all
-/// of which we mirror here against the independent matter.js vector
-/// (`test-vectors/transport/group-message.json`):
+/// A group message differs from the unicast secured path in six ways, all
+/// of which we mirror byte-for-byte against connectedhomeip (the full-frame
+/// KAT below comes from `TestSessionManagerDispatch.cpp`, "private group
+/// message"; the P=0 decode direction is additionally covered by the
+/// matter.js vector `test-vectors/transport/group-message.json`):
 ///
 /// 1. **Key.** AES-128-CCM uses the *operational group key* directly — there
 ///    is no per-session `i2r`/`r2i` split and no [`crate::session::Session`],
 ///    so the caller supplies the 16-byte key.
-/// 2. **Security flags.** [`SecurityFlags::SESSION_TYPE_GROUP`] is set
-///    (`0x01`); the wire `securityFlags` byte is `0x01`.
+/// 2. **Security flags.** [`SecurityFlags::SESSION_TYPE_GROUP`] plus
+///    [`SecurityFlags::PRIVACY`] — chip's `SessionManager` sets the `P` flag
+///    unconditionally for group TX; the wire `securityFlags` byte is `0x81`.
 /// 3. **Message flags / destination.** [`SecuredMessageFlags::DEST_GROUP`]
 ///    (`DSIZ = 0b10`) plus [`SecuredMessageFlags::SOURCE_PRESENT`] — a group
 ///    header carries BOTH the 8-byte source node id and the 2-byte
 ///    destination group id (`msgFlags = 0x06`).
 /// 4. **Nonce.** `SecurityFlags(1) || MessageCounter(4 LE) || SourceNodeId(8
-///    LE)`, where the node id is OUR (the sender's) operational node id. The
-///    header already carries this same source node id, so the nonce builder
-///    picks it up from the header — but we pass it explicitly too for parity
-///    with the unicast contract.
-/// 5. **No MRP.** Group sends are unacknowledged; the caller owns the group
+///    LE)`, where the node id is OUR (the sender's) operational node id.
+///    The flags byte is the RAW security-flags byte — `P` bit **included**
+///    (`0x81`), exactly as in the header/AAD: chip `CryptoContext::BuildNonce`
+///    consumes `PacketHeader::GetSecurityFlags()`, the raw byte. See the
+///    private `build_nonce` helper.
+/// 5. **Privacy obfuscation.** After AEAD encryption, the mutable header
+///    region — bytes `[4..header_len]`: message counter, source node id,
+///    destination group id — is XOR-masked with an AES-CTR keystream under the
+///    *privacy key* (derived from the operational key,
+///    [`matter_crypto::derive_group_privacy_key`]) and the privacy nonce
+///    `SessionId(2 BE) || MIC[5..16]` ([`build_group_privacy_nonce`]).
+/// 6. **No MRP.** Group sends are unacknowledged; the caller owns the group
 ///    message counter (there is no session counter to advance).
 ///
 /// `counter` is the group message counter the caller has allocated.
 /// `protocol_header` and `app_payload` form the plaintext exactly as on the
 /// unicast path: `encode_protocol_header(protocol_header) || app_payload`.
 ///
-/// The output layout is `header bytes || AES-CCM(plaintext) || 16-byte tag`,
-/// byte-for-byte the full group wire message.
+/// The output layout is `header bytes (privacy-obfuscated from byte 4) ||
+/// AES-CCM(plaintext) || 16-byte tag`, byte-for-byte the full group wire
+/// message as chip emits it.
 ///
 /// # Errors
 ///
 /// - [`Error::PayloadTooLarge`] if the encoded plaintext (protocol header +
 ///   `app_payload`) exceeds the framing payload cap.
-/// - [`Error::Crypto`] if the underlying AES-CCM cipher fails (not expected
-///   in practice for spec-bounded message sizes).
+/// - [`Error::Crypto`] if the underlying AES-CCM cipher or the privacy-key
+///   HKDF fails (not expected in practice for spec-bounded message sizes).
 pub fn encode_group_secured(
     operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
     group_session_id: u16,
@@ -545,31 +556,82 @@ pub fn encode_group_secured(
         // group id (DSIZ=0b10) → msgFlags = 0x06.
         flags: SecuredMessageFlags::SOURCE_PRESENT | SecuredMessageFlags::DEST_GROUP,
         session_id: SessionId(group_session_id),
-        security_flags: SecurityFlags::SESSION_TYPE_GROUP,
+        // P is set from the start: the AAD (and the wire) carry 0x81. Only
+        // the AEAD nonce masks the P bit (see build_nonce).
+        security_flags: SecurityFlags::SESSION_TYPE_GROUP | SecurityFlags::PRIVACY,
         message_counter: MessageCounter(counter),
         source_node_id: Some(NodeId(source_node_id)),
         destination_node_id: Some(DestNodeId::Group(group_id)),
     };
 
-    // AAD = the exact encoded packet-header bytes (spec §4.8.2; matter.js
-    // `GroupSession.encode`). Nonce mixes the source node id; `build_nonce`
-    // reads it from the header (which carries it for group messages).
+    // AAD = the exact encoded packet-header bytes (spec §4.8.2), P bit
+    // included. Nonce mixes the source node id; `build_nonce` reads it from
+    // the header (which carries it for group messages).
     let aad = encode_header(&header);
     let nonce = build_nonce(&header, source_node_id);
 
     // Reuse the shared AES-CCM routine — never hand-roll the cipher.
     let ciphertext = matter_crypto::aead::encrypt(operational_group_key, &nonce, &aad, &plaintext)?;
+
+    // Privacy obfuscation (§4.8.3): CTR over the header's mutable region
+    // under the privacy key, keyed by the (plaintext) session id + MIC.
+    let mic = ciphertext
+        .get(ciphertext.len() - matter_crypto::aead::AEAD_TAG_LEN..)
+        .ok_or(Error::Crypto(matter_crypto::Error::EncryptionFailed))?;
+    let privacy_nonce = build_group_privacy_nonce(group_session_id, mic)?;
+    let privacy_key =
+        matter_crypto::derive_group_privacy_key(operational_group_key).map_err(Error::Crypto)?;
     let mut out = aad;
+    let obfuscated =
+        matter_crypto::aead::ctr_apply(&privacy_key, &privacy_nonce, &out[PRIVACY_REGION_START..])?;
+    out.truncate(PRIVACY_REGION_START);
+    out.extend_from_slice(&obfuscated);
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
 
-/// Decrypt + decode a Matter **group** secured message produced by
-/// [`encode_group_secured`] (or a matter.js group sender).
+/// First obfuscated byte of a privacy-enhanced header: the flags, session id
+/// and security-flags bytes (`[0..4]`) stay in the clear — the receiver needs
+/// them to locate the key — while everything after (message counter, source
+/// node id, destination group id) is obfuscated (Matter Core Spec §4.8.3;
+/// chip `PacketHeader::PrivacyEncrypt`).
+const PRIVACY_REGION_START: usize = 4;
+
+/// Compose the 13-byte group **privacy nonce** (Matter Core Spec §4.8.3;
+/// chip `CryptoContext::BuildPrivacyNonce`):
+/// `SessionId(2 BE) || MIC[5..16]` — note the session id is **big-endian**
+/// here, unlike its little-endian wire encoding.
 ///
-/// On success returns the parsed header and the decrypted plaintext (protocol
-/// header || app payload). The caller recovers the source node id and group
-/// id from the returned [`SecuredMessageHeader`].
+/// `mic` is the 16-byte AEAD tag trailing the message ciphertext.
+///
+/// # Errors
+///
+/// Returns [`Error::MalformedHeader`] if `mic` is not exactly 16 bytes.
+pub fn build_group_privacy_nonce(
+    session_id: u16,
+    mic: &[u8],
+) -> Result<[u8; matter_crypto::aead::AEAD_NONCE_LEN]> {
+    if mic.len() != matter_crypto::aead::AEAD_TAG_LEN {
+        return Err(Error::MalformedHeader(mic.len()));
+    }
+    let mut nonce = [0u8; matter_crypto::aead::AEAD_NONCE_LEN];
+    nonce[0..2].copy_from_slice(&session_id.to_be_bytes());
+    nonce[2..13].copy_from_slice(&mic[5..16]);
+    Ok(nonce)
+}
+
+/// Decrypt + decode a Matter **group** secured message produced by
+/// [`encode_group_secured`], chip, or a matter.js group sender.
+///
+/// Handles both privacy-enhanced (`P = 1`, chip's unconditional group TX
+/// format) and plain (`P = 0`, e.g. matter.js) frames: when `P` is set, the
+/// header's mutable region is first de-obfuscated with the privacy key
+/// derived from `operational_group_key` (§4.8.3), then the message is
+/// decrypted as usual.
+///
+/// On success returns the parsed (de-obfuscated) header and the decrypted
+/// plaintext (protocol header || app payload). The caller recovers the
+/// source node id and group id from the returned [`SecuredMessageHeader`].
 ///
 /// Unlike [`decode_secured`], there is no replay window: group messaging is
 /// stateless on the receive side here, and the caller owns any per-group
@@ -579,18 +641,63 @@ pub fn encode_group_secured(
 /// # Errors
 ///
 /// - [`Error::MalformedHeader`] if the header bytes are truncated or
-///   reserved-value bits are set.
+///   reserved-value bits are set (including a `P = 1` frame too short to
+///   hold the privacy region + MIC).
 /// - [`Error::DecryptionFailed`] if the AES-CCM tag does not verify (wrong
 ///   group key, tampered ciphertext, or mismatched AAD/nonce).
 pub fn decode_group_secured(
     bytes: &[u8],
     operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
-    let (header, rest) = decode_header(bytes)?;
-    // AAD is the on-the-wire header — the leading bytes up to `rest` (same
-    // optimisation as `decode_secured`).
-    let header_len = bytes.len() - rest.len();
-    let aad = &bytes[..header_len];
+    // The first 4 bytes (flags, session id LE, security flags) are always in
+    // the clear — peek at the P bit before any header parse, because a
+    // privacy-enhanced header's counter/source/group bytes are obfuscated and
+    // would otherwise mis-parse.
+    let sec_byte = *bytes.get(3).ok_or(Error::MalformedHeader(bytes.len()))?;
+    let deobfuscated: Vec<u8>;
+    let wire = if SecurityFlags::from_bits_retain(sec_byte).contains(SecurityFlags::PRIVACY) {
+        // Privacy region length = header length for this flags byte:
+        // 4 + source(8, S bit) + destination(8 / 2 by DSIZ).
+        let flags = SecuredMessageFlags::from_bits_retain(bytes[0]);
+        let mut header_len = PRIVACY_REGION_START + 4; // counter always present
+        if flags.contains(SecuredMessageFlags::SOURCE_PRESENT) {
+            header_len += 8;
+        }
+        header_len += match bytes[0] & DSIZ_MASK {
+            DSIZ_UNICAST => 8,
+            DSIZ_GROUP => 2,
+            _ => 0,
+        };
+        let min_len = header_len + matter_crypto::aead::AEAD_TAG_LEN;
+        if bytes.len() < min_len {
+            return Err(Error::MalformedHeader(bytes.len()));
+        }
+        let session_id = u16::from_le_bytes([bytes[1], bytes[2]]);
+        let mic = &bytes[bytes.len() - matter_crypto::aead::AEAD_TAG_LEN..];
+        let privacy_nonce = build_group_privacy_nonce(session_id, mic)?;
+        let privacy_key = matter_crypto::derive_group_privacy_key(operational_group_key)
+            .map_err(Error::Crypto)?;
+        let clear = matter_crypto::aead::ctr_apply(
+            &privacy_key,
+            &privacy_nonce,
+            &bytes[PRIVACY_REGION_START..header_len],
+        )?;
+        let mut copy = Vec::with_capacity(bytes.len());
+        copy.extend_from_slice(&bytes[..PRIVACY_REGION_START]);
+        copy.extend_from_slice(&clear);
+        copy.extend_from_slice(&bytes[header_len..]);
+        deobfuscated = copy;
+        &deobfuscated[..]
+    } else {
+        bytes
+    };
+
+    let (header, rest) = decode_header(wire)?;
+    // AAD is the de-obfuscated header — the leading bytes up to `rest` (same
+    // optimisation as `decode_secured`). The AAD keeps the P bit; only the
+    // AEAD nonce masks it (build_nonce).
+    let header_len = wire.len() - rest.len();
+    let aad = &wire[..header_len];
     // Group messages carry the source node id in the header; `build_nonce`
     // uses it. The fallback (0) is never reached for a well-formed group
     // header (S=1).
@@ -616,6 +723,13 @@ fn build_nonce(
     nonce_source_node_id: u64,
 ) -> [u8; matter_crypto::aead::AEAD_NONCE_LEN] {
     let mut nonce = [0u8; matter_crypto::aead::AEAD_NONCE_LEN];
+    // The nonce carries the RAW security-flags byte, privacy bit included
+    // (0x81 for chip group TX): chip `CryptoContext::BuildNonce` consumes
+    // `PacketHeader::GetSecurityFlags()` = `mSecFlags.Raw()`. Pinned by the
+    // full-frame chip KAT (`group_encode_matches_chip_privacy_vector`) —
+    // note the `.nonce` field inside chip's own `TestSessionManagerDispatch`
+    // vector struct claims a masked `0x01` byte, but it is unused by that
+    // test and does NOT decrypt the fixture frames; only the raw byte does.
     nonce[0] = header.security_flags.bits();
     nonce[1..5].copy_from_slice(&header.message_counter.0.to_le_bytes());
     let node_id = match header.source_node_id {
@@ -968,13 +1082,17 @@ mod tests {
         assert_eq!(payload, b"world");
     }
 
-    /// **Security-critical known-answer test.** The group-secured encode
-    /// MUST byte-match the independent matter.js vector
+    /// **Security-critical known-answer test.** A plain (`P = 0`) group
+    /// message from the independent matter.js vector
     /// (`test-vectors/transport/group-message.json`, captured from
-    /// `@matter/protocol` `GroupSession.encode` + Node `aes-128-ccm`). If the
-    /// nonce, AAD, key, or header layout drifts by a single byte the tag
-    /// changes and this fails. This is the proof that our group nonce/AAD/key
-    /// construction matches the oracle.
+    /// `@matter/protocol` `GroupSession.encode` + Node `aes-128-ccm`) MUST
+    /// decode: matter.js does not privacy-obfuscate group TX, and spec
+    /// receivers accept `P = 0` frames. If the nonce, AAD, key, or header
+    /// layout drifts by a single byte the tag check fails.
+    ///
+    /// (The encode direction moved to the chip privacy vector in
+    /// [`group_encode_matches_chip_privacy_vector`] when group TX gained
+    /// unconditional privacy for chip parity.)
     ///
     /// Inputs are read straight from the fixture:
     /// - `operational_group_key` = `4e6f436f6e74726f6c4d61747465724b`
@@ -983,76 +1101,159 @@ mod tests {
     /// - plaintext = `052102d10a0001003501290218` (a protocol header
     ///   `INITIATOR|RELIABLE`, opcode 0x21, exchange 0xd102, protocol 0x000a,
     ///   followed by the app payload tail `01003501290218`).
-    /// - expected wire = header `0601000105000000bebafecaefbeadde3412` ||
-    ///   ciphertext+tag.
     #[test]
-    fn group_encode_matches_matterjs_vector() {
+    fn group_decode_matches_matterjs_vector() {
+        // ---- Fixture (verbatim from group-message.json) ----
+        let key: [u8; 16] = hex16("4e6f436f6e74726f6c4d61747465724b");
+        let wire =
+            hex("0601000105000000bebafecaefbeadde34129506e3d4b7267e33e078a21650d79c70db886e5ddfc1398a6ee2212fb5");
+
+        let (header, plaintext) = decode_group_secured(&wire, &key).unwrap();
+        assert_eq!(header.session_id, SessionId(1));
+        assert_eq!(header.message_counter, MessageCounter(5));
+        assert_eq!(header.source_node_id, Some(NodeId(0xDEAD_BEEF_CAFE_BABE)));
+        assert_eq!(header.destination_node_id, Some(DestNodeId::Group(0x1234)));
+        assert!(!header.security_flags.contains(SecurityFlags::PRIVACY));
+        assert_eq!(
+            hex_encode(&plaintext),
+            "052102d10a0001003501290218",
+            "P=0 group plaintext must match the matter.js fixture"
+        );
+    }
+
+    /// **Security-critical known-answer test.** The group-secured encode MUST
+    /// byte-match the connectedhomeip "private group message" vector
+    /// (`src/transport/tests/TestSessionManagerDispatch.cpp`), covering the
+    /// full chip group TX format in one shot:
+    ///
+    /// - security flags `0x81` (`P | group`) in the header, the AAD AND the
+    ///   AEAD nonce (chip `BuildNonce` takes the raw byte — the fixture
+    ///   struct's `.nonce` field claims `\x01` but is unused by chip's test
+    ///   and does not decrypt the frames; `\x81` does);
+    /// - privacy key derived from the operational key (fixture `.privacyKey`);
+    /// - privacy nonce = session id (BE) || MIC[5..16] (fixture
+    ///   `.privacyNonce`);
+    /// - CTR obfuscation of header bytes `[4..18]` (counter + source +
+    ///   group id), ciphertext/MIC untouched.
+    ///
+    /// AES-CCM is deterministic for a fixed nonce, so the whole 40-byte wire
+    /// message must be byte-identical to the fixture's `.privacy` frame.
+    /// Vector stored at `test-vectors/transport/group-message-privacy-chip.json`.
+    #[test]
+    fn group_encode_matches_chip_privacy_vector() {
         use crate::protocol_header::{ExchangeFlags, ProtocolHeader, ProtocolId};
 
-        // ---- Inputs (verbatim from group-message.json) ----
-        let key: [u8; 16] = hex16("4e6f436f6e74726f6c4d61747465724b");
-        let group_session_id: u16 = 1;
-        let group_id: u16 = 0x1234; // 4660
-        let counter: u32 = 5;
-        let source_node_id: u64 = 0xDEAD_BEEF_CAFE_BABE;
+        // ---- Inputs (verbatim from the chip test vector) ----
+        // encryptKey (operational group key; derives from epoch key
+        // b0..bf + compressed fabric id 2906c908d115d362).
+        let op_key: [u8; 16] = hex16("ca92d7a0942d1a511a0e26ad074f4c2f");
+        let group_session_id: u16 = 0xdb7d;
+        let group_id: u16 = 2;
+        let counter: u32 = 0x1234_5679;
+        let source_node_id: u64 = 0x0000_0000_0000_0001;
 
-        // The fixture's plaintext decodes as protocol-header || app-payload.
-        // We reconstruct the header fields and the tail so the encoded
-        // plaintext is byte-identical to `payload_hex`.
+        // The fixture plaintext `01 64 ee 0e 20 7d` is a protocol header:
+        // flags INITIATOR, opcode 0x64, exchange 0x0eee, protocol 0x7d20.
         let protocol_header = ProtocolHeader {
-            exchange_flags: ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
-            opcode: 0x21,
-            exchange_id: 0xd102,
+            exchange_flags: ExchangeFlags::INITIATOR,
+            opcode: 0x64,
+            exchange_id: 0x0eee,
             protocol_id: ProtocolId {
                 vendor: 0,
-                protocol: 0x000a,
+                protocol: 0x7d20,
             },
             ack_counter: None,
         };
-        let app_payload = hex("01003501290218");
-
-        // Sanity: the reconstructed plaintext equals the fixture's payload_hex.
         let mut plaintext = Vec::new();
         crate::protocol_header::encode_protocol_header(&protocol_header, &mut plaintext);
-        plaintext.extend_from_slice(&app_payload);
         assert_eq!(
-            plaintext,
-            hex("052102d10a0001003501290218"),
-            "reconstructed plaintext must equal the fixture payload_hex"
+            hex_encode(&plaintext),
+            "0164ee0e207d",
+            "reconstructed plaintext must equal the fixture's decrypted payload"
+        );
+
+        // The privacy key chip lists for this vector is exactly what we
+        // derive from the operational key (chains the two fixtures).
+        assert_eq!(
+            matter_crypto::derive_group_privacy_key(&op_key).unwrap(),
+            hex16("bfe9da016a765365f2dd97a9f939e425"),
+            "privacy key derivation must match the fixture's .privacyKey"
         );
 
         // ---- Encode ----
         let wire = encode_group_secured(
-            &key,
+            &op_key,
             group_session_id,
             source_node_id,
             group_id,
             counter,
             &protocol_header,
-            &app_payload,
+            &[],
         )
         .unwrap();
 
-        // ---- Assert byte-for-byte against the full fixture wire message ----
-        let expected_wire =
-            hex("0601000105000000bebafecaefbeadde34129506e3d4b7267e33e078a21650d79c70db886e5ddfc1398a6ee2212fb5");
+        // ---- The full 40-byte privacy frame, byte-for-byte ----
+        let expected = hex("067ddb81d926afce24c8a0981bdd44f4e7302b2f915a66c959629\
+             0ebe4408217b3c0c921a2fca4e1");
         assert_eq!(
             hex_encode(&wire),
-            hex_encode(&expected_wire),
-            "group wire message must byte-match the matter.js vector"
+            hex_encode(&expected),
+            "group wire message must byte-match chip's .privacy frame"
         );
 
-        // Cross-check the discrete fixture fields too: header + ciphertext+tag.
-        let header_bytes = hex("0601000105000000bebafecaefbeadde3412");
+        // ---- And it decodes back (P=1 RX path) ----
+        let (header, decoded) = decode_group_secured(&wire, &op_key).unwrap();
+        assert!(header.security_flags.contains(SecurityFlags::PRIVACY));
+        assert!(header
+            .security_flags
+            .contains(SecurityFlags::SESSION_TYPE_GROUP));
+        assert_eq!(header.session_id, SessionId(group_session_id));
+        assert_eq!(header.message_counter, MessageCounter(counter));
+        assert_eq!(header.source_node_id, Some(NodeId(source_node_id)));
         assert_eq!(
-            &wire[..header_bytes.len()],
-            &header_bytes[..],
-            "header (AAD)"
+            header.destination_node_id,
+            Some(DestNodeId::Group(group_id))
         );
+        assert_eq!(decoded, plaintext);
+    }
+
+    /// The chip vector's intermediate `.encrypted` frame (P set in the
+    /// header/AAD but header NOT yet obfuscated) pins the nonce rule in
+    /// isolation: both the AAD and the AEAD nonce byte 0 carry the raw
+    /// security flags `0x81`. We reproduce it by AEAD-encrypting exactly as
+    /// `encode_group_secured` does and comparing before obfuscation.
+    #[test]
+    fn group_aead_nonce_carries_privacy_bit() {
+        let op_key: [u8; 16] = hex16("ca92d7a0942d1a511a0e26ad074f4c2f");
+        let header = SecuredMessageHeader {
+            flags: SecuredMessageFlags::SOURCE_PRESENT | SecuredMessageFlags::DEST_GROUP,
+            session_id: SessionId(0xdb7d),
+            security_flags: SecurityFlags::SESSION_TYPE_GROUP | SecurityFlags::PRIVACY,
+            message_counter: MessageCounter(0x1234_5679),
+            source_node_id: Some(NodeId(1)),
+            destination_node_id: Some(DestNodeId::Group(2)),
+        };
+        let aad = encode_header(&header);
         assert_eq!(
-            &wire[header_bytes.len()..],
-            &hex("9506e3d4b7267e33e078a21650d79c70db886e5ddfc1398a6ee2212fb5")[..],
-            "ciphertext || tag"
+            hex_encode(&aad),
+            "067ddb817956341201000000000000000200",
+            "AAD/header carries P (0x81)"
+        );
+        let nonce = build_nonce(&header, 1);
+        assert_eq!(
+            hex_encode(&nonce),
+            "81795634120100000000000000",
+            "nonce byte 0 carries the raw security flags incl. P (0x81)"
+        );
+        let ct = matter_crypto::aead::encrypt(&op_key, &nonce, &aad, &hex("0164ee0e207d")).unwrap();
+        let mut frame = aad;
+        frame.extend_from_slice(&ct);
+        let expected = hex("067ddb8179563412010000000000000002002b2f915a66c959629\
+             0ebe4408217b3c0c921a2fca4e1");
+        assert_eq!(
+            hex_encode(&frame),
+            hex_encode(&expected),
+            "pre-privacy frame must byte-match chip's .encrypted fixture"
         );
     }
 
