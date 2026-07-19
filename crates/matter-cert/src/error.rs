@@ -133,6 +133,14 @@ pub enum Error {
     #[error("test-support X.509 signing failed: {0}")]
     TestX509SigningFailed(&'static str),
 
+    /// Production ECDSA-P256-SHA256 signing via `ring` failed.
+    ///
+    /// Produced by [`crate::operational::sign_with_ring`] when the supplied
+    /// issuer PKCS#8 key is malformed, or `ring` rejects the signing
+    /// request.
+    #[error("certificate signing failed: {0}")]
+    SigningFailed(&'static str),
+
     /// A certificate's `not_before` is in the future.
     #[error("certificate is not yet valid (cert_index={cert_index}, not_before={not_before:?}, at={at:?})")]
     NotYetValid {

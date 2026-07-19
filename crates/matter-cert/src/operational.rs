@@ -12,10 +12,12 @@
 //! Operational Certificate, spec §6.5.5).
 
 use ring::digest;
+use ring::rand::SystemRandom;
+use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 
 use crate::builder::UnsignedCertificate;
 use crate::certificate::MatterCertificate;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::extensions::{BasicConstraints, Extensions, KeyIdentifier, KeyUsage};
 use crate::name::{DistinguishedName, DnAttribute};
 use crate::public_key::PublicKey;
@@ -41,6 +43,34 @@ pub struct RcacParams {
     /// `BasicConstraints.pathLen` for this root. The RCAC profile
     /// (spec §6.5.5) recommends `Some(1)`; pass `None` for no constraint.
     pub path_len: Option<u8>,
+}
+
+impl RcacParams {
+    /// Construct params for [`rcac`] from explicit field values.
+    ///
+    /// `RcacParams` is `#[non_exhaustive]`, so Rust forbids building one
+    /// via struct-literal syntax from outside `matter-cert` — even when
+    /// every field is supplied (`rustc --explain E0639`). This associated
+    /// function is the sanctioned workaround for external callers; code
+    /// inside `matter-cert` can still use struct-literal syntax directly.
+    #[must_use]
+    pub fn new(
+        rcac_id: u64,
+        public_key: PublicKey,
+        serial: Vec<u8>,
+        not_before: MatterTime,
+        not_after: MatterTime,
+        path_len: Option<u8>,
+    ) -> Self {
+        Self {
+            rcac_id,
+            public_key,
+            serial,
+            not_before,
+            not_after,
+            path_len,
+        }
+    }
 }
 
 /// Parameters for [`icac`].
@@ -255,6 +285,51 @@ pub fn noc(params: NocParams) -> Result<UnsignedCertificate> {
         .public_key(params.public_key)
         .extensions(extensions)
         .build_unsigned()
+}
+
+/// Sign `unsigned` with `issuer_pkcs8` (a PKCS#8 DER-encoded P-256 private
+/// key) and return the assembled, signed [`MatterCertificate`].
+///
+/// Convenience wrapper around the two-stage `UnsignedCertificate` flow
+/// (see [`crate::builder`]) for the common case of signing with an
+/// in-process `ring` key: computes [`UnsignedCertificate::tbs_der`], signs
+/// it with `ring`'s `ECDSA_P256_SHA256_FIXED_SIGNING` (whose output is
+/// exactly the 64-byte raw `r || s` form the Matter wire format uses — no
+/// ASN.1 DER wrapping, unlike `ECDSA_P256_SHA256_ASN1_SIGNING`), then calls
+/// [`UnsignedCertificate::assemble`].
+///
+/// For a self-signed certificate (e.g. an [`rcac`]), pass the same key's
+/// PKCS#8 bytes as `issuer_pkcs8`.
+///
+/// # Errors
+///
+/// Returns [`Error::SigningFailed`] if `issuer_pkcs8` is not a valid P-256
+/// PKCS#8 key, or if `ring` rejects the signing request. Returns
+/// [`Error::WrongSignatureLength`] in the (practically unreachable) case
+/// that `ring`'s fixed-length signer emits a signature that is not exactly
+/// 64 bytes. Also returns any error [`UnsignedCertificate::tbs_der`] would
+/// return on conversion failure.
+pub fn sign_with_ring(
+    unsigned: UnsignedCertificate,
+    issuer_pkcs8: &[u8],
+) -> Result<MatterCertificate> {
+    let tbs = unsigned.tbs_der()?;
+
+    let rng = SystemRandom::new();
+    let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, issuer_pkcs8, &rng)
+        .map_err(|_| Error::SigningFailed("issuer PKCS#8 key rejected by ring"))?;
+    let sig = key_pair
+        .sign(&rng, &tbs)
+        .map_err(|_| Error::SigningFailed("ring ECDSA signing failed"))?;
+
+    let sig_bytes = sig.as_ref();
+    if sig_bytes.len() != 64 {
+        return Err(Error::WrongSignatureLength(sig_bytes.len()));
+    }
+    let mut sig_arr = [0u8; 64];
+    sig_arr.copy_from_slice(sig_bytes);
+
+    Ok(unsigned.assemble(sig_arr))
 }
 
 #[cfg(test)]
