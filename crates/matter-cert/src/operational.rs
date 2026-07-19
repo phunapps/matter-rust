@@ -96,6 +96,35 @@ pub struct IcacParams {
     pub not_after: MatterTime,
 }
 
+impl IcacParams {
+    /// Construct params for [`icac`] from explicit field values.
+    ///
+    /// `IcacParams` is `#[non_exhaustive]`, so Rust forbids struct-literal
+    /// construction from outside `matter-cert` even when every field is
+    /// supplied (`rustc --explain E0639`); this is the sanctioned constructor
+    /// for external callers.
+    #[must_use]
+    pub fn new(
+        icac_id: u64,
+        issuer: DistinguishedName,
+        issuer_skid: KeyIdentifier,
+        public_key: PublicKey,
+        serial: Vec<u8>,
+        not_before: MatterTime,
+        not_after: MatterTime,
+    ) -> Self {
+        Self {
+            icac_id,
+            issuer,
+            issuer_skid,
+            public_key,
+            serial,
+            not_before,
+            not_after,
+        }
+    }
+}
+
 /// Parameters for [`noc`].
 ///
 /// `#[non_exhaustive]`: future spec-driven NOC fields should be addable
@@ -125,6 +154,40 @@ pub struct NocParams {
     pub not_before: MatterTime,
     /// End of the validity window (`MatterTime::NO_EXPIRY` for none).
     pub not_after: MatterTime,
+}
+
+impl NocParams {
+    /// Construct params for [`noc`] from explicit field values.
+    ///
+    /// `NocParams` is `#[non_exhaustive]`, so Rust forbids struct-literal
+    /// construction from outside `matter-cert` even when every field is
+    /// supplied (`rustc --explain E0639`); this is the sanctioned constructor
+    /// for external callers.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // A NOC's identity is intrinsically this many fields.
+    pub fn new(
+        fabric_id: u64,
+        node_id: u64,
+        case_authenticated_tags: Vec<u32>,
+        issuer: DistinguishedName,
+        issuer_skid: KeyIdentifier,
+        public_key: PublicKey,
+        serial: Vec<u8>,
+        not_before: MatterTime,
+        not_after: MatterTime,
+    ) -> Self {
+        Self {
+            fabric_id,
+            node_id,
+            case_authenticated_tags,
+            issuer,
+            issuer_skid,
+            public_key,
+            serial,
+            not_before,
+            not_after,
+        }
+    }
 }
 
 /// Extended-key-usage OID arc values for the NOC profile (spec §6.5.4):
