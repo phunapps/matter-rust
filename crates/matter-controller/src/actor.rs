@@ -821,11 +821,15 @@ async fn run_commission_task(
     admin_vendor_id: u16,
     now: matter_cert::MatterTime,
     rng: Arc<dyn matter_commissioning::NocRng>,
+    multicast_if: Option<u32>,
 ) -> Result<matter_commissioning::CommissionedFabric, Error> {
     use matter_commissioning::driver::{commission, DriverConfig};
     use matter_commissioning::CommissionerConfig;
 
-    let transport = matter_transport::TokioUdpTransport::bind(0)
+    // Honour the builder's `multicast_interface` on this task-local socket
+    // too (the main actor socket already binds with it); `None` keeps the
+    // `MATTER_MULTICAST_IF` env fallback inside the transport.
+    let transport = matter_transport::TokioUdpTransport::bind_with_multicast_if(0, multicast_if)
         .await
         .map_err(|e| Error::Operational(format!("commission bind: {e}")))?;
     let mut discovery = matter_transport::MdnsSdDiscovery::new()
@@ -1353,6 +1357,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         };
         let rng = self.rng.clone();
         let tx = self.commission_tx.clone();
+        let multicast_if = self.multicast_if;
 
         tokio::spawn(async move {
             let result = run_commission_task(
@@ -1367,6 +1372,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 admin_vendor_id,
                 now,
                 rng,
+                multicast_if,
             )
             .await;
             let _ = tx
