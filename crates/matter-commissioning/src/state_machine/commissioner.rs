@@ -659,11 +659,24 @@ impl Commissioner {
                 let noc_tlv = noc
                     .to_tlv()
                     .map_err(|e| CommissioningError::from(crate::noc::NocError::CertBuild(e)))?;
-                // ICAC slot is `None` in M6.4: only RCAC -> NOC chains
-                // are issued. ICAC support is M6.3.x / M8 work.
+                // If this fabric runs a 3-tier RCAC -> ICAC -> NOC chain, the
+                // device NOC was signed under the ICAC (see
+                // `run_generate_noc_chain` -> `issue_noc`, which signs under
+                // `fabric.icac_signer` whenever the fabric carries one). The
+                // device therefore needs the ICAC certificate to assemble and
+                // validate the chain, so we transmit it in AddNOC's optional
+                // ICACValue field (spec §11.18.5.9 field 1). Flat RCAC -> NOC
+                // fabrics carry no ICAC and the field is omitted, leaving the
+                // M6.3 wire bytes unchanged.
+                let icac_tlv = match self.fabric.icac_cert.as_ref() {
+                    Some(icac) => Some(icac.to_tlv().map_err(|e| {
+                        CommissioningError::from(crate::noc::NocError::CertBuild(e))
+                    })?),
+                    None => None,
+                };
                 let payload = encode_add_noc(
                     &noc_tlv,
-                    None,
+                    icac_tlv.as_deref(),
                     &self.ipk_epoch_key,
                     self.case_admin_subject,
                     self.admin_vendor_id,
@@ -1361,6 +1374,109 @@ mod tests {
             &SystemNocRng,
         )
         .unwrap()
+    }
+
+    /// A fabric that issues a 3-tier RCAC -> ICAC -> NOC chain: the RCAC from
+    /// [`make_fabric_record`] with a freshly-minted ICAC attached (so
+    /// `issue_noc` signs the device NOC under the ICAC and `SendNoc` must
+    /// transmit the ICAC alongside it).
+    fn make_fabric_record_with_icac() -> FabricRecord {
+        let mut fabric = make_fabric_record();
+        let (icac_signer, _pkcs8) = RingSigner::generate().unwrap();
+        let icac_public_key =
+            matter_cert::PublicKey::from_slice(icac_signer.public_key().as_bytes()).unwrap();
+        let icac = crate::noc::issue_icac(
+            &fabric,
+            /* icac_id */ 7,
+            &icac_public_key,
+            (
+                MatterTime::from_unix_secs(1_704_067_200),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+        fabric.icac_signer = Some(Arc::new(icac_signer));
+        fabric.icac_cert = Some(icac);
+        fabric
+    }
+
+    /// True iff the encoded `AddNOC` payload carries an `ICACValue` (field 1,
+    /// spec §11.18.5.9). Scans the top-level struct members for a
+    /// context-1 element; every `AddNOC` field is a scalar/byte-string, so
+    /// no descent past the outer container is needed.
+    fn add_noc_payload_has_icac(payload: &[u8]) -> bool {
+        use matter_codec::{Element, Tag, TlvReader};
+        let mut r = TlvReader::new(payload);
+        match r.next().unwrap() {
+            Some(Element::ContainerStart { .. }) => {}
+            other => panic!("expected an AddNOC struct, got {other:?}"),
+        }
+        while let Some(el) = r.next().unwrap() {
+            match el {
+                Element::ContainerEnd => break,
+                Element::Scalar {
+                    tag: Tag::Context(1),
+                    ..
+                } => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn send_noc_includes_icac_for_three_tier_fabric() {
+        let fabric = make_fabric_record_with_icac();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+        let mut sm =
+            Commissioner::new(base_config(&fabric, &setup, &paa, &cd, rng)).expect("valid config");
+        // `SendNoc` reads `issued_noc` + `fabric.icac_cert`; the NOC bytes are
+        // irrelevant to whether the ICAC is attached, so stub the NOC and jump
+        // straight to the stage under test.
+        sm.issued_noc = Some(fabric.root_cert.clone());
+        sm.stage = Stage::SendNoc;
+        match sm.dispatch_stage().expect("SendNoc dispatch") {
+            Action::Invoke {
+                cluster,
+                command,
+                payload,
+                ..
+            } => {
+                assert_eq!(cluster, 0x003E);
+                assert_eq!(command, 0x06);
+                assert!(
+                    add_noc_payload_has_icac(&payload),
+                    "AddNOC must carry the ICAC (ctx1) when the fabric runs a 3-tier chain"
+                );
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_noc_omits_icac_for_flat_fabric() {
+        let fabric = make_fabric_record();
+        let setup = make_setup_payload();
+        let paa = PaaTrustStore::with_example_device_roots();
+        let cd = CdSigningRoots::with_example_device_roots();
+        let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+        let mut sm =
+            Commissioner::new(base_config(&fabric, &setup, &paa, &cd, rng)).expect("valid config");
+        sm.issued_noc = Some(fabric.root_cert.clone());
+        sm.stage = Stage::SendNoc;
+        match sm.dispatch_stage().expect("SendNoc dispatch") {
+            Action::Invoke { payload, .. } => {
+                assert!(
+                    !add_noc_payload_has_icac(&payload),
+                    "flat RCAC->NOC AddNOC must omit the ICAC field"
+                );
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
     }
 
     fn base_config<'a>(
