@@ -40,6 +40,7 @@ pub mod chain;
 pub mod error;
 pub mod extensions;
 pub mod name;
+pub mod operational;
 pub mod public_key;
 pub mod signature;
 #[cfg(feature = "test-support")]

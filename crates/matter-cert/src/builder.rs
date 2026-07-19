@@ -132,6 +132,24 @@ impl Builder {
 }
 
 impl UnsignedCertificate {
+    /// The certificate's extensions, as set on the builder.
+    #[must_use]
+    pub fn extensions(&self) -> &Extensions {
+        &self.extensions
+    }
+
+    /// The certificate's subject distinguished name, as set on the builder.
+    #[must_use]
+    pub fn subject(&self) -> &DistinguishedName {
+        &self.subject
+    }
+
+    /// The certificate's issuer distinguished name, as set on the builder.
+    #[must_use]
+    pub fn issuer(&self) -> &DistinguishedName {
+        &self.issuer
+    }
+
     /// Return the X.509 `TBSCertificate` DER bytes that an external signer
     /// must sign. Byte-identical to matter.js's `Certificate.asUnsignedDer()`.
     ///
