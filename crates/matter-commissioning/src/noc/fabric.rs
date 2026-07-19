@@ -23,14 +23,17 @@ pub struct FabricRecord {
     pub fabric_id: u64,
     /// Public key of the fabric root signer (SEC1 uncompressed P-256).
     pub root_public_key: PublicKey,
-    /// Signer for the fabric root key. Used to sign NOCs (and, when
-    /// ICAC issuance lands, to sign the ICAC).
+    /// Signer for the fabric root key. Signs NOCs on a flat RCAC -> NOC
+    /// fabric, and signs the ICAC on a 3-tier fabric.
     pub root_signer: Arc<dyn Signer>,
     /// Self-signed root (RCAC) certificate.
     pub root_cert: MatterCertificate,
-    /// Intermediate-CA signer. `None` in M6.3 (RCAC-direct issuance).
+    /// Intermediate-CA signer. `None` on a flat RCAC -> NOC fabric; `Some`
+    /// when the fabric issues a 3-tier RCAC -> ICAC -> NOC chain, in which
+    /// case NOCs are signed under this key rather than the root.
     pub icac_signer: Option<Arc<dyn Signer>>,
-    /// Intermediate-CA certificate. `None` in M6.3.
+    /// Intermediate-CA certificate. `None` on a flat fabric; `Some` (paired
+    /// with `icac_signer`) on a 3-tier fabric.
     pub icac_cert: Option<MatterCertificate>,
     /// 16-byte Identity Protection Key. Forms part of the `AddNOC` payload
     /// and seeds operational group-key derivation (spec §11.18.5.13).

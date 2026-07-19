@@ -303,7 +303,8 @@ fn case_roundtrip_new_session() {
 /// mixed with the fixed-SKI `build_test_rcac`/`build_test_noc` helpers above,
 /// whose SKIs would not match an operational-module chain.
 ///
-/// Returns `(rcac, rcac_pkcs8, icac, icac_pkcs8, trusted_roots, rcac_pub)`.
+/// Returns `(rcac, icac, icac_pkcs8, trusted_roots, rcac_pub)` — the ICAC key
+/// signs the per-side NOCs, and the RCAC seeds `trusted_roots`.
 // `rcac_*`/`icac_*` bindings are intentionally parallel-named (same role,
 // different tier), mirroring `matter-cert/tests/operational_certs.rs`.
 #[allow(clippy::similar_names)]
