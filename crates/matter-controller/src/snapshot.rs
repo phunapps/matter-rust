@@ -8,7 +8,10 @@
 //!   C3: rcac_pkcs8(bytes), C4: commissioner(struct), C5: Array[device],
 //!   C6: Array[group_key_set] (optional — absent in v1 snapshots written
 //!       before group-key support; defaults to empty on read),
-//!   C7: outbound_group_counter(uint, optional — same default rule)
+//!   C7: outbound_group_counter(uint, optional — same default rule),
+//!   C8: Array[icd_registration] (optional — same default rule),
+//!   C9: icac_cert(bytes,TLV, optional — present only when the fabric has
+//!       an ICAC), C10: icac_pkcs8(bytes, optional — present iff C9 is)
 //! }
 //! commissioner: Structure { C0: node_id(uint), C1: op_pkcs8(bytes), C2: noc(bytes,TLV) }
 //! device: Structure {
@@ -22,11 +25,14 @@
 //!
 //! ## Backward compatibility
 //!
-//! C6 and C7 are optional tags: a v1 snapshot without them (written by an
-//! older binary) still deserializes cleanly — `group_keys` defaults to
-//! `Vec::new()` and `outbound_group_counter` to `0`.  No version bump is
-//! needed because the tag-keyed deserializer simply treats absent tags as
-//! defaults.
+//! C6, C7, C8, C9, and C10 are optional tags: a v1 snapshot without them
+//! (written by an older binary) still deserializes cleanly — `group_keys`
+//! defaults to `Vec::new()`, `outbound_group_counter` to `0`, `icd_clients`
+//! to `Vec::new()`, and `icac` to `None`.  C9/C10 are themselves only
+//! written when a fabric has an ICAC, so a fabric without one round-trips to
+//! byte-identical output regardless of ICAC support existing in the binary.
+//! No version bump is needed because the tag-keyed deserializer simply
+//! treats absent tags as defaults.
 
 use matter_cert::MatterCertificate;
 use matter_codec::{Tag, TlvWriter, Value};
@@ -34,6 +40,7 @@ use matter_codec::{Tag, TlvWriter, Value};
 use crate::error::Error;
 use crate::state::{
     CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry, GroupKeySetConfig,
+    IcacIdentity,
 };
 
 /// Current snapshot schema version.
@@ -69,7 +76,7 @@ fn fabric_to_value(f: &FabricEntry) -> Result<Value, Error> {
         .iter()
         .map(icd_registration_to_value)
         .collect();
-    Ok(Value::Structure(vec![
+    let mut members = vec![
         (Tag::Context(0), Value::Uint(f.fabric_id)),
         (Tag::Context(1), Value::Bytes(f.ipk.to_vec())),
         (Tag::Context(2), Value::Bytes(f.rcac_cert.to_tlv()?)),
@@ -82,7 +89,15 @@ fn fabric_to_value(f: &FabricEntry) -> Result<Value, Error> {
             Value::Uint(u64::from(f.outbound_group_counter)),
         ),
         (Tag::Context(8), Value::Array(icd_clients)),
-    ]))
+    ];
+    // C9/C10 (ICAC) are omitted entirely when the fabric has no ICAC, so a
+    // fabric without one serializes to byte-identical output regardless of
+    // ICAC support existing in the binary (backward compatibility).
+    if let Some(icac) = &f.icac {
+        members.push((Tag::Context(9), Value::Bytes(icac.cert.to_tlv()?)));
+        members.push((Tag::Context(10), Value::Bytes(icac.pkcs8.clone())));
+    }
+    Ok(Value::Structure(members))
 }
 
 fn icd_registration_to_value(r: &crate::icd::IcdRegistration) -> Value {
@@ -199,6 +214,20 @@ fn fabric_from_value(v: &Value) -> Result<FabricEntry, Error> {
         None => Vec::new(),
     };
 
+    // C9/C10 (ICAC) are optional and only present together — absent in
+    // snapshots written before ICAC support, or for a fabric that never
+    // adopted one. Only C9-present-and-C10-present decodes to `Some`;
+    // anything else (both absent, or one without the other) decodes to
+    // `None` rather than erroring, matching the other optional tags' rule
+    // of "absent means default".
+    let icac = match (get(m, 9), get(m, 10)) {
+        (Some(Value::Bytes(cert_tlv)), Some(Value::Bytes(pkcs8))) => Some(IcacIdentity {
+            cert: MatterCertificate::from_tlv(cert_tlv)?,
+            pkcs8: pkcs8.clone(),
+        }),
+        _ => None,
+    };
+
     Ok(FabricEntry {
         fabric_id: get_uint(m, 0)?,
         ipk: byte_array::<16>(get_bytes(m, 1)?, "ipk")?,
@@ -209,6 +238,7 @@ fn fabric_from_value(v: &Value) -> Result<FabricEntry, Error> {
         group_keys,
         outbound_group_counter,
         icd_clients,
+        icac,
     })
 }
 
@@ -504,6 +534,101 @@ mod tests {
         let bytes = serialize(&state).expect("serialize");
         let back = deserialize(&bytes).expect("deserialize");
         assert_eq!(back.fabrics[0].icd_clients, fabric.icd_clients);
+    }
+
+    // --- ICAC persistence (C9/C10) ---
+
+    /// Build a throwaway ICAC cert (signed by `fabric`'s RCAC key) + a fresh
+    /// PKCS#8 signing key for it, wrapped as an [`IcacIdentity`].
+    fn sample_icac(fabric: &FabricEntry) -> crate::state::IcacIdentity {
+        use matter_cert::operational::{icac, sign_with_ring, IcacParams};
+        use matter_cert::PublicKey;
+        use matter_crypto::{RingSigner, Signer};
+
+        let (icac_signer, icac_pkcs8) = RingSigner::generate().expect("generate icac key");
+        let icac_public_key =
+            PublicKey::new(*icac_signer.public_key().as_bytes()).expect("valid P-256 public key");
+        let issuer_skid = fabric
+            .rcac_cert
+            .extensions()
+            .subject_key_identifier
+            .expect("rcac has SKID");
+
+        let unsigned = icac(IcacParams::new(
+            0x0000_0000_0000_0099,
+            fabric.rcac_cert.subject().clone(),
+            issuer_skid,
+            icac_public_key,
+            vec![0x01],
+            MatterTime::from_unix_secs(1_700_000_000),
+            MatterTime::NO_EXPIRY,
+        ))
+        .expect("build unsigned icac");
+        let cert = sign_with_ring(unsigned, &fabric.rcac_pkcs8).expect("sign icac");
+
+        crate::state::IcacIdentity {
+            cert,
+            pkcs8: icac_pkcs8,
+        }
+    }
+
+    #[test]
+    fn snapshot_round_trips_fabric_with_icac() {
+        // A FabricEntry WITH an ICAC must survive serialize -> deserialize
+        // with both the cert and the signing key preserved (C9/C10).
+        let mut fabric = shared_fabric().clone();
+        let icac_identity = sample_icac(&fabric);
+        fabric.icac = Some(icac_identity);
+
+        let state = ControllerState {
+            fabrics: vec![fabric.clone()],
+        };
+        let bytes = serialize(&state).expect("serialize");
+        let back = deserialize(&bytes).expect("deserialize");
+
+        let want = fabric.icac.as_ref().expect("icac set on input fabric");
+        let got = back.fabrics[0]
+            .icac
+            .as_ref()
+            .expect("icac must round-trip as Some");
+        assert_eq!(got.cert.to_tlv().unwrap(), want.cert.to_tlv().unwrap());
+        assert_eq!(got.pkcs8, want.pkcs8);
+    }
+
+    #[test]
+    fn snapshot_without_icac_is_backward_compatible() {
+        // A FabricEntry with icac = None must (a) round-trip to None, and
+        // (b) serialize to bytes containing no C9/C10 tags at all — the
+        // encoding must be identical to what pre-ICAC code produced.
+        let fabric = shared_fabric().clone();
+        assert!(fabric.icac.is_none());
+        let state = ControllerState {
+            fabrics: vec![fabric],
+        };
+
+        let bytes = serialize(&state).expect("serialize");
+        let back = deserialize(&bytes).expect("deserialize");
+        assert!(back.fabrics[0].icac.is_none());
+
+        // Context tags 9 and 10 must not appear anywhere in the fabric
+        // structure's encoded member list. Re-decode the fabric Value
+        // directly and check its tag set rather than grepping raw bytes
+        // (TLV tag/length bytes can coincidentally match arbitrary byte
+        // patterns elsewhere in the blob).
+        let mut r = matter_codec::TlvReader::new(&bytes);
+        let (_tag, root) = r.read_value().expect("read root");
+        let root_members = as_struct(&root).expect("root struct");
+        let fabrics_arr = get(root_members, 1).expect("fabrics array");
+        let first_fabric = &as_array(fabrics_arr).expect("fabrics array")[0];
+        let fabric_members = as_struct(first_fabric).expect("fabric struct");
+        assert!(
+            get(fabric_members, 9).is_none(),
+            "C9 (icac_cert) must be absent when icac is None"
+        );
+        assert!(
+            get(fabric_members, 10).is_none(),
+            "C10 (icac_pkcs8) must be absent when icac is None"
+        );
     }
 
     #[test]

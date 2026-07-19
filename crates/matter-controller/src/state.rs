@@ -49,6 +49,27 @@ impl GroupKeySetConfig {
     }
 }
 
+/// A per-fabric intermediate CA (ICAC): the issued ICAC certificate plus the
+/// PKCS#8 private key that signs NOCs under it. `None` for a flat RCAC->NOC
+/// fabric (the default).
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct IcacIdentity {
+    /// The RCAC-signed ICAC certificate.
+    pub cert: MatterCertificate,
+    /// The ICAC signing key, PKCS#8 DER.
+    pub pkcs8: Vec<u8>,
+}
+
+impl std::fmt::Debug for IcacIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IcacIdentity")
+            .field("cert", &"<MatterCertificate>")
+            .field("pkcs8", &"<redacted PKCS#8>")
+            .finish()
+    }
+}
+
 /// A device commissioned onto a fabric.
 ///
 /// `#[non_exhaustive]`: persisted record whose shape may grow (e.g. CAT tags,
@@ -152,6 +173,9 @@ pub struct FabricEntry {
     /// uses to verify a registered device's Check-In messages. Empty until the
     /// controller calls `register_icd_client`.
     pub icd_clients: Vec<crate::icd::IcdRegistration>,
+    /// Optional per-fabric intermediate CA. `None` for a flat RCAC->NOC
+    /// fabric (the default); `Some` once the fabric adopts an ICAC tier.
+    pub icac: Option<IcacIdentity>,
 }
 
 impl std::fmt::Debug for FabricEntry {
@@ -172,6 +196,7 @@ impl std::fmt::Debug for FabricEntry {
                 "icd_clients",
                 &format!("<{} registrations>", self.icd_clients.len()),
             )
+            .field("icac", &self.icac)
             .finish()
     }
 }

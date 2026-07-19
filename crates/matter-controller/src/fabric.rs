@@ -111,6 +111,7 @@ pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry
         group_keys: Vec::new(),
         outbound_group_counter: 0,
         icd_clients: Vec::new(),
+        icac: None,
     })
 }
 
