@@ -1594,8 +1594,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         matter_crypto::random_bytes(&mut epoch_key)
             .map_err(|e| Error::Operational(format!("group epoch-key generation failed: {e}")))?;
 
-        // Append the persisted key-set config to the sole fabric.
+        // Upsert the persisted key-set config on the sole fabric. Re-creating
+        // an existing `key_set_id` REPLACES it: a plain append would leave the
+        // old epoch key first in the list, and the outbound path would keep
+        // encrypting under the stale key while devices hold the newly
+        // provisioned one — every group send would then fail to decrypt on the
+        // device (found on real hardware, 2026-07-20). The retain also heals
+        // stores already poisoned with duplicates by older builds.
         let fabric = self.sole_fabric_mut()?;
+        fabric.group_keys.retain(|k| k.key_set_id != key_set_id);
         fabric.group_keys.push(crate::state::GroupKeySetConfig::new(
             key_set_id,
             epoch_key,
@@ -1635,11 +1642,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // borrow of `self` is held across the persist `.await` below. ---
         let (fabric_id, source_node_id, root_public_key, epoch_key, counter) = {
             let fabric = self.sole_fabric()?;
-            // (a) Look up the epoch key for this key set.
+            // (a) Look up the epoch key for this key set. Take the LAST match:
+            // `create_group` upserts so duplicates no longer occur, but stores
+            // written by older builds may still carry several entries for one
+            // `key_set_id` — the most recently appended one is the key that was
+            // last programmed onto devices via `KeySetWrite`, so it is the only
+            // one the devices can decrypt.
             let epoch_key = fabric
                 .group_keys
                 .iter()
-                .find(|k| k.key_set_id == key_set_id)
+                .rfind(|k| k.key_set_id == key_set_id)
                 .map(|k| k.epoch_key)
                 .ok_or(Error::GroupNotProvisioned(key_set_id))?;
             // The RCAC root public key (SEC1 uncompressed) for the compressed
@@ -3681,6 +3693,111 @@ mod tests {
         assert_eq!(path_members[0], (Tag::Context(0), Value::Uint(0)));
         assert_eq!(path_members[1], (Tag::Context(1), Value::Uint(0x0006)));
         assert_eq!(path_members[2], (Tag::Context(2), Value::Uint(0x01)));
+    }
+
+    /// Re-creating a key set REPLACES the stored entry, and the outbound path
+    /// always encrypts under the newest key — even when the store was
+    /// poisoned with duplicates by an older build.
+    ///
+    /// Regression test for the real-hardware group-decrypt failure
+    /// (2026-07-20): `create_group` used to append duplicates and
+    /// `invoke_group` picked the FIRST match, so after any re-provision the
+    /// controller kept encrypting under a stale epoch key while devices held
+    /// the newly written one.
+    #[tokio::test]
+    async fn create_group_upserts_and_invoke_uses_newest_key() {
+        use matter_transport::decode_group_secured;
+
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        let fabric_id = controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+
+        // Re-create the same key set: the second call must REPLACE the first.
+        let key_set_id = 0x0042u16;
+        let first = controller
+            .create_group(key_set_id, 0)
+            .await
+            .expect("create_group #1");
+        let second = controller
+            .create_group(key_set_id, 0)
+            .await
+            .expect("create_group #2");
+        assert_ne!(first.epoch_key, second.epoch_key, "fresh key each create");
+
+        let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            snap.fabrics[0].group_keys.len(),
+            1,
+            "create_group must upsert, not append a duplicate"
+        );
+        assert_eq!(
+            snap.fabrics[0].group_keys[0].epoch_key[..],
+            second.epoch_key[..],
+            "the stored key must be the newest one"
+        );
+
+        // Poison the store the way pre-fix builds did: a STALE entry for the
+        // same key set id sitting in front of the current one.
+        let mut poisoned = snap;
+        poisoned.fabrics[0].group_keys.insert(
+            0,
+            crate::state::GroupKeySetConfig::new(key_set_id, [0xAA; 16], 0),
+        );
+        store
+            .save(&crate::snapshot::serialize(&poisoned).unwrap())
+            .unwrap();
+
+        // A controller opened on the poisoned store must STILL send under the
+        // newest (last) key — the one devices actually hold.
+        let (io2, peer2) = InMemoryDatagram::pair();
+        let controller2 = crate::controller::MatterController::with_components(
+            store.clone(),
+            io2,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("reopen");
+        let path = crate::CommandPath {
+            endpoint: 0,
+            cluster: 0x0006,
+            command: 0x01,
+        };
+        controller2
+            .invoke_group(
+                0x0008,
+                key_set_id,
+                path,
+                matter_codec::Value::Structure(vec![]),
+            )
+            .await
+            .expect("invoke_group");
+        let (wire, _from) = peer2.recv_from().await.expect("frame emitted");
+
+        let root_public_key = *poisoned.fabrics[0].rcac_cert.public_key().as_bytes();
+        let compressed = derive_compressed_fabric_id(&root_public_key, fabric_id).unwrap();
+        let newest_epoch: [u8; 16] = second.epoch_key.clone().try_into().unwrap();
+        let op_newest = derive_operational_ipk(&newest_epoch, &compressed).unwrap();
+        decode_group_secured(&wire, &op_newest)
+            .expect("frame must decrypt under the NEWEST key for this key set id");
+        let op_stale = derive_operational_ipk(&[0xAA; 16], &compressed).unwrap();
+        assert!(
+            decode_group_secured(&wire, &op_stale).is_err(),
+            "frame must NOT be encrypted under the stale first-match key"
+        );
     }
 
     /// `invoke_group` with an unprovisioned key set is rejected up front.
