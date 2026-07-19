@@ -3514,6 +3514,7 @@ mod tests {
                 MatterTime::from_unix_secs(1_700_000_000),
                 MatterTime::NO_EXPIRY,
             ),
+            issue_icac: false,
         }
     }
 
@@ -4719,6 +4720,7 @@ mod tests {
                     MatterTime::from_unix_secs(1_700_000_000),
                     MatterTime::NO_EXPIRY,
                 ),
+                issue_icac: false,
             };
             crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
         };
@@ -5851,6 +5853,7 @@ mod tests {
                     MatterTime::from_unix_secs(1_700_000_000),
                     MatterTime::NO_EXPIRY,
                 ),
+                issue_icac: false,
             };
             crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
         };

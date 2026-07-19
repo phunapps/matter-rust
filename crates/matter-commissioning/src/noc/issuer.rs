@@ -28,18 +28,37 @@ pub fn issue_noc(
     validity: (MatterTime, MatterTime),
     rng: &dyn NocRng,
 ) -> Result<MatterCertificate, NocError> {
-    let root_ski = fabric
-        .root_cert
-        .extensions()
-        .subject_key_identifier
-        .ok_or_else(|| {
-            // Tag value chosen to point at "subject-key-identifier" in the
-            // existing extensions error space; the precise constant lives
-            // in matter-cert's tlv_tags::EXT_SUBJECT_KEY_IDENTIFIER if
-            // refactoring later — using a literal here keeps this crate
-            // independent of matter-cert's internal tag constants.
-            NocError::CertBuild(matter_cert::Error::MissingField(4))
-        })?;
+    // A fabric with an ICAC tier signs NOCs under the ICAC, not the RCAC
+    // directly (spec §6.5.5). Both `icac_signer` and `icac_cert` must be
+    // `Some` to take this path — a fabric can't be half-migrated to an
+    // ICAC tier, so a lone `Some` falls back to the flat RCAC path below.
+    let (issuer_dn, issuer_ski, signer) =
+        if let (Some(icac_signer), Some(icac_cert)) = (&fabric.icac_signer, &fabric.icac_cert) {
+            let icac_ski = icac_cert
+                .extensions()
+                .subject_key_identifier
+                .ok_or_else(|| NocError::CertBuild(matter_cert::Error::MissingField(4)))?;
+            (icac_cert.subject().clone(), icac_ski, icac_signer.as_ref())
+        } else {
+            let root_ski = fabric
+                .root_cert
+                .extensions()
+                .subject_key_identifier
+                .ok_or_else(|| {
+                    // Tag value chosen to point at "subject-key-identifier" in
+                    // the existing extensions error space; the precise
+                    // constant lives in matter-cert's
+                    // tlv_tags::EXT_SUBJECT_KEY_IDENTIFIER if refactoring
+                    // later — using a literal here keeps this crate
+                    // independent of matter-cert's internal tag constants.
+                    NocError::CertBuild(matter_cert::Error::MissingField(4))
+                })?;
+            (
+                fabric.root_cert.subject().clone(),
+                root_ski,
+                fabric.root_signer.as_ref(),
+            )
+        };
 
     // Serial: 19 random bytes (matter.js convention; pinned by M6.3.3
     // byte-parity).
@@ -53,8 +72,8 @@ pub fn issue_noc(
         fabric.fabric_id,
         node_id,
         case_authenticated_tags.to_vec(),
-        fabric.root_cert.subject().clone(),
-        root_ski,
+        issuer_dn,
+        issuer_ski,
         verified_csr.public_key.clone(),
         serial,
         validity.0,
@@ -62,8 +81,7 @@ pub fn issue_noc(
     ))
     .map_err(NocError::CertBuild)?;
     let tbs = unsigned.tbs_der().map_err(NocError::CertBuild)?;
-    let sig = fabric
-        .root_signer
+    let sig = signer
         .sign_p256_sha256(&tbs)
         .map_err(NocError::SigningFailed)?;
     Ok(unsigned.assemble(sig))
@@ -238,6 +256,52 @@ mod tests {
 
         // ICAC verifies under the fabric's root public key.
         icac.verify_signed_by(&fabric.root_public_key).unwrap();
+    }
+
+    #[test]
+    fn issue_noc_signs_under_icac_when_present() {
+        // When the fabric carries an ICAC (both `icac_signer` and
+        // `icac_cert` set), issue_noc must sign the NOC under the ICAC key
+        // and set the issuer DN/SKID from the ICAC — not the RCAC.
+        let mut fabric = sample_fabric();
+        let (icac_signer, _) = RingSigner::generate().unwrap();
+        let icac_public_key = icac_signer.public_key().clone();
+        let icac = issue_icac(
+            &fabric,
+            0x0000_0000_0000_0042,
+            &icac_public_key,
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+        let icac_signer: Arc<dyn Signer> = Arc::new(icac_signer);
+        fabric.icac_signer = Some(icac_signer);
+        fabric.icac_cert = Some(icac.clone());
+
+        let verified = sample_verified_csr();
+        let noc = issue_noc(
+            &fabric,
+            &verified,
+            0xDEAD_BEEF_CAFE_BABE,
+            &[],
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+
+        // Issuer DN must be the ICAC's subject, not the RCAC's.
+        assert_eq!(noc.issuer(), icac.subject());
+        assert_ne!(noc.issuer(), fabric.root_cert.subject());
+
+        // The NOC must verify under the ICAC's public key (i.e. it was
+        // signed by the ICAC signer), not the RCAC's.
+        noc.verify_signed_by(icac.public_key()).unwrap();
     }
 
     #[test]

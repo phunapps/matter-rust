@@ -6,11 +6,11 @@
 use std::sync::Arc;
 
 use matter_cert::MatterTime;
-use matter_commissioning::{issue_noc, FabricRecord, NocRng, VerifiedCsr};
+use matter_commissioning::{issue_icac, issue_noc, FabricRecord, NocRng, VerifiedCsr};
 use matter_crypto::{RingSigner, Signer};
 
 use crate::error::Error;
-use crate::state::{CommissionerIdentity, FabricEntry};
+use crate::state::{CommissionerIdentity, FabricEntry, IcacIdentity};
 
 /// Inputs for creating a new fabric.
 ///
@@ -28,6 +28,12 @@ pub struct FabricConfig {
     pub commissioner_node_id: u64,
     /// `(not_before, not_after)` validity for the RCAC and commissioner NOC.
     pub validity: (MatterTime, MatterTime),
+    /// When `true`, `create_fabric` mints an intermediate CA (ICAC) under
+    /// the RCAC and signs the commissioner NOC (and, later, all NOCs
+    /// issued on this fabric) under the ICAC instead of directly under the
+    /// RCAC. Defaults to `false` (the flat RCAC->NOC path) via
+    /// [`FabricConfig::new`].
+    pub issue_icac: bool,
 }
 
 impl FabricConfig {
@@ -48,6 +54,7 @@ impl FabricConfig {
             rcac_id,
             commissioner_node_id,
             validity,
+            issue_icac: false,
         }
     }
 }
@@ -67,7 +74,7 @@ pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry
     let (root_signer, rcac_pkcs8) =
         RingSigner::generate().map_err(|e| Error::Signer(e.to_string()))?;
     let root_arc: Arc<dyn Signer> = Arc::new(root_signer);
-    let fabric_record = FabricRecord::new_root_only(
+    let mut fabric_record = FabricRecord::new_root_only(
         cfg.fabric_id,
         root_arc,
         cfg.validity.0,
@@ -75,6 +82,36 @@ pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry
         cfg.rcac_id,
         rng,
     )?;
+
+    // 1b. Optionally mint an ICAC tier under the RCAC. This must happen
+    //     BEFORE the commissioner NOC is issued below, so the commissioner
+    //     NOC itself is signed under the ICAC (matching what a real
+    //     ICAC-tier fabric does for every NOC it issues).
+    let icac_identity = if cfg.issue_icac {
+        let (icac_signer_raw, icac_pkcs8) =
+            RingSigner::generate().map_err(|e| Error::Signer(e.to_string()))?;
+        let icac_public_key = icac_signer_raw.public_key().clone();
+        // Single-ICAC fabric: reuse `cfg.rcac_id` as the ICAC's `IcacId`
+        // DN value too. `RcacId` and `IcacId` are distinct DN attribute
+        // types (spec §6.5.5), so the shared numeric id is unambiguous —
+        // there is no collision between "RCAC id 7" and "ICAC id 7".
+        let icac_cert = issue_icac(
+            &fabric_record,
+            cfg.rcac_id,
+            &icac_public_key,
+            cfg.validity,
+            rng,
+        )
+        .map_err(Error::Noc)?;
+        fabric_record.icac_signer = Some(Arc::new(icac_signer_raw));
+        fabric_record.icac_cert = Some(icac_cert.clone());
+        Some(IcacIdentity {
+            cert: icac_cert,
+            pkcs8: icac_pkcs8,
+        })
+    } else {
+        None
+    };
 
     // 2. Commissioner operational keypair.
     let (comm_signer, comm_pkcs8) =
@@ -84,7 +121,9 @@ pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry
     // 3. Mint the commissioner NOC over our own key. We generated the key
     //    ourselves, so there is no device CSR to verify — `VerifiedCsr`
     //    here asserts "this public key is trusted for issuance", which is
-    //    sound for our own identity.
+    //    sound for our own identity. When `fabric_record.icac_signer`/
+    //    `icac_cert` are `Some` (set just above), `issue_noc` signs this
+    //    under the ICAC instead of the RCAC.
     let verified = VerifiedCsr {
         public_key: comm_public_key,
     };
@@ -111,7 +150,7 @@ pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry
         group_keys: Vec::new(),
         outbound_group_counter: 0,
         icd_clients: Vec::new(),
-        icac: None,
+        icac: icac_identity,
     })
 }
 
@@ -168,6 +207,66 @@ mod tests {
             .noc
             .verify_signed_by(rcac_key)
             .expect("commissioner NOC must verify under the RCAC");
+    }
+
+    #[test]
+    fn default_path_has_no_icac_and_noc_issuer_is_rcac() {
+        // `issue_icac = false` (the `FabricConfig::new` default) must not
+        // mint an ICAC, and the commissioner NOC's issuer must be the RCAC
+        // subject (the flat RCAC->NOC path, byte-unchanged from Task 7).
+        let fabric = create_fabric(&sample_cfg(), &SystemNocRng).expect("create");
+        assert!(fabric.icac.is_none());
+        assert_eq!(fabric.commissioner.noc.issuer(), fabric.rcac_cert.subject());
+    }
+
+    #[test]
+    fn issue_icac_true_mints_chain_and_signs_commissioner_noc_under_icac() {
+        let mut cfg = sample_cfg();
+        cfg.issue_icac = true;
+        let entry = create_fabric(&cfg, &SystemNocRng).expect("create");
+
+        // The fabric entry carries a minted ICAC.
+        let icac = entry.icac.clone().expect("icac must be Some");
+
+        // Reconstructing the runtime FabricRecord restores both the ICAC
+        // signer and cert.
+        let rec = entry.to_fabric_record().expect("to_fabric_record");
+        assert!(rec.icac_signer.is_some());
+        assert!(rec.icac_cert.is_some());
+
+        // The commissioner NOC's issuer DN is the ICAC's subject, not the
+        // RCAC's.
+        assert_eq!(entry.commissioner.noc.issuer(), icac.cert.subject());
+        assert_ne!(entry.commissioner.noc.issuer(), entry.rcac_cert.subject());
+
+        // 3-tier chain linkage + signature verification:
+        // RCAC issued/signed the ICAC...
+        assert_eq!(icac.cert.issuer(), entry.rcac_cert.subject());
+        icac.cert
+            .verify_signed_by(entry.rcac_cert.public_key())
+            .expect("icac must verify under the rcac's public key");
+        // ...and the ICAC issued/signed the commissioner NOC.
+        assert_eq!(entry.commissioner.noc.issuer(), icac.cert.subject());
+        entry
+            .commissioner
+            .noc
+            .verify_signed_by(icac.cert.public_key())
+            .expect("commissioner noc must verify under the icac's public key");
+
+        // Snapshot round-trip preserves `icac` as `Some` with a matching
+        // cert.
+        let state = crate::state::ControllerState::new(vec![entry.clone()]);
+        let bytes = crate::snapshot::serialize(&state).expect("serialize");
+        let restored = crate::snapshot::deserialize(&bytes).expect("deserialize");
+        let restored_icac = restored.fabrics[0]
+            .icac
+            .clone()
+            .expect("icac must round-trip as Some");
+        assert_eq!(
+            restored_icac.cert.to_tlv().expect("tlv"),
+            icac.cert.to_tlv().expect("tlv"),
+            "restored icac cert must byte-match the original"
+        );
     }
 
     #[test]

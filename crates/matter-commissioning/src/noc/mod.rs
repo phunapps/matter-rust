@@ -67,4 +67,4 @@ pub use csr::{
 };
 pub use error::{NocError, NocRng, SystemNocRng};
 pub use fabric::FabricRecord;
-pub use issuer::issue_noc;
+pub use issuer::{issue_icac, issue_noc};

@@ -358,6 +358,7 @@ mod tests {
                 MatterTime::from_unix_secs(1_700_000_000),
                 MatterTime::NO_EXPIRY,
             ),
+            issue_icac: false,
         };
         let mut fabric = create_fabric(&cfg, &SystemNocRng).expect("create_fabric");
         fabric.devices.push(DeviceEntry {
@@ -447,6 +448,7 @@ mod tests {
                     MatterTime::from_unix_secs(1_700_000_000),
                     MatterTime::NO_EXPIRY,
                 ),
+                issue_icac: false,
             };
             create_fabric(&cfg, &SystemNocRng).expect("mint shared fabric")
         })

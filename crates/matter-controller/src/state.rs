@@ -230,13 +230,28 @@ impl FabricEntry {
     pub fn to_fabric_record(&self) -> Result<FabricRecord, Error> {
         let signer = self.rcac_signer()?;
         let root_public_key = signer.public_key().clone();
+        // Reconstruct the ICAC signer/cert when this fabric has an ICAC
+        // tier, so a restored fabric keeps signing NOCs (and CASE
+        // credentials, via `FabricRecord.icac_cert`) under the ICAC —
+        // matching what `create_fabric` sets up live.
+        let (icac_signer, icac_cert) = match &self.icac {
+            Some(icac) => {
+                let signer = RingSigner::from_pkcs8(&icac.pkcs8)
+                    .map_err(|e| Error::Signer(e.to_string()))?;
+                (
+                    Some(Arc::new(signer) as Arc<dyn Signer>),
+                    Some(icac.cert.clone()),
+                )
+            }
+            None => (None, None),
+        };
         Ok(FabricRecord {
             fabric_id: self.fabric_id,
             root_public_key,
             root_signer: Arc::new(signer) as Arc<dyn Signer>,
             root_cert: self.rcac_cert.clone(),
-            icac_signer: None,
-            icac_cert: None,
+            icac_signer,
+            icac_cert,
             identity_protection_key: self.ipk,
         })
     }
