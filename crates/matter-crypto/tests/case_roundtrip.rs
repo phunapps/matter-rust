@@ -12,6 +12,9 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use matter_cert::operational::{
+    icac, noc, rcac, sign_with_ring, IcacParams, NocParams, RcacParams,
+};
 use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields};
 use matter_cert::{
     BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyIdentifier, KeyUsage,
@@ -288,6 +291,237 @@ fn case_roundtrip_new_session() {
     assert_eq!(
         init_record.shared_secret, resp_record.shared_secret,
         "both sides must store the same shared secret"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: full 3-tier RCAC -> ICAC -> NOC chain over CASE
+// ---------------------------------------------------------------------------
+
+/// Build a real 3-tier operational-PKI chain via `matter_cert::operational`
+/// (real SHA-1 SKIs, so AKI/SKI linkage is automatic) — deliberately NOT
+/// mixed with the fixed-SKI `build_test_rcac`/`build_test_noc` helpers above,
+/// whose SKIs would not match an operational-module chain.
+///
+/// Returns `(rcac, rcac_pkcs8, icac, icac_pkcs8, trusted_roots, rcac_pub)`.
+// `rcac_*`/`icac_*` bindings are intentionally parallel-named (same role,
+// different tier), mirroring `matter-cert/tests/operational_certs.rs`.
+#[allow(clippy::similar_names)]
+#[allow(clippy::type_complexity)]
+fn build_operational_rcac_icac_chain() -> (
+    MatterCertificate,
+    MatterCertificate,
+    Vec<u8>,
+    TrustedRoots,
+    [u8; 65],
+) {
+    let not_before = MatterTime::from_unix_secs(1_700_000_000);
+    let not_after = MatterTime::NO_EXPIRY;
+
+    // --- RCAC: self-signed root ---
+    let (rcac_signer, rcac_pkcs8) = RingSigner::generate().expect("rcac signer");
+    let rcac_pub_key = rcac_signer.public_key().clone();
+    let unsigned_rcac = rcac(RcacParams::new(
+        1,
+        rcac_pub_key,
+        vec![0x01],
+        not_before,
+        not_after,
+        Some(1),
+    ))
+    .expect("build rcac");
+    let rcac_cert = sign_with_ring(unsigned_rcac, &rcac_pkcs8).expect("sign rcac");
+    let rcac_pub: [u8; 65] = *rcac_cert.public_key().as_bytes();
+
+    let rcac_subject = rcac_cert.subject().clone();
+    let rcac_skid = rcac_cert
+        .extensions()
+        .subject_key_identifier
+        .expect("rcac ski");
+
+    // --- ICAC: signed by the RCAC ---
+    let (icac_signer, icac_pkcs8) = RingSigner::generate().expect("icac signer");
+    let icac_pub_key = icac_signer.public_key().clone();
+    let unsigned_icac = icac(IcacParams::new(
+        2,
+        rcac_subject,
+        rcac_skid,
+        icac_pub_key,
+        vec![0x02],
+        not_before,
+        not_after,
+    ))
+    .expect("build icac");
+    let icac_cert = sign_with_ring(unsigned_icac, &rcac_pkcs8).expect("sign icac");
+
+    let mut trusted_roots = TrustedRoots::new();
+    trusted_roots.add(TrustAnchor::from_root_cert(&rcac_cert));
+
+    (rcac_cert, icac_cert, icac_pkcs8, trusted_roots, rcac_pub)
+}
+
+/// Build a NOC signed under the given ICAC's key (3-tier: ICAC issues the
+/// NOC, not the RCAC).
+fn build_operational_noc_under_icac(
+    icac_cert: &MatterCertificate,
+    icac_pkcs8: &[u8],
+    fabric_id: u64,
+    node_id: u64,
+    serial: Vec<u8>,
+) -> (MatterCertificate, RingSigner) {
+    let not_before = MatterTime::from_unix_secs(1_700_000_000);
+    let not_after = MatterTime::NO_EXPIRY;
+
+    let icac_subject = icac_cert.subject().clone();
+    let icac_skid = icac_cert
+        .extensions()
+        .subject_key_identifier
+        .expect("icac ski");
+
+    let (noc_signer, _noc_pkcs8) = RingSigner::generate().expect("noc signer");
+    let noc_pub_key = noc_signer.public_key().clone();
+    let unsigned_noc = noc(NocParams::new(
+        fabric_id,
+        node_id,
+        vec![],
+        icac_subject,
+        icac_skid,
+        noc_pub_key,
+        serial,
+        not_before,
+        not_after,
+    ))
+    .expect("build noc");
+    let noc_cert = sign_with_ring(unsigned_noc, icac_pkcs8).expect("sign noc under icac");
+
+    (noc_cert, noc_signer)
+}
+
+/// The headline ICAC proof: a full Sigma1 -> Sigma2 -> Sigma3 CASE handshake
+/// where both peers present a NOC issued under a 3-tier RCAC -> ICAC -> NOC
+/// chain (`CaseCredentials.icac = Some(icac)`), and the initiator validates
+/// the whole chain against a `TrustedRoots` that only contains the RCAC.
+#[test]
+#[allow(clippy::too_many_lines)] // mirrors case_roundtrip_new_session's multi-step protocol exchange
+fn case_establishes_over_three_tier_chain() {
+    let (rcac_cert, icac_cert, icac_pkcs8, trusted_roots, rcac_pub) =
+        build_operational_rcac_icac_chain();
+
+    let (initiator_noc, initiator_signer) = build_operational_noc_under_icac(
+        &icac_cert,
+        &icac_pkcs8,
+        TEST_FABRIC_ID,
+        INITIATOR_NODE_ID,
+        vec![0x03],
+    );
+    let (responder_noc, responder_signer) = build_operational_noc_under_icac(
+        &icac_cert,
+        &icac_pkcs8,
+        TEST_FABRIC_ID,
+        RESPONDER_NODE_ID,
+        vec![0x04],
+    );
+
+    // Negative control: each NOC's issuer must be the ICAC's subject, not
+    // the RCAC's — proving this really is a 3-tier chain, not a disguised
+    // 2-tier one.
+    assert_eq!(
+        initiator_noc.issuer(),
+        icac_cert.subject(),
+        "NOC issuer must be the ICAC subject"
+    );
+    assert_ne!(
+        initiator_noc.issuer(),
+        rcac_cert.subject(),
+        "NOC issuer must NOT be the RCAC subject in a 3-tier chain"
+    );
+
+    let initiator_creds = CaseCredentials {
+        noc: initiator_noc,
+        icac: Some(icac_cert.clone()),
+        signer: Box::new(initiator_signer),
+        fabric_id: TEST_FABRIC_ID,
+        node_id: INITIATOR_NODE_ID,
+        ipk: IPK,
+        rcac_public_key: rcac_pub,
+    };
+    let responder_creds = CaseCredentials {
+        noc: responder_noc,
+        icac: Some(icac_cert),
+        signer: Box::new(responder_signer),
+        fabric_id: TEST_FABRIC_ID,
+        node_id: RESPONDER_NODE_ID,
+        ipk: IPK,
+        rcac_public_key: rcac_pub,
+    };
+
+    let mut initiator = CaseInitiator::new(
+        initiator_creds,
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("initiator construction");
+    let mut responder = CaseResponder::new(
+        responder_creds,
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder construction");
+
+    // --- Sigma1 ---
+    let sigma1 = initiator.start().expect("sigma1");
+    let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
+    assert!(
+        matches!(outcome, Sigma1Outcome::NewSession),
+        "expected NewSession outcome from Sigma1"
+    );
+
+    // --- Sigma2 ---
+    let sigma2 = responder.next_message().expect("sigma2");
+    initiator.handle_sigma2(&sigma2).expect("handle sigma2");
+
+    // --- Sigma3 ---
+    let sigma3 = initiator.next_message().expect("sigma3");
+    responder.handle_sigma3(&sigma3).expect("handle sigma3");
+
+    // --- Collect session outputs ---
+    let init_output = initiator.finish().expect("initiator finish");
+    let resp_output = responder.finish().expect("responder finish");
+
+    // --- Session key parity ---
+    assert_eq!(
+        init_output.keys.i2r_key, resp_output.keys.i2r_key,
+        "i2r_key must match on both sides"
+    );
+    assert_eq!(
+        init_output.keys.r2i_key, resp_output.keys.r2i_key,
+        "r2i_key must match on both sides"
+    );
+    assert_eq!(
+        init_output.keys.attestation_challenge, resp_output.keys.attestation_challenge,
+        "attestation_challenge must match on both sides"
+    );
+
+    // --- Peer identity ---
+    assert_eq!(
+        init_output.peer.node_id, RESPONDER_NODE_ID,
+        "initiator must see responder's node_id"
+    );
+    assert_eq!(
+        init_output.peer.fabric_id, TEST_FABRIC_ID,
+        "initiator must see correct fabric_id for peer"
+    );
+    assert_eq!(
+        resp_output.peer.node_id, INITIATOR_NODE_ID,
+        "responder must see initiator's node_id"
+    );
+    assert_eq!(
+        resp_output.peer.fabric_id, TEST_FABRIC_ID,
+        "responder must see correct fabric_id for peer"
     );
 }
 

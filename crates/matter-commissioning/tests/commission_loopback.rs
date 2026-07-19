@@ -56,7 +56,9 @@ use matter_commissioning::attestation::CdSigningRoots;
 use matter_commissioning::driver::{
     commission, operational_instance_name, DriverConfig, InMemoryDatagram,
 };
-use matter_commissioning::noc::{issue_noc, FabricRecord, NocRng, SystemNocRng, VerifiedCsr};
+use matter_commissioning::noc::{
+    issue_icac, issue_noc, FabricRecord, NocRng, SystemNocRng, VerifiedCsr,
+};
 use matter_commissioning::setup::{
     CommissioningFlow, DiscoveryCapabilities, Discriminator, Passcode, SetupPayload,
 };
@@ -336,6 +338,195 @@ async fn run_loopback_commission() {
 #[tokio::test]
 async fn commission_reaches_done_against_mock_device() {
     run_loopback_commission().await;
+}
+
+// ── ICAC loopback gate ─────────────────────────────────────────────────────────
+
+/// Sibling of [`run_loopback_commission`]: mints a 3-tier-chain ICAC and
+/// attaches it to the fabric BEFORE any NOC issuance, then runs the same
+/// commission loopback. `FabricRecord::issue_noc`/the free `issue_noc`
+/// function both consult `fabric.icac_signer`/`fabric.icac_cert` and sign
+/// under the ICAC whenever both are present (see
+/// `noc::issuer::issue_noc_signs_under_icac_when_present`), so once the
+/// fabric carries an ICAC, both the commissioner's own operational NOC and
+/// the device's CASE NOC (minted in `build_device_case_setup`, which already
+/// threads `icac: fabric.icac_cert.clone()` into `CaseCredentials`) are
+/// signed under the ICAC automatically — no other code path changes.
+///
+/// This asserts the same success criteria as the flat gate
+/// (`terminated_at == Cleanup`, correct peer node id and fabric id, CASE
+/// therefore established) plus that the ICAC actually threaded through: the
+/// device's `CaseCredentials.icac` is `Some`, and the device NOC's issuer DN
+/// equals the ICAC's subject DN (not the RCAC's) — the same negative-control
+/// shape as `case_establishes_over_three_tier_chain` in
+/// `matter-crypto/tests/case_roundtrip.rs`.
+#[allow(clippy::too_many_lines)] // mirrors run_loopback_commission's mutually-consistent assembly
+#[tokio::test]
+async fn run_loopback_commission_with_icac() {
+    // ── 1. Mock-device PKI (identical to the flat gate). ───────────────────────
+    let mock_pki = build_mock_device_pki(now());
+
+    // ── 2. Fabric RCAC, then an ICAC minted under it and attached BEFORE any
+    //       NOC issuance so every NOC minted from here on signs under the ICAC. ─
+    let (root_signer, _pkcs8) = RingSigner::generate().expect("fabric root key");
+    let root_signer: Arc<dyn Signer> = Arc::new(root_signer);
+    let mut fabric = FabricRecord::new_root_only(
+        FABRIC_ID,
+        root_signer,
+        now(),
+        MatterTime::NO_EXPIRY,
+        1, // rcac_id
+        &SystemNocRng,
+    )
+    .expect("fabric RCAC");
+
+    let (icac_signer, _icac_pkcs8) = RingSigner::generate().expect("icac key");
+    let icac_public_key = icac_signer.public_key().clone();
+    let icac_cert = issue_icac(
+        &fabric,
+        1, // icac_id
+        &icac_public_key,
+        (now(), MatterTime::NO_EXPIRY),
+        &SystemNocRng,
+    )
+    .expect("issue icac under fabric RCAC"); // Test-code carve-out: see CLAUDE.md.
+    let icac_subject = icac_cert.subject().clone();
+
+    fabric.icac_signer = Some(Arc::new(icac_signer));
+    fabric.icac_cert = Some(icac_cert);
+
+    // ── 3. Setup payload (identical to the flat gate). ─────────────────────────
+    let setup = SetupPayload {
+        version: 0,
+        vendor_id: Some(VID),
+        product_id: Some(PID),
+        commissioning_flow: CommissioningFlow::Standard,
+        discovery_capabilities: DiscoveryCapabilities::ON_NETWORK,
+        discriminator: Discriminator::new(DISCRIMINATOR).unwrap(),
+        passcode: Passcode::new(PASSCODE).unwrap(),
+    };
+
+    let cd_signing_roots = CdSigningRoots::with_example_device_roots();
+    let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
+
+    // ── 4. Transport pair + discovery returning the operational record. ────────
+    let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+    let dev_addr = dev_io.local_addr();
+    let ctrl_addr = ctrl_io.local_addr();
+
+    let compressed = derive_compressed_fabric_id(fabric.root_public_key.as_bytes(), FABRIC_ID)
+        .expect("compressed fabric id");
+    let op_instance_name = operational_instance_name(compressed, ASSIGNED_NODE_ID);
+    let mut fake_disc = FakeDiscovery {
+        service: MatterService::new(
+            op_instance_name,
+            ServiceKind::Operational,
+            vec![dev_addr.ip()],
+            dev_addr.port(),
+            std::collections::HashMap::new(),
+        ),
+    };
+
+    // ── 5. CommissionerConfig + DriverConfig. ───────────────────────────────────
+    let commissioner = CommissionerConfig {
+        pase_attestation_challenge: [0u8; 16],
+        fabric: &fabric,
+        setup_payload: &setup,
+        paa_trust_store: &mock_pki.paa_trust_store,
+        cd_signing_roots: &cd_signing_roots,
+        commissioner_node_id: COMMISSIONER_NODE_ID,
+        assigned_node_id: ASSIGNED_NODE_ID,
+        ipk_epoch_key: [0x42_u8; 16],
+        case_admin_subject: COMMISSIONER_NODE_ID,
+        admin_vendor_id: VID,
+        now: now(),
+        rng,
+        network: matter_commissioning::NetworkCredentials::AlreadyOnNetwork,
+    };
+    // Persistent commissioner operational identity — `issue_noc` below signs
+    // under the ICAC automatically since `fabric.icac_signer`/`icac_cert` are
+    // both `Some` at this point.
+    let (commissioner_signer, commissioner_pkcs8) =
+        matter_crypto::RingSigner::generate().expect("commissioner keypair");
+    let commissioner_noc = matter_commissioning::issue_noc(
+        &fabric,
+        &matter_commissioning::VerifiedCsr {
+            public_key: matter_crypto::CaseSigner::public_key(&commissioner_signer).clone(),
+        },
+        COMMISSIONER_NODE_ID,
+        &[],
+        (now(), matter_cert::MatterTime::NO_EXPIRY),
+        &matter_commissioning::SystemNocRng,
+    )
+    .expect("commissioner NOC");
+
+    let config = DriverConfig {
+        commissioner,
+        commissionable_addr: Some(dev_addr),
+        passcode: PASSCODE,
+        commissioner_noc: &commissioner_noc,
+        commissioner_signer_pkcs8: &commissioner_pkcs8,
+    };
+
+    // ── 6. Device CASE setup — `build_device_case_setup` already threads
+    //       `icac: fabric.icac_cert.clone()` into `CaseCredentials` and mints
+    //       the device NOC via `issue_noc(fabric, ...)`, which now signs under
+    //       the ICAC we just attached. Capture the issuer DN and the
+    //       `icac.is_some()` flag BEFORE `case_setup` is moved into
+    //       `run_mock_device` below. ──────────────────────────────────────────
+    let case_setup = build_device_case_setup(&fabric, [0x42_u8; 16]);
+    let device_noc_issuer = case_setup.credentials.noc.issuer().clone();
+    let device_credentials_has_icac = case_setup.credentials.icac.is_some();
+
+    // ── 7. Run both halves concurrently. ────────────────────────────────────
+    let device = run_mock_device(
+        &dev_io,
+        ctrl_addr,
+        &mock_pki,
+        PASSCODE,
+        matter_crypto::pase::PasePbkdfParams {
+            iterations: 1000,
+            salt: vec![0x55; 16],
+        },
+        PASE_RESPONDER_SESSION_ID,
+        case_setup,
+    );
+
+    let (commission_result, device_result) =
+        tokio::join!(commission(&ctrl_io, &mut fake_disc, config), device);
+
+    // ── 8. Assert the same success criteria as the flat gate. ──────────────────
+    device_result.expect("mock device side completed without error");
+    let commissioned = commission_result.expect("commission() reached Done");
+
+    assert_eq!(
+        commissioned.terminated_at,
+        Stage::Cleanup,
+        "commissioning must terminate at the Cleanup stage"
+    );
+    assert_eq!(
+        commissioned.peer_node_id, ASSIGNED_NODE_ID,
+        "commissioned peer node id must equal the assigned node id"
+    );
+    assert_eq!(
+        commissioned.fabric.fabric_id, FABRIC_ID,
+        "commissioned fabric id must match the fabric we commissioned under"
+    );
+
+    // ── 9. ICAC-specific assertions: the ICAC actually threaded through. ───────
+    assert!(
+        commissioned.fabric.icac_cert.is_some(),
+        "the fabric returned by commission() must still carry the ICAC"
+    );
+    assert!(
+        device_credentials_has_icac,
+        "device-side CaseCredentials.icac must be Some once the fabric carries an ICAC"
+    );
+    assert_eq!(
+        device_noc_issuer, icac_subject,
+        "device NOC issuer must be the ICAC subject, proving the NOC was signed under \
+         the ICAC and not the RCAC"
+    );
 }
 
 // ── Wire-trace capture test ────────────────────────────────────────────────────
