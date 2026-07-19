@@ -7,7 +7,8 @@
 //! [`UnsignedCertificate`] — signing stays external, same two-stage split
 //! as [`crate::builder`].
 //!
-//! Currently implemented: [`rcac`] (Root CA Certificate, spec §6.5.5).
+//! Currently implemented: [`rcac`] (Root CA Certificate, spec §6.5.5);
+//! [`icac`] (Intermediate CA Certificate, spec §6.5.5).
 
 use ring::digest;
 
@@ -39,6 +40,29 @@ pub struct RcacParams {
     /// `BasicConstraints.pathLen` for this root. The RCAC profile
     /// (spec §6.5.5) recommends `Some(1)`; pass `None` for no constraint.
     pub path_len: Option<u8>,
+}
+
+/// Parameters for [`icac`].
+///
+/// `#[non_exhaustive]`: future spec-driven ICAC fields should be addable
+/// without breaking existing callers.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct IcacParams {
+    /// The Matter Intermediate CA Identifier (subject DN `IcacId` attribute).
+    pub icac_id: u64,
+    /// The issuing RCAC's Distinguished Name (this ICAC's issuer DN).
+    pub issuer: DistinguishedName,
+    /// The issuing RCAC's Subject Key Identifier (this ICAC's AKID).
+    pub issuer_skid: KeyIdentifier,
+    /// The intermediate CA's own EC P-256 public key.
+    pub public_key: PublicKey,
+    /// Certificate serial number (1..=20 raw bytes per spec §6.5.1).
+    pub serial: Vec<u8>,
+    /// Start of the validity window.
+    pub not_before: MatterTime,
+    /// End of the validity window (`MatterTime::NO_EXPIRY` for none).
+    pub not_after: MatterTime,
 }
 
 /// Compute a Subject/Authority Key Identifier from a public key: SHA-1 over
@@ -94,6 +118,44 @@ pub fn rcac(params: RcacParams) -> Result<UnsignedCertificate> {
         .build_unsigned()
 }
 
+/// Build an unsigned Intermediate CA Certificate (ICAC, spec §6.5.5).
+///
+/// Pins the ICAC profile from spec §6.5.5 / §6.5.4:
+/// - subject DN = `IcacId(params.icac_id)`; issuer DN = `params.issuer`
+///   (the RCAC's DN)
+/// - `BasicConstraints { cA: true, pathLen: Some(0) }`, critical
+/// - `KeyUsage { keyCertSign, cRLSign }`, critical
+/// - `SubjectKeyIdentifier` = SHA-1(SPKI) of this ICAC's own public key;
+///   `AuthorityKeyIdentifier` = `params.issuer_skid` (the RCAC's SKID)
+///
+/// # Errors
+///
+/// Returns [`crate::Error::FieldValueOutOfRange`] if `params.serial` is
+/// empty or longer than the 20-byte maximum (spec §6.5.1). All other
+/// [`IcacParams`] fields are structurally valid by construction, so no
+/// other builder error is reachable here.
+pub fn icac(params: IcacParams) -> Result<UnsignedCertificate> {
+    let subject = DistinguishedName::new(vec![DnAttribute::IcacId(params.icac_id)]);
+
+    let skid = skid_from_spki(&params.public_key);
+
+    let extensions = Extensions::builder()
+        .basic_constraints(Some(BasicConstraints::new(true, Some(0))))
+        .key_usage(Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN))
+        .subject_key_identifier(Some(skid))
+        .authority_key_identifier(Some(params.issuer_skid))
+        .build();
+
+    MatterCertificate::builder()
+        .serial(params.serial)
+        .issuer(params.issuer)
+        .subject(subject)
+        .validity(params.not_before, params.not_after)
+        .public_key(params.public_key)
+        .extensions(extensions)
+        .build_unsigned()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -126,6 +188,35 @@ mod tests {
         // Self-signed: AKID == SKID; issuer DN == subject DN (RcacId=1).
         assert_eq!(ext.authority_key_identifier, ext.subject_key_identifier);
         assert_eq!(unsigned.subject().rcac_id(), Some(1));
+        assert_eq!(unsigned.issuer().rcac_id(), Some(1));
+    }
+
+    #[test]
+    fn icac_has_the_expected_profile() {
+        let issuer_dn = DistinguishedName::new(vec![DnAttribute::RcacId(1)]);
+        let issuer_skid = skid_from_spki(&spki());
+
+        let unsigned = icac(IcacParams {
+            icac_id: 2,
+            issuer: issuer_dn.clone(),
+            issuer_skid,
+            public_key: spki(),
+            serial: vec![0x02],
+            not_before: MatterTime::from_unix_secs(1_700_000_000),
+            not_after: MatterTime::NO_EXPIRY,
+        })
+        .unwrap();
+
+        let ext = unsigned.extensions();
+        let bc = ext.basic_constraints.unwrap();
+        assert!(bc.is_ca && bc.path_len_constraint == Some(0));
+        assert_eq!(
+            ext.key_usage,
+            Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN)
+        );
+        assert!(ext.subject_key_identifier.is_some());
+        assert_eq!(ext.authority_key_identifier, Some(issuer_skid));
+        assert_eq!(unsigned.subject().icac_id(), Some(2));
         assert_eq!(unsigned.issuer().rcac_id(), Some(1));
     }
 }
