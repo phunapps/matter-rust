@@ -101,6 +101,67 @@ pub fn issue_noc(
     Ok(unsigned.assemble(sig))
 }
 
+/// Construct + sign an Intermediate CA Certificate (ICAC, spec §6.5.5)
+/// for this fabric, signed by the fabric's RCAC key.
+///
+/// Delegates the ICAC extension/DN profile (`BasicConstraints{cA:true,
+/// pathLen:Some(0)}`, `KeyUsage{keyCertSign,cRLSign}`, SKID/AKID) to
+/// [`matter_cert::operational::icac`] — see that constructor for the
+/// pinned spec profile. This function's job is just to supply the
+/// fabric-derived issuer DN/SKID, generate a serial, and sign.
+///
+/// # Errors
+///
+/// Returns [`NocError::CertBuild`] if the fabric's root certificate is
+/// missing its `SubjectKeyIdentifier` extension (should not happen for a
+/// `FabricRecord` built via [`FabricRecord::new_root_only`]) or if
+/// certificate construction otherwise fails, [`NocError::SigningFailed`]
+/// if the fabric's root signer rejects, and [`NocError::Rng`] on RNG
+/// failure.
+pub fn issue_icac(
+    fabric: &FabricRecord,
+    icac_id: u64,
+    icac_public_key: &matter_cert::PublicKey,
+    validity: (MatterTime, MatterTime),
+    rng: &dyn NocRng,
+) -> Result<MatterCertificate, NocError> {
+    let root_ski = fabric
+        .root_cert
+        .extensions()
+        .subject_key_identifier
+        .ok_or_else(|| {
+            // Same rationale as issue_noc's identical check above: a
+            // literal tag value keeps this crate independent of
+            // matter-cert's internal tag constants.
+            NocError::CertBuild(matter_cert::Error::MissingField(4))
+        })?;
+
+    // Serial: 19 random bytes (matter.js convention; same construction
+    // as issue_noc, above).
+    let mut serial = vec![0u8; 19];
+    rng.fill(&mut serial)?;
+    // Top bit cleared — see fabric.rs `new_root_only` for the chip-vs-
+    // matter.js INTEGER-normalization divergence this avoids.
+    serial[0] &= 0x7F;
+
+    let unsigned = matter_cert::operational::icac(matter_cert::operational::IcacParams::new(
+        icac_id,
+        fabric.root_cert.subject().clone(),
+        root_ski,
+        icac_public_key.clone(),
+        serial,
+        validity.0,
+        validity.1,
+    ))
+    .map_err(NocError::CertBuild)?;
+    let tbs = unsigned.tbs_der().map_err(NocError::CertBuild)?;
+    let sig = fabric
+        .root_signer
+        .sign_p256_sha256(&tbs)
+        .map_err(NocError::SigningFailed)?;
+    Ok(unsigned.assemble(sig))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
@@ -165,6 +226,50 @@ mod tests {
             0,
             "generated NOC serial must have the top bit clear"
         );
+    }
+
+    #[test]
+    fn issue_icac_produces_self_consistent_certificate() {
+        let fabric = sample_fabric();
+        let (icac_signer, _) = RingSigner::generate().unwrap();
+        let icac_public_key = icac_signer.public_key().clone();
+
+        let icac = issue_icac(
+            &fabric,
+            0x0000_0000_0000_0042,
+            &icac_public_key,
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+
+        // Issuer DN == fabric.root_cert subject.
+        assert_eq!(icac.issuer(), fabric.root_cert.subject());
+
+        // Subject DN carries the ICAC id.
+        assert_eq!(icac.subject().icac_id(), Some(0x0000_0000_0000_0042));
+
+        // Extensions match the ICAC profile: cA=true, pathLen=0,
+        // KEY_CERT_SIGN|CRL_SIGN, AKID == RCAC's SKID.
+        let extensions = icac.extensions();
+        assert_eq!(
+            extensions.basic_constraints,
+            Some(BasicConstraints::new(true, Some(0)))
+        );
+        assert_eq!(
+            extensions.key_usage,
+            Some(KeyUsage::KEY_CERT_SIGN | KeyUsage::CRL_SIGN)
+        );
+        assert_eq!(
+            extensions.authority_key_identifier,
+            fabric.root_cert.extensions().subject_key_identifier
+        );
+
+        // ICAC verifies under the fabric's root public key.
+        icac.verify_signed_by(&fabric.root_public_key).unwrap();
     }
 
     #[test]
