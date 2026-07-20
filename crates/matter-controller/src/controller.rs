@@ -662,6 +662,29 @@ impl MatterController {
         rx.await.map_err(|_| Error::ControllerStopped)
     }
 
+    /// Forget a node: drop ALL of the controller's own state for it — the
+    /// persisted device record, any cached CASE session, and its resumption
+    /// data — WITHOUT contacting the device. Use this to reclaim a node that is
+    /// unreachable or already factory-reset (where `remove_fabric` cannot run).
+    ///
+    /// Returns `true` if a node was found and removed, `false` if no such node
+    /// was commissioned. This does NOT remove the controller's fabric from the
+    /// device; a still-live device keeps its NOC until it is reset or its fabric
+    /// removed via `Node::remove_fabric`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the task stopped, or a store error while
+    /// persisting the removal.
+    pub async fn forget_node(&self, node_id: u64) -> Result<bool, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ForgetNode { node_id, reply })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
     /// Handle addressing a device by node id (single-fabric in M8.2).
     #[must_use]
     pub fn node(&self, node_id: u64) -> Node {

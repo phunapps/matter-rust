@@ -539,6 +539,19 @@ pub(crate) enum Command {
     ListNodes {
         reply: oneshot::Sender<Vec<crate::NodeInfo>>,
     },
+    /// Drop ALL of the controller's own local state for `node_id` — the
+    /// persisted `DeviceEntry`, its cached CASE session, and any parked
+    /// connect bookkeeping — WITHOUT contacting the device. A local-state
+    /// verb like [`Command::ListNodes`]/[`Command::SetNodeVidPid`]: handled
+    /// only in [`Actor::dispatch_ready`], never routed through
+    /// `command_target_node` (routing it as a node-addressed verb would try
+    /// to open a CASE session to a node we are trying to forget, which may
+    /// be unreachable or already reset). `reply` carries whether a device
+    /// was actually found and removed.
+    ForgetNode {
+        node_id: u64,
+        reply: oneshot::Sender<Result<bool, Error>>,
+    },
     /// Return the sole fabric's stored CASE resumption record bytes for
     /// `node_id` (serialized [`matter_crypto::ResumptionRecord`], see
     /// [`crate::resumption`]), or `None` if the device has none. Read from the
@@ -1257,6 +1270,38 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     })
                     .collect();
                 let _ = reply.send(nodes);
+            }
+            Command::ForgetNode { node_id, reply } => {
+                // Drop all LOCAL state for this node — no device round-trip, so
+                // it works even when the device is unreachable or already reset.
+                let mut removed = false;
+                for fabric in &mut self.state.fabrics {
+                    let before = fabric.devices.len();
+                    let fabric_id = fabric.fabric_id;
+                    fabric.devices.retain(|d| d.node_id != node_id);
+                    if fabric.devices.len() != before {
+                        removed = true;
+                        // Evict the cached session (+ its dead MRP retransmits).
+                        if let Some(c) = self.cache.remove(&(fabric_id, node_id)) {
+                            self.sessions.remove(c.session_id);
+                        }
+                    }
+                }
+                // Fail any parked waiters and drop the connect bookkeeping for
+                // this node. Reuse the existing helper — it removes
+                // `connect_inbound`, `connect_routes`, AND `pending_connects`
+                // and fails/reschedules each waiter by kind (do NOT hand-roll
+                // this; a hand-rolled loop misses `connect_routes`).
+                self.fail_connect_waiters(node_id, &Error::Operational("node forgotten".into()));
+                let outcome = if removed {
+                    match self.durable_save_inputs() {
+                        Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| true),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Ok(false)
+                };
+                let _ = reply.send(outcome);
             }
             Command::SetNodeVidPid {
                 node_id,
@@ -3724,6 +3769,118 @@ mod tests {
                 product_id: Some(0x8000),
                 label: Some("plug".to_string()),
             }]
+        );
+    }
+
+    /// Task 6 — `forget_node` drops ALL of the controller's own local state
+    /// for a node WITHOUT contacting the device: the persisted `DeviceEntry`,
+    /// the cached CASE session, and any parked connect bookkeeping. Seeds a
+    /// fabric with one device (same seeding style as
+    /// `nodes_lists_commissioned_devices_with_metadata` above) plus a live
+    /// cached session (same `CachedSession` seeding as
+    /// `timeout_on_current_session_evicts_it` above — standing in for an
+    /// established loopback session without a full CASE handshake), then
+    /// confirms: (a) `nodes()` no longer lists the node afterward, (b) the
+    /// cached session is evicted, (c) the reloaded on-disk snapshot has no
+    /// such `DeviceEntry`, (d) `forget_node` returns `Ok(true)` the first time
+    /// and `Ok(false)` on a repeat call for the same (now-absent) node.
+    #[tokio::test]
+    async fn forget_node_drops_all_local_state_without_device_contact() {
+        let mut fabric =
+            crate::fabric::create_fabric(&cfg(), &SystemNocRng).expect("create_fabric");
+        let fabric_id = fabric.fabric_id;
+        let node_id: u64 = 0x0000_0000_0000_0042;
+        fabric.devices.push(crate::state::DeviceEntry {
+            node_id,
+            peer_noc_public_key: [0u8; 65],
+            resumption_record: None,
+            last_known_addr: None,
+            vendor_id: Some(0xFFF1),
+            product_id: Some(0x8000),
+            label: Some("plug".to_string()),
+        });
+
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            store.clone(),
+            Arc::new(SystemNocRng),
+            ControllerState {
+                fabrics: vec![fabric],
+            },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        // A live cached session for the node — `forget_node` must evict this
+        // too, or dead MRP retransmits keep firing on a session the caller
+        // now believes is gone.
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: SessionId(7),
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+
+        // The fixture is visible before forgetting.
+        let (nodes_tx, nodes_rx) = oneshot::channel();
+        actor
+            .dispatch_ready(Command::ListNodes { reply: nodes_tx })
+            .await;
+        assert_eq!(
+            nodes_rx.await.unwrap().len(),
+            1,
+            "fixture device must be listed before forget"
+        );
+
+        let (reply, rx) = oneshot::channel();
+        actor
+            .dispatch_ready(Command::ForgetNode { node_id, reply })
+            .await;
+        assert!(
+            rx.await.unwrap().expect("forget_node"),
+            "a device was found and removed"
+        );
+
+        assert!(
+            !actor.cache.contains_key(&(fabric_id, node_id)),
+            "the cached session must be evicted"
+        );
+
+        let (after_tx, after_rx) = oneshot::channel();
+        actor
+            .dispatch_ready(Command::ListNodes { reply: after_tx })
+            .await;
+        assert!(
+            after_rx.await.unwrap().is_empty(),
+            "nodes() must no longer list the forgotten node"
+        );
+
+        // The reloaded on-disk snapshot has no such `DeviceEntry`.
+        let bytes = store.load().unwrap().expect("snapshot saved");
+        let restored = crate::snapshot::deserialize(&bytes).unwrap();
+        assert!(
+            restored
+                .fabrics
+                .iter()
+                .all(|f| f.devices.iter().all(|d| d.node_id != node_id)),
+            "the persisted snapshot must no longer contain the forgotten device"
+        );
+
+        // A second forget of the same (now-absent) node is a no-op `Ok(false)`.
+        let (repeat_reply, repeat_rx) = oneshot::channel();
+        actor
+            .dispatch_ready(Command::ForgetNode {
+                node_id,
+                reply: repeat_reply,
+            })
+            .await;
+        assert!(
+            !repeat_rx.await.unwrap().expect("forget_node second call"),
+            "a second forget of the same node finds nothing"
         );
     }
 
