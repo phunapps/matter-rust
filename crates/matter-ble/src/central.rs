@@ -39,6 +39,37 @@ use crate::handshake::{HandshakeRequest, HandshakeResponse, WINDOW_SIZE};
 use crate::session::{BtpSession, Role};
 use crate::BtpError;
 
+/// Diagnostic pump tracing, enabled by setting `MATTER_BLE_PUMP_TRACE=1`.
+///
+/// macOS has no `btmon`, and the pump runs in a spawned task that prints
+/// nothing between "commissioning…" and the result — so a hang (the known
+/// macOS `CoreBluetooth` BTP stall) is invisible. When enabled, the pump emits
+/// a timestamped line at each C1-write boundary (START / DONE), each inbound C2
+/// indication, and each surfaced SDU. The tell-tale for the leading hypothesis
+/// (a half-duplex deadlock: the pump blocks in a `WithResponse` write `await`
+/// — which runs OUTSIDE the `select!` — so it stops reading indications while
+/// the device keeps streaming) is a `C1 write START` with no matching `DONE`.
+///
+/// Off by default and side-effect-free (a single relaxed env read, cached), so
+/// it cannot affect the proven Linux path. Diagnostic only — remove or promote
+/// to `tracing` once the root cause is confirmed on hardware.
+fn pump_trace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("MATTER_BLE_PUMP_TRACE")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    })
+}
+
+/// Emit one diagnostic pump-trace line to stderr when `MATTER_BLE_PUMP_TRACE`
+/// is set (see [`pump_trace_enabled`]).
+fn pt(msg: &str) {
+    if pump_trace_enabled() {
+        eprintln!("[btp-pump] {msg}");
+    }
+}
+
 /// Matter BTP GATT service UUID (`0000fff6-0000-1000-8000-00805f9b34fb`).
 pub const MATTER_SERVICE_UUID: Uuid = Uuid::from_u128(0x0000_fff6_0000_1000_8000_0080_5f9b_34fb);
 /// C1 characteristic — central writes BTP fragments here
@@ -485,10 +516,16 @@ async fn write_fragment(
     session: &mut BtpSession,
     fragment: &[u8],
 ) -> Result<(), CentralError> {
+    // The tell-tale for the macOS half-duplex-deadlock hypothesis: a `START`
+    // with no matching `DONE` means the pump is blocked in this `WithResponse`
+    // write `await` (which runs outside the `select!`), so it has stopped
+    // reading C2 indications. See [`pump_trace_enabled`].
+    pt(&format!("C1 write START ({} bytes)", fragment.len()));
     peripheral
         .write(c1, fragment, WriteType::WithResponse)
         .await
         .map_err(|e| CentralError::Gatt(e.to_string()))?;
+    pt("C1 write DONE");
     session.gatt_write_completed(Instant::now());
     Ok(())
 }
@@ -582,8 +619,10 @@ async fn pump_loop(
             },
             note = indications.next() => match note {
                 Some(note) if note.uuid == C2_UUID => {
+                    pt(&format!("C2 indication ({} bytes)", note.value.len()));
                     match session.on_indication(&note.value, Instant::now()) {
                         Ok(Some(sdu)) => {
+                            pt(&format!("SDU surfaced ({} bytes)", sdu.len()));
                             if sdu_tx.send(Ok(sdu)).await.is_err() {
                                 return;
                             }
