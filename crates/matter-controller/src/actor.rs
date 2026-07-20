@@ -1264,7 +1264,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 product_id,
                 reply,
             } => {
-                let _ = reply.send(self.handle_set_node_vid_pid(node_id, vendor_id, product_id).await);
+                let _ = reply.send(
+                    self.handle_set_node_vid_pid(node_id, vendor_id, product_id)
+                        .await,
+                );
             }
             Command::ResumptionRecordFor { node_id, reply } => {
                 let result = self.sole_fabric().map(|f| {

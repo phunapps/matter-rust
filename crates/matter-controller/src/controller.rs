@@ -20,12 +20,15 @@ use crate::store::ControllerStore;
 use crate::trust::AttestationTrust;
 
 /// `BasicInformation` cluster id (Matter §11.1) — read post-commission for the
-/// device's `VendorID`/`ProductID`.
-const BASIC_INFORMATION_CLUSTER: u32 = 0x0028;
+/// device's `VendorID`/`ProductID`. Sourced from the generated cluster
+/// definitions so it stays tied to the codegen source of truth.
+const BASIC_INFORMATION_CLUSTER: u32 = matter_clusters::gen::basic_information::CLUSTER_ID;
 /// `BasicInformation.VendorID` attribute id.
-const BASIC_INFO_ATTR_VENDOR_ID: u32 = 0x0002;
+const BASIC_INFO_ATTR_VENDOR_ID: u32 =
+    matter_clusters::gen::basic_information::attribute_id::VENDOR_ID;
 /// `BasicInformation.ProductID` attribute id.
-const BASIC_INFO_ATTR_PRODUCT_ID: u32 = 0x0004;
+const BASIC_INFO_ATTR_PRODUCT_ID: u32 =
+    matter_clusters::gen::basic_information::attribute_id::PRODUCT_ID;
 
 const COMMAND_CHANNEL_DEPTH: usize = 32;
 
@@ -487,7 +490,14 @@ impl MatterController {
     }
 
     /// Commission a device from a QR (`MT:...`) or manual pairing code, bring it
-    /// onto the controller's fabric, and persist it. Returns the device's node id.
+    /// onto the controller's fabric, and persist it. Returns a [`NodeInfo`] for
+    /// the commissioned device.
+    ///
+    /// After the device is on the fabric, a best-effort `BasicInformation` read
+    /// captures its `VendorID`/`ProductID` into the returned `NodeInfo` and
+    /// persists them on the device entry. That read is best-effort: if it fails,
+    /// commissioning still succeeds and `NodeInfo::vendor_id`/`product_id` are
+    /// left `None` (re-readable later via [`Self::nodes`]).
     ///
     /// `label` is an opaque, caller-supplied string (e.g. a friendly name like
     /// `"kitchen plug"`) persisted on the device's entry atomically with the
@@ -526,7 +536,9 @@ impl MatterController {
     /// every pre-operational stage (attestation, NOC install, network
     /// provisioning) over BTP, then complete the operational CASE session over
     /// IP once the device joins the operational network. Brings the device
-    /// onto the controller's fabric, persists it, and returns its node id.
+    /// onto the controller's fabric, persists it, and returns a [`NodeInfo`]
+    /// (including a best-effort `BasicInformation` `VendorID`/`ProductID`
+    /// capture, exactly as [`Self::commission`]).
     ///
     /// `network` selects which provisioning sub-flow runs after `AddNOC`:
     /// [`NetworkCredentials::WiFi`](matter_commissioning::NetworkCredentials::WiFi)
@@ -601,7 +613,9 @@ impl MatterController {
         let mut vendor_id = None;
         let mut product_id = None;
         for (path, value) in &reports {
-            let crate::Value::Uint(n) = value else { continue };
+            let crate::Value::Uint(n) = value else {
+                continue;
+            };
             let Ok(n16) = u16::try_from(*n) else { continue };
             if path.attribute == BASIC_INFO_ATTR_VENDOR_ID {
                 vendor_id = Some(n16);
