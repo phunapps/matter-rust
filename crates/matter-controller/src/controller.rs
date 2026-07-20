@@ -19,6 +19,14 @@ use crate::state::ControllerState;
 use crate::store::ControllerStore;
 use crate::trust::AttestationTrust;
 
+/// `BasicInformation` cluster id (Matter §11.1) — read post-commission for the
+/// device's `VendorID`/`ProductID`.
+const BASIC_INFORMATION_CLUSTER: u32 = 0x0028;
+/// `BasicInformation.VendorID` attribute id.
+const BASIC_INFO_ATTR_VENDOR_ID: u32 = 0x0002;
+/// `BasicInformation.ProductID` attribute id.
+const BASIC_INFO_ATTR_PRODUCT_ID: u32 = 0x0004;
+
 const COMMAND_CHANNEL_DEPTH: usize = 32;
 
 /// Addresses to advertise for a self-hosted operational service (OTA provider,
@@ -493,7 +501,11 @@ impl MatterController {
     /// [`Error::NoTrust`] if no attestation trust was configured,
     /// [`Error::SetupCode`] if the code is invalid, [`Error::ControllerStopped`]
     /// if the task stopped, or any driver/commissioning error.
-    pub async fn commission(&self, setup_code: &str, label: Option<String>) -> Result<u64, Error> {
+    pub async fn commission(
+        &self,
+        setup_code: &str,
+        label: Option<String>,
+    ) -> Result<NodeInfo, Error> {
         let setup_payload = parse_setup_code(setup_code)?;
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -504,7 +516,9 @@ impl MatterController {
             })
             .await
             .map_err(|_| Error::ControllerStopped)?;
-        rx.await.map_err(|_| Error::ControllerStopped)?
+        let mut info = rx.await.map_err(|_| Error::ControllerStopped)??;
+        self.capture_basic_info(&mut info).await;
+        Ok(info)
     }
 
     /// Commission a Wi-Fi or Thread device over **BLE/BTP** (feature `ble`):
@@ -549,7 +563,7 @@ impl MatterController {
         setup_code: &str,
         network: matter_commissioning::NetworkCredentials,
         label: Option<String>,
-    ) -> Result<u64, Error> {
+    ) -> Result<NodeInfo, Error> {
         let setup_payload = parse_setup_code(setup_code)?;
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -561,7 +575,61 @@ impl MatterController {
             })
             .await
             .map_err(|_| Error::ControllerStopped)?;
-        rx.await.map_err(|_| Error::ControllerStopped)?
+        let mut info = rx.await.map_err(|_| Error::ControllerStopped)??;
+        self.capture_basic_info(&mut info).await;
+        Ok(info)
+    }
+
+    /// Best-effort: read `VendorID`/`ProductID` from the device's
+    /// `BasicInformation` cluster (endpoint 0) and persist them onto the node's
+    /// stored entry, filling `info.vendor_id`/`info.product_id`.
+    ///
+    /// Deliberately infallible from the caller's view: commissioning has
+    /// already succeeded and the device is on the fabric, so a flaky metadata
+    /// read (or a device that answers something unexpected) must never turn a
+    /// completed commission into an error. On any failure the ids stay `None`
+    /// and can be re-read later.
+    async fn capture_basic_info(&self, info: &mut NodeInfo) {
+        let node = self.node(info.node_id);
+        let paths = [
+            crate::ReadPath::concrete(0, BASIC_INFORMATION_CLUSTER, BASIC_INFO_ATTR_VENDOR_ID),
+            crate::ReadPath::concrete(0, BASIC_INFORMATION_CLUSTER, BASIC_INFO_ATTR_PRODUCT_ID),
+        ];
+        let Ok(reports) = node.read(&paths).await else {
+            return;
+        };
+        let mut vendor_id = None;
+        let mut product_id = None;
+        for (path, value) in &reports {
+            let crate::Value::Uint(n) = value else { continue };
+            let Ok(n16) = u16::try_from(*n) else { continue };
+            if path.attribute == BASIC_INFO_ATTR_VENDOR_ID {
+                vendor_id = Some(n16);
+            } else if path.attribute == BASIC_INFO_ATTR_PRODUCT_ID {
+                product_id = Some(n16);
+            }
+        }
+        if vendor_id.is_none() && product_id.is_none() {
+            return;
+        }
+        info.vendor_id = vendor_id;
+        info.product_id = product_id;
+        // Persist best-effort — a store failure here only means a future
+        // `nodes()` re-reads `None`; it does not fail the commission.
+        let (reply, rx) = oneshot::channel();
+        if self
+            .tx
+            .send(Command::SetNodeVidPid {
+                node_id: info.node_id,
+                vendor_id,
+                product_id,
+                reply,
+            })
+            .await
+            .is_ok()
+        {
+            let _ = rx.await;
+        }
     }
 
     /// Enumerate every node this controller has commissioned, across all

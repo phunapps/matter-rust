@@ -163,7 +163,8 @@ async fn main() -> Result<()> {
     let node_id = controller
         .commission_ble(&args.commission, NetworkCredentials::WiFi(wifi), None)
         .await
-        .context("BLE→Wi-Fi commissioning")?;
+        .context("BLE→Wi-Fi commissioning")?
+        .node_id;
     println!("commissioned over BLE as node 0x{node_id:016X}");
 
     // 5. Confirm operational control over the Wi-Fi-routed path: read OnOff,

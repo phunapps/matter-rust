@@ -119,8 +119,8 @@ async fn open_window_second_controller_and_remove_fabric() {
         }
     };
     match commissioned {
-        Ok(node_id_b) => {
-            let node_b = controller_b.node(node_id_b);
+        Ok(info_b) => {
+            let node_b = controller_b.node(info_b.node_id);
 
             // Both control paths are live.
             assert!(

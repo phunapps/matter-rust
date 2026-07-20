@@ -156,7 +156,8 @@ async fn main() -> Result<()> {
     let node_id = controller
         .commission_ble(&args.commission, NetworkCredentials::Thread(dataset), None)
         .await
-        .context("BLE→Thread commissioning")?;
+        .context("BLE→Thread commissioning")?
+        .node_id;
     println!("commissioned over BLE as node 0x{node_id:016X}");
 
     // 5. Confirm operational control over the Thread-routed path: read OnOff,

@@ -443,27 +443,40 @@ pub(crate) enum Command {
         payload: Vec<u8>,
         reply: oneshot::Sender<Result<Vec<matter_interaction::ReportData>, Error>>,
     },
-    /// Commission a device from a parsed setup payload; returns its node id.
-    /// `label` is an opaque caller-supplied string persisted on the resulting
-    /// `DeviceEntry` (set atomically with the rest of the entry, so it can
-    /// never observably land only on a later save).
+    /// Commission a device from a parsed setup payload; returns the resulting
+    /// [`NodeInfo`](crate::NodeInfo) (with `vendor_id`/`product_id` left `None`
+    /// — the controller fills those best-effort via a `BasicInformation` read
+    /// after this reply resolves).  `label` is an opaque caller-supplied string
+    /// persisted on the resulting `DeviceEntry` (set atomically with the rest
+    /// of the entry, so it can never observably land only on a later save).
     Commission {
         setup_payload: matter_commissioning::SetupPayload,
         label: Option<String>,
-        reply: oneshot::Sender<Result<u64, Error>>,
+        reply: oneshot::Sender<Result<crate::NodeInfo, Error>>,
     },
     /// Commission a device over BLE/BTP from a parsed setup payload and required
-    /// network (Wi-Fi or Thread) credentials; returns its node id (feature
-    /// `ble`). Runs on its own spawned task exactly like [`Command::Commission`],
-    /// but the task first scans BLE, opens a BTP session, and drives
-    /// `commission_ble`. `label` is the same opaque caller-supplied string as
-    /// [`Command::Commission`]'s.
+    /// network (Wi-Fi or Thread) credentials; returns the resulting
+    /// [`NodeInfo`](crate::NodeInfo) (feature `ble`). Runs on its own spawned
+    /// task exactly like [`Command::Commission`], but the task first scans BLE,
+    /// opens a BTP session, and drives `commission_ble`. `label` is the same
+    /// opaque caller-supplied string as [`Command::Commission`]'s.
     #[cfg(feature = "ble")]
     CommissionBle {
         setup_payload: matter_commissioning::SetupPayload,
         network: matter_commissioning::NetworkCredentials,
         label: Option<String>,
-        reply: oneshot::Sender<Result<u64, Error>>,
+        reply: oneshot::Sender<Result<crate::NodeInfo, Error>>,
+    },
+    /// Persist `vendor_id`/`product_id` (from a post-commission `BasicInformation`
+    /// read) onto the commissioned device `node_id`'s entry. Best-effort: a
+    /// missing device is a no-op success. Used only by the commission
+    /// orchestration, which has already reported success — this just enriches
+    /// the stored metadata.
+    SetNodeVidPid {
+        node_id: u64,
+        vendor_id: Option<u16>,
+        product_id: Option<u16>,
+        reply: oneshot::Sender<Result<(), Error>>,
     },
     /// Establish a subscription to `paths` on `node_id`; returns the report
     /// receiver + `(session, exchange)` key for the `Node` to wrap.
@@ -815,7 +828,7 @@ struct CommissionCompletion {
     /// Caller-supplied label to persist on the device entry, carried through
     /// from `Command::Commission`/`CommissionBle` (see there).
     label: Option<String>,
-    reply: oneshot::Sender<Result<u64, Error>>,
+    reply: oneshot::Sender<Result<crate::NodeInfo, Error>>,
 }
 
 /// Run a full commission on a **freshly-bound socket + discovery**, off the actor
@@ -1245,6 +1258,14 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     .collect();
                 let _ = reply.send(nodes);
             }
+            Command::SetNodeVidPid {
+                node_id,
+                vendor_id,
+                product_id,
+                reply,
+            } => {
+                let _ = reply.send(self.handle_set_node_vid_pid(node_id, vendor_id, product_id).await);
+            }
             Command::ResumptionRecordFor { node_id, reply } => {
                 let result = self.sole_fabric().map(|f| {
                     f.devices
@@ -1345,7 +1366,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         &mut self,
         setup_payload: matter_commissioning::SetupPayload,
         label: Option<String>,
-        reply: oneshot::Sender<Result<u64, Error>>,
+        reply: oneshot::Sender<Result<crate::NodeInfo, Error>>,
     ) {
         let Some(trust) = self.trust.clone() else {
             let _ = reply.send(Err(Error::NoTrust));
@@ -1435,7 +1456,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         setup_payload: matter_commissioning::SetupPayload,
         network: matter_commissioning::NetworkCredentials,
         label: Option<String>,
-        reply: oneshot::Sender<Result<u64, Error>>,
+        reply: oneshot::Sender<Result<crate::NodeInfo, Error>>,
     ) {
         let Some(trust) = self.trust.clone() else {
             let _ = reply.send(Err(Error::NoTrust));
@@ -1522,7 +1543,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Ok(commissioned) => {
                 let mut device = crate::commission::device_entry_from_commissioned(&commissioned);
                 device.label = label;
-                let node_id = device.node_id;
+                // Build the NodeInfo to return. `vendor_id`/`product_id` are
+                // `None` here — the controller fills them best-effort via a
+                // BasicInformation read after this reply resolves (a device
+                // read cannot run from inside the actor's completion handler).
+                let info = crate::NodeInfo {
+                    node_id: device.node_id,
+                    fabric_id,
+                    vendor_id: None,
+                    product_id: None,
+                    label: device.label.clone(),
+                };
                 if let Some(fabric) = self
                     .state
                     .fabrics
@@ -1535,13 +1566,45 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // entry is durably persisted (same guarantee as the old inline
                 // path).
                 match self.durable_save_inputs() {
-                    Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| node_id),
+                    Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| info),
                     Err(e) => Err(e),
                 }
             }
             Err(e) => Err(e),
         };
         let _ = reply.send(outcome);
+    }
+
+    /// Persist `vendor_id`/`product_id` onto the commissioned device `node_id`'s
+    /// entry (from the controller's post-commission `BasicInformation` read). A
+    /// device that is not found is a no-op success — the metadata is enrichment,
+    /// not a correctness-critical write, and the commission itself has already
+    /// been reported successful. Persists only if a field actually changed.
+    async fn handle_set_node_vid_pid(
+        &mut self,
+        node_id: u64,
+        vendor_id: Option<u16>,
+        product_id: Option<u16>,
+    ) -> Result<(), Error> {
+        let mut changed = false;
+        for fabric in &mut self.state.fabrics {
+            if let Some(device) = fabric.devices.iter_mut().find(|d| d.node_id == node_id) {
+                if vendor_id.is_some() && device.vendor_id != vendor_id {
+                    device.vendor_id = vendor_id;
+                    changed = true;
+                }
+                if product_id.is_some() && device.product_id != product_id {
+                    device.product_id = product_id;
+                    changed = true;
+                }
+                break;
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+        let (store, bytes) = self.durable_save_inputs()?;
+        save_offloaded(store, bytes).await
     }
 
     /// Prepare the inputs for a durable, await-to-completion snapshot save.
@@ -6637,6 +6700,7 @@ mod tests {
     /// `commission_completion_drains_while_loop_stays_responsive` does for the
     /// error path) and confirm the label round-trips through `ListNodes`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // one linear success-path scenario: label + vid/pid persistence
     async fn commission_completion_persists_label_on_device_entry() {
         let (io, _peer) = InMemoryDatagram::pair();
         let fabric = {
@@ -6690,7 +6754,19 @@ mod tests {
             .await
             .expect("the completions arm must resolve the commission reply")
             .expect("reply channel");
-        assert_eq!(outcome.unwrap(), 2, "node id must be the assigned peer id");
+        let info = outcome.expect("commission reply");
+        assert_eq!(info.node_id, 2, "node id must be the assigned peer id");
+        assert_eq!(info.fabric_id, fabric_id, "NodeInfo carries the fabric id");
+        assert_eq!(
+            info.label,
+            Some("plug".to_string()),
+            "NodeInfo carries the label"
+        );
+        assert_eq!(
+            (info.vendor_id, info.product_id),
+            (None, None),
+            "vid/pid are filled by the controller's post-commission read, not the actor"
+        );
 
         // Read back the persisted device via the public `ListNodes` path.
         let (nodes_tx, nodes_rx) = oneshot::channel();
@@ -6705,6 +6781,52 @@ mod tests {
             Some("plug".to_string()),
             "the caller-supplied label must be persisted on the device entry"
         );
+
+        // Task 5 — `SetNodeVidPid` (the controller's post-commission
+        // BasicInformation-capture persist) updates the same entry's vid/pid,
+        // durably, and `ListNodes` reflects it.
+        let (set_tx, set_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::SetNodeVidPid {
+                node_id: 2,
+                vendor_id: Some(0xFFF1),
+                product_id: Some(0x8000),
+                reply: set_tx,
+            })
+            .await
+            .unwrap();
+        set_rx.await.unwrap().expect("SetNodeVidPid persist");
+        let (nodes2_tx, nodes2_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::ListNodes { reply: nodes2_tx })
+            .await
+            .unwrap();
+        let nodes2 = nodes2_rx.await.unwrap();
+        assert_eq!(
+            (nodes2[0].vendor_id, nodes2[0].product_id),
+            (Some(0xFFF1), Some(0x8000)),
+            "SetNodeVidPid must persist vid/pid onto the device entry"
+        );
+        assert_eq!(
+            nodes2[0].label,
+            Some("plug".to_string()),
+            "SetNodeVidPid must not disturb the existing label"
+        );
+        // An unknown node id is a no-op success (not an error).
+        let (miss_tx, miss_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::SetNodeVidPid {
+                node_id: 0xDEAD,
+                vendor_id: Some(1),
+                product_id: Some(2),
+                reply: miss_tx,
+            })
+            .await
+            .unwrap();
+        miss_rx
+            .await
+            .unwrap()
+            .expect("SetNodeVidPid for an unknown node is a no-op success");
 
         drop(cmd_tx);
         let _ = loop_handle.await;

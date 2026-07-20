@@ -111,12 +111,15 @@ async fn main() -> Result<()> {
     let node_id = match (&args.commission, args.node) {
         (Some(code), _) => {
             println!("commissioning…");
-            let id = controller
-                .commission(code, None)
+            let info = controller
+                .commission(code, Some("quickstart device".into()))
                 .await
                 .context("commissioning")?;
-            println!("commissioned device as node 0x{id:016X}");
-            id
+            println!(
+                "commissioned device as node 0x{:016X} (vendor {:?}, product {:?}, label {:?})",
+                info.node_id, info.vendor_id, info.product_id, info.label
+            );
+            info.node_id
         }
         (None, Some(id)) => {
             println!("reconnecting to persisted node 0x{id:016X} (no commissioning)");
