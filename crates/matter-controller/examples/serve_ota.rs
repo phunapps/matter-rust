@@ -43,6 +43,12 @@ struct Args {
     /// UDP port to bind the provider socket to (0 = ephemeral).
     #[arg(long, default_value_t = 5560)]
     port: u16,
+
+    /// BDX max block size in bytes. 960 (the default) fits the Wi-Fi/IP
+    /// secured-payload budget; use ~512 for a Thread-routed requestor so each
+    /// block spans fewer 6LoWPAN fragments (BDX-4).
+    #[arg(long, default_value_t = 960)]
+    block_size: u16,
 }
 
 #[tokio::main]
@@ -50,17 +56,18 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let image = std::fs::read(&args.image).context("read .ota image")?;
     println!(
-        "[ota] loaded {}-byte image; announcing to node {} + serving on port {}…",
+        "[ota] loaded {}-byte image; announcing to node {} + serving on port {} (block size {})…",
         image.len(),
         args.node,
-        args.port
+        args.port,
+        args.block_size
     );
     let store = Arc::new(FileStore::new(&args.store));
     let controller = MatterController::open(store)
         .await
         .context("open controller")?;
     controller
-        .serve_ota(args.node, image, args.version, args.port)
+        .serve_ota_with_block_size(args.node, image, args.version, args.port, args.block_size)
         .await
         .context("serve_ota")?;
     println!("[ota] done — requestor downloaded + applied the image");
