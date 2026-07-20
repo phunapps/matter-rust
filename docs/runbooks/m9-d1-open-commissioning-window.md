@@ -130,7 +130,7 @@ let ctrl_b = MatterController::builder(store_b)
     .await?;
 let _ = ctrl_b.create_fabric(FabricConfig::new(2, 2, 1,
     (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY))).await?;
-let node_id_b = ctrl_b.commission(&win.manual_code).await?;
+let node_id_b = ctrl_b.commission(&win.manual_code, None).await?.node_id;
 println!("Fabric B commissioned node_id={node_id_b}");
 ```
 

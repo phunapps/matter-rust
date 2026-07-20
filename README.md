@@ -187,8 +187,8 @@ let controller = MatterController::builder(store)
     .build()
     .await?;
 controller.create_fabric(fabric_config).await?;
-let node_id = controller.commission("MT:...").await?;
-let node = controller.node(node_id);
+let info = controller.commission("MT:...", Some("kitchen plug".into())).await?;
+let node = controller.node(info.node_id);
 
 node.invoke(toggle_path, Value::Structure(vec![])).await?;       // commands
 let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;   // wildcard read

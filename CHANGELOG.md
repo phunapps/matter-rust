@@ -22,6 +22,46 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## 0.3.0
+
+A `matter-controller` API batch driven by the WeaveHome integration. Only
+`matter-controller`'s public API changes (one breaking change); the other
+crates are untouched at the API level.
+
+### `matter-controller`
+
+- **BREAKING — `commission()` / `commission_ble()` return `NodeInfo`, not
+  `u64`.** Both also take a new `label: Option<String>` argument. The returned
+  [`NodeInfo`] carries `node_id`, `fabric_id`, `vendor_id`, `product_id`, and
+  the caller-supplied `label`. `vendor_id`/`product_id` are captured
+  **best-effort** via a post-commission `BasicInformation` read (endpoint 0,
+  cluster `0x0028`, `VendorID` `0x0002` + `ProductID` `0x0004`) — a failed read
+  never fails a completed commission; the ids stay `None` and can be re-read
+  later. The `label` is persisted atomically with the device entry.
+- **`MatterController::nodes() -> Vec<NodeInfo>`** — typed enumeration of every
+  commissioned node across all fabrics, so integrators no longer deserialize the
+  on-disk snapshot to discover node ids and metadata.
+- **`MatterController::forget_node(node_id) -> Result<bool>`** — drops ALL of
+  the controller's own local state for a node (device entry, cached CASE
+  session, resumption data, live subscriptions, and connect bookkeeping)
+  **without contacting the device**. Reclaims a node that is unreachable or
+  already factory-reset, where `remove_fabric` (which needs the device to
+  cooperate) cannot run. Returns `true` if a node was removed, `false` if none
+  matched.
+- **`Node::invoke_tlv(path, fields_tlv)` and `Node::invoke_timed_tlv`** — invoke
+  a command with **pre-encoded** TLV fields (e.g. the `Vec<u8>` returned by
+  `matter_clusters::gen::<cluster>::encode_<command>()`), skipping the
+  decode-then-re-encode round trip through `Value`. `invoke()`/`invoke_timed()`
+  now delegate to these.
+- **Clearer `Error::NoTrust`** — the message now names the concrete fix
+  (`builder().attestation_trust(AttestationTrust::from_dirs(paa, cd))`), so a
+  controller opened via `MatterController::open()` (no trust) gets an actionable
+  error at commission time instead of a bare "no attestation trust configured".
+- New persisted `DeviceEntry` fields `vendor_id`/`product_id`/`label` (snapshot
+  device-struct tags 4/5/6, additive + optional — pre-0.3.0 stores load
+  unchanged, defaulting the three to `None`; the snapshot version is not
+  bumped).
+
 ## 0.2.0
 
 The first release after `0.1.0`. Bundles a security-remediation batch (from a
