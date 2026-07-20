@@ -67,8 +67,13 @@ pub enum Error {
     #[error("invalid setup code: {0}")]
     SetupCode(String),
 
-    /// Commissioning requires attestation trust, but none was configured.
-    #[error("no attestation trust configured (use MatterController::builder)")]
+    /// No attestation trust configured; commissioning cannot verify the device.
+    #[error(
+        "no attestation trust configured — commissioning cannot verify the device's \
+         attestation. Build the controller with MatterController::builder(store)\
+         .attestation_trust(AttestationTrust::from_dirs(paa_dir, cd_dir)).build(), \
+         not MatterController::open(store)"
+    )]
     NoTrust,
 
     /// An `AdministratorCommissioning` command returned a non-success IM status
@@ -105,4 +110,20 @@ pub enum Error {
     /// first to mint and persist the key set.
     #[error("group key set {0} is not provisioned on this fabric")]
     GroupNotProvisioned(u16),
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn no_trust_error_names_the_fix() {
+        let msg = crate::error::Error::NoTrust.to_string();
+        assert!(
+            msg.contains("attestation_trust"),
+            "NoTrust must name the builder fix: {msg}"
+        );
+        assert!(
+            msg.contains("from_dirs"),
+            "NoTrust must name from_dirs: {msg}"
+        );
+    }
 }
