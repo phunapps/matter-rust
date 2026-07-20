@@ -2340,18 +2340,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     dev.resumption_record = Some(rr);
                     changed = true;
                 }
-            } else {
-                fabric.devices.push(crate::state::DeviceEntry {
-                    node_id,
-                    peer_noc_public_key: [0u8; 65],
-                    resumption_record,
-                    last_known_addr: Some(addr),
-                    vendor_id: None,
-                    product_id: None,
-                    label: None,
-                });
-                changed = true;
             }
+            // UPDATE-ONLY: a `DeviceEntry` is born at commission time
+            // ([`Self::handle_commission_completion`]), never on a connect. If
+            // the node is not a known device — because it was `forget_node`ed
+            // while this handshake was in flight, or was never commissioned —
+            // this connect must NOT fabricate an entry. Doing so previously
+            // pushed a placeholder with a ZEROED `peer_noc_public_key`, which
+            // (a) resurrected a device the caller asked to forget and (b)
+            // persisted a corrupt NOC key. A late connect to a forgotten node
+            // now leaves persisted state untouched; its transient session is
+            // never used (its waiters were failed by `forget_node`).
         }
         // Persistence here is best-effort and offloaded off the actor loop; a
         // write failure must not abort an otherwise-successful connection (the
@@ -3922,6 +3921,59 @@ mod tests {
         );
     }
 
+    /// Final-review C1 regression: a connect that completes AFTER the node was
+    /// forgotten (or was never commissioned) must NOT resurrect a `DeviceEntry`.
+    /// `upsert_device` is update-only — the corrupt zeroed-NOC-key placeholder
+    /// it used to push would otherwise re-add a device the caller forgot (and
+    /// persist a bogus key). We drive `upsert_device` directly, which is the
+    /// exact call `handle_connect_done` makes when a spawned handshake lands.
+    #[tokio::test]
+    async fn upsert_device_is_update_only_and_never_resurrects_a_forgotten_node() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let peer: std::net::SocketAddr = "127.0.0.1:5540".parse().unwrap();
+
+        // (a) UNKNOWN/forgotten node: a completed connect must add nothing.
+        actor.upsert_device(fabric_id, 0x0000_0000_0000_0042, peer, Some(vec![1, 2, 3]));
+        assert!(
+            actor.sole_fabric().unwrap().devices.is_empty(),
+            "upsert_device must not fabricate a DeviceEntry for an unknown/forgotten node"
+        );
+
+        // (b) KNOWN node: the happy path (address-hint / resumption update) still
+        // works — the update-only change must not break legitimate reconnects.
+        let node_id = 0x0000_0000_0000_0007;
+        actor
+            .state
+            .fabrics
+            .iter_mut()
+            .find(|f| f.fabric_id == fabric_id)
+            .unwrap()
+            .devices
+            .push(crate::state::DeviceEntry {
+                node_id,
+                peer_noc_public_key: [0x04; 65],
+                resumption_record: None,
+                last_known_addr: None,
+                vendor_id: None,
+                product_id: None,
+                label: None,
+            });
+        actor.upsert_device(fabric_id, node_id, peer, Some(vec![9, 9]));
+        let dev = actor.sole_fabric().unwrap().devices[0].clone();
+        assert_eq!(dev.last_known_addr.as_deref(), Some("127.0.0.1:5540"));
+        assert_eq!(dev.resumption_record, Some(vec![9, 9]));
+        assert_eq!(
+            dev.peer_noc_public_key, [0x04; 65],
+            "the existing NOC key must be preserved, never zeroed"
+        );
+        assert_eq!(
+            actor.sole_fabric().unwrap().devices.len(),
+            1,
+            "no duplicate entry was created for the known node"
+        );
+    }
+
     /// Loopback acceptance for the multicast group send.
     ///
     /// Drive `create_group` + `invoke_group`, capture the multicast frame the
@@ -5193,7 +5245,7 @@ mod tests {
     }
 
     fn loopback_harness() -> Harness {
-        let fabric = {
+        let mut fabric = {
             let cfg = FabricConfig {
                 fabric_id: 0x0102_0304_0506_0708,
                 rcac_id: 1,
@@ -5210,6 +5262,20 @@ mod tests {
 
         let device_record = fabric.to_fabric_record().unwrap();
         let (device_signer, _pkcs8) = RingSigner::generate().unwrap();
+        // Seed the device into the fabric, as a real commission would: the
+        // controller only ever connects to an already-commissioned device
+        // (device entries are born at commission, and `upsert_device` is
+        // update-only). Without this, a connect would find no entry to update.
+        let device_pubkey = *device_signer.public_key().as_bytes();
+        fabric.devices.push(crate::state::DeviceEntry {
+            node_id: device_node_id,
+            peer_noc_public_key: device_pubkey,
+            resumption_record: None,
+            last_known_addr: None,
+            vendor_id: None,
+            product_id: None,
+            label: None,
+        });
         let device_noc = issue_noc(
             &device_record,
             &VerifiedCsr {
