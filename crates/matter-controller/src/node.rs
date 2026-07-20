@@ -463,7 +463,28 @@ impl Node {
     /// As [`Self::read`], plus [`Error::Codec`] if the fields fail to encode
     /// or the response fields cannot be decoded.
     pub async fn invoke(&self, path: CommandPath, fields: Value) -> Result<InvokeResult, Error> {
-        let fields_tlv = value_to_tlv(&fields)?;
+        self.invoke_tlv(path, value_to_tlv(&fields)?).await
+    }
+
+    /// Invoke a command with **pre-encoded** TLV command fields — e.g. the
+    /// `Vec<u8>` returned by
+    /// `matter_clusters::gen::<cluster>::encode_<command>()` — passed straight
+    /// into the wire payload, avoiding a decode-then-re-encode round trip
+    /// through [`Value`].
+    ///
+    /// `fields_tlv` must be the TLV-encoded command fields structure (an
+    /// anonymous-tagged struct), exactly what the generated `encode_*` helpers
+    /// produce; pass the empty-structure encoding for a no-field command.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`], plus [`Error::Codec`] if the response fields cannot be
+    /// decoded.
+    pub async fn invoke_tlv(
+        &self,
+        path: CommandPath,
+        fields_tlv: Vec<u8>,
+    ) -> Result<InvokeResult, Error> {
         let resp = self
             .action(
                 OP_INVOKE_REQUEST,
@@ -497,7 +518,24 @@ impl Node {
         fields: Value,
         timeout_ms: Option<u16>,
     ) -> Result<InvokeResult, Error> {
-        let fields_tlv = value_to_tlv(&fields)?;
+        self.invoke_timed_tlv(path, value_to_tlv(&fields)?, timeout_ms)
+            .await
+    }
+
+    /// Like [`invoke_tlv`](Self::invoke_tlv) (pre-encoded TLV fields) but always
+    /// performs a **timed** interaction, mirroring
+    /// [`invoke_timed`](Self::invoke_timed). `timeout_ms` defaults to
+    /// [`TIMED_DEFAULT_MS`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::invoke_tlv`].
+    pub async fn invoke_timed_tlv(
+        &self,
+        path: CommandPath,
+        fields_tlv: Vec<u8>,
+        timeout_ms: Option<u16>,
+    ) -> Result<InvokeResult, Error> {
         let payload = build_invoke_request_timed(path, &fields_tlv);
         let resp = self
             .round_trip_timed(
@@ -1418,5 +1456,45 @@ impl Node {
             key,
             cancelled: false,
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
+mod tests {
+    use matter_codec::Value;
+
+    use super::{build_invoke_request, value_to_tlv, CommandPath};
+
+    /// The whole point of [`Node::invoke_tlv`]: a generated
+    /// `matter_clusters::gen::*::encode_*()` output can be fed straight in, and
+    /// the resulting wire `InvokeRequest` is byte-identical to encoding the
+    /// corresponding [`Value`] and calling [`Node::invoke`]. This proves the
+    /// triple-hop (encode → decode → re-encode) the raw-TLV path removes is a
+    /// no-op transform, so both entry points send the same bytes.
+    #[test]
+    fn invoke_tlv_matches_invoke_value_wire_payload() {
+        let path = CommandPath {
+            endpoint: 1,
+            cluster: 0x0006,
+            command: 0x01,
+        };
+        // Generated encoder output for OnOff.On (an empty fields struct) — the
+        // exact `Vec<u8>` a caller would pass to `invoke_tlv`.
+        let gen_tlv = matter_clusters::gen::on_off::encode_on();
+        // The equivalent `Value` a caller would otherwise pass to `invoke`.
+        let via_value = value_to_tlv(&Value::Structure(vec![])).unwrap();
+        assert_eq!(
+            gen_tlv, via_value,
+            "gen encode_on() must equal value_to_tlv(empty struct) — the raw-TLV \
+             and Value paths carry identical field bytes"
+        );
+        // Therefore the built wire requests are identical: invoke_tlv(gen) and
+        // invoke(Value) transmit byte-identical frames.
+        assert_eq!(
+            build_invoke_request(path, &gen_tlv),
+            build_invoke_request(path, &via_value),
+            "invoke_tlv and invoke build the same on-wire InvokeRequest"
+        );
     }
 }
