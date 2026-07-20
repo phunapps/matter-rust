@@ -444,19 +444,25 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<Vec<matter_interaction::ReportData>, Error>>,
     },
     /// Commission a device from a parsed setup payload; returns its node id.
+    /// `label` is an opaque caller-supplied string persisted on the resulting
+    /// `DeviceEntry` (set atomically with the rest of the entry, so it can
+    /// never observably land only on a later save).
     Commission {
         setup_payload: matter_commissioning::SetupPayload,
+        label: Option<String>,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
     /// Commission a device over BLE/BTP from a parsed setup payload and required
     /// network (Wi-Fi or Thread) credentials; returns its node id (feature
     /// `ble`). Runs on its own spawned task exactly like [`Command::Commission`],
     /// but the task first scans BLE, opens a BTP session, and drives
-    /// `commission_ble`.
+    /// `commission_ble`. `label` is the same opaque caller-supplied string as
+    /// [`Command::Commission`]'s.
     #[cfg(feature = "ble")]
     CommissionBle {
         setup_payload: matter_commissioning::SetupPayload,
         network: matter_commissioning::NetworkCredentials,
+        label: Option<String>,
         reply: oneshot::Sender<Result<u64, Error>>,
     },
     /// Establish a subscription to `paths` on `node_id`; returns the report
@@ -806,6 +812,9 @@ async fn run_connect_task(
 struct CommissionCompletion {
     fabric_id: u64,
     result: Result<matter_commissioning::CommissionedFabric, Error>,
+    /// Caller-supplied label to persist on the device entry, carried through
+    /// from `Command::Commission`/`CommissionBle` (see there).
+    label: Option<String>,
     reply: oneshot::Sender<Result<u64, Error>>,
 }
 
@@ -1133,23 +1142,25 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             Command::Commission {
                 setup_payload,
+                label,
                 reply,
             } => {
                 // M9-G-d: spawn on its own socket + return to the loop
                 // immediately; the result is resolved later via the completions
                 // channel, so a multi-second commission no longer pauses other
                 // sessions' MRP/liveness.
-                self.spawn_commission(setup_payload, reply);
+                self.spawn_commission(setup_payload, label, reply);
             }
             #[cfg(feature = "ble")]
             Command::CommissionBle {
                 setup_payload,
                 network,
+                label,
                 reply,
             } => {
                 // Same off-loop pattern as `Command::Commission`, but the
                 // spawned task scans BLE + opens a BTP session first.
-                self.spawn_commission_ble(setup_payload, network, reply);
+                self.spawn_commission_ble(setup_payload, network, label, reply);
             }
             Command::Subscribe {
                 node_id,
@@ -1333,6 +1344,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     fn spawn_commission(
         &mut self,
         setup_payload: matter_commissioning::SetupPayload,
+        label: Option<String>,
         reply: oneshot::Sender<Result<u64, Error>>,
     ) {
         let Some(trust) = self.trust.clone() else {
@@ -1401,6 +1413,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 .send(CommissionCompletion {
                     fabric_id,
                     result,
+                    label,
                     reply,
                 })
                 .await;
@@ -1421,6 +1434,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         &mut self,
         setup_payload: matter_commissioning::SetupPayload,
         network: matter_commissioning::NetworkCredentials,
+        label: Option<String>,
         reply: oneshot::Sender<Result<u64, Error>>,
     ) {
         let Some(trust) = self.trust.clone() else {
@@ -1488,6 +1502,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 .send(CommissionCompletion {
                     fabric_id,
                     result,
+                    label,
                     reply,
                 })
                 .await;
@@ -1500,11 +1515,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let CommissionCompletion {
             fabric_id,
             result,
+            label,
             reply,
         } = completion;
         let outcome = match result {
             Ok(commissioned) => {
-                let device = crate::commission::device_entry_from_commissioned(&commissioned);
+                let mut device = crate::commission::device_entry_from_commissioned(&commissioned);
+                device.label = label;
                 let node_id = device.node_id;
                 if let Some(fabric) = self
                     .state
@@ -6594,6 +6611,7 @@ mod tests {
             .send(CommissionCompletion {
                 fabric_id,
                 result: Err(Error::Operational("simulated commission failure".into())),
+                label: None,
                 reply: reply_tx,
             })
             .await
@@ -6605,6 +6623,87 @@ mod tests {
         assert!(
             matches!(outcome, Err(Error::Operational(_))),
             "the commission error must propagate to the caller (got {outcome:?})"
+        );
+
+        drop(cmd_tx);
+        let _ = loop_handle.await;
+    }
+
+    /// Task 4 — a caller-supplied `label` riding along on a successful
+    /// [`CommissionCompletion`] must land on the pushed `DeviceEntry`, atomically
+    /// with the rest of the commissioning state (same durable-save path as the
+    /// node id / peer key). We feed a synthetic success completion (skipping the
+    /// real PASE/CASE network dance, exactly like
+    /// `commission_completion_drains_while_loop_stays_responsive` does for the
+    /// error path) and confirm the label round-trips through `ListNodes`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commission_completion_persists_label_on_device_entry() {
+        let (io, _peer) = InMemoryDatagram::pair();
+        let fabric = {
+            let cfg = FabricConfig {
+                fabric_id: 0x0A0B_0C0D_0E0F_1011,
+                rcac_id: 1,
+                commissioner_node_id: 1,
+                validity: (
+                    MatterTime::from_unix_secs(1_700_000_000),
+                    MatterTime::NO_EXPIRY,
+                ),
+                issue_icac: false,
+            };
+            crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
+        };
+        let fabric_id = fabric.fabric_id;
+        let fabric_record = fabric.to_fabric_record().expect("fabric record");
+        let actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(SystemNocRng),
+            ControllerState {
+                fabrics: vec![fabric],
+            },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+        let completion_tx = actor.commission_tx.clone();
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(8);
+        let loop_handle = tokio::spawn(actor.run(cmd_rx));
+
+        let commissioned = matter_commissioning::test_support::commissioned_fabric_for_test(
+            fabric_record,
+            2,
+            [0x04; 65],
+        );
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        completion_tx
+            .send(CommissionCompletion {
+                fabric_id,
+                result: Ok(commissioned),
+                label: Some("plug".to_string()),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), reply_rx)
+            .await
+            .expect("the completions arm must resolve the commission reply")
+            .expect("reply channel");
+        assert_eq!(outcome.unwrap(), 2, "node id must be the assigned peer id");
+
+        // Read back the persisted device via the public `ListNodes` path.
+        let (nodes_tx, nodes_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::ListNodes { reply: nodes_tx })
+            .await
+            .unwrap();
+        let nodes = nodes_rx.await.unwrap();
+        assert_eq!(nodes.len(), 1, "the device entry must have been pushed");
+        assert_eq!(
+            nodes[0].label,
+            Some("plug".to_string()),
+            "the caller-supplied label must be persisted on the device entry"
         );
 
         drop(cmd_tx);
@@ -6627,6 +6726,7 @@ mod tests {
             .send(Command::Commission {
                 setup_payload: matter_commissioning::parse_manual_code("11693312331")
                     .expect("valid sample manual pairing code"),
+                label: None,
                 reply: c_tx,
             })
             .await

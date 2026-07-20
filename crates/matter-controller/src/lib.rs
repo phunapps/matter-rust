@@ -79,8 +79,12 @@
 //! )).await?;
 //! let _ = fabric_id;
 //!
-//! // Commission a device, then control it.
-//! let node_id = controller.commission("MT:Y.K90AFN00KA0648G00").await?;
+//! // Commission a device, then control it. `label` is an opaque
+//! // caller-supplied string persisted on the device entry; pass `None` if
+//! // you have nothing to attach.
+//! let node_id = controller
+//!     .commission("MT:Y.K90AFN00KA0648G00", Some("kitchen plug".into()))
+//!     .await?;
 //! let node = controller.node(node_id);
 //!
 //! // Read all attributes of the OnOff cluster (0x0006) on endpoint 1.

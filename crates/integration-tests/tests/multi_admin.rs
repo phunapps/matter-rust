@@ -110,12 +110,12 @@ async fn open_window_second_controller_and_remove_fabric() {
     //    as a transient commission timeout in the sweep — tolerate ONE
     //    transient failure with a short pause. A real regression fails both
     //    attempts and still hard-fails the test.
-    let commissioned = match controller_b.commission(&window.manual_code).await {
+    let commissioned = match controller_b.commission(&window.manual_code, None).await {
         Ok(id) => Ok(id),
         Err(first) => {
             eprintln!("[multi_admin] B's first commission attempt failed ({first}); retrying once");
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            controller_b.commission(&window.manual_code).await
+            controller_b.commission(&window.manual_code, None).await
         }
     };
     match commissioned {

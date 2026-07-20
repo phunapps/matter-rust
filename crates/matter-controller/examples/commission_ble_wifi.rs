@@ -161,7 +161,7 @@ async fn main() -> Result<()> {
          and registers over mDNS)…"
     );
     let node_id = controller
-        .commission_ble(&args.commission, NetworkCredentials::WiFi(wifi))
+        .commission_ble(&args.commission, NetworkCredentials::WiFi(wifi), None)
         .await
         .context("BLE→Wi-Fi commissioning")?;
     println!("commissioned over BLE as node 0x{node_id:016X}");

@@ -119,6 +119,8 @@ pub use matter_interaction as im;
 pub mod noc;
 pub mod setup;
 pub mod state_machine;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod thread_dataset;
 #[cfg(feature = "wiretrace")]
 pub mod wiretrace;

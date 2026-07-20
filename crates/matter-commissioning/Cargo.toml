@@ -27,6 +27,13 @@ tracing = ["dep:tracing"]
 ## `matter-transport` IO layer. Off by default: the sans-IO state machine,
 ## codecs, and `im` module do not require an async runtime.
 driver = ["dep:tokio"]
+## Enables `matter_commissioning::test_support` — a canned-`CommissionedFabric`
+## constructor for downstream crates whose tests need a successful
+## commissioning outcome without driving a full PASE/CASE handshake
+## (`CommissionedFabric` is `#[non_exhaustive]`, so no other crate can build
+## one by struct literal). Mirrors `matter_cert::test_support`. NOT part of
+## the stable public API — production callers must not enable this feature.
+test-support = []
 ## JSON-lines wire-trace capture (`JsonlLayer`) for cross-verification
 ## against matter.js. Implies `tracing`. Tooling-grade, not wire-format code.
 wiretrace = ["tracing", "dep:tracing-subscriber", "dep:serde_json"]

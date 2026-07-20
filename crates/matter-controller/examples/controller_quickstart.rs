@@ -19,6 +19,9 @@
 //! `credentials/production/{paa-root-certs,cd-certs}`). Without them the bundled
 //! CSA **test** roots are used, which reject production devices.
 
+// One long linear main with verbose prose, like the other examples in this crate.
+#![allow(clippy::too_many_lines)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -108,7 +111,10 @@ async fn main() -> Result<()> {
     let node_id = match (&args.commission, args.node) {
         (Some(code), _) => {
             println!("commissioning…");
-            let id = controller.commission(code).await.context("commissioning")?;
+            let id = controller
+                .commission(code, None)
+                .await
+                .context("commissioning")?;
             println!("commissioned device as node 0x{id:016X}");
             id
         }

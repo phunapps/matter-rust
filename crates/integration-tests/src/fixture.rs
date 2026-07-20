@@ -61,7 +61,7 @@ pub async fn connect(cfg: &DutConfig) -> Result<(MatterController, u64)> {
     }
 
     let node_id = controller
-        .commission(&cfg.setup_code)
+        .commission(&cfg.setup_code, None)
         .await
         .context("commissioning DUT")?;
     std::fs::write(cfg.node_sidecar(), node_id.to_string()).context("writing node-id sidecar")?;

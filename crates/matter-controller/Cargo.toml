@@ -41,6 +41,13 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Test-only: enables `matter_commissioning::test_support`'s canned
+# `CommissionedFabric` constructor so actor.rs's unit tests can exercise a
+# successful-commission completion without a full PASE/CASE handshake.
+# Mirrors matter-commissioning's own dev-dependency on matter-cert's
+# `test-support`. Cargo unifies this into the lib build only under
+# `cargo test` (dev-dependencies never apply to a plain `cargo build`).
+matter-commissioning = { path = "../matter-commissioning", version = "0.2.0", features = ["driver", "test-support"] }
 
 [[example]]
 name = "controller_quickstart"

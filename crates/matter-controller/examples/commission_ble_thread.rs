@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
     //    attestation → NOC → AddOrUpdateThreadNetwork → ConnectNetwork → CASE.
     println!("commissioning over BLE→Thread (this can take up to ~90 s at network-enable while the device attaches to the mesh)…");
     let node_id = controller
-        .commission_ble(&args.commission, NetworkCredentials::Thread(dataset))
+        .commission_ble(&args.commission, NetworkCredentials::Thread(dataset), None)
         .await
         .context("BLE→Thread commissioning")?;
     println!("commissioned over BLE as node 0x{node_id:016X}");

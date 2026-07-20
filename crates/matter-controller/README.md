@@ -45,7 +45,9 @@ let _fabric = controller.create_fabric(FabricConfig {
     validity: (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
 }).await?;
 
-let node_id = controller.commission("MT:Y.K90AFN00KA0648G00").await?;
+let node_id = controller
+    .commission("MT:Y.K90AFN00KA0648G00", Some("kitchen plug".into()))
+    .await?;
 let node = controller.node(node_id);
 
 // Read all OnOff attributes; subscribe to changes.

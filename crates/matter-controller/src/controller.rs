@@ -481,17 +481,25 @@ impl MatterController {
     /// Commission a device from a QR (`MT:...`) or manual pairing code, bring it
     /// onto the controller's fabric, and persist it. Returns the device's node id.
     ///
+    /// `label` is an opaque, caller-supplied string (e.g. a friendly name like
+    /// `"kitchen plug"`) persisted on the device's entry atomically with the
+    /// rest of the commissioning result — a crash after this call returns
+    /// either sees the fully-commissioned device with its label, or nothing
+    /// at all, never a device missing its label. Pass `None` if you have no
+    /// label to attach yet; it can be left unset.
+    ///
     /// # Errors
     ///
     /// [`Error::NoTrust`] if no attestation trust was configured,
     /// [`Error::SetupCode`] if the code is invalid, [`Error::ControllerStopped`]
     /// if the task stopped, or any driver/commissioning error.
-    pub async fn commission(&self, setup_code: &str) -> Result<u64, Error> {
+    pub async fn commission(&self, setup_code: &str, label: Option<String>) -> Result<u64, Error> {
         let setup_payload = parse_setup_code(setup_code)?;
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Command::Commission {
                 setup_payload,
+                label,
                 reply,
             })
             .await
@@ -522,6 +530,11 @@ impl MatterController {
     /// attributed to the terminal application — see
     /// `docs/runbooks/ble-commissioning.md`.
     ///
+    /// `label` is the same opaque, caller-supplied string as
+    /// [`Self::commission`]'s — persisted on the device's entry atomically
+    /// with the rest of the commissioning result. Pass `None` if you have no
+    /// label to attach yet.
+    ///
     /// # Errors
     ///
     /// [`Error::NoTrust`] if no attestation trust was configured,
@@ -535,6 +548,7 @@ impl MatterController {
         &self,
         setup_code: &str,
         network: matter_commissioning::NetworkCredentials,
+        label: Option<String>,
     ) -> Result<u64, Error> {
         let setup_payload = parse_setup_code(setup_code)?;
         let (reply, rx) = oneshot::channel();
@@ -542,6 +556,7 @@ impl MatterController {
             .send(Command::CommissionBle {
                 setup_payload,
                 network,
+                label,
                 reply,
             })
             .await
