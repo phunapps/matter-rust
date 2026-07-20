@@ -671,6 +671,12 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// completes. See [`Self::enqueue_connect_waiter`] /
     /// [`Self::handle_connect_done`].
     pending_connects: HashMap<u64, Vec<ConnectWaiter>>,
+    /// Peer MRP config (from the operational mDNS `SII`/`SAI`/`SAT`) captured
+    /// when a connect is spawned, applied to the session at
+    /// [`Self::handle_connect_done`] so retransmits are sized to the peer, not
+    /// our defaults (MRP-2). Keyed by node id; removed when the connect
+    /// completes or the node is forgotten.
+    connect_mrp: HashMap<u64, matter_transport::MrpConfig>,
     /// IPv6 multicast egress interface for group sends (destination scope
     /// id). Set via `MatterControllerBuilder::multicast_interface`; `None`
     /// falls back to the `MATTER_MULTICAST_IF` env var, then kernel default.
@@ -963,6 +969,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             commission_tx,
             commission_rx,
             pending_connects: HashMap::new(),
+            connect_mrp: HashMap::new(),
             multicast_if: None,
             connect_inbound: HashMap::new(),
             connect_routes: HashMap::new(),
@@ -1959,7 +1966,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return;
             }
         };
-        let peer = match matter_commissioning::driver::resolve_operational(
+        let (peer, peer_mrp) = match matter_commissioning::driver::resolve_operational_with_mrp(
             &mut self.discovery,
             compressed,
             node_id,
@@ -1972,6 +1979,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return;
             }
         };
+        // Capture the peer's advertised MRP config; applied to the session when
+        // the handshake completes (MRP-2, see `handle_connect_done`).
+        self.connect_mrp.insert(node_id, peer_mrp);
         // Reserve the local session id the handshake advertises in Sigma1; the
         // actor registers the finished session under it on completion.
         let local_session_id = self.sessions.allocate_session_id().0;
@@ -2052,7 +2062,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .resumption_record
             .as_ref()
             .and_then(|r| crate::resumption::serialize_record(r).ok());
-        let sid = self.sessions.register_case(&output, SessionRole::Initiator);
+        // Apply the peer's advertised MRP config captured at spawn time (MRP-2);
+        // default if the connect predates the capture (e.g. a recovery path).
+        let peer_mrp = self.connect_mrp.remove(&node_id).unwrap_or_default();
+        let sid = self
+            .sessions
+            .register_case_with_mrp(&output, SessionRole::Initiator, peer_mrp);
         self.upsert_device(fabric_id, node_id, peer, record_bytes);
         self.cache.insert(
             (fabric_id, node_id),
@@ -2093,6 +2108,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     fn fail_connect_waiters(&mut self, node_id: u64, err: &Error) {
         self.connect_inbound.remove(&node_id);
         self.connect_routes.retain(|_, n| *n != node_id);
+        // Drop any captured peer MRP config for this aborted/forgotten connect.
+        self.connect_mrp.remove(&node_id);
         if let Some(waiters) = self.pending_connects.remove(&node_id) {
             let msg = err.to_string();
             let fail_err =

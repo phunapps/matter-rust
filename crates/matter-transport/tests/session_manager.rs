@@ -277,10 +277,13 @@ fn poll_timeout_min_across_sessions() {
         .unwrap();
 
     let deadline = mgr.poll_timeout().unwrap();
+    // Both sessions are fresh with no recorded peer activity, so they classify
+    // as idle (MRP-1) and use the idle base (4200 ms). s1 was sent first, so
+    // its deadline is the earliest across sessions.
     assert_eq!(
         deadline,
-        now + Duration::from_millis(300),
-        "earliest is s1's 300ms deadline",
+        now + Duration::from_millis(4200),
+        "earliest is s1's idle-base deadline",
     );
 }
 
@@ -354,10 +357,14 @@ fn handle_timeout_drains_expired_sessions() {
         )
         .unwrap();
 
-    // Advance well past all 5 retransmits.
+    // Advance well past all 5 retransmits. The session is idle (no peer
+    // activity recorded), so retransmits use the idle base (4200 ms) with
+    // exponential backoff — the last attempt reschedules to ~134 s out, so the
+    // budget must comfortably exceed that (chip's idle spacing is deliberately
+    // long for sleepy devices).
     let mut t = now;
     let mut saw_expired = false;
-    for _ in 0..10 {
+    for _ in 0..30 {
         t += Duration::from_secs(10);
         let events = mgr.handle_timeout(t);
         if events.iter().any(|e| matches!(e, MrpEvent::Expired { .. })) {

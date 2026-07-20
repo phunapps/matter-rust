@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 
 use matter_cert::{MatterTime, TrustedRoots};
 use matter_crypto::{CaseCredentials, CaseInitiator};
-use matter_transport::{Discovery, ServiceKind, SessionId, SessionManager, SessionRole};
+use matter_transport::{Discovery, MrpConfig, ServiceKind, SessionId, SessionManager, SessionRole};
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
@@ -110,6 +110,41 @@ pub async fn resolve_operational_with_attempts<D: Discovery>(
     node_id: u64,
     attempts: u32,
 ) -> Result<SocketAddr, DriverError> {
+    resolve_operational_service(discovery, compressed_fabric_id, node_id, attempts)
+        .await
+        .map(|(addr, _mrp)| addr)
+}
+
+/// Like [`resolve_operational`], but also returns the peer's advertised MRP
+/// retransmit config (from its operational mDNS TXT `SII`/`SAI`/`SAT`) so the
+/// caller can size retransmits to the device — critical for not hammering a
+/// sleepy device (MRP-2). Uses the IP-path poll budget.
+///
+/// # Errors
+///
+/// As [`resolve_operational`].
+pub async fn resolve_operational_with_mrp<D: Discovery>(
+    discovery: &mut D,
+    compressed_fabric_id: [u8; 8],
+    node_id: u64,
+) -> Result<(SocketAddr, MrpConfig), DriverError> {
+    resolve_operational_service(
+        discovery,
+        compressed_fabric_id,
+        node_id,
+        RESOLVE_POLL_ATTEMPTS,
+    )
+    .await
+}
+
+/// Shared resolve loop returning both the preferred address and the peer's
+/// parsed MRP config. Both public resolvers delegate here.
+async fn resolve_operational_service<D: Discovery>(
+    discovery: &mut D,
+    compressed_fabric_id: [u8; 8],
+    node_id: u64,
+    attempts: u32,
+) -> Result<(SocketAddr, MrpConfig), DriverError> {
     let target = operational_instance_name(compressed_fabric_id, node_id);
     let handle = discovery
         .query(ServiceKind::Operational)
@@ -120,7 +155,7 @@ pub async fn resolve_operational_with_attempts<D: Discovery>(
             if svc.instance_name.eq_ignore_ascii_case(&target) {
                 if let Some(addr) = preferred_address(&svc.addresses) {
                     discovery.stop_query(handle);
-                    return Ok(SocketAddr::new(addr, svc.port));
+                    return Ok((SocketAddr::new(addr, svc.port), svc.peer_mrp_config()));
                 }
             }
         }

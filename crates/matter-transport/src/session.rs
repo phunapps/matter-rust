@@ -274,6 +274,23 @@ impl SessionManager {
     /// demux correctly. The peer's Node ID, Fabric ID, and session ID are
     /// pulled from `output` automatically.
     pub fn register_case(&mut self, output: &CaseSessionOutput, role: SessionRole) -> SessionId {
+        self.register_case_with_mrp(output, role, MrpConfig::default())
+    }
+
+    /// [`Self::register_case`] but with the peer's advertised MRP retransmit
+    /// config (from its operational mDNS TXT `SII`/`SAI`/`SAT`, via
+    /// [`MatterService::peer_mrp_config`](crate::MatterService::peer_mrp_config)).
+    ///
+    /// Sizing retransmits to the peer's own parameters is what keeps us from
+    /// hammering a sleepy device that polls on a long idle interval (MRP-2).
+    /// The freshly-registered session has no pending MRP state yet, so applying
+    /// the config here (right at creation, before any traffic) is safe.
+    pub fn register_case_with_mrp(
+        &mut self,
+        output: &CaseSessionOutput,
+        role: SessionRole,
+        mrp_config: MrpConfig,
+    ) -> SessionId {
         let local_id = SessionId(output.local.session_id);
         let peer = PeerHint {
             node_id: Some(NodeId(output.peer.node_id)),
@@ -292,6 +309,7 @@ impl SessionManager {
         if let Some(session) = self.sessions.get_mut(&local_id) {
             session.local_nonce_node_id = output.local.node_id;
             session.peer_nonce_node_id = output.peer.node_id;
+            session.mrp = MrpState::new(mrp_config);
         }
         local_id
     }

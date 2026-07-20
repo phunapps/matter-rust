@@ -16,8 +16,8 @@ mod pase;
 mod unsecured;
 
 pub use case::{
-    operational_instance_name, resolve_operational, resolve_operational_with_attempts, run_case,
-    run_case_establish, BLE_RESOLVE_POLL_ATTEMPTS,
+    operational_instance_name, resolve_operational, resolve_operational_with_attempts,
+    resolve_operational_with_mrp, run_case, run_case_establish, BLE_RESOLVE_POLL_ATTEMPTS,
 };
 pub use commission::{
     commission, commission_ble, resolve_commissionable, BleDriverConfig, DriverConfig, STREAM_PEER,

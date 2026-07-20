@@ -111,6 +111,26 @@ impl MatterService {
             .get(key)
             .and_then(|v| std::str::from_utf8(v).ok())
     }
+
+    /// Parse the peer's advertised MRP retransmit parameters — mDNS TXT keys
+    /// `SII` (Session Idle Interval), `SAI` (Session Active Interval), and
+    /// `SAT` (Session Active Threshold), each a decimal-ASCII millisecond count
+    /// (Matter Core Spec §4.3.1.8) — into an [`MrpConfig`](crate::MrpConfig).
+    ///
+    /// A device advertises these to tell the initiator how patiently to
+    /// retransmit to it; a sleepy device advertises large `SII`. Any key that
+    /// is absent, non-ASCII, or not a valid integer falls back to the Matter
+    /// spec default inside [`MrpConfig::for_peer`](crate::MrpConfig::for_peer),
+    /// which also clamps out-of-range values.
+    #[must_use]
+    pub fn peer_mrp_config(&self) -> crate::mrp::MrpConfig {
+        let ms = |key: &str| {
+            self.txt_str(key)
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .map(std::time::Duration::from_millis)
+        };
+        crate::mrp::MrpConfig::for_peer(ms("SII"), ms("SAI"), ms("SAT"))
+    }
 }
 
 /// Opaque handle for an in-progress query. Returned by
@@ -209,6 +229,34 @@ mod tests {
         set.insert(ServiceKind::Commissionable);
         assert!(set.contains(&ServiceKind::Commissionable));
         assert!(!set.contains(&ServiceKind::Operational));
+    }
+
+    #[test]
+    fn peer_mrp_config_parses_txt_and_falls_back() {
+        use std::time::Duration;
+        // A device advertising SII/SAI/SAT (decimal ms) → parsed into MrpConfig.
+        let mut txt = HashMap::new();
+        txt.insert("SII".to_string(), b"5000".to_vec());
+        txt.insert("SAI".to_string(), b"800".to_vec());
+        txt.insert("SAT".to_string(), b"6000".to_vec());
+        let svc = MatterService::new("N".to_string(), ServiceKind::Operational, vec![], 5540, txt);
+        let c = svc.peer_mrp_config();
+        assert_eq!(c.initial_idle, Duration::from_secs(5));
+        assert_eq!(c.initial_active, Duration::from_millis(800));
+        assert_eq!(c.idle_threshold, Duration::from_secs(6));
+
+        // No MRP keys → spec defaults (500/300/4000).
+        let bare = MatterService::new(
+            "N".to_string(),
+            ServiceKind::Operational,
+            vec![],
+            5540,
+            HashMap::new(),
+        );
+        let d = bare.peer_mrp_config();
+        assert_eq!(d.initial_idle, Duration::from_millis(500));
+        assert_eq!(d.initial_active, Duration::from_millis(300));
+        assert_eq!(d.idle_threshold, Duration::from_secs(4));
     }
 
     #[test]

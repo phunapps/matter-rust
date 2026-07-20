@@ -68,6 +68,43 @@ impl Default for MrpConfig {
     }
 }
 
+/// Matter spec-default MRP parameters used for a peer that advertises no value
+/// for a given key (chip `ReliableMessageProtocolConfig` non-Linux defaults):
+/// SII (idle) = 500 ms, SAI (active) = 300 ms, SAT (active threshold) = 4000 ms.
+const SPEC_DEFAULT_IDLE: Duration = Duration::from_millis(500);
+const SPEC_DEFAULT_ACTIVE: Duration = Duration::from_millis(300);
+const SPEC_DEFAULT_ACTIVE_THRESHOLD: Duration = Duration::from_secs(4);
+/// Spec upper bounds: SII/SAI are 3-byte-ish intervals (Matter caps them at
+/// 3600000 ms = 1 h); SAT is a `uint16` ms (≤ 65535 ms). A peer advertising an
+/// out-of-range value is clamped rather than trusted or rejected.
+const MAX_RETRANS_INTERVAL: Duration = Duration::from_secs(3600);
+const MAX_ACTIVE_THRESHOLD: Duration = Duration::from_millis(65_535);
+
+impl MrpConfig {
+    /// Build a per-session config from a peer's advertised MRP parameters
+    /// (mDNS TXT `SII`/`SAI`/`SAT`, Matter Core Spec §4.3.1.8). Any field the
+    /// peer omits falls back to the spec default; each supplied value is clamped
+    /// to its spec upper bound. Retransmit shape (`backoff_factor`,
+    /// `max_attempts`) and the local `standalone_ack_deadline` are NOT
+    /// peer-controlled and keep their [`Default`] values.
+    ///
+    /// - `sii` → `initial_idle` (Session Idle Interval)
+    /// - `sai` → `initial_active` (Session Active Interval)
+    /// - `sat` → `idle_threshold` (Session Active Threshold)
+    #[must_use]
+    pub fn for_peer(sii: Option<Duration>, sai: Option<Duration>, sat: Option<Duration>) -> Self {
+        let base = Self::default();
+        Self {
+            initial_idle: sii.unwrap_or(SPEC_DEFAULT_IDLE).min(MAX_RETRANS_INTERVAL),
+            initial_active: sai.unwrap_or(SPEC_DEFAULT_ACTIVE).min(MAX_RETRANS_INTERVAL),
+            idle_threshold: sat
+                .unwrap_or(SPEC_DEFAULT_ACTIVE_THRESHOLD)
+                .min(MAX_ACTIVE_THRESHOLD),
+            ..base
+        }
+    }
+}
+
 /// Caller-facing MRP control bits for an outbound message.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MrpFlags {
@@ -239,7 +276,6 @@ struct PendingAck {
     exchange_id: u16,
     next_attempt: Instant,
     attempts_remaining: u8,
-    is_active: bool,
 }
 
 /// Buffered piggyback-ack for one exchange. Held in a per-exchange map
@@ -283,6 +319,14 @@ pub struct MrpState {
     exchanges: HashMap<u16, ExchangeState>,
     next_exchange_id: u16,
     last_outbound: Option<Instant>,
+    /// Wall-clock of the most recent message RECEIVED from the peer, used to
+    /// classify the peer as "active" (within `config.idle_threshold` = the
+    /// Session Active Threshold, SAT) vs idle. The retransmit base interval is
+    /// selected off THIS, not our own outbound timing — chip
+    /// `SecureSession::IsPeerActive` / `GetMRPBaseTimeout` (MRP-1). `None` until
+    /// the first inbound: a peer we have never heard from is treated as idle,
+    /// so we never hammer a sleepy device with active-interval spacing.
+    last_peer_activity: Option<Instant>,
     config: MrpConfig,
 }
 
@@ -298,7 +342,22 @@ impl MrpState {
             exchanges: HashMap::new(),
             next_exchange_id: 1,
             last_outbound: None,
+            last_peer_activity: None,
             config,
+        }
+    }
+
+    /// Whether the peer is currently "active" — it has sent us a message within
+    /// the Session Active Threshold (`config.idle_threshold`, SAT). Drives the
+    /// retransmit base interval (active → `initial_active`/SAI, idle →
+    /// `initial_idle`/SII), re-evaluated on every retransmit exactly as chip's
+    /// `GetMRPBaseTimeout` does. A peer we have never heard from (`None`) is
+    /// idle: sizing the FIRST retransmit on the slower idle interval is the safe
+    /// direction (it never over-drives a sleepy device).
+    fn is_peer_active(&self, now: Instant) -> bool {
+        match self.last_peer_activity {
+            Some(t) => now.saturating_duration_since(t) < self.config.idle_threshold,
+            None => false,
         }
     }
 
@@ -408,9 +467,11 @@ impl MrpState {
     /// for retransmit. Unreliable messages still update `last_outbound` so
     /// idle-vs-active classification remains accurate.
     ///
-    /// Idle vs active base is selected based on the gap from the previous
-    /// `last_outbound`: if `now - last_outbound > config.idle_threshold`,
-    /// the idle base applies to this message's first retransmit.
+    /// The first retransmit deadline uses the active base (`initial_active`,
+    /// SAI) when the PEER is active — it has sent us something within SAT
+    /// (`is_peer_active`) — and the idle base (`initial_idle`, SII) otherwise.
+    /// Selection is off the peer's activity, NOT our own outbound timing
+    /// (MRP-1); subsequent retransmits re-evaluate it in `handle_timeout`.
     pub fn mark_packet_sent(
         &mut self,
         counter: MessageCounter,
@@ -419,17 +480,15 @@ impl MrpState {
         reliable: bool,
         now: Instant,
     ) {
-        let is_active = match self.last_outbound {
-            None => true, // first send is treated as active
-            Some(prev) => now.saturating_duration_since(prev) <= self.config.idle_threshold,
-        };
+        // `last_outbound` is retained for callers/telemetry; it no longer drives
+        // the active/idle classification (that is peer-activity based now).
         self.last_outbound = Some(now);
 
         if !reliable {
             return;
         }
 
-        let initial = if is_active {
+        let initial = if self.is_peer_active(now) {
             self.config.initial_active
         } else {
             self.config.initial_idle
@@ -441,7 +500,6 @@ impl MrpState {
                 exchange_id,
                 next_attempt: now + initial,
                 attempts_remaining: self.config.max_attempts,
-                is_active,
             },
         );
     }
@@ -475,6 +533,14 @@ impl MrpState {
         // or a drained buffered ack); each is reclaimed if it ends up idle.
         let mut reclaim_candidates: Vec<u16> = Vec::new();
 
+        // Re-evaluate the peer's active/idle state ONCE for this tick, exactly
+        // as chip re-evaluates `IsPeerActive` on every retransmit scheduling:
+        // a peer that has gone silent past SAT since the message was queued
+        // switches to the slower idle base for its remaining retransmits (MRP-1;
+        // the CASE-Sigma3-to-a-sleepy-device failure mode). `last_peer_activity`
+        // does not change during this loop, so one read is exact.
+        let peer_active = self.is_peer_active(now);
+
         for (counter, pending) in &mut self.pending_acks {
             if pending.next_attempt > now {
                 continue;
@@ -494,7 +560,7 @@ impl MrpState {
                 packet: pending.packet_bytes.clone(),
             });
             pending.attempts_remaining -= 1;
-            let base = if pending.is_active {
+            let base = if peer_active {
                 self.config.initial_active
             } else {
                 self.config.initial_idle
@@ -575,6 +641,10 @@ impl MrpState {
         peer_counter: MessageCounter,
         now: Instant,
     ) -> Result<InboundOutcome> {
+        // Any inbound is fresh evidence the peer is awake — it feeds the
+        // active/idle classification (MRP-1, `is_peer_active`). Record it before
+        // any early return so even an ack-only or duplicate frame counts.
+        self.last_peer_activity = Some(now);
         // Decode once and use the tail-slice length to split off app bytes.
         let (header, header_len) = {
             let (h, tail) = crate::protocol_header::decode_protocol_header(&decrypted_payload)?;
@@ -796,6 +866,8 @@ mod tests {
     fn reliable_send_schedules_retransmit() {
         let mut mrp = MrpState::new(MrpConfig::default());
         let now = t0();
+        // Peer is active (it sent us something just now) → active base (300 ms).
+        mrp.last_peer_activity = Some(now);
 
         let prepared = mrp
             .prepare_outbound(
@@ -823,6 +895,8 @@ mod tests {
     fn handle_timeout_emits_retransmit_at_deadline() {
         let mut mrp = MrpState::new(MrpConfig::default());
         let now = t0();
+        // Peer active → active base (300 ms) for the first retransmit.
+        mrp.last_peer_activity = Some(now);
         let prepared = mrp
             .prepare_outbound(
                 0x02,
@@ -916,53 +990,100 @@ mod tests {
         assert_eq!(mrp.poll_timeout(), None, "no more pending after Expired");
     }
 
-    #[test]
-    fn idle_session_uses_idle_base() {
-        let mut mrp = MrpState::new(MrpConfig::default());
-        let t = t0();
-
-        // First outbound at t=0 — sets last_outbound but is the FIRST send,
-        // which is treated as active per spec (no prior idle interval to measure).
-        let p1 = mrp
+    /// Helper: queue one reliable message and return its scheduled first
+    /// retransmit deadline.
+    fn schedule_reliable(mrp: &mut MrpState, counter: u32, now: Instant) -> Instant {
+        let p = mrp
             .prepare_outbound(
                 0x02,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
                 None,
                 b"x",
                 MrpFlags { reliable: true },
-                t,
+                now,
             )
             .unwrap();
-        mrp.mark_packet_sent(MessageCounter(1), p1.exchange_id, vec![1u8; 4], true, t);
-        assert_eq!(mrp.poll_timeout().unwrap(), t + Duration::from_millis(300));
+        mrp.mark_packet_sent(
+            MessageCounter(counter),
+            p.exchange_id,
+            vec![1u8; 4],
+            true,
+            now,
+        );
+        mrp.poll_timeout().expect("retransmit deadline scheduled")
+    }
 
-        // Clear pending (simulate ack).
-        // For Task 4, we don't have process_inbound yet — instead, advance
-        // through all 5 retransmits + Expired to clear, then send another.
-        for _ in 0..6 {
-            let sim = mrp.poll_timeout().expect("timer");
-            mrp.handle_timeout(sim);
-        }
-        assert_eq!(mrp.poll_timeout(), None);
+    /// MRP-1: a fresh session (we have never heard from the peer) is IDLE, so
+    /// the first retransmit uses the slow idle base (SII) — we never open with
+    /// active-interval spacing at a device that might be a sleepy ICD. Once the
+    /// peer sends us something (within SAT), the session is active (SAI).
+    #[test]
+    fn classification_follows_peer_activity_not_our_tx() {
+        let now = t0();
 
-        // Second outbound at t + 10 seconds — more than idle_threshold (5s)
-        // since last_outbound. Schedules with idle base.
-        let later = t + Duration::from_secs(10);
-        let p2 = mrp
-            .prepare_outbound(
-                0x02,
-                crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
-                b"y",
-                MrpFlags { reliable: true },
-                later,
-            )
-            .unwrap();
-        mrp.mark_packet_sent(MessageCounter(2), p2.exchange_id, vec![2u8; 4], true, later);
+        // Fresh session, no peer inbound → idle base (4200 ms).
+        let mut fresh = MrpState::new(MrpConfig::default());
         assert_eq!(
-            mrp.poll_timeout().unwrap(),
+            schedule_reliable(&mut fresh, 1, now),
+            now + Duration::from_millis(4200),
+            "a peer we have never heard from is idle (SII), regardless of our tx timing",
+        );
+
+        // Peer sent us something within SAT → active base (300 ms).
+        let mut active = MrpState::new(MrpConfig::default());
+        active.last_peer_activity = Some(now);
+        assert_eq!(
+            schedule_reliable(&mut active, 1, now),
+            now + Duration::from_millis(300),
+            "a peer active within SAT uses the active base (SAI)",
+        );
+
+        // Peer last spoke longer ago than SAT (idle_threshold, 5 s) → idle base.
+        let mut aged = MrpState::new(MrpConfig::default());
+        aged.last_peer_activity = Some(now);
+        let later = now + Duration::from_secs(6);
+        assert_eq!(
+            schedule_reliable(&mut aged, 1, later),
             later + Duration::from_millis(4200),
-            "idle base applied to second outbound after >5s gap",
+            "a peer silent past SAT is idle (SII) again",
+        );
+    }
+
+    /// MRP-1 core: the active/idle base is re-evaluated on EVERY retransmit
+    /// (chip `GetMRPBaseTimeout`), not fixed at send time. A message queued
+    /// while the peer was active must switch to the idle base once the peer
+    /// goes silent past SAT — the CASE-Sigma3-to-a-sleepy-device failure mode.
+    #[test]
+    fn retransmit_reevaluates_peer_active_state() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+        // Peer active at send → first retransmit at the active base (300 ms).
+        mrp.last_peer_activity = Some(now);
+        let d0 = schedule_reliable(&mut mrp, 1, now);
+        assert_eq!(d0, now + Duration::from_millis(300));
+
+        // Fire the first retransmit while the peer is STILL active (t+300ms,
+        // within SAT). Next attempt uses the active base × backoff.
+        let ev = mrp.handle_timeout(d0);
+        assert_eq!(ev.len(), 1);
+        let d1 = mrp.poll_timeout().unwrap();
+        assert_eq!(
+            d1,
+            d0 + Duration::from_millis(480), // 300 * 1.6^1
+            "still-active peer: active base with backoff",
+        );
+
+        // Now the peer has gone silent well past SAT (5 s). The NEXT retransmit
+        // must switch to the idle base (4200 ms) × its backoff, not stay on the
+        // active grid — this is the anti-hammer guarantee.
+        let much_later = d1.max(now + Duration::from_secs(7));
+        mrp.handle_timeout(much_later);
+        let d2 = mrp.poll_timeout().unwrap();
+        // attempts_done is now 2 → idle base 4200 * 1.6^2 = 10752 ms.
+        assert_eq!(
+            d2,
+            much_later + Duration::from_millis(10752),
+            "peer silent past SAT: retransmit re-evaluates to the idle base (SII)",
         );
     }
 
@@ -1037,6 +1158,69 @@ mod tests {
         encode_protocol_header(&header, &mut out);
         out.extend_from_slice(app_tail);
         out
+    }
+
+    /// MRP-1: an inbound from the peer marks it active, so a reliable send that
+    /// follows uses the active base — proving `process_inbound` feeds the
+    /// classification (it is the real hook, not the test-only field poke).
+    #[test]
+    fn process_inbound_marks_peer_active() {
+        let mut mrp = MrpState::new(MrpConfig::default());
+        let now = t0();
+        // Before any inbound: fresh session is idle.
+        let mut probe = MrpState::new(MrpConfig::default());
+        assert_eq!(
+            schedule_reliable(&mut probe, 1, now),
+            now + Duration::from_millis(4200),
+        );
+        // After a real inbound: peer is active.
+        let payload = build_inbound_payload(ExchangeFlags::INITIATOR, 0x02, 0x0001, None, b"hi");
+        let _ = mrp
+            .process_inbound(payload, MessageCounter(50), now)
+            .unwrap();
+        assert_eq!(
+            schedule_reliable(&mut mrp, 1, now),
+            now + Duration::from_millis(300),
+            "a send right after a peer inbound uses the active base",
+        );
+    }
+
+    /// MRP-2: `MrpConfig::for_peer` maps advertised `SII`/`SAI`/`SAT`, falls
+    /// back to the Matter spec defaults for omitted keys, and clamps
+    /// out-of-range values to their spec upper bounds.
+    #[test]
+    fn for_peer_maps_txt_defaults_and_clamps() {
+        // All three supplied, in range.
+        let c = MrpConfig::for_peer(
+            Some(Duration::from_secs(6)),  // SII
+            Some(Duration::from_secs(1)),  // SAI
+            Some(Duration::from_secs(30)), // SAT
+        );
+        assert_eq!(c.initial_idle, Duration::from_secs(6));
+        assert_eq!(c.initial_active, Duration::from_secs(1));
+        assert_eq!(c.idle_threshold, Duration::from_secs(30));
+        // Retransmit shape stays at the local defaults (not peer-controlled).
+        assert_eq!(c.max_attempts, MrpConfig::default().max_attempts);
+        assert!(
+            (c.backoff_factor - MrpConfig::default().backoff_factor).abs() < f32::EPSILON,
+            "backoff factor stays at the local default",
+        );
+
+        // None → spec defaults (SII 500, SAI 300, SAT 4000).
+        let d = MrpConfig::for_peer(None, None, None);
+        assert_eq!(d.initial_idle, Duration::from_millis(500));
+        assert_eq!(d.initial_active, Duration::from_millis(300));
+        assert_eq!(d.idle_threshold, Duration::from_secs(4));
+
+        // Over-range → clamped (SII/SAI ≤ 3_600_000 ms, SAT ≤ 65_535 ms).
+        let e = MrpConfig::for_peer(
+            Some(Duration::from_secs(9999)),
+            Some(Duration::from_secs(9999)),
+            Some(Duration::from_secs(9999)),
+        );
+        assert_eq!(e.initial_idle, Duration::from_secs(3600));
+        assert_eq!(e.initial_active, Duration::from_secs(3600));
+        assert_eq!(e.idle_threshold, Duration::from_millis(65_535));
     }
 
     #[test]
