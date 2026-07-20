@@ -504,6 +504,15 @@ impl MrpState {
         );
     }
 
+    /// Whether this session has any in-flight reliable work — an unacked
+    /// retransmit or a buffered piggyback ack. Used by the session table's
+    /// idle-first eviction to avoid tearing down a session mid-exchange when a
+    /// truly-idle one could be reclaimed instead.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        !self.pending_acks.is_empty() || !self.pending_outbound_acks.is_empty()
+    }
+
     /// Earliest pending deadline across retransmits and the
     /// piggyback-ack flush deadline, or `None` if nothing pending.
     #[must_use]

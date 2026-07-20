@@ -385,15 +385,20 @@ impl SessionManager {
         );
         // DoS defense: bound the table. If it is at capacity and this is a NEW
         // local id (a replacement of an existing id does not grow the table),
-        // evict the oldest session (lowest `created_seq`) before inserting.
+        // evict a victim before inserting. IDLE-FIRST: prefer a session with no
+        // in-flight reliable work (`mrp.has_pending() == false`) over one
+        // mid-exchange, so a burst of new sessions never tears down an active
+        // handshake while an idle session is reclaimable; break ties by oldest
+        // (`created_seq`). `false < true`, so the tuple key sorts idle sessions
+        // ahead of busy ones.
         if self.sessions.len() >= self.max_sessions && !self.sessions.contains_key(&local_id) {
-            if let Some(oldest) = self
+            if let Some(victim) = self
                 .sessions
                 .iter()
-                .min_by_key(|(_, s)| s.created_seq)
+                .min_by_key(|(_, s)| (s.mrp.has_pending(), s.created_seq))
                 .map(|(id, _)| *id)
             {
-                self.sessions.remove(&oldest);
+                self.sessions.remove(&victim);
             }
         }
         let created_seq = self.next_seq;
@@ -1238,5 +1243,49 @@ mod tests {
         assert!(m.get(id2).is_some());
         assert!(m.get(id3).is_some());
         assert!(m.get(id4).is_some());
+    }
+
+    #[test]
+    fn session_eviction_prefers_idle_over_busy() {
+        use crate::mrp::MrpFlags;
+        use crate::protocol_header::ProtocolId;
+
+        // idle-first: a session mid-exchange (in-flight reliable work) is spared
+        // in favor of a truly-idle one, even though the busy session is OLDER.
+        let keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [1u8; 16],
+            r2i_key: [2u8; 16],
+            attestation_key: [3u8; 16],
+        };
+        let mut m = SessionManager::new();
+        m.set_max_sessions(2);
+        let busy = m.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        let idle = m.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+
+        // Give the OLDER session in-flight reliable work (a pending retransmit).
+        let now = std::time::Instant::now();
+        let _ = m
+            .encode_outbound(
+                busy,
+                None,
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+
+        // A 3rd registration into the full (cap 2) table must evict the IDLE
+        // session, NOT the older busy one mid-exchange.
+        let fresh = m.register_pase(keys, SessionRole::Initiator, 1, PeerHint::default());
+        assert_eq!(m.session_count(), 2, "table stays capped at 2");
+        assert!(
+            m.get(busy).is_some(),
+            "the busy (mid-exchange) session is spared despite being older",
+        );
+        assert!(m.get(idle).is_none(), "the idle session is evicted first");
+        assert!(m.get(fresh).is_some());
     }
 }
