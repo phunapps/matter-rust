@@ -515,6 +515,11 @@ pub(crate) enum Command {
     CommissionerNodeId {
         reply: oneshot::Sender<Result<u64, Error>>,
     },
+    /// Enumerate all commissioned nodes across every fabric as typed
+    /// [`NodeInfo`](crate::NodeInfo) — the snapshot-decoupled accessor.
+    ListNodes {
+        reply: oneshot::Sender<Vec<crate::NodeInfo>>,
+    },
     /// Return the sole fabric's stored CASE resumption record bytes for
     /// `node_id` (serialized [`matter_crypto::ResumptionRecord`], see
     /// [`crate::resumption`]), or `None` if the device has none. Read from the
@@ -1211,6 +1216,23 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             Command::CommissionerNodeId { reply } => {
                 let _ = reply.send(self.sole_fabric().map(|f| f.commissioner.node_id));
+            }
+            Command::ListNodes { reply } => {
+                let nodes = self
+                    .state
+                    .fabrics
+                    .iter()
+                    .flat_map(|f| {
+                        f.devices.iter().map(move |d| crate::NodeInfo {
+                            node_id: d.node_id,
+                            fabric_id: f.fabric_id,
+                            vendor_id: d.vendor_id,
+                            product_id: d.product_id,
+                            label: d.label.clone(),
+                        })
+                    })
+                    .collect();
+                let _ = reply.send(nodes);
             }
             Command::ResumptionRecordFor { node_id, reply } => {
                 let result = self.sole_fabric().map(|f| {
@@ -3564,6 +3586,62 @@ mod tests {
         let restored = crate::snapshot::deserialize(&bytes).expect("deserialize");
         assert_eq!(restored.fabrics.len(), 1);
         assert_eq!(restored.fabrics[0].commissioner.node_id, 1);
+    }
+
+    /// `nodes()` must enumerate every commissioned device across every fabric
+    /// as typed `NodeInfo`, without requiring the caller to deserialize the
+    /// on-disk snapshot. Seeded by pre-writing a hand-built `ControllerState`
+    /// snapshot directly to the store (constructing a `DeviceEntry` with
+    /// metadata through the public commissioning API is impractical in a unit
+    /// test), then opening the controller over it.
+    #[tokio::test]
+    async fn nodes_lists_commissioned_devices_with_metadata() {
+        let mut fabric =
+            crate::fabric::create_fabric(&cfg(), &SystemNocRng).expect("create_fabric");
+        let fabric_id = fabric.fabric_id;
+        let node_id: u64 = 0x0000_0000_0000_0042;
+        fabric.devices.push(crate::state::DeviceEntry {
+            node_id,
+            peer_noc_public_key: [0u8; 65],
+            resumption_record: None,
+            last_known_addr: None,
+            vendor_id: Some(0xFFF1),
+            product_id: Some(0x8000),
+            label: Some("plug".to_string()),
+        });
+
+        let store = Arc::new(MemStore::default());
+        store
+            .save(
+                &crate::snapshot::serialize(&ControllerState {
+                    fabrics: vec![fabric],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let nodes = controller.nodes().await.expect("nodes");
+        assert_eq!(
+            nodes,
+            vec![crate::NodeInfo {
+                node_id,
+                fabric_id,
+                vendor_id: Some(0xFFF1),
+                product_id: Some(0x8000),
+                label: Some("plug".to_string()),
+            }]
+        );
     }
 
     /// Loopback acceptance for the multicast group send.

@@ -121,6 +121,7 @@ pub(crate) mod handshake_socket;
 pub(crate) mod icd;
 pub(crate) mod icd_listener;
 pub mod node;
+pub(crate) mod node_info;
 pub(crate) mod opcreds;
 pub mod provider_server;
 pub(crate) mod resumption;
@@ -153,6 +154,7 @@ pub use matter_interaction::{
     EventReportItem, EventTimestamp, ImStatus, ReadPath,
 };
 pub use node::{DstOffsetEntry, InvokeResult, Node, TimeGranularity, TimeZoneEntry};
+pub use node_info::NodeInfo;
 pub use opcreds::FabricDescriptor;
 pub use provider_server::{build_operational_service, ProviderServer};
 pub use state::{

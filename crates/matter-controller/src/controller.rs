@@ -13,6 +13,7 @@ use crate::builder::MatterControllerBuilder;
 use crate::error::Error;
 use crate::fabric::FabricConfig;
 use crate::node::Node;
+use crate::node_info::NodeInfo;
 use crate::snapshot;
 use crate::state::ControllerState;
 use crate::store::ControllerStore;
@@ -546,6 +547,22 @@ impl MatterController {
             .await
             .map_err(|_| Error::ControllerStopped)?;
         rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
+    /// Enumerate every node this controller has commissioned, across all
+    /// fabrics, as typed [`NodeInfo`]. Replaces the need to deserialize the
+    /// on-disk snapshot to discover node ids and metadata.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task has stopped.
+    pub async fn nodes(&self) -> Result<Vec<NodeInfo>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ListNodes { reply })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)
     }
 
     /// Handle addressing a device by node id (single-fabric in M8.2).
