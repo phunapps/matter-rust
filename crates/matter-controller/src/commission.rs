@@ -32,6 +32,9 @@ pub(crate) fn device_entry_from_commissioned(commissioned: &CommissionedFabric) 
         peer_noc_public_key: commissioned.peer_root_public_key,
         resumption_record: None,
         last_known_addr: None,
+        vendor_id: None,
+        product_id: None,
+        label: None,
     }
 }
 
@@ -73,6 +76,9 @@ mod tests {
             peer_noc_public_key: [0x04; 65],
             resumption_record: None,
             last_known_addr: None,
+            vendor_id: None,
+            product_id: None,
+            label: None,
         });
         assert_eq!(next_device_node_id(&f), 6);
     }

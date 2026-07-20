@@ -86,14 +86,24 @@ pub struct DeviceEntry {
     pub resumption_record: Option<Vec<u8>>,
     /// Last operational address we reached the device at (a discovery hint).
     pub last_known_addr: Option<String>,
+    /// Device vendor id (`BasicInformation` 0x0028/0x0002), captured
+    /// best-effort after commissioning. `None` if the read did not complete.
+    pub vendor_id: Option<u16>,
+    /// Device product id (`BasicInformation` 0x0028/0x0004), captured
+    /// best-effort after commissioning. `None` if the read did not complete.
+    pub product_id: Option<u16>,
+    /// Caller-supplied opaque label attached at `commission()` time. `None`
+    /// if the caller passed none.
+    pub label: Option<String>,
 }
 
 impl std::fmt::Debug for DeviceEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `resumption_record` is a serialized CASE ResumptionRecord and carries
         // a session shared secret — redact it (matches the redaction discipline
-        // in `FabricEntry`/`CommissionerIdentity`). `peer_noc_public_key` and
-        // `last_known_addr` are not secret.
+        // in `FabricEntry`/`CommissionerIdentity`). `peer_noc_public_key`,
+        // `last_known_addr`, `vendor_id`, `product_id`, and `label` are not
+        // secret.
         f.debug_struct("DeviceEntry")
             .field("node_id", &self.node_id)
             .field("peer_noc_public_key", &self.peer_noc_public_key)
@@ -105,6 +115,9 @@ impl std::fmt::Debug for DeviceEntry {
                     .map(|_| "<redacted; CASE secret>"),
             )
             .field("last_known_addr", &self.last_known_addr)
+            .field("vendor_id", &self.vendor_id)
+            .field("product_id", &self.product_id)
+            .field("label", &self.label)
             .finish()
     }
 }

@@ -16,7 +16,10 @@
 //! commissioner: Structure { C0: node_id(uint), C1: op_pkcs8(bytes), C2: noc(bytes,TLV) }
 //! device: Structure {
 //!   C0: node_id(uint), C1: peer_noc_public_key(bytes65),
-//!   C2: resumption_record(bytes, optional), C3: last_known_addr(utf8, optional)
+//!   C2: resumption_record(bytes, optional), C3: last_known_addr(utf8, optional),
+//!   C4: vendor_id(uint, optional), C5: product_id(uint, optional),
+//!   C6: label(utf8, optional) — all three additive/ICAC-style, absent means
+//!       `None`
 //! }
 //! group_key_set: Structure {
 //!   C0: key_set_id(uint), C1: epoch_key(bytes16), C2: epoch_start_time(uint)
@@ -25,14 +28,21 @@
 //!
 //! ## Backward compatibility
 //!
-//! C6, C7, C8, C9, and C10 are optional tags: a v1 snapshot without them
-//! (written by an older binary) still deserializes cleanly — `group_keys`
-//! defaults to `Vec::new()`, `outbound_group_counter` to `0`, `icd_clients`
-//! to `Vec::new()`, and `icac` to `None`.  C9/C10 are themselves only
-//! written when a fabric has an ICAC, so a fabric without one round-trips to
-//! byte-identical output regardless of ICAC support existing in the binary.
-//! No version bump is needed because the tag-keyed deserializer simply
-//! treats absent tags as defaults.
+//! Fabric-struct C6, C7, C8, C9, and C10 are optional tags: a v1 snapshot
+//! without them (written by an older binary) still deserializes cleanly —
+//! `group_keys` defaults to `Vec::new()`, `outbound_group_counter` to `0`,
+//! `icd_clients` to `Vec::new()`, and `icac` to `None`.  C9/C10 are
+//! themselves only written when a fabric has an ICAC, so a fabric without
+//! one round-trips to byte-identical output regardless of ICAC support
+//! existing in the binary.
+//!
+//! Device-struct C4, C5, and C6 (`vendor_id`/`product_id`/`label`) follow the same
+//! rule: they're only written when the corresponding field is `Some`, and a
+//! device struct without them deserializes to `vendor_id`/`product_id`/
+//! `label` all `None`.
+//!
+//! No version bump is needed for any of the above because the tag-keyed
+//! deserializer simply treats absent tags as defaults.
 
 use matter_cert::MatterCertificate;
 use matter_codec::{Tag, TlvWriter, Value};
@@ -139,6 +149,15 @@ fn device_to_value(d: &DeviceEntry) -> Value {
     }
     if let Some(addr) = &d.last_known_addr {
         members.push((Tag::Context(3), Value::Utf8(addr.clone())));
+    }
+    if let Some(vid) = d.vendor_id {
+        members.push((Tag::Context(4), Value::Uint(u64::from(vid))));
+    }
+    if let Some(pid) = d.product_id {
+        members.push((Tag::Context(5), Value::Uint(u64::from(pid))));
+    }
+    if let Some(label) = &d.label {
+        members.push((Tag::Context(6), Value::Utf8(label.clone())));
     }
     Value::Structure(members)
 }
@@ -287,11 +306,31 @@ fn device_from_value(v: &Value) -> Result<DeviceEntry, Error> {
         Some(Value::Utf8(s)) => Some(s.clone()),
         _ => None,
     };
+    // C4/C5/C6 are optional tags (absent in snapshots written before device
+    // metadata support): a v1 device struct with only t0..t3 still
+    // deserializes cleanly, defaulting vendor_id/product_id/label to `None`
+    // — same additive-optional-tag discipline as C6/C7 (group keys) and
+    // C9/C10 (ICAC) above.
+    let vendor_id = match get(m, 4) {
+        Some(Value::Uint(n)) => u16::try_from(*n).ok(),
+        _ => None,
+    };
+    let product_id = match get(m, 5) {
+        Some(Value::Uint(n)) => u16::try_from(*n).ok(),
+        _ => None,
+    };
+    let label = match get(m, 6) {
+        Some(Value::Utf8(s)) => Some(s.clone()),
+        _ => None,
+    };
     Ok(DeviceEntry {
         node_id: get_uint(m, 0)?,
         peer_noc_public_key: byte_array::<65>(get_bytes(m, 1)?, "peer_noc_public_key")?,
         resumption_record,
         last_known_addr,
+        vendor_id,
+        product_id,
+        label,
     })
 }
 
@@ -366,12 +405,18 @@ mod tests {
             peer_noc_public_key: [0x04; 65],
             resumption_record: Some(vec![1, 2, 3, 4]),
             last_known_addr: Some("[fe80::1]:5540".to_string()),
+            vendor_id: None,
+            product_id: None,
+            label: None,
         });
         fabric.devices.push(DeviceEntry {
             node_id: 0xBEEF,
             peer_noc_public_key: [0x04; 65],
             resumption_record: None,
             last_known_addr: None,
+            vendor_id: None,
+            product_id: None,
+            label: None,
         });
         ControllerState {
             fabrics: vec![fabric],
@@ -463,7 +508,15 @@ mod tests {
         ) -> DeviceEntry {
             let mut peer_noc_public_key = [0u8; 65];
             peer_noc_public_key.copy_from_slice(&pk);
-            DeviceEntry { node_id, peer_noc_public_key, resumption_record: rr, last_known_addr: addr }
+            DeviceEntry {
+                node_id,
+                peer_noc_public_key,
+                resumption_record: rr,
+                last_known_addr: addr,
+                vendor_id: None,
+                product_id: None,
+                label: None,
+            }
         }
     }
 
@@ -631,6 +684,46 @@ mod tests {
             get(fabric_members, 10).is_none(),
             "C10 (icac_pkcs8) must be absent when icac is None"
         );
+    }
+
+    // --- device metadata (vendor_id/product_id/label, C4/C5/C6) ---
+
+    #[test]
+    fn device_metadata_round_trips_and_defaults_none() {
+        // A DeviceEntry with vendor_id/product_id/label set must survive
+        // serialize -> deserialize.
+        let mut fabric = shared_fabric().clone();
+        fabric.devices = vec![DeviceEntry {
+            node_id: 0x1234,
+            peer_noc_public_key: [0x04; 65],
+            resumption_record: None,
+            last_known_addr: None,
+            vendor_id: Some(0xFFF1),
+            product_id: Some(0x8000),
+            label: Some("kitchen plug".to_string()),
+        }];
+        let state = ControllerState {
+            fabrics: vec![fabric],
+        };
+        let bytes = serialize(&state).expect("serialize");
+        let back = deserialize(&bytes).expect("deserialize");
+        let d = &back.fabrics[0].devices[0];
+        assert_eq!(d.vendor_id, Some(0xFFF1));
+        assert_eq!(d.product_id, Some(0x8000));
+        assert_eq!(d.label.as_deref(), Some("kitchen plug"));
+
+        // A device Value::Structure carrying ONLY tags 0+1 (the old layout,
+        // written before vendor_id/product_id/label existed) must
+        // deserialize to all three fields `None` — this is the back-compat
+        // proof for the additive C4/C5/C6 tags.
+        let old_device_val = Value::Structure(vec![
+            (Tag::Context(0), Value::Uint(0x9999)),
+            (Tag::Context(1), Value::Bytes(vec![0x04; 65])),
+        ]);
+        let old_device = device_from_value(&old_device_val).expect("old device must load");
+        assert_eq!(old_device.vendor_id, None);
+        assert_eq!(old_device.product_id, None);
+        assert_eq!(old_device.label, None);
     }
 
     #[test]

@@ -2187,6 +2187,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     peer_noc_public_key: [0u8; 65],
                     resumption_record,
                     last_known_addr: Some(addr),
+                    vendor_id: None,
+                    product_id: None,
+                    label: None,
                 });
                 changed = true;
             }
