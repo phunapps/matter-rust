@@ -1293,6 +1293,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // and fails/reschedules each waiter by kind (do NOT hand-roll
                 // this; a hand-rolled loop misses `connect_routes`).
                 self.fail_connect_waiters(node_id, &Error::Operational("node forgotten".into()));
+                // Drop any live subscriptions, scheduled resubscribes, and
+                // in-flight pending ops for the node. This is essential to the
+                // "no device contact" guarantee: a surviving `SubEntry` would,
+                // on its next liveness deadline, drive the resubscribe engine to
+                // open a fresh CASE handshake to the very node we just forgot —
+                // reintroducing the exact hazard the local-only routing avoids.
+                self.subscriptions.retain(|_, s| s.node_id != node_id);
+                self.resubscribes.retain(|pr| pr.node_id != node_id);
+                self.pending.retain(|_, p| p.node_id != node_id);
                 let outcome = if removed {
                     match self.durable_save_inputs() {
                         Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| true),
@@ -3785,6 +3794,7 @@ mod tests {
     /// such `DeviceEntry`, (d) `forget_node` returns `Ok(true)` the first time
     /// and `Ok(false)` on a repeat call for the same (now-absent) node.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one linear scenario: seed device+session+sub, forget, assert full drop
     async fn forget_node_drops_all_local_state_without_device_contact() {
         let mut fabric =
             crate::fabric::create_fabric(&cfg(), &SystemNocRng).expect("create_fabric");
@@ -3825,6 +3835,29 @@ mod tests {
             },
         );
 
+        // A live subscription to the node — `forget_node` must drop this, or
+        // its liveness timer would later drive the resubscribe engine to open a
+        // fresh CASE handshake to the very node we forgot (the "no device
+        // contact" guarantee would be silently violated).
+        let (sink, _report_rx, _ctrl_rx) = test_report_sink();
+        actor.subscriptions.insert(
+            SubId(1),
+            SubEntry {
+                tx: sink,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+                reassembler: ReportReassembler::default(),
+                session_id: SessionId(7),
+                wire_sub_id: 0x1234,
+                node_id,
+                paths: vec![matter_interaction::ReadPath::all()],
+                event_paths: vec![],
+                event_filters: vec![],
+                min_interval: 1,
+                max_interval: 30,
+                liveness_deadline: Instant::now(),
+            },
+        );
+
         // The fixture is visible before forgetting.
         let (nodes_tx, nodes_rx) = oneshot::channel();
         actor
@@ -3848,6 +3881,11 @@ mod tests {
         assert!(
             !actor.cache.contains_key(&(fabric_id, node_id)),
             "the cached session must be evicted"
+        );
+        assert!(
+            actor.subscriptions.values().all(|s| s.node_id != node_id),
+            "the live subscription to the node must be dropped (else the \
+             resubscribe engine reconnects to the forgotten node)"
         );
 
         let (after_tx, after_rx) = oneshot::channel();
