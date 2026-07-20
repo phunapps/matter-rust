@@ -206,10 +206,10 @@ pub fn decode_set_regulatory_config_response(
 
 /// Decoded `BasicCommissioningInfo` struct (spec §11.10.5.5).
 ///
-/// Only `failsafe_expiry_length_seconds` is consumed by the
-/// commissioner today. `max_cumulative_failsafe_seconds` is exposed
-/// for callers that want to display caps; the commissioner does NOT
-/// enforce the cap (the device will reject `ArmFailSafe` if violated).
+/// The commissioner reads `failsafe_expiry_length_seconds` as the requested
+/// `ArmFailSafe` expiry and caps it against `max_cumulative_failsafe_seconds`
+/// so it never sends a value the device is guaranteed to reject with
+/// `BoundsExceeded`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BasicCommissioningInfo {
     /// Maximum failsafe expiry the device will honour, in seconds.

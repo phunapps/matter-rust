@@ -338,14 +338,14 @@ Embedded callers will eventually want a borrowing variant
 `WiFiCredentialsRef<'a> { ssid: &'a [u8], credentials: &'a [u8] }`.
 Additive — does not change the existing owned variant.
 
-### NetworkCommissioning `MaxNetworks` cap enforcement — deferred to post-v1.0
+### `ArmFailSafe` cumulative-cap enforcement — RESOLVED 2026-07-21
 
-**Status:** open. M6.5 does not enforce
-`BasicCommissioningInfo::max_cumulative_failsafe_seconds`. The device
-will reject `ArmFailSafe` with a non-OK status if the requested expiry
-exceeds the cap. A future PR caps `failsafe_expiry_seconds` against
-`max_cumulative_failsafe_seconds` so we never round-trip a
-guaranteed-fail value.
+**Status:** done. The commissioner now caps `failsafe_expiry_seconds`
+against `BasicCommissioningInfo::max_cumulative_failsafe_seconds` when it
+reads the device's commissioning info, so it never round-trips an expiry
+the device is guaranteed to reject with `BoundsExceeded`. (This item was
+mis-headed "MaxNetworks"; the `MaxNetworks`/`BoundsExceeded` network-add
+rejection is already surfaced as a typed error.)
 
 ### `test-helpers` feature naming + scope review — pre-v1.0
 

@@ -926,6 +926,15 @@ impl Commissioner {
                     if info.failsafe_expiry_length_seconds > 0 {
                         self.failsafe_expiry_seconds = info.failsafe_expiry_length_seconds;
                     }
+                    // Cap against the device's hard cumulative failsafe limit
+                    // (Matter §11.10.5.1): an `ArmFailSafe` whose expiry exceeds
+                    // `MaxCumulativeFailsafeSeconds` is guaranteed to be rejected
+                    // (BoundsExceeded), so never round-trip such a value.
+                    if info.max_cumulative_failsafe_seconds > 0 {
+                        self.failsafe_expiry_seconds = self
+                            .failsafe_expiry_seconds
+                            .min(info.max_cumulative_failsafe_seconds);
+                    }
                 }
                 self.advance(Stage::ArmFailsafe);
                 Ok(())
@@ -2552,6 +2561,37 @@ mod tests {
                 assert!(
                     payload.windows(3).any(|w| w == [0x24, 0x00, 0x78]),
                     "ArmFailSafe payload should carry expiry=120: {payload:02x?}",
+                );
+            }
+            other => panic!("expected Invoke, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn failsafe_expiry_capped_at_max_cumulative_failsafe_seconds() {
+        let mut sm = Commissioner::new(sample_valid_config()).expect("valid config");
+        let _initial = sm.poll().expect("initial poll");
+        // BasicCommissioningInfo: failsafe_expiry_length=120 (tag 0),
+        // max_cumulative=90 (tag 1). Our requested expiry must cap at 90 so the
+        // device never rejects the ArmFailSafe with BoundsExceeded.
+        let response = vec![
+            0x15, //
+            0x25, 0x00, 0x78, 0x00, // tag0 u16 = 120
+            0x25, 0x01, 0x5A, 0x00, // tag1 u16 = 90 (max cumulative)
+            0x18,
+        ];
+        sm.on_response(Expectation::CommissioningInfo, &response)
+            .expect("commissioning info accepted");
+        let action = sm.poll().expect("arm-failsafe poll");
+        match action {
+            Action::Invoke { payload, .. } => {
+                assert!(
+                    payload.windows(3).any(|w| w == [0x24, 0x00, 0x5A]),
+                    "ArmFailSafe expiry must be capped to 90: {payload:02x?}",
+                );
+                assert!(
+                    !payload.windows(3).any(|w| w == [0x24, 0x00, 0x78]),
+                    "the uncapped 120 must NOT be sent: {payload:02x?}",
                 );
             }
             other => panic!("expected Invoke, got {other:?}"),
