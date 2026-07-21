@@ -44,15 +44,17 @@ use crate::BtpError;
 /// macOS has no `btmon`, and the pump runs in a spawned task that prints
 /// nothing between "commissioning…" and the result — so a hang (the known
 /// macOS `CoreBluetooth` BTP stall) is invisible. When enabled, the pump emits
-/// a timestamped line at each C1-write boundary (START / DONE), each inbound C2
-/// indication, and each surfaced SDU. The tell-tale for the leading hypothesis
-/// (a half-duplex deadlock: the pump blocks in a `WithResponse` write `await`
-/// — which runs OUTSIDE the `select!` — so it stops reading indications while
-/// the device keeps streaming) is a `C1 write START` with no matching `DONE`.
+/// a timestamped line at each `open_btp` boundary (peripheral, connect, service
+/// discovery, notifications, C1 write, subscribe, handshake response) and each
+/// C1-write / C2-indication in the pump. This is how the macOS hang was
+/// root-caused: the trace stops at `discover_services START` (or, past a patched
+/// btleplug, at `handshake C1 write START`) — see the investigation under
+/// `docs/superpowers/audits/`. Confirmed cause: btleplug 0.12.0 drops errored
+/// `CoreBluetooth` delegate events, and `CoreBluetooth` rejects the `CHIPoBLE`
+/// GATT ops with `CBError.uuidNotAllowed`.
 ///
 /// Off by default and side-effect-free (a single relaxed env read, cached), so
-/// it cannot affect the proven Linux path. Diagnostic only — remove or promote
-/// to `tracing` once the root cause is confirmed on hardware.
+/// it cannot affect the proven Linux path.
 fn pump_trace_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -85,6 +87,33 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long to wait for the BTP handshake response indication
 /// (chip `BTP_CONN_RSP_TIMEOUT_MS`).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+/// Per-attempt timeout for GATT service discovery. On `CoreBluetooth`,
+/// `discover_services()` can never return on its own: `btleplug` 0.12.0 only
+/// completes the discovery future once every characteristic's *descriptor*
+/// discovery reports success, but it silently drops the completion event when a
+/// descriptor probe returns an error (`central_delegate.rs`, the
+/// `didDiscoverDescriptorsForCharacteristic` handler gates on `error.is_none()`).
+/// `CHIPoBLE`'s C1/C2 return `CBError.uuidNotAllowed` for that probe, so the
+/// future stalls forever. A per-attempt bound converts the stall into a clean,
+/// fast failure instead of hanging past every commissioning deadline. See the
+/// macOS BLE investigation under docs/superpowers/audits/.
+const SERVICE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(12);
+/// How many times to (re-)issue service discovery before giving up. A retry
+/// cannot recover the `btleplug` event-drop above (re-discovery hits the same
+/// descriptor error), but it is cheap insurance against a genuinely transient
+/// stall on other peripherals.
+const SERVICE_DISCOVERY_ATTEMPTS: u32 = 2;
+/// Timeout for a single C1 GATT write (`WithResponse`). Same `btleplug` 0.12.0
+/// failure mode as discovery: the `didWriteValueForCharacteristic` handler only
+/// emits its completion event on `error.is_none()`, so a write that
+/// `CoreBluetooth` rejects (`CHIPoBLE` writes currently draw
+/// `CBError.uuidNotAllowed` on macOS)
+/// leaves `write().await` pending forever. Bound it so the failure surfaces.
+const C1_WRITE_TIMEOUT: Duration = Duration::from_secs(12);
+/// Bound for the best-effort pre-connect disconnect. On a not-connected
+/// peripheral `CoreBluetooth`'s `disconnect()` never returns, so this is short:
+/// if there is nothing to tear down we move on to `connect()` promptly.
+const PRE_CONNECT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Errors from the BLE central and its BTP pump.
 #[derive(Debug, Error)]
@@ -263,19 +292,28 @@ impl BleCentral {
     /// [`CentralError`] variants for connect, GATT discovery, subscription, or
     /// handshake failures.
     pub async fn open_btp(&self, device: &FoundDevice) -> Result<BtpChannel, CentralError> {
+        pt("open_btp: peripheral()");
         let peripheral = self
             .adapter
             .peripheral(&device.peripheral_id)
             .await
             .map_err(|e| CentralError::Connect(e.to_string()))?;
+        // Clear any stale system-level connection to this peripheral before
+        // connecting. On macOS `CoreBluetooth` a connection left over from a
+        // prior (crashed/killed) attempt survives at the daemon and keeps the
+        // peripheral from re-advertising, so a best-effort disconnect first
+        // forces a clean link. Bounded by a short timeout: on a not-connected
+        // peripheral `disconnect()` itself never returns (it awaits a
+        // `didDisconnect` that never fires), so we must not block on it.
+        let _ = tokio::time::timeout(PRE_CONNECT_DISCONNECT_TIMEOUT, peripheral.disconnect()).await;
+        pt("open_btp: connect START");
         peripheral
             .connect_with_timeout(CONNECT_TIMEOUT)
             .await
             .map_err(|e| CentralError::Connect(e.to_string()))?;
-        peripheral
-            .discover_services()
-            .await
-            .map_err(|e| CentralError::Connect(e.to_string()))?;
+        pt("open_btp: connect DONE; discover_services START");
+        discover_services_with_retry(&peripheral).await?;
+        pt("open_btp: discover_services DONE");
 
         let c1 = find_char(&peripheral, C1_UUID).ok_or(CentralError::GattNotFound("C1"))?;
         let c2 = find_char(&peripheral, C2_UUID).ok_or(CentralError::GattNotFound("C2"))?;
@@ -287,6 +325,7 @@ impl BleCentral {
             .notifications()
             .await
             .map_err(|e| CentralError::Gatt(e.to_string()))?;
+        pt("open_btp: notifications opened");
 
         // Handshake: request MTU 0 (unknown on macOS) + our receive window; the
         // device's response fixes the negotiated fragment size and window.
@@ -294,10 +333,15 @@ impl BleCentral {
             mtu: 0,
             window: WINDOW_SIZE,
         };
-        peripheral
-            .write(&c1, &request.encode(), WriteType::WithResponse)
-            .await
-            .map_err(|e| CentralError::Gatt(e.to_string()))?;
+        pt("open_btp: handshake C1 write START");
+        tokio::time::timeout(
+            C1_WRITE_TIMEOUT,
+            peripheral.write(&c1, &request.encode(), WriteType::WithResponse),
+        )
+        .await
+        .map_err(|_| CentralError::Gatt("C1 handshake write timed out".into()))?
+        .map_err(|e| CentralError::Gatt(e.to_string()))?;
+        pt("open_btp: handshake C1 write DONE");
 
         // Subscribe AFTER the request: the CCCD write is what makes the
         // peripheral emit the response (see this method's doc comment).
@@ -305,11 +349,13 @@ impl BleCentral {
             .subscribe(&c2)
             .await
             .map_err(|e| CentralError::Gatt(e.to_string()))?;
+        pt("open_btp: subscribed C2; awaiting handshake response");
 
         let resp_bytes = tokio::time::timeout(HANDSHAKE_TIMEOUT, next_c2(&mut indications))
             .await
             .map_err(|_| CentralError::HandshakeTimeout)?
             .ok_or(CentralError::Disconnected)?;
+        pt("open_btp: handshake response received");
         let response = HandshakeResponse::parse(&resp_bytes)?;
 
         let now = Instant::now();
@@ -502,6 +548,38 @@ fn spawn_pump(
         inbound: sdu_rx,
         pump: Some(pump),
     }
+}
+
+/// Discover the peripheral's GATT services, bounding the macOS
+/// `CoreBluetooth` hang where `discover_services()` never returns.
+///
+/// Root cause (verified against a real ESP32-C6 on macOS 26): `btleplug` 0.12.0
+/// only fulfills the discovery future after every characteristic's *descriptor*
+/// discovery reports back, but its delegate drops that event when the probe
+/// errors. `CHIPoBLE`'s C1/C2 answer descriptor discovery with
+/// `CBError.uuidNotAllowed`, so the future never completes. A per-attempt bound
+/// plus a small retry budget ([`SERVICE_DISCOVERY_ATTEMPTS`]) turns the infinite
+/// hang into a fast, diagnosable failure. Full macOS BLE commissioning is still
+/// blocked upstream (the same `uuidNotAllowed` also rejects the C1 write); this
+/// only ensures we fail cleanly rather than hang.
+async fn discover_services_with_retry(peripheral: &Peripheral) -> Result<(), CentralError> {
+    let mut last: Option<String> = None;
+    for attempt in 1..=SERVICE_DISCOVERY_ATTEMPTS {
+        pt(&format!("discover_services attempt {attempt}"));
+        match tokio::time::timeout(SERVICE_DISCOVERY_TIMEOUT, peripheral.discover_services()).await
+        {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) => last = Some(e.to_string()),
+            Err(_) => last = Some("timed out (no reply from CoreBluetooth)".into()),
+        }
+        // Let a still-in-progress service modification settle before re-issuing;
+        // the next `discover_services` replaces the stale in-flight discovery.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    Err(CentralError::Connect(format!(
+        "GATT service discovery did not complete after {SERVICE_DISCOVERY_ATTEMPTS} attempts: {}",
+        last.unwrap_or_else(|| "unknown".into())
+    )))
 }
 
 /// Write one fragment to C1 and release the one-op-in-flight slot.
