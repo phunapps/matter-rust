@@ -82,10 +82,13 @@ if you're coming from matter.js.
 
 ## Known limitations
 
-- **BLE commissioning on macOS hangs** in the BTP pump (CoreBluetooth). Drive
-  live BLE commissioning from Linux; IP commissioning and everything else is
-  unaffected on all platforms. Tracked with a diagnosis + instrumentation
-  (`MATTER_BLE_PUMP_TRACE=1`).
+- **BLE commissioning on macOS cannot complete.** Root-caused to `btleplug`
+  0.12.0 / CoreBluetooth: the CHIPoBLE GATT characteristics draw
+  `CBError.uuidNotAllowed` on descriptor discovery and the C1 write, and btleplug
+  drops the errored delegate events. The former infinite hang is now bounded to a
+  fast, clear failure, but success needs an upstream fix — drive live BLE
+  commissioning from Linux. IP commissioning and everything else is unaffected on
+  all platforms. Instrumentation: `MATTER_BLE_PUMP_TRACE=1`.
 - Thread network commissioning and BLE transport require the `ble` feature.
 
 ## License

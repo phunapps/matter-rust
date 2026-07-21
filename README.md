@@ -93,9 +93,14 @@ Still deferred: Scenes Management, `no_std` (see
 [ADR 0002](docs/decisions/0002-no-std-posture.md)), React Native, and Matter 1.5+
 features.
 
-Known limitation: **live BLE commissioning is Linux-only** — the BLE central hangs
-on macOS (scanning is fine; GATT/BTP is not). Tracked in
-[`TODO-1.0.md`](TODO-1.0.md).
+Known limitation: **live BLE commissioning is Linux-only.** On macOS, scanning
+works but GATT does not: `btleplug` 0.12.0 / CoreBluetooth reject the CHIPoBLE
+characteristics' descriptor discovery and C1 write with `CBError.uuidNotAllowed`,
+and btleplug drops the errored delegate events so the operation used to hang.
+That hang is now **bounded to a fast, clear failure** rather than an indefinite
+stall, but macOS BLE commissioning still cannot complete — it needs an upstream
+btleplug/CoreBluetooth fix. Root-cause writeup in
+[`docs/superpowers/audits/`](docs/) and [`TODO-1.0.md`](TODO-1.0.md).
 
 ## Commissioning a real device
 
