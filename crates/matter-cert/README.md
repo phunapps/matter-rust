@@ -22,7 +22,7 @@ milestones.
 
 ## Status
 
-**Pre-release (`0.1.0-pre`).** Feature-complete; API claimed stable;
+**0.2.0.** Feature-complete; API claimed stable;
 not yet on crates.io. Cross-verified against matter.js for byte-level
 compatibility on a 3-tier RCAC/ICAC/NOC chain.
 

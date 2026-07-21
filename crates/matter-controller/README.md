@@ -4,26 +4,40 @@ The high-level Matter controller API — the single crate a consumer depends on
 to commission and control Matter devices from pure Rust. It wraps every other
 `matter-*` crate behind a small, async (Tokio) surface.
 
-Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 8
-(the v1.0 release).
+Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **pre-release (`0.0.0`)**. M8.1–M8.5 implemented: persistence + stable
-> commissioner identity, transparent CASE, commissioning + attestation trust,
-> typed read/write/invoke (raw `Value`, wildcard reads), and live subscriptions.
+> Status: **0.3.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
+> (M9): BLE→Wi-Fi/Thread commissioning, full interaction model, groups, OTA
+> provider, ICD client, multi-admin/ACL — extensively validated against real
+> silicon (ESP32-C6 over Wi-Fi and Thread).
 
 ## What it does
 
 - **Fabric & identity** — `create_fabric` mints and persists the controller's
   stable operational identity once per fabric, through a pluggable
-  `ControllerStore` (a default `FileStore` ships).
-- **Commissioning** — `commission("MT:…" | "<manual-code>")` brings a device
-  onto the fabric, verifying device attestation against an `AttestationTrust`
-  (bundled CSA test roots, or production PAA/CD roots loaded `from_dirs`).
+  `ControllerStore` (a default `FileStore` ships). Opt-in per-fabric ICAC for
+  a 3-tier RCAC→ICAC→NOC chain.
+- **Commissioning** — `commission("MT:…" | "<manual-code>", label)` brings a
+  device onto the fabric over IP, verifying device attestation against an
+  `AttestationTrust` (`example_device_roots()`, or production PAA/CD roots via
+  `from_dirs`). `commission_ble` (feature `ble`) commissions a fresh device
+  over BLE onto Wi-Fi or Thread. Both return a typed `NodeInfo`.
+- **Node lifecycle** — `nodes() -> Vec<NodeInfo>` enumerates commissioned
+  devices (node id, fabric id, vendor/product id, label) with no snapshot
+  deserialization; `forget_node(node_id)` drops all local state for a device
+  without needing it to cooperate (reclaim an unreachable/reset node).
 - **Interaction** — `Node::read` / `write` / `invoke` over raw
-  `matter_codec::Value`, including **wildcard reads** (`ReadPath::cluster`,
-  `ReadPath::all`) for reading every attribute off a device.
+  `matter_codec::Value` (plus `invoke_tlv` for pre-encoded
+  `matter-clusters` command TLV), **wildcard + chunked reads**, events, and
+  timed interactions.
 - **Subscriptions** — `Node::subscribe` returns a `Subscription` stream of
-  `AttributeReport`s (`next().await` + `cancel()`).
+  attribute/event reports that **transparently auto-resubscribes** across
+  session loss or a device reboot (validated on hardware).
+- **Groups** — provision group keys and `invoke_group` over IPv6 multicast.
+- **OTA provider** — `serve_ota` announces + serves a `.ota` image over BDX to
+  a commissioned requestor.
+- **ICD client** — register as a check-in client and receive a Long-Idle-Time
+  device's periodic Check-In.
 
 The operational CASE session is established, cached, and reused transparently —
 callers address a device by node id and never manage sessions.
@@ -54,18 +68,25 @@ let node = controller.node(info.node_id);
 let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;
 let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
 while let Some(change) = sub.next().await { /* … */ }
+
+// Enumerate and manage commissioned nodes.
+for n in controller.nodes().await? {
+    println!("node 0x{:016X} — {:?}", n.node_id, n.label);
+}
 ```
 
-See `examples/controller_quickstart.rs` for an end-to-end run, and
+See `examples/` (`controller_quickstart`, `list_nodes`, `e3_group_multicast`,
+`serve_ota`, …) for end-to-end runs, and
 [`docs/matter-js-migration-guide.md`](../../docs/matter-js-migration-guide.md)
 if you're coming from matter.js.
 
-## Known limitations (v1.0)
+## Known limitations
 
-Subscription hardening is a tracked follow-up: liveness-driven auto-resubscribe
-on staleness/session-loss is not yet implemented, and a steady-state report that
-arrives while a concurrent round-trip on the same node owns the socket is acked
-but not delivered to the consumer (a pure subscription stream loses nothing).
+- **BLE commissioning on macOS hangs** in the BTP pump (CoreBluetooth). Drive
+  live BLE commissioning from Linux; IP commissioning and everything else is
+  unaffected on all platforms. Tracked with a diagnosis + instrumentation
+  (`MATTER_BLE_PUMP_TRACE=1`).
+- Thread network commissioning and BLE transport require the `ble` feature.
 
 ## License
 

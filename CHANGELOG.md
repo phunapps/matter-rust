@@ -82,8 +82,22 @@ changes.
   the anchoring PAA's SubjectKeyIdentifier.
 - **Transport (TRAN-1):** decide the MRP duplicate-ack only *after* decrypt, so
   an unauthenticated replay can no longer emit an ack or burn a counter.
-- **Transport:** bound the session table (default 256) with oldest-first
-  eviction — closes the unbounded-`HashMap` DoS.
+- **Transport:** bound the session table (default 256) with **idle-first**
+  eviction — a full table drops a session with no in-flight reliable work
+  before one mid-exchange (tie-break oldest) — closing the unbounded-`HashMap`
+  DoS without tearing down an active handshake.
+- **Transport (MRP-1/MRP-2):** size MRP retransmits to the *peer*, not our own
+  transmit timing. The active/idle base is chosen from whether the peer has
+  been active within its Session Active Threshold — re-evaluated on every
+  retransmit (chip `GetMRPBaseTimeout`) — and the per-session intervals come
+  from the peer's advertised operational mDNS `SII`/`SAI`/`SAT`
+  (`MrpConfig::for_peer`, `MatterService::peer_mrp_config`,
+  `resolve_operational_with_mrp`, `SessionManager::register_case_with_mrp`).
+  Stops us hammering a sleepy/ICD device with active-interval spacing it never
+  polls fast enough to see.
+- **Commissioning:** cap the requested `ArmFailSafe` expiry at the device's
+  `BasicCommissioningInfo::MaxCumulativeFailsafeSeconds`, so we never
+  round-trip an expiry the device is guaranteed to reject with `BoundsExceeded`.
 - **CASE (CASE-1):** test coverage for peer-signature rejection (the auth line).
 - **Codec (CODEC-1):** truncate char strings at the IS1 (`0x1F`) localized-string
   separator (matches chip/matter.js).

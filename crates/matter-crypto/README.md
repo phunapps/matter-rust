@@ -33,7 +33,7 @@ Authenticated Session Establishment) via SIGMA-I. Part of the
 
 ## Status
 
-**Pre-release (`0.1.0-pre`).** PASE and CASE feature-complete.
+**0.2.0.** PASE and CASE feature-complete.
 
 ## Minimal example
 

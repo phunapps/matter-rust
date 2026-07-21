@@ -5,7 +5,7 @@ attestation, NOC issuance, and network commissioning.
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
 
-> Status: **pre-release (`0.0.0`)**.
+> Status: **0.2.0**.
 >
 > **Milestone 6.4 (Commissioning State Machine): complete** — the
 > state machine drives end-to-end from `SecurePairing` through

@@ -30,7 +30,7 @@ and `BdxOtaSender`.
 
 ```toml
 [dependencies]
-matter-bdx = "0.1"
+matter-bdx = "0.2"
 ```
 
 ## Scope

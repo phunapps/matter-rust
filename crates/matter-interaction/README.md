@@ -8,7 +8,7 @@ Part of [matter-rust](https://github.com/phunapps/matter-rust). Lifted out
 of `matter-commissioning` in M7 so cluster control (M7) and the controller
 API (M8) can use IM framing without depending on commissioning.
 
-Status: pre-release (`0.1.0-pre`), not yet published.
+Status: 0.2.0.
 
 Scope (deliberate subset): one command per invoke, concrete (non-wildcard)
 paths, no subscriptions, no events, no timed actions, no chunked writes.

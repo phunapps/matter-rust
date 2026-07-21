@@ -17,14 +17,19 @@ MRP reliability layer (§4.11) and the application protocol header
   (pending acks, piggyback queue, exchange table, recent-reliable
   cache); Matter application protocol header codec (skip-and-ignore
   SX/V extensions). Byte-identical to matter.js across 3 more captured
-  fixtures.
+  fixtures. Retransmit timing is sized to the **peer** — the active/idle
+  base is chosen from the peer's activity within its Session Active
+  Threshold (re-evaluated per retransmit, chip `GetMRPBaseTimeout`) using
+  the peer's advertised `SII`/`SAI`/`SAT` (`MrpConfig::for_peer`), so a
+  sleepy/ICD device is never hammered with active-interval spacing.
 - **Transport + Discovery adapters (M5.3):** sans-IO `Transport` /
   `Discovery` traits + default Tokio UDP + mdns-sd implementations.
 
 ## Status
 
-**Pre-release (`0.1.0-pre`).** M5 is feature-complete. Not yet published
-to crates.io; no real-device interop testing yet (M6 territory).
+**0.2.0.** Feature-complete and validated against real silicon (ESP32-C6
+over Wi-Fi and Thread) via the higher-level crates. The session table is
+bounded with idle-first eviction (DoS defense).
 
 ## Cargo features
 
@@ -36,7 +41,7 @@ to crates.io; no real-device interop testing yet (M6 territory).
 Embedded callers disable defaults:
 
 ```toml
-matter-transport = { version = "0.1.0-pre", default-features = false }
+matter-transport = { version = "0.2.0", default-features = false }
 ```
 
 …and implement `Transport` + `Discovery` themselves against their HAL.
@@ -78,8 +83,10 @@ See `tests/loopback.rs` for a complete two-side example.
 
 Framing and protocol-header layers are verified byte-for-byte against
 matter.js across 6 captured fixtures (3 framing, 3 protocol header).
-MRP behaviour is covered by 16 simulated-clock state-machine tests.
-Real-device interop is M6's job.
+MRP behaviour (including peer-activity classification and peer-config
+sizing) is covered by simulated-clock state-machine tests. Real-device
+interop is validated end-to-end by the higher-level crates against an
+ESP32-C6 over Wi-Fi and Thread.
 
 ## License
 

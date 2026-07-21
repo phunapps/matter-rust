@@ -29,7 +29,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 
 ## Status
 
-Pre-release (`0.0.0`). The 10 M7 clusters are generated and **byte-parity
+0.2.0. The 10 M7 clusters are generated and **byte-parity
 tested against matter.js 0.16.11** (`test-vectors/clusters/`): BasicInformation,
 Descriptor, Identify, OnOff, LevelControl, ColorControl, OccupancySensing,
 TemperatureMeasurement, RelativeHumidityMeasurement, and DoorLock (Aliro

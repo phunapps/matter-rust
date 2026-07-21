@@ -5,11 +5,10 @@
 
 A Rust implementation of the **Matter** protocol — controller side.
 
-> Status: **feature-complete against Matter 1.4, not yet published to crates.io.**
-> The controller commissions and controls real Matter devices over IP, and over BLE
-> onto Wi-Fi or Thread — all validated against hardware, not just tests. The crates
-> are unpublished by choice, not because they are empty; see
-> [Using the crates](#using-the-crates).
+> Status: **feature-complete against Matter 1.4 and published to crates.io**
+> (`matter-controller` `0.3.0`; the lower-level crates `0.2.0`). The controller
+> commissions and controls real Matter devices over IP, and over BLE onto Wi-Fi
+> or Thread — all validated against hardware, not just tests.
 
 ## What this is
 
@@ -166,13 +165,11 @@ before changing the test.
 
 ## Using the crates
 
-**Not yet published to crates.io.** That is a deliberate hold, not a gap in the
-work — the maintainer will publish when the API has had more outside use. Until
-then, depend on it via git:
+Published on crates.io — depend on the high-level crate directly:
 
 ```toml
 [dependencies]
-matter-controller = { git = "https://github.com/phunapps/matter-rust" }
+matter-controller = "0.3"
 ```
 
 Each crate is independently usable: take `matter-codec` alone for TLV, or
