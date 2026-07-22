@@ -55,18 +55,10 @@ async fn time_sync_set_and_read() {
 
     // Time zone + DST offset (single entries valid from epoch 0).
     let _dst_required = node
-        .set_time_zone(&[TimeZoneEntry {
-            offset_seconds: 3600,
-            valid_at_us: 0,
-            name: None,
-        }])
+        .set_time_zone(&[TimeZoneEntry::new(3600, 0, None)])
         .await
         .expect("SetTimeZone");
-    node.set_dst_offset(&[DstOffsetEntry {
-        offset_seconds: 3600,
-        valid_starting_us: 0,
-        valid_until_us: None,
-    }])
-    .await
-    .expect("SetDSTOffset");
+    node.set_dst_offset(&[DstOffsetEntry::new(3600, 0, None)])
+        .await
+        .expect("SetDSTOffset");
 }

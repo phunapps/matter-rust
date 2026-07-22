@@ -8,7 +8,11 @@ use crate::actor::Command;
 use crate::error::Error;
 
 /// One reported attribute change from a subscription.
+///
+/// `#[non_exhaustive]`: this is a read-only report produced by the library, so
+/// future fields (e.g. a data version) can be added without a breaking change.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AttributeReport {
     /// The concrete attribute path the device reported.
     pub path: AttributePath,

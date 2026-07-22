@@ -76,7 +76,11 @@ impl TimeGranularity {
 }
 
 /// One `TimeZoneStruct` entry for [`Node::set_time_zone`].
+///
+/// `#[non_exhaustive]`: construct via [`TimeZoneEntry::new`] so future optional
+/// spec fields can be added without a breaking change.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TimeZoneEntry {
     /// Offset from UTC in seconds (−43200..=50400).
     pub offset_seconds: i32,
@@ -86,8 +90,25 @@ pub struct TimeZoneEntry {
     pub name: Option<String>,
 }
 
+impl TimeZoneEntry {
+    /// A time-zone entry: `offset_seconds` from UTC (−43200..=50400) taking
+    /// effect at `valid_at_us` (epoch µs), with an optional IANA `name`.
+    #[must_use]
+    pub fn new(offset_seconds: i32, valid_at_us: u64, name: Option<String>) -> Self {
+        Self {
+            offset_seconds,
+            valid_at_us,
+            name,
+        }
+    }
+}
+
 /// One `DSTOffsetStruct` entry for [`Node::set_dst_offset`].
+///
+/// `#[non_exhaustive]`: construct via [`DstOffsetEntry::new`] so future optional
+/// spec fields can be added without a breaking change.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DstOffsetEntry {
     /// DST offset in seconds added to the standard offset.
     pub offset_seconds: i32,
@@ -95,6 +116,20 @@ pub struct DstOffsetEntry {
     pub valid_starting_us: u64,
     /// The `UTCTime` (epoch µs) at which it stops, or `None` for indefinite.
     pub valid_until_us: Option<u64>,
+}
+
+impl DstOffsetEntry {
+    /// A DST-offset entry: `offset_seconds` added to the standard offset,
+    /// starting at `valid_starting_us` and ending at `valid_until_us` (both
+    /// epoch µs; `None` end means indefinite).
+    #[must_use]
+    pub fn new(offset_seconds: i32, valid_starting_us: u64, valid_until_us: Option<u64>) -> Self {
+        Self {
+            offset_seconds,
+            valid_starting_us,
+            valid_until_us,
+        }
+    }
 }
 
 /// Extract `SetTimeZoneResponse.DSTOffsetRequired` (ctx0 bool) from a decoded

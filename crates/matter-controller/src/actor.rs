@@ -9093,11 +9093,7 @@ mod tests {
         .expect("open");
         let dst_required = controller
             .node(device_node_id)
-            .set_time_zone(&[crate::TimeZoneEntry {
-                offset_seconds: 3600,
-                valid_at_us: 0,
-                name: Some("CET".into()),
-            }])
+            .set_time_zone(&[crate::TimeZoneEntry::new(3600, 0, Some("CET".into()))])
             .await
             .expect("set time zone");
         assert!(dst_required);
@@ -9145,11 +9141,7 @@ mod tests {
         .expect("open");
         controller
             .node(device_node_id)
-            .set_dst_offset(&[crate::DstOffsetEntry {
-                offset_seconds: 3600,
-                valid_starting_us: 0,
-                valid_until_us: None,
-            }])
+            .set_dst_offset(&[crate::DstOffsetEntry::new(3600, 0, None)])
             .await
             .expect("set dst offset");
         device.await.unwrap();
