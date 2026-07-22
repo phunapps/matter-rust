@@ -164,6 +164,19 @@ changes.
 
 #### Fixed
 
+- **The macOS `CoreBluetooth` GATT hangs are now bounded to a clean failure.**
+  On macOS, `discover_services()`, the C1 handshake write, and the C2 subscribe
+  could each hang forever: btleplug 0.12.0 drops any errored `CoreBluetooth`
+  delegate event (its handlers gate on `error.is_none()`), and `CoreBluetooth`
+  rejects the `CHIPoBLE` characteristics' descriptor discovery and C1 write with
+  `CBError.uuidNotAllowed`. The three previously-unbounded awaits now have
+  timeouts (service discovery 12 s × 2, C1 write 12 s, pre-connect disconnect
+  2 s), so the flow fails fast with a clear error instead of stalling past every
+  commissioning deadline. **Known limitation (deferred):** this does not make
+  macOS BLE commissioning *succeed* — the `uuidNotAllowed` write rejection is an
+  upstream btleplug/`CoreBluetooth` issue (and the same rig's macOS `chip-tool`
+  hits an equivalent GATT-write failure), so live BLE commissioning stays
+  Linux-only. Root-cause writeup under `docs/superpowers/audits/`.
 - **BLE scanning never worked on Linux/`BlueZ`.** `BleCentral::find_device`
   passed a service-UUID `ScanFilter` to btleplug; `CoreBluetooth` honours it,
   but the `BlueZ` backend goes silent under it — no service-data events and an
