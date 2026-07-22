@@ -296,20 +296,14 @@ absent.
 
 ### ICAC issuance — deferred to M6.3.x or M8
 
-**Status:** open. Not a hard gate, but required for v1.0 production use.
-
-`FabricRecord` (M6.3.1) carries `icac_signer: Option<Arc<dyn Signer>>` +
-`icac_cert: Option<MatterCertificate>` slots, but only
-`FabricRecord::new_root_only` is implemented. Real production
-controllers (Apple Home, Google Home, SmartThings) all use ICAC for
-operational-key rotation without breaking the durable fabric root.
-Add `FabricRecord::new_with_icac(...)` plus the ICAC-issuance code
-path before v1.0 ships.
-
-The schema is already non-breaking — adding the issuer code does
-not change `FabricRecord`'s shape, only adds a new constructor +
-new code path inside `issue_noc` that emits the NOC under an ICAC
-issuer DN instead of the RCAC.
+**Status:** CLOSED (2026-07-19/20, verified 2026-07-21). The opt-in 3-tier
+RCAC→ICAC→NOC path landed in the 0.2.0 batch: a fabric can carry an
+`icac_signer`, `issue_noc` emits the NOC under the ICAC issuer DN, the
+commissioner sends the ICAC in `AddNOC`, and the controller presents it on
+operational CASE sessions (commits `7db02dc0`, `8e714ad6`, `d83cea02`;
+`make_fabric_record_with_icac` + `position_at_stage`-covered tests). Validated
+by a 3-tier CASE test + ICAC loopback commission. ICAC is opt-in per fabric;
+root-only fabrics are unchanged.
 
 ### NetworkCommissioning endpoint discovery — deferred to post-v1.0
 
@@ -349,23 +343,24 @@ rejection is already surfaced as a typed error.)
 
 ### `test-helpers` feature naming + scope review — pre-v1.0
 
-**Status:** open. M6.5.2 ships a `test-helpers` Cargo feature exposing
-two shortcut constructors (`new_at_read_network_commissioning_info`,
-`new_at_evict_previous_case_sessions`) needed because the M6.4.6 real-
-fixture e2e driver is deferred. Before v1.0, consider:
-- Renaming to `_unstable-test-helpers` (underscore prefix) to signal
-  "not for production use" in dependency-graph audits.
-- Reviewing whether to consolidate the two shortcuts into a single
-  `position_at_stage_for_test(self, stage: Stage)` API.
-- Removing entirely once M6.4.6's real-fixture e2e driver lands.
+**Status:** CLOSED (verified 2026-07-21). All three suggestions were taken:
+the feature is now `__test_shortcuts` (double-underscore = "internal, do not
+use" — stronger than the proposed `_unstable-` prefix), the two shortcut
+constructors were consolidated into a single
+`Commissioner::position_at_stage_for_test(self, stage: Stage, seeds: TestStateSeeds)`,
+and it is properly gated: `__test_shortcuts` is off by default and the only
+consumer is the crate's own test, which opts in via `required-features`. The
+constructor is `#[cfg(feature = "__test_shortcuts")]` and documents "Never use
+in production code." Not part of the frozen public surface.
 
 ### `WiFiNetworkFeature` naming — open question
 
-**Status:** open from M6.5.1 PR review. The `WiFiNetworkFeature` bitflags
-struct carries WIFI, THREAD, and ETHERNET bits — the Wi-Fi-centric type
-name is technically misleading. The spec uses this name; rename to
-`NetworkInterfaceFeature` (or similar) is a cheap pre-v1.0 search-and-
-replace if desired.
+**Status:** CLOSED (verified 2026-07-21). No `WiFiNetworkFeature` type exists
+in the shipped code — the WIFI/THREAD/ETHERNET FeatureMap bitflags is
+`NetworkCommissioningFeature` (`crates/matter-commissioning/src/clusters/
+network_commissioning.rs`), which is spec-accurate (it *is* the
+NetworkCommissioning cluster's FeatureMap) and not Wi-Fi-centric. No rename
+needed.
 
 ### matter.js NOC byte-parity capture — operator wiring
 
