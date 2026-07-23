@@ -1,6 +1,6 @@
 [package]
 name = "matter-ota"
-version = "0.2.0"
+version = "0.3.0"
 description = "Matter OTA Software Update Provider: OtaProvider (0x0029) command handlers."
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,7 @@ workspace = true
 
 [dependencies]
 matter-codec = { path = "../matter-codec", version = "0.2.0" }
-matter-interaction = { path = "../matter-interaction", version = "0.2.0" }
+matter-interaction = { path = "../matter-interaction", version = "0.3.0" }
 matter-clusters = { path = "../matter-clusters", version = "0.2.0" }
 thiserror = { workspace = true }
 

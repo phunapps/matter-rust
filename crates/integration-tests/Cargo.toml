@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-matter-controller = { path = "../matter-controller", version = "0.3.0" }
+matter-controller = { path = "../matter-controller", version = "0.4.0" }
 matter-codec = { path = "../matter-codec", version = "0.2.0" }
 matter-clusters = { path = "../matter-clusters", version = "0.2.0" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }

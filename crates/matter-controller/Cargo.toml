@@ -1,6 +1,6 @@
 [package]
 name = "matter-controller"
-version = "0.3.0"
+version = "0.4.0"
 description = "High-level Matter controller API: commission, read, write, invoke, subscribe."
 edition.workspace = true
 rust-version.workspace = true
@@ -34,11 +34,11 @@ matter-codec = { path = "../matter-codec", version = "0.2.0" }
 matter-cert = { path = "../matter-cert", version = "0.2.0" }
 matter-crypto = { path = "../matter-crypto", version = "0.2.0" }
 matter-transport = { path = "../matter-transport", version = "0.2.0" }
-matter-commissioning = { path = "../matter-commissioning", version = "0.2.0", features = ["driver"] }
-matter-interaction = { path = "../matter-interaction", version = "0.2.0" }
+matter-commissioning = { path = "../matter-commissioning", version = "0.3.0", features = ["driver"] }
+matter-interaction = { path = "../matter-interaction", version = "0.3.0" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 matter-clusters = { path = "../matter-clusters", version = "0.2.0" }
-matter-ota = { path = "../matter-ota", version = "0.2.0" }
+matter-ota = { path = "../matter-ota", version = "0.3.0" }
 matter-bdx = { path = "../matter-bdx", version = "0.2.0" }
 matter-ble = { path = "../matter-ble", version = "0.2.0", optional = true }
 thiserror = { workspace = true }
@@ -55,7 +55,7 @@ serde_json = { workspace = true }
 # Mirrors matter-commissioning's own dev-dependency on matter-cert's
 # `test-support`. Cargo unifies this into the lib build only under
 # `cargo test` (dev-dependencies never apply to a plain `cargo build`).
-matter-commissioning = { path = "../matter-commissioning", version = "0.2.0", features = ["driver", "test-support"] }
+matter-commissioning = { path = "../matter-commissioning", version = "0.3.0", features = ["driver", "test-support"] }
 
 [[example]]
 name = "controller_quickstart"

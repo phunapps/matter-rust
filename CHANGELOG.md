@@ -22,13 +22,15 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## [Unreleased]
+## 0.4.0
 
 A 1.0-readiness pass over the public surface (from a freeze-readiness review),
-plus a real-hardware interop fix from WeaveHome dogfooding. Not yet published;
-version bumps are cut at release. The breaking items make the **next
-`matter-controller` a minor bump (→ 0.4.0)** and the **next `matter-interaction`
-a minor bump (→ 0.3.0)**.
+plus a real-hardware interop fix from WeaveHome dogfooding. Published so WeaveHome
+can dogfood the latest. Crate versions in this release: **`matter-controller`
+0.4.0**, **`matter-interaction` 0.3.0** (the breaking `#[non_exhaustive]` change),
+and **`matter-commissioning` 0.3.0** / **`matter-ota` 0.3.0** (dependency bump
+only — they now require `matter-interaction` 0.3.0, no source change). The other
+lower crates are unchanged at `0.2.0`.
 
 ### `matter-controller`
 

@@ -1,6 +1,6 @@
 [package]
 name = "matter-interaction"
-version = "0.2.0"
+version = "0.3.0"
 description = "Matter Interaction Model message framing: invoke, read, and write request/response encoding."
 edition.workspace = true
 rust-version.workspace = true
