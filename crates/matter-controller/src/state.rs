@@ -57,8 +57,9 @@ impl GroupKeySetConfig {
 pub struct IcacIdentity {
     /// The RCAC-signed ICAC certificate.
     pub cert: MatterCertificate,
-    /// The ICAC signing key, PKCS#8 DER.
-    pub pkcs8: Vec<u8>,
+    /// The ICAC signing key, PKCS#8 DER. `pub(crate)`: raw private-key material
+    /// is never exposed on the public surface (persisted via `snapshot`).
+    pub(crate) pkcs8: Vec<u8>,
 }
 
 impl std::fmt::Debug for IcacIdentity {
@@ -135,8 +136,9 @@ impl std::fmt::Debug for DeviceEntry {
 pub struct CommissionerIdentity {
     /// The commissioner's stable node ID on this fabric.
     pub node_id: u64,
-    /// The commissioner's operational private key, PKCS#8 DER.
-    pub operational_pkcs8: Vec<u8>,
+    /// The commissioner's operational private key, PKCS#8 DER. `pub(crate)`:
+    /// raw private-key material is never exposed on the public surface.
+    pub(crate) operational_pkcs8: Vec<u8>,
     /// The commissioner's NOC, signed by the fabric RCAC.
     pub noc: MatterCertificate,
 }
@@ -166,8 +168,9 @@ pub struct FabricEntry {
     pub ipk: [u8; 16],
     /// Self-signed root (RCAC) certificate.
     pub rcac_cert: MatterCertificate,
-    /// The RCAC root signing key, PKCS#8 DER.
-    pub rcac_pkcs8: Vec<u8>,
+    /// The RCAC root signing key, PKCS#8 DER. `pub(crate)`: raw private-key
+    /// material is never exposed on the public surface.
+    pub(crate) rcac_pkcs8: Vec<u8>,
     /// The controller's stable identity on this fabric.
     pub commissioner: CommissionerIdentity,
     /// Devices commissioned onto this fabric.
@@ -220,7 +223,7 @@ impl FabricEntry {
     /// # Errors
     ///
     /// Returns [`Error::Signer`] if the stored key is not valid PKCS#8.
-    pub fn rcac_signer(&self) -> Result<RingSigner, Error> {
+    pub(crate) fn rcac_signer(&self) -> Result<RingSigner, Error> {
         RingSigner::from_pkcs8(&self.rcac_pkcs8).map_err(|e| Error::Signer(e.to_string()))
     }
 
@@ -229,7 +232,7 @@ impl FabricEntry {
     /// # Errors
     ///
     /// Returns [`Error::Signer`] if the stored key is not valid PKCS#8.
-    pub fn commissioner_signer(&self) -> Result<RingSigner, Error> {
+    pub(crate) fn commissioner_signer(&self) -> Result<RingSigner, Error> {
         RingSigner::from_pkcs8(&self.commissioner.operational_pkcs8)
             .map_err(|e| Error::Signer(e.to_string()))
     }
@@ -240,7 +243,7 @@ impl FabricEntry {
     /// # Errors
     ///
     /// Returns [`Error::Signer`] if the RCAC key cannot be reconstructed.
-    pub fn to_fabric_record(&self) -> Result<FabricRecord, Error> {
+    pub(crate) fn to_fabric_record(&self) -> Result<FabricRecord, Error> {
         let signer = self.rcac_signer()?;
         let root_public_key = signer.public_key().clone();
         // Reconstruct the ICAC signer/cert when this fabric has an ICAC
