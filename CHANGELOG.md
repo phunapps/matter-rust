@@ -22,6 +22,57 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## [Unreleased]
+
+A 1.0-readiness pass over the public surface (from a freeze-readiness review),
+plus a real-hardware interop fix from WeaveHome dogfooding. Not yet published;
+version bumps are cut at release. The breaking items make the **next
+`matter-controller` a minor bump (→ 0.4.0)** and the **next `matter-interaction`
+a minor bump (→ 0.3.0)**.
+
+### `matter-controller`
+
+#### Fixed
+
+- **Timed auto-upgrade now fires when a device reports the requirement
+  per-command / per-attribute.** The transparent retry-as-timed only triggered
+  on a message-level `StatusResponse(NEEDS_TIMED_INTERACTION, 0xc6)`. Shipping
+  door locks (e.g. eufy E31) return `0xc6` as a `CommandStatusIB` inside an
+  `InvokeResponse` (or an `AttributeStatusIB` inside a `WriteResponse`) instead,
+  so timed-required commands (`DoorLock` lock/unlock, any T-quality command)
+  failed against them. Detection now covers all three delivery forms. Behaviour
+  fix (semver-patch); reported via WeaveHome dogfooding.
+
+#### Changed (breaking)
+
+- Public field-structs `TimeZoneEntry`, `DstOffsetEntry`, and `AttributeReport`
+  are now `#[non_exhaustive]` (with `TimeZoneEntry::new` / `DstOffsetEntry::new`
+  constructors) so future fields stay non-breaking.
+- The low-level provider server — `ProviderServer`, `build_operational_service`,
+  and `MatterController::serve_provider_once` — moved behind a new
+  **`unstable-provider`** feature (not covered by semver). The stable OTA path,
+  `MatterController::serve_ota` / `serve_ota_with_block_size`, is unchanged.
+- `Node::open_commissioning_window_with` (7-arg caller-supplied-secrets variant)
+  is now `pub(crate)`; use `Node::open_commissioning_window`.
+- Raw private-key material is no longer on the public surface: the PKCS#8 fields
+  on `FabricEntry` / `CommissionerIdentity` / `IcacIdentity`, and the
+  `rcac_signer` / `commissioner_signer` / `to_fabric_record` methods (which
+  returned concrete `RingSigner` / `FabricRecord`), are now `pub(crate)`.
+- The redundant top-level `create_fabric` free function is no longer re-exported
+  (`MatterController::create_fabric` is the API), and the `snapshot` module
+  (`serialize` / `deserialize` / `SNAPSHOT_VERSION`) is now `pub(crate)`.
+
+### `matter-interaction`
+
+#### Changed (breaking)
+
+- `ReadPath`, `EventPath`, and `EventFilter` are now `#[non_exhaustive]` so the
+  spec's optional path/filter components (e.g. a data-version filter) can be
+  added without a break. All construction already goes through their
+  constructors; `ReadPath::new(endpoint, cluster, attribute)` is added for the
+  raw-optional case. The concrete `CommandPath` / `AttributePath` are left as
+  plain structs — spec-complete 3-field addressing types that cannot grow.
+
 ## 0.3.0
 
 A `matter-controller` API batch driven by the WeaveHome integration. Only
