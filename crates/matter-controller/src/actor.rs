@@ -30,10 +30,51 @@ const OP_STATUS_RESPONSE: u8 = 0x01;
 const OP_TIMED_REQUEST: u8 = 0x0a;
 /// IM `WriteRequest` opcode — used by the chunked-write primitive.
 const OP_WRITE_REQUEST: u8 = 0x06;
-/// IM status `NEEDS_TIMED_INTERACTION` — a device returns this (as a message-level
-/// `StatusResponse`) when a write/invoke that requires a timed interaction arrives
-/// without a preceding `TimedRequest`. Triggers the transparent timed retry.
+/// IM status `NEEDS_TIMED_INTERACTION` — a device returns this when a write/invoke
+/// that requires a timed interaction arrives without a preceding `TimedRequest`.
+/// Triggers the transparent timed retry (see [`response_needs_timed`]).
 const NEEDS_TIMED_INTERACTION: u8 = 0xc6;
+
+/// `true` if a plain (non-timed) write/invoke response signals the device
+/// requires a *timed* interaction (`NEEDS_TIMED_INTERACTION`, 0xc6).
+///
+/// A device may signal this two ways, and real hardware uses both:
+/// * as a **message-level** `StatusResponse` (0xc6), or
+/// * as a **per-command** `CommandStatusIB` inside an `InvokeResponse`, or a
+///   **per-attribute** `AttributeStatusIB` inside a `WriteResponse`.
+///
+/// Only the first form was handled originally, so timed-required commands failed
+/// against shipping devices that use the second — notably door locks (e.g. the
+/// eufy E31, which returns 0xc6 as an `InvokeResponse` command status). Chip and
+/// the Apple/Google controllers accept both forms, so handling both is required
+/// for real-world interop. `opcode` is the original request opcode
+/// (`OP_INVOKE_REQUEST` / `OP_WRITE_REQUEST`), used to select the response parser.
+fn response_needs_timed(opcode: u8, payload: &[u8]) -> bool {
+    // Message-level StatusResponse.
+    if matches!(
+        matter_interaction::parse_status_response(payload),
+        Ok(Some(NEEDS_TIMED_INTERACTION))
+    ) {
+        return true;
+    }
+    // Per-command / per-attribute status embedded in the response body.
+    match opcode {
+        crate::node::OP_INVOKE_REQUEST => matches!(
+            matter_interaction::parse_invoke_response_batch(payload),
+            Ok(entries) if entries.iter().any(|e| matches!(
+                e.response,
+                matter_interaction::InvokeResponse::Status(s)
+                    if s.to_u8() == NEEDS_TIMED_INTERACTION
+            ))
+        ),
+        OP_WRITE_REQUEST => matches!(
+            matter_interaction::parse_write_response(payload),
+            Ok(statuses)
+                if statuses.iter().any(|(_, s)| s.to_u8() == NEEDS_TIMED_INTERACTION)
+        ),
+        _ => false,
+    }
+}
 
 /// How often the loop wakes to drive MRP / liveness when no MRP deadline is
 /// pending.
@@ -2642,10 +2683,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// timed-cache and transparently retry the action as a timed interaction;
     /// otherwise resolve the caller with the response bytes.
     async fn resolve_action(&mut self, sid: SessionId, exchange: u16, payload: Vec<u8>) {
-        let needs_timed = matches!(
-            matter_interaction::parse_status_response(&payload),
-            Ok(Some(NEEDS_TIMED_INTERACTION))
-        );
         let Some(p) = self.pending.remove(&(sid, exchange)) else {
             return;
         };
@@ -2660,7 +2697,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         else {
             return;
         };
-        if !needs_timed {
+        if !response_needs_timed(opcode, &payload) {
             let _ = reply.send(Ok(payload));
             return;
         }
@@ -3669,6 +3706,108 @@ mod tests {
         ServiceKind, SessionManager, SessionRole,
     };
     use std::time::Instant;
+
+    /// Build a `WriteResponseMessage` whose single `AttributeStatusIB` carries
+    /// `status` for `(endpoint, cluster, attribute)` — the per-attribute form of
+    /// a write rejection (there is no public builder, so mirror the wire shape
+    /// `parse_write_response` expects).
+    fn build_write_response_status(
+        endpoint: u16,
+        cluster: u32,
+        attribute: u32,
+        status: u8,
+    ) -> Vec<u8> {
+        use matter_codec::{Tag, TlvWriter};
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(0)).unwrap(); // WriteResponses
+        w.start_structure(Tag::Anonymous).unwrap(); // AttributeStatusIB
+        w.start_list(Tag::Context(0)).unwrap(); // AttributePathIB
+        w.put_uint(Tag::Context(2), u64::from(endpoint)).unwrap();
+        w.put_uint(Tag::Context(3), u64::from(cluster)).unwrap();
+        w.put_uint(Tag::Context(4), u64::from(attribute)).unwrap();
+        w.end_container().unwrap();
+        w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+        w.put_uint(Tag::Context(0), u64::from(status)).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+        buf
+    }
+
+    // --- response_needs_timed: transparent timed auto-upgrade detection ---
+    // Regression for the WeaveHome door-lock report: 0xc6 delivered inside an
+    // InvokeResponse/WriteResponse (not just as a message-level StatusResponse)
+    // must still trigger the timed retry.
+
+    #[test]
+    fn needs_timed_detects_message_level_status_response() {
+        let payload = matter_interaction::build_status_response(NEEDS_TIMED_INTERACTION);
+        // Detected regardless of which request opcode it answered.
+        assert!(response_needs_timed(
+            crate::node::OP_INVOKE_REQUEST,
+            &payload
+        ));
+        assert!(response_needs_timed(OP_WRITE_REQUEST, &payload));
+    }
+
+    #[test]
+    fn needs_timed_detects_per_command_invoke_status() {
+        // The door-lock case: 0xc6 as a CommandStatusIB inside an InvokeResponse.
+        let path = matter_interaction::CommandPath {
+            endpoint: 1,
+            cluster: 0x0101, // DoorLock
+            command: 0x00,   // LockDoor
+        };
+        let payload = matter_interaction::build_invoke_response_status(
+            path,
+            matter_interaction::ImStatus::Failure(NEEDS_TIMED_INTERACTION),
+        );
+        assert!(
+            response_needs_timed(crate::node::OP_INVOKE_REQUEST, &payload),
+            "0xc6 carried in an InvokeResponse must trigger the timed retry"
+        );
+    }
+
+    #[test]
+    fn needs_timed_detects_per_attribute_write_status() {
+        // 0xc6 as an AttributeStatusIB inside a WriteResponse.
+        let payload = build_write_response_status(0, 0x0028, 0x05, NEEDS_TIMED_INTERACTION);
+        assert!(
+            response_needs_timed(OP_WRITE_REQUEST, &payload),
+            "0xc6 carried in a WriteResponse must trigger the timed retry"
+        );
+    }
+
+    #[test]
+    fn needs_timed_false_for_success_and_other_failures() {
+        let path = matter_interaction::CommandPath {
+            endpoint: 1,
+            cluster: 0x0101,
+            command: 0x00,
+        };
+        // A successful invoke status is not a timed requirement.
+        let ok = matter_interaction::build_invoke_response_status(
+            path,
+            matter_interaction::ImStatus::Success,
+        );
+        assert!(!response_needs_timed(crate::node::OP_INVOKE_REQUEST, &ok));
+        // A different failure (e.g. FAILURE 0x01) must not be mistaken for 0xc6.
+        let other = matter_interaction::build_invoke_response_status(
+            path,
+            matter_interaction::ImStatus::Failure(0x01),
+        );
+        assert!(!response_needs_timed(
+            crate::node::OP_INVOKE_REQUEST,
+            &other
+        ));
+        // A write success likewise.
+        let wok = build_write_response_status(0, 0x0028, 0x05, 0x00);
+        assert!(!response_needs_timed(OP_WRITE_REQUEST, &wok));
+    }
 
     /// A discovery that finds nothing (sufficient for the `create_fabric` test).
     struct NullDiscovery;
