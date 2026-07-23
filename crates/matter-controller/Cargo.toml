@@ -21,6 +21,14 @@ workspace = true
 # macOS), so it is opt-in. The default IP commissioning path needs none of it.
 ble = ["dep:matter-ble", "matter-ble/central"]
 
+# UNSTABLE, not covered by semver. Exposes the low-level provider-server
+# building blocks (`ProviderServer`, `build_operational_service`) and
+# `MatterController::serve_provider_once` — a generic CASE/IM responder for
+# power users building a custom server. The supported, stable OTA path is
+# `MatterController::serve_ota`, which needs none of this. May change or be
+# removed in any release.
+unstable-provider = []
+
 [dependencies]
 matter-codec = { path = "../matter-codec", version = "0.2.0" }
 matter-cert = { path = "../matter-cert", version = "0.2.0" }
@@ -72,6 +80,10 @@ name = "group_acl_test"
 
 [[example]]
 name = "open_window"
+
+[[example]]
+name = "provider_server"
+required-features = ["unstable-provider"]
 
 [[example]]
 name = "ble_scan"

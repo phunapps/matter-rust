@@ -191,6 +191,7 @@ impl MatterController {
     /// [`Error::NotCommissioned`] if no fabric exists; [`Error::Operational`] on
     /// bind / mDNS / clock failure; otherwise any CASE-accept or dispatch error
     /// from [`crate::provider_server::ProviderServer`].
+    #[cfg(feature = "unstable-provider")]
     pub async fn serve_provider_once<H>(
         &self,
         port: u16,

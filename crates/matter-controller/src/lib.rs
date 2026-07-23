@@ -127,7 +127,7 @@ pub(crate) mod icd_listener;
 pub mod node;
 pub(crate) mod node_info;
 pub(crate) mod opcreds;
-pub mod provider_server;
+pub(crate) mod provider_server;
 pub(crate) mod resumption;
 pub mod snapshot;
 pub mod state;
@@ -160,6 +160,10 @@ pub use matter_interaction::{
 pub use node::{DstOffsetEntry, InvokeResult, Node, TimeGranularity, TimeZoneEntry};
 pub use node_info::NodeInfo;
 pub use opcreds::FabricDescriptor;
+/// Low-level provider-server building blocks. **Unstable** — gated behind the
+/// `unstable-provider` feature and not covered by semver. The stable OTA path is
+/// [`MatterController::serve_ota`](controller::MatterController::serve_ota).
+#[cfg(feature = "unstable-provider")]
 pub use provider_server::{build_operational_service, ProviderServer};
 pub use state::{
     CommissionerIdentity, ControllerState, DeviceEntry, FabricEntry, GroupKeySetConfig,

@@ -5,6 +5,13 @@
 //! `matter-controller` so it can reuse the persisted operational identity
 //! (`crate::credentials::operational_credentials`) and the existing session /
 //! transport / discovery machinery without a new crate boundary.
+//!
+//! This module is `pub(crate)`; its low-level items are re-exported publicly
+//! only under the `unstable-provider` feature (the stable path is
+//! `MatterController::serve_ota`). The items stay `pub` so that re-export can
+//! widen them, so `unreachable_pub` is a false positive in the feature-off
+//! build — allow it module-wide.
+#![allow(unreachable_pub)]
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
@@ -14,8 +21,11 @@ use matter_commissioning::driver::{decode_unsecured, encode_unsecured_reply, Asy
 use matter_crypto::{CaseCredentials, CaseResponder, ResumptionRecord, Sigma1Outcome};
 use matter_interaction::{
     build_invoke_response_command, build_invoke_response_status, parse_invoke_request, CommandPath,
-    ImStatus, ParsedInvokeRequest,
+    ImStatus,
 };
+// Only referenced by the unstable generic-provider `accept_and_dispatch_once`.
+#[cfg(any(feature = "unstable-provider", test))]
+use matter_interaction::ParsedInvokeRequest;
 use matter_transport::{
     DecodeInboundOutput, MatterService, MrpFlags, ProtocolId, ServiceKind, SessionId,
     SessionManager, SessionRole,
@@ -590,6 +600,11 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// failure (including a non-`NewSession` Sigma1 or an unexpected opcode), or
     /// [`Error::Transport`] / [`Error::InteractionModel`] from the session / IM
     /// layers.
+    ///
+    /// Part of the unstable generic-provider surface (see the module docs); the
+    /// stable OTA path uses [`Self::serve_ota_once`]. Compiled only under
+    /// `unstable-provider` (its sole caller, `serve_provider_once`) or in tests.
+    #[cfg(any(feature = "unstable-provider", test))]
     pub async fn accept_and_dispatch_once<H>(
         mut self,
         mut handler: H,
