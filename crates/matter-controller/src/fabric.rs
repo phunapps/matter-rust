@@ -69,7 +69,7 @@ impl FabricConfig {
 ///
 /// Returns [`Error::Signer`] if key generation fails, or [`Error::Noc`] if
 /// RCAC construction or NOC issuance fails.
-pub fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry, Error> {
+pub(crate) fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry, Error> {
     // 1. RCAC root key + self-signed root certificate.
     let (root_signer, rcac_pkcs8) =
         RingSigner::generate().map_err(|e| Error::Signer(e.to_string()))?;

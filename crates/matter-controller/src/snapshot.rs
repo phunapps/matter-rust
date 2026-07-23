@@ -54,7 +54,7 @@ use crate::state::{
 };
 
 /// Current snapshot schema version.
-pub const SNAPSHOT_VERSION: u8 = 1;
+pub(crate) const SNAPSHOT_VERSION: u8 = 1;
 
 /// Serialize controller state into an opaque TLV blob.
 ///
@@ -62,7 +62,7 @@ pub const SNAPSHOT_VERSION: u8 = 1;
 ///
 /// Returns [`Error::Cert`] if a certificate fails to serialize, or
 /// [`Error::Codec`] if TLV encoding fails.
-pub fn serialize(state: &ControllerState) -> Result<Vec<u8>, Error> {
+pub(crate) fn serialize(state: &ControllerState) -> Result<Vec<u8>, Error> {
     let mut fabrics = Vec::with_capacity(state.fabrics.len());
     for f in &state.fabrics {
         fabrics.push(fabric_to_value(f)?);
@@ -169,7 +169,7 @@ fn device_to_value(d: &DeviceEntry) -> Value {
 /// Returns [`Error::Snapshot`] if the structure or version is invalid,
 /// [`Error::Codec`] on TLV decode failure, or [`Error::Cert`] if an
 /// embedded certificate fails to parse.
-pub fn deserialize(bytes: &[u8]) -> Result<ControllerState, Error> {
+pub(crate) fn deserialize(bytes: &[u8]) -> Result<ControllerState, Error> {
     use matter_codec::TlvReader;
 
     let mut r = TlvReader::new(bytes);
@@ -385,8 +385,87 @@ fn byte_array<const N: usize>(b: &[u8], field: &str) -> Result<[u8; N], Error> {
 mod tests {
     use super::*;
     use crate::fabric::{create_fabric, FabricConfig};
+    use crate::store::{ControllerStore, FileStore};
     use matter_cert::MatterTime;
     use matter_commissioning::SystemNocRng;
+    use matter_crypto::Signer as _;
+
+    /// A unique temp path per (process, call) — a fixed shared path races when
+    /// two test processes (or an overlapping re-run) touch the same file.
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let uniq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "matter-controller-restart-{name}-{}-{uniq}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p);
+        let _ = std::fs::remove_file(p.with_extension("tmp"));
+        p
+    }
+
+    /// M8.1 acceptance (white-box: exercises the crate-internal `create_fabric`,
+    /// `serialize`/`deserialize`, and signer reconstruction): a fabric minted,
+    /// persisted via `FileStore`, and reloaded yields a byte-identical
+    /// commissioner identity whose key still signs.
+    #[test]
+    fn commissioner_identity_is_stable_across_restart() {
+        let cfg = FabricConfig::new(
+            0x0102_0304_0506_0708,
+            1,
+            0x0000_0000_0000_0001,
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+        );
+        let fabric = create_fabric(&cfg, &SystemNocRng).expect("create_fabric");
+        let original_state = ControllerState::new(vec![fabric]);
+
+        // "First boot": serialize and persist.
+        let path = temp_path("identity");
+        let store = FileStore::new(&path);
+        store
+            .save(&serialize(&original_state).expect("serialize"))
+            .expect("save");
+
+        // "Second boot": load and deserialize from disk.
+        let loaded = store.load().expect("load").expect("snapshot present");
+        let restored = deserialize(&loaded).expect("deserialize");
+
+        let before = &original_state.fabrics[0];
+        let after = &restored.fabrics[0];
+
+        assert_eq!(after.commissioner.node_id, before.commissioner.node_id);
+        assert_eq!(
+            after.commissioner.noc.to_tlv().unwrap(),
+            before.commissioner.noc.to_tlv().unwrap(),
+            "commissioner NOC must survive restart byte-for-byte"
+        );
+
+        // The reloaded operational key still signs and matches the NOC.
+        let signer = after
+            .commissioner_signer()
+            .expect("reload commissioner signer");
+        assert_eq!(
+            signer.public_key().as_bytes(),
+            after.commissioner.noc.public_key().as_bytes()
+        );
+        let sig_bytes = signer.sign_p256_sha256(b"post-restart").expect("sign");
+        let sig = matter_cert::Signature::new(sig_bytes);
+        signer
+            .public_key()
+            .verify(b"post-restart", &sig)
+            .expect("post-restart signature verifies");
+
+        // The reconstructed FabricRecord is usable (RCAC signer reloads).
+        let record = after.to_fabric_record().expect("to_fabric_record");
+        assert_eq!(record.fabric_id, cfg.fabric_id);
+
+        let _ = std::fs::remove_file(&path);
+    }
 
     fn sample_state() -> ControllerState {
         let cfg = FabricConfig {
