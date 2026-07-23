@@ -1086,9 +1086,13 @@ impl Node {
         Ok(crate::acl::parse_acl(&reports))
     }
 
-    /// Open an enhanced commissioning window using **caller-supplied** secrets
-    /// (test/power-user seam). Most callers want
-    /// `Node::open_commissioning_window` (Task 3), which generates the secrets.
+    /// Open an enhanced commissioning window using **caller-supplied** secrets.
+    ///
+    /// Internal seam behind the public [`Node::open_commissioning_window`], which
+    /// generates the secrets. Kept `pub(crate)` rather than exposing a 7-argument
+    /// public signature at 1.0; if a consumer ever needs caller-supplied secrets,
+    /// re-expose it through an options struct (extend
+    /// [`OpenWindowOpts`](crate::admin::OpenWindowOpts)).
     ///
     /// Computes the PAKE passcode verifier from `passcode`/`salt`/`iterations`,
     /// invokes `OpenCommissioningWindow` (a **timed** invoke — `AdminComm` requires
@@ -1099,7 +1103,7 @@ impl Node {
     /// Returns [`Error::CommissioningWindowRejected`] if the device rejects the
     /// command, or a crypto/interaction error.
     #[allow(clippy::too_many_arguments)]
-    pub async fn open_commissioning_window_with(
+    pub(crate) async fn open_commissioning_window_with(
         &self,
         timeout_s: u16,
         passcode: u32,
