@@ -127,11 +127,7 @@ fn read_request_matches_matter_js() {
         let our_paths: Vec<matter_interaction::ReadPath> = f
             .paths
             .iter()
-            .map(|p| matter_interaction::ReadPath {
-                endpoint: p.endpoint,
-                cluster: p.cluster,
-                attribute: p.attribute,
-            })
+            .map(|p| matter_interaction::ReadPath::new(p.endpoint, p.cluster, p.attribute))
             .collect();
         let ours = build_read_request_paths(&our_paths);
         let theirs = B64.decode(&f.expected_message_b64).unwrap();
@@ -412,11 +408,7 @@ fn subscribe_request_matches_matter_js() {
         let our_paths: Vec<ReadPath> = f
             .paths
             .iter()
-            .map(|p| ReadPath {
-                endpoint: p.endpoint,
-                cluster: p.cluster,
-                attribute: p.attribute,
-            })
+            .map(|p| ReadPath::new(p.endpoint, p.cluster, p.attribute))
             .collect();
         let req = SubscribeRequest {
             keep_subscriptions: f.keep_subscriptions,
@@ -470,11 +462,7 @@ fn subscribe_request_with_events_matches_matter_js() {
         paths: f
             .paths
             .iter()
-            .map(|p| ReadPath {
-                endpoint: p.endpoint,
-                cluster: p.cluster,
-                attribute: p.attribute,
-            })
+            .map(|p| ReadPath::new(p.endpoint, p.cluster, p.attribute))
             .collect(),
         event_paths: f
             .event_paths

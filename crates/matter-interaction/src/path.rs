@@ -41,7 +41,13 @@ pub struct AttributePath {
 /// interprets as a wildcard (Appendix A.6): omit `attribute` → all attributes of
 /// the cluster; omit `endpoint` → all endpoints; etc. Responses are always keyed
 /// by a concrete [`AttributePath`].
+///
+/// `#[non_exhaustive]`: a read/subscribe path may gain optional spec components
+/// (e.g. a data-version filter); marking it keeps such additions non-breaking.
+/// Build via [`ReadPath::concrete`] / [`ReadPath::cluster`] / [`ReadPath::all`]
+/// / [`ReadPath::new`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct ReadPath {
     /// Endpoint, or `None` for all endpoints.
     pub endpoint: Option<u16>,
@@ -52,6 +58,18 @@ pub struct ReadPath {
 }
 
 impl ReadPath {
+    /// A read path from raw optional components (a `None` component is a
+    /// wildcard). Prefer [`Self::concrete`] / [`Self::cluster`] / [`Self::all`]
+    /// for the common shapes.
+    #[must_use]
+    pub fn new(endpoint: Option<u16>, cluster: Option<u32>, attribute: Option<u32>) -> Self {
+        Self {
+            endpoint,
+            cluster,
+            attribute,
+        }
+    }
+
     /// A concrete `(endpoint, cluster, attribute)` path (no wildcards).
     #[must_use]
     pub fn concrete(endpoint: u16, cluster: u32, attribute: u32) -> Self {

@@ -17,7 +17,12 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 /// field is omitted from the encoded `EventPathIB`, which the IM interprets as a
 /// wildcard. `node` is normally `None` for a controller addressing the connected
 /// node; `is_urgent` requests urgent reporting on a subscription (B2).
+///
+/// `#[non_exhaustive]`: an event path may gain optional spec components; marking
+/// it keeps such additions non-breaking. Build via [`EventPath::concrete`] /
+/// [`EventPath::cluster`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct EventPath {
     /// Node, or `None` (the connected node / wildcard).
     pub node: Option<u64>,
@@ -83,7 +88,11 @@ impl EventPath {
 
 /// An `EventFilterIB`: only events with `event_number >= event_min` are reported
 /// (used to resume after the last seen event). `node` is omitted when `None`.
+///
+/// `#[non_exhaustive]`: build via [`EventFilter::from_event_min`]; marking it
+/// keeps future optional fields non-breaking.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EventFilter {
     /// Node scope, or `None`.
     pub node: Option<u64>,
