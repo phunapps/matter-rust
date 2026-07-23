@@ -37,7 +37,7 @@ pub enum SubscriptionEvent {
     Event(EventReport),
     /// The subscription was (re-)established by the device; carries the
     /// device-assigned subscription id. Fired after each successful
-    /// `SubscribeResponse`, including after an auto-resubscribe (SH.2b). Priming
+    /// `SubscribeResponse`, including after an auto-resubscribe. Priming
     /// [`Self::Report`]s, if any, precede it (they arrive before the
     /// `SubscribeResponse` on the wire).
     ///
@@ -48,7 +48,7 @@ pub enum SubscriptionEvent {
     },
     /// The subscription went stale (liveness timeout or session loss) and is
     /// being transparently re-established; `cause` is why. Reports resume after
-    /// the next [`Self::Established`]. Emitted by the SH.2b resubscribe engine.
+    /// the next [`Self::Established`]. Emitted by the auto-resubscribe engine.
     ///
     /// Delivered reliably even under report backpressure (see [`Subscription`]).
     Resubscribing {

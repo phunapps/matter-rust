@@ -1,5 +1,5 @@
 //! `OperationalCredentials` (0x003E) controller support: types and the pure
-//! Value codecs the fabric-management `Node` verbs compose. See M9-D2 plan.
+//! Value codecs the fabric-management `Node` verbs compose.
 
 use crate::error::Error;
 use matter_codec::{Tag, Value};

@@ -1,7 +1,7 @@
 //! Assemble CASE operational credentials from a persisted [`FabricEntry`].
 //!
 //! The controller authenticates to devices as its stable commissioner
-//! identity (minted once in M8.1). The IPK handed to CASE is the *derived*
+//! identity (minted once, at fabric creation). The IPK handed to CASE is the *derived*
 //! operational IPK — `HKDF(epoch_key, compressed_fabric_id)` — NOT the raw
 //! epoch key stored in the fabric (real devices reject the raw key).
 

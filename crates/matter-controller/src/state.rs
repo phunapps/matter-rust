@@ -83,7 +83,7 @@ pub struct DeviceEntry {
     pub node_id: u64,
     /// The device's NOC public key (SEC1 uncompressed, `0x04 || X || Y`).
     pub peer_noc_public_key: [u8; 65],
-    /// Cached CASE resumption record (opaque bytes; typed in M8.2).
+    /// Cached CASE resumption record (opaque bytes).
     pub resumption_record: Option<Vec<u8>>,
     /// Last operational address we reached the device at (a discovery hint).
     pub last_known_addr: Option<String>,
@@ -126,8 +126,9 @@ impl std::fmt::Debug for DeviceEntry {
 /// The controller's own stable operational identity on a fabric.
 ///
 /// Minted **once** when the fabric is created (see
-/// [`crate::fabric::create_fabric`]) and reused for every CASE handshake,
-/// replacing M6.6.4's per-call NOC minting.
+/// [`MatterController::create_fabric`](crate::controller::MatterController::create_fabric))
+/// and reused for every CASE handshake, replacing the earlier per-call NOC
+/// minting.
 ///
 /// `#[non_exhaustive]`: persisted identity record that may grow; marking it
 /// keeps additions non-breaking. Only constructed inside `matter-controller`.

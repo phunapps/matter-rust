@@ -1,5 +1,5 @@
 //! `AdministratorCommissioning` (0x003C) controller support: types and the pure
-//! request/response codecs the `Node` verbs compose. See M9-D1 plan.
+//! request/response codecs the `Node` verbs compose.
 
 use matter_codec::{Tag, Value};
 use matter_interaction::AttributePath;
@@ -25,7 +25,7 @@ pub const DEFAULT_WINDOW_ITERATIONS: u32 = 1000;
 /// Spec-recommended commissioning-window timeout (seconds).
 pub const DEFAULT_WINDOW_TIMEOUT_S: u16 = 180;
 
-/// Options for `Node::open_commissioning_window` (Task 3).
+/// Options for `Node::open_commissioning_window`.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct OpenWindowOpts {

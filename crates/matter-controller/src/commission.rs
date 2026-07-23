@@ -7,7 +7,7 @@ use matter_commissioning::CommissionedFabric;
 use crate::state::{DeviceEntry, FabricEntry};
 
 /// First device node id assigned on a fabric. The commissioner takes node id 1
-/// (M8.1 default); devices start at 2.
+/// by default; devices start at 2.
 pub(crate) const FIRST_DEVICE_NODE_ID: u64 = 2;
 
 /// Allocate the next operational node id for a new device on `fabric`: one past

@@ -180,11 +180,11 @@ impl MatterController {
     /// kept off the proven request/MRP loop). It authenticates as our persisted
     /// operational identity (the M8 commissioner NOC/IPK/root).
     ///
-    /// F3 ships the generic plumbing; F4 supplies the OTA `QueryImage` handler
-    /// and the BDX transfer. Note: advertising a wildcard-bound address may not
-    /// be routable to a foreign requestor — see the F3 runbook for the
-    /// interface-selection caveat (the automated validation is the in-process
-    /// loopback test).
+    /// This ships the generic provider plumbing; the OTA `QueryImage` handler
+    /// and the BDX transfer build on it. Note: advertising a wildcard-bound
+    /// address may not be routable to a foreign requestor — see the runbook
+    /// for the interface-selection caveat (the automated validation is the
+    /// in-process loopback test).
     ///
     /// # Errors
     ///
@@ -416,8 +416,8 @@ impl MatterController {
     /// re-establishes a session and reads/subscribes / `stay_active_request`s
     /// while the device is briefly active.
     ///
-    /// Runs on its **own** freshly-bound UDP socket + mDNS daemon (the F3
-    /// pattern), off the client actor. Requires at least one registration from
+    /// Runs on its **own** freshly-bound UDP socket + mDNS daemon, off the
+    /// client actor. Requires at least one registration from
     /// [`Node::register_icd_client`](crate::Node::register_icd_client).
     ///
     /// # Errors
@@ -547,7 +547,7 @@ impl MatterController {
     /// [`NetworkCredentials::Thread`](matter_commissioning::NetworkCredentials::Thread).
     /// Some network credentials are **required** for a BLE-only device with no
     /// operational connectivity yet — a BLE-only device with no network to
-    /// join is unprovisionable (design D7);
+    /// join is unprovisionable;
     /// [`NetworkCredentials::AlreadyOnNetwork`](matter_commissioning::NetworkCredentials::AlreadyOnNetwork)
     /// only makes sense for a device that already has operational connectivity
     /// independent of BLE (e.g. Ethernet).
@@ -686,7 +686,7 @@ impl MatterController {
         rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
-    /// Handle addressing a device by node id (single-fabric in M8.2).
+    /// Handle addressing a device by node id (single-fabric).
     #[must_use]
     pub fn node(&self, node_id: u64) -> Node {
         Node {

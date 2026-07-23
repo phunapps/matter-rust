@@ -1,7 +1,7 @@
 //! `GroupKeyManagement` (0x003F) + `Groups` (0x0004) controller support: provisioning
 //! types and the pure Value codecs the group verbs compose. Decoder-agnostic
 //! (hand-built Value); the generated matter-clusters encoders are the byte-parity
-//! oracle. M9-E1.
+//! oracle.
 
 use matter_codec::{Tag, Value};
 

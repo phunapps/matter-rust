@@ -601,7 +601,7 @@ impl Node {
     /// invoked on the device's endpoint 0.
     ///
     /// This only fires the announcement — the provider-server half (serving the
-    /// image over BDX) lands in a later M9-F phase.
+    /// image over BDX) is a separate piece.
     ///
     /// # Errors
     ///

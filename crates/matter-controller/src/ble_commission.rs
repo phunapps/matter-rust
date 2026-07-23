@@ -13,7 +13,7 @@
 //!
 //! Layering mirrors `handshake_socket`: an `AsyncDatagram` impl for a foreign
 //! transport lives here (above the trait), never inside `matter-ble` — which
-//! must not depend on `matter-commissioning` (design D4).
+//! must not depend on `matter-commissioning`.
 
 use std::io;
 use std::net::SocketAddr;
@@ -30,7 +30,7 @@ use crate::error::Error;
 
 /// How long a single BLE scan waits for a matching advertisement before giving
 /// up. Applied once for the long-discriminator pass and once more for the
-/// short-discriminator fallback (design D7: 60 s scan). A device advertising
+/// short-discriminator fallback (60 s scan). A device advertising
 /// its full 12-bit discriminator (QR / the Pi DUT's `3840` = `0xF00`) matches
 /// on the first pass immediately; only a manual-pairing-code commission of a
 /// device whose long discriminator has non-zero low bits pays the fallback.
@@ -112,8 +112,8 @@ impl AsyncDatagram for BtpDatagram {
 /// future is `'static` + `Send` and can be `tokio::spawn`ed.
 ///
 /// The `BleCentral` is constructed **inside** this task: that is the macOS TCC
-/// trigger, deliberately deferred to a user-initiated commissioning flow (design
-/// D9). The BTP channel is closed only after `commission_ble` returns — success
+/// trigger, deliberately deferred to a user-initiated commissioning flow. The
+/// BTP channel is closed only after `commission_ble` returns — success
 /// or failure — so a rollback over PASE (when CASE fails) still has a live link.
 ///
 /// # Errors

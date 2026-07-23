@@ -1,6 +1,6 @@
 //! `AccessControl` (0x001F) controller support: ACL entry types, the pure Value
 //! encode/parse, and the lockout guard. Decoder-agnostic (hand-built Value);
-//! the generated matter-clusters decoder is the read byte-parity oracle. M9-D3.
+//! the generated matter-clusters decoder is the read byte-parity oracle.
 
 use matter_codec::{Tag, Value};
 use matter_interaction::AttributePath;

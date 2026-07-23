@@ -1,5 +1,5 @@
 //! The [`AsyncDatagram`] a spawned CASE-connect task drives instead of a real
-//! socket (M9-G-d event-driven connect).
+//! socket, for the event-driven connect path.
 //!
 //! Connecting to a device runs a multi-round-trip CASE (SIGMA-I) handshake plus
 //! an mDNS resolution — both of which `.await` on the network. Running them

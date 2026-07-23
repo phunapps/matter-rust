@@ -406,7 +406,7 @@ mod tests {
         p
     }
 
-    /// M8.1 acceptance (white-box: exercises the crate-internal `create_fabric`,
+    /// Acceptance test (white-box: exercises the crate-internal `create_fabric`,
     /// `serialize`/`deserialize`, and signer reconstruction): a fabric minted,
     /// persisted via `FileStore`, and reloaded yields a byte-identical
     /// commissioner identity whose key still signs.

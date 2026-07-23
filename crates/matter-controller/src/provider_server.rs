@@ -1,4 +1,4 @@
-//! The OTA **provider server** (M9-F3): a dedicated task that advertises our
+//! The OTA **provider server**: a dedicated task that advertises our
 //! operational service, accepts an inbound CASE session as the responder, and
 //! dispatches one server-side `InvokeRequest`. Productionizes the responder
 //! accept-flow proven in the actor's loopback tests; hosts it in
@@ -57,7 +57,7 @@ const STATUS_GENERAL_FAILURE: u16 = 0x0001;
 /// Encode the fixed 8-byte Secure-Channel `StatusReport` body (Matter Core
 /// §4.11.6): `GeneralCode` (u16 LE) || `ProtocolId` (u32 LE, `vendor<<16 |
 /// protocol`) || `ProtocolStatus` (u16 LE). Used to abort a BDX transfer
-/// (BDX-3) so the peer learns the failure instead of timing out.
+/// so the peer learns the failure instead of timing out.
 fn encode_status_report_body(general: u16, proto: ProtocolId, protocol_status: u16) -> Vec<u8> {
     let proto_id: u32 = (u32::from(proto.vendor) << 16) | u32::from(proto.protocol);
     let mut body = Vec::with_capacity(8);

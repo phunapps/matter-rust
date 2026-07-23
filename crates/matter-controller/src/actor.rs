@@ -319,7 +319,7 @@ enum PendingReply {
     /// `reply` with the raw response bytes (the `Node` parses them into per-path
     /// statuses). There is exactly ONE such pending per exchange — the
     /// intermediate chunks are reliable sends awaiting MRP transport acks, NOT
-    /// app-level pendings (SH.1 preserved).
+    /// app-level pendings.
     ChunkedWrite {
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
@@ -389,7 +389,7 @@ const MAX_SUB_CHUNKS: usize = 64;
 /// mid-notification) leaves a partial accumulation that would merge into the
 /// *next* notification's flush. The [`MAX_SUB_CHUNKS`] cap bounds the memory of
 /// such a runaway sequence; the stale-merge window itself is closed by the
-/// liveness tracking + auto-resubscribe of SH.2 (an abandoned notification means
+/// liveness tracking + auto-resubscribe (an abandoned notification means
 /// no complete report within `max_interval`, so liveness fires and we
 /// re-subscribe to a fresh priming snapshot). Conformant devices do not start a
 /// new notification before the prior chunked sequence completes, so this
@@ -562,7 +562,7 @@ pub(crate) enum Command {
     /// `WriteResponseMessage` after the final chunk — there is no per-chunk
     /// app-level response (intermediate chunks are acknowledged at the MRP
     /// transport layer only). A single [`PendingReply::ChunkedWrite`] is
-    /// registered on the final chunk's exchange (SH.1: one pending per
+    /// registered on the final chunk's exchange (one pending per
     /// `(session, exchange)`); it resolves with the `WriteResponse` bytes.
     ChunkedWrite {
         node_id: u64,
@@ -700,12 +700,12 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// Populated on a `0xc6` rejection; covers manufacturer/ungenerated clusters
     /// and survives for the controller's lifetime (the spec's B3 learned-cache).
     timed_paths: std::collections::HashSet<(u32, u32)>,
-    /// Sender half of the spawned-commission completions channel (M9-G-d):
-    /// cloned into each [`Self::spawn_commission`] task.
+    /// Sender half of the spawned-commission completions channel: cloned into
+    /// each [`Self::spawn_commission`] task.
     commission_tx: mpsc::Sender<CommissionCompletion>,
     /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
     commission_rx: mpsc::Receiver<CommissionCompletion>,
-    /// M9-G-d event-driven connect: work waiting on an in-flight CASE connect,
+    /// Event-driven connect: work waiting on an in-flight CASE connect,
     /// coalesced per device node id. A key's presence means a connect to that
     /// node is running on a spawned task; the queued [`ConnectWaiter`]s are
     /// resumed (on success) or resolved/rescheduled (on error) when it
@@ -744,7 +744,7 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     connect_done_rx: mpsc::Receiver<ConnectCompletion>,
 }
 
-/// A completed spawned CASE connect (M9-G-d event-driven connect), delivered
+/// A completed spawned CASE connect (event-driven connect), delivered
 /// back to the actor loop for session registration + waiter resolution. On
 /// success it carries the established [`CaseSessionOutput`] (the actor registers
 /// it — the task has no `SessionManager`) and the resolved device address.
@@ -755,7 +755,7 @@ struct ConnectCompletion {
     result: Result<(matter_crypto::CaseSessionOutput, SocketAddr), Error>,
 }
 
-/// A unit of work parked behind an in-flight CASE connect (M9-G-d). On connect
+/// A unit of work parked behind an in-flight CASE connect. On connect
 /// success each is resumed on the freshly-established `(session, peer)`; on
 /// failure each is resolved/rescheduled per its kind ([`Actor::handle_connect_done`]
 /// / [`Actor::fail_connect_waiters`]). This lets the two timer-arm recovery
@@ -773,7 +773,7 @@ enum ConnectWaiter {
     Resubscribe(PendingResubscribe),
 }
 
-/// Canonicalize a peer address for the in-flight-handshake route table (M9-G-d).
+/// Canonicalize a peer address for the in-flight-handshake route table.
 ///
 /// The address we *resolve* (from mDNS) and the address a datagram *arrives*
 /// from can differ in representation for the same peer, so keying the route map
@@ -799,8 +799,8 @@ fn route_key(addr: SocketAddr) -> SocketAddr {
 
 /// The device node id a command opens a session to, or `None` if it needs no
 /// per-device session (fabric/group/ICD/diagnostic commands). Used by
-/// [`Actor::dispatch`] to park a verb behind an off-loop connect (M9-G-d)
-/// instead of running the handshake inline.
+/// [`Actor::dispatch`] to park a verb behind an off-loop connect instead of
+/// running the handshake inline.
 fn command_target_node(cmd: &Command) -> Option<u64> {
     match cmd {
         Command::Read { node_id, .. }
@@ -841,7 +841,7 @@ fn fail_command(cmd: Command, err: Error) {
 }
 
 /// Run a CASE (SIGMA-I) handshake to an already-resolved `peer` **off the actor
-/// loop** (M9-G-d), driving it over a
+/// loop**, driving it over a
 /// [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket) whose datagrams
 /// flow through the actor's own socket (this task never touches a socket).
 /// Reports the established session (or error) back over `done_tx`. Takes only
@@ -880,7 +880,7 @@ async fn run_connect_task(
     let _ = done_tx.send(ConnectCompletion { node_id, result }).await;
 }
 
-/// A completed spawned commission (M9-G-d), delivered back to the actor loop
+/// A completed spawned commission, delivered back to the actor loop
 /// over the completions channel for persistence + reply resolution.
 struct CommissionCompletion {
     fabric_id: u64,
@@ -892,7 +892,7 @@ struct CommissionCompletion {
 }
 
 /// Run a full commission on a **freshly-bound socket + discovery**, off the actor
-/// loop (M9-G-d). Takes only owned inputs so the future is `'static` + `Send` and
+/// loop. Takes only owned inputs so the future is `'static` + `Send` and
 /// can be `tokio::spawn`ed. `commission()` binds nothing itself here — the
 /// transient PASE/CASE handshakes run on this task's own socket.
 #[allow(clippy::too_many_arguments)]
@@ -1030,7 +1030,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// the loop instead of owning recv, a steady-state report arriving during a
     /// concurrent round-trip is delivered, not dropped.
     ///
-    /// ## Long handlers run off the loop (M9-G-d)
+    /// ## Long handlers run off the loop
     ///
     /// The two multi-round-trip protocol flows — **commission** and **CASE
     /// connect** — no longer run inline on this task. Each is driven on a
@@ -1165,7 +1165,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Process one command, parking device verbs behind an off-loop connect.
     ///
-    /// M9-G-d: if `cmd` targets a device with no live cached session, the CASE
+    /// If `cmd` targets a device with no live cached session, the CASE
     /// handshake is run on a spawned task ([`Self::spawn_connect`]) and the
     /// command is queued in `pending_connects`; the actor loop returns
     /// immediately and stays responsive to every other session for the whole
@@ -1455,7 +1455,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Ok(())
     }
 
-    /// Kick off a commission on a **spawned task with its own socket** (M9-G-d).
+    /// Kick off a commission on a **spawned task with its own socket**.
     ///
     /// Commissioning is the longest protocol handler (PASE + attestation + CSR +
     /// NOC + operational CASE + config — multiple seconds). Running it inline on
@@ -1635,7 +1635,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         });
     }
 
-    /// Handle a completed spawned commission (M9-G-d): on success persist the
+    /// Handle a completed spawned commission: on success persist the
     /// `DeviceEntry` + durably save, then resolve the original `reply`.
     async fn handle_commission_completion(&mut self, completion: CommissionCompletion) {
         let CommissionCompletion {
@@ -1763,7 +1763,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }));
     }
 
-    /// The sole fabric, or an error if not exactly one (M8.2 is single-fabric;
+    /// The sole fabric, or an error if not exactly one (single-fabric only;
     /// multi-fabric `fabric(id).node(id)` addressing is deferred).
     fn sole_fabric(&self) -> Result<&crate::state::FabricEntry, Error> {
         match self.state.fabrics.as_slice() {
@@ -1964,7 +1964,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Queue `waiter` behind an off-loop connect to `node_id`, starting the
-    /// connect if this is the first waiter (M9-G-d). Concurrent work targeting
+    /// connect if this is the first waiter. Concurrent work targeting
     /// the same not-yet-connected node coalesces onto a single handshake.
     async fn enqueue_connect_waiter(
         &mut self,
@@ -1984,7 +1984,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Resolve `node_id` via the actor's injected discovery, then spawn its CASE
     /// handshake on a task ([`run_connect_task`]) whose I/O flows through the
-    /// actor's socket (M9-G-d). Resolution runs inline (a brief bounded mDNS
+    /// actor's socket. Resolution runs inline (a brief bounded mDNS
     /// poll — instant when cached — kept on the actor to preserve the discovery
     /// seam); only the multi-round-trip handshake is decoupled. On a setup or
     /// resolution failure the parked waiters are failed immediately.
@@ -2044,8 +2044,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         ));
     }
 
-    /// Put a spawned connect's outbound datagram on the actor's own socket
-    /// (M9-G-d). Installs the `peer` → node-id route first — before the send, so
+    /// Put a spawned connect's outbound datagram on the actor's own socket.
+    /// Installs the `peer` → node-id route first — before the send, so
     /// it is guaranteed present before the device's reply can arrive — then
     /// sends. The route is only installed while the connect is still live
     /// (`connect_inbound` holds its queue); a late outbound after completion is
@@ -2062,7 +2062,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let _ = self.transport.send_to(&bytes, peer).await;
     }
 
-    /// Handle a finished spawned connect (M9-G-d): tear down its routing, then
+    /// Handle a finished spawned connect: tear down its routing, then
     /// on success register the established session + re-dispatch the parked
     /// verbs (their `session_for` now cache-hits), or on failure resolve each
     /// parked verb's caller with the error.
@@ -2166,7 +2166,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Re-send a timed-out pending op `p` on the freshly-established
-    /// `(session, peer)` (M9-G-d pending-retry recovery, resumed by
+    /// `(session, peer)` (pending-retry recovery, resumed by
     /// [`Self::handle_connect_done`]). Marks it `retried` and discards any
     /// partial read/subscribe accumulation from the first attempt; a send
     /// failure fails the op's caller.
@@ -2211,7 +2211,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Re-establish a stranded subscription `pr` on the freshly-established
-    /// `(session, peer)` (M9-G-d resubscribe recovery, resumed by
+    /// `(session, peer)` (resubscribe recovery, resumed by
     /// [`Self::handle_connect_done`]). A send failure reschedules it on its
     /// backoff rather than dropping it.
     async fn resume_resubscribe(
@@ -2275,10 +2275,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Establish a fresh CASE session to `node_id`, cache it, and record an
-    /// address hint in persisted state. Resumption is dormant (M4.2): this
+    /// address hint in persisted state. Resumption is dormant: this
     /// always performs a full SIGMA handshake.
     ///
-    /// M9-G-d: this INLINE handshake is now a defensive fallback only. Every
+    /// This INLINE handshake is now a defensive fallback only. Every
     /// real caller connects OFF the actor loop instead — verbs park behind
     /// [`Self::spawn_connect`] via [`Self::dispatch`], and the two timer-arm
     /// recovery reconnects (pending-retry in [`Self::on_pending_timeout`],
@@ -2360,7 +2360,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Record/refresh the device's last-known address and (when the fresh
     /// handshake produced one) its CASE resumption record in persisted state.
-    /// The NOC public key stays unknown until M8.3 learns it during
+    /// The NOC public key stays unknown until it is captured separately during
     /// commissioning; this entry is an address/resumption cache only.
     ///
     /// `resumption_record` is the serialized [`matter_crypto::ResumptionRecord`]
@@ -2775,7 +2775,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// chip `WriteHandler` accumulates and only `SendWriteResponse` once
     /// `MoreChunkedMessages` is clear).
     ///
-    /// SH.1: exactly ONE [`Pending`] is registered, keyed by the final chunk's
+    /// Exactly ONE [`Pending`] is registered, keyed by the final chunk's
     /// `(session, exchange)`. The intermediate chunks are reliable sends whose
     /// MRP acks are driven by the central recv/`drive_mrp` loop — they are NOT
     /// app-level pendings, so no second pending ever shares the exchange.
@@ -3413,7 +3413,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Drive MRP for all sessions: send retransmits/standalone-acks, and on
     /// `Expired` resolve the matching pending op — retrying once on a fresh
-    /// session if the cached one was stale (preserves the pre-SH.1
+    /// session if the cached one was stale (preserves the original
     /// reconnect-once policy).
     async fn drive_mrp(&mut self) {
         for event in self.sessions.handle_timeout(Instant::now()) {
@@ -3622,7 +3622,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// One resubscribe attempt: send a fresh `SubscribeRequest` on the node's
     /// cached session and register a pending Subscribe (no oneshot reply) so the
     /// central demux drives the handshake. If the node is not connected, reconnect
-    /// OFF the actor loop (M9-G-d — the CASE handshake no longer blocks other
+    /// OFF the actor loop (the CASE handshake no longer blocks other
     /// sessions) and resume on completion; a missing fabric reschedules on backoff.
     async fn attempt_resubscribe(&mut self, pr: PendingResubscribe) {
         let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) else {
@@ -3936,7 +3936,7 @@ mod tests {
         );
     }
 
-    /// Task 6 — `forget_node` drops ALL of the controller's own local state
+    /// `forget_node` drops ALL of the controller's own local state
     /// for a node WITHOUT contacting the device: the persisted `DeviceEntry`,
     /// the cached CASE session, and any parked connect bookkeeping. Seeds a
     /// fabric with one device (same seeding style as
@@ -5121,7 +5121,7 @@ mod tests {
     /// Device that establishes a subscription, then — when a round-trip request
     /// arrives — sends a steady-state `ReportData` (on the subscription
     /// exchange, carrying the `subscriptionId`) *before* replying to the
-    /// round-trip. This is the concurrent window the pre-SH.1 controller
+    /// round-trip. This is the concurrent window the previous controller design
     /// dropped the report in (consumed inside `secured_round_trip`'s recv loop).
     #[allow(clippy::too_many_lines)] // CASE-handshake boilerplate, as the sibling mocks.
     async fn run_concurrent_sub_roundtrip_device(
@@ -5559,7 +5559,7 @@ mod tests {
         device.await.unwrap();
     }
 
-    /// M9-G-d route-key normalization (regression guard for the bug the live
+    /// Route-key normalization (regression guard for the bug the live
     /// DUT surfaced): the address a handshake reply arrives *from* and the
     /// address we *resolved + sent to* must map to the same route key, or the
     /// device's Sigma2 is dropped and the handshake starves. Covers the two
@@ -5596,14 +5596,14 @@ mod tests {
         assert_ne!(route_key(a), route_key(b));
     }
 
-    /// M9-G-d headline: a verb-triggered CASE connect runs its handshake **off
+    /// A verb-triggered CASE connect runs its handshake **off
     /// the actor loop**, so a stalled handshake no longer starves other work.
     ///
     /// The device receives Sigma1 and never answers, so the connect's handshake
     /// stalls (retransmits Sigma1, eventually times out — seconds). We fire a
     /// round-trip at that device (which parks behind the connect) and then, while
     /// the handshake is stalled, issue an unrelated `session_count` command. It
-    /// must be serviced promptly. On the pre-G-d inline design the connect ran on
+    /// must be serviced promptly. On the previous inline design the connect ran on
     /// the actor task itself, so `session_count` would be blocked behind the
     /// whole stalled handshake and this 1s timeout would fire.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -6311,10 +6311,10 @@ mod tests {
         sub.cancel().await.expect("cancel");
     }
 
-    /// SH.1 discriminating guard for the concurrent-round-trip report-loss
-    /// (M8.5 known limitation #1): a steady-state report that arrives while a
-    /// round-trip is in flight on the same node must be DELIVERED, not dropped.
-    /// Under the pre-SH.1 code the report was consumed inside
+    /// Discriminating guard for the concurrent-round-trip report-loss
+    /// (a known limitation of the earlier design): a steady-state report that
+    /// arrives while a round-trip is in flight on the same node must be
+    /// DELIVERED, not dropped. Under the earlier code the report was consumed inside
     /// `secured_round_trip`'s owned recv loop and silently discarded (so
     /// `sub.next()` below would hang); the always-listening demux delivers it.
     #[tokio::test]
@@ -6392,7 +6392,7 @@ mod tests {
         sub.cancel().await.expect("cancel");
     }
 
-    /// SH.2b discriminating guard: a subscription that goes silent past its
+    /// Discriminating guard: a subscription that goes silent past its
     /// liveness deadline (negotiated max interval 0 + `LIVENESS_GRACE`) must be
     /// transparently re-established — the consumer sees `Resubscribing`, a SECOND
     /// `Established`, and a re-primed `Report`, all behind the same handle. Takes
@@ -7051,9 +7051,9 @@ mod tests {
         );
     }
 
-    /// M9-G-d decoupling, part 1 — the actor loop stays responsive while a
-    /// commission is outstanding, and the completions-channel `select!` arm
-    /// drains a finished commission and resolves its reply.
+    /// Decoupled connect/commission handling, part 1 — the actor loop stays
+    /// responsive while a commission is outstanding, and the completions-channel
+    /// `select!` arm drains a finished commission and resolves its reply.
     ///
     /// The commission runs on its own spawned task ([`Actor::spawn_commission`])
     /// and reports back through `commission_tx`. We model "a commission is in
@@ -7112,7 +7112,7 @@ mod tests {
         let _ = loop_handle.await;
     }
 
-    /// Task 4 — a caller-supplied `label` riding along on a successful
+    /// A caller-supplied `label` riding along on a successful
     /// [`CommissionCompletion`] must land on the pushed `DeviceEntry`, atomically
     /// with the rest of the commissioning state (same durable-save path as the
     /// node id / peer key). We feed a synthetic success completion (skipping the
@@ -7252,8 +7252,9 @@ mod tests {
         let _ = loop_handle.await;
     }
 
-    /// M9-G-d decoupling, part 2 — dispatching `Command::Commission` hands off
-    /// without the loop `.await`ing the commission. With no attestation trust
+    /// Decoupled connect/commission handling, part 2 — dispatching
+    /// `Command::Commission` hands off without the loop `.await`ing the
+    /// commission. With no attestation trust
     /// configured, `spawn_commission` short-circuits to `NoTrust` (no network),
     /// so this exercises the dispatch → spawn path in isolation and confirms a
     /// following command is serviced on the same responsive loop.
@@ -10282,7 +10283,7 @@ mod tests {
     /// Note: `write_acl` hardcodes budget=800 which won't force multi-chunk in a
     /// unit test (that would need ~100 large ACL entries). We therefore test the
     /// multi-chunk path via `chunked_write` directly, using the same tiny budget
-    /// as Task 4's `chunked_write_sends_all_chunks_one_exchange`. This is
+    /// as `chunked_write_sends_all_chunks_one_exchange`. This is
     /// explicitly endorsed by the brief ("a second from this angle is fine") and
     /// covers the end-to-end multi-chunk write path that `write_acl` delegates to.
     #[tokio::test]

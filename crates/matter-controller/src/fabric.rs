@@ -1,7 +1,7 @@
 //! Fabric creation. Mints the fabric trust root (RCAC + IPK) and the
 //! controller's **stable** commissioner operational identity in one shot.
 //! The commissioner NOC is minted here exactly once and persisted; every
-//! later CASE handshake reuses it (retiring M6.6.4's per-call minting).
+//! later CASE handshake reuses it (retiring the earlier per-call minting).
 
 use std::sync::Arc;
 

@@ -4,7 +4,7 @@
 //! controller can re-establish a session and read/subscribe while the device is
 //! briefly active.
 //!
-//! Transport-wise this reuses the F3 provider-server pattern: the ICD resolves
+//! Transport-wise this reuses the provider-server pattern: the ICD resolves
 //! our `CheckInNodeID` via operational mDNS and sends the Check-In to our
 //! advertised address, so the listener binds its own socket + advertises our
 //! operational service (see [`crate::controller::MatterController::listen_for_checkin_once`]).
