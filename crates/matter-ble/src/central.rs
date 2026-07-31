@@ -205,6 +205,13 @@ pub enum CentralError {
     /// Connecting to the peripheral failed.
     #[error("BLE connect failed: {0}")]
     Connect(String),
+    /// GATT service discovery did not complete (all attempts failed or timed
+    /// out). Kept distinct from [`Self::Connect`]: a connect abort is often
+    /// transient and worth one retry, while discovery exhaustion on macOS is
+    /// the documented `CoreBluetooth` `uuidNotAllowed` stall, which a retry
+    /// cannot recover (see `docs/runbooks/ble-commissioning.md`).
+    #[error("GATT service discovery failed: {0}")]
+    ServiceDiscovery(String),
     /// A required GATT characteristic (C1 or C2) was not found on the device.
     #[error("Matter BTP characteristic not found: {0}")]
     GattNotFound(&'static str),
@@ -780,7 +787,7 @@ async fn discover_services_with_retry(peripheral: &Peripheral) -> Result<(), Cen
         // the next `discover_services` replaces the stale in-flight discovery.
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
-    Err(CentralError::Connect(format!(
+    Err(CentralError::ServiceDiscovery(format!(
         "GATT service discovery did not complete after {SERVICE_DISCOVERY_ATTEMPTS} attempts: {}",
         last.unwrap_or_else(|| "unknown".into())
     )))
@@ -1035,5 +1042,15 @@ mod tests {
             local_name: None::<String>,
         };
         let _ = shape;
+    }
+
+    #[test]
+    fn service_discovery_error_is_distinct_from_connect() {
+        // Task 5's single connect retry keys on `Connect`; discovery exhaustion
+        // (the macOS uuidNotAllowed stall) must NOT be that variant, or the retry
+        // doubles a ~25 s known-hopeless failure.
+        let e = CentralError::ServiceDiscovery("2 attempts".into());
+        assert!(matches!(e, CentralError::ServiceDiscovery(_)));
+        assert!(e.to_string().contains("service discovery"));
     }
 }
