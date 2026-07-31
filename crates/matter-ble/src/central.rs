@@ -21,6 +21,7 @@
 //! requests MTU 0 and adopts the peripheral's advertised fragment size).
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,6 +32,7 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
 use thiserror::Error;
+use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -300,12 +302,16 @@ impl BleCentral {
     /// long-discriminator matching (see [`advert_matches`]).
     ///
     /// The scan is deliberately **unfiltered**, with [`MATTER_SERVICE_UUID`]
-    /// matched in `match_service_data` instead of being handed to btleplug as a
+    /// matched in-crate instead of being handed to btleplug as a
     /// [`ScanFilter`]. Passing that filter is not portable: `CoreBluetooth`
     /// honours it, but on `BlueZ` it suppresses the backend entirely — no
     /// service-data events and an empty `peripherals()` — so every scan found
     /// nothing on Linux while macOS worked. Filtering here costs only the
     /// discarded non-Matter adverts and behaves identically on both backends.
+    ///
+    /// This is now a thin, discriminator-filtered wrapper over
+    /// [`Self::scan_commissionables`] — see that method to enumerate every
+    /// nearby commissionable device instead of matching one.
     ///
     /// # Errors
     /// [`CentralError::Scan`] on a scan failure, [`CentralError::ScanTimeout`]
@@ -316,35 +322,55 @@ impl BleCentral {
         short: bool,
         timeout: Duration,
     ) -> Result<FoundDevice, CentralError> {
-        let mut events = self
+        let mut scan = self.scan_commissionables().await?;
+        let found = tokio::time::timeout(timeout, async {
+            while let Some(dev) = scan.next().await {
+                if advert_matches(&dev.advert, discriminator, short) {
+                    return Some(dev);
+                }
+            }
+            None // adapter event stream ended
+        })
+        .await;
+        scan.stop().await;
+        match found {
+            Ok(Some(dev)) => Ok(dev),
+            Ok(None) | Err(_) => Err(CentralError::ScanTimeout),
+        }
+    }
+
+    /// Start a continuous, **unfiltered** scan for commissionable Matter
+    /// devices (see [`CommissionableScan`] for yield semantics and lifecycle).
+    ///
+    /// Unlike [`Self::find_device`] this surfaces *every* commissionable
+    /// advert — no discriminator needed — so consumers can enumerate nearby
+    /// devices without sweeping short-discriminator values, and slow
+    /// advertisers (post-reset intervals up to ~1.2 s) appear whenever they
+    /// advertise. Safe to hold while a commission runs: the radio scan is
+    /// refcounted across all scan users on this central.
+    ///
+    /// The scan is deliberately unfiltered at the btleplug layer — a
+    /// service-UUID `ScanFilter` blinds the `BlueZ` backend (see
+    /// [`Self::find_device`]); [`MATTER_SERVICE_UUID`] is matched in-crate.
+    ///
+    /// # Errors
+    /// [`CentralError::Scan`] if the adapter event stream or radio scan could
+    /// not be started.
+    pub async fn scan_commissionables(&self) -> Result<CommissionableScan, CentralError> {
+        // Events BEFORE the scan starts, so no advert can slip between.
+        let events = self
             .adapter
             .events()
             .await
             .map_err(|e| CentralError::Scan(e.to_string()))?;
         acquire_scan(&self.scan, &self.adapter).await?;
-
-        let found = tokio::time::timeout(timeout, async {
-            while let Some(event) = events.next().await {
-                if let CentralEvent::ServiceDataAdvertisement { id, service_data } = event {
-                    if let Some(dev) = match_service_data(&id, &service_data, discriminator, short)
-                    {
-                        return Some(dev);
-                    }
-                }
-            }
-            None
+        Ok(CommissionableScan {
+            adapter: self.adapter.clone(),
+            events,
+            scan: Arc::clone(&self.scan),
+            names: HashMap::new(),
+            released: false,
         })
-        .await;
-
-        release_scan(&self.scan, &self.adapter).await;
-
-        match found {
-            Ok(Some(mut dev)) => {
-                dev.local_name = local_name_for(&self.adapter, &dev.peripheral_id).await;
-                Ok(dev)
-            }
-            Ok(None) | Err(_) => Err(CentralError::ScanTimeout),
-        }
     }
 
     /// Connect to `device`, open the Matter BTP GATT service, run the BTP
@@ -460,25 +486,103 @@ impl BleCentral {
     }
 }
 
-/// Parse a service-data map for the Matter service UUID and match its
-/// discriminator; returns a [`FoundDevice`] on a hit. Pure over its inputs.
-fn match_service_data(
-    id: &PeripheralId,
-    service_data: &HashMap<Uuid, Vec<u8>>,
-    discriminator: u16,
-    short: bool,
-) -> Option<FoundDevice> {
-    let raw = service_data.get(&MATTER_SERVICE_UUID)?;
-    let advert = CommissionableAdvert::parse(raw).ok()?;
-    if advert_matches(&advert, discriminator, short) {
-        Some(FoundDevice {
-            peripheral_id: id.clone(),
-            advert,
-            local_name: None,
-        })
-    } else {
+/// A live, unfiltered scan for commissionable Matter devices, from
+/// [`BleCentral::scan_commissionables`].
+///
+/// Yields a [`FoundDevice`] for **every** observed commissionable
+/// advertisement — **no dedup and no discriminator filter**: the same device
+/// yields again on every advertising interval (typically every 100–500 ms;
+/// btleplug requests duplicate reports on both backends). Consumers own
+/// windowing and dedup (key on [`FoundDevice::peripheral_id`]).
+///
+/// Owns its own adapter handle, so it is `'static` — hand it to a UI task.
+/// Scanning stops when the last scan user goes away: on [`Self::stop`]
+/// (preferred), or best-effort on drop (requires an ambient tokio runtime;
+/// without one the radio scan persists until another scan user finishes).
+/// The underlying adapter event stream is a bounded broadcast that drops on
+/// lag; that is benign here because advertisements repeat.
+pub struct CommissionableScan {
+    adapter: Adapter,
+    events: Pin<Box<dyn Stream<Item = CentralEvent> + Send>>,
+    scan: Arc<TokioMutex<ScanRefCount>>,
+    /// Cache of observed local names, so repeated adverts from the same
+    /// device don't re-pay the `BlueZ` D-Bus properties round trip. Only
+    /// `Some` results are cached — a name often arrives in a later scan
+    /// response, so `None` is re-queried.
+    names: HashMap<PeripheralId, String>,
+    /// Set by [`Self::stop`] so `Drop` doesn't release the scan slot twice.
+    released: bool,
+}
+
+impl CommissionableScan {
+    /// Next observed commissionable advertisement, or `None` if the adapter
+    /// event stream ends (adapter gone).
+    ///
+    /// `local_name` is filled best-effort from cached peripheral properties —
+    /// see the field docs on [`FoundDevice::local_name`].
+    pub async fn next(&mut self) -> Option<FoundDevice> {
+        while let Some(event) = self.events.next().await {
+            let CentralEvent::ServiceDataAdvertisement { id, service_data } = event else {
+                continue;
+            };
+            let Some(advert) = commissionable_from_service_data(&service_data) else {
+                continue;
+            };
+            let cached = self.names.get(&id).cloned();
+            let local_name = if let Some(name) = cached {
+                Some(name)
+            } else {
+                let name = local_name_for(&self.adapter, &id).await;
+                if let Some(n) = &name {
+                    self.names.insert(id.clone(), n.clone());
+                }
+                name
+            };
+            return Some(FoundDevice {
+                peripheral_id: id,
+                advert,
+                local_name,
+            });
+        }
         None
     }
+
+    /// Stop this scan user, stopping the radio scan if it was the last one.
+    /// Preferred over drop: deterministic, and needs no ambient runtime.
+    pub async fn stop(mut self) {
+        self.released = true;
+        release_scan(&self.scan, &self.adapter).await;
+    }
+}
+
+impl Drop for CommissionableScan {
+    /// Best-effort release: spawns the (async) scan-slot release when a tokio
+    /// runtime is ambient. The release re-checks the refcount under the lock,
+    /// so a delayed drop can never kill a scan started after it.
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        if let Ok(handle) = Handle::try_current() {
+            let scan = Arc::clone(&self.scan);
+            let adapter = self.adapter.clone();
+            handle.spawn(async move {
+                release_scan(&scan, &adapter).await;
+            });
+        }
+        // No runtime handle: the slot leaks until another scan user's release
+        // drives the count to zero. Documented on the type; `stop()` is the
+        // clean path.
+    }
+}
+
+/// Parse a service-data map's Matter-UUID entry into a commissionable
+/// advertisement. Pure over its inputs; no discriminator filtering.
+fn commissionable_from_service_data(
+    service_data: &HashMap<Uuid, Vec<u8>>,
+) -> Option<CommissionableAdvert> {
+    let raw = service_data.get(&MATTER_SERVICE_UUID)?;
+    CommissionableAdvert::parse(raw).ok()
 }
 
 /// Find a characteristic by UUID among the peripheral's discovered set.
@@ -885,6 +989,26 @@ mod tests {
         assert!(!rc.release());
         assert!(rc.acquire(), "recovers to normal operation");
         assert!(rc.release());
+    }
+
+    #[test]
+    fn commissionable_from_service_data_parses_matter_uuid_only() {
+        // Vector test-vectors/btp/advert.json "pi_default_disc": disc 0xF00.
+        let payload = vec![0x00, 0x00, 0x0F, 0xF1, 0xFF, 0x00, 0x80, 0x00];
+        let mut data = HashMap::new();
+        data.insert(MATTER_SERVICE_UUID, payload.clone());
+        let advert = commissionable_from_service_data(&data).unwrap();
+        assert_eq!(advert.discriminator, 0xF00);
+
+        // A non-Matter UUID must not match.
+        let mut other = HashMap::new();
+        other.insert(C1_UUID, payload);
+        assert!(commissionable_from_service_data(&other).is_none());
+
+        // Garbage service data for the Matter UUID must not match.
+        let mut garbled = HashMap::new();
+        garbled.insert(MATTER_SERVICE_UUID, vec![0xFF]);
+        assert!(commissionable_from_service_data(&garbled).is_none());
     }
 
     #[test]
