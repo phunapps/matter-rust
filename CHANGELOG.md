@@ -29,7 +29,11 @@ alongside an in-flight commission), a scoped BLE connect retry, and two
 commissioning hardening fixes. `matter-ble` is bumped in-repo to **0.3.0**
 (breaking) but not yet published to crates.io (publish to follow on
 maintainer's go); `matter-controller` gains additive API on top of the
-published `0.4.0`; `matter-commissioning` is behavior-only, still `0.3.0`.
+published `0.4.0`. `matter-commissioning` carries bug fixes (see Fixed
+below), so — no exceptions to the patch-bumps-on-bug-fixes rule — it will
+publish as **0.3.1**, not stay at the already-published `0.3.0`.
+`matter-controller`'s own entries below also mean its next publish needs a
+version bump; the exact number is decided at publish time.
 
 ### `matter-ble`
 
