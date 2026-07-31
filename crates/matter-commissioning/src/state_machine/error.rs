@@ -115,15 +115,23 @@ pub enum CommissioningError {
 /// Render `debug_text` for `Display`, capped at 64 chars with an ellipsis.
 /// The device controls this string and it can echo an SSID; the full (still
 /// 512-byte-capped) value stays on the field for deliberate consumers.
+///
+/// Rendered with `Debug` (`{:?}`), not `Display` — deliberately. The device
+/// fully controls these bytes (decoded as UTF-8, so `\n`, `\r`, and ANSI
+/// escapes like `\u{1b}` are all legal content), and this string lands
+/// directly in whatever a consumer logs. `Debug` escapes control characters
+/// into their `\n`/`\r`/`\u{1b}` textual form; passing the raw string
+/// through `Display` would let a malicious or buggy device inject newlines
+/// or terminal escape sequences straight into consumer logs.
 fn display_debug_text(text: Option<&String>) -> String {
     match text {
         None => "None".to_owned(),
         Some(s) => {
             let capped: String = s.chars().take(64).collect();
             if capped.len() < s.len() {
-                format!("Some(\"{capped}…\")")
+                format!("Some({capped:?}…)")
             } else {
-                format!("Some(\"{s}\")")
+                format!("Some({s:?})")
             }
         }
     }
@@ -242,20 +250,42 @@ mod tests {
             remediation_hint: RemediationHint::CheckSsid,
         };
         let msg = e.to_string();
-        // 64 chars + ellipsis, not the whole 300.
-        assert!(msg.contains(&"s".repeat(64)));
+        // 64 chars + ellipsis, not the whole 300. Rendered via `{:?}`, so the
+        // capped run of plain ASCII 's' is unescaped but still quoted.
+        assert!(msg.contains(&format!("{:?}", "s".repeat(64))));
         assert!(!msg.contains(&"s".repeat(65)));
         assert!(msg.contains('…'));
 
-        // Short text renders in full, no ellipsis.
+        // Short text renders in full, no ellipsis, still Debug-quoted.
         let short = CommissioningError::NetworkRejected {
             stage: Stage::NetworkSetup,
             networking_status: 5,
             debug_text: Some("bad ssid".into()),
             remediation_hint: RemediationHint::CheckSsid,
         };
-        assert!(short.to_string().contains("bad ssid"));
+        assert!(short.to_string().contains("\"bad ssid\""));
         assert!(!short.to_string().contains('…'));
+    }
+
+    #[test]
+    fn network_rejected_display_escapes_control_chars() {
+        // The critical property this Display impl exists for: a
+        // device-controlled debug_text containing a newline or an ANSI
+        // escape must never appear raw in the rendered message — only in
+        // its escaped `Debug` form (`\n`, `\u{1b}`). Otherwise a malicious
+        // device can inject fake log lines or terminal control sequences
+        // into whatever logs this error's Display output.
+        let e = CommissioningError::NetworkRejected {
+            stage: Stage::NetworkSetup,
+            networking_status: 5,
+            debug_text: Some("evil\nFAKE LOG LINE\u{1b}[31mred".to_owned()),
+            remediation_hint: RemediationHint::CheckSsid,
+        };
+        let msg = e.to_string();
+        assert!(!msg.contains('\n'), "raw newline leaked into: {msg}");
+        assert!(!msg.contains('\u{1b}'), "raw ESC leaked into: {msg}");
+        assert!(msg.contains("\\n"), "newline must render escaped: {msg}");
+        assert!(msg.contains("\\u{1b}"), "ESC must render escaped: {msg}");
     }
 
     #[test]
