@@ -311,7 +311,11 @@ impl BleCentral {
     ///
     /// This is now a thin, discriminator-filtered wrapper over
     /// [`Self::scan_commissionables`] — see that method to enumerate every
-    /// nearby commissionable device instead of matching one.
+    /// nearby commissionable device instead of matching one. Name resolution
+    /// now happens inside the scan stream itself, so each distinct nearby
+    /// commissionable peripheral costs one best-effort properties lookup
+    /// (cached per peripheral) before discriminator filtering, rather than
+    /// only the one that ultimately matches.
     ///
     /// # Errors
     /// [`CentralError::Scan`] on a scan failure, [`CentralError::ScanTimeout`]
@@ -520,6 +524,9 @@ impl CommissionableScan {
     ///
     /// `local_name` is filled best-effort from cached peripheral properties —
     /// see the field docs on [`FoundDevice::local_name`].
+    ///
+    /// Cancel-safe in effect: a dropped `next()` may lose one advertisement,
+    /// which the device re-sends on its next advertising interval.
     pub async fn next(&mut self) -> Option<FoundDevice> {
         while let Some(event) = self.events.next().await {
             let CentralEvent::ServiceDataAdvertisement { id, service_data } = event else {
@@ -549,6 +556,11 @@ impl CommissionableScan {
 
     /// Stop this scan user, stopping the radio scan if it was the last one.
     /// Preferred over drop: deterministic, and needs no ambient runtime.
+    ///
+    /// Not cancel-safe — dropping this future after it is first polled can
+    /// leak the scan slot (the drop-release is already defused); poll it to
+    /// completion, or drop the scan itself instead to use the best-effort
+    /// drop path.
     pub async fn stop(mut self) {
         self.released = true;
         release_scan(&self.scan, &self.adapter).await;
