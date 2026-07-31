@@ -22,18 +22,15 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## 0.4.1
 
 A WeaveHome-dogfooding follow-up batch: a continuous BLE scan API (safe to run
 alongside an in-flight commission), a scoped BLE connect retry, and two
-commissioning hardening fixes. `matter-ble` is bumped in-repo to **0.3.0**
-(breaking) but not yet published to crates.io (publish to follow on
-maintainer's go); `matter-controller` gains additive API on top of the
-published `0.4.0`. `matter-commissioning` carries bug fixes (see Fixed
-below), so — no exceptions to the patch-bumps-on-bug-fixes rule — it will
-publish as **0.3.1**, not stay at the already-published `0.3.0`.
-`matter-controller`'s own entries below also mean its next publish needs a
-version bump; the exact number is decided at publish time.
+commissioning hardening fixes. Crate versions in this release:
+**`matter-ble` 0.3.0** (breaking — the `FoundDevice` change below),
+**`matter-commissioning` 0.3.1** (bug fixes; patch-bumps-on-bug-fixes rule,
+no exceptions), and **`matter-controller` 0.4.1** (additive API on top of
+`0.4.0`). All other crates are unchanged and not republished.
 
 ### `matter-ble`
 
