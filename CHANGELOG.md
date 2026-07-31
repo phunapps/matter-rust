@@ -22,6 +22,92 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+A WeaveHome-dogfooding follow-up batch: a continuous BLE scan API (safe to run
+alongside an in-flight commission), a scoped BLE connect retry, and two
+commissioning hardening fixes. `matter-ble` is bumped in-repo to **0.3.0**
+(breaking) but not yet published to crates.io (publish to follow on
+maintainer's go); `matter-controller` gains additive API on top of the
+published `0.4.0`; `matter-commissioning` is behavior-only, still `0.3.0`.
+
+### `matter-ble`
+
+#### Added
+
+- `BleCentral::scan_commissionables()` — a continuous, unfiltered scan
+  returning a `CommissionableScan` stream that yields every observed
+  commissionable advertisement (no discriminator filter, no dedup — the same
+  device yields again on every advertising interval; consumers own
+  windowing/dedup by `peripheral_id`). Safe to hold across a concurrent
+  commission: the radio scan is now refcounted across every scan user on a
+  `BleCentral` (`start_scan`/`stop_scan` fire only on the 0→1 / 1→0
+  transition), so a live enumeration scan and an in-flight `find_device` no
+  longer fight over the adapter. `find_device` is now a thin,
+  discriminator-filtered wrapper over the same stream.
+- `FoundDevice::local_name` — best-effort BLE local name from the peripheral's
+  cached advertisement properties (populated on `find_device` and cached
+  per-device inside `CommissionableScan`; may be `None` on first sighting
+  since names often arrive in a later scan response than the first
+  service-data advertisement).
+
+#### Changed (breaking)
+
+- `FoundDevice` is now `#[non_exhaustive]` (carries the new `local_name`
+  field).
+- `CentralError::ServiceDiscovery(String)` is a new variant, split out of what
+  was previously reported as `Connect`: GATT service-discovery exhaustion
+  (the documented macOS `uuidNotAllowed` stall) is not the transient failure
+  `Connect` represents. `matter-controller`'s new BLE connect retry (below)
+  keys on `Connect` specifically so it doesn't double a ~25 s known-hopeless
+  discovery timeout. `CentralError` was already `#[non_exhaustive]`.
+
+### `matter-commissioning`
+
+#### Fixed
+
+- `NetworkConfigResponse::debug_text` / `ConnectNetworkResponse::debug_text`
+  are now capped at the spec's 512-octet bound at decode (floors to a UTF-8
+  char boundary rather than panicking mid-char). Both are device-echoed free
+  text and were previously unbounded.
+- `CommissioningError::NetworkRejected`'s `Display` now renders `debug_text`
+  capped at 64 characters with an ellipsis instead of the full (still
+  512-byte-capped) string; the field itself is unchanged for deliberate
+  consumers. Semi-public behavioral change — matches the `RemediationHint`
+  stability precedent (rendered text is not covered by semver, the typed
+  field is).
+
+#### Pinned
+
+- `CommissioningError::NetworkFeatureUnsupported`'s rendered wording
+  (`"does not support {needed:?} network type"`) is now locked by a
+  regression test: WeaveHome substring-matches it to route Wi-Fi-only devices
+  off an automatic Thread path. Reword only in coordination with WeaveHome;
+  new consumers should prefer the typed
+  `matter_controller::Error::network_feature_unsupported()` below.
+
+### `matter-controller`
+
+#### Added
+
+- `Error::network_feature_unsupported() -> Option<NetworkKind>` — typed
+  access to a `NetworkFeatureUnsupported` commissioning failure (which
+  network type the supplied credentials required), so callers can route on
+  the error without substring-matching the rendered message. `NetworkKind` is
+  now re-exported from `matter-commissioning`.
+- New non-optional `tracing` dependency (`0.1`, `default-features = false`,
+  `std` feature only) — logs the BLE connect retry below.
+
+#### Changed
+
+- `commission_ble` now retries a BLE **connect** failure once before
+  surfacing it: transient local aborts (e.g. BlueZ
+  `le-connection-abort-by-local`) routinely succeed on an immediate retry,
+  and no BTP state exists yet so a full re-open is safe. Scoped to
+  `CentralError::Connect` only — a `ServiceDiscovery` failure (the
+  known-hopeless macOS stall) still surfaces immediately.
+- README status line corrected to **0.4.0** (was stale at 0.3.0).
+
 ## 0.4.0
 
 A 1.0-readiness pass over the public surface (from a freeze-readiness review),
