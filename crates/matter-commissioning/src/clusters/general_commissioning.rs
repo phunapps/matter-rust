@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::clusters::network_commissioning::truncate_utf8;
 use crate::state_machine::{CommissioningError, Stage};
 
 /// Cluster ID: `0x0030`.
@@ -26,7 +27,9 @@ pub mod command_id {
 pub struct ArmFailSafeResponse {
     /// `CommissioningErrorEnum` (spec §11.10.5.1). 0 = OK.
     pub error_code: u8,
-    /// Optional human-readable debug text (≤128 chars).
+    /// Optional human-readable debug text (≤128 chars), capped at the
+    /// spec's 512-octet bound at decode. **Device-controlled free text** —
+    /// log deliberately.
     pub debug_text: Option<String>,
 }
 
@@ -35,7 +38,8 @@ pub struct ArmFailSafeResponse {
 pub struct SetRegulatoryConfigResponse {
     /// `CommissioningErrorEnum`. 0 = OK.
     pub error_code: u8,
-    /// Optional debug text.
+    /// Optional debug text, capped at the spec's 512-octet bound at
+    /// decode. **Device-controlled free text** — log deliberately.
     pub debug_text: Option<String>,
 }
 
@@ -160,7 +164,8 @@ pub(crate) fn decode_commissioning_error_response(
                 if debug_text.is_some() {
                     return Err(CommissioningError::MalformedResponse(stage));
                 }
-                debug_text = Some(s);
+                // Spec bound (§11.10): DebugText ≤ 512 octets. Device-echoed free text — cap defensively.
+                debug_text = Some(truncate_utf8(s, 512));
             }
             // Forward-compat: ignore future tags.
             Some(Element::Scalar { .. } | Element::ContainerStart { .. }) => {}
@@ -346,5 +351,26 @@ mod tests {
     fn basic_commissioning_info_malformed_returns_none() {
         assert!(decode_basic_commissioning_info(&[0xFF]).is_none());
         assert!(decode_basic_commissioning_info(&[]).is_none());
+    }
+
+    #[test]
+    fn arm_fail_safe_response_caps_debug_text_at_512_bytes() {
+        use matter_codec::{Tag, TlvWriter};
+        // ArmFailSafeResponse TLV: anonymous struct { [0]=1u, [1]=600x'x' }.
+        let long_text = "x".repeat(600);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_utf8(Tag::Context(1), &long_text).unwrap();
+        w.end_container().unwrap();
+
+        let decoded = decode_arm_fail_safe_response(&buf).expect("happy path decodes");
+        assert_eq!(decoded.error_code, 1);
+        assert_eq!(
+            decoded.debug_text.unwrap().len(),
+            512,
+            "capped at spec bound"
+        );
     }
 }

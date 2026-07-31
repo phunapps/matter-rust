@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::clusters::network_commissioning::truncate_utf8;
 use crate::noc::error::NocError;
 
 /// Decoded `CSRResponse` (spec §11.18.5.7).
@@ -30,7 +31,9 @@ pub struct NocResponse {
     pub status: u8,
     /// `FabricIndex` assigned to the new fabric (present iff `status == 0`).
     pub fabric_index: Option<u8>,
-    /// Optional debug text. Spec §11.18.5.11 caps at 128 chars.
+    /// Optional debug text. Spec §11.18.5.11 caps at 128 chars; capped at
+    /// the spec's 512-octet bound at decode. **Device-controlled free
+    /// text** — log deliberately.
     pub debug_text: Option<String>,
 }
 
@@ -457,7 +460,8 @@ pub fn decode_noc_response(tlv: &[u8]) -> Result<NocResponse, NocError> {
                 tag: Tag::Context(2),
                 value: Value::Utf8(s),
             }) => {
-                debug_text = Some(s);
+                // Spec bound (§11.18): DebugText ≤ 512 octets. Device-echoed free text — cap defensively.
+                debug_text = Some(truncate_utf8(s, 512));
             }
             // Forward-compat: ignore unknown future fields.
             Some(_) => {}
@@ -598,6 +602,14 @@ mod tests {
         assert_eq!(r.status, 9);
         assert_eq!(r.fabric_index, None);
         assert_eq!(r.debug_text.as_deref(), Some("invalid NOC"));
+    }
+
+    #[test]
+    fn decode_noc_response_caps_debug_text_at_512_bytes() {
+        let long_text = "x".repeat(600);
+        let tlv = write_noc_response(0, Some(1), Some(&long_text));
+        let r = decode_noc_response(&tlv).unwrap();
+        assert_eq!(r.debug_text.unwrap().len(), 512, "capped at spec bound");
     }
 
     #[test]
