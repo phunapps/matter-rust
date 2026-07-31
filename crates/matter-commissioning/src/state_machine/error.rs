@@ -76,6 +76,11 @@ pub enum CommissioningError {
     /// `FeatureMap` lacks the Thread bit). Both Wi-Fi and Thread are
     /// supported network types as of M9-C2 — this variant signals a
     /// device/credential *mismatch*, not an unsupported network type.
+    ///
+    /// **Wording pinned:** WeaveHome substring-matches
+    /// `does not support Thread network type` to route Wi-Fi-only devices off
+    /// its automatic Thread path. Do not reword without coordinating — the
+    /// typed replacement is `matter_controller::Error::network_feature_unsupported()`.
     #[error("device does not support {needed:?} network type (credential/device mismatch)")]
     NetworkFeatureUnsupported {
         /// Which network type the supplied credentials required.
@@ -205,5 +210,23 @@ mod tests {
         assert_copy::<RemediationHint>();
         assert_eq!(RemediationHint::None, RemediationHint::None);
         assert_ne!(RemediationHint::None, RemediationHint::CheckPassphrase);
+    }
+
+    #[test]
+    fn network_feature_unsupported_wording_is_pinned() {
+        // WeaveHome routes Wi-Fi-only devices off its Thread path by
+        // substring-matching this exact wording (their state_machine/error.rs
+        // consumer). A reword compiles cleanly downstream and silently breaks
+        // the fall-through — this pin makes a reword a visible test failure.
+        // Coordinate any change with WeaveHome and their typed replacement,
+        // matter_controller::Error::network_feature_unsupported().
+        let e = CommissioningError::NetworkFeatureUnsupported {
+            needed: NetworkKind::Thread,
+        };
+        assert!(
+            e.to_string()
+                .contains("does not support Thread network type"),
+            "pinned substring changed: {e}"
+        );
     }
 }
