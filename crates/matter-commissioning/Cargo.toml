@@ -73,7 +73,7 @@ matter-clusters = { path = "../matter-clusters", version = "0.2.0" }
 # `BtpSession`s to prove reassembly + MRP-off end to end. Dev-dep ONLY —
 # matter-ble must never enter the runtime graph (and a dep on matter-controller
 # would be a cycle, so the BtpSession→AsyncDatagram shim is test-local).
-matter-ble = { path = "../matter-ble", version = "0.2.0" }
+matter-ble = { path = "../matter-ble", version = "0.3.0" }
 hex = { workspace = true }
 proptest = { workspace = true }
 serde = { workspace = true }

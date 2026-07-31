@@ -220,14 +220,21 @@ pub enum CentralError {
     Gatt(String),
 }
 
-/// A commissionable device located by [`BleCentral::find_device`].
+/// A commissionable device located by [`BleCentral::find_device`] or yielded
+/// by [`CommissionableScan`].
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FoundDevice {
     /// btleplug identifier for the peripheral (a `CoreBluetooth` UUID on macOS —
     /// never a hardware MAC).
     pub peripheral_id: PeripheralId,
     /// The parsed advertisement that matched.
     pub advert: CommissionableAdvert,
+    /// BLE local name from the peripheral's cached advertisement properties,
+    /// when one was observed. **Best-effort:** names usually arrive in a scan
+    /// response *after* the first service-data advertisement, so early sightings
+    /// of a device may carry `None` while later ones carry the name.
+    pub local_name: Option<String>,
 }
 
 /// Does `advert` match the requested `discriminator`?
@@ -332,7 +339,10 @@ impl BleCentral {
         release_scan(&self.scan, &self.adapter).await;
 
         match found {
-            Ok(Some(dev)) => Ok(dev),
+            Ok(Some(mut dev)) => {
+                dev.local_name = local_name_for(&self.adapter, &dev.peripheral_id).await;
+                Ok(dev)
+            }
             Ok(None) | Err(_) => Err(CentralError::ScanTimeout),
         }
     }
@@ -464,6 +474,7 @@ fn match_service_data(
         Some(FoundDevice {
             peripheral_id: id.clone(),
             advert,
+            local_name: None,
         })
     } else {
         None
@@ -476,6 +487,15 @@ fn find_char(peripheral: &Peripheral, uuid: Uuid) -> Option<Characteristic> {
         .characteristics()
         .into_iter()
         .find(|c| c.uuid == uuid)
+}
+
+/// Best-effort BLE local name for `id` from btleplug's cached advertisement
+/// properties. Cheap: a map lookup on `CoreBluetooth`, one bounded D-Bus
+/// round trip on `BlueZ`. Any error (e.g. the device was evicted from the
+/// cache) is swallowed to `None` — the name is cosmetic.
+async fn local_name_for(adapter: &Adapter, id: &PeripheralId) -> Option<String> {
+    let peripheral = adapter.peripheral(id).await.ok()?;
+    peripheral.properties().await.ok().flatten()?.local_name
 }
 
 /// Await the next C2 indication payload from the notification stream, skipping
@@ -865,5 +885,19 @@ mod tests {
         assert!(!rc.release());
         assert!(rc.acquire(), "recovers to normal operation");
         assert!(rc.release());
+    }
+
+    #[test]
+    fn found_device_has_optional_local_name() {
+        // Compile-shape test: `PeripheralId` has no portable constructor, so we
+        // assert the new field's existence and type via a never-called closure.
+        // Population is best-effort at yield time (service-data events carry no
+        // name); construction sites must default it to `None`.
+        let shape = |peripheral_id: PeripheralId, advert: CommissionableAdvert| FoundDevice {
+            peripheral_id,
+            advert,
+            local_name: None::<String>,
+        };
+        let _ = shape;
     }
 }
