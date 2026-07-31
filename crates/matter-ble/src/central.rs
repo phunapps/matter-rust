@@ -21,6 +21,7 @@
 //! requests MTU 0 and adopts the peripheral's advertised fragment size).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use btleplug::api::{
@@ -30,7 +31,7 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
 use thiserror::Error;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -115,6 +116,74 @@ const C1_WRITE_TIMEOUT: Duration = Duration::from_secs(12);
 /// if there is nothing to tear down we move on to `connect()` promptly.
 const PRE_CONNECT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Refcount for the one radio scan on the shared adapter.
+///
+/// Neither backend refcounts discovery: a second `StartDiscovery` on `BlueZ`
+/// draws `org.bluez.Error.InProgress`, and `CoreBluetooth`'s `stop_scan` stops
+/// the radio globally — so a live [`CommissionableScan`] and a concurrent
+/// [`BleCentral::find_device`] (an in-flight commission) would break each
+/// other. All starts/stops route through [`acquire_scan`]/[`release_scan`],
+/// which hold one async mutex across the btleplug call: the radio scan starts
+/// on the 0→1 transition and stops on 1→0.
+#[derive(Default)]
+struct ScanRefCount {
+    active: u32,
+}
+
+impl ScanRefCount {
+    /// Register a scan user. `true` ⇒ this was 0→1: the caller must
+    /// `start_scan` (and must call [`Self::release`] on start failure).
+    fn acquire(&mut self) -> bool {
+        self.active += 1;
+        self.active == 1
+    }
+
+    /// Deregister a scan user. `true` ⇒ this was 1→0: the caller must
+    /// `stop_scan`. An underflowing release (defensive double-drop) is a
+    /// no-op that never requests a stop.
+    fn release(&mut self) -> bool {
+        if self.active == 0 {
+            return false;
+        }
+        self.active -= 1;
+        self.active == 0
+    }
+}
+
+/// Take a scan slot, starting the radio scan if this is the first holder.
+/// The lock is held across `start_scan` so a concurrent release cannot
+/// interleave between the count change and the radio call.
+///
+/// # Errors
+/// [`CentralError::Scan`] if the radio scan fails to start (the slot is
+/// returned).
+async fn acquire_scan(
+    scan: &Arc<TokioMutex<ScanRefCount>>,
+    adapter: &Adapter,
+) -> Result<(), CentralError> {
+    let mut guard = scan.lock().await;
+    if guard.acquire() {
+        // Unfiltered on purpose — a service-UUID ScanFilter blinds BlueZ. See
+        // the doc comment on `find_device`.
+        if let Err(e) = adapter.start_scan(ScanFilter::default()).await {
+            guard.release();
+            return Err(CentralError::Scan(e.to_string()));
+        }
+    }
+    Ok(())
+}
+
+/// Return a scan slot, stopping the radio scan (best-effort) if this was the
+/// last holder. Held-lock stop serializes against any new `acquire_scan`, so
+/// a delayed release can never kill a scan started after it.
+async fn release_scan(scan: &Arc<TokioMutex<ScanRefCount>>, adapter: &Adapter) {
+    let mut guard = scan.lock().await;
+    if guard.release() {
+        // Best-effort; we are done scanning either way.
+        let _ = adapter.stop_scan().await;
+    }
+}
+
 /// Errors from the BLE central and its BTP pump.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -181,6 +250,8 @@ pub fn advert_matches(advert: &CommissionableAdvert, discriminator: u16, short: 
 /// Construction is the macOS TCC trigger — see the module docs.
 pub struct BleCentral {
     adapter: Adapter,
+    /// Scan refcount shared with every [`CommissionableScan`] (Task 3).
+    scan: Arc<TokioMutex<ScanRefCount>>,
 }
 
 impl BleCentral {
@@ -205,7 +276,10 @@ impl BleCentral {
             .next()
             .ok_or_else(|| CentralError::AdapterUnavailable("no adapters".to_string()))?;
         match adapter.adapter_state().await {
-            Ok(CentralState::PoweredOn) => Ok(Self { adapter }),
+            Ok(CentralState::PoweredOn) => Ok(Self {
+                adapter,
+                scan: Arc::new(TokioMutex::new(ScanRefCount::default())),
+            }),
             Ok(other) => Err(CentralError::AdapterUnavailable(format!("state {other:?}"))),
             Err(e) => Err(CentralError::AdapterUnavailable(e.to_string())),
         }
@@ -240,12 +314,7 @@ impl BleCentral {
             .events()
             .await
             .map_err(|e| CentralError::Scan(e.to_string()))?;
-        // Unfiltered on purpose — a service-UUID ScanFilter blinds BlueZ. See
-        // the doc comment above.
-        self.adapter
-            .start_scan(ScanFilter::default())
-            .await
-            .map_err(|e| CentralError::Scan(e.to_string()))?;
+        acquire_scan(&self.scan, &self.adapter).await?;
 
         let found = tokio::time::timeout(timeout, async {
             while let Some(event) = events.next().await {
@@ -260,8 +329,7 @@ impl BleCentral {
         })
         .await;
 
-        // Best-effort stop; ignore errors (we are done scanning either way).
-        let _ = self.adapter.stop_scan().await;
+        release_scan(&self.scan, &self.adapter).await;
 
         match found {
             Ok(Some(dev)) => Ok(dev),
@@ -778,5 +846,24 @@ mod tests {
     fn characteristic_uuids_stringify_to_spec_values() {
         assert_eq!(C1_UUID.to_string(), "18ee2ef5-263d-4559-959f-4f9c429f9d11");
         assert_eq!(C2_UUID.to_string(), "18ee2ef5-263d-4559-959f-4f9c429f9d12");
+    }
+
+    #[test]
+    fn scan_refcount_first_acquire_starts_last_release_stops() {
+        let mut rc = ScanRefCount::default();
+        assert!(rc.acquire(), "0->1 must start the radio scan");
+        assert!(!rc.acquire(), "1->2 must not restart");
+        assert!(!rc.release(), "2->1 must not stop");
+        assert!(rc.release(), "1->0 must stop the radio scan");
+    }
+
+    #[test]
+    fn scan_refcount_release_without_acquire_never_stops() {
+        // A defensive underflow (double drop) must not issue a spurious stop_scan
+        // that would kill an unrelated live scan.
+        let mut rc = ScanRefCount::default();
+        assert!(!rc.release());
+        assert!(rc.acquire(), "recovers to normal operation");
+        assert!(rc.release());
     }
 }
