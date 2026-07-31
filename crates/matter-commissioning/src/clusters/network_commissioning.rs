@@ -205,6 +205,21 @@ pub fn decode_connect_max_time_seconds(tlv: &[u8]) -> Result<u16, CommissioningE
     }
 }
 
+/// Cap `s` at `max_bytes` bytes, flooring to a UTF-8 char boundary (Matter
+/// string bounds are octet counts; `String::truncate` panics mid-char, and
+/// `str::floor_char_boundary` is unstable at MSRV 1.88).
+pub(crate) fn truncate_utf8(mut s: String, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    s
+}
+
 /// Decoded `NetworkConfigResponse` (spec §11.9.6.5). Emitted by
 /// `AddOrUpdateWiFiNetwork`, `RemoveNetwork`, `ReorderNetworks`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,7 +227,9 @@ pub fn decode_connect_max_time_seconds(tlv: &[u8]) -> Result<u16, CommissioningE
 pub struct NetworkConfigResponse {
     /// `NetworkCommissioningStatusEnum` (spec §11.9.5.1). 0 = OK.
     pub networking_status: u8,
-    /// Optional human-readable debug text (≤512 chars).
+    /// Optional human-readable debug text echoed by the device, capped at
+    /// the spec's 512-octet bound at decode. **Device-controlled free
+    /// text** — it may name networks (e.g. an SSID); log deliberately.
     pub debug_text: Option<String>,
     // `network_index` deliberately omitted — only meaningful on the
     // scan path, which M6.5 does not ship.
@@ -224,7 +241,9 @@ pub struct NetworkConfigResponse {
 pub struct ConnectNetworkResponse {
     /// `NetworkCommissioningStatusEnum`. 0 = OK.
     pub networking_status: u8,
-    /// Optional human-readable debug text.
+    /// Optional human-readable debug text echoed by the device, capped at
+    /// the spec's 512-octet bound at decode. **Device-controlled free
+    /// text** — it may name networks (e.g. an SSID); log deliberately.
     pub debug_text: Option<String>,
     /// Platform-specific Wi-Fi error code (spec §11.9.6.6.3). Optional.
     pub error_value: Option<i32>,
@@ -285,7 +304,8 @@ pub fn decode_network_config_response(
                 if debug_text.is_some() {
                     return Err(CommissioningError::MalformedResponse(stage));
                 }
-                debug_text = Some(s);
+                // Spec bound (§11.9): DebugText ≤ 512 octets. Device-echoed free text — cap defensively.
+                debug_text = Some(truncate_utf8(s, 512));
             }
             // Forward-compat: ignore tag 2 (network_index) on NetworkConfigResponse
             // and all other unknown tags.
@@ -353,7 +373,8 @@ pub fn decode_connect_network_response(
                 if debug_text.is_some() {
                     return Err(CommissioningError::MalformedResponse(stage));
                 }
-                debug_text = Some(s);
+                // Spec bound (§11.9): DebugText ≤ 512 octets. Device-echoed free text — cap defensively.
+                debug_text = Some(truncate_utf8(s, 512));
             }
             Some(Element::Scalar {
                 tag: Tag::Context(2),
@@ -625,6 +646,59 @@ mod tests {
             matches!(err, CommissioningError::MalformedResponse(_)),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn truncate_utf8_caps_bytes_without_splitting_chars() {
+        // ASCII: exact byte cap.
+        let s = "a".repeat(600);
+        assert_eq!(truncate_utf8(s, 512).len(), 512);
+
+        // Under the cap: untouched.
+        assert_eq!(truncate_utf8("short".to_string(), 512), "short");
+
+        // Multi-byte char straddling the boundary: floor to the previous char
+        // boundary — never panic, never emit invalid UTF-8. 'é' is 2 bytes;
+        // 511 ASCII bytes + 'é' puts the boundary mid-char at 512.
+        let mut s = "a".repeat(511);
+        s.push('é');
+        let t = truncate_utf8(s, 512);
+        assert_eq!(t.len(), 511, "must floor to the char boundary");
+        assert!(t.is_char_boundary(t.len()));
+    }
+
+    #[test]
+    fn decode_caps_debug_text_at_512_bytes() {
+        use matter_codec::{Tag, TlvWriter};
+        // NetworkConfigResponse TLV: anonymous struct { [0]=5u, [1]=600x'x' }.
+        let long_text = "x".repeat(600);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 5).unwrap();
+        w.put_utf8(Tag::Context(1), &long_text).unwrap();
+        w.end_container().unwrap();
+
+        let resp = decode_network_config_response(Stage::NetworkSetup, &buf).unwrap();
+        assert_eq!(resp.networking_status, 5);
+        assert_eq!(resp.debug_text.unwrap().len(), 512, "capped at spec bound");
+    }
+
+    #[test]
+    fn decode_connect_network_response_caps_debug_text_at_512_bytes() {
+        use matter_codec::{Tag, TlvWriter};
+        // ConnectNetworkResponse TLV: anonymous struct { [0]=5u, [1]=600x'x' }.
+        let long_text = "x".repeat(600);
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 5).unwrap();
+        w.put_utf8(Tag::Context(1), &long_text).unwrap();
+        w.end_container().unwrap();
+
+        let resp = decode_connect_network_response(Stage::NetworkEnable, &buf).unwrap();
+        assert_eq!(resp.networking_status, 5);
+        assert_eq!(resp.debug_text.unwrap().len(), 512, "capped at spec bound");
     }
 
     #[test]

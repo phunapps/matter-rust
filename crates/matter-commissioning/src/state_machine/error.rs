@@ -77,7 +77,7 @@ pub enum CommissioningError {
     /// supported network types as of M9-C2 — this variant signals a
     /// device/credential *mismatch*, not an unsupported network type.
     ///
-    /// **Wording pinned:** WeaveHome substring-matches
+    /// **Wording pinned:** `WeaveHome` substring-matches
     /// `does not support Thread network type` to route Wi-Fi-only devices off
     /// its automatic Thread path. Do not reword without coordinating — the
     /// typed replacement is `matter_controller::Error::network_feature_unsupported()`.
@@ -93,7 +93,8 @@ pub enum CommissioningError {
     #[error(
         "network commissioning rejected at stage {stage:?}: \
              networking_status {networking_status:#x}, \
-             debug_text={debug_text:?}, hint={remediation_hint:?}"
+             debug_text={}, hint={remediation_hint:?}",
+        display_debug_text(debug_text.as_ref())
     )]
     NetworkRejected {
         /// Which stage the device rejected.
@@ -101,11 +102,31 @@ pub enum CommissioningError {
         /// Raw `NetworkCommissioningStatusEnum` value from the
         /// response.
         networking_status: u8,
-        /// Optional human-readable debug text echoed by the device.
+        /// Optional human-readable debug text echoed by the device,
+        /// capped at the spec's 512-octet bound at decode.
+        /// **Device-controlled free text** — it may name networks (e.g.
+        /// an SSID); log deliberately.
         debug_text: Option<String>,
         /// Mapped remediation category for downstream UI rendering.
         remediation_hint: RemediationHint,
     },
+}
+
+/// Render `debug_text` for `Display`, capped at 64 chars with an ellipsis.
+/// The device controls this string and it can echo an SSID; the full (still
+/// 512-byte-capped) value stays on the field for deliberate consumers.
+fn display_debug_text(text: Option<&String>) -> String {
+    match text {
+        None => "None".to_owned(),
+        Some(s) => {
+            let capped: String = s.chars().take(64).collect();
+            if capped.len() < s.len() {
+                format!("Some(\"{capped}…\")")
+            } else {
+                format!("Some(\"{s}\")")
+            }
+        }
+    }
 }
 
 /// Which Matter network-commissioning type a device declared in its
@@ -210,6 +231,31 @@ mod tests {
         assert_copy::<RemediationHint>();
         assert_eq!(RemediationHint::None, RemediationHint::None);
         assert_ne!(RemediationHint::None, RemediationHint::CheckPassphrase);
+    }
+
+    #[test]
+    fn network_rejected_display_caps_debug_text() {
+        let e = CommissioningError::NetworkRejected {
+            stage: Stage::NetworkSetup,
+            networking_status: 5,
+            debug_text: Some("s".repeat(300)),
+            remediation_hint: RemediationHint::CheckSsid,
+        };
+        let msg = e.to_string();
+        // 64 chars + ellipsis, not the whole 300.
+        assert!(msg.contains(&"s".repeat(64)));
+        assert!(!msg.contains(&"s".repeat(65)));
+        assert!(msg.contains('…'));
+
+        // Short text renders in full, no ellipsis.
+        let short = CommissioningError::NetworkRejected {
+            stage: Stage::NetworkSetup,
+            networking_status: 5,
+            debug_text: Some("bad ssid".into()),
+            remediation_hint: RemediationHint::CheckSsid,
+        };
+        assert!(short.to_string().contains("bad ssid"));
+        assert!(!short.to_string().contains('…'));
     }
 
     #[test]
