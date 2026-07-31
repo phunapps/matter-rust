@@ -33,7 +33,7 @@ use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
 use thiserror::Error;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, MutexGuard};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -152,26 +152,77 @@ impl ScanRefCount {
     }
 }
 
+/// Drop-guard around the scan-refcount `MutexGuard`, so a cancelled
+/// [`acquire_scan`] (the caller's future dropped mid-`start_scan`, e.g. a
+/// timeout wrapped around [`BleCentral::scan_commissionables`] or
+/// [`BleCentral::find_device`]) releases the slot it took instead of
+/// stranding the count above zero with no scan user.
+///
+/// Race-free: `Drop::drop` runs before the wrapped `MutexGuard` field is
+/// itself dropped, so [`ScanRefCount::release`] executes while the lock is
+/// still held — a concurrent `acquire`/`release` can never interleave with
+/// it. Call [`Self::defuse`] once `start_scan` has returned `Ok`; past that
+/// point the increment is owned by the caller (released later via
+/// `release_scan`) and the guard's drop must not touch it.
+struct ScanGuard<'a> {
+    guard: MutexGuard<'a, ScanRefCount>,
+    defused: bool,
+}
+
+impl ScanGuard<'_> {
+    /// Hand ownership of the increment to the caller: the guard's `Drop`
+    /// becomes a no-op.
+    fn defuse(mut self) {
+        self.defused = true;
+    }
+}
+
+impl Drop for ScanGuard<'_> {
+    fn drop(&mut self) {
+        if !self.defused {
+            self.guard.release();
+        }
+    }
+}
+
 /// Take a scan slot, starting the radio scan if this is the first holder.
 /// The lock is held across `start_scan` so a concurrent release cannot
 /// interleave between the count change and the radio call.
 ///
+/// Cancel-safe: if this future is dropped before it resolves, the
+/// [`ScanGuard`] releases the slot it took rather than leaking a phantom
+/// holder — without it, every later scan would see `count > 0` and skip
+/// `start_scan` forever. Residual, best-effort case (same tier as the drop
+/// caveat on [`CommissionableScan`]): if the btleplug backend's
+/// `start_scan` actually completed at the same instant this future was
+/// dropped, the radio may keep scanning with `count == 0` until a later
+/// acquire/release cycle notices and corrects it.
+///
 /// # Errors
 /// [`CentralError::Scan`] if the radio scan fails to start (the slot is
-/// returned).
+/// released).
 async fn acquire_scan(
     scan: &Arc<TokioMutex<ScanRefCount>>,
     adapter: &Adapter,
 ) -> Result<(), CentralError> {
-    let mut guard = scan.lock().await;
-    if guard.acquire() {
+    let mut guard = ScanGuard {
+        guard: scan.lock().await,
+        defused: false,
+    };
+    if guard.guard.acquire() {
         // Unfiltered on purpose — a service-UUID ScanFilter blinds BlueZ. See
-        // the doc comment on `find_device`.
-        if let Err(e) = adapter.start_scan(ScanFilter::default()).await {
-            guard.release();
-            return Err(CentralError::Scan(e.to_string()));
-        }
+        // the doc comment on `find_device`. If this await is where the
+        // caller's future gets dropped (see the doc comment above), `guard`
+        // drops un-defused and releases the slot it took.
+        adapter
+            .start_scan(ScanFilter::default())
+            .await
+            .map_err(|e| CentralError::Scan(e.to_string()))?;
     }
+    // Past this point the increment is owned by the caller (released via
+    // `release_scan` when their scan ends) — defuse so the guard's drop
+    // doesn't undo it.
+    guard.defuse();
     Ok(())
 }
 
@@ -1008,6 +1059,52 @@ mod tests {
         assert!(!rc.release());
         assert!(rc.acquire(), "recovers to normal operation");
         assert!(rc.release());
+    }
+
+    #[tokio::test]
+    async fn scan_guard_releases_on_drop_unless_defused() {
+        // This is the acquire-side cancellation fix: an un-defused ScanGuard
+        // must release the slot it took (the "caller's future got dropped
+        // mid-start_scan" case), while a defused one must leave the count
+        // untouched (the normal "start_scan succeeded" case). Exercised here
+        // directly against ScanRefCount/TokioMutex — no Adapter needed, since
+        // ScanGuard's Drop only ever touches the MutexGuard it wraps.
+        let scan: Arc<TokioMutex<ScanRefCount>> =
+            Arc::new(TokioMutex::new(ScanRefCount::default()));
+
+        // Cancellation case: acquire, then drop the guard without defusing —
+        // the slot must come back to 0.
+        {
+            let mut inner = scan.lock().await;
+            assert!(inner.acquire(), "0->1");
+            let guard = ScanGuard {
+                guard: inner,
+                defused: false,
+            };
+            drop(guard);
+        }
+        assert_eq!(
+            scan.lock().await.active,
+            0,
+            "un-defused drop must release the slot (the cancellation-hole fix)"
+        );
+
+        // Success case: acquire, defuse, drop — the slot must stay held for
+        // the caller to release later via release_scan.
+        {
+            let mut inner = scan.lock().await;
+            assert!(inner.acquire(), "0->1");
+            let guard = ScanGuard {
+                guard: inner,
+                defused: false,
+            };
+            guard.defuse();
+        }
+        assert_eq!(
+            scan.lock().await.active,
+            1,
+            "defused drop must not release the slot"
+        );
     }
 
     #[test]
