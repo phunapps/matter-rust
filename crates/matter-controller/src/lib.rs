@@ -151,8 +151,10 @@ pub use icd_listener::CheckIn;
 pub use matter_cert::MatterTime;
 pub use matter_codec::Value;
 /// Network (Wi-Fi/Thread) credentials for `MatterController::commission_ble`
-/// (feature `ble`), re-exported from `matter-commissioning`.
-pub use matter_commissioning::{NetworkCredentials, ThreadDataset, WiFiCredentials};
+/// (feature `ble`) and the network-type witness for
+/// [`Error::network_feature_unsupported`], re-exported from
+/// `matter-commissioning`.
+pub use matter_commissioning::{NetworkCredentials, NetworkKind, ThreadDataset, WiFiCredentials};
 pub use matter_interaction::{
     AttributePath, CommandPath, EventFilter, EventPath, EventPriority, EventReport,
     EventReportItem, EventTimestamp, ImStatus, ReadPath,

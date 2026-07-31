@@ -112,6 +112,26 @@ pub enum Error {
     GroupNotProvisioned(u16),
 }
 
+impl Error {
+    /// If this error is the device rejecting the supplied network-credential
+    /// *type* — e.g. Thread credentials handed to a Wi-Fi-only device
+    /// (`NetworkCommissioning::FeatureMap` lacks the needed bit) — returns
+    /// which network type the credentials required. Use this to route to a
+    /// different credential type instead of substring-matching the rendered
+    /// message.
+    ///
+    /// Returns `None` for every other error.
+    #[must_use]
+    pub fn network_feature_unsupported(&self) -> Option<matter_commissioning::NetworkKind> {
+        match self {
+            Error::Driver(matter_commissioning::driver::DriverError::Commissioning(
+                matter_commissioning::CommissioningError::NetworkFeatureUnsupported { needed },
+            )) => Some(*needed),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -125,5 +145,34 @@ mod tests {
             msg.contains("from_dirs"),
             "NoTrust must name from_dirs: {msg}"
         );
+    }
+
+    #[test]
+    fn network_feature_unsupported_is_typed_through_the_chain() {
+        use matter_commissioning::{driver::DriverError, CommissioningError, NetworkKind};
+
+        // The nested chain a commission failure actually produces.
+        let e = crate::error::Error::Driver(DriverError::Commissioning(
+            CommissioningError::NetworkFeatureUnsupported {
+                needed: NetworkKind::Thread,
+            },
+        ));
+        assert_eq!(e.network_feature_unsupported(), Some(NetworkKind::Thread));
+
+        // The substring WeaveHome matched still renders through the chain
+        // (belt for the matter-commissioning pin's braces).
+        assert!(e
+            .to_string()
+            .contains("does not support Thread network type"));
+
+        // Unrelated errors: None.
+        assert_eq!(
+            crate::error::Error::ControllerStopped.network_feature_unsupported(),
+            None
+        );
+        let other = crate::error::Error::Driver(DriverError::Commissioning(
+            CommissioningError::CaseEstablishmentFailed,
+        ));
+        assert_eq!(other.network_feature_unsupported(), None);
     }
 }
