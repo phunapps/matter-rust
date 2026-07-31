@@ -120,7 +120,8 @@ impl AsyncDatagram for BtpDatagram {
 ///
 /// [`Error::Operational`] for any BLE-layer failure (no adapter / permission,
 /// scan timeout, connect, GATT, or BTP handshake) or an operational-socket bind
-/// failure; [`Error::Driver`] for any commissioning-protocol failure.
+/// failure; [`Error::Driver`] for any commissioning-protocol failure. A BLE
+/// connect failure is retried once before surfacing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_commission_ble_task(
     setup_payload: matter_commissioning::SetupPayload,
@@ -165,7 +166,19 @@ pub(crate) async fn run_commission_ble_task(
 
     // 2. Open the BTP session (connect + GATT + BTP handshake) and adapt it to
     //    the driver's datagram seam.
-    let channel = central.open_btp(&device).await.map_err(|e| ble_err(&e))?;
+    // 2a. One retry on a *connect* failure only: transient local aborts (e.g.
+    // BlueZ `le-connection-abort-by-local`) routinely succeed on an immediate
+    // retry, and no BTP state exists yet so a full re-open is safe. Other
+    // variants (notably `ServiceDiscovery`, the known-hopeless ~25 s macOS
+    // stall) surface immediately.
+    let channel = match central.open_btp(&device).await {
+        Ok(channel) => channel,
+        Err(CentralError::Connect(first)) => {
+            tracing::warn!(error = %first, "BLE connect failed; retrying once");
+            central.open_btp(&device).await.map_err(|e| ble_err(&e))?
+        }
+        Err(e) => return Err(ble_err(&e)),
+    };
     let btp = BtpDatagram::new(channel);
 
     // 3. Bind this task's own operational transport + discovery (copied from the
