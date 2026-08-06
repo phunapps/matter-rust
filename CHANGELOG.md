@@ -22,9 +22,11 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## matter-ble 0.3.1
 
-### `matter-ble` (0.3.1)
+A single-crate hotfix release: only `matter-ble` is republished.
+
+### `matter-ble`
 
 #### Fixed
 
