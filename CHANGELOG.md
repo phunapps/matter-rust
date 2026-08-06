@@ -22,6 +22,31 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### `matter-ble` (0.3.1)
+
+#### Fixed
+
+- **D-Bus connection leak on Linux — one leaked fd per `BleCentral::new()`,
+  eventually a system-wide BLE outage.** btleplug's Linux backend opens a new
+  D-Bus system-bus connection per `Manager::new()` (`bluez-async`
+  `BluetoothSession`), whose connection-owning task is detached and can never
+  be aborted — dropping the central does not close it. Constructing a central
+  per scan/commission therefore climbed monotonically toward dbus-daemon's
+  256-connections-per-user cap, after which **every** process's BLE on the
+  host failed ("No buffer space available", `bluetoothctl` SIGABRT) until the
+  consumer process was restarted. Observed live on a Pi hub after ~45 minutes
+  of periodic scans. `BleCentral::new()` now lazily initializes one
+  process-wide shared btleplug session (adapter + the scan refcount, which
+  must span all centrals now that they share one radio) and every subsequent
+  construction reuses it: the fd count stays flat no matter how consumers
+  construct centrals. First-call semantics are unchanged (macOS TCC prompt
+  still fires on first use; a failed first init is retried, not cached). The
+  adapter identity is now cached for the process lifetime — hot-replacing the
+  only Bluetooth adapter requires a process restart (same guidance
+  `bluez-async` gives for a lost D-Bus connection).
+
 ## 0.4.1
 
 A WeaveHome-dogfooding follow-up batch: a continuous BLE scan API (safe to run

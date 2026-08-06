@@ -33,7 +33,7 @@ use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
 use thiserror::Error;
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, MutexGuard};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex, MutexGuard, OnceCell};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -312,40 +312,108 @@ pub fn advert_matches(advert: &CommissionableAdvert, discriminator: u16, short: 
     }
 }
 
+/// The one process-wide btleplug handle: the first adapter plus the scan
+/// refcount every [`BleCentral`] shares.
+///
+/// **Why a singleton:** on Linux, every `btleplug::platform::Manager::new()`
+/// opens a fresh D-Bus system-bus connection (`bluez-async`'s
+/// `BluetoothSession::new`), whose connection-owning future is detached with
+/// `tokio::spawn` — and btleplug discards the join handle, so nothing can ever
+/// abort it. Dropping the manager/adapter/central does NOT close the
+/// connection: each construction leaks one fd for the life of the process.
+/// Constructing a central per operation therefore climbs monotonically toward
+/// dbus-daemon's 256-connections-per-user cap and then breaks Bluetooth
+/// **system-wide** — every process's BLE fails with "No buffer space
+/// available" until this process exits (observed live on a Pi hub after ~45
+/// minutes of periodic scans). `bluez-async` documents the intended model:
+/// one session per process. Caching the adapter here gives exactly that —
+/// every [`BleCentral::new`] after the first reuses the single session and
+/// the fd count stays flat regardless of how consumers construct centrals.
+///
+/// The scan refcount lives here for the same reason: with one shared radio,
+/// the start/stop-scan refcount must span every `BleCentral` in the process,
+/// or two instances would each believe they own the radio scan.
+///
+/// Known trade-off: the adapter identity is cached for the process lifetime,
+/// so hot-replacing the only Bluetooth adapter (e.g. re-plugging a USB
+/// dongle) requires a process restart — the same guidance `bluez-async`
+/// gives for a lost D-Bus connection.
+struct SharedCore {
+    adapter: Adapter,
+    scan: Arc<TokioMutex<ScanRefCount>>,
+}
+
+/// See [`SharedCore`]. Success is cached for the process lifetime; a failed
+/// init is retried on the next [`BleCentral::new`] (floor-tested in
+/// `shared_core_once_cell_retries_after_error_and_caches_success`).
+static SHARED_CORE: OnceCell<SharedCore> = OnceCell::const_new();
+
+/// Initialize the process-wide [`SharedCore`]: one btleplug manager, its
+/// first adapter. Runs at most once per process on success. The `PoweredOn`
+/// check deliberately does NOT happen here — it lives in
+/// [`BleCentral::new`] so it re-runs on every construction.
+///
+/// # Errors
+/// [`CentralError::AdapterUnavailable`] when the manager cannot be created or
+/// no adapter exists (including a denied macOS Bluetooth permission). The
+/// error is not cached.
+async fn init_shared_core() -> Result<SharedCore, CentralError> {
+    let manager = Manager::new()
+        .await
+        .map_err(|e| CentralError::AdapterUnavailable(e.to_string()))?;
+    let adapters = manager
+        .adapters()
+        .await
+        .map_err(|e| CentralError::AdapterUnavailable(e.to_string()))?;
+    let adapter = adapters
+        .into_iter()
+        .next()
+        .ok_or_else(|| CentralError::AdapterUnavailable("no adapters".to_string()))?;
+    Ok(SharedCore {
+        adapter,
+        scan: Arc::new(TokioMutex::new(ScanRefCount::default())),
+    })
+}
+
 /// A BLE central bound to a specific adapter.
 ///
-/// Construction is the macOS TCC trigger — see the module docs.
+/// Construction is the macOS TCC trigger — see the module docs. All centrals
+/// in a process share one underlying btleplug session and one scan refcount
+/// (see the private `SharedCore` doc for why: btleplug's Linux backend leaks
+/// one D-Bus connection per manager, so per-operation construction of
+/// independent sessions eventually breaks BLE system-wide), so constructing
+/// centrals per operation is cheap and leak-free.
 pub struct BleCentral {
     adapter: Adapter,
-    /// Scan refcount shared with every [`CommissionableScan`] (Task 3).
+    /// Scan refcount shared with every [`CommissionableScan`] AND every other
+    /// [`BleCentral`] in the process (see [`SharedCore`]).
     scan: Arc<TokioMutex<ScanRefCount>>,
 }
 
 impl BleCentral {
-    /// Acquire the first Bluetooth adapter and verify it is powered on.
+    /// Acquire the process-wide shared adapter (first call creates it) and
+    /// verify it is powered on.
     ///
-    /// **This instantiates `CoreBluetooth` and may raise the macOS Bluetooth
-    /// permission prompt.** Call only from a user-initiated commissioning flow.
+    /// **The first call in a process instantiates `CoreBluetooth` and may
+    /// raise the macOS Bluetooth permission prompt.** Call only from a
+    /// user-initiated commissioning flow. Subsequent calls reuse the shared
+    /// session — no new D-Bus connection on Linux, no new
+    /// `CBCentralManager` on macOS — so per-operation construction stays
+    /// cheap and the process's fd count stays flat.
     ///
     /// # Errors
     /// [`CentralError::AdapterUnavailable`] when no adapter exists or it is not
-    /// `PoweredOn` (including a denied macOS Bluetooth permission).
+    /// `PoweredOn` (including a denied macOS Bluetooth permission). A failed
+    /// first initialization is retried on the next call, not cached.
     pub async fn new() -> Result<Self, CentralError> {
-        let manager = Manager::new()
-            .await
-            .map_err(|e| CentralError::AdapterUnavailable(e.to_string()))?;
-        let adapters = manager
-            .adapters()
-            .await
-            .map_err(|e| CentralError::AdapterUnavailable(e.to_string()))?;
-        let adapter = adapters
-            .into_iter()
-            .next()
-            .ok_or_else(|| CentralError::AdapterUnavailable("no adapters".to_string()))?;
-        match adapter.adapter_state().await {
+        let core = SHARED_CORE.get_or_try_init(init_shared_core).await?;
+        // Power state is re-checked on EVERY call — the cached adapter
+        // outlives Bluetooth being toggled off or the permission being
+        // revoked, and callers must still see those as `AdapterUnavailable`.
+        match core.adapter.adapter_state().await {
             Ok(CentralState::PoweredOn) => Ok(Self {
-                adapter,
-                scan: Arc::new(TokioMutex::new(ScanRefCount::default())),
+                adapter: core.adapter.clone(),
+                scan: Arc::clone(&core.scan),
             }),
             Ok(other) => Err(CentralError::AdapterUnavailable(format!("state {other:?}"))),
             Err(e) => Err(CentralError::AdapterUnavailable(e.to_string())),
@@ -1059,6 +1127,48 @@ mod tests {
         assert!(!rc.release());
         assert!(rc.acquire(), "recovers to normal operation");
         assert!(rc.release());
+    }
+
+    /// Floor test for the `tokio::sync::OnceCell` semantics
+    /// [`BleCentral::new`]'s process-wide shared core relies on:
+    /// `get_or_try_init` must cache success (the initializer runs exactly once
+    /// across all later calls) and must NOT cache failure — a transient
+    /// "no adapter" / denied-permission error on the first `BleCentral::new`
+    /// must not poison every future one.
+    #[tokio::test]
+    async fn shared_core_once_cell_retries_after_error_and_caches_success() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let cell: OnceCell<u32> = OnceCell::const_new();
+        let attempts = AtomicU32::new(0);
+
+        let failed = cell
+            .get_or_try_init(|| async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err::<u32, &str>("no adapter yet")
+            })
+            .await;
+        assert!(failed.is_err(), "first init fails");
+
+        let ok = cell
+            .get_or_try_init(|| async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Ok::<u32, &str>(7)
+            })
+            .await;
+        assert_eq!(ok, Ok(&7), "an errored init must be retried, not cached");
+
+        let cached = cell
+            .get_or_try_init(|| async {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Ok::<u32, &str>(9)
+            })
+            .await;
+        assert_eq!(cached, Ok(&7), "success must be cached");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            2,
+            "initializer must not run again after a success"
+        );
     }
 
     #[tokio::test]

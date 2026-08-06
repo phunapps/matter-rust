@@ -168,3 +168,22 @@ failure as "investigate before continuing," not "retry and hope."
 - Peripheral-side runbook: `docs/runbooks/ble-dut-pi.md`.
 - API: `MatterController::commission_ble`
   (`crates/matter-controller/src/controller.rs`).
+
+## Linux: verifying the shared-session fd fix (matter-ble 0.3.1)
+
+matter-ble ≥0.3.1 holds ONE process-wide btleplug/D-Bus session; before that,
+every `BleCentral::new()` leaked one D-Bus connection on Linux until the
+dbus-daemon 256-per-user cap broke BLE **system-wide** ("No buffer space
+available", `bluetoothctl` SIGABRT — recovered only by restarting the
+consumer process).
+
+To verify on a live consumer (e.g. the WeaveHome hub's matter subprocess):
+
+```sh
+# fd count of the consumer process — run before/after repeated BLE
+# scans / commission attempts; it must stay flat, not climb toward 256.
+ls /proc/$(pgrep -f integrations/matter)/fd | wc -l
+
+# total D-Bus system-bus connections on the host (healthy: a few dozen)
+ss -x | grep -c system_bus_socket
+```
