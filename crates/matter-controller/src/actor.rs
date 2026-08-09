@@ -125,6 +125,18 @@ const MAX_READ_BYTES: usize = 256 * 1024;
 /// and group traffic share port 5540).
 const MATTER_GROUP_PORT: u16 = 5540;
 
+/// How many outbound group message counters one durable persist reserves.
+///
+/// The persisted `outbound_group_counter` holds the reserved **ceiling**, not
+/// the last-sent value: every counter below it may be handed out without a
+/// further store write. A crash therefore resumes at the ceiling, skipping at
+/// most `GROUP_COUNTER_BLOCK - 1` never-sent values but NEVER reusing a sent
+/// one (reuse would let an attacker replay an old group message).
+///
+/// 64 trades a bounded counter-space skip (the space is 2^32) for one fsync per
+/// 64 group sends instead of one per send.
+const GROUP_COUNTER_BLOCK: u32 = 64;
+
 /// chip resubscribe backoff constants (`CHIPConfig.h`, verbatim).
 const RESUB_MAX_FIBONACCI_STEP_INDEX: u32 = 14;
 const RESUB_WAIT_TIME_MULTIPLIER_MS: u64 = 10_000;
@@ -664,9 +676,10 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<crate::GroupKeySet, Error>>,
     },
     /// Fire-and-forget multicast group invoke. The actor derives the operational
-    /// group key + session id from the persisted `key_set_id`, bumps and
-    /// **persists** the fabric's outbound group counter BEFORE sending, encodes
-    /// a group-secured `InvokeRequest`, and multicasts it. No pending is
+    /// group key + session id from the persisted `key_set_id`, takes the next
+    /// outbound group counter from a **durably reserved block** (extending and
+    /// persisting the reservation BEFORE sending when the block runs out),
+    /// encodes a group-secured `InvokeRequest`, and multicasts it. No pending is
     /// registered and no response is awaited (group sends are unacknowledged).
     InvokeGroup {
         group_id: u16,
@@ -720,6 +733,27 @@ impl SaveJob {
     /// guarantee — releasing it earlier would let two renames interleave and
     /// leave the older bytes on disk. A stale job returns `Ok(())`: skipping is
     /// the intended outcome, not a failure.
+    ///
+    /// ## Why `Ok(())` on skip is sound for DURABLE saves
+    ///
+    /// A durable caller (`durable_save_inputs` + [`save_offloaded`]) treats
+    /// `Ok(())` as "my state is on disk", so a skip must never lose a
+    /// durability-critical write. Two things make that hold:
+    ///
+    /// 1. Durable saves are **serialized on the actor loop** — every one of them
+    ///    is awaited inside a `select!` *arm body*, which runs to completion and
+    ///    is never a cancellable branch future. No other save of this actor can
+    ///    be serialized between a durable job's serialize and its write, so a
+    ///    durable job is never actually skipped in today's code.
+    /// 2. Even if one were, the snapshot is **whole-state**: a newer snapshot
+    ///    already contains everything the skipped one did (sequences advance
+    ///    monotonically from the same actor state), so "a newer write landed
+    ///    first" and "my write landed" are indistinguishable on disk.
+    ///
+    /// NEW CALLERS MUST NOT issue durable saves from spawned tasks without
+    /// revisiting this: off-loop saves can interleave with the loop's own, and
+    /// point 1 — the property that makes the skip trivially unobservable — would
+    /// no longer hold.
     ///
     /// A poisoned gate (a previous job panicked mid-save) is recovered rather
     /// than propagated: the protected value is a plain `u64` that a panic
@@ -834,6 +868,21 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// id). Set via `MatterControllerBuilder::multicast_interface`; `None`
     /// falls back to the `MATTER_MULTICAST_IF` env var, then kernel default.
     multicast_if: Option<u32>,
+    /// Live next outbound group message counter per fabric id.
+    ///
+    /// **Never serialized.** The persisted
+    /// [`FabricEntry::outbound_group_counter`](crate::state::FabricEntry) holds
+    /// the reserved *ceiling* instead; this map hands out the values below it
+    /// without touching the store, and initializes from the ceiling on restart
+    /// (see [`GROUP_COUNTER_BLOCK`] and [`Self::handle_invoke_group`]).
+    ///
+    /// Entries are never removed because fabrics are never removed from
+    /// `state.fabrics` locally — `Node::remove_fabric` removes *us* from a
+    /// device's fabric table, and `forget_node` drops a device, not a fabric.
+    /// If a local fabric-removal path is ever added it MUST drop the matching
+    /// entry, or a re-created fabric with the same id would restart mid-block
+    /// against a fresh (zero) persisted ceiling.
+    group_counters: HashMap<u64, u32>,
     /// Per-in-flight-connect inbound queue (keyed by node id): the actor forwards
     /// the device's unsecured handshake replies here for the spawned task to
     /// consume via its [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket).
@@ -1155,6 +1204,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             resolve_query: None,
             seen_records: HashMap::new(),
             multicast_if: None,
+            group_counters: HashMap::new(),
             connect_inbound: HashMap::new(),
             connect_routes: HashMap::new(),
             connect_outbound_tx,
@@ -2009,11 +2059,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Fire-and-forget multicast group invoke (see [`Command::InvokeGroup`]).
     ///
     /// Derives the operational group key + group session id from the persisted
-    /// `key_set_id`, allocates the next outbound group counter and **persists it
-    /// before sending** (a reused counter weakens replay protection), builds a
-    /// group-secured `InvokeRequest`, and multicasts it to the group's
-    /// site-local address. Returns `Ok(())` as soon as the datagram is handed to
-    /// the socket — no response is awaited.
+    /// `key_set_id`, allocates the next outbound group counter from a durably
+    /// reserved block — **extending and persisting the reservation before
+    /// sending** whenever the block is exhausted, since a reused counter
+    /// weakens replay protection — builds a group-secured `InvokeRequest`, and
+    /// multicasts it to the group's site-local address. Returns `Ok(())` as soon
+    /// as the datagram is handed to the socket — no response is awaited.
     async fn handle_invoke_group(
         &mut self,
         group_id: u16,
@@ -2023,7 +2074,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ) -> Result<(), Error> {
         // --- Gather everything from the sole fabric into owned locals so no
         // borrow of `self` is held across the persist `.await` below. ---
-        let (fabric_id, source_node_id, root_public_key, epoch_key, counter) = {
+        let (fabric_id, source_node_id, root_public_key, epoch_key, ceiling) = {
             let fabric = self.sole_fabric()?;
             // (a) Look up the epoch key for this key set. Take the LAST match:
             // `create_group` upserts so duplicates no longer occur, but stores
@@ -2041,12 +2092,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             // fabric id derivation (read straight off the stored root cert, as
             // the CASE credentials path does).
             let root_public_key = *fabric.rcac_cert.public_key().as_bytes();
-            // (f) Allocate the counter; reject on overflow (re-key needed).
-            if fabric.outbound_group_counter == u32::MAX {
-                return Err(Error::Operational(
-                    "group counter exhausted — re-key the group".to_string(),
-                ));
-            }
+            // (f) The persisted field is the reserved CEILING (see
+            // `GROUP_COUNTER_BLOCK`), read here under the same borrow as the
+            // rest. Exhaustion is detected at the reservation below — the only
+            // place the ceiling can fail to advance — so there is no separate
+            // pre-check: a ceiling of `u32::MAX` still has its last block's
+            // counters left to burn.
             (
                 fabric.fabric_id,
                 fabric.commissioner.node_id,
@@ -2066,16 +2117,57 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .map_err(|e| Error::Operational(format!("group session id: {e}")))?;
         let mcast = matter_crypto::group_multicast_ipv6(fabric_id, group_id);
 
-        // (f) Bump the counter and PERSIST BEFORE SENDING. A counter reused
-        // after a crash would let an attacker replay an old group message, so
-        // the new counter must be durable before any datagram carrying it
-        // leaves the host.
-        self.sole_fabric_mut()?.outbound_group_counter =
-            counter.checked_add(1).ok_or_else(|| {
-                Error::Operational("group counter exhausted — re-key the group".into())
-            })?;
-        let job = self.durable_save_inputs()?;
-        save_offloaded(job).await?;
+        // (f) Take the next counter from the reserved block, and PERSIST A NEW
+        // RESERVATION BEFORE SENDING only when the block is exhausted.
+        //
+        // A counter reused after a crash would let an attacker replay an old
+        // group message, so no datagram may carry a counter the store does not
+        // already cover. The serialized `outbound_group_counter` therefore holds
+        // the reservation CEILING, never the live value: any snapshot taken by
+        // any save path — including a detached best-effort one that fires
+        // mid-block — is safe, because a restart resumes at the ceiling, above
+        // every counter this run could have sent.
+        //
+        // The live counter (`self.group_counters`) is deliberately NOT
+        // serialized: persisting it is exactly the per-send fsync this replaces.
+        //
+        // No reentrancy: `handle_invoke_group` runs in a `select!` arm body on
+        // the actor loop, which runs to completion, so no second group send can
+        // interleave with the `.await` below and slip past the reservation.
+        let next = *self.group_counters.entry(fabric_id).or_insert(ceiling);
+        if next >= ceiling {
+            // Extend the reservation. `checked_add` guards the wrap; when the
+            // block would overflow we still reserve the remaining tail up to
+            // `u32::MAX`, and only a `next` already AT `u32::MAX` is exhausted.
+            let new_ceiling = next
+                .checked_add(GROUP_COUNTER_BLOCK)
+                .or_else(|| (next < u32::MAX).then_some(u32::MAX))
+                .ok_or_else(|| {
+                    Error::Operational("group counter exhausted — re-key the group".into())
+                })?;
+            self.sole_fabric_mut()?.outbound_group_counter = new_ceiling;
+            let saved = match self.durable_save_inputs() {
+                Ok(job) => save_offloaded(job).await,
+                Err(e) => Err(e),
+            };
+            if let Err(e) = saved {
+                // The raised ceiling never reached the store. Roll it back so a
+                // later send cannot treat it as reserved — leaving it raised
+                // in memory would hand out counters a crash would hand out
+                // again. Nothing above `ceiling` was sent, so resuming there
+                // stays sound.
+                if let Ok(fabric) = self.sole_fabric_mut() {
+                    fabric.outbound_group_counter = ceiling;
+                }
+                return Err(e);
+            }
+        }
+        // `saturating_add` cannot actually saturate below `u32::MAX`: `next` is
+        // strictly below the (freshly extended) ceiling here, and `next ==
+        // u32::MAX` already returned the exhaustion error above.
+        self.group_counters
+            .insert(fabric_id, next.saturating_add(1));
+        let counter = next;
 
         // (g) Build the InvokeRequest IM payload (SuppressResponse=true — group
         // commands are unacknowledged) and a fresh-exchange protocol header.
@@ -4566,11 +4658,12 @@ mod tests {
             .await
             .expect("invoke_group");
 
-        // The counter must have been bumped AND persisted BEFORE the send.
+        // A counter block must have been RESERVED and persisted BEFORE the send:
+        // the serialized field holds the ceiling, not the last-sent value.
         let snap2 = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
         assert_eq!(
-            snap2.fabrics[0].outbound_group_counter, 1,
-            "counter must be persisted (bumped) before send"
+            snap2.fabrics[0].outbound_group_counter, GROUP_COUNTER_BLOCK,
+            "the reservation ceiling must be persisted before the send"
         );
 
         // 3. Capture the multicast frame on the paired endpoint.
@@ -4777,6 +4870,315 @@ mod tests {
             .await
             .expect_err("must reject unprovisioned key set");
         assert!(matches!(err, Error::GroupNotProvisioned(0x0099)));
+    }
+
+    // --- group counter block reservation (spec §1.4) ---
+
+    /// In-memory store that counts `save()` calls, so a test can assert how
+    /// many store writes a sequence of operations cost.
+    #[derive(Default)]
+    struct CountingStore {
+        inner: std::sync::Mutex<Option<Vec<u8>>>,
+        saves: std::sync::atomic::AtomicUsize,
+    }
+    impl CountingStore {
+        fn saves(&self) -> usize {
+            self.saves.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+    impl ControllerStore for CountingStore {
+        fn load(&self) -> Result<Option<Vec<u8>>, crate::store::StoreError> {
+            Ok(self.inner.lock().unwrap().clone())
+        }
+        fn save(&self, snapshot: &[u8]) -> Result<(), crate::store::StoreError> {
+            *self.inner.lock().unwrap() = Some(snapshot.to_vec());
+            self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// The operational group key for `epoch_key` on the fabric in `snap`.
+    fn op_group_key_of(snap: &ControllerState, epoch_key: &[u8; 16]) -> [u8; 16] {
+        let root_public_key = *snap.fabrics[0].rcac_cert.public_key().as_bytes();
+        let compressed =
+            derive_compressed_fabric_id(&root_public_key, snap.fabrics[0].fabric_id).unwrap();
+        derive_operational_ipk(epoch_key, &compressed).unwrap()
+    }
+
+    /// The message counter carried by a captured group-secured frame.
+    fn wire_group_counter(wire: &[u8], op_group_key: &[u8; 16]) -> u32 {
+        let (header, _plaintext) =
+            matter_transport::decode_group_secured(wire, op_group_key).expect("decode group");
+        header.message_counter.0
+    }
+
+    fn on_command_path() -> crate::CommandPath {
+        crate::CommandPath {
+            endpoint: 0,
+            cluster: 0x0006,
+            command: 0x01,
+        }
+    }
+
+    /// Consecutive group sends inside one reserved block cost exactly ONE store
+    /// write, and still burn strictly increasing counters.
+    ///
+    /// Pre-fix every `invoke_group` fsynced the whole snapshot before the
+    /// datagram left the host, so a burst of group commands ran at disk speed.
+    #[tokio::test]
+    async fn group_sends_share_one_reservation() {
+        let store = Arc::new(CountingStore::default());
+        let (io, peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+        let key_set_id = 0x0042u16;
+        let group_key = controller
+            .create_group(key_set_id, 0)
+            .await
+            .expect("create_group");
+        let epoch_key: [u8; 16] = group_key.epoch_key.clone().try_into().unwrap();
+
+        // Baseline: everything before the group sends is already persisted.
+        let baseline = store.saves();
+
+        let mut counters = Vec::new();
+        for _ in 0..3 {
+            controller
+                .invoke_group(
+                    0xBEEF,
+                    key_set_id,
+                    on_command_path(),
+                    matter_codec::Value::Structure(vec![]),
+                )
+                .await
+                .expect("invoke_group");
+            let (wire, _from) = peer.recv_from().await.expect("frame emitted");
+            let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+            let op = op_group_key_of(&snap, &epoch_key);
+            counters.push(wire_group_counter(&wire, &op));
+        }
+
+        assert_eq!(
+            store.saves() - baseline,
+            1,
+            "3 group sends inside one reserved block must cost exactly 1 store write"
+        );
+        assert_eq!(
+            counters,
+            vec![0, 1, 2],
+            "counters must still be strictly increasing across the block"
+        );
+
+        // The persisted field holds the RESERVED CEILING, not the last-sent value.
+        let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            snap.fabrics[0].outbound_group_counter, GROUP_COUNTER_BLOCK,
+            "the serialized counter must be the reservation ceiling"
+        );
+    }
+
+    /// Crash-safety invariant: after a restart the controller resumes at the
+    /// persisted ceiling, so no counter it already sent can be handed out again.
+    #[tokio::test]
+    async fn group_counter_survives_restart_without_reuse() {
+        let store: Arc<CountingStore> = Arc::new(CountingStore::default());
+        let (io, peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+        let key_set_id = 0x0042u16;
+        let group_key = controller
+            .create_group(key_set_id, 0)
+            .await
+            .expect("create_group");
+        let epoch_key: [u8; 16] = group_key.epoch_key.clone().try_into().unwrap();
+
+        let mut sent = Vec::new();
+        for _ in 0..2 {
+            controller
+                .invoke_group(
+                    0xBEEF,
+                    key_set_id,
+                    on_command_path(),
+                    matter_codec::Value::Structure(vec![]),
+                )
+                .await
+                .expect("invoke_group");
+            let (wire, _from) = peer.recv_from().await.expect("frame emitted");
+            let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+            let op = op_group_key_of(&snap, &epoch_key);
+            sent.push(wire_group_counter(&wire, &op));
+        }
+        drop(controller);
+
+        let persisted_ceiling = crate::snapshot::deserialize(&store.load().unwrap().unwrap())
+            .unwrap()
+            .fabrics[0]
+            .outbound_group_counter;
+
+        // Restart: a fresh controller over the SAME store (the actor's live
+        // counter is never serialized, so this is a true cold start).
+        let (io2, peer2) = InMemoryDatagram::pair();
+        let controller2 = crate::controller::MatterController::with_components(
+            store.clone(),
+            io2,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("reopen");
+        controller2
+            .invoke_group(
+                0xBEEF,
+                key_set_id,
+                on_command_path(),
+                matter_codec::Value::Structure(vec![]),
+            )
+            .await
+            .expect("invoke_group after restart");
+        let (wire, _from) = peer2.recv_from().await.expect("frame emitted");
+        let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let op = op_group_key_of(&snap, &epoch_key);
+        let after_restart = wire_group_counter(&wire, &op);
+
+        assert!(
+            after_restart >= persisted_ceiling,
+            "post-restart counter {after_restart} must resume at or above the persisted ceiling {persisted_ceiling}"
+        );
+        assert!(
+            sent.iter().all(|&c| after_restart > c),
+            "post-restart counter {after_restart} must exceed every counter already sent ({sent:?})"
+        );
+    }
+
+    /// A best-effort snapshot taken MID-BLOCK is safe: it serializes the
+    /// ceiling, never the live counter, so a crash immediately after it still
+    /// resumes above every value already sent.
+    ///
+    /// This is the invariant that makes the reservation sound in the presence
+    /// of the detached address-hint save path, which can snapshot at any time.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn best_effort_snapshot_mid_block_is_safe() {
+        let store = Arc::new(CountingStore::default());
+        let key_set_id = 0x0042u16;
+        let fields_tlv =
+            crate::node::value_to_tlv(&matter_codec::Value::Structure(vec![])).unwrap();
+
+        let (io, peer) = InMemoryDatagram::pair();
+        let fabric = crate::fabric::create_fabric(&cfg(), &SystemNocRng).unwrap();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            store.clone(),
+            Arc::new(SystemNocRng),
+            ControllerState {
+                fabrics: vec![fabric],
+            },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        let (reply, rx) = oneshot::channel();
+        actor
+            .dispatch_ready(Command::CreateGroup {
+                key_set_id,
+                epoch_start_time: 0,
+                reply,
+            })
+            .await;
+        let group_key = rx.await.unwrap().expect("create_group");
+        let epoch_key: [u8; 16] = group_key.epoch_key.clone().try_into().unwrap();
+
+        let (reply, rx) = oneshot::channel();
+        actor
+            .dispatch_ready(Command::InvokeGroup {
+                group_id: 0xBEEF,
+                key_set_id,
+                path: on_command_path(),
+                fields_tlv: fields_tlv.clone(),
+                reply,
+            })
+            .await;
+        rx.await.unwrap().expect("invoke_group");
+        let (wire, _from) = peer.recv_from().await.expect("frame emitted");
+        let snap = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let op = op_group_key_of(&snap, &epoch_key);
+        let first = wire_group_counter(&wire, &op);
+
+        // Mid-block best-effort snapshot (what the per-connect address hint does).
+        let before = store.saves();
+        actor.persist_best_effort();
+        let mut landed = false;
+        for _ in 0..200 {
+            if store.saves() > before {
+                landed = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(landed, "the detached best-effort save must have run");
+
+        let mid = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            mid.fabrics[0].outbound_group_counter, GROUP_COUNTER_BLOCK,
+            "a mid-block best-effort snapshot must serialize the ceiling, not the live counter"
+        );
+
+        // Crash right there: restart from exactly those bytes.
+        let (io2, peer2) = InMemoryDatagram::pair();
+        let mut actor2 = Actor::new(
+            io2,
+            NullDiscovery,
+            store.clone(),
+            Arc::new(SystemNocRng),
+            mid,
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+        let (reply, rx) = oneshot::channel();
+        actor2
+            .dispatch_ready(Command::InvokeGroup {
+                group_id: 0xBEEF,
+                key_set_id,
+                path: on_command_path(),
+                fields_tlv,
+                reply,
+            })
+            .await;
+        rx.await.unwrap().expect("invoke_group after crash");
+        let (wire2, _from) = peer2.recv_from().await.expect("frame emitted");
+        let after = wire_group_counter(&wire2, &op);
+
+        assert!(
+            after >= GROUP_COUNTER_BLOCK,
+            "post-crash counter {after} must resume at the ceiling {GROUP_COUNTER_BLOCK}"
+        );
+        assert!(
+            after > first,
+            "post-crash counter {after} must not reuse the already-sent {first}"
+        );
     }
 
     // --- loopback acceptance test (CaseResponder over InMemoryDatagram) ---
@@ -7565,11 +7967,22 @@ mod tests {
         let held = store.gate.lock().unwrap();
 
         // Fire-and-forget; this must return immediately despite the wedged store.
+        let seq_before = actor.snapshot_seq;
         let start = std::time::Instant::now();
         actor.persist_best_effort();
         assert!(
             start.elapsed() < std::time::Duration::from_millis(500),
             "best-effort persist must not block on the fsync"
+        );
+        // Ordering regression guard: the detached job must be stamped from the
+        // actor's OWN sequence + gate, not a fresh one. A best-effort save that
+        // silently built its own gate would order against nothing and could roll
+        // durable state backwards — and every timing assertion here would still
+        // pass. Assert the sequence advanced...
+        assert_eq!(
+            actor.snapshot_seq,
+            seq_before + 1,
+            "persist_best_effort must advance the actor's snapshot sequence"
         );
         // The blocked save hasn't run yet.
         assert_eq!(store.saves.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -7585,6 +7998,12 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(ran, "the offloaded best-effort save must eventually run");
+        // ...and that the write landed on the actor's SHARED gate.
+        assert_eq!(
+            *actor.save_gate.lock().unwrap(),
+            actor.snapshot_seq,
+            "the detached best-effort job must share the actor's save gate"
+        );
     }
 
     /// Durability-critical persists block until the save completes AND surface

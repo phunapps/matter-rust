@@ -179,11 +179,18 @@ pub struct FabricEntry {
     /// Group key sets programmed on this fabric (persisted for outbound group
     /// message encryption). Empty until the controller programs group keys.
     pub group_keys: Vec<GroupKeySetConfig>,
-    /// The outbound group message counter for this fabric.
+    /// The reserved **ceiling** of the outbound group message counter for this
+    /// fabric: the lowest counter value this controller may not yet have sent.
     ///
-    /// Monotonically incremented each time the controller sends a group
-    /// message. Persisted so the counter survives restarts (spec §4.6.7
-    /// prohibits counter reuse across sessions / resets).
+    /// Persisted so counters survive restarts (spec §4.6.7 prohibits counter
+    /// reuse across sessions / resets). The controller hands out counters below
+    /// the ceiling from memory and only persists when it raises the ceiling by a
+    /// block, so a restart resumes here — skipping at most a block of never-sent
+    /// values, never reusing a sent one.
+    ///
+    /// Snapshots written before block reservation stored the next counter to
+    /// send, which is the same quantity (the smallest never-sent value), so they
+    /// are read back correctly with no migration.
     pub outbound_group_counter: u32,
     /// ICD (Intermittently Connected Device) client registrations on this
     /// fabric. Each holds the shared key + counter floor the check-in listener

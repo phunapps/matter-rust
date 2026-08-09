@@ -22,6 +22,51 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+Controller-liveness performance phase 1: nothing on the actor's `select!` loop
+may block on I/O that is not the thing the loop is there to do. Four changes,
+all internal — no public API changes.
+
+### `matter-controller`
+
+#### Fixed
+
+- **A device whose operational mDNS record never appears no longer stalls every
+  other session.** `spawn_connect` polled the resolver inline on the actor loop,
+  so one unresolvable node froze all traffic — other sessions' verbs, MRP
+  retransmits, subscription liveness — for the full ~30 s discovery budget. The
+  connect now parks and is settled from the existing timer arm, one shared
+  `_matter._tcp` browse and one drain per tick. Drained records are cached
+  (bounded, TTL-aged) so a record that arrives before its resolve parks is not
+  lost, and the browse is released when the controller shuts down.
+- **Resubscribe entries whose consumer is gone are reaped instead of retried
+  forever.** A `PendingResubscribe` whose subscription handle had been dropped
+  could never be observed again, yet kept churning reconnects on backoff and
+  leaking its entry. It is now dropped at both retry points, which are the
+  places that reliably observe the closed channels.
+- **A stale best-effort snapshot save can no longer clobber newer persisted
+  state.** Detached best-effort saves could be descheduled behind a later
+  durable save and then win the store's atomic rename, rolling persisted state
+  backwards. Every save now carries its serialize-time sequence and shares a
+  per-controller write gate; an out-of-order job is skipped.
+
+#### Performance
+
+- **Group sends no longer fsync the whole snapshot per message.** The persisted
+  outbound group counter now holds a reserved *ceiling* rather than the
+  last-sent value, so 64 group sends cost one store write instead of 64. The
+  replay-protection invariant is unchanged and enforced by test: a restart
+  resumes at the ceiling — skipping at most a block of never-sent counters, and
+  never reusing a counter that was sent.
+
+### `matter-commissioning`
+
+#### Changed
+
+- `preferred_address` is now `pub` (was crate-internal), so the controller's
+  timer-driven resolve picks the same address the inline resolver did.
+
 ## matter-ble 0.3.1
 
 A single-crate hotfix release: only `matter-ble` is republished.
