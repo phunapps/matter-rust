@@ -135,6 +135,11 @@ const MATTER_GROUP_PORT: u16 = 5540;
 ///
 /// 64 trades a bounded counter-space skip (the space is 2^32) for one fsync per
 /// 64 group sends instead of one per send.
+///
+/// This is chip's design: `src/transport/GroupPeerMessageCounter.cpp` in
+/// connectedhomeip persists a ceiling and keeps the live counter in RAM the
+/// same way. chip reserves in blocks of 1000; 64 is the more conservative
+/// choice (a crash skips fewer counters) and still amortizes the fsync away.
 const GROUP_COUNTER_BLOCK: u32 = 64;
 
 /// chip resubscribe backoff constants (`CHIPConfig.h`, verbatim).
@@ -2156,6 +2161,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // in memory would hand out counters a crash would hand out
                 // again. Nothing above `ceiling` was sent, so resuming there
                 // stays sound.
+                //
+                // The lookup cannot fail: the identical call succeeded a few
+                // lines above and the fabric set cannot change across the
+                // awaited save (arm-body execution — see the reentrancy note).
+                // It stays fallible-but-total rather than `?` so the store's
+                // error, not a lookup error, is what the caller sees.
+                debug_assert!(
+                    self.sole_fabric().is_ok(),
+                    "the fabric that was just reserved against must still exist"
+                );
                 if let Ok(fabric) = self.sole_fabric_mut() {
                     fabric.outbound_group_counter = ceiling;
                 }
@@ -4874,16 +4889,22 @@ mod tests {
 
     // --- group counter block reservation (spec §1.4) ---
 
-    /// In-memory store that counts `save()` calls, so a test can assert how
-    /// many store writes a sequence of operations cost.
+    /// In-memory store that counts successful `save()` calls, so a test can
+    /// assert how many store writes a sequence of operations cost. `fail` makes
+    /// every subsequent save return an I/O error without writing, which is how
+    /// the counter-reservation rollback path is exercised.
     #[derive(Default)]
     struct CountingStore {
         inner: std::sync::Mutex<Option<Vec<u8>>>,
         saves: std::sync::atomic::AtomicUsize,
+        fail: std::sync::atomic::AtomicBool,
     }
     impl CountingStore {
         fn saves(&self) -> usize {
             self.saves.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn set_failing(&self, fail: bool) {
+            self.fail.store(fail, std::sync::atomic::Ordering::SeqCst);
         }
     }
     impl ControllerStore for CountingStore {
@@ -4891,6 +4912,16 @@ mod tests {
             Ok(self.inner.lock().unwrap().clone())
         }
         fn save(&self, snapshot: &[u8]) -> Result<(), crate::store::StoreError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(crate::store::StoreError::Io(std::io::Error::other(
+                    "disk full",
+                )));
+            }
+            // Order is load-bearing: the bytes land BEFORE the count is bumped,
+            // so a test that observes `saves()` advance may then read `load()`
+            // and be sure it sees the snapshot that advance refers to. (The
+            // gate's last-written sequence is set by `SaveJob::run` only after
+            // this returns, so gate assertions must poll the gate itself.)
             *self.inner.lock().unwrap() = Some(snapshot.to_vec());
             self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(())
@@ -5070,6 +5101,109 @@ mod tests {
         assert!(
             sent.iter().all(|&c| after_restart > c),
             "post-restart counter {after_restart} must exceed every counter already sent ({sent:?})"
+        );
+    }
+
+    /// A reservation whose durable save FAILS must roll the in-memory ceiling
+    /// back — and must burn no counter doing so.
+    ///
+    /// This pins the security core of block reservation, and the one deliberate
+    /// departure from the reviewed design (which propagated the save error with
+    /// `?`, leaving the raised ceiling in memory). Both halves are asserted:
+    ///
+    /// - **No counter burned.** The failed send emits no datagram, and the next
+    ///   successful send reuses the very counter the failed one would have used.
+    /// - **No uncovered counter.** That successful send is preceded by a
+    ///   reservation that actually reaches the store — which only happens if the
+    ///   ceiling was rolled back. Without the rollback the in-memory ceiling
+    ///   would still read 64, the send would skip the reservation entirely, and
+    ///   the persisted ceiling would stay 0 while counter 0 went out on the
+    ///   wire: a crash would then hand counter 0 out a second time.
+    #[tokio::test]
+    async fn failed_reservation_rolls_back_and_burns_no_counter() {
+        let store = Arc::new(CountingStore::default());
+        let (io, peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+        let key_set_id = 0x0042u16;
+        let group_key = controller
+            .create_group(key_set_id, 0)
+            .await
+            .expect("create_group");
+        let epoch_key: [u8; 16] = group_key.epoch_key.clone().try_into().unwrap();
+        let snap_before = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            snap_before.fabrics[0].outbound_group_counter, 0,
+            "no reservation yet"
+        );
+
+        // The store goes down exactly when the first reservation tries to land.
+        store.set_failing(true);
+        let err = controller
+            .invoke_group(
+                0xBEEF,
+                key_set_id,
+                on_command_path(),
+                matter_codec::Value::Structure(vec![]),
+            )
+            .await
+            .expect_err("a failed reservation save must fail the send");
+        assert!(
+            format!("{err}").to_lowercase().contains("disk full"),
+            "expected the store error to propagate, got: {err}"
+        );
+
+        // NOTHING went on the wire — the reservation is persist-before-send.
+        let emitted = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            Box::pin(peer.recv_from()),
+        )
+        .await;
+        assert!(
+            emitted.is_err(),
+            "a send whose reservation never reached the store must emit no datagram"
+        );
+        // And the store still holds the pre-failure ceiling.
+        let snap_failed = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert_eq!(
+            snap_failed.fabrics[0].outbound_group_counter, 0,
+            "a failed save must not have persisted the raised ceiling"
+        );
+
+        // Store recovers; the retry must re-attempt the reservation.
+        store.set_failing(false);
+        controller
+            .invoke_group(
+                0xBEEF,
+                key_set_id,
+                on_command_path(),
+                matter_codec::Value::Structure(vec![]),
+            )
+            .await
+            .expect("invoke_group after the store recovers");
+        let (wire, _from) = peer.recv_from().await.expect("frame emitted");
+        let snap_after = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let op = op_group_key_of(&snap_after, &epoch_key);
+
+        assert_eq!(
+            wire_group_counter(&wire, &op),
+            0,
+            "the failed send burned no counter: the retry reuses it"
+        );
+        assert_eq!(
+            snap_after.fabrics[0].outbound_group_counter, GROUP_COUNTER_BLOCK,
+            "the retry must have re-run the reservation — proving the ceiling was rolled back"
         );
     }
 
@@ -7998,11 +8132,24 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(ran, "the offloaded best-effort save must eventually run");
-        // ...and that the write landed on the actor's SHARED gate.
-        assert_eq!(
+        // ...and that the write landed on the actor's SHARED gate. Poll the gate
+        // itself rather than asserting off the `saves` counter: `save()` bumps
+        // that counter before it returns, while `SaveJob::run` publishes the
+        // sequence only afterwards, so `ran` can be observed an instant early.
+        let mut gated = false;
+        for _ in 0..200 {
+            if *actor.save_gate.lock().unwrap() == actor.snapshot_seq {
+                gated = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            gated,
+            "the detached best-effort job must share the actor's save gate \
+             (gate {}, expected {})",
             *actor.save_gate.lock().unwrap(),
-            actor.snapshot_seq,
-            "the detached best-effort job must share the actor's save gate"
+            actor.snapshot_seq
         );
     }
 

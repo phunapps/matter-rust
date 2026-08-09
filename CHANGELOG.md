@@ -26,7 +26,8 @@ APIs have had no outside users yet and are expected to move.
 
 Controller-liveness performance phase 1: nothing on the actor's `select!` loop
 may block on I/O that is not the thing the loop is there to do. Four changes,
-all internal — no public API changes.
+all internal to the controller's actor loop; the two API-surface notes they
+carry are listed under `#### Changed` below.
 
 ### `matter-controller`
 
@@ -58,7 +59,17 @@ all internal — no public API changes.
   last-sent value, so 64 group sends cost one store write instead of 64. The
   replay-protection invariant is unchanged and enforced by test: a restart
   resumes at the ceiling — skipping at most a block of never-sent counters, and
-  never reusing a counter that was sent.
+  never reusing a counter that was sent. This is the design chip uses
+  (`GroupPeerMessageCounter.cpp`), with a smaller block (64 vs chip's 1000).
+
+#### Changed
+
+- **`FabricEntry::outbound_group_counter` changed MEANING** (the type and the
+  snapshot encoding are unchanged). It used to hold the next counter to send;
+  it now holds the reserved *ceiling*, which may sit up to a block above the
+  last counter actually sent. No migration is needed — the pre-change value is
+  the smallest never-sent counter, which is exactly a valid ceiling — but code
+  reading this field as "how many group messages were sent" will over-report.
 
 ### `matter-commissioning`
 
