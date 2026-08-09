@@ -120,9 +120,26 @@ pub struct SecuredMessageHeader {
     pub destination_node_id: Option<DestNodeId>,
 }
 
+/// Largest possible encoded header: 8 fixed bytes + 8 source node id +
+/// 8 unicast destination node id (a 2-byte group destination is smaller).
+/// Pinned by `header_with_source_and_destination`, which asserts the
+/// maximal shape encodes to exactly 24 bytes.
+const MAX_HEADER_LEN: usize = 24;
+
 /// Encode a [`SecuredMessageHeader`] to its on-the-wire byte sequence.
 pub fn encode_header(header: &SecuredMessageHeader) -> Vec<u8> {
-    let mut out = Vec::with_capacity(24);
+    let mut out = Vec::with_capacity(MAX_HEADER_LEN);
+    encode_header_into(header, &mut out);
+    out
+}
+
+/// Append the on-the-wire header bytes to `out`.
+///
+/// The body of [`encode_header`], factored out so the secured-message
+/// encoder can serialise the header straight into the pre-sized output
+/// buffer instead of allocating a separate header `Vec` and copying it.
+/// Both callers therefore share one definition of the byte layout.
+fn encode_header_into(header: &SecuredMessageHeader, out: &mut Vec<u8>) {
     out.push(header.flags.bits());
     out.extend_from_slice(&header.session_id.0.to_le_bytes());
     out.push(header.security_flags.bits());
@@ -135,7 +152,6 @@ pub fn encode_header(header: &SecuredMessageHeader) -> Vec<u8> {
         Some(DestNodeId::Node(NodeId(n))) => out.extend_from_slice(&n.to_le_bytes()),
         Some(DestNodeId::Group(g)) => out.extend_from_slice(&g.to_le_bytes()),
     }
-    out
 }
 
 /// Decode the header from the start of `bytes`. On success returns the
@@ -431,10 +447,21 @@ pub(crate) fn encode_secured_with_cipher(
         });
     }
 
-    let aad = encode_header(header);
+    // One allocation for the finished frame, sized for the worst-case header
+    // up front: previously the header `Vec` was allocated at 24 bytes and
+    // then GUARANTEED to reallocate when the ciphertext (payload + 16-byte
+    // tag) was appended — a realloc plus a full copy of every outbound
+    // packet. `MAX_HEADER_LEN` over-reserves by at most 16 bytes for the
+    // common S=0/DSIZ=0 header, which is cheaper than the realloc it avoids.
+    let mut out =
+        Vec::with_capacity(MAX_HEADER_LEN + payload.len() + matter_crypto::aead::AEAD_TAG_LEN);
+    encode_header_into(header, &mut out);
     let nonce = build_nonce(header, nonce_source_node_id);
-    let ciphertext = cipher.encrypt(&nonce, &aad, payload)?;
-    let mut out = aad;
+    // AAD is the header bytes just written — the same bytes the old code
+    // passed as a standalone `Vec`. `cipher.encrypt` allocates its output
+    // pre-sized to `payload.len() + tag` internally (aead 0.5's blanket
+    // `Aead::encrypt`), so it does not realloc either.
+    let ciphertext = cipher.encrypt(&nonce, &out, payload)?;
     out.extend_from_slice(&ciphertext);
     Ok(out)
 }
