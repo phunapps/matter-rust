@@ -10,8 +10,8 @@ use std::time::Instant;
 use matter_commissioning::driver::AsyncDatagram;
 use matter_commissioning::NocRng;
 use matter_transport::{
-    DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolHeader, ProtocolId, SessionId,
-    SessionManager, SessionRole,
+    DecodeInboundOutput, Discovery, MrpEvent, MrpFlags, ProtocolHeader, ProtocolId, QueryHandle,
+    ServiceKind, SessionId, SessionManager, SessionRole,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -79,6 +79,20 @@ fn response_needs_timed(opcode: u8, payload: &[u8]) -> bool {
 /// How often the loop wakes to drive MRP / liveness when no MRP deadline is
 /// pending.
 const LIVENESS_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long a parked operational resolve ([`Actor::park_resolve`]) waits for its
+/// device's mDNS record before its waiters are failed. Matches the budget the
+/// old inline resolve spent (`RESOLVE_POLL_ATTEMPTS` × 100 ms in
+/// `matter_commissioning::driver`), which is of the same order as chip's
+/// session-establishment discovery budget. The wait now costs the actor nothing
+/// — it is one entry polled on the [`LIVENESS_TICK`] arm, not a blocked loop.
+#[cfg(not(test))]
+const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+/// Shortened under `cfg(test)` so `actor_stays_live_while_resolve_pends` can
+/// observe the expiry without 30 s of wall clock. Only the in-crate unit tests
+/// see this; integration tests link the lib without `cfg(test)` and get 30 s.
+#[cfg(test)]
+const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Max `ReportData` chunks a single read may span before aborting (mirrors
 /// `matter_commissioning::driver::MAX_READ_CHUNKS`).
@@ -718,6 +732,19 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// our defaults (MRP-2). Keyed by node id; removed when the connect
     /// completes or the node is forgotten.
     connect_mrp: HashMap<u64, matter_transport::MrpConfig>,
+    /// Operational resolves waiting on mDNS, polled from the timer arm by
+    /// [`Self::drive_pending_resolves`]. A connect whose record is not already
+    /// known parks here instead of blocking the loop on a poll loop; at most one
+    /// entry per node (`pending_connects` coalesces concurrent connects).
+    pending_resolves: Vec<PendingResolve>,
+    /// The ONE `_matter._tcp` browse shared by every parked resolve, opened when
+    /// the first entry parks and stopped when the last one leaves.
+    ///
+    /// It must be shared: [`Discovery::stop_query`] stops the daemon-side browse
+    /// for the whole [`ServiceKind`], so per-resolve handles would cancel each
+    /// other's browse as they completed. One handle also means one
+    /// [`Discovery::poll_results`] drain per tick serving all entries.
+    resolve_query: Option<QueryHandle>,
     /// IPv6 multicast egress interface for group sends (destination scope
     /// id). Set via `MatterControllerBuilder::multicast_interface`; `None`
     /// falls back to the `MATTER_MULTICAST_IF` env var, then kernel default.
@@ -753,6 +780,21 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
 struct ConnectCompletion {
     node_id: u64,
     result: Result<(matter_crypto::CaseSessionOutput, SocketAddr), Error>,
+}
+
+/// A connect whose device has not been seen on mDNS yet, parked on the actor's
+/// timer arm ([`Actor::drive_pending_resolves`]) instead of blocking the loop.
+///
+/// The connect's waiters already sit in `pending_connects` under `node_id`, so
+/// this carries only what turning an mDNS hit into a spawned handshake needs.
+struct PendingResolve {
+    fabric_id: u64,
+    node_id: u64,
+    /// The operational instance name to match, case-insensitively:
+    /// `<compressed-fabric-id>-<node-id>`.
+    target: String,
+    /// When to give up and fail the node's waiters.
+    deadline: Instant,
 }
 
 /// A unit of work parked behind an in-flight CASE connect. On connect
@@ -847,9 +889,10 @@ fn fail_command(cmd: Command, err: Error) {
 /// Reports the established session (or error) back over `done_tx`. Takes only
 /// owned inputs so the future is `'static + Send` and can be `tokio::spawn`ed.
 ///
-/// The device is resolved on the actor via its injected discovery *before*
-/// spawning ([`Actor::spawn_connect`]) — a brief bounded step that preserves the
-/// discovery seam — so only the multi-round-trip handshake runs here.
+/// The device's address is resolved on the actor, via its injected discovery,
+/// before this task is spawned ([`Actor::spawn_connect`] on a cached mDNS hit,
+/// [`Actor::drive_pending_resolves`] once a parked lookup lands) — so only the
+/// multi-round-trip handshake runs here.
 #[allow(clippy::too_many_arguments)]
 async fn run_connect_task(
     node_id: u64,
@@ -1011,6 +1054,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             commission_rx,
             pending_connects: HashMap::new(),
             connect_mrp: HashMap::new(),
+            pending_resolves: Vec::new(),
+            resolve_query: None,
             multicast_if: None,
             connect_inbound: HashMap::new(),
             connect_routes: HashMap::new(),
@@ -1051,9 +1096,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ///   completion ([`Self::handle_connect_done`]) the session is registered and
     ///   the parked verbs re-dispatched. Because every datagram still leaves and
     ///   arrives on this socket, the session lives here from the first message —
-    ///   no second socket, no session migration. The device is resolved via the
-    ///   injected discovery *inline* first (a brief bounded mDNS poll — instant
-    ///   when cached — kept on the actor to preserve the discovery seam).
+    ///   no second socket, no session migration. The device's address comes from
+    ///   the injected discovery, drained non-blockingly: a cached record spawns
+    ///   the handshake at once, and an unknown one parks a [`PendingResolve`]
+    ///   polled on the timer arm ([`Self::drive_pending_resolves`]), so an
+    ///   unreachable device costs the loop nothing while it is looked up.
     ///
     /// **Residual:** the two low-frequency *recovery* connects — a pending
     /// round-trip's post-timeout reconnect and a stranded subscription's
@@ -1073,8 +1120,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// the next MRP deadline and the periodic liveness tick — subscription
     /// liveness is not part of `sessions.poll_timeout()`, so it is tracked
     /// separately), and whenever that moment has already passed we run
-    /// [`Self::drive_mrp`]/[`Self::check_liveness`]/[`Self::drive_resubscribes`]
-    /// immediately, then `continue`, regardless of how much inbound is pending.
+    /// [`Self::drive_mrp`]/[`Self::check_liveness`]/[`Self::drive_resubscribes`]/
+    /// [`Self::drive_pending_resolves`] immediately, then `continue`, regardless
+    /// of how much inbound is pending.
     ///
     /// This guarantees deadlines are honoured under continuous inbound: each
     /// inbound packet costs one loop iteration, and at the start of the next
@@ -1119,6 +1167,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.drive_mrp().await;
                 self.check_liveness();
                 self.drive_resubscribes().await;
+                self.drive_pending_resolves();
                 next_liveness_tick = Instant::now() + LIVENESS_TICK;
                 continue;
             }
@@ -1157,6 +1206,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.drive_mrp().await;
                     self.check_liveness();
                     self.drive_resubscribes().await;
+                    self.drive_pending_resolves();
                     next_liveness_tick = Instant::now() + LIVENESS_TICK;
                 }
             }
@@ -1177,8 +1227,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if let Some(node_id) = command_target_node(&cmd) {
             if let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) {
                 if !self.cache.contains_key(&(fabric_id, node_id)) {
-                    self.enqueue_connect_waiter(fabric_id, node_id, ConnectWaiter::Command(cmd))
-                        .await;
+                    self.enqueue_connect_waiter(fabric_id, node_id, ConnectWaiter::Command(cmd));
                     return;
                 }
             }
@@ -1966,34 +2015,192 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Queue `waiter` behind an off-loop connect to `node_id`, starting the
     /// connect if this is the first waiter. Concurrent work targeting
     /// the same not-yet-connected node coalesces onto a single handshake.
-    async fn enqueue_connect_waiter(
-        &mut self,
-        fabric_id: u64,
-        node_id: u64,
-        waiter: ConnectWaiter,
-    ) {
+    fn enqueue_connect_waiter(&mut self, fabric_id: u64, node_id: u64, waiter: ConnectWaiter) {
         let already_connecting = self.pending_connects.contains_key(&node_id);
         self.pending_connects
             .entry(node_id)
             .or_default()
             .push(waiter);
         if !already_connecting {
-            self.spawn_connect(fabric_id, node_id).await;
+            self.spawn_connect(fabric_id, node_id);
         }
     }
 
-    /// Resolve `node_id` via the actor's injected discovery, then spawn its CASE
-    /// handshake on a task ([`run_connect_task`]) whose I/O flows through the
-    /// actor's socket. Resolution runs inline (a brief bounded mDNS
-    /// poll — instant when cached — kept on the actor to preserve the discovery
-    /// seam); only the multi-round-trip handshake is decoupled. On a setup or
-    /// resolution failure the parked waiters are failed immediately.
-    async fn spawn_connect(&mut self, fabric_id: u64, node_id: u64) {
+    /// Start a connect to `node_id`: look its operational record up on the
+    /// actor's injected discovery and, once found, spawn the CASE handshake on a
+    /// task ([`run_connect_task`]) whose I/O flows through the actor's socket.
+    ///
+    /// The lookup NEVER blocks the loop: the connect parks as a
+    /// [`PendingResolve`] and is settled by a single non-sleeping
+    /// [`Self::drive_pending_resolves`] pass — which usually resolves it on the
+    /// spot, since the record is typically already in the browse's buffer (and
+    /// which is what keeps the injected-discovery tests synchronous). Otherwise
+    /// it stays parked for the timer arm. Previously this polled inline for the
+    /// whole [`RESOLVE_DEADLINE`], stalling every other session behind one
+    /// unreachable device.
+    ///
+    /// Only a credential/clock/query-setup failure fails the parked waiters here;
+    /// a device that simply never answers fails at its deadline instead.
+    fn spawn_connect(&mut self, fabric_id: u64, node_id: u64) {
         let creds = match self.sole_fabric() {
             Ok(fabric) => crate::credentials::operational_credentials(fabric),
             Err(e) => Err(e),
         };
-        let (credentials, roots, compressed) = match creds {
+        // Only the compressed fabric id is needed to name the record; the
+        // credentials themselves are rebuilt in `finish_spawn_connect` (which may
+        // run many seconds later, and wants a fresh validation clock).
+        let compressed = match creds {
+            Ok((_credentials, _roots, compressed)) => compressed,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &e);
+                return;
+            }
+        };
+        let target = matter_commissioning::driver::operational_instance_name(compressed, node_id);
+
+        if self.resolve_query.is_none() {
+            match self.discovery.query(ServiceKind::Operational) {
+                Ok(h) => self.resolve_query = Some(h),
+                Err(e) => {
+                    let err = Error::from(matter_commissioning::driver::DriverError::Transport(e));
+                    self.fail_connect_waiters(node_id, &err);
+                    return;
+                }
+            }
+        }
+        self.park_resolve(fabric_id, node_id, target);
+        // Settle immediately rather than draining the browse here: every
+        // `poll_results` call CONSUMES the records it returns, so a drain that
+        // only looked for `target` would silently discard records other parked
+        // resolves are waiting on. One settle pass owns every drain.
+        self.drive_pending_resolves();
+    }
+
+    /// Park an unresolved connect for the timer arm, with the
+    /// [`RESOLVE_DEADLINE`] budget. The node's waiters stay in
+    /// `pending_connects` and are resolved when the record lands or the deadline
+    /// passes.
+    fn park_resolve(&mut self, fabric_id: u64, node_id: u64, target: String) {
+        self.pending_resolves.push(PendingResolve {
+            fabric_id,
+            node_id,
+            target,
+            deadline: Instant::now() + RESOLVE_DEADLINE,
+        });
+    }
+
+    /// Find `target`'s operational record in one browse drain and turn it into
+    /// the dial-out address plus the peer's advertised MRP config. Mirrors
+    /// `matter_commissioning::driver::resolve_operational_with_mrp`'s per-poll
+    /// body exactly (same case-insensitive instance match, same
+    /// [`preferred_address`](matter_commissioning::driver::preferred_address)
+    /// routability pick) so the timer-driven path dials what the inline resolve
+    /// would have dialled. A record with no usable address is skipped, not
+    /// treated as a hit.
+    fn match_service(
+        services: &[matter_transport::MatterService],
+        target: &str,
+    ) -> Option<(SocketAddr, matter_transport::MrpConfig)> {
+        services.iter().find_map(|svc| {
+            if !svc.instance_name.eq_ignore_ascii_case(target) {
+                return None;
+            }
+            let addr = matter_commissioning::driver::preferred_address(&svc.addresses)?;
+            Some((SocketAddr::new(addr, svc.port), svc.peer_mrp_config()))
+        })
+    }
+
+    /// Drop the shared operational browse once no resolve still needs it, so an
+    /// idle controller holds no mDNS query open.
+    fn release_resolve_query_if_idle(&mut self) {
+        if self.pending_resolves.is_empty() {
+            if let Some(handle) = self.resolve_query.take() {
+                self.discovery.stop_query(handle);
+            }
+        }
+    }
+
+    /// Drop any parked resolve for `node_id` (it has been resolved, failed, or
+    /// the node was forgotten) and release the shared browse if it was the last.
+    fn cancel_pending_resolve(&mut self, node_id: u64) {
+        self.pending_resolves.retain(|pr| pr.node_id != node_id);
+        self.release_resolve_query_if_idle();
+    }
+
+    /// Settle the parked resolves: drain the shared browse ONCE and match every
+    /// parked entry against that one snapshot — hits spawn their handshake,
+    /// entries past [`RESOLVE_DEADLINE`] fail their node's waiters, the rest stay
+    /// parked. The single drain is required for correctness, not just economy:
+    /// [`Discovery::poll_results`] consumes what it returns, so a second drain
+    /// elsewhere would steal records from entries this pass has not examined.
+    ///
+    /// Called from the timer arm, so [`LIVENESS_TICK`] is the resolve's polling
+    /// interval (the inline resolve it replaces polled every 100 ms), and once
+    /// from [`Self::spawn_connect`] so an already-known record connects at once.
+    /// Returns immediately when nothing is parked — an idle controller pays
+    /// nothing.
+    fn drive_pending_resolves(&mut self) {
+        let Some(handle) = self.resolve_query else {
+            return;
+        };
+        if self.pending_resolves.is_empty() {
+            return;
+        }
+        let services = self.discovery.poll_results(handle);
+        let now = Instant::now();
+
+        // Settle in two passes: the retain cannot call `&mut self` methods, so it
+        // only classifies, and the effects run after. Expired entries are left in
+        // place for `fail_connect_waiters` to remove (via `cancel_pending_resolve`).
+        let mut resolved: Vec<(u64, u64, SocketAddr, matter_transport::MrpConfig)> = Vec::new();
+        let mut expired: Vec<(u64, String)> = Vec::new();
+        self.pending_resolves.retain(|pr| {
+            if let Some((peer, peer_mrp)) = Self::match_service(&services, &pr.target) {
+                resolved.push((pr.fabric_id, pr.node_id, peer, peer_mrp));
+                false
+            } else {
+                if now >= pr.deadline {
+                    expired.push((pr.node_id, pr.target.clone()));
+                }
+                true
+            }
+        });
+        self.release_resolve_query_if_idle();
+
+        for (node_id, target) in expired {
+            // Same error the inline resolve produced on budget exhaustion, so
+            // callers that match on the message text are unaffected.
+            let err = Error::from(matter_commissioning::driver::DriverError::Discovery(
+                format!("operational node {target} not found via mDNS"),
+            ));
+            // Removes the entry itself, via `cancel_pending_resolve`.
+            self.fail_connect_waiters(node_id, &err);
+        }
+        for (fabric_id, node_id, peer, peer_mrp) in resolved {
+            self.finish_spawn_connect(fabric_id, node_id, peer, peer_mrp);
+        }
+    }
+
+    /// Spawn the CASE handshake to an already-resolved `peer` — the tail of a
+    /// connect, shared by [`spawn_connect`](Self::spawn_connect)'s fast path and
+    /// the timer arm.
+    ///
+    /// The credentials and the certificate-validation clock are (re)built here
+    /// rather than carried from `spawn_connect`: a parked connect may start its
+    /// handshake many seconds later, and the device's operational chain must be
+    /// checked against the time the handshake actually runs at.
+    fn finish_spawn_connect(
+        &mut self,
+        fabric_id: u64,
+        node_id: u64,
+        peer: SocketAddr,
+        peer_mrp: matter_transport::MrpConfig,
+    ) {
+        let creds = match self.sole_fabric() {
+            Ok(fabric) => crate::credentials::operational_credentials(fabric),
+            Err(e) => Err(e),
+        };
+        let (credentials, roots, _compressed) = match creds {
             Ok(c) => c,
             Err(e) => {
                 self.fail_connect_waiters(node_id, &e);
@@ -2004,19 +2211,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Ok(n) => n,
             Err(e) => {
                 self.fail_connect_waiters(node_id, &e);
-                return;
-            }
-        };
-        let (peer, peer_mrp) = match matter_commissioning::driver::resolve_operational_with_mrp(
-            &mut self.discovery,
-            compressed,
-            node_id,
-        )
-        .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                self.fail_connect_waiters(node_id, &Error::from(e));
                 return;
             }
         };
@@ -2151,6 +2345,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.connect_routes.retain(|_, n| *n != node_id);
         // Drop any captured peer MRP config for this aborted/forgotten connect.
         self.connect_mrp.remove(&node_id);
+        // …and any resolve still parked for it, so a forgotten node stops being
+        // looked up and the shared browse closes with the last entry.
+        self.cancel_pending_resolve(node_id);
         if let Some(waiters) = self.pending_connects.remove(&node_id) {
             let msg = err.to_string();
             let fail_err =
@@ -3526,8 +3723,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             {
                 self.resume_resend_pending(p, sid, peer).await;
             } else {
-                self.enqueue_connect_waiter(fabric_id, p.node_id, ConnectWaiter::ResendPending(p))
-                    .await;
+                self.enqueue_connect_waiter(fabric_id, p.node_id, ConnectWaiter::ResendPending(p));
             }
             return;
         }
@@ -3636,8 +3832,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         {
             self.resume_resubscribe(pr, sid, peer).await;
         } else {
-            self.enqueue_connect_waiter(fabric_id, pr.node_id, ConnectWaiter::Resubscribe(pr))
-                .await;
+            self.enqueue_connect_waiter(fabric_id, pr.node_id, ConnectWaiter::Resubscribe(pr));
         }
     }
 
@@ -5555,6 +5750,104 @@ mod tests {
             .expect("fetch resumption record")
             .expect("connect must persist a resumption record");
         assert_eq!(record.peer.node_id, device_node_id);
+
+        device.await.unwrap();
+    }
+
+    /// Liveness regression: an operational resolve that never lands must not
+    /// stall the actor loop. `FixedDiscovery` only ever advertises the loopback
+    /// device, so a verb aimed at `UNRESOLVABLE_NODE` can never match — its
+    /// resolve parks on the timer arm, and every *other* session must keep
+    /// running while it does. Before the timer-driven resolve this test hung:
+    /// `spawn_connect` polled mDNS inline for the whole ~30 s budget, so the
+    /// loopback round-trip below never got dispatched.
+    #[tokio::test]
+    async fn actor_stays_live_while_resolve_pends() {
+        /// A node id no discovery record will ever match (the harness's device
+        /// is `0x42`), so its resolve runs to the deadline.
+        const UNRESOLVABLE_NODE: u64 = 0x0000_0000_0000_0099;
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            b"pong".to_vec(),
+            false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // (1) Aim a verb at the unresolvable node and keep its future alive. The
+        // short timeout both delivers the command and gives the actor time to
+        // park the resolve; the future must still be *pending* (a failed connect
+        // would have resolved it with an error instead).
+        let unresolvable = controller.node(UNRESOLVABLE_NODE);
+        let mut pending_verb = Box::pin(unresolvable.round_trip(
+            0x02,
+            ProtocolId::INTERACTION_MODEL,
+            b"ping".to_vec(),
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), &mut pending_verb)
+                .await
+                .is_err(),
+            "the parked resolve must not have failed yet"
+        );
+
+        // (2) The whole point: with that resolve parked, the loopback device's
+        // CASE handshake + round-trip must still complete promptly.
+        let node = controller.node(device_node_id);
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            node.round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec()),
+        )
+        .await
+        .expect("actor stayed live while the other node's resolve was parked")
+        .expect("loopback round-trip");
+        assert_eq!(resp, b"pong");
+
+        // (3) And the parked resolve is still parked, not yet expired — its
+        // deadline outlives a whole handshake + round-trip on another session.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut pending_verb)
+                .await
+                .is_err(),
+            "the parked resolve must outlive the other session's traffic"
+        );
+
+        // (4) Once RESOLVE_DEADLINE passes, the timer arm expires the entry and
+        // fails its waiters with the mDNS-not-found error.
+        let err = tokio::time::timeout(RESOLVE_DEADLINE * 3, pending_verb)
+            .await
+            .expect("the parked resolve must expire at its deadline")
+            .expect_err("an unresolvable node must fail its waiters");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not found via mDNS"),
+            "expiry must report the mDNS-not-found error, got: {msg}"
+        );
 
         device.await.unwrap();
     }

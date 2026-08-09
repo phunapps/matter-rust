@@ -46,13 +46,22 @@ const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// succeed — a materially longer window than the IP path's ~30 s (design D11.2).
 pub const BLE_RESOLVE_POLL_ATTEMPTS: u32 = 600;
 
-/// Pick the most routable address from an mDNS record: IPv4 first, then any
-/// non-link-local IPv6, then whatever is left. A `fe80::` IPv6 needs an
-/// interface scope id that [`MatterService`](matter_transport::MatterService)
-/// does not carry, so a dial-out socket cannot route to it — devices often
-/// list it FIRST, ahead of perfectly routable addresses (M6.6.5: closes the
-/// previously FLAGGED `.first()` pick). Shared with `resolve_commissionable`.
-pub(crate) fn preferred_address(addresses: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
+/// Pick the most routable address from an mDNS record's address list: the first
+/// IPv4, else the first non-link-local IPv6, else the first address of any kind
+/// (`None` only for an empty list).
+///
+/// A `fe80::` IPv6 needs an interface scope id that
+/// [`MatterService`](matter_transport::MatterService) does not carry, so a
+/// dial-out socket cannot route to it — devices often list it FIRST, ahead of
+/// perfectly routable addresses (M6.6.5: closes the previously FLAGGED
+/// `.first()` pick).
+///
+/// Public so a caller that drives its own non-blocking discovery poll — the
+/// controller actor resolves operational records on its timer arm rather than
+/// inside [`resolve_operational`] — picks the *same* address this crate's
+/// resolvers would.
+#[must_use]
+pub fn preferred_address(addresses: &[std::net::IpAddr]) -> Option<std::net::IpAddr> {
     let is_v6_link_local = |a: &std::net::IpAddr| match a {
         std::net::IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
         std::net::IpAddr::V4(_) => false,
