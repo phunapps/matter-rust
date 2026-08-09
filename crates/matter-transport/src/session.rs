@@ -24,8 +24,8 @@ use matter_crypto::pase::PaseSessionKeys;
 
 use crate::error::{Error, Result};
 use crate::framing::{
-    decode_secured, encode_secured, MessageCounter, NodeId, ReplayWindow, SecuredMessageFlags,
-    SecuredMessageHeader, SecurityFlags, SessionId,
+    decode_secured_with_header, encode_secured_with_cipher, MessageCounter, NodeId, ReplayWindow,
+    SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 use crate::mrp::{InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent};
 use crate::protocol_header::{build_standalone_ack_header, encode_protocol_header, ProtocolId};
@@ -102,6 +102,13 @@ pub struct Session {
     /// Whether we're the initiator or the responder of this session.
     pub role: SessionRole,
     /// Symmetric session keys.
+    ///
+    /// Fixed for the life of the session: Matter re-keys by establishing a
+    /// NEW session (PASE/CASE handshake), never by mutating an existing
+    /// one's keys. The cached AES-CCM ciphers below are derived from these
+    /// bytes on first use and are NOT invalidated afterwards, so overwriting
+    /// this field in place would leave the ciphers on the old key. Register
+    /// a fresh session instead.
     pub keys: SessionKeys,
     /// Next outbound message counter. Initialised per Matter Core Spec
     /// §4.4.3 (random and > `1 << 31`); M5.1 starts at 1 for simplicity
@@ -132,6 +139,59 @@ pub struct Session {
     /// Used ONLY to pick the oldest session to evict when the table hits its
     /// cap; not part of the wire or session identity.
     pub(crate) created_seq: u64,
+    /// Cached AES-CCM cipher over [`SessionKeys::i2r_key`], built on first
+    /// use. Private: it is a derived cache of [`Self::keys`], not session
+    /// state a caller may set.
+    cipher_i2r: Option<matter_crypto::aead::SessionAead>,
+    /// Cached AES-CCM cipher over [`SessionKeys::r2i_key`], built on first
+    /// use. Private, as above.
+    cipher_r2i: Option<matter_crypto::aead::SessionAead>,
+}
+
+impl Session {
+    /// Cached cipher for the initiator→responder key, built on first use.
+    ///
+    /// Session keys never change once the session is registered (see
+    /// [`Self::keys`]), so the cache needs no invalidation hook.
+    fn cipher_i2r(&mut self) -> &matter_crypto::aead::SessionAead {
+        let key = self.keys.i2r_key;
+        self.cipher_i2r
+            .get_or_insert_with(|| matter_crypto::aead::SessionAead::new(&key))
+    }
+
+    /// Cached cipher for the responder→initiator key, built on first use.
+    fn cipher_r2i(&mut self) -> &matter_crypto::aead::SessionAead {
+        let key = self.keys.r2i_key;
+        self.cipher_r2i
+            .get_or_insert_with(|| matter_crypto::aead::SessionAead::new(&key))
+    }
+
+    /// Cipher for OUR outbound direction. Mirrors the key choice in
+    /// [`crate::framing::encode_secured`] exactly: initiator sends under
+    /// i2r, responder under r2i.
+    pub(crate) fn outbound_cipher(&mut self) -> &matter_crypto::aead::SessionAead {
+        match self.role {
+            SessionRole::Initiator => self.cipher_i2r(),
+            SessionRole::Responder => self.cipher_r2i(),
+        }
+    }
+
+    /// Cipher for the PEER's outbound direction (what we decrypt with),
+    /// borrowed together with the replay window because the inbound path
+    /// needs both at once and they live in disjoint fields of `self`.
+    ///
+    /// Mirrors the key choice in [`crate::framing::decode_secured`] exactly:
+    /// the peer's sending key is the opposite of ours.
+    pub(crate) fn inbound_cipher_and_window(
+        &mut self,
+    ) -> (&matter_crypto::aead::SessionAead, &mut ReplayWindow) {
+        let (slot, key) = match self.role {
+            SessionRole::Initiator => (&mut self.cipher_r2i, self.keys.r2i_key),
+            SessionRole::Responder => (&mut self.cipher_i2r, self.keys.i2r_key),
+        };
+        let cipher = slot.get_or_insert_with(|| matter_crypto::aead::SessionAead::new(&key));
+        (cipher, &mut self.replay_window)
+    }
 }
 
 /// Structured output of [`SessionManager::encode_outbound`]. Carries the
@@ -421,6 +481,11 @@ impl SessionManager {
             // reliable transport via `set_transport_reliable`.
             transport_reliable: false,
             created_seq,
+            // Built lazily on the session's first encrypt/decrypt so
+            // registering a session stays cheap; keys never change, so the
+            // caches never need invalidating.
+            cipher_i2r: None,
+            cipher_r2i: None,
         };
         self.sessions.insert(local_id, session);
     }
@@ -556,12 +621,15 @@ impl SessionManager {
             source_node_id: None,
             destination_node_id: None,
         };
-        let wire_bytes = encode_secured(
+        // Read the nonce node id out before borrowing the cipher: the cipher
+        // accessor borrows `session` (to fill the lazy cache on first use),
+        // so the scalar it needs must be copied first.
+        let nonce_node_id = session.local_nonce_node_id;
+        let wire_bytes = encode_secured_with_cipher(
             &secured_header,
             &prepared.wire_payload,
-            &session.keys,
-            session.role,
-            session.local_nonce_node_id,
+            session.outbound_cipher(),
+            nonce_node_id,
         )?;
         let counter = MessageCounter(session.outbound_counter);
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
@@ -600,8 +668,9 @@ impl SessionManager {
     /// Decode + verify + replay-check an inbound packet, then dispatch into
     /// MRP for exchange / ack / duplicate-reliable handling.
     ///
-    /// The replay window is consulted as part of [`decode_secured`]; if it
-    /// rejects the counter the manager checks the per-session
+    /// The replay window is consulted as part of the framing decode (the
+    /// cipher-taking internal twin of [`crate::framing::decode_secured`]);
+    /// if it rejects the counter the manager checks the per-session
     /// recent-reliable cache and, on a hit, builds a fresh standalone-ack
     /// packet to re-send (the
     /// [`DecodeInboundOutput::DuplicateReliableAckResent`] variant).
@@ -621,8 +690,11 @@ impl SessionManager {
     /// - [`Error::CounterOverflow`] if building a duplicate-reliable
     ///   standalone-ack packet would overflow the outbound counter.
     pub fn decode_inbound(&mut self, packet: &[u8], now: Instant) -> Result<DecodeInboundOutput> {
-        // Peek the secured header to learn the session_id.
-        let (peeked, _) = crate::framing::decode_header(packet)?;
+        // Parse the secured header ONCE: we need it here to learn the
+        // session_id, and the framing decoder takes it (plus its length) so
+        // the same bytes are not re-parsed per inbound packet.
+        let (peeked, rest) = crate::framing::decode_header(packet)?;
+        let header_len = packet.len() - rest.len();
         let local_id = peeked.session_id;
         let peer_counter = peeked.message_counter;
 
@@ -631,15 +703,23 @@ impl SessionManager {
             .get_mut(&local_id)
             .ok_or(Error::UnknownSession(local_id.0))?;
 
-        // Attempt full decode.
-        match decode_secured(
-            packet,
-            &session.keys,
-            session.role,
-            &mut session.replay_window,
-            session.peer_nonce_node_id,
-        ) {
-            Ok((_, decrypted)) => {
+        // Attempt full decode. Scoped in a `let` so the cipher/replay-window
+        // borrows of `session` end before the match arms below use `session`
+        // again.
+        let nonce_node_id = session.peer_nonce_node_id;
+        let decoded = {
+            let (cipher, replay_window) = session.inbound_cipher_and_window();
+            decode_secured_with_header(
+                packet,
+                &peeked,
+                header_len,
+                cipher,
+                replay_window,
+                nonce_node_id,
+            )
+        };
+        match decoded {
+            Ok(decrypted) => {
                 let outcome = session.mrp.process_inbound(decrypted, peer_counter, now)?;
                 // A transport_reliable session (BTP) skips ack scheduling
                 // entirely, even if the peer's message carried R=1:
@@ -829,9 +909,10 @@ impl SessionManager {
     /// - [`Error::CounterOverflow`] if `session.outbound_counter` is
     ///   already `u32::MAX`.
     /// - [`Error::PayloadTooLarge`] surfacing from the underlying
-    ///   [`encode_secured`] call (will not occur in practice for a
-    ///   standalone-ack header — the encoded form is well under 16 bytes
-    ///   — but is propagated for completeness).
+    ///   framing encode — the cipher-taking internal twin of
+    ///   [`crate::framing::encode_secured`]. It will not occur in practice
+    ///   for a standalone-ack header (the encoded form is well under 16
+    ///   bytes) but is propagated for completeness.
     pub(crate) fn build_standalone_ack_packet(
         session: &mut Session,
         exchange_id: u16,
@@ -853,12 +934,12 @@ impl SessionManager {
             source_node_id: None,
             destination_node_id: None,
         };
-        let packet = encode_secured(
+        let nonce_node_id = session.local_nonce_node_id;
+        let packet = encode_secured_with_cipher(
             &secured_header,
             &payload,
-            &session.keys,
-            session.role,
-            session.local_nonce_node_id,
+            session.outbound_cipher(),
+            nonce_node_id,
         )?;
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
         Ok(packet)

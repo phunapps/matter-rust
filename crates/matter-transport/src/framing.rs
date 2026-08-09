@@ -388,6 +388,42 @@ pub fn encode_secured(
     role: crate::session::SessionRole,
     nonce_source_node_id: u64,
 ) -> Result<Vec<u8>> {
+    // Outbound traffic is encrypted with OUR sending key: i2r when we are
+    // the initiator, r2i when we are the responder.
+    let key = match role {
+        crate::session::SessionRole::Initiator => &keys.i2r_key,
+        crate::session::SessionRole::Responder => &keys.r2i_key,
+    };
+    encode_secured_with_cipher(
+        header,
+        payload,
+        &matter_crypto::aead::SessionAead::new(key),
+        nonce_source_node_id,
+    )
+}
+
+/// [`encode_secured`] with the AES-CCM cipher supplied by the caller
+/// instead of rebuilt from raw key bytes.
+///
+/// Identical output to [`encode_secured`] for the same
+/// header/payload/key/nonce — pinned by
+/// `with_cipher_paths_match_public_functions`. The point is that
+/// [`matter_crypto::aead::SessionAead`] caches the AES-128 key schedule, so a
+/// caller holding one per session (see [`crate::session::Session`]) pays
+/// key expansion once per session rather than once per packet. `cipher` MUST
+/// be built from the key [`encode_secured`] would have selected for `role`;
+/// the direction choice lives in the two callers, not here.
+///
+/// # Errors
+///
+/// Same as [`encode_secured`]: [`Error::PayloadTooLarge`] and
+/// [`Error::Crypto`].
+pub(crate) fn encode_secured_with_cipher(
+    header: &SecuredMessageHeader,
+    payload: &[u8],
+    cipher: &matter_crypto::aead::SessionAead,
+    nonce_source_node_id: u64,
+) -> Result<Vec<u8>> {
     if payload.len() > MAX_PAYLOAD_LEN {
         return Err(Error::PayloadTooLarge {
             len: payload.len(),
@@ -397,12 +433,7 @@ pub fn encode_secured(
 
     let aad = encode_header(header);
     let nonce = build_nonce(header, nonce_source_node_id);
-    let key = match role {
-        crate::session::SessionRole::Initiator => &keys.i2r_key,
-        crate::session::SessionRole::Responder => &keys.r2i_key,
-    };
-
-    let ciphertext = matter_crypto::aead::encrypt(key, &nonce, &aad, payload)?;
+    let ciphertext = cipher.encrypt(&nonce, &aad, payload)?;
     let mut out = aad;
     out.extend_from_slice(&ciphertext);
     Ok(out)
@@ -442,7 +473,53 @@ pub fn decode_secured(
     nonce_source_node_id: u64,
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
     let (header, rest) = decode_header(bytes)?;
+    let header_len = bytes.len() - rest.len();
 
+    // We're decoding inbound from the peer; the peer's outbound key is
+    // the opposite of ours.
+    let key = match role {
+        crate::session::SessionRole::Initiator => &keys.r2i_key,
+        crate::session::SessionRole::Responder => &keys.i2r_key,
+    };
+
+    let plaintext = decode_secured_with_header(
+        bytes,
+        &header,
+        header_len,
+        &matter_crypto::aead::SessionAead::new(key),
+        replay_window,
+        nonce_source_node_id,
+    )?;
+    Ok((header, plaintext))
+}
+
+/// [`decode_secured`] with the header already parsed and the AES-CCM cipher
+/// supplied by the caller.
+///
+/// `header` MUST be the result of [`decode_header`] on `bytes`, and
+/// `header_len` the number of leading bytes it consumed (i.e.
+/// `bytes.len() - rest.len()`); `cipher` MUST be built from the key
+/// [`decode_secured`] would have selected for the session role. The two
+/// exist so [`crate::session::SessionManager::decode_inbound`], which must
+/// parse the header anyway to demux onto a session, parses it exactly once
+/// per inbound packet and reuses that session's cached cipher instead of
+/// re-running AES key expansion per packet.
+///
+/// Returns the decrypted payload only — the caller already owns the header.
+///
+/// # Errors
+///
+/// Same as [`decode_secured`], plus [`Error::MalformedHeader`] if
+/// `header_len` is past the end of `bytes` (a caller-contract violation; we
+/// bound-check rather than panic).
+pub(crate) fn decode_secured_with_header(
+    bytes: &[u8],
+    header: &SecuredMessageHeader,
+    header_len: usize,
+    cipher: &matter_crypto::aead::SessionAead,
+    replay_window: &mut ReplayWindow,
+    nonce_source_node_id: u64,
+) -> Result<Vec<u8>> {
     // TRAN-1: replay classification happens AFTER authentication, never
     // before. The header (session id, counter) is unauthenticated cleartext,
     // so we do NOT run a pre-decrypt reject here — an attacker who replays a
@@ -455,30 +532,25 @@ pub fn decode_secured(
     // (chip does the same: decrypt+verify before message-counter verification,
     // `SessionManager.cpp:963`.)
 
-    // The AAD is the on-the-wire header — the leading bytes of `bytes` up to
-    // where the encrypted payload (`rest`) begins. `decode_header` returns
-    // `rest = &bytes[header_len..]`, so `&bytes[..header_len]` is byte-for-byte
-    // the header the sender authenticated. We slice it directly rather than
-    // re-encoding via `encode_header(&header)` — the slice and the re-encode
-    // are identical bytes (the framing roundtrip tests pin this), and the
-    // slice avoids an allocation + re-serialisation on every inbound packet.
-    let header_len = bytes.len() - rest.len();
-    let aad = &bytes[..header_len];
-    let nonce = build_nonce(&header, nonce_source_node_id);
-    // We're decoding inbound from the peer; the peer's outbound key is
-    // the opposite of ours.
-    let key = match role {
-        crate::session::SessionRole::Initiator => &keys.r2i_key,
-        crate::session::SessionRole::Responder => &keys.i2r_key,
-    };
+    // The AAD is the on-the-wire header — the leading `header_len` bytes of
+    // `bytes`, i.e. byte-for-byte the header the sender authenticated. We
+    // slice it directly rather than re-encoding via `encode_header(header)`:
+    // the slice and the re-encode are identical bytes (pinned by
+    // `aad_slice_equals_reencoded_header`), and the slice avoids an
+    // allocation + re-serialisation on every inbound packet.
+    let (aad, rest) = bytes
+        .split_at_checked(header_len)
+        .ok_or(Error::MalformedHeader(header_len))?;
+    let nonce = build_nonce(header, nonce_source_node_id);
 
-    let plaintext = matter_crypto::aead::decrypt(key, &nonce, aad, rest)
+    let plaintext = cipher
+        .decrypt(&nonce, aad, rest)
         .map_err(|_| Error::DecryptionFailed)?;
 
     // Authenticated: now it is safe to COMMIT the counter to the replay
     // window. A forged datagram never reaches this point.
     replay_window.check_and_record(header.message_counter.0)?;
-    Ok((header, plaintext))
+    Ok(plaintext)
 }
 
 /// Encode + encrypt a Matter **group** secured message (Matter Core Spec
@@ -570,8 +642,12 @@ pub fn encode_group_secured(
     let aad = encode_header(&header);
     let nonce = build_nonce(&header, source_node_id);
 
-    // Reuse the shared AES-CCM routine — never hand-roll the cipher.
-    let ciphertext = matter_crypto::aead::encrypt(operational_group_key, &nonce, &aad, &plaintext)?;
+    // Reuse the shared AES-CCM routine — never hand-roll the cipher. One
+    // `SessionAead` per call: group sends have no `Session` to hang a cached
+    // cipher off, so the key schedule is built here (caller-supplied caching
+    // is a later task).
+    let ciphertext = matter_crypto::aead::SessionAead::new(operational_group_key)
+        .encrypt(&nonce, &aad, &plaintext)?;
 
     // Privacy obfuscation (§4.8.3): CTR over the header's mutable region
     // under the privacy key, keyed by the (plaintext) session id + MIC.
@@ -582,8 +658,8 @@ pub fn encode_group_secured(
     let privacy_key =
         matter_crypto::derive_group_privacy_key(operational_group_key).map_err(Error::Crypto)?;
     let mut out = aad;
-    let obfuscated =
-        matter_crypto::aead::ctr_apply(&privacy_key, &privacy_nonce, &out[PRIVACY_REGION_START..])?;
+    let obfuscated = matter_crypto::aead::SessionAead::new(&privacy_key)
+        .ctr_apply(&privacy_nonce, &out[PRIVACY_REGION_START..])?;
     out.truncate(PRIVACY_REGION_START);
     out.extend_from_slice(&obfuscated);
     out.extend_from_slice(&ciphertext);
@@ -677,11 +753,8 @@ pub fn decode_group_secured(
         let privacy_nonce = build_group_privacy_nonce(session_id, mic)?;
         let privacy_key = matter_crypto::derive_group_privacy_key(operational_group_key)
             .map_err(Error::Crypto)?;
-        let clear = matter_crypto::aead::ctr_apply(
-            &privacy_key,
-            &privacy_nonce,
-            &bytes[PRIVACY_REGION_START..header_len],
-        )?;
+        let clear = matter_crypto::aead::SessionAead::new(&privacy_key)
+            .ctr_apply(&privacy_nonce, &bytes[PRIVACY_REGION_START..header_len])?;
         let mut copy = Vec::with_capacity(bytes.len());
         copy.extend_from_slice(&bytes[..PRIVACY_REGION_START]);
         copy.extend_from_slice(&clear);
@@ -702,7 +775,8 @@ pub fn decode_group_secured(
     // uses it. The fallback (0) is never reached for a well-formed group
     // header (S=1).
     let nonce = build_nonce(&header, 0);
-    let plaintext = matter_crypto::aead::decrypt(operational_group_key, &nonce, aad, rest)
+    let plaintext = matter_crypto::aead::SessionAead::new(operational_group_key)
+        .decrypt(&nonce, aad, rest)
         .map_err(|_| Error::DecryptionFailed)?;
     Ok((header, plaintext))
 }
@@ -1009,6 +1083,74 @@ mod tests {
             r2i_key: [0x22; 16],
             attestation_key: [0x33; 16],
         }
+    }
+
+    /// The cipher-taking internals MUST be byte-for-byte interchangeable
+    /// with the public key-taking entry points: `encode_secured_with_cipher`
+    /// emits exactly the frame `encode_secured` emits, and each decode path
+    /// accepts the other's output. This is the referee for the per-session
+    /// cipher cache — if the direction/key selection in the internal path
+    /// ever drifts from the public one, real peers would silently fail to
+    /// decrypt, so we pin the equivalence here rather than trusting that two
+    /// copies of the key-choice `match` stay in step.
+    #[test]
+    fn with_cipher_paths_match_public_functions() {
+        use crate::session::SessionRole;
+        use matter_crypto::aead::SessionAead;
+
+        let keys = test_session_keys();
+        let header = secured_header(7);
+        let payload = b"cipher parity payload";
+        // Sender's nonce node id (non-zero, as on a CASE session).
+        let nonce_node_id = 0x0102_0304_0506_0708u64;
+
+        // Encode as the Initiator: the public path picks `i2r_key`, so the
+        // hand-built cipher must be the i2r one for the outputs to match.
+        let public = encode_secured(
+            &header,
+            payload,
+            &keys,
+            SessionRole::Initiator,
+            nonce_node_id,
+        )
+        .unwrap();
+        let cipher = SessionAead::new(&keys.i2r_key);
+        let with_cipher =
+            encode_secured_with_cipher(&header, payload, &cipher, nonce_node_id).unwrap();
+        assert_eq!(
+            public, with_cipher,
+            "with-cipher encode must be byte-identical to the public encode"
+        );
+
+        // Decode direction: as the Responder we decrypt the peer's traffic
+        // with `i2r_key` — the same cipher. Feed the internal decoder the
+        // pre-parsed header, as `SessionManager::decode_inbound` does.
+        let (parsed, rest) = decode_header(&public).unwrap();
+        let header_len = public.len() - rest.len();
+        let mut window = ReplayWindow::new();
+        let plaintext = decode_secured_with_header(
+            &public,
+            &parsed,
+            header_len,
+            &cipher,
+            &mut window,
+            nonce_node_id,
+        )
+        .unwrap();
+        assert_eq!(plaintext, payload);
+
+        // ...and the public decoder accepts the with-cipher frame.
+        let mut public_window = ReplayWindow::new();
+        let (public_header, public_plaintext) = decode_secured(
+            &with_cipher,
+            &keys,
+            SessionRole::Responder,
+            &mut public_window,
+            nonce_node_id,
+        )
+        .unwrap();
+        assert_eq!(public_header, parsed);
+        assert_eq!(public_plaintext, payload);
     }
 
     /// A forged datagram must not advance the replay window when its tag

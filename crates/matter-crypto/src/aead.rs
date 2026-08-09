@@ -134,6 +134,17 @@ pub fn ctr_apply(
 /// Holds the expanded AES-128 key schedule for its lifetime; there is no
 /// `Debug` derive because printing that schedule would leak key material
 /// (see the manual [`Debug`] impl below).
+///
+/// **Secret hygiene:** the expanded key schedule is NOT zeroized on drop —
+/// the `ccm`/`aes` types we compose do not implement `ZeroizeOnDrop`, and we
+/// do not reimplement them. That is acceptable here because a `SessionAead`
+/// is always constructed from key material that is itself already resident
+/// unzeroized for the whole session (the session keys it is derived from),
+/// so dropping the handle removes no guarantee the caller had. `SessionAead`
+/// is therefore NOT a secret-erasure boundary: a caller that needs key
+/// material scrubbed must scrub the source key bytes (see
+/// [`crate::pase::PaseSessionKeys`], which is `ZeroizeOnDrop`) and drop every
+/// derived handle, and must not treat this type as providing erasure.
 pub struct SessionAead(Aes128Ccm);
 
 impl SessionAead {
@@ -382,6 +393,39 @@ mod tests {
         assert!(session
             .decrypt_in_place(&nonce, aad, &mut tampered)
             .is_err());
+    }
+
+    /// A buffer too short to even hold the 16-byte tag must be rejected, not
+    /// mis-read. `decrypt_in_place` is on the inbound path (attacker-supplied
+    /// bytes), so this pins the `aead` crate's length guard: a truncated
+    /// datagram returns `Err` rather than underflowing the tag split.
+    #[test]
+    fn decrypt_in_place_rejects_buffer_shorter_than_tag() {
+        let key = [0x42u8; AEAD_KEY_LEN];
+        let nonce = [0x17u8; AEAD_NONCE_LEN];
+        let session = SessionAead::new(&key);
+
+        let mut too_short = vec![0xAAu8; 4]; // < AEAD_TAG_LEN
+        assert!(session
+            .decrypt_in_place(&nonce, b"aad", &mut too_short)
+            .is_err());
+
+        // Boundary: exactly one byte short of a bare tag is still rejected.
+        let mut one_short = vec![0xAAu8; AEAD_TAG_LEN - 1];
+        assert!(session
+            .decrypt_in_place(&nonce, b"aad", &mut one_short)
+            .is_err());
+    }
+
+    /// Compile-time proof that a `SessionAead` can be cached inside a
+    /// `Session` that is moved across threads / held in a `tokio` task —
+    /// the whole point of caching it per session. Mirrors the static-assert
+    /// pattern in `crate::pase`'s secret-hygiene tests.
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn session_aead_is_send_and_sync() {
+        assert_send_sync::<SessionAead>();
     }
 
     #[test]
