@@ -10,6 +10,9 @@
 //!   M3.3: matter.js byte-parity verification.
 //! - [`case`]: Certificate Authenticated Session Establishment (SIGMA-I).
 //!   Placeholder; M4 territory.
+//! - [`aead`]: AES-128-CCM-128 AEAD helpers. Prefer [`SessionAead`] over
+//!   the free functions on any path that encrypts/decrypts more than once
+//!   per key, to avoid repeating AES key expansion per call.
 //! - [`error`]: the crate error type.
 //!
 //! # Cryptographic discipline
@@ -31,6 +34,7 @@ pub mod pase;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+pub use aead::SessionAead;
 pub use case::initiator::CaseInitiator;
 pub use case::responder::CaseResponder;
 pub use case::signer::{CaseSigner, RingSigner, SignerError};
