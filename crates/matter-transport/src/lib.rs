@@ -55,9 +55,10 @@ pub mod mdns_sd_discovery;
 
 pub use error::{Error, Result};
 pub use framing::{
-    build_group_privacy_nonce, decode_group_secured, decode_header, decode_secured,
-    encode_group_secured, encode_header, encode_secured, DestNodeId, MessageCounter, NodeId,
-    ReplayWindow, SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
+    build_group_privacy_nonce, decode_group_secured, decode_group_secured_with_privacy_key,
+    decode_header, decode_secured, encode_group_secured, encode_group_secured_with_privacy_key,
+    encode_header, encode_secured, DestNodeId, MessageCounter, NodeId, ReplayWindow,
+    SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 pub use mrp::{
     InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent, PreparedOutbound,

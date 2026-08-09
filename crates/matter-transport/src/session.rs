@@ -108,7 +108,8 @@ pub struct Session {
     /// one's keys. The cached AES-CCM ciphers below are derived from these
     /// bytes on first use and are NOT invalidated afterwards, so overwriting
     /// this field in place would leave the ciphers on the old key. Register
-    /// a fresh session instead.
+    /// a fresh session instead — a debug build trips an assertion if you
+    /// don't (each cached cipher keeps a copy of its source key to check).
     pub keys: SessionKeys,
     /// Next outbound message counter. Initialised per Matter Core Spec
     /// §4.4.3 (random and > `1 << 31`); M5.1 starts at 1 for simplicity
@@ -142,28 +143,54 @@ pub struct Session {
     /// Cached AES-CCM cipher over [`SessionKeys::i2r_key`], built on first
     /// use. Private: it is a derived cache of [`Self::keys`], not session
     /// state a caller may set.
-    cipher_i2r: Option<matter_crypto::aead::SessionAead>,
+    cipher_i2r: Option<CachedCipher>,
     /// Cached AES-CCM cipher over [`SessionKeys::r2i_key`], built on first
     /// use. Private, as above.
-    cipher_r2i: Option<matter_crypto::aead::SessionAead>,
+    cipher_r2i: Option<CachedCipher>,
+}
+
+/// A cached AES-CCM cipher together with the key bytes it was built from.
+#[derive(Debug)]
+struct CachedCipher {
+    cipher: matter_crypto::aead::SessionAead,
+    /// Copy of the key `cipher` was built from, kept ONLY so the accessors
+    /// can `debug_assert` the cache still matches [`Session::keys`] (which
+    /// is `pub`, hence mutable out-of-crate via `SessionManager::get_mut`).
+    /// Compiled out of release builds along with the assertions.
+    key: [u8; 16],
 }
 
 impl Session {
     /// Cached cipher for the initiator→responder key, built on first use.
     ///
     /// Session keys never change once the session is registered (see
-    /// [`Self::keys`]), so the cache needs no invalidation hook.
+    /// [`Self::keys`]), so the cache needs no invalidation hook — the
+    /// `debug_assert` catches a caller that breaks that rule anyway.
     fn cipher_i2r(&mut self) -> &matter_crypto::aead::SessionAead {
         let key = self.keys.i2r_key;
-        self.cipher_i2r
-            .get_or_insert_with(|| matter_crypto::aead::SessionAead::new(&key))
+        let cached = self.cipher_i2r.get_or_insert_with(|| CachedCipher {
+            cipher: matter_crypto::aead::SessionAead::new(&key),
+            key,
+        });
+        debug_assert_eq!(
+            cached.key, key,
+            "i2r_key changed after the cipher cache was built — register a fresh session instead of mutating `keys`"
+        );
+        &cached.cipher
     }
 
     /// Cached cipher for the responder→initiator key, built on first use.
     fn cipher_r2i(&mut self) -> &matter_crypto::aead::SessionAead {
         let key = self.keys.r2i_key;
-        self.cipher_r2i
-            .get_or_insert_with(|| matter_crypto::aead::SessionAead::new(&key))
+        let cached = self.cipher_r2i.get_or_insert_with(|| CachedCipher {
+            cipher: matter_crypto::aead::SessionAead::new(&key),
+            key,
+        });
+        debug_assert_eq!(
+            cached.key, key,
+            "r2i_key changed after the cipher cache was built — register a fresh session instead of mutating `keys`"
+        );
+        &cached.cipher
     }
 
     /// Cipher for OUR outbound direction. Mirrors the key choice in
@@ -189,8 +216,15 @@ impl Session {
             SessionRole::Initiator => (&mut self.cipher_r2i, self.keys.r2i_key),
             SessionRole::Responder => (&mut self.cipher_i2r, self.keys.i2r_key),
         };
-        let cipher = slot.get_or_insert_with(|| matter_crypto::aead::SessionAead::new(&key));
-        (cipher, &mut self.replay_window)
+        let cached = slot.get_or_insert_with(|| CachedCipher {
+            cipher: matter_crypto::aead::SessionAead::new(&key),
+            key,
+        });
+        debug_assert_eq!(
+            cached.key, key,
+            "the peer's session key changed after the cipher cache was built — register a fresh session instead of mutating `keys`"
+        );
+        (&cached.cipher, &mut self.replay_window)
     }
 }
 

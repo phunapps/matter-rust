@@ -637,6 +637,56 @@ pub fn encode_group_secured(
     protocol_header: &crate::protocol_header::ProtocolHeader,
     app_payload: &[u8],
 ) -> Result<Vec<u8>> {
+    // Derive the privacy key here, then run the ONE encode path below. A
+    // caller that sends repeatedly under a long-lived group key should
+    // pre-derive once and call the variant directly.
+    let privacy_key =
+        matter_crypto::derive_group_privacy_key(operational_group_key).map_err(Error::Crypto)?;
+    encode_group_secured_with_privacy_key(
+        operational_group_key,
+        &privacy_key,
+        group_session_id,
+        source_node_id,
+        group_id,
+        counter,
+        protocol_header,
+        app_payload,
+    )
+}
+
+/// [`encode_group_secured`] with the **privacy key supplied by the caller**
+/// instead of derived per packet.
+///
+/// Identical wire output — this is the same code path, and
+/// [`encode_group_secured`] is a thin wrapper that derives `privacy_key` and
+/// calls straight through. Use this when you hold a long-lived group key set:
+/// derive once with [`matter_crypto::derive_group_privacy_key`], cache it
+/// alongside the operational group key, and skip an HKDF per outbound packet.
+///
+/// `privacy_key` MUST be `derive_group_privacy_key(operational_group_key)`.
+/// Any other value produces a frame no spec-conformant receiver can
+/// de-obfuscate (the AAD would not match, so the AEAD tag check fails there) —
+/// it is not a second, independent secret.
+///
+/// # Errors
+///
+/// Same as [`encode_group_secured`], minus the privacy-key HKDF (already
+/// done by the caller): [`Error::PayloadTooLarge`] for an over-cap plaintext,
+/// [`Error::Crypto`] if the underlying AES-CCM cipher fails.
+// One key more than `encode_group_secured`, which is already at the limit;
+// the parameters are the group header fields and cannot be bundled without
+// inventing a type the caller would only ever fill in inline.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_group_secured_with_privacy_key(
+    operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+    privacy_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+    group_session_id: u16,
+    source_node_id: u64,
+    group_id: u16,
+    counter: u32,
+    protocol_header: &crate::protocol_header::ProtocolHeader,
+    app_payload: &[u8],
+) -> Result<Vec<u8>> {
     // Plaintext = protocol header || app payload, identical to the unicast
     // path's `prepared.wire_payload`.
     let mut plaintext = Vec::with_capacity(16 + app_payload.len());
@@ -682,10 +732,8 @@ pub fn encode_group_secured(
         .get(ciphertext.len() - matter_crypto::aead::AEAD_TAG_LEN..)
         .ok_or(Error::Crypto(matter_crypto::Error::EncryptionFailed))?;
     let privacy_nonce = build_group_privacy_nonce(group_session_id, mic)?;
-    let privacy_key =
-        matter_crypto::derive_group_privacy_key(operational_group_key).map_err(Error::Crypto)?;
     let mut out = aad;
-    let obfuscated = matter_crypto::aead::SessionAead::new(&privacy_key)
+    let obfuscated = matter_crypto::aead::SessionAead::new(privacy_key)
         .ctr_apply(&privacy_nonce, &out[PRIVACY_REGION_START..])?;
     out.truncate(PRIVACY_REGION_START);
     out.extend_from_slice(&obfuscated);
@@ -752,6 +800,45 @@ pub fn decode_group_secured(
     bytes: &[u8],
     operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
 ) -> Result<(SecuredMessageHeader, Vec<u8>)> {
+    // `None` = derive the privacy key on demand, and only if the frame
+    // actually carries P = 1 (a plain matter.js frame needs no HKDF at all).
+    decode_group_secured_inner(bytes, operational_group_key, None)
+}
+
+/// [`decode_group_secured`] with the **privacy key supplied by the caller**
+/// instead of derived per packet.
+///
+/// Same code path and same acceptance behaviour — [`decode_group_secured`]
+/// differs only in deriving `privacy_key` itself (and only for `P = 1`
+/// frames). Use this when you hold a long-lived group key set: derive once
+/// with [`matter_crypto::derive_group_privacy_key`], cache it alongside the
+/// operational group key, and skip an HKDF per inbound packet.
+///
+/// `privacy_key` MUST be `derive_group_privacy_key(operational_group_key)`;
+/// a wrong value de-obfuscates the header to garbage and the frame then fails
+/// its AEAD tag check ([`Error::DecryptionFailed`]). It is ignored entirely
+/// for `P = 0` frames, which carry no obfuscation.
+///
+/// # Errors
+///
+/// Same as [`decode_group_secured`].
+pub fn decode_group_secured_with_privacy_key(
+    bytes: &[u8],
+    operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+    privacy_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+) -> Result<(SecuredMessageHeader, Vec<u8>)> {
+    decode_group_secured_inner(bytes, operational_group_key, Some(privacy_key))
+}
+
+/// The single group-decode implementation behind both public entry points.
+///
+/// `privacy_key`: `Some` = pre-derived by the caller, `None` = derive it here
+/// (lazily, inside the `P = 1` branch only).
+fn decode_group_secured_inner(
+    bytes: &[u8],
+    operational_group_key: &[u8; matter_crypto::aead::AEAD_KEY_LEN],
+    privacy_key: Option<&[u8; matter_crypto::aead::AEAD_KEY_LEN]>,
+) -> Result<(SecuredMessageHeader, Vec<u8>)> {
     // The first 4 bytes (flags, session id LE, security flags) are always in
     // the clear — peek at the P bit before any header parse, because a
     // privacy-enhanced header's counter/source/group bytes are obfuscated and
@@ -778,9 +865,17 @@ pub fn decode_group_secured(
         let session_id = u16::from_le_bytes([bytes[1], bytes[2]]);
         let mic = &bytes[bytes.len() - matter_crypto::aead::AEAD_TAG_LEN..];
         let privacy_nonce = build_group_privacy_nonce(session_id, mic)?;
-        let privacy_key = matter_crypto::derive_group_privacy_key(operational_group_key)
-            .map_err(Error::Crypto)?;
-        let clear = matter_crypto::aead::SessionAead::new(&privacy_key)
+        // Borrow the caller's key, or derive one that lives just long enough
+        // for the de-obfuscation below.
+        let derived;
+        let privacy_key = if let Some(key) = privacy_key {
+            key
+        } else {
+            derived = matter_crypto::derive_group_privacy_key(operational_group_key)
+                .map_err(Error::Crypto)?;
+            &derived
+        };
+        let clear = matter_crypto::aead::SessionAead::new(privacy_key)
             .ctr_apply(&privacy_nonce, &bytes[PRIVACY_REGION_START..header_len])?;
         let mut copy = Vec::with_capacity(bytes.len());
         copy.extend_from_slice(&bytes[..PRIVACY_REGION_START]);
@@ -1384,6 +1479,108 @@ mod tests {
             Some(DestNodeId::Group(group_id))
         );
         assert_eq!(decoded, plaintext);
+    }
+
+    /// The pre-derived-privacy-key variants must be a pure refactor of the
+    /// derive-internally originals: identical wire bytes out, identical
+    /// plaintext back. Pinned against BOTH known-answer vectors (chip's
+    /// privacy frame for `P = 1`, matter.js's plain frame for `P = 0`), so a
+    /// divergence shows up as a KAT failure rather than mere
+    /// self-consistency.
+    #[test]
+    fn group_privacy_key_variant_matches_original() {
+        use crate::protocol_header::{ExchangeFlags, ProtocolHeader, ProtocolId};
+
+        // ---- chip privacy vector (P = 1) ----
+        let op_key: [u8; 16] = hex16("ca92d7a0942d1a511a0e26ad074f4c2f");
+        let privacy_key = matter_crypto::derive_group_privacy_key(&op_key).unwrap();
+        assert_eq!(
+            privacy_key,
+            hex16("bfe9da016a765365f2dd97a9f939e425"),
+            "the pre-derived key must be the fixture's .privacyKey"
+        );
+        let group_session_id: u16 = 0xdb7d;
+        let group_id: u16 = 2;
+        let counter: u32 = 0x1234_5679;
+        let source_node_id: u64 = 1;
+        let protocol_header = ProtocolHeader {
+            exchange_flags: ExchangeFlags::INITIATOR,
+            opcode: 0x64,
+            exchange_id: 0x0eee,
+            protocol_id: ProtocolId {
+                vendor: 0,
+                protocol: 0x7d20,
+            },
+            ack_counter: None,
+        };
+
+        let original = encode_group_secured(
+            &op_key,
+            group_session_id,
+            source_node_id,
+            group_id,
+            counter,
+            &protocol_header,
+            &[],
+        )
+        .unwrap();
+        let variant = encode_group_secured_with_privacy_key(
+            &op_key,
+            &privacy_key,
+            group_session_id,
+            source_node_id,
+            group_id,
+            counter,
+            &protocol_header,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            hex_encode(&variant),
+            hex_encode(&original),
+            "pre-derived-key encode must be byte-identical to the original"
+        );
+        assert_eq!(
+            hex_encode(&variant),
+            hex_encode(&hex(
+                "067ddb81d926afce24c8a0981bdd44f4e7302b2f915a66c9596290ebe4408217b3c0c921a2fca4e1"
+            )),
+            "and still byte-match chip's .privacy frame"
+        );
+
+        // Decode both ways: same header, same plaintext.
+        let (h_original, p_original) = decode_group_secured(&variant, &op_key).unwrap();
+        let (h_variant, p_variant) =
+            decode_group_secured_with_privacy_key(&variant, &op_key, &privacy_key).unwrap();
+        assert_eq!(h_variant, h_original);
+        assert_eq!(hex_encode(&p_variant), hex_encode(&p_original));
+        assert_eq!(hex_encode(&p_variant), "0164ee0e207d");
+
+        // A WRONG privacy key de-obfuscates the header to garbage, so the AAD
+        // no longer matches and the tag check fails — the caller cannot smuggle
+        // an unrelated key past the AEAD.
+        assert!(
+            decode_group_secured_with_privacy_key(&variant, &op_key, &[0xFF; 16]).is_err(),
+            "a wrong privacy key must not decode a P=1 frame"
+        );
+
+        // ---- matter.js plain vector (P = 0) ----
+        // The privacy key is unused on this path, so even a bogus one decodes
+        // identically to the deriving original.
+        let js_key: [u8; 16] = hex16("4e6f436f6e74726f6c4d61747465724b");
+        let js_wire = hex(
+            "0601000105000000bebafecaefbeadde34129506e3d4b7267e33e078a21650d79c70db886e5ddfc1398a6ee2212fb5",
+        );
+        let (h_js_original, p_js_original) = decode_group_secured(&js_wire, &js_key).unwrap();
+        let (h_js_variant, p_js_variant) =
+            decode_group_secured_with_privacy_key(&js_wire, &js_key, &[0xFF; 16]).unwrap();
+        assert_eq!(h_js_variant, h_js_original);
+        assert_eq!(hex_encode(&p_js_variant), hex_encode(&p_js_original));
+        assert_eq!(
+            hex_encode(&p_js_variant),
+            "052102d10a0001003501290218",
+            "P=0 group plaintext must match the matter.js fixture"
+        );
     }
 
     /// The chip vector's intermediate `.encrypted` frame (P set in the
