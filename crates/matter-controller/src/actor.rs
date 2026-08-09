@@ -3908,6 +3908,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// OFF the actor loop (the CASE handshake no longer blocks other
     /// sessions) and resume on completion; a missing fabric reschedules on backoff.
     async fn attempt_resubscribe(&mut self, pr: PendingResubscribe) {
+        // A consumer that dropped both receivers can never observe this
+        // subscription again — reap instead of retrying forever (the drop-side
+        // cancel is lossy `try_send`, so this is the reliable reap point).
+        if pr.tx.report_tx.is_closed() && pr.tx.ctrl_tx.is_closed() {
+            return;
+        }
         let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) else {
             self.reschedule_resubscribe(pr);
             return;
@@ -3925,6 +3931,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Reschedule a failed attempt with the next backoff step (retry forever).
     fn reschedule_resubscribe(&mut self, mut pr: PendingResubscribe) {
+        // Same reap guard as `attempt_resubscribe`: a consumer that dropped
+        // both receivers can never observe this subscription again.
+        if pr.tx.report_tx.is_closed() && pr.tx.ctrl_tx.is_closed() {
+            return;
+        }
         pr.retry_count = pr.retry_count.saturating_add(1);
         let wait = resubscribe_backoff(self.rng.as_ref(), pr.retry_count);
         pr.attempt_at = Instant::now() + wait;
@@ -7044,6 +7055,56 @@ mod tests {
         assert!(actor.subscriptions.contains_key(&SubId(2)));
         assert!(!actor.resubscribes.iter().any(|pr| pr.sub_id == SubId(2)));
         assert!(rx_b.try_recv().is_err(), "unaffected sub gets no event");
+    }
+
+    /// A consumer that dropped both its report and control receivers can never
+    /// observe a subscription again (the drop-side cancel is a lossy
+    /// `try_send`, so it may not have reached the actor). `drive_resubscribes`
+    /// must reap such an entry instead of retrying it forever, and must not
+    /// enqueue a connect for it — there is no one left to deliver `Established`
+    /// to.
+    #[tokio::test]
+    async fn dropped_subscription_reaps_pending_resubscribe() {
+        let (io, _peer) = InMemoryDatagram::pair();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(matter_commissioning::SystemNocRng),
+            ControllerState { fabrics: vec![] },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        let (sink, report_rx, ctrl_rx) = test_report_sink();
+        drop(report_rx);
+        drop(ctrl_rx);
+
+        actor.resubscribes.push(PendingResubscribe {
+            sub_id: SubId(1),
+            attempt_at: Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .expect("instant minus 1s is representable"),
+            node_id: 2,
+            paths: vec![matter_interaction::ReadPath::all()],
+            event_paths: vec![],
+            event_filters: vec![],
+            min_interval: 1,
+            max_interval: 30,
+            retry_count: 0,
+            tx: sink,
+        });
+
+        actor.drive_resubscribes().await;
+
+        assert!(
+            actor.resubscribes.is_empty(),
+            "zombie resubscribe entry must be reaped, not rescheduled"
+        );
+        assert!(
+            actor.pending_connects.is_empty(),
+            "no connect should be enqueued for a consumer that is gone"
+        );
     }
 
     /// Build an actor with one real fabric in state so `sole_fabric()` (and thus
