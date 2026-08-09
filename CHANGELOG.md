@@ -29,6 +29,13 @@ may block on I/O that is not the thing the loop is there to do. Four changes,
 all internal to the controller's actor loop; the two API-surface notes they
 carry are listed under `#### Changed` below.
 
+Packet-crypto performance phase 2: no key schedule and no key derivation is
+recomputed per packet when its inputs cannot have changed. **No wire bytes
+move** — every known-answer vector (chip's privacy frame, the matter.js group
+and session vectors) is unchanged and is what pins this. The only new public
+API is `matter_crypto::aead::SessionAead` and the two additive group-framing
+variants below; everything else is internal caching.
+
 ### `matter-controller`
 
 #### Fixed
@@ -61,6 +68,14 @@ carry are listed under `#### Changed` below.
   resumes at the ceiling — skipping at most a block of never-sent counters, and
   never reusing a counter that was sent. This is the design chip uses
   (`GroupPeerMessageCounter.cpp`), with a smaller block (64 vs chip's 1000).
+- **Group key material is derived once per fabric, not once per message.**
+  Every `invoke_group` re-ran four HKDFs — compressed fabric id, operational
+  group key, group session id, and (inside the framing layer) the privacy key —
+  although all four are a pure function of the fabric's epoch key. They are now
+  cached per fabric and invalidated by comparing the epoch key on every send, so
+  a rotated key set (`create_group` / `KeySetWrite`) still re-derives before
+  anything goes out under it. Covered by a test that rotates the epoch key and
+  asserts the next frame decrypts under the NEW key and not the cached one.
 
 #### Changed
 
@@ -77,6 +92,41 @@ carry are listed under `#### Changed` below.
 
 - `preferred_address` is now `pub` (was crate-internal), so the controller's
   timer-driven resolve picks the same address the inline resolver did.
+
+### `matter-transport`
+
+#### Added
+
+- `encode_group_secured_with_privacy_key` / `decode_group_secured_with_privacy_key`
+  — the group framing functions with the privacy key supplied by the caller
+  instead of derived per packet. Additive: the existing
+  `encode_group_secured` / `decode_group_secured` derive the key and delegate,
+  so there is one encode path and one decode path, and their behaviour is
+  byte-identical (the chip privacy vector and the matter.js plain-frame vector
+  both still pass). Use them when you hold a long-lived group key set: derive
+  once with `matter_crypto::derive_group_privacy_key` and cache it.
+
+#### Performance
+
+- **One AES-CCM key schedule per session instead of one per packet.** Each
+  `Session` now caches the ciphers for its two directional keys, built on first
+  use. Session keys never change once a session is registered (Matter re-keys by
+  establishing a new session), so the cache needs no invalidation — and a debug
+  build now asserts that, tripping if `keys` is ever mutated out of crate via
+  `SessionManager::get_mut` while a cipher is cached.
+- **Outbound secured frames are allocated at their final size**, so the header
+  + ciphertext no longer forces a reallocation and copy on every send.
+
+### `matter-crypto`
+
+#### Added
+
+- `aead::SessionAead` — an AES-CCM handle that owns its key schedule, so a
+  caller holding a long-lived key (a session, a group key set) computes the
+  schedule once and encrypts/decrypts many packets against it. The free
+  `aead::encrypt` / `aead::decrypt` functions are unchanged; this is purely an
+  additional way to reach the same cipher, and the same primitive
+  implementation underneath.
 
 ## matter-ble 0.3.1
 

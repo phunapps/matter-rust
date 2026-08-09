@@ -888,6 +888,16 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// entry, or a re-created fabric with the same id would restart mid-block
     /// against a fresh (zero) persisted ceiling.
     group_counters: HashMap<u64, u32>,
+    /// Derived group key material per fabric id, so a burst of group sends
+    /// costs one set of HKDFs instead of four per packet
+    /// ([`Self::handle_invoke_group`]).
+    ///
+    /// Same lifecycle note as `group_counters`: entries are never removed
+    /// because fabrics are never removed locally. A future local
+    /// fabric-removal path SHOULD drop the matching entry — stale material
+    /// here is inert (the epoch-key check below rejects it), but it would keep
+    /// 56 bytes of key material alive for no reason.
+    group_key_cache: HashMap<u64, GroupKeyCacheEntry>,
     /// Per-in-flight-connect inbound queue (keyed by node id): the actor forwards
     /// the device's unsecured handshake replies here for the spawned task to
     /// consume via its [`HandshakeSocket`](crate::handshake_socket::HandshakeSocket).
@@ -908,6 +918,41 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     connect_done_tx: mpsc::Sender<ConnectCompletion>,
     /// Receiver half, drained by an arm of the [`Self::run`] `select!`.
     connect_done_rx: mpsc::Receiver<ConnectCompletion>,
+}
+
+/// Derived group-key material for a fabric, computed once per epoch key.
+///
+/// Every value below is a pure function of `(epoch_key, root_public_key,
+/// fabric_id)`. The root public key is the fabric's RCAC key and the fabric id
+/// is the map key, so both are fixed for the life of the entry — which makes
+/// **`epoch_key` equality the complete invalidation condition**. It is checked
+/// on every use ([`Actor::handle_invoke_group`]); a key rotation
+/// (`create_group` / `KeySetWrite`) changes the epoch key and forces
+/// re-derivation.
+///
+/// Deliberately keyed by fabric id alone, not by `(fabric_id, key_set_id)`:
+/// nothing derived here depends on the key set id — it only selects WHICH
+/// epoch key the caller passes in. Alternating sends between two key sets on
+/// one fabric therefore stay correct (each send sees a different `epoch_key`
+/// and re-derives), and in the degenerate case where two key sets hold the
+/// same epoch key the cached material is the material both need anyway. The
+/// cost of alternating is a re-derivation per send, i.e. today's behaviour.
+struct GroupKeyCacheEntry {
+    /// The epoch key these values were derived from — the invalidation stamp.
+    epoch_key: [u8; 16],
+    /// Compressed fabric id (RCAC public key + fabric id), spec §4.3.2 — the
+    /// salt `op_group_key` was derived under. Kept as the record of what was
+    /// derived (and asserted on in tests); the send path only needs the two
+    /// keys and the session id below, so nothing in the library reads it yet.
+    #[allow(dead_code)]
+    compressed_fabric_id: [u8; 8],
+    /// Operational group key: the AES-CCM key for group messages.
+    op_group_key: [u8; 16],
+    /// Group session id carried in the group message header.
+    group_session_id: u16,
+    /// Privacy key for the header obfuscation (§4.8.3), derived from
+    /// `op_group_key`.
+    privacy_key: [u8; 16],
 }
 
 /// A completed spawned CASE connect (event-driven connect), delivered
@@ -1210,6 +1255,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             seen_records: HashMap::new(),
             multicast_if: None,
             group_counters: HashMap::new(),
+            group_key_cache: HashMap::new(),
             connect_inbound: HashMap::new(),
             connect_routes: HashMap::new(),
             connect_outbound_tx,
@@ -2061,6 +2107,64 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         ))
     }
 
+    /// The fabric's derived group-key material, computed on first use and
+    /// re-derived whenever its epoch key changes.
+    ///
+    /// Four HKDFs (compressed fabric id → operational group key → group session
+    /// id, plus the privacy key the framing layer would otherwise derive per
+    /// packet) are pure overhead on a burst of group commands, since all four
+    /// are a pure function of the fabric's epoch key. Comparing `epoch_key` is
+    /// the WHOLE invalidation rule — see [`GroupKeyCacheEntry`] for why that is
+    /// complete — so a rotated key set (`create_group` / `KeySetWrite`)
+    /// re-derives here before anything is sent under it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Operational`] if any derivation fails (not expected: the inputs
+    /// are fixed-size key material).
+    fn group_keys_for(
+        &mut self,
+        fabric_id: u64,
+        root_public_key: &[u8; 65],
+        epoch_key: [u8; 16],
+    ) -> Result<&GroupKeyCacheEntry, Error> {
+        use std::collections::hash_map::Entry;
+        match self.group_key_cache.entry(fabric_id) {
+            // Hit: same fabric, same epoch key — every derived value below is
+            // still exactly what a fresh derivation would produce.
+            Entry::Occupied(e) if e.get().epoch_key == epoch_key => Ok(e.into_mut()),
+            // Miss (cold) or stale (rotated key): derive the whole set.
+            slot => {
+                let compressed_fabric_id =
+                    matter_crypto::derive_compressed_fabric_id(root_public_key, fabric_id)
+                        .map_err(|e| Error::Operational(format!("compressed fabric id: {e}")))?;
+                let op_group_key =
+                    matter_crypto::derive_operational_ipk(&epoch_key, &compressed_fabric_id)
+                        .map_err(|e| Error::Operational(format!("operational group key: {e}")))?;
+                let group_session_id = matter_crypto::derive_group_session_id(&op_group_key)
+                    .map_err(|e| Error::Operational(format!("group session id: {e}")))?;
+                let privacy_key = matter_crypto::derive_group_privacy_key(&op_group_key)
+                    .map_err(|e| Error::Operational(format!("group privacy key: {e}")))?;
+                let fresh = GroupKeyCacheEntry {
+                    epoch_key,
+                    compressed_fabric_id,
+                    op_group_key,
+                    group_session_id,
+                    privacy_key,
+                };
+                // Replace the stale entry (or fill the empty slot) — the map
+                // holds at most one entry per fabric either way.
+                Ok(match slot {
+                    Entry::Occupied(mut e) => {
+                        e.insert(fresh);
+                        e.into_mut()
+                    }
+                    Entry::Vacant(e) => e.insert(fresh),
+                })
+            }
+        }
+    }
+
     /// Fire-and-forget multicast group invoke (see [`Command::InvokeGroup`]).
     ///
     /// Derives the operational group key + group session id from the persisted
@@ -2112,14 +2216,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             )
         };
 
-        // (b-e) Crypto derivations (reuse E2; never hand-rolled).
-        let compressed_fabric_id =
-            matter_crypto::derive_compressed_fabric_id(&root_public_key, fabric_id)
-                .map_err(|e| Error::Operational(format!("compressed fabric id: {e}")))?;
-        let op_group_key = matter_crypto::derive_operational_ipk(&epoch_key, &compressed_fabric_id)
-            .map_err(|e| Error::Operational(format!("operational group key: {e}")))?;
-        let group_session_id = matter_crypto::derive_group_session_id(&op_group_key)
-            .map_err(|e| Error::Operational(format!("group session id: {e}")))?;
+        // (b-e) Crypto derivations (reuse E2; never hand-rolled), computed once
+        // per epoch key and cached per fabric — see `group_keys_for`.
+        let entry = self.group_keys_for(fabric_id, &root_public_key, epoch_key)?;
+        let op_group_key = entry.op_group_key;
+        let group_session_id = entry.group_session_id;
+        let privacy_key = entry.privacy_key;
         let mcast = matter_crypto::group_multicast_ipv6(fabric_id, group_id);
 
         // (f) Take the next counter from the reserved block, and PERSIST A NEW
@@ -2201,8 +2303,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         };
 
         // (h) Encode the group-secured wire message (reuses Task-3 framing).
-        let wire = matter_transport::encode_group_secured(
+        // The privacy-key variant: ours is cached above, so the framing layer
+        // does not re-derive it for every packet.
+        let wire = matter_transport::encode_group_secured_with_privacy_key(
             &op_group_key,
+            &privacy_key,
             group_session_id,
             source_node_id,
             group_id,
@@ -4885,6 +4990,175 @@ mod tests {
             .await
             .expect_err("must reject unprovisioned key set");
         assert!(matches!(err, Error::GroupNotProvisioned(0x0099)));
+    }
+
+    // --- per-fabric group key derivation cache ---
+
+    /// An actor whose sole fabric already holds `epoch_key` under `key_set_id`
+    /// (as `create_group` would have left it), plus the paired endpoint that
+    /// receives every multicast the actor sends.
+    fn group_test_actor(
+        key_set_id: u16,
+        epoch_key: [u8; 16],
+    ) -> (Actor<InMemoryDatagram, NullDiscovery>, InMemoryDatagram) {
+        let (io, peer) = InMemoryDatagram::pair();
+        let mut fabric =
+            crate::fabric::create_fabric(&cfg(), &SystemNocRng).expect("create_fabric");
+        fabric.group_keys.push(crate::state::GroupKeySetConfig::new(
+            key_set_id, epoch_key, 0,
+        ));
+        let actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(SystemNocRng),
+            ControllerState {
+                fabrics: vec![fabric],
+            },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+        (actor, peer)
+    }
+
+    /// The TLV for an empty command field set (`OnOff.On` takes none).
+    fn empty_fields_tlv() -> Vec<u8> {
+        crate::node::value_to_tlv(&matter_codec::Value::Structure(vec![])).unwrap()
+    }
+
+    /// Repeated group sends on one fabric derive the group key material ONCE:
+    /// the second `invoke_group` hits the cache (still a single entry), and both
+    /// frames still decode under an independent from-scratch derivation.
+    #[tokio::test]
+    async fn group_key_cache_reused_across_sends() {
+        let key_set_id = 0x0042u16;
+        let epoch_key = [0x11u8; 16];
+        let (mut actor, peer) = group_test_actor(key_set_id, epoch_key);
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        // Derived here the long way, exactly as a peer device would.
+        let op_group_key = op_group_key_of(&actor.state, &epoch_key);
+        let fields_tlv = empty_fields_tlv();
+
+        assert!(
+            actor.group_key_cache.is_empty(),
+            "cache starts cold — nothing is derived before the first send"
+        );
+
+        actor
+            .handle_invoke_group(0xBEEF, key_set_id, on_command_path(), &fields_tlv)
+            .await
+            .expect("first group send");
+        assert_eq!(
+            actor.group_key_cache.len(),
+            1,
+            "the first send must populate exactly one cache entry"
+        );
+
+        actor
+            .handle_invoke_group(0xBEEF, key_set_id, on_command_path(), &fields_tlv)
+            .await
+            .expect("second group send");
+        assert_eq!(
+            actor.group_key_cache.len(),
+            1,
+            "the second send must reuse the entry, not add another"
+        );
+        let entry = actor
+            .group_key_cache
+            .get(&fabric_id)
+            .expect("entry keyed by fabric id");
+        assert_eq!(
+            entry.epoch_key, epoch_key,
+            "the cached entry must record the epoch key it was derived from"
+        );
+        assert_eq!(
+            entry.op_group_key, op_group_key,
+            "the cached operational group key must equal the from-scratch derivation"
+        );
+        assert_eq!(
+            entry.privacy_key,
+            matter_crypto::derive_group_privacy_key(&op_group_key).unwrap(),
+            "the cached privacy key must equal the from-scratch derivation"
+        );
+
+        // Both frames decode under the independent derivation, with the
+        // counters the reservation handed out.
+        let (wire1, _from) = peer.recv_from().await.expect("frame 1 emitted");
+        let (wire2, _from) = peer.recv_from().await.expect("frame 2 emitted");
+        assert_eq!(wire_group_counter(&wire1, &op_group_key), 0);
+        assert_eq!(wire_group_counter(&wire2, &op_group_key), 1);
+        let (_h, plaintext) =
+            matter_transport::decode_group_secured(&wire2, &op_group_key).expect("decode");
+        let (_ph, app) = matter_transport::decode_protocol_header(&plaintext).unwrap();
+        assert_eq!(
+            app,
+            &matter_interaction::build_invoke_request_group(on_command_path(), &fields_tlv)[..],
+            "the cached path must still carry the same IM payload"
+        );
+    }
+
+    /// Rotating the fabric's epoch key (what `create_group` / `KeySetWrite`
+    /// does) MUST invalidate the cache: the next frame has to be encrypted
+    /// under the new key's derivations, never the cached old ones. Without the
+    /// `epoch_key` check this is exactly the 2026-07-20 hardware failure —
+    /// devices hold the new key while we keep sending under the stale one.
+    #[tokio::test]
+    async fn group_key_cache_invalidated_on_epoch_rotation() {
+        let key_set_id = 0x0042u16;
+        let old_epoch = [0x11u8; 16];
+        let new_epoch = [0x22u8; 16];
+        let (mut actor, peer) = group_test_actor(key_set_id, old_epoch);
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let op_old = op_group_key_of(&actor.state, &old_epoch);
+        let op_new = op_group_key_of(&actor.state, &new_epoch);
+        let fields_tlv = empty_fields_tlv();
+
+        // Send once under the old key — this is what warms the cache.
+        actor
+            .handle_invoke_group(0xBEEF, key_set_id, on_command_path(), &fields_tlv)
+            .await
+            .expect("send under the old epoch key");
+        let (wire_old, _from) = peer.recv_from().await.expect("frame 1 emitted");
+        matter_transport::decode_group_secured(&wire_old, &op_old)
+            .expect("first frame must decrypt under the old key");
+
+        // Rotate the key set in place, as `create_group`'s upsert does.
+        {
+            let fabric = actor.sole_fabric_mut().unwrap();
+            let slot = fabric
+                .group_keys
+                .iter_mut()
+                .rfind(|k| k.key_set_id == key_set_id)
+                .expect("provisioned key set");
+            *slot = crate::state::GroupKeySetConfig::new(key_set_id, new_epoch, 0);
+        }
+
+        actor
+            .handle_invoke_group(0xBEEF, key_set_id, on_command_path(), &fields_tlv)
+            .await
+            .expect("send after rotation");
+        let (wire_new, _from) = peer.recv_from().await.expect("frame 2 emitted");
+        matter_transport::decode_group_secured(&wire_new, &op_new)
+            .expect("frame must decrypt under the NEW epoch key's derivation");
+        assert!(
+            matter_transport::decode_group_secured(&wire_new, &op_old).is_err(),
+            "frame must NOT still be encrypted under the cached stale key"
+        );
+
+        let entry = actor
+            .group_key_cache
+            .get(&fabric_id)
+            .expect("entry keyed by fabric id");
+        assert_eq!(
+            entry.epoch_key, new_epoch,
+            "the refreshed entry must record the new epoch key"
+        );
+        assert_eq!(entry.op_group_key, op_new);
+        assert_eq!(
+            actor.group_key_cache.len(),
+            1,
+            "invalidation replaces the entry rather than accumulating"
+        );
     }
 
     // --- group counter block reservation (spec §1.4) ---
