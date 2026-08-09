@@ -94,6 +94,27 @@ const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30)
 #[cfg(test)]
 const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a drained operational record stays usable in `seen_records`.
+///
+/// Records must be cached at all because [`Discovery::poll_results`] CONSUMES
+/// what it returns while the shared browse stays open: mdns-sd re-flushes its
+/// cache only to *newly* opened browses, and otherwise re-emits an instance only
+/// on an actual record refresh (its re-query backoff doubles 1 s, 2 s, 4 s … up
+/// to an hour). Without the cache, a record drained while nothing was parked for
+/// it would be lost, and a resolve parked seconds later for that very much
+/// *online* device would sit until [`RESOLVE_DEADLINE`].
+///
+/// The TTL bounds the other direction: a device that moves address must not be
+/// dialled at its old one indefinitely. A minute is far shorter than a Matter
+/// operational record's typical TTL and than mdns-sd's own cache retention, so
+/// a moved device is re-learned well before this matters.
+const SEEN_RECORD_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Cap on cached operational records, so a large fabric (or a hostile flood of
+/// `_matter._tcp` advertisements) cannot grow `seen_records` without bound. Well
+/// above any realistic fabric size; the oldest entry is evicted to make room.
+const SEEN_RECORD_CAP: usize = 256;
+
 /// Max `ReportData` chunks a single read may span before aborting (mirrors
 /// `matter_commissioning::driver::MAX_READ_CHUNKS`).
 const MAX_READ_CHUNKS: usize = 64;
@@ -745,6 +766,12 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// other's browse as they completed. One handle also means one
     /// [`Discovery::poll_results`] drain per tick serving all entries.
     resolve_query: Option<QueryHandle>,
+    /// Operational records drained from that browse, keyed by ASCII-lowercased
+    /// instance name. A drain consumes what it returns, so every record is
+    /// cached — not just the ones a resolve is parked for right now — or a
+    /// record that arrived before its resolve did would be lost. Bounded by
+    /// [`SEEN_RECORD_CAP`], aged out by [`SEEN_RECORD_TTL`].
+    seen_records: HashMap<String, SeenRecord>,
     /// IPv6 multicast egress interface for group sends (destination scope
     /// id). Set via `MatterControllerBuilder::multicast_interface`; `None`
     /// falls back to the `MATTER_MULTICAST_IF` env var, then kernel default.
@@ -795,6 +822,16 @@ struct PendingResolve {
     target: String,
     /// When to give up and fail the node's waiters.
     deadline: Instant,
+}
+
+/// One operational record drained from the shared browse, already reduced to
+/// what a connect needs. Kept in `seen_records` so a record that arrives before
+/// anyone is waiting for it is not thrown away — see [`SEEN_RECORD_TTL`].
+struct SeenRecord {
+    peer: SocketAddr,
+    peer_mrp: matter_transport::MrpConfig,
+    /// When this record was last drained; ages the entry out.
+    seen: Instant,
 }
 
 /// A unit of work parked behind an in-flight CASE connect. On connect
@@ -1056,6 +1093,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             connect_mrp: HashMap::new(),
             pending_resolves: Vec::new(),
             resolve_query: None,
+            seen_records: HashMap::new(),
             multicast_if: None,
             connect_inbound: HashMap::new(),
             connect_routes: HashMap::new(),
@@ -1177,7 +1215,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 biased;
                 maybe = rx.recv() => match maybe {
                     Some(cmd) => self.dispatch(cmd).await,
-                    None => return,
+                    // Every controller handle is gone: shut down.
+                    None => return self.shutdown_discovery(),
                 },
                 // M9-G-d: a spawned commission finished — persist + resolve its
                 // reply. This arm keeps the loop responsive to other sessions
@@ -2042,15 +2081,19 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Only a credential/clock/query-setup failure fails the parked waiters here;
     /// a device that simply never answers fails at its deadline instead.
     fn spawn_connect(&mut self, fabric_id: u64, node_id: u64) {
-        let creds = match self.sole_fabric() {
-            Ok(fabric) => crate::credentials::operational_credentials(fabric),
-            Err(e) => Err(e),
-        };
-        // Only the compressed fabric id is needed to name the record; the
-        // credentials themselves are rebuilt in `finish_spawn_connect` (which may
-        // run many seconds later, and wants a fresh validation clock).
-        let compressed = match creds {
-            Ok((_credentials, _roots, compressed)) => compressed,
+        // Naming the record needs ONLY the compressed fabric id, so derive just
+        // that — the full credential build (signer reconstruction from PKCS#8,
+        // IPK derivation, cert clones) happens once, in `finish_spawn_connect`,
+        // which may run many seconds later and wants a fresh validation clock.
+        let compressed = self.sole_fabric().and_then(|fabric| {
+            matter_crypto::derive_compressed_fabric_id(
+                fabric.rcac_cert.public_key().as_bytes(),
+                fabric.fabric_id,
+            )
+            .map_err(|e| Error::Operational(e.to_string()))
+        });
+        let compressed = match compressed {
+            Ok(c) => c,
             Err(e) => {
                 self.fail_connect_waiters(node_id, &e);
                 return;
@@ -2072,7 +2115,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // Settle immediately rather than draining the browse here: every
         // `poll_results` call CONSUMES the records it returns, so a drain that
         // only looked for `target` would silently discard records other parked
-        // resolves are waiting on. One settle pass owns every drain.
+        // resolves are waiting on. One settle pass owns every drain — and it
+        // also consults `seen_records`, so a record drained before this connect
+        // existed still resolves it on the spot.
         self.drive_pending_resolves();
     }
 
@@ -2089,25 +2134,63 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         });
     }
 
-    /// Find `target`'s operational record in one browse drain and turn it into
-    /// the dial-out address plus the peer's advertised MRP config. Mirrors
+    /// `seen_records` key for an operational instance name. Matter instance
+    /// names are hex, and DNS-SD comparison is case-insensitive, so lowercasing
+    /// gives the same match the inline resolver's `eq_ignore_ascii_case` did.
+    fn record_key(instance_name: &str) -> String {
+        instance_name.to_ascii_lowercase()
+    }
+
+    /// Fold one browse drain into `seen_records`: age out stale entries, then
+    /// store each record reduced to `(peer, peer_mrp)`.
+    ///
+    /// Address selection mirrors
     /// `matter_commissioning::driver::resolve_operational_with_mrp`'s per-poll
-    /// body exactly (same case-insensitive instance match, same
+    /// body exactly (same
     /// [`preferred_address`](matter_commissioning::driver::preferred_address)
-    /// routability pick) so the timer-driven path dials what the inline resolve
-    /// would have dialled. A record with no usable address is skipped, not
-    /// treated as a hit.
-    fn match_service(
-        services: &[matter_transport::MatterService],
-        target: &str,
-    ) -> Option<(SocketAddr, matter_transport::MrpConfig)> {
-        services.iter().find_map(|svc| {
-            if !svc.instance_name.eq_ignore_ascii_case(target) {
-                return None;
+    /// routability pick, same `peer_mrp_config`) so the timer-driven path dials
+    /// what the inline resolve would have dialled. A record with no usable
+    /// address is dropped rather than cached as an un-dialable hit.
+    fn record_seen(&mut self, services: &[matter_transport::MatterService], now: Instant) {
+        self.seen_records
+            .retain(|_, r| now.saturating_duration_since(r.seen) < SEEN_RECORD_TTL);
+        for svc in services {
+            let Some(addr) = matter_commissioning::driver::preferred_address(&svc.addresses) else {
+                continue;
+            };
+            let key = Self::record_key(&svc.instance_name);
+            // Make room for a genuinely new instance by dropping the oldest.
+            if self.seen_records.len() >= SEEN_RECORD_CAP && !self.seen_records.contains_key(&key) {
+                let oldest = self
+                    .seen_records
+                    .iter()
+                    .min_by_key(|(_, r)| r.seen)
+                    .map(|(k, _)| k.clone());
+                if let Some(k) = oldest {
+                    self.seen_records.remove(&k);
+                }
             }
-            let addr = matter_commissioning::driver::preferred_address(&svc.addresses)?;
-            Some((SocketAddr::new(addr, svc.port), svc.peer_mrp_config()))
-        })
+            self.seen_records.insert(
+                key,
+                SeenRecord {
+                    peer: SocketAddr::new(addr, svc.port),
+                    peer_mrp: svc.peer_mrp_config(),
+                    seen: now,
+                },
+            );
+        }
+    }
+
+    /// Last act of [`Self::run`]: abandon any parked resolve and release the
+    /// shared mDNS browse.
+    ///
+    /// Dropping the actor is NOT enough. With a caller-supplied daemon
+    /// (`MdnsSdDiscovery::with_daemon`, `owns_daemon == false`) nothing ever
+    /// stops the browse, so a controller dropped mid-resolve would leave a
+    /// `_matter._tcp` browse running on that shared daemon forever.
+    fn shutdown_discovery(&mut self) {
+        self.pending_resolves.clear();
+        self.release_resolve_query_if_idle();
     }
 
     /// Drop the shared operational browse once no resolve still needs it, so an
@@ -2127,12 +2210,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.release_resolve_query_if_idle();
     }
 
-    /// Settle the parked resolves: drain the shared browse ONCE and match every
-    /// parked entry against that one snapshot — hits spawn their handshake,
-    /// entries past [`RESOLVE_DEADLINE`] fail their node's waiters, the rest stay
-    /// parked. The single drain is required for correctness, not just economy:
+    /// Settle the parked resolves: drain the shared browse ONCE into
+    /// `seen_records`, then match every parked entry against that cache — hits
+    /// spawn their handshake, entries past [`RESOLVE_DEADLINE`] fail their node's
+    /// waiters, the rest stay parked.
+    ///
+    /// The single drain is required for correctness, not just economy:
     /// [`Discovery::poll_results`] consumes what it returns, so a second drain
-    /// elsewhere would steal records from entries this pass has not examined.
+    /// elsewhere would steal records from entries this pass has not examined —
+    /// and matching against the *cache* rather than this pass's snapshot is what
+    /// stops a record that arrived before its resolve did from being lost (see
+    /// [`SEEN_RECORD_TTL`]).
     ///
     /// Called from the timer arm, so [`LIVENESS_TICK`] is the resolve's polling
     /// interval (the inline resolve it replaces polled every 100 ms), and once
@@ -2148,23 +2236,23 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
         let services = self.discovery.poll_results(handle);
         let now = Instant::now();
+        self.record_seen(&services, now);
 
-        // Settle in two passes: the retain cannot call `&mut self` methods, so it
-        // only classifies, and the effects run after. Expired entries are left in
-        // place for `fail_connect_waiters` to remove (via `cancel_pending_resolve`).
+        // Classify first, act after: the effects below need `&mut self`, which
+        // the parked list cannot be borrowed across.
         let mut resolved: Vec<(u64, u64, SocketAddr, matter_transport::MrpConfig)> = Vec::new();
         let mut expired: Vec<(u64, String)> = Vec::new();
-        self.pending_resolves.retain(|pr| {
-            if let Some((peer, peer_mrp)) = Self::match_service(&services, &pr.target) {
-                resolved.push((pr.fabric_id, pr.node_id, peer, peer_mrp));
-                false
+        let mut still_parked = Vec::with_capacity(self.pending_resolves.len());
+        for pr in std::mem::take(&mut self.pending_resolves) {
+            if let Some(rec) = self.seen_records.get(&Self::record_key(&pr.target)) {
+                resolved.push((pr.fabric_id, pr.node_id, rec.peer, rec.peer_mrp));
+            } else if now >= pr.deadline {
+                expired.push((pr.node_id, pr.target));
             } else {
-                if now >= pr.deadline {
-                    expired.push((pr.node_id, pr.target.clone()));
-                }
-                true
+                still_parked.push(pr);
             }
-        });
+        }
+        self.pending_resolves = still_parked;
         self.release_resolve_query_if_idle();
 
         for (node_id, target) in expired {
@@ -2173,7 +2261,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             let err = Error::from(matter_commissioning::driver::DriverError::Discovery(
                 format!("operational node {target} not found via mDNS"),
             ));
-            // Removes the entry itself, via `cancel_pending_resolve`.
             self.fail_connect_waiters(node_id, &err);
         }
         for (fabric_id, node_id, peer, peer_mrp) in resolved {
@@ -4628,6 +4715,49 @@ mod tests {
         }
     }
 
+    /// Like [`FixedDiscovery`] but with mdns-sd's **consuming** drain semantics:
+    /// a browse hands each record over once and never repeats it, because
+    /// `poll_results` drains the daemon's event receiver. mdns-sd re-flushes its
+    /// cache only to *newly opened* browses (an already-open one sees an instance
+    /// again only on a real record refresh, whose re-query backoff doubles
+    /// 1 s, 2 s, 4 s … up to an hour), so reopening the query is modelled as
+    /// making the record available again.
+    ///
+    /// `FixedDiscovery` re-emits forever and therefore cannot exercise the
+    /// actor's `seen_records` cache at all — this double is what pins it.
+    struct DrainingDiscovery {
+        addr: std::net::SocketAddr,
+        instance_name: String,
+        /// `true` once the current browse has handed the record over.
+        drained: bool,
+    }
+    impl Discovery for DrainingDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            self.drained = false; // a fresh browse gets the daemon's cache flush
+            Ok(QueryHandle(1))
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+            if self.drained {
+                return Vec::new();
+            }
+            self.drained = true;
+            vec![MatterService::new(
+                self.instance_name.clone(),
+                ServiceKind::Operational,
+                vec![self.addr.ip()],
+                self.addr.port(),
+                std::collections::HashMap::new(),
+            )]
+        }
+    }
+
     /// Device side: complete the CASE handshake (unsecured Sigma framing,
     /// mirroring `matter-commissioning`'s `run_case` loopback test), then
     /// answer `echoes` secured IM round-trips with a `b"pong"` `ReportData`.
@@ -5848,6 +5978,87 @@ mod tests {
             msg.contains("not found via mDNS"),
             "expiry must report the mDNS-not-found error, got: {msg}"
         );
+
+        device.await.unwrap();
+    }
+
+    /// A record drained from the shared browse while NO resolve was parked for
+    /// it must not be thrown away: `poll_results` consumes what it returns, and
+    /// an already-open browse will not see that instance again for a long time
+    /// (mdns-sd re-flushes its cache only to new browses; its re-query backoff
+    /// doubles to an hour). So the online device must still connect from the
+    /// cached record — otherwise a node that is up and advertising fails at
+    /// `RESOLVE_DEADLINE` purely because an unrelated offline node opened the
+    /// browse first.
+    #[tokio::test]
+    async fn record_drained_before_its_resolve_parks_is_not_lost() {
+        /// Offline node: never advertised, so it holds the browse open.
+        const OFFLINE_NODE: u64 = 0x0000_0000_0000_0099;
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        // Same device, but advertised with realistic consuming-drain semantics.
+        let discovery = DrainingDiscovery {
+            addr: discovery.addr,
+            instance_name: discovery.instance_name,
+            drained: false,
+        };
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            b"pong".to_vec(),
+            false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // (1) The OFFLINE node connects first. That opens the browse, and its
+        // one and only drain carries the *loopback device's* record — which
+        // nothing is parked for yet. Keep the verb alive so the browse stays
+        // open (a closed+reopened browse would re-flush and mask the bug).
+        let offline = controller.node(OFFLINE_NODE);
+        let mut parked_verb =
+            Box::pin(offline.round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec()));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(150), &mut parked_verb)
+                .await
+                .is_err(),
+            "the offline node's resolve must still be parked, holding the browse open"
+        );
+
+        // (2) Now connect to the online device. Its record will never be emitted
+        // again on this browse, so this can only succeed from the cache.
+        let node = controller.node(device_node_id);
+        let resp = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            node.round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec()),
+        )
+        .await
+        .expect("an online device must not be starved by a record drained before it parked")
+        .expect("loopback round-trip");
+        assert_eq!(resp, b"pong");
 
         device.await.unwrap();
     }
