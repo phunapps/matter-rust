@@ -688,14 +688,65 @@ struct CachedSession {
     peer: std::net::SocketAddr,
 }
 
-/// Await a blocking store save on the Tokio blocking pool.
+/// A serialized snapshot plus its ordering sequence.
+///
+/// Fully owned (no borrow of the actor): the actor is non-`Sync`, so anything
+/// held across an `.await` — or moved into `spawn_blocking` — must own its
+/// inputs, else the actor future is non-`Send` and unspawnable.
+///
+/// Saves are applied in **sequence order**, not in whichever order the blocking
+/// pool happens to schedule them. Without this, a *detached* best-effort save
+/// (see [`Actor::persist_best_effort`]) that was serialized first but
+/// descheduled could win the store's atomic `rename` over a later durable save
+/// and silently roll persisted state backwards. A job whose `seq` is older than
+/// the last-written snapshot is therefore skipped.
+struct SaveJob {
+    store: Arc<dyn ControllerStore>,
+    bytes: Vec<u8>,
+    /// Serialize-time sequence from [`Actor::snapshot_seq`] (monotonic).
+    seq: u64,
+    /// Last-written sequence, shared by every save path of one actor. A `std`
+    /// mutex, not a Tokio one, because it is only ever locked inside
+    /// `spawn_blocking` — never on an async task, so it cannot block a runtime
+    /// worker holding it across an await point.
+    gate: Arc<std::sync::Mutex<u64>>,
+}
+
+impl SaveJob {
+    /// Write the snapshot, unless a newer one already landed.
+    ///
+    /// Runs on the blocking pool. The gate lock is held across the store's
+    /// write+fsync+rename deliberately: serializing writers *is* the ordering
+    /// guarantee — releasing it earlier would let two renames interleave and
+    /// leave the older bytes on disk. A stale job returns `Ok(())`: skipping is
+    /// the intended outcome, not a failure.
+    ///
+    /// A poisoned gate (a previous job panicked mid-save) is recovered rather
+    /// than propagated: the protected value is a plain `u64` that a panic
+    /// cannot leave in a torn state, and refusing every subsequent save would
+    /// be strictly worse than continuing to order them.
+    fn run(self) -> Result<(), crate::store::StoreError> {
+        let mut last = match self.gate.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if self.seq < *last {
+            return Ok(());
+        }
+        self.store.save(&self.bytes)?;
+        *last = self.seq;
+        Ok(())
+    }
+}
+
+/// Await a [`SaveJob`] on the Tokio blocking pool.
 ///
 /// Free function (owns its inputs) so the actor never holds a `&self` borrow
 /// across the `.await`: that would make the actor future non-`Send` and so
 /// unspawnable. A panic inside `save` surfaces as a `JoinError`, mapped to an
 /// operational persistence error rather than unwinding the actor loop.
-async fn save_offloaded(store: Arc<dyn ControllerStore>, bytes: Vec<u8>) -> Result<(), Error> {
-    match tokio::task::spawn_blocking(move || store.save(&bytes)).await {
+async fn save_offloaded(job: SaveJob) -> Result<(), Error> {
+    match tokio::task::spawn_blocking(move || job.run()).await {
         Ok(saved) => Ok(saved?),
         Err(join_err) => Err(Error::Operational(format!(
             "persistence task failed: {join_err}"
@@ -727,6 +778,13 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     pending: HashMap<(SessionId, u16), Pending>,
     /// Monotonic source of stable [`SubId`]s.
     next_sub_id: u64,
+    /// Monotonic snapshot sequence, bumped on every serialize. Stamped onto the
+    /// resulting [`SaveJob`] so saves are applied in serialize order.
+    snapshot_seq: u64,
+    /// Sequence of the last snapshot actually written, shared by every save
+    /// path (durable and best-effort) so they order against each other. See
+    /// [`SaveJob::run`].
+    save_gate: Arc<std::sync::Mutex<u64>>,
     /// Scheduled resubscribe attempts (fired from the timer arm when due).
     resubscribes: Vec<PendingResubscribe>,
     /// Learned set of `(cluster_id, attr_or_command_id)` paths the device has
@@ -1085,6 +1143,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             subscriptions: HashMap::new(),
             pending: HashMap::new(),
             next_sub_id: 1,
+            snapshot_seq: 0,
+            save_gate: Arc::new(std::sync::Mutex::new(0)),
             resubscribes: Vec::new(),
             timed_paths: std::collections::HashSet::new(),
             commission_tx,
@@ -1440,7 +1500,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.retain(|_, p| p.node_id != node_id);
                 let outcome = if removed {
                     match self.durable_save_inputs() {
-                        Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| true),
+                        Ok(job) => save_offloaded(job).await.map(|()| true),
                         Err(e) => Err(e),
                     }
                 } else {
@@ -1522,8 +1582,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // Durability-critical: the caller must not consider the fabric created
         // (and its private keys safe) until the snapshot is on disk. Serialize
         // under `&self`, then drop the borrow before awaiting the offloaded save.
-        let (store, bytes) = self.durable_save_inputs()?;
-        save_offloaded(store, bytes).await?;
+        let job = self.durable_save_inputs()?;
+        save_offloaded(job).await?;
         Ok(fabric_id)
     }
 
@@ -1538,8 +1598,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .icd_clients
             .retain(|r| r.node_id != registration.node_id);
         fabric.icd_clients.push(registration);
-        let (store, bytes) = self.durable_save_inputs()?;
-        save_offloaded(store, bytes).await?;
+        let job = self.durable_save_inputs()?;
+        save_offloaded(job).await?;
         Ok(())
     }
 
@@ -1759,7 +1819,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // entry is durably persisted (same guarantee as the old inline
                 // path).
                 match self.durable_save_inputs() {
-                    Ok((store, bytes)) => save_offloaded(store, bytes).await.map(|()| info),
+                    Ok(job) => save_offloaded(job).await.map(|()| info),
                     Err(e) => Err(e),
                 }
             }
@@ -1796,8 +1856,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if !changed {
             return Ok(());
         }
-        let (store, bytes) = self.durable_save_inputs()?;
-        save_offloaded(store, bytes).await
+        let job = self.durable_save_inputs()?;
+        save_offloaded(job).await
     }
 
     /// Prepare the inputs for a durable, await-to-completion snapshot save.
@@ -1815,15 +1875,32 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// best-effort updates (e.g. the per-connect address hint) use
     /// [`Self::persist_best_effort`].
     ///
-    /// Returns the `(store, bytes)` to feed to [`save_offloaded`]. The split is
-    /// deliberate: serializing under `&self` and awaiting the save are kept in
-    /// separate statements so no borrow of the (non-`Sync`) actor is held across
-    /// the `.await` — that would make the actor future non-`Send` and so
-    /// unspawnable. Callers do `let (s, b) = self.durable_save_inputs()?;
-    /// save_offloaded(s, b).await?;`.
-    fn durable_save_inputs(&self) -> Result<(Arc<dyn ControllerStore>, Vec<u8>), Error> {
+    /// Returns a fully owned [`SaveJob`] to feed to [`save_offloaded`]. The
+    /// split is deliberate: serializing under `&mut self` and awaiting the save
+    /// are kept in separate statements, and the job borrows nothing from the
+    /// actor, so no borrow of the (non-`Sync`) actor is held across the
+    /// `.await` — that would make the actor future non-`Send` and so
+    /// unspawnable. Callers do `let job = self.durable_save_inputs()?;
+    /// save_offloaded(job).await?;`.
+    ///
+    /// The job also carries the serialize-order sequence, so a concurrently
+    /// detached best-effort save cannot overwrite it with older bytes.
+    fn durable_save_inputs(&mut self) -> Result<SaveJob, Error> {
         let bytes = snapshot::serialize(&self.state)?;
-        Ok((self.store.clone(), bytes))
+        Ok(self.save_job(bytes))
+    }
+
+    /// Stamp already-serialized snapshot `bytes` with the next sequence and the
+    /// shared write gate. The single place [`Actor::snapshot_seq`] advances, so
+    /// every save path — durable and best-effort — is ordered against the rest.
+    fn save_job(&mut self, bytes: Vec<u8>) -> SaveJob {
+        self.snapshot_seq += 1;
+        SaveJob {
+            store: self.store.clone(),
+            bytes,
+            seq: self.snapshot_seq,
+            gate: self.save_gate.clone(),
+        }
     }
 
     /// Persist the snapshot best-effort, off the actor loop, without awaiting.
@@ -1835,19 +1912,24 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// cache the controller can rebuild via mDNS. Durability-critical state must
     /// use [`Self::durable_save_inputs`] + [`save_offloaded`] (await-to-durable)
     /// instead.
-    fn persist_best_effort(&self) {
+    ///
+    /// Detached does not mean unordered: the job carries its serialize-time
+    /// sequence, so if a durable save lands first this write is skipped rather
+    /// than rolling persisted state back to these older bytes
+    /// ([`SaveJob::run`]).
+    fn persist_best_effort(&mut self) {
         // Serialization failure here is purely best-effort state; dropping it
         // must not abort the connection that triggered it.
         let Ok(bytes) = snapshot::serialize(&self.state) else {
             return;
         };
-        let store = self.store.clone();
+        let job = self.save_job(bytes);
         // Fire-and-forget: detach the blocking save. The actor loop returns
         // immediately and never observes the fsync latency or its outcome.
         // (No logging facility is wired into this crate yet; a write error is
         // silently dropped, which is acceptable for a rebuildable address cache.)
         drop(tokio::task::spawn_blocking(move || {
-            let _ = store.save(&bytes);
+            let _ = job.run();
         }));
     }
 
@@ -1914,8 +1996,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // before it programs the key onto devices (so a crash mid-provision can
         // resume from a known key). Serialize under `&self`, then drop the
         // borrow before awaiting the offloaded save.
-        let (store, bytes) = self.durable_save_inputs()?;
-        save_offloaded(store, bytes).await?;
+        let job = self.durable_save_inputs()?;
+        save_offloaded(job).await?;
 
         Ok(crate::GroupKeySet::new(
             key_set_id,
@@ -1992,8 +2074,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             counter.checked_add(1).ok_or_else(|| {
                 Error::Operational("group counter exhausted — re-key the group".into())
             })?;
-        let (store, bytes) = self.durable_save_inputs()?;
-        save_offloaded(store, bytes).await?;
+        let job = self.durable_save_inputs()?;
+        save_offloaded(job).await?;
 
         // (g) Build the InvokeRequest IM payload (SuppressResponse=true — group
         // commands are unacknowledged) and a fresh-exchange protocol header.
@@ -7477,7 +7559,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn best_effort_persist_does_not_block_on_fsync() {
         let store = Arc::new(BlockingStore::default());
-        let actor = test_actor(store.clone());
+        let mut actor = test_actor(store.clone());
 
         // Wedge any save until we release this guard.
         let held = store.gate.lock().unwrap();
@@ -7514,24 +7596,115 @@ mod tests {
     async fn durable_persist_inputs_offload_round_trip() {
         // Success path: a normal store records the save and returns Ok.
         let store = Arc::new(MemStore::default());
-        let actor = test_actor(store.clone());
-        let (s, bytes) = actor.durable_save_inputs().expect("serialize");
-        save_offloaded(s, bytes).await.expect("durable save ok");
+        let mut actor = test_actor(store.clone());
+        let job = actor.durable_save_inputs().expect("serialize");
+        save_offloaded(job).await.expect("durable save ok");
         assert!(
             store.load().expect("load").is_some(),
             "durable save must have written the snapshot"
         );
 
         // Failure path: a failing store surfaces the error to the awaiter.
-        let actor = test_actor(Arc::new(FailingStore));
-        let (s, bytes) = actor.durable_save_inputs().expect("serialize");
-        let err = save_offloaded(s, bytes)
+        let mut actor = test_actor(Arc::new(FailingStore));
+        let job = actor.durable_save_inputs().expect("serialize");
+        let err = save_offloaded(job)
             .await
             .expect_err("a failing store must surface its error");
         assert!(
             format!("{err}").to_lowercase().contains("disk full")
                 || format!("{err}").to_lowercase().contains("i/o"),
             "expected the store error to propagate, got: {err}"
+        );
+    }
+
+    /// Ordering regression: a snapshot serialized EARLIER must never overwrite
+    /// one serialized LATER, whichever reaches the store's `rename` first.
+    ///
+    /// The hazard is real because best-effort saves are detached: a fire-and-
+    /// forget job can be descheduled behind a later durable save and then land
+    /// its (now stale) bytes on top. `SaveJob` carries the serialize-time
+    /// sequence and a shared gate; a job older than the last-written sequence
+    /// is skipped instead of clobbering.
+    #[test]
+    fn stale_snapshot_does_not_clobber_newer() {
+        let store = Arc::new(MemStore::default());
+        let gate = Arc::new(std::sync::Mutex::new(0u64));
+
+        let newer = SaveJob {
+            store: store.clone(),
+            bytes: b"B".to_vec(),
+            seq: 2,
+            gate: gate.clone(),
+        };
+        let stale = SaveJob {
+            store: store.clone(),
+            bytes: b"A".to_vec(),
+            seq: 1,
+            gate: gate.clone(),
+        };
+
+        newer.run().expect("newer save ok");
+        // The stale job still reports success — it is a skip, not a failure —
+        // but must leave the newer bytes in place.
+        stale.run().expect("stale save is a no-op, not an error");
+
+        assert_eq!(
+            store.load().expect("load"),
+            Some(b"B".to_vec()),
+            "the older snapshot must not have clobbered the newer one"
+        );
+        assert_eq!(*gate.lock().unwrap(), 2, "the gate tracks the newest write");
+    }
+
+    /// The async counterpart of `stale_snapshot_does_not_clobber_newer`: a
+    /// detached best-effort save built from a snapshot serialized BEFORE a
+    /// durable save must not overwrite the durable bytes when it finally runs
+    /// on the blocking pool.
+    ///
+    /// The stale job is constructed directly (seq below the actor's gate) —
+    /// that is exactly the state a `persist_best_effort` descheduled behind a
+    /// durable save would be in, without needing to win a real race.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn best_effort_after_durable_is_noop() {
+        let store = Arc::new(MemStore::default());
+        let mut actor = test_actor(store.clone());
+
+        // Durable save first: this advances the shared gate to its sequence.
+        let job = actor.durable_save_inputs().expect("serialize");
+        save_offloaded(job).await.expect("durable save ok");
+        let durable = store.load().expect("load");
+        assert!(durable.is_some(), "durable save must have written");
+
+        // A best-effort job serialized *before* the durable one (lower seq),
+        // detached exactly as `persist_best_effort` does.
+        let stale = SaveJob {
+            store: store.clone(),
+            bytes: b"stale-snapshot".to_vec(),
+            seq: 0,
+            gate: actor.save_gate.clone(),
+        };
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ran.clone();
+        drop(tokio::task::spawn_blocking(move || {
+            let _ = stale.run();
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        // Drain the blocking pool: wait until the detached job has finished.
+        let mut done = false;
+        for _ in 0..200 {
+            if ran.load(std::sync::atomic::Ordering::SeqCst) {
+                done = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(done, "the detached best-effort job must have run");
+
+        assert_eq!(
+            store.load().expect("load"),
+            durable,
+            "a stale best-effort save must not roll the store back"
         );
     }
 
