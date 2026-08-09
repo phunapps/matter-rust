@@ -894,9 +894,10 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     ///
     /// Same lifecycle note as `group_counters`: entries are never removed
     /// because fabrics are never removed locally. A future local
-    /// fabric-removal path SHOULD drop the matching entry — stale material
-    /// here is inert (the epoch-key check below rejects it), but it would keep
-    /// 56 bytes of key material alive for no reason.
+    /// fabric-removal path SHOULD still drop the matching entry: correctness
+    /// does not depend on it (a re-created fabric changes either its epoch key
+    /// or its RCAC public key, and [`Self::group_keys_for`] compares both), but
+    /// leaving it keeps derived key material alive for a fabric that is gone.
     group_key_cache: HashMap<u64, GroupKeyCacheEntry>,
     /// Per-in-flight-connect inbound queue (keyed by node id): the actor forwards
     /// the device's unsecured handshake replies here for the spawned task to
@@ -920,15 +921,19 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     connect_done_rx: mpsc::Receiver<ConnectCompletion>,
 }
 
-/// Derived group-key material for a fabric, computed once per epoch key.
+/// Derived group-key material for a fabric, computed once per
+/// `(epoch_key, root_public_key)` pair.
 ///
 /// Every value below is a pure function of `(epoch_key, root_public_key,
-/// fabric_id)`. The root public key is the fabric's RCAC key and the fabric id
-/// is the map key, so both are fixed for the life of the entry — which makes
-/// **`epoch_key` equality the complete invalidation condition**. It is checked
-/// on every use ([`Actor::handle_invoke_group`]); a key rotation
-/// (`create_group` / `KeySetWrite`) changes the epoch key and forces
-/// re-derivation.
+/// fabric_id)`. `fabric_id` is the map key, and the other two are **both**
+/// stamped on the entry and compared on every use
+/// ([`Actor::group_keys_for`]), which makes that pair the complete
+/// invalidation condition. A key rotation (`create_group` / `KeySetWrite`)
+/// changes the epoch key; a fabric that is ever removed and re-created under
+/// the same id would change the RCAC public key. Either one forces
+/// re-derivation, so an entry can never outlive the inputs it was derived
+/// from — including under a future local fabric-removal path, which does not
+/// exist today.
 ///
 /// Deliberately keyed by fabric id alone, not by `(fabric_id, key_set_id)`:
 /// nothing derived here depends on the key set id — it only selects WHICH
@@ -937,15 +942,29 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
 /// and re-derives), and in the degenerate case where two key sets hold the
 /// same epoch key the cached material is the material both need anyway. The
 /// cost of alternating is a re-derivation per send, i.e. today's behaviour.
+///
+/// The compressed fabric id is deliberately NOT stored: nothing reads it after
+/// `op_group_key` is derived, and it is itself a pure function of the two
+/// stamps above, so keeping it would only add a field that can go stale.
+///
+/// **Secret hygiene:** this holds derived key material long-lived and
+/// unzeroized. That is acceptable because it is derived from the epoch key,
+/// which is already resident unzeroized in
+/// [`ControllerState`](crate::state::ControllerState) for as long as the
+/// controller is open — dropping an entry removes no guarantee the caller had.
+/// This is NOT a secret-erasure boundary (same position as
+/// [`matter_crypto::aead::SessionAead`]): a caller that needs group key
+/// material scrubbed must scrub the stored epoch keys.
 struct GroupKeyCacheEntry {
-    /// The epoch key these values were derived from — the invalidation stamp.
+    /// The epoch key these values were derived from — half the invalidation
+    /// stamp.
     epoch_key: [u8; 16],
-    /// Compressed fabric id (RCAC public key + fabric id), spec §4.3.2 — the
-    /// salt `op_group_key` was derived under. Kept as the record of what was
-    /// derived (and asserted on in tests); the send path only needs the two
-    /// keys and the session id below, so nothing in the library reads it yet.
-    #[allow(dead_code)]
-    compressed_fabric_id: [u8; 8],
+    /// The fabric's RCAC public key (SEC1 uncompressed), the compressed fabric
+    /// id — and hence `op_group_key` — was derived from: the other half of the
+    /// stamp. Fixed for a given fabric today; compared anyway so that a fabric
+    /// re-created under the same id with a NEW root can never be served this
+    /// entry's keys (which would put undecryptable frames on the wire).
+    root_public_key: [u8; 65],
     /// Operational group key: the AES-CCM key for group messages.
     op_group_key: [u8; 16],
     /// Group session id carried in the group message header.
@@ -2108,15 +2127,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// The fabric's derived group-key material, computed on first use and
-    /// re-derived whenever its epoch key changes.
+    /// re-derived whenever the inputs it was derived from change.
     ///
     /// Four HKDFs (compressed fabric id → operational group key → group session
     /// id, plus the privacy key the framing layer would otherwise derive per
     /// packet) are pure overhead on a burst of group commands, since all four
-    /// are a pure function of the fabric's epoch key. Comparing `epoch_key` is
-    /// the WHOLE invalidation rule — see [`GroupKeyCacheEntry`] for why that is
-    /// complete — so a rotated key set (`create_group` / `KeySetWrite`)
-    /// re-derives here before anything is sent under it.
+    /// are a pure function of `(epoch_key, root_public_key, fabric_id)`.
+    /// `fabric_id` is the cache key and the other two are compared here on
+    /// every send — see [`GroupKeyCacheEntry`] for why that pair is the
+    /// complete invalidation rule. A rotated key set (`create_group` /
+    /// `KeySetWrite`) therefore re-derives before anything is sent under it.
     ///
     /// # Errors
     ///
@@ -2130,10 +2150,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ) -> Result<&GroupKeyCacheEntry, Error> {
         use std::collections::hash_map::Entry;
         match self.group_key_cache.entry(fabric_id) {
-            // Hit: same fabric, same epoch key — every derived value below is
-            // still exactly what a fresh derivation would produce.
-            Entry::Occupied(e) if e.get().epoch_key == epoch_key => Ok(e.into_mut()),
-            // Miss (cold) or stale (rotated key): derive the whole set.
+            // Hit: same fabric, same epoch key, same root key — every derived
+            // value below is still exactly what a fresh derivation would
+            // produce.
+            Entry::Occupied(e)
+                if e.get().epoch_key == epoch_key
+                    && &e.get().root_public_key == root_public_key =>
+            {
+                Ok(e.into_mut())
+            }
+            // Miss (cold), or stale because the key set was rotated or the
+            // fabric's root changed: derive the whole set.
             slot => {
                 let compressed_fabric_id =
                     matter_crypto::derive_compressed_fabric_id(root_public_key, fabric_id)
@@ -2147,7 +2174,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     .map_err(|e| Error::Operational(format!("group privacy key: {e}")))?;
                 let fresh = GroupKeyCacheEntry {
                     epoch_key,
-                    compressed_fabric_id,
+                    root_public_key: *root_public_key,
                     op_group_key,
                     group_session_id,
                     privacy_key,
@@ -5159,6 +5186,72 @@ mod tests {
             1,
             "invalidation replaces the entry rather than accumulating"
         );
+    }
+
+    /// The epoch key is only HALF the invalidation stamp: the derivation also
+    /// takes the fabric's RCAC public key. A fabric re-created under the same
+    /// id with a NEW root (no such local path today — hence the simulation
+    /// below) must NOT be served the old root's keys, or every group frame
+    /// would go out undecryptable.
+    ///
+    /// Simulated by poisoning the cached entry: same epoch key, a different
+    /// `root_public_key`, and an `op_group_key` that decrypts nothing. If the
+    /// hit condition ignored the root key this would be a cache HIT and the
+    /// frame would be encrypted under the poison key.
+    #[tokio::test]
+    async fn group_key_cache_invalidated_on_root_key_change() {
+        let key_set_id = 0x0042u16;
+        let epoch_key = [0x11u8; 16];
+        let (mut actor, peer) = group_test_actor(key_set_id, epoch_key);
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let op_real = op_group_key_of(&actor.state, &epoch_key);
+        let real_root = *actor
+            .sole_fabric()
+            .unwrap()
+            .rcac_cert
+            .public_key()
+            .as_bytes();
+        let fields_tlv = empty_fields_tlv();
+
+        // Warm the cache.
+        actor
+            .handle_invoke_group(0xBEEF, key_set_id, on_command_path(), &fields_tlv)
+            .await
+            .expect("first send");
+        let (_wire, _from) = peer.recv_from().await.expect("frame 1 emitted");
+
+        // Poison: as if the entry had been derived under a different root.
+        {
+            let entry = actor
+                .group_key_cache
+                .get_mut(&fabric_id)
+                .expect("warmed entry");
+            entry.root_public_key = [0x04; 65];
+            entry.op_group_key = [0xEE; 16];
+            entry.privacy_key = [0xEE; 16];
+        }
+
+        actor
+            .handle_invoke_group(0xBEEF, key_set_id, on_command_path(), &fields_tlv)
+            .await
+            .expect("second send");
+        let (wire, _from) = peer.recv_from().await.expect("frame 2 emitted");
+        matter_transport::decode_group_secured(&wire, &op_real)
+            .expect("frame must be re-derived under the fabric's REAL root key");
+        assert!(
+            matter_transport::decode_group_secured(&wire, &[0xEE; 16]).is_err(),
+            "frame must not be encrypted under the poisoned cache entry"
+        );
+
+        let entry = actor
+            .group_key_cache
+            .get(&fabric_id)
+            .expect("entry keyed by fabric id");
+        assert_eq!(
+            entry.root_public_key, real_root,
+            "the refreshed entry must record the root key it was derived under"
+        );
+        assert_eq!(entry.op_group_key, op_real);
     }
 
     // --- group counter block reservation (spec §1.4) ---

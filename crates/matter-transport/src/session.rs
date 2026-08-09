@@ -149,15 +149,28 @@ pub struct Session {
     cipher_r2i: Option<CachedCipher>,
 }
 
-/// A cached AES-CCM cipher together with the key bytes it was built from.
-#[derive(Debug)]
+/// A cached AES-CCM cipher, plus — in debug builds only — the key bytes it
+/// was built from.
 struct CachedCipher {
     cipher: matter_crypto::aead::SessionAead,
     /// Copy of the key `cipher` was built from, kept ONLY so the accessors
-    /// can `debug_assert` the cache still matches [`Session::keys`] (which
-    /// is `pub`, hence mutable out-of-crate via `SessionManager::get_mut`).
-    /// Compiled out of release builds along with the assertions.
+    /// can assert the cache still matches [`Session::keys`] (which is `pub`,
+    /// hence mutable out-of-crate via `SessionManager::get_mut`).
+    ///
+    /// `#[cfg(debug_assertions)]`: the field itself — not just the assertions
+    /// — is absent from release builds, so a release binary carries no second
+    /// copy of the session keys.
+    #[cfg(debug_assertions)]
     key: [u8; 16],
+}
+
+/// Opaque `Debug`: both the expanded key schedule inside
+/// [`matter_crypto::aead::SessionAead`] and the debug-only key copy above are
+/// raw key material, and [`Session`] derives `Debug`.
+impl core::fmt::Debug for CachedCipher {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CachedCipher(<key material redacted>)")
+    }
 }
 
 impl Session {
@@ -170,9 +183,13 @@ impl Session {
         let key = self.keys.i2r_key;
         let cached = self.cipher_i2r.get_or_insert_with(|| CachedCipher {
             cipher: matter_crypto::aead::SessionAead::new(&key),
+            #[cfg(debug_assertions)]
             key,
         });
-        debug_assert_eq!(
+        // `#[cfg]`, not `debug_assert!`: the field it reads does not exist in
+        // release builds, so the statement must not be compiled there either.
+        #[cfg(debug_assertions)]
+        assert_eq!(
             cached.key, key,
             "i2r_key changed after the cipher cache was built — register a fresh session instead of mutating `keys`"
         );
@@ -184,9 +201,11 @@ impl Session {
         let key = self.keys.r2i_key;
         let cached = self.cipher_r2i.get_or_insert_with(|| CachedCipher {
             cipher: matter_crypto::aead::SessionAead::new(&key),
+            #[cfg(debug_assertions)]
             key,
         });
-        debug_assert_eq!(
+        #[cfg(debug_assertions)]
+        assert_eq!(
             cached.key, key,
             "r2i_key changed after the cipher cache was built — register a fresh session instead of mutating `keys`"
         );
@@ -218,9 +237,11 @@ impl Session {
         };
         let cached = slot.get_or_insert_with(|| CachedCipher {
             cipher: matter_crypto::aead::SessionAead::new(&key),
+            #[cfg(debug_assertions)]
             key,
         });
-        debug_assert_eq!(
+        #[cfg(debug_assertions)]
+        assert_eq!(
             cached.key, key,
             "the peer's session key changed after the cipher cache was built — register a fresh session instead of mutating `keys`"
         );
