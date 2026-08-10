@@ -10,7 +10,7 @@
 #![forbid(unsafe_code)]
 
 use crate::error::ImError;
-use crate::{read_container_members, read_container_value, skip_container};
+use crate::{read_container_value, skip_container};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// A read/subscribe event path with optional (wildcard) components. A `None`
@@ -203,20 +203,40 @@ pub enum EventReport {
     },
 }
 
-/// Read an `EventPathIB` list's members into an [`EventPath`] (tags 0–4).
-fn event_path_from_members(members: &[(Tag, Value)]) -> EventPath {
+/// Consume an `EventPathIB` list body (reader positioned just after the
+/// list's `ContainerStart`) into an [`EventPath`] (tags 0–4), without
+/// materialising the members. Field mapping is lenient, as before:
+/// wrong-typed or out-of-range members leave the field `None`.
+fn event_path_from_reader(r: &mut TlvReader<'_>) -> Result<EventPath, ImError> {
     let mut p = EventPath::default();
-    for (tag, v) in members {
-        match (tag, v) {
-            (Tag::Context(0), Value::Uint(n)) => p.node = Some(*n),
-            (Tag::Context(1), Value::Uint(n)) => p.endpoint = u16::try_from(*n).ok(),
-            (Tag::Context(2), Value::Uint(n)) => p.cluster = u32::try_from(*n).ok(),
-            (Tag::Context(3), Value::Uint(n)) => p.event = u32::try_from(*n).ok(),
-            (Tag::Context(4), Value::Bool(b)) => p.is_urgent = Some(*b),
-            _ => {}
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Ok(p),
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(n),
+            }) => p.node = Some(n),
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(n),
+            }) => p.endpoint = u16::try_from(n).ok(),
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(n),
+            }) => p.cluster = u32::try_from(n).ok(),
+            Some(Element::Scalar {
+                tag: Tag::Context(3),
+                value: Value::Uint(n),
+            }) => p.event = u32::try_from(n).ok(),
+            Some(Element::Scalar {
+                tag: Tag::Context(4),
+                value: Value::Bool(b),
+            }) => p.is_urgent = Some(b),
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
         }
     }
-    p
 }
 
 /// Parse the body of one `EventReportIB` (reader positioned just after its struct
@@ -270,8 +290,7 @@ fn parse_event_data(r: &mut TlvReader<'_>) -> Result<EventReportItem, ImError> {
                 tag: Tag::Context(0),
                 kind: ContainerKind::List,
             }) => {
-                let members = read_container_members(r)?;
-                path = event_path_from_members(&members);
+                path = event_path_from_reader(r)?;
             }
             Some(Element::Scalar {
                 tag: Tag::Context(1),
@@ -336,20 +355,24 @@ fn parse_event_status(r: &mut TlvReader<'_>) -> Result<EventReport, ImError> {
                 tag: Tag::Context(0),
                 kind: ContainerKind::List,
             }) => {
-                let members = read_container_members(r)?;
-                path = event_path_from_members(&members);
+                path = event_path_from_reader(r)?;
             }
             // Status [1] — StatusIB struct { 0: Status u8, 1: ClusterStatus? }.
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Structure,
-            }) => {
-                for (tag, v) in read_container_members(r)? {
-                    if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
-                        status = u8::try_from(n).unwrap_or(0);
-                    }
+            }) => loop {
+                match r.next()? {
+                    None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+                    Some(Element::ContainerEnd) => break,
+                    Some(Element::Scalar {
+                        tag: Tag::Context(0),
+                        value: Value::Uint(n),
+                    }) => status = u8::try_from(n).unwrap_or(0),
+                    Some(Element::ContainerStart { .. }) => skip_container(r)?,
+                    Some(_) => {}
                 }
-            }
+            },
             Some(Element::ContainerStart { .. }) => skip_container(r)?,
             Some(_) => {}
         }

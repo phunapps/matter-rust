@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::invoke::{command_path_from_value, reencode_anonymous, write_command_path};
+use crate::invoke::{command_path_from_reader, reencode_anonymous, write_command_path};
 use crate::path::CommandPath;
 use crate::status::ImStatus;
 use crate::{expect_message_struct, skip_container, IM_REVISION};
@@ -110,8 +110,7 @@ fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImE
                 tag: Tag::Context(0),
                 kind: ContainerKind::List,
             }) => {
-                let members = read_list_members(r)?;
-                path = Some(command_path_from_value(&members)?);
+                path = Some(command_path_from_reader(r)?);
             }
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
@@ -138,14 +137,6 @@ fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImE
             .ok_or(crate::ImError::MissingField("CommandDataIB.CommandFields"))?,
         command_ref,
     })
-}
-
-/// Read a `Value::List`'s members (reader positioned after the list start).
-fn read_list_members(r: &mut TlvReader<'_>) -> Result<Vec<(Tag, Value)>, crate::ImError> {
-    match crate::read_container_value(r, ContainerKind::List)? {
-        Value::List(members) => Ok(members),
-        _ => Err(crate::ImError::UnexpectedValue("expected a list")),
-    }
 }
 
 /// Read a `Value::Structure` (reader positioned after the struct start) and

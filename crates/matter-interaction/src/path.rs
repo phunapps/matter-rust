@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use crate::error::ImError;
-use matter_codec::{Tag, Value};
+use matter_codec::{Element, Tag, TlvReader, Value};
 
 /// A concrete command path: `(endpoint, cluster, command)`.
 ///
@@ -111,54 +111,144 @@ impl From<AttributePath> for ReadPath {
     }
 }
 
-/// Read an `AttributePathIB` list (`Value::List` members) into an
-/// [`AttributePath`]. Out-of-range values surface as
-/// [`ImError::UnexpectedValue`] (not as a missing field).
-pub(crate) fn attribute_path_from_value(
-    members: &[(Tag, Value)],
-) -> Result<AttributePath, ImError> {
+/// Consume an `AttributePathIB` list body (reader positioned just after the
+/// list's `ContainerStart`) into an [`AttributePath`], without materialising
+/// the members. The `bool` reports a `ListIndex` (context tag 5) equal to
+/// `null`, which in a `ReportData` signals a list **append** (Matter
+/// §10.6.4). Out-of-range values surface as [`ImError::UnexpectedValue`].
+pub(crate) fn attribute_path_from_reader(
+    r: &mut TlvReader<'_>,
+) -> Result<(AttributePath, bool), ImError> {
     let mut endpoint = None;
     let mut cluster = None;
     let mut attribute = None;
-    for (tag, v) in members {
-        match (tag, v) {
-            (Tag::Context(2), Value::Uint(n)) => {
+    let mut append = false;
+    loop {
+        match r.next()? {
+            None => {
+                return Err(ImError::Codec(matter_codec::Error::UnclosedContainer));
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(n),
+            }) => {
                 endpoint =
-                    Some(u16::try_from(*n).map_err(|_| {
+                    Some(u16::try_from(n).map_err(|_| {
                         ImError::UnexpectedValue("AttributePath.endpoint exceeds u16")
                     })?);
             }
-            (Tag::Context(3), Value::Uint(n)) => {
+            Some(Element::Scalar {
+                tag: Tag::Context(3),
+                value: Value::Uint(n),
+            }) => {
                 cluster =
-                    Some(u32::try_from(*n).map_err(|_| {
+                    Some(u32::try_from(n).map_err(|_| {
                         ImError::UnexpectedValue("AttributePath.cluster exceeds u32")
                     })?);
             }
-            (Tag::Context(4), Value::Uint(n)) => {
-                attribute = Some(u32::try_from(*n).map_err(|_| {
+            Some(Element::Scalar {
+                tag: Tag::Context(4),
+                value: Value::Uint(n),
+            }) => {
+                attribute = Some(u32::try_from(n).map_err(|_| {
                     ImError::UnexpectedValue("AttributePath.attribute exceeds u32")
                 })?);
             }
-            _ => {}
+            Some(Element::Scalar {
+                tag: Tag::Context(5),
+                value: Value::Null,
+            }) => append = true,
+            Some(Element::ContainerStart { .. }) => crate::skip_container(r)?,
+            Some(_) => {}
         }
     }
-    Ok(AttributePath {
-        endpoint: endpoint.ok_or(ImError::MissingField("AttributePath.endpoint"))?,
-        cluster: cluster.ok_or(ImError::MissingField("AttributePath.cluster"))?,
-        attribute: attribute.ok_or(ImError::MissingField("AttributePath.attribute"))?,
-    })
+    Ok((
+        AttributePath {
+            endpoint: endpoint.ok_or(ImError::MissingField("AttributePath.endpoint"))?,
+            cluster: cluster.ok_or(ImError::MissingField("AttributePath.cluster"))?,
+            attribute: attribute.ok_or(ImError::MissingField("AttributePath.attribute"))?,
+        },
+        append,
+    ))
 }
 
-/// Like [`attribute_path_from_value`], but also reports whether the path
-/// carried a `ListIndex` (context tag 5) equal to `null`, which in a
-/// `ReportData` signals a list **append** (Matter §10.6.4). Returns
-/// `(path, list_index_is_null_append)`.
-pub(crate) fn attribute_path_and_append_from_value(
-    members: &[(Tag, Value)],
-) -> Result<(AttributePath, bool), ImError> {
-    let path = attribute_path_from_value(members)?;
-    let append = members
-        .iter()
-        .any(|(tag, v)| matches!(tag, Tag::Context(5)) && matches!(v, Value::Null));
-    Ok((path, append))
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    use super::*;
+    use matter_codec::{Element, TlvReader, TlvWriter};
+
+    /// Drive `attribute_path_from_reader` over a writer-built `AttributePathIB`.
+    fn parse(build: impl FnOnce(&mut TlvWriter<'_>)) -> Result<(AttributePath, bool), ImError> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_list(Tag::Anonymous).unwrap();
+        build(&mut w);
+        w.end_container().unwrap();
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        attribute_path_from_reader(&mut r)
+    }
+
+    #[test]
+    fn streaming_path_parse_matches_member_semantics() {
+        // Normal path + ListIndex null append marker.
+        let (p, append) = parse(|w| {
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.put_uint(Tag::Context(3), 0x0006).unwrap();
+            w.put_uint(Tag::Context(4), 0xFFFC).unwrap();
+            w.put_null(Tag::Context(5)).unwrap();
+        })
+        .unwrap();
+        assert_eq!((p.endpoint, p.cluster, p.attribute), (1, 0x0006, 0xFFFC));
+        assert!(append);
+
+        // Duplicate tag: last wins (parity with the member-vec iteration).
+        let (p, _) = parse(|w| {
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.put_uint(Tag::Context(2), 2).unwrap();
+            w.put_uint(Tag::Context(3), 6).unwrap();
+            w.put_uint(Tag::Context(4), 0).unwrap();
+        })
+        .unwrap();
+        assert_eq!(p.endpoint, 2);
+
+        // Unknown nested container inside the path list is skipped.
+        let (p, append) = parse(|w| {
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.start_structure(Tag::Context(9)).unwrap();
+            w.put_uint(Tag::Context(0), 7).unwrap();
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(3), 6).unwrap();
+            w.put_uint(Tag::Context(4), 0).unwrap();
+        })
+        .unwrap();
+        assert_eq!(p.cluster, 6);
+        assert!(!append);
+    }
+
+    #[test]
+    fn streaming_path_parse_range_and_missing_errors() {
+        // endpoint exceeding u16 → UnexpectedValue.
+        assert!(matches!(
+            parse(|w| {
+                w.put_uint(Tag::Context(2), 0x0001_0000).unwrap();
+                w.put_uint(Tag::Context(3), 6).unwrap();
+                w.put_uint(Tag::Context(4), 0).unwrap();
+            }),
+            Err(ImError::UnexpectedValue(_))
+        ));
+        // missing attribute → MissingField.
+        assert!(matches!(
+            parse(|w| {
+                w.put_uint(Tag::Context(2), 0).unwrap();
+                w.put_uint(Tag::Context(3), 6).unwrap();
+            }),
+            Err(ImError::MissingField("AttributePath.attribute"))
+        ));
+    }
 }

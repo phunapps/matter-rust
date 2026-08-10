@@ -3,9 +3,11 @@
 #![forbid(unsafe_code)]
 
 use crate::error::ImError;
-use crate::path::{attribute_path_from_value, AttributePath};
+use crate::path::AttributePath;
+#[cfg(test)]
+use crate::read_container_members;
 use crate::status::ImStatus;
-use crate::{expect_message_struct, read_container_members, skip_container, IM_REVISION};
+use crate::{expect_message_struct, skip_container, IM_REVISION};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// One attribute write: a concrete path plus the pre-encoded data value.
@@ -144,22 +146,15 @@ pub(crate) fn parse_attribute_status_ib(
                 tag: Tag::Context(0),
                 kind: ContainerKind::List,
             }) => {
-                let members = read_container_members(r)?;
-                path = Some(attribute_path_from_value(&members)?);
+                let (p, _) = crate::path::attribute_path_from_reader(r)?;
+                path = Some(p);
             }
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
                 kind: ContainerKind::Structure,
             }) => {
-                // StatusIB = { 0: Status (uint), 1: ClusterStatus (ignored) }
-                let members = read_container_members(r)?;
-                // Last value wins for duplicate tags (lenient parsing); real devices never duplicate Status.
-                for (tag, v) in &members {
-                    if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
-                        let code = u8::try_from(*n)
-                            .map_err(|_| ImError::InvalidStatusCode { code: *n })?;
-                        status = Some(ImStatus::from_u8(code));
-                    }
+                if let Some(s) = parse_status_ib_body(r)? {
+                    status = Some(s);
                 }
             }
             Some(Element::ContainerStart { .. }) => skip_container(r)?,
@@ -170,6 +165,28 @@ pub(crate) fn parse_attribute_status_ib(
         path.ok_or(ImError::MissingField("AttributeStatusIB.Path"))?,
         status.ok_or(ImError::MissingField("AttributeStatusIB.Status"))?,
     ))
+}
+
+/// Consume a `StatusIB` struct body (reader just after its start),
+/// returning the last `Status` (context tag 0) seen, mapped to
+/// [`ImStatus`]. Out-of-range codes error as `InvalidStatusCode`.
+pub(crate) fn parse_status_ib_body(r: &mut TlvReader<'_>) -> Result<Option<ImStatus>, ImError> {
+    let mut status = None;
+    loop {
+        match r.next()? {
+            None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerEnd) => return Ok(status),
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(n),
+            }) => {
+                let code = u8::try_from(n).map_err(|_| ImError::InvalidStatusCode { code: n })?;
+                status = Some(ImStatus::from_u8(code));
+            }
+            Some(Element::ContainerStart { .. }) => skip_container(r)?,
+            Some(_) => {}
+        }
+    }
 }
 
 /// Reserve for the `MoreChunkedMessages`(ctx3) bool we may add after packing.

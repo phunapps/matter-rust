@@ -5,10 +5,7 @@
 use crate::error::ImError;
 use crate::path::CommandPath;
 use crate::status::ImStatus;
-use crate::{
-    expect_message_struct, read_container_members, read_container_value, skip_container,
-    IM_REVISION,
-};
+use crate::{expect_message_struct, read_container_value, skip_container, IM_REVISION};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Write a `CommandPathIB` (a TLV **list**: 0=endpoint, 1=cluster,
@@ -191,32 +188,48 @@ pub(crate) fn reencode_anonymous(value: &Value) -> Vec<u8> {
     buf
 }
 
-/// Read a `CommandPathIB` list (`Value::List` members) into a [`CommandPath`].
-pub(crate) fn command_path_from_value(members: &[(Tag, Value)]) -> Result<CommandPath, ImError> {
+/// Consume a `CommandPathIB` list body (reader positioned just after the
+/// list's `ContainerStart`) into a [`CommandPath`], without materialising
+/// the members.
+pub(crate) fn command_path_from_reader(r: &mut TlvReader<'_>) -> Result<CommandPath, ImError> {
     let mut endpoint = None;
     let mut cluster = None;
     let mut command = None;
-    for (tag, v) in members {
-        match (tag, v) {
-            (Tag::Context(0), Value::Uint(n)) => {
+    loop {
+        match r.next()? {
+            None => {
+                return Err(ImError::Codec(matter_codec::Error::UnclosedContainer));
+            }
+            Some(Element::ContainerEnd) => break,
+            Some(Element::Scalar {
+                tag: Tag::Context(0),
+                value: Value::Uint(n),
+            }) => {
                 endpoint =
-                    Some(u16::try_from(*n).map_err(|_| {
+                    Some(u16::try_from(n).map_err(|_| {
                         ImError::UnexpectedValue("CommandPath.endpoint exceeds u16")
                     })?);
             }
-            (Tag::Context(1), Value::Uint(n)) => {
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(n),
+            }) => {
                 cluster =
-                    Some(u32::try_from(*n).map_err(|_| {
+                    Some(u32::try_from(n).map_err(|_| {
                         ImError::UnexpectedValue("CommandPath.cluster exceeds u32")
                     })?);
             }
-            (Tag::Context(2), Value::Uint(n)) => {
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(n),
+            }) => {
                 command =
-                    Some(u32::try_from(*n).map_err(|_| {
+                    Some(u32::try_from(n).map_err(|_| {
                         ImError::UnexpectedValue("CommandPath.command exceeds u32")
                     })?);
             }
-            _ => {}
+            Some(Element::ContainerStart { .. }) => crate::skip_container(r)?,
+            Some(_) => {}
         }
     }
     Ok(CommandPath {
@@ -390,8 +403,7 @@ fn parse_command_data_ref(
                 tag: Tag::Context(0),
                 kind: ContainerKind::List,
             }) => {
-                let body = read_container_members(r)?;
-                path = Some(command_path_from_value(&body)?);
+                path = Some(command_path_from_reader(r)?);
             }
             Some(Element::ContainerStart {
                 tag: Tag::Context(1),
@@ -448,11 +460,18 @@ fn parse_command_status_ref(r: &mut TlvReader<'_>) -> Result<(ImStatus, Option<u
                 tag: Tag::Context(1),
                 kind: ContainerKind::Structure,
             }) => {
-                let members = read_container_members(r)?;
-                // Last value wins for duplicate tags (lenient parsing); real devices never duplicate Status.
-                for (tag, v) in &members {
-                    if let (Tag::Context(0), Value::Uint(n)) = (tag, v) {
-                        status = Some(*n);
+                // StatusIB body: last Status (ctx 0) wins; range-checked to u8
+                // only after the parse loop (see `status` doc above).
+                loop {
+                    match r.next()? {
+                        None => return Err(ImError::Codec(matter_codec::Error::UnclosedContainer)),
+                        Some(Element::ContainerEnd) => break,
+                        Some(Element::Scalar {
+                            tag: Tag::Context(0),
+                            value: Value::Uint(n),
+                        }) => status = Some(n),
+                        Some(Element::ContainerStart { .. }) => skip_container(r)?,
+                        Some(_) => {}
                     }
                 }
             }

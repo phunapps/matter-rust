@@ -4,12 +4,8 @@
 
 use crate::error::ImError;
 use crate::event::{EventFilter, EventPath};
-use crate::path::attribute_path_and_append_from_value;
 pub use crate::path::{AttributePath, ReadPath};
-use crate::{
-    expect_message_struct, read_container_members, read_container_value, skip_container,
-    IM_REVISION,
-};
+use crate::{expect_message_struct, read_container_value, skip_container, IM_REVISION};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Build a `ReadRequestMessage` carrying attribute paths, event paths, and event
@@ -428,8 +424,7 @@ fn parse_attribute_data(
                 tag: Tag::Context(1),
                 kind: ContainerKind::List,
             }) => {
-                let members = read_container_members(r)?;
-                let (p, is_append) = attribute_path_and_append_from_value(&members)?;
+                let (p, is_append) = crate::path::attribute_path_from_reader(r)?;
                 *path = Some(p);
                 *append = is_append;
             }
