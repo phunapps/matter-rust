@@ -11707,7 +11707,7 @@ mod tests {
     }
 
     /// Does this `WriteRequestMessage` carry `MoreChunkedMessages` (ctx tag 3) =
-    /// true? Mirrors `matter_interaction::write`'s `has_more_chunked` test helper:
+    /// true? Mirrors `matter_interaction::write`'s `more_chunked_flag` test helper:
     /// walk the top-level struct, skipping nested containers, looking for the
     /// boolean at context tag 3.
     fn write_request_has_more_chunked(msg: &[u8]) -> bool {
@@ -11741,7 +11741,8 @@ mod tests {
     /// Loopback device for the chunked-write primitive. Completes CASE, then
     /// receives `expected_chunks` `WriteRequest`s (opcode 0x06) on ONE
     /// exchange, asserting `MoreChunkedMessages=true` on all but the last
-    /// (decoded from each request, not just counted). Chip-faithful AND
+    /// (the last carries an explicit `false`; decoded from each request, not
+    /// just counted). Chip-faithful AND
     /// strict: replies to EVERY chunk with `write_response` (opcode 0x07) on
     /// the same exchange — chip's `WriteHandler` sends one `WriteResponse`
     /// per received `WriteRequest`, and `WriteClient` gates the next chunk on
@@ -12805,8 +12806,9 @@ mod tests {
     /// `write_acl` multi-chunk path: build chunks directly with a tiny budget so
     /// they split, then drive them through `chunked_write` (which is what
     /// `write_acl` delegates to). The loopback device collects all chunks, asserts
-    /// `MoreChunkedMessages=true` on all but the last (courtesy of
-    /// `run_chunked_write_device`), then replies `WriteResponse(Success)`.
+    /// `MoreChunkedMessages=true` on all but the last — explicit `false` on the
+    /// last (courtesy of `run_chunked_write_device`), then replies
+    /// `WriteResponse(Success)`.
     ///
     /// Note: `write_acl` hardcodes budget=800 which won't force multi-chunk in a
     /// unit test (that would need ~100 large ACL entries). We therefore test the

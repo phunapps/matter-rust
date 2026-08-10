@@ -42,6 +42,13 @@ CASE/matter.js vectors, and the chip check-in KAT pin every change. The only
 new public API is the additive `Session::peer_addr` routing hint in
 matter-transport; everything else is internal.
 
+Chunked-write chip-parity fixes (found by phase 3's live hardware validation —
+the multi-chunk write path's first-ever contact with a real chip stack): the
+two entries under `matter-controller` → *Fixed* and `matter-interaction` →
+*Fixed* below. One of them deliberately moves multi-chunk wire bytes; the
+"no wire bytes move" claim above is about the phase-3 performance changes,
+which these two fixes are not part of.
+
 ### `matter-controller`
 
 #### Fixed
@@ -64,6 +71,16 @@ matter-transport; everything else is internal.
   durable save and then win the store's atomic rename, rolling persisted state
   backwards. Every save now carries its serialize-time sequence and shares a
   per-controller write gate; an out-of-order job is skipped.
+- **Chunked writes now gate each chunk on its `WriteResponse`** instead of
+  pipelining every chunk back-to-back on one exchange. MRP permits one
+  outstanding reliable message per exchange, so the pipelined chunks rode on
+  retransmit timing: against a real Thread device the write reported success
+  while later chunks were still in flight, and the device's half-fed write
+  transaction answered subsequent writes with `Busy` until it timed out.
+  Each chunk's response is now parsed and its statuses accumulated (chip's
+  `WriteClient` pumps every chunk regardless of element statuses, and so do
+  we); a message-level `StatusResponse` rejection or a malformed response
+  aborts with an error instead of feeding chunks into a closed transaction.
 
 #### Performance
 
@@ -172,6 +189,18 @@ matter-transport; everything else is internal.
   precise).
 
 ### `matter-interaction`
+
+#### Fixed
+
+- **Multi-chunk `WriteRequest`s now carry `MoreChunkedMessages` explicitly on
+  every chunk — including an explicit `false` on the final one.** chip's
+  `WriteHandler` initialises the flag from the previous chunk's value before
+  parsing, so an *absent* field on the final chunk inherits `true` and the
+  device waits for more chunks until its transaction times out (observed live
+  against an ESP32-C6; chip's own `WriteClient` always encodes the flag).
+  This deliberately changes multi-chunk wire bytes (+2 bytes on the final
+  chunk); the old bytes never worked against a chip stack. Single-message
+  writes are unchanged and remain byte-identical to `build_write_request`.
 
 #### Performance
 

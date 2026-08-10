@@ -302,7 +302,9 @@ impl Node {
     /// Send a multi-chunk write: each element of `chunks` is one
     /// `WriteRequestMessage` (built by
     /// [`build_list_write_chunks`](matter_interaction::build_list_write_chunks),
-    /// which sets `MoreChunkedMessages` on all but the last). All chunks go on
+    /// which encodes `MoreChunkedMessages` explicitly on every chunk of a
+    /// multi-chunk sequence — `true` on all but the last, explicit `false` on
+    /// the last, as chip's sticky-flag parser requires). All chunks go on
     /// ONE exchange, ONE in flight at a time — the actor sends the next chunk
     /// only after the device's `WriteResponseMessage` to the previous one
     /// (chip's `WriteClient` parity; see `Actor::handle_chunked_write` /
