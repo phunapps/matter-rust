@@ -134,10 +134,31 @@ pub fn read_container_value(
     r: &mut TlvReader<'_>,
     kind: ContainerKind,
 ) -> Result<Value, error::ImError> {
+    if matches!(kind, ContainerKind::Array) {
+        // Arrays: build the Vec<Value> directly instead of collecting
+        // (Tag, Value) members and re-collecting into a second Vec. Tags on
+        // array children are discarded, as before (lenient; the codec's
+        // tree-builder path is the strict one).
+        let mut elements = Vec::new();
+        loop {
+            match r.next()? {
+                None => {
+                    return Err(error::ImError::Codec(
+                        matter_codec::Error::UnclosedContainer,
+                    ))
+                }
+                Some(Element::ContainerEnd) => return Ok(Value::Array(elements)),
+                Some(Element::Scalar { value, .. }) => elements.push(value),
+                Some(Element::ContainerStart {
+                    kind: inner_kind, ..
+                }) => elements.push(read_container_value(r, inner_kind)?),
+                Some(_) => {}
+            }
+        }
+    }
     let members = read_container_members(r)?;
     Ok(match kind {
         ContainerKind::Structure => Value::Structure(members),
-        ContainerKind::Array => Value::Array(members.into_iter().map(|(_, v)| v).collect()),
         // ContainerKind::List and any future non-exhaustive variants: preserve as List.
         _ => Value::List(members),
     })
@@ -202,5 +223,34 @@ mod tests {
             }) => {}
             other => panic!("expected sentinel after skip, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn read_container_value_array_matches_codec_tree_builder_shape() {
+        // Array of mixed scalars + a nested array; tags on array children are
+        // discarded (lenient, unchanged behavior).
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Anonymous, 1).unwrap();
+        w.start_array(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Anonymous, 2).unwrap();
+        w.end_container().unwrap();
+        w.put_utf8(Tag::Anonymous, "x").unwrap();
+        w.end_container().unwrap();
+
+        let mut r = TlvReader::new(&buf);
+        let Some(Element::ContainerStart { kind, .. }) = r.next().unwrap() else {
+            panic!("expected array start");
+        };
+        let v = read_container_value(&mut r, kind).unwrap();
+        assert_eq!(
+            v,
+            Value::Array(vec![
+                Value::Uint(1),
+                Value::Array(vec![Value::Uint(2)]),
+                Value::Utf8(String::from("x")),
+            ])
+        );
     }
 }
