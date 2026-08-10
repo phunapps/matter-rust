@@ -110,6 +110,45 @@ pub const MAX_DEPTH: usize = 32;
 /// [`TlvReader::with_element_budget`].
 pub const DEFAULT_ELEMENT_BUDGET: usize = 1 << 20;
 
+/// Byte offsets of one element within a [`TlvReader`]'s input, produced by
+/// [`TlvReader::element_span`] / [`TlvReader::skip_container_span`].
+///
+/// Two-form contract:
+/// - **Scalar span** — after `next()`/`next_ref()` returns a `Scalar`, the
+///   span covers the complete element; [`body`](Self::body) starts after the
+///   tag bytes (for strings it includes the length field, whose width form
+///   lives in the element type).
+/// - **Container span** — after `next()` returns `ContainerStart` the span
+///   covers only the container header; call
+///   [`skip_container_span`](TlvReader::skip_container_span) for the full
+///   container, whose [`body`](Self::body) covers the children plus the
+///   end-of-container marker and EXCLUDES the original control/tag bytes.
+///
+/// Resolve ranges against the input with [`TlvReader::span_bytes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ElementSpan {
+    start: usize,
+    body_start: usize,
+    end: usize,
+}
+
+impl ElementSpan {
+    /// The complete element: control octet through the last body byte.
+    #[must_use]
+    pub fn full(&self) -> core::ops::Range<usize> {
+        self.start..self.end
+    }
+
+    /// The element body: everything after the control octet and tag bytes.
+    /// For a container span from `skip_container_span`, this is the children
+    /// plus the end-of-container marker — the exact bytes retag re-emission
+    /// copies under a fresh header.
+    #[must_use]
+    pub fn body(&self) -> core::ops::Range<usize> {
+        self.body_start..self.end
+    }
+}
+
 /// A streaming TLV decoder over a borrowed byte slice.
 pub struct TlvReader<'a> {
     bytes: &'a [u8],
@@ -124,6 +163,10 @@ pub struct TlvReader<'a> {
     /// [`Self::read_value`]). The streaming [`Self::next`] path does not
     /// touch it because it allocates nothing per element.
     element_budget: usize,
+    /// Span of the element most recently returned by [`Self::next`] /
+    /// [`Self::next_ref`] (or the whole container after a `skip_container*`
+    /// call). `None` before the first element.
+    last_span: Option<ElementSpan>,
 }
 
 impl<'a> TlvReader<'a> {
@@ -136,6 +179,7 @@ impl<'a> TlvReader<'a> {
             pos: 0,
             depth: 0,
             element_budget: DEFAULT_ELEMENT_BUDGET,
+            last_span: None,
         }
     }
 
@@ -153,6 +197,7 @@ impl<'a> TlvReader<'a> {
             pos: 0,
             depth: 0,
             element_budget: budget,
+            last_span: None,
         }
     }
 
@@ -215,6 +260,7 @@ impl<'a> TlvReader<'a> {
         if self.is_empty() {
             return Ok(None);
         }
+        let start = self.pos;
         let control = self.next_byte()?;
         let elem_type = control & et::ELEMENT_TYPE_MASK;
 
@@ -227,10 +273,16 @@ impl<'a> TlvReader<'a> {
                 return Err(Error::UnexpectedEndOfContainer);
             }
             self.depth -= 1;
+            self.last_span = Some(ElementSpan {
+                start,
+                body_start: self.pos,
+                end: self.pos,
+            });
             return Ok(Some(ElementRef::ContainerEnd));
         }
 
         let tag = self.read_tag(control)?;
+        let body_start = self.pos;
 
         // Container opens — record the kind and bump depth.
         let kind = match elem_type {
@@ -244,10 +296,20 @@ impl<'a> TlvReader<'a> {
                 return Err(Error::ContainerTooDeep);
             }
             self.depth += 1;
+            self.last_span = Some(ElementSpan {
+                start,
+                body_start,
+                end: self.pos,
+            });
             return Ok(Some(ElementRef::ContainerStart { tag, kind }));
         }
 
         let value = self.read_value_body_ref(elem_type)?;
+        self.last_span = Some(ElementSpan {
+            start,
+            body_start,
+            end: self.pos,
+        });
         Ok(Some(ElementRef::Scalar { tag, value }))
     }
 
@@ -278,6 +340,10 @@ impl<'a> TlvReader<'a> {
     /// - [`Error::UnexpectedEndOfContainer`] — called with no container open
     ///   on this reader.
     ///
+    /// After a successful skip, [`Self::element_span`] reports the whole
+    /// skipped container (header through end-of-container marker) — same as
+    /// calling [`Self::skip_container_span`] and discarding the return value.
+    ///
     /// # Examples
     ///
     /// ```
@@ -303,11 +369,65 @@ impl<'a> TlvReader<'a> {
     /// # Ok::<(), matter_codec::Error>(())
     /// ```
     pub fn skip_container(&mut self) -> Result<()> {
-        // Raw byte walk: control byte → tag skip → body skip. Nothing is
-        // materialised and string payloads are advanced over without UTF-8
-        // validation (deliberate: skipped data is unobserved; 2026-08-09
-        // perf spec §4.1). Structural validation (tag forms, element types,
-        // bounds, nesting depth) is identical to `next()`.
+        self.skip_container_body()?;
+        if let Some(h) = self.last_span {
+            self.last_span = Some(ElementSpan {
+                start: h.start,
+                body_start: h.body_start,
+                end: self.pos,
+            });
+        }
+        Ok(())
+    }
+
+    /// Like [`Self::skip_container`], but returns the skipped container's
+    /// [`ElementSpan`] (marked at the `ContainerStart` just returned by
+    /// `next()`; ended at the read position after the raw skip).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnexpectedEndOfContainer`] if no element has been returned
+    /// yet, plus every error [`Self::skip_container`] can return. As with
+    /// `skip_container`, calling this anywhere other than immediately after
+    /// a `ContainerStart` yields an error or a meaningless span — never a
+    /// panic.
+    pub fn skip_container_span(&mut self) -> Result<ElementSpan> {
+        let header = self.last_span.ok_or(Error::UnexpectedEndOfContainer)?;
+        self.skip_container_body()?;
+        let span = ElementSpan {
+            start: header.start,
+            body_start: header.body_start,
+            end: self.pos,
+        };
+        self.last_span = Some(span);
+        Ok(span)
+    }
+
+    /// Span of the element most recently returned by [`Self::next`] /
+    /// [`Self::next_ref`] (or the whole container after a
+    /// `skip_container*` call). `None` before the first element; unchanged
+    /// by calls that return `Ok(None)` or an error.
+    #[inline]
+    #[must_use]
+    pub fn element_span(&self) -> Option<ElementSpan> {
+        self.last_span
+    }
+
+    /// Resolve a range produced by this reader's span APIs against the
+    /// reader's input. Returns an empty slice for a range that does not lie
+    /// within the input (only possible with a span from a different reader).
+    #[inline]
+    #[must_use]
+    pub fn span_bytes(&self, range: core::ops::Range<usize>) -> &'a [u8] {
+        self.bytes.get(range).unwrap_or(&[])
+    }
+
+    /// Raw byte walk: control byte → tag skip → body skip. Nothing is
+    /// materialised and string payloads are advanced over without UTF-8
+    /// validation (deliberate: skipped data is unobserved; 2026-08-09
+    /// perf spec §4.1). Structural validation (tag forms, element types,
+    /// bounds, nesting depth) is identical to `next()`.
+    fn skip_container_body(&mut self) -> Result<()> {
         let mut depth = 1usize;
         while depth > 0 {
             if self.is_empty() {
@@ -1763,5 +1883,100 @@ mod tests {
         );
         assert_eq!(Value::from(ValueRef::Uint(7)), Value::Uint(7));
         assert_eq!(Value::from(ValueRef::Null), Value::Null);
+    }
+
+    // --- Task 4.4b: element spans ---
+
+    #[test]
+    fn scalar_element_span_covers_full_element_and_body_excludes_tag() {
+        // ctx5 uint8=42 → bytes [0x24, 0x05, 0x2A]; body = payload only.
+        let bytes = [0x24, 0x05, 0x2A];
+        let mut r = TlvReader::new(&bytes);
+        assert!(r.element_span().is_none(), "no element returned yet");
+        r.next().unwrap().unwrap();
+        let span = r.element_span().unwrap();
+        assert_eq!(span.full(), 0..3);
+        assert_eq!(span.body(), 2..3);
+        assert_eq!(r.span_bytes(span.full()), &bytes[..]);
+        assert_eq!(r.span_bytes(span.body()), &[0x2A]);
+    }
+
+    #[test]
+    fn string_span_body_includes_length_field() {
+        // anon utf8 "Hi" → [0x0C, 0x02, b'H', b'i']; body = len field + payload.
+        let bytes = [0x0C, 0x02, b'H', b'i'];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap().unwrap();
+        let span = r.element_span().unwrap();
+        assert_eq!(span.full(), 0..4);
+        assert_eq!(span.body(), 1..4);
+    }
+
+    #[test]
+    fn skip_container_span_covers_container_and_body_excludes_header() {
+        // outer anon struct { ctx9 struct { ctx1: uint8 0x2A } } sentinel.
+        let buf = {
+            let mut b = Vec::new();
+            let mut w = crate::writer::TlvWriter::new(&mut b);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_structure(Tag::Context(9)).unwrap();
+            w.put_uint(Tag::Context(1), 0x2A).unwrap();
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(2), 7).unwrap();
+            w.end_container().unwrap();
+            b
+        };
+        // bytes: 0x15 | 0x35 0x09 | 0x24 0x01 0x2A | 0x18 | 0x24 0x02 0x07 | 0x18
+        let mut r = TlvReader::new(&buf);
+        r.next().unwrap(); // outer start
+        r.next().unwrap(); // ctx9 start (header span only at this point)
+        let header = r.element_span().unwrap();
+        assert_eq!(header.full(), 1..3, "header-only span after ContainerStart");
+        let span = r.skip_container_span().unwrap();
+        assert_eq!(span.full(), 1..7, "control+tag+children+end marker");
+        // body EXCLUDES the container's control/tag bytes, INCLUDES its end.
+        assert_eq!(r.span_bytes(span.body()), &[0x24, 0x01, 0x2A, 0x18]);
+        // reader continues at the sentinel
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(7)
+            })
+        ));
+    }
+
+    #[test]
+    fn retag_reemission_from_span_matches_writer_output() {
+        // The 4.5 adoption pattern: copy a ctx-tagged container's body under a
+        // fresh anonymous header. Must equal a writer-built anonymous
+        // equivalent byte-for-byte (proves the original tag byte 0x09 is
+        // excluded), and must preserve non-minimal widths in the body.
+        // Hand-assembled: ctx9 struct { ctx0: uint16-encoded 42 } — the codec
+        // writer would emit uint8, so bytes are assembled manually.
+        let bytes = [0x35, 0x09, 0x25, 0x00, 0x2A, 0x00, 0x18];
+        let mut r = TlvReader::new(&bytes);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            })
+        ));
+        let span = r.skip_container_span().unwrap();
+        let mut out = Vec::new();
+        {
+            let mut w = crate::writer::TlvWriter::new(&mut out);
+            w.start_structure(Tag::Anonymous).unwrap();
+        }
+        out.extend_from_slice(r.span_bytes(span.body()));
+        // Anonymous struct, SAME body bytes: uint16 width preserved, tag gone.
+        assert_eq!(out, [0x15, 0x25, 0x00, 0x2A, 0x00, 0x18]);
+    }
+
+    #[test]
+    fn span_bytes_out_of_range_returns_empty() {
+        let r = TlvReader::new(&[0x14]);
+        assert_eq!(r.span_bytes(5..9), &[] as &[u8]);
     }
 }
