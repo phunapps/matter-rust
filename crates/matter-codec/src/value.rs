@@ -10,8 +10,8 @@ use crate::tag::Tag;
 /// Integer widths and float widths are erased from the public type — the
 /// encoder chooses the minimal wire width per the spec, and the decoder
 /// produces the same Rust type regardless of the width the bytes used. If
-/// you need exact-byte round-trip for non-minimal inputs, for exact-byte
-/// access use the reader's span APIs ([`crate::TlvReader::element_span`] /
+/// you need exact-byte round-trip for non-minimal inputs, use the reader's
+/// span APIs ([`crate::TlvReader::element_span`] /
 /// [`crate::TlvReader::skip_container_span`] + [`crate::TlvReader::span_bytes`]),
 /// which expose an element's raw bytes for width-preserving re-emission.
 #[derive(Debug, Clone, PartialEq)]
