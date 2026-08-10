@@ -196,20 +196,33 @@ pub fn build_list_write_chunks(
     budget: usize,
     timed: bool,
 ) -> Vec<Vec<u8>> {
+    // Probe element: a 1-byte anonymous null (0x14). cost = base + wrapper
+    // + probe.len() + 1, so wrapper+1 falls out by subtraction.
+    const PROBE: &[u8] = &[0x14];
+
+    // Incremental size accounting: containers are delimited by end markers
+    // (never length prefixes), so a chunk with elements e_1..e_k encodes to
+    // exactly base + Σ cost(e_i). ReplaceAll cost(e) = e.len() (anonymous
+    // re-tag rewrites the control byte, same size); AppendItem cost(e) =
+    // wrapper + e.len() + 1 (fixed per-path AttributeDataIB wrapper, and the
+    // context re-tag adds one byte). Probe both constants from real encodes
+    // rather than hand-deriving byte counts; the equivalence proptest and
+    // the single-chunk byte-identity test pin correctness.
+    let replace_base = encoded_replace_all_len(path, &[], timed);
+    let append_base = encoded_append_len(path, &[], timed);
+    let append_per_elem_overhead =
+        encoded_append_len(path, &[PROBE], timed) - append_base - PROBE.len();
+
     // 1) Greedily fill chunk 0's ReplaceAll array.
     let mut idx = 0usize;
     let mut first_batch: Vec<&[u8]> = Vec::new();
+    let mut size = replace_base;
     while idx < element_tlvs.len() {
-        let candidate: Vec<&[u8]> = first_batch
-            .iter()
-            .copied()
-            .chain(std::iter::once(element_tlvs[idx].as_slice()))
-            .collect();
-        if encoded_replace_all_len(path, &candidate, timed) + CHUNK_FLAG_RESERVE > budget
-            && !first_batch.is_empty()
-        {
+        let cost = element_tlvs[idx].len();
+        if size + cost + CHUNK_FLAG_RESERVE > budget && !first_batch.is_empty() {
             break;
         }
+        size += cost;
         first_batch.push(element_tlvs[idx].as_slice());
         idx += 1;
     }
@@ -218,17 +231,13 @@ pub fn build_list_write_chunks(
     let mut append_batches: Vec<Vec<&[u8]>> = Vec::new();
     while idx < element_tlvs.len() {
         let mut batch: Vec<&[u8]> = Vec::new();
+        let mut size = append_base;
         while idx < element_tlvs.len() {
-            let candidate: Vec<&[u8]> = batch
-                .iter()
-                .copied()
-                .chain(std::iter::once(element_tlvs[idx].as_slice()))
-                .collect();
-            if encoded_append_len(path, &candidate, timed) + CHUNK_FLAG_RESERVE > budget
-                && !batch.is_empty()
-            {
+            let cost = append_per_elem_overhead + element_tlvs[idx].len();
+            if size + cost + CHUNK_FLAG_RESERVE > budget && !batch.is_empty() {
                 break;
             }
+            size += cost;
             batch.push(element_tlvs[idx].as_slice());
             idx += 1;
         }
@@ -688,6 +697,90 @@ mod chunk_tests {
             endpoint: 0,
             cluster: 0x001F,
             attribute: 0x0000,
+        }
+    }
+
+    /// Pre-phase-3 packer: re-encodes the whole candidate chunk on every
+    /// element to decide whether it still fits `budget`, so it is O(n²) in
+    /// elements per chunk. Retained verbatim as a proptest oracle to pin
+    /// the incremental packer's output as byte-identical.
+    fn build_list_write_chunks_reference(
+        path: AttributePath,
+        element_tlvs: &[Vec<u8>],
+        budget: usize,
+        timed: bool,
+    ) -> Vec<Vec<u8>> {
+        // 1) Greedily fill chunk 0's ReplaceAll array.
+        let mut idx = 0usize;
+        let mut first_batch: Vec<&[u8]> = Vec::new();
+        while idx < element_tlvs.len() {
+            let candidate: Vec<&[u8]> = first_batch
+                .iter()
+                .copied()
+                .chain(std::iter::once(element_tlvs[idx].as_slice()))
+                .collect();
+            if encoded_replace_all_len(path, &candidate, timed) + CHUNK_FLAG_RESERVE > budget
+                && !first_batch.is_empty()
+            {
+                break;
+            }
+            first_batch.push(element_tlvs[idx].as_slice());
+            idx += 1;
+        }
+
+        // Collect remaining elements as AppendItem batches.
+        let mut append_batches: Vec<Vec<&[u8]>> = Vec::new();
+        while idx < element_tlvs.len() {
+            let mut batch: Vec<&[u8]> = Vec::new();
+            while idx < element_tlvs.len() {
+                let candidate: Vec<&[u8]> = batch
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(element_tlvs[idx].as_slice()))
+                    .collect();
+                if encoded_append_len(path, &candidate, timed) + CHUNK_FLAG_RESERVE > budget
+                    && !batch.is_empty()
+                {
+                    break;
+                }
+                batch.push(element_tlvs[idx].as_slice());
+                idx += 1;
+            }
+            append_batches.push(batch);
+        }
+
+        // 2) Encode each chunk, setting MoreChunkedMessages on all but the last.
+        let total = 1 + append_batches.len();
+        let mut messages: Vec<Vec<u8>> = Vec::with_capacity(total);
+        let first_more = total > 1;
+        messages.push(encode_replace_all(path, &first_batch, timed, first_more));
+        for (i, batch) in append_batches.iter().enumerate() {
+            let more = i + 1 < append_batches.len();
+            messages.push(encode_append_items(path, batch, timed, more));
+        }
+        messages
+    }
+
+    proptest! {
+        /// The incremental packer must produce byte-identical chunks to the
+        /// pre-phase-3 full-re-encode packer for arbitrary element sets.
+        #[test]
+        fn incremental_packer_matches_reference(
+            lens in proptest::collection::vec(0usize..120, 0..30),
+            budget in 60usize..600,
+            timed: bool,
+        ) {
+            let elems: Vec<Vec<u8>> = lens.iter().map(|&n| {
+                let mut buf = Vec::new();
+                let mut w = TlvWriter::new(&mut buf);
+                w.put_bytes(Tag::Anonymous, &vec![0x5A; n]).unwrap();
+                buf
+            }).collect();
+            let p = p(); // the existing test-path helper at the top of the test module
+            prop_assert_eq!(
+                build_list_write_chunks(p, &elems, budget, timed),
+                build_list_write_chunks_reference(p, &elems, budget, timed)
+            );
         }
     }
 
