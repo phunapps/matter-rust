@@ -2718,6 +2718,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let sid = self
             .sessions
             .register_case_with_mrp(&output, SessionRole::Initiator, peer_mrp);
+        if let Some(s) = self.sessions.get_mut(sid) {
+            s.peer_addr = Some(peer);
+        }
         self.upsert_device(fabric_id, node_id, peer, record_bytes);
         self.cache.insert(
             (fabric_id, node_id),
@@ -2925,6 +2928,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             now,
         )
         .await?;
+        if let Some(s) = self.sessions.get_mut(sid) {
+            s.peer_addr = Some(peer);
+        }
 
         // Evict any prior session for this node from the SessionManager so its
         // dead MRP retransmits stop; we keep only the freshly-established one.
@@ -4342,9 +4348,14 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.resubscribes.push(pr);
     }
 
-    /// The peer address for `sid`: from an active subscription, a pending op, or
-    /// the session cache.
+    /// The peer address for `sid`: O(1) from the session's stamped
+    /// `peer_addr`; falls back to scanning subscriptions/pending/cache for
+    /// sessions that predate stamping (defensive — every prod registration
+    /// path stamps).
     fn peer_for_session(&self, sid: SessionId) -> Option<SocketAddr> {
+        if let Some(addr) = self.sessions.get(sid).and_then(|s| s.peer_addr) {
+            return Some(addr);
+        }
         self.subscriptions
             .values()
             .find(|e| e.session_id == sid)
@@ -8281,6 +8292,36 @@ mod tests {
             None,
             crate::builder::DEFAULT_ADMIN_VENDOR_ID,
         )
+    }
+
+    /// The address stamped onto a session is what `peer_for_session` returns
+    /// in O(1) — and it disappears the moment the session is removed, rather
+    /// than lingering in a side index (the whole point of storing it ON the
+    /// session: eviction can't strand it).
+    #[test]
+    fn peer_for_session_uses_stamped_addr_and_dies_with_the_session() {
+        use matter_crypto::pase::PaseSessionKeys;
+
+        let mut actor = actor_with_one_fabric();
+        let keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [1u8; 16],
+            r2i_key: [2u8; 16],
+            attestation_key: [3u8; 16],
+        };
+        let sid = actor.sessions.register_pase(
+            keys,
+            SessionRole::Initiator,
+            1,
+            matter_transport::PeerHint::default(),
+        );
+        let peer: SocketAddr = "[::1]:5540".parse().unwrap();
+        if let Some(s) = actor.sessions.get_mut(sid) {
+            s.peer_addr = Some(peer);
+        }
+        assert_eq!(actor.peer_for_session(sid), Some(peer));
+        actor.sessions.remove(sid);
+        assert_eq!(actor.peer_for_session(sid), None);
     }
 
     fn seed_pending_round_trip(
