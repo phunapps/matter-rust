@@ -76,6 +76,7 @@ pub enum ElementRef<'a> {
 }
 
 impl From<ElementRef<'_>> for Element {
+    #[inline]
     fn from(e: ElementRef<'_>) -> Self {
         match e {
             ElementRef::Scalar { tag, value } => Element::Scalar {
@@ -550,22 +551,29 @@ impl<'a> TlvReader<'a> {
     /// per-element budget accounting is active (see the fast-path comment
     /// there — `CHARGE == false` is only reachable when the byte bound proves
     /// the budget cannot be exceeded).
+    ///
+    /// Drives [`Self::next_ref`] rather than [`Self::next`]: the owned
+    /// [`Element`] `next()` would build is an intermediate this path
+    /// immediately destructures again, and materialising it per element cost
+    /// ~2.5x on the decode benchmarks (2026-08-10 phase-4 regression). The
+    /// borrowed element is destructured here and only its payload is taken
+    /// into ownership, at the point where it is pushed into the tree.
     fn read_value_inner<const CHARGE: bool>(&mut self) -> Result<(Tag, Value)> {
-        match self.next()? {
-            Some(Element::Scalar { tag, value }) => {
+        match self.next_ref()? {
+            Some(ElementRef::Scalar { tag, value }) => {
                 if CHARGE {
                     self.charge_element()?;
                 }
-                Ok((tag, value))
+                Ok((tag, Value::from(value)))
             }
-            Some(Element::ContainerStart { tag, kind }) => {
+            Some(ElementRef::ContainerStart { tag, kind }) => {
                 if CHARGE {
                     self.charge_element()?;
                 }
                 let value = self.read_container_body::<CHARGE>(kind)?;
                 Ok((tag, value))
             }
-            Some(Element::ContainerEnd) => Err(Error::UnexpectedEndOfContainer),
+            Some(ElementRef::ContainerEnd) => Err(Error::UnexpectedEndOfContainer),
             None => Err(Error::UnexpectedEof),
         }
     }
@@ -611,6 +619,10 @@ impl<'a> TlvReader<'a> {
     /// memory amplification, and a subsequent `read_value` on the same reader
     /// starts from a tree of zero live elements).
     fn read_container_body<const CHARGE: bool>(&mut self, kind: ContainerKind) -> Result<Value> {
+        // Both loops walk `next_ref` and convert the borrowed payload at push
+        // time — see `read_value_inner` for why the owned `Element` step is
+        // skipped here.
+        //
         // Branch on the container kind once, before the loop, so arrays decode
         // straight into a `Vec<Value>` without first building a `Vec<(Tag,
         // Value)>` and re-collecting. Structures and lists keep their members'
@@ -620,10 +632,10 @@ impl<'a> TlvReader<'a> {
                 let mut elements: Vec<Value> = Vec::new();
                 let mut budget = self.element_budget;
                 loop {
-                    match self.next()? {
+                    match self.next_ref()? {
                         None => return Err(Error::UnclosedContainer),
-                        Some(Element::ContainerEnd) => break,
-                        Some(Element::Scalar { tag, value }) => {
+                        Some(ElementRef::ContainerEnd) => break,
+                        Some(ElementRef::Scalar { tag, value }) => {
                             // Spec: every array element must be anonymous. Fail
                             // closed on any other tag rather than discarding it.
                             if tag != Tag::Anonymous {
@@ -633,9 +645,9 @@ impl<'a> TlvReader<'a> {
                                 budget =
                                     budget.checked_sub(1).ok_or(Error::ElementBudgetExceeded)?;
                             }
-                            elements.push(value);
+                            elements.push(Value::from(value));
                         }
-                        Some(Element::ContainerStart {
+                        Some(ElementRef::ContainerStart {
                             tag,
                             kind: inner_kind,
                         }) => {
@@ -663,17 +675,17 @@ impl<'a> TlvReader<'a> {
                 let mut members: Vec<(Tag, Value)> = Vec::new();
                 let mut budget = self.element_budget;
                 loop {
-                    match self.next()? {
+                    match self.next_ref()? {
                         None => return Err(Error::UnclosedContainer),
-                        Some(Element::ContainerEnd) => break,
-                        Some(Element::Scalar { tag, value }) => {
+                        Some(ElementRef::ContainerEnd) => break,
+                        Some(ElementRef::Scalar { tag, value }) => {
                             if CHARGE {
                                 budget =
                                     budget.checked_sub(1).ok_or(Error::ElementBudgetExceeded)?;
                             }
-                            members.push((tag, value));
+                            members.push((tag, Value::from(value)));
                         }
-                        Some(Element::ContainerStart {
+                        Some(ElementRef::ContainerStart {
                             tag,
                             kind: inner_kind,
                         }) => {
@@ -717,6 +729,15 @@ impl<'a> TlvReader<'a> {
         Ok(slice)
     }
 
+    // The decode helpers below (`read_tag`, `read_value_body_ref`, the
+    // fixed-width and length-field readers) are each one small step of a
+    // single element's decode. Until phase 4 they lived inside one monolithic
+    // `next()` and were inlined into it implicitly; once the core moved into
+    // `next_ref` — itself `#[inline]`, so it is inlined into its callers and
+    // then re-optimised there — LLVM stopped inlining them and every element
+    // paid a call per step (measured: +73% on `decode/struct_500_uint`).
+    // Marking them explicitly restores the pre-phase-4 shape.
+    #[inline]
     fn read_tag(&mut self, control: u8) -> Result<Tag> {
         match control & tc::TAG_CONTROL_MASK {
             tc::ANONYMOUS => Ok(Tag::Anonymous),
@@ -779,6 +800,7 @@ impl<'a> TlvReader<'a> {
         }
     }
 
+    #[inline]
     fn read_u16_le(&mut self) -> Result<u16> {
         let raw: [u8; 2] = self
             .next_bytes(2)?
@@ -787,6 +809,7 @@ impl<'a> TlvReader<'a> {
         Ok(u16::from_le_bytes(raw))
     }
 
+    #[inline]
     fn read_u32_le(&mut self) -> Result<u32> {
         let raw: [u8; 4] = self
             .next_bytes(4)?
@@ -796,6 +819,7 @@ impl<'a> TlvReader<'a> {
     }
 
     #[allow(clippy::cast_possible_wrap)] // `b as i8`: reinterprets the byte pattern as signed, not truncation.
+    #[inline]
     fn read_value_body_ref(&mut self, elem_type: u8) -> Result<ValueRef<'a>> {
         match elem_type {
             et::BOOL_FALSE => Ok(ValueRef::Bool(false)),
@@ -877,6 +901,7 @@ impl<'a> TlvReader<'a> {
     /// Read the variable-width length field that precedes utf8 and bytes
     /// payloads. The two low bits of the element type encode the width:
     /// `0b00` = 1 byte, `0b01` = 2 bytes, `0b10` = 4 bytes, `0b11` = 8 bytes.
+    #[inline]
     fn read_payload_len(&mut self, elem_type: u8) -> Result<usize> {
         match elem_type & 0b11 {
             0b00 => Ok(usize::from(self.next_byte()?)),
@@ -886,6 +911,7 @@ impl<'a> TlvReader<'a> {
         }
     }
 
+    #[inline]
     fn read_u64_le(&mut self) -> Result<u64> {
         let raw: [u8; 8] = self
             .next_bytes(8)?
@@ -894,6 +920,7 @@ impl<'a> TlvReader<'a> {
         Ok(u64::from_le_bytes(raw))
     }
 
+    #[inline]
     fn read_utf8_ref(&mut self, len: usize) -> Result<ValueRef<'a>> {
         let bytes = self.next_bytes(len)?;
         // Validate UTF-8 across the ENTIRE payload (a malformed suffix still
@@ -915,6 +942,7 @@ impl<'a> TlvReader<'a> {
         Ok(ValueRef::Utf8(text))
     }
 
+    #[inline]
     fn read_bytes_ref(&mut self, len: usize) -> Result<ValueRef<'a>> {
         Ok(ValueRef::Bytes(self.next_bytes(len)?))
     }

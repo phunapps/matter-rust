@@ -94,6 +94,11 @@ pub enum ValueRef<'a> {
 }
 
 impl From<ValueRef<'_>> for Value {
+    // Called once per materialised element by the reader's tree builder (and
+    // by every cross-crate `next()` caller through `Element::from`), so it is
+    // inlined: the discriminant match then folds into the caller's own match
+    // and only the string/bytes arms keep their allocation.
+    #[inline]
     fn from(v: ValueRef<'_>) -> Self {
         match v {
             ValueRef::Bool(b) => Value::Bool(b),
