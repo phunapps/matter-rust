@@ -119,6 +119,14 @@ pub struct Session {
     pub replay_window: ReplayWindow,
     /// Peer identity hint (CASE) or default (PASE).
     pub peer: PeerHint,
+    /// Transport address the peer was last known at, stamped by the owner
+    /// after registration (the controller sets it when it caches the
+    /// session). `None` until stamped. Routing hint only — NOT part of the
+    /// session's cryptographic identity, and never consulted by
+    /// encode/decode. Lives on the session so eviction (explicit `remove`
+    /// or the internal oldest-session cap eviction) can never strand a
+    /// stale address index entry.
+    pub peer_addr: Option<std::net::SocketAddr>,
     /// OUR node id mixed into the AES-CCM nonce of outbound frames (spec
     /// §4.8.2): the local *operational* node id on CASE sessions, `0` on
     /// PASE sessions. Decoupled from the wire header, which omits the
@@ -526,6 +534,10 @@ impl SessionManager {
             outbound_counter: 1,
             replay_window: ReplayWindow::new(),
             peer,
+            // Stamped later by the owner (the controller, once it has the
+            // session id and knows which peer address it corresponds to);
+            // `None` until then.
+            peer_addr: None,
             // PASE default: zero nonce node ids (spec §4.8.2). `register_case`
             // overwrites both with the operational node ids.
             local_nonce_node_id: 0,
