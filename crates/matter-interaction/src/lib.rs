@@ -148,10 +148,10 @@ pub fn read_container_value(
 /// reader in any other position yields an [`error::ImError`] or misattributed
 /// members — never a panic or UB.
 ///
-/// Streaming: the skipped sub-tree is structurally validated (tag/length
-/// walking, depth-capped) but never collected into an owned subtree — per-scalar
-/// values are decoded and immediately discarded — and it does not charge the codec's
-/// tree-builder element budget; a discarded payload is bounded by its input size only.
+/// Streaming: the skipped bytes are walked structurally (tags, lengths,
+/// depth) but never decoded — string payloads in skipped data are not
+/// UTF-8 validated — and it does not charge the codec's tree-builder
+/// element budget; a discarded payload is bounded by its input size only.
 /// (Deliberate: see the 2026-08-09 performance-remediation spec §3.1.)
 ///
 /// # Errors

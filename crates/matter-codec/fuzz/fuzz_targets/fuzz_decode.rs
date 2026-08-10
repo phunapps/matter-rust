@@ -16,11 +16,22 @@ fuzz_target!(|data: &[u8]| {
     // crash and saves the input under `artifacts/`.
     let _ = reader.read_value();
 
-    // Also exercise skip_container: open the first element; if it is a
-    // container, draining it must not panic or loop forever on adversarial
-    // input. (depth/budget are enforced by next().)
-    let mut sr = matter_codec::TlvReader::new(data);
-    if let Ok(Some(matter_codec::Element::ContainerStart { .. })) = sr.next() {
-        let _ = sr.skip_container();
+    // Interleaved streaming walk: alternate next() with skip_container() on
+    // every other ContainerStart. Exercises the raw-walk skip against the
+    // event-driven reader on the same adversarial input; must never panic
+    // or loop forever (depth and bounds are enforced internally).
+    let mut ir = matter_codec::TlvReader::new(data);
+    let mut skip_toggle = false;
+    loop {
+        match ir.next() {
+            Ok(Some(matter_codec::Element::ContainerStart { .. })) => {
+                if skip_toggle && ir.skip_container().is_err() {
+                    break;
+                }
+                skip_toggle = !skip_toggle;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
     }
 });

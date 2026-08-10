@@ -191,16 +191,24 @@ impl<'a> TlvReader<'a> {
     /// Call this immediately after `next()` yields a `ContainerStart` you
     /// want to discard — for example an unknown field carried by a struct
     /// from a newer Matter revision. On return the reader is positioned at
-    /// the first element *after* the skipped container. Scalars inside the
-    /// container are walked but not materialised, so cost is bounded by the
-    /// input size and nesting by [`MAX_DEPTH`] (both enforced by `next()`).
+    /// the first element *after* the skipped container. The container body
+    /// is skipped as a raw byte walk: nothing is materialised, and string
+    /// payloads inside the skipped (unobserved) region are **not** UTF-8
+    /// validated. Cost is bounded by the input size and nesting by
+    /// [`MAX_DEPTH`].
     ///
     /// # Errors
     ///
     /// - [`Error::UnclosedContainer`] — end of input before the container's
     ///   closing marker.
-    /// - Any error returned by [`Self::next`] (malformed body, over-deep
-    ///   nesting, or element-budget exhaustion).
+    /// - [`Error::InvalidTagControl`] — unrecognised tag-control byte form.
+    /// - [`Error::InvalidElementType`] — unknown element-type code.
+    /// - [`Error::UnexpectedEof`] — truncated payload bytes or a truncated
+    ///   length field.
+    /// - [`Error::ContainerTooDeep`] — a container open inside the skipped
+    ///   region would exceed [`MAX_DEPTH`] nesting levels.
+    /// - [`Error::UnexpectedEndOfContainer`] — called with no container open
+    ///   on this reader.
     ///
     /// # Examples
     ///
@@ -227,14 +235,83 @@ impl<'a> TlvReader<'a> {
     /// # Ok::<(), matter_codec::Error>(())
     /// ```
     pub fn skip_container(&mut self) -> Result<()> {
+        // Raw byte walk: control byte → tag skip → body skip. Nothing is
+        // materialised and string payloads are advanced over without UTF-8
+        // validation (deliberate: skipped data is unobserved; 2026-08-09
+        // perf spec §4.1). Structural validation (tag forms, element types,
+        // bounds, nesting depth) is identical to `next()`.
         let mut depth = 1usize;
         while depth > 0 {
-            match self.next()? {
-                Some(Element::ContainerStart { .. }) => depth += 1,
-                Some(Element::ContainerEnd) => depth -= 1,
-                Some(Element::Scalar { .. }) => {}
-                None => return Err(Error::UnclosedContainer),
+            if self.is_empty() {
+                return Err(Error::UnclosedContainer);
             }
+            let control = self.next_byte()?;
+            let elem_type = control & et::ELEMENT_TYPE_MASK;
+            if elem_type == et::END_OF_CONTAINER {
+                if control & tc::TAG_CONTROL_MASK != tc::ANONYMOUS {
+                    return Err(Error::InvalidTagControl(control & tc::TAG_CONTROL_MASK));
+                }
+                if depth == 1 && self.depth == 0 {
+                    // No container is actually open on this reader — the
+                    // same misuse `next()` reports for a stray end marker.
+                    return Err(Error::UnexpectedEndOfContainer);
+                }
+                depth -= 1;
+                continue;
+            }
+            // Parse-and-discard the tag: allocation-free, and keeps tag-form
+            // validation identical to `next()`.
+            let _ = self.read_tag(control)?;
+            match elem_type {
+                et::STRUCTURE | et::ARRAY | et::LIST => {
+                    // `next()` would error when opening a child at
+                    // self.depth >= MAX_DEPTH; during a skip that effective
+                    // depth is reader depth + local nesting - 1, so this is
+                    // `self.depth + depth - 1 >= MAX_DEPTH` rearranged to
+                    // avoid clippy::int_plus_one.
+                    if self.depth + depth > MAX_DEPTH {
+                        return Err(Error::ContainerTooDeep);
+                    }
+                    depth += 1;
+                }
+                _ => self.skip_value_body(elem_type)?,
+            }
+        }
+        // The skipped container's ContainerStart incremented self.depth in
+        // next(); its end marker was consumed here rather than via next(),
+        // so balance the counter. Cannot underflow: reaching this point
+        // required consuming an end marker at local depth 1, which the
+        // misuse guard above rejects when self.depth == 0.
+        self.depth -= 1;
+        Ok(())
+    }
+
+    /// Advance past a scalar body during a raw skip, without materialising
+    /// it. String/bytes payloads are bounds-checked and skipped whole; no
+    /// UTF-8 validation is performed on skipped data.
+    fn skip_value_body(&mut self, elem_type: u8) -> Result<()> {
+        let n = match elem_type {
+            et::BOOL_FALSE | et::BOOL_TRUE | et::NULL => 0,
+            et::UINT8 | et::INT8 => 1,
+            et::UINT16 | et::INT16 => 2,
+            et::UINT32 | et::INT32 | et::FLOAT32 => 4,
+            et::UINT64 | et::INT64 | et::FLOAT64 => 8,
+            et::UTF8_LEN8
+            | et::UTF8_LEN16
+            | et::UTF8_LEN32
+            | et::UTF8_LEN64
+            | et::BYTES_LEN8
+            | et::BYTES_LEN16
+            | et::BYTES_LEN32
+            | et::BYTES_LEN64 => {
+                let len = self.read_payload_len(elem_type)?;
+                let _ = self.next_bytes(len)?;
+                return Ok(());
+            }
+            other => return Err(Error::InvalidElementType(other)),
+        };
+        if n > 0 {
+            let _ = self.next_bytes(n)?;
         }
         Ok(())
     }
@@ -1494,5 +1571,84 @@ mod tests {
             Some(Element::ContainerStart { .. })
         ));
         assert!(matches!(r.skip_container(), Err(Error::UnclosedContainer)));
+    }
+
+    // --- Task 4.1: raw-walk skip_container ---
+
+    #[test]
+    fn skip_container_does_not_validate_skipped_utf8() {
+        // Outer anon struct { ctx9 struct { utf8 with invalid byte } , ctx1=42 }.
+        // Hand-assembled because the writer cannot emit invalid UTF-8.
+        // 0x15                anon struct start
+        //   0x35 0x09         ctx9 struct start
+        //     0x0C 0x01 0xFF  utf8 len 1, invalid byte
+        //   0x18              ctx9 end
+        //   0x24 0x01 0x2A    ctx1 = uint8 42
+        // 0x18                outer end
+        let bytes = [
+            0x15, 0x35, 0x09, 0x0C, 0x01, 0xFF, 0x18, 0x24, 0x01, 0x2A, 0x18,
+        ];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // outer start
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        // Skipped (unobserved) data is NOT UTF-8 validated — deliberate loosening,
+        // 2026-08-09 perf spec §4.1 (same class as §3.1's non-charged skip).
+        r.skip_container().unwrap();
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::Scalar {
+                tag: Tag::Context(1),
+                value: Value::Uint(42)
+            })
+        ));
+    }
+
+    #[test]
+    fn skip_container_truncated_string_body_is_eof() {
+        // ctx9 struct containing a utf8 claiming 5 bytes with only 2 present.
+        let bytes = [0x15, 0x35, 0x09, 0x0C, 0x05, b'H', b'i'];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        r.next().unwrap();
+        assert!(matches!(r.skip_container(), Err(Error::UnexpectedEof)));
+    }
+
+    #[test]
+    fn skip_container_enforces_depth_cap() {
+        // 33 nested anon struct opens. Open two via next() (reader depth = 2),
+        // then skip: the 31st open inside the skip sits at effective depth 32
+        // and must error, exactly as the old next()-driven walk did.
+        let bytes: Vec<u8> = std::iter::repeat_n(0x15u8, 33).collect();
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        r.next().unwrap();
+        assert!(matches!(r.skip_container(), Err(Error::ContainerTooDeep)));
+    }
+
+    #[test]
+    fn skip_container_rejects_tagged_end_marker() {
+        // 0x38 = context tag-control | END_OF_CONTAINER, invalid per spec.
+        let bytes = [0x15, 0x35, 0x09, 0x38, 0x05];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap();
+        r.next().unwrap();
+        assert!(matches!(
+            r.skip_container(),
+            Err(Error::InvalidTagControl(_))
+        ));
+    }
+
+    #[test]
+    fn skip_container_misuse_at_top_level_errors() {
+        // No container open: the walk must fail with the same error next() gives
+        // for a stray end marker, and must not underflow the depth counter.
+        let mut r = TlvReader::new(&[0x18]);
+        assert!(matches!(
+            r.skip_container(),
+            Err(Error::UnexpectedEndOfContainer)
+        ));
     }
 }
