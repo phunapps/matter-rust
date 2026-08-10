@@ -6,9 +6,70 @@ use crate::tag::Tag;
 use crate::value::Value;
 use crate::{element_type as et, tag_control as tc};
 
+/// Stack-buffer size for one element header plus the widest fixed
+/// payload: control octet (1) + fully-qualified-8 tag (8) + 8-byte
+/// scalar payload or length field.
+const MAX_HEADER: usize = 17;
+
 /// A streaming TLV encoder that appends to a caller-provided `Vec<u8>`.
 pub struct TlvWriter<'a> {
     out: &'a mut Vec<u8>,
+}
+
+/// Assemble the control octet + tag bytes for `tag` into the front of `buf`,
+/// returning the byte count (1..=9). Byte layout is identical to what the
+/// old per-push `write_tag` emitted; the golden vectors pin it.
+fn encode_tag(tag: Tag, element_type: u8, buf: &mut [u8; MAX_HEADER]) -> usize {
+    match tag {
+        Tag::Anonymous => {
+            buf[0] = tc::ANONYMOUS | element_type;
+            1
+        }
+        Tag::Context(n) => {
+            buf[0] = tc::CONTEXT | element_type;
+            buf[1] = n;
+            2
+        }
+        Tag::CommonProfile(n) => {
+            if let Ok(n16) = u16::try_from(n) {
+                buf[0] = tc::COMMON_PROFILE_2 | element_type;
+                buf[1..3].copy_from_slice(&n16.to_le_bytes());
+                3
+            } else {
+                buf[0] = tc::COMMON_PROFILE_4 | element_type;
+                buf[1..5].copy_from_slice(&n.to_le_bytes());
+                5
+            }
+        }
+        Tag::ImplicitProfile(n) => {
+            if let Ok(n16) = u16::try_from(n) {
+                buf[0] = tc::IMPLICIT_PROFILE_2 | element_type;
+                buf[1..3].copy_from_slice(&n16.to_le_bytes());
+                3
+            } else {
+                buf[0] = tc::IMPLICIT_PROFILE_4 | element_type;
+                buf[1..5].copy_from_slice(&n.to_le_bytes());
+                5
+            }
+        }
+        Tag::FullyQualified {
+            vendor,
+            profile,
+            tag,
+        } => {
+            buf[1..3].copy_from_slice(&vendor.to_le_bytes());
+            buf[3..5].copy_from_slice(&profile.to_le_bytes());
+            if let Ok(tag16) = u16::try_from(tag) {
+                buf[0] = tc::FULLY_QUALIFIED_6 | element_type;
+                buf[5..7].copy_from_slice(&tag16.to_le_bytes());
+                7
+            } else {
+                buf[0] = tc::FULLY_QUALIFIED_8 | element_type;
+                buf[5..9].copy_from_slice(&tag.to_le_bytes());
+                9
+            }
+        }
+    }
 }
 
 impl<'a> TlvWriter<'a> {
@@ -18,53 +79,21 @@ impl<'a> TlvWriter<'a> {
         Self { out }
     }
 
-    /// Write a control octet (tag form bits OR'd with element type bits)
-    /// followed by any tag bytes the tag form requires.
+    /// Write a control octet + tag bytes as a single append.
     fn write_tag(&mut self, tag: Tag, element_type: u8) {
-        match tag {
-            Tag::Anonymous => {
-                self.out.push(tc::ANONYMOUS | element_type);
-            }
-            Tag::Context(n) => {
-                self.out.push(tc::CONTEXT | element_type);
-                self.out.push(n);
-            }
-            Tag::CommonProfile(n) => {
-                if let Ok(n16) = u16::try_from(n) {
-                    self.out.push(tc::COMMON_PROFILE_2 | element_type);
-                    self.out.extend_from_slice(&n16.to_le_bytes());
-                } else {
-                    self.out.push(tc::COMMON_PROFILE_4 | element_type);
-                    self.out.extend_from_slice(&n.to_le_bytes());
-                }
-            }
-            Tag::ImplicitProfile(n) => {
-                if let Ok(n16) = u16::try_from(n) {
-                    self.out.push(tc::IMPLICIT_PROFILE_2 | element_type);
-                    self.out.extend_from_slice(&n16.to_le_bytes());
-                } else {
-                    self.out.push(tc::IMPLICIT_PROFILE_4 | element_type);
-                    self.out.extend_from_slice(&n.to_le_bytes());
-                }
-            }
-            Tag::FullyQualified {
-                vendor,
-                profile,
-                tag,
-            } => {
-                if let Ok(tag16) = u16::try_from(tag) {
-                    self.out.push(tc::FULLY_QUALIFIED_6 | element_type);
-                    self.out.extend_from_slice(&vendor.to_le_bytes());
-                    self.out.extend_from_slice(&profile.to_le_bytes());
-                    self.out.extend_from_slice(&tag16.to_le_bytes());
-                } else {
-                    self.out.push(tc::FULLY_QUALIFIED_8 | element_type);
-                    self.out.extend_from_slice(&vendor.to_le_bytes());
-                    self.out.extend_from_slice(&profile.to_le_bytes());
-                    self.out.extend_from_slice(&tag.to_le_bytes());
-                }
-            }
-        }
+        let mut buf = [0u8; MAX_HEADER];
+        let n = encode_tag(tag, element_type, &mut buf);
+        self.out.extend_from_slice(&buf[..n]);
+    }
+
+    /// Header + fixed-width payload assembled in one stack buffer, single
+    /// `extend_from_slice`. `payload` is at most 8 bytes (widest scalar), so
+    /// `n + payload.len() <= 17` always holds.
+    fn put_scalar(&mut self, tag: Tag, element_type: u8, payload: &[u8]) {
+        let mut buf = [0u8; MAX_HEADER];
+        let n = encode_tag(tag, element_type, &mut buf);
+        buf[n..n + payload.len()].copy_from_slice(payload);
+        self.out.extend_from_slice(&buf[..n + payload.len()]);
     }
 
     /// Emit a boolean value with the given tag.
@@ -75,7 +104,7 @@ impl<'a> TlvWriter<'a> {
     /// type is reserved for future I/O-backed writers.
     pub fn put_bool(&mut self, tag: Tag, v: bool) -> Result<()> {
         let et = if v { et::BOOL_TRUE } else { et::BOOL_FALSE };
-        self.write_tag(tag, et);
+        self.put_scalar(tag, et, &[]);
         Ok(())
     }
 
@@ -86,7 +115,7 @@ impl<'a> TlvWriter<'a> {
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
     pub fn put_null(&mut self, tag: Tag) -> Result<()> {
-        self.write_tag(tag, et::NULL);
+        self.put_scalar(tag, et::NULL, &[]);
         Ok(())
     }
 
@@ -100,17 +129,13 @@ impl<'a> TlvWriter<'a> {
     /// type is reserved for future I/O-backed writers.
     pub fn put_uint(&mut self, tag: Tag, v: u64) -> Result<()> {
         if let Ok(n) = u8::try_from(v) {
-            self.write_tag(tag, et::UINT8);
-            self.out.push(n);
+            self.put_scalar(tag, et::UINT8, &n.to_le_bytes());
         } else if let Ok(n) = u16::try_from(v) {
-            self.write_tag(tag, et::UINT16);
-            self.out.extend_from_slice(&n.to_le_bytes());
+            self.put_scalar(tag, et::UINT16, &n.to_le_bytes());
         } else if let Ok(n) = u32::try_from(v) {
-            self.write_tag(tag, et::UINT32);
-            self.out.extend_from_slice(&n.to_le_bytes());
+            self.put_scalar(tag, et::UINT32, &n.to_le_bytes());
         } else {
-            self.write_tag(tag, et::UINT64);
-            self.out.extend_from_slice(&v.to_le_bytes());
+            self.put_scalar(tag, et::UINT64, &v.to_le_bytes());
         }
         Ok(())
     }
@@ -125,17 +150,13 @@ impl<'a> TlvWriter<'a> {
     /// type is reserved for future I/O-backed writers.
     pub fn put_int(&mut self, tag: Tag, v: i64) -> Result<()> {
         if let Ok(n) = i8::try_from(v) {
-            self.write_tag(tag, et::INT8);
-            self.out.push(n.to_le_bytes()[0]);
+            self.put_scalar(tag, et::INT8, &n.to_le_bytes());
         } else if let Ok(n) = i16::try_from(v) {
-            self.write_tag(tag, et::INT16);
-            self.out.extend_from_slice(&n.to_le_bytes());
+            self.put_scalar(tag, et::INT16, &n.to_le_bytes());
         } else if let Ok(n) = i32::try_from(v) {
-            self.write_tag(tag, et::INT32);
-            self.out.extend_from_slice(&n.to_le_bytes());
+            self.put_scalar(tag, et::INT32, &n.to_le_bytes());
         } else {
-            self.write_tag(tag, et::INT64);
-            self.out.extend_from_slice(&v.to_le_bytes());
+            self.put_scalar(tag, et::INT64, &v.to_le_bytes());
         }
         Ok(())
     }
@@ -147,8 +168,7 @@ impl<'a> TlvWriter<'a> {
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
     pub fn put_float(&mut self, tag: Tag, v: f32) -> Result<()> {
-        self.write_tag(tag, et::FLOAT32);
-        self.out.extend_from_slice(&v.to_le_bytes());
+        self.put_scalar(tag, et::FLOAT32, &v.to_le_bytes());
         Ok(())
     }
 
@@ -159,8 +179,7 @@ impl<'a> TlvWriter<'a> {
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
     pub fn put_double(&mut self, tag: Tag, v: f64) -> Result<()> {
-        self.write_tag(tag, et::FLOAT64);
-        self.out.extend_from_slice(&v.to_le_bytes());
+        self.put_scalar(tag, et::FLOAT64, &v.to_le_bytes());
         Ok(())
     }
 
@@ -242,20 +261,29 @@ impl<'a> TlvWriter<'a> {
         et_len64: u8,
     ) -> Result<()> {
         let len = bytes.len();
-        if let Ok(len8) = u8::try_from(len) {
-            self.write_tag(tag, et_len8);
-            self.out.push(len8);
+        let mut buf = [0u8; MAX_HEADER];
+        let header_len = if let Ok(len8) = u8::try_from(len) {
+            let n = encode_tag(tag, et_len8, &mut buf);
+            buf[n] = len8;
+            n + 1
         } else if let Ok(len16) = u16::try_from(len) {
-            self.write_tag(tag, et_len16);
-            self.out.extend_from_slice(&len16.to_le_bytes());
+            let n = encode_tag(tag, et_len16, &mut buf);
+            buf[n..n + 2].copy_from_slice(&len16.to_le_bytes());
+            n + 2
         } else if let Ok(len32) = u32::try_from(len) {
-            self.write_tag(tag, et_len32);
-            self.out.extend_from_slice(&len32.to_le_bytes());
+            let n = encode_tag(tag, et_len32, &mut buf);
+            buf[n..n + 4].copy_from_slice(&len32.to_le_bytes());
+            n + 4
         } else {
             let len64 = u64::try_from(len).map_err(|_| Error::LengthOverflow)?;
-            self.write_tag(tag, et_len64);
-            self.out.extend_from_slice(&len64.to_le_bytes());
-        }
+            let n = encode_tag(tag, et_len64, &mut buf);
+            buf[n..n + 8].copy_from_slice(&len64.to_le_bytes());
+            n + 8
+        };
+        // One reservation for header + payload, then two appends into
+        // guaranteed-capacity space.
+        self.out.reserve(header_len + len);
+        self.out.extend_from_slice(&buf[..header_len]);
         self.out.extend_from_slice(bytes);
         Ok(())
     }
