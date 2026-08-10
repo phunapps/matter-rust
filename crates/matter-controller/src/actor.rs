@@ -2,7 +2,7 @@
 //! discovery, and `ControllerState`. Processes [`Command`]s; while any
 //! subscription is active it also listens for unsolicited reports.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,6 +30,12 @@ const OP_STATUS_RESPONSE: u8 = 0x01;
 const OP_TIMED_REQUEST: u8 = 0x0a;
 /// IM `WriteRequest` opcode — used by the chunked-write primitive.
 const OP_WRITE_REQUEST: u8 = 0x06;
+/// IM `WriteResponse` opcode — the device's per-chunk reply to a
+/// `WriteRequest` in the chunked-write primitive. A device that rejects a
+/// chunk outright (e.g. Busy) replies with a message-level `StatusResponse`
+/// (opcode [`OP_STATUS_RESPONSE`]) instead — `resolve_chunked_write` checks
+/// the opcode explicitly rather than assuming every reply is a `WriteResponse`.
+const OP_WRITE_RESPONSE: u8 = 0x07;
 /// IM status `NEEDS_TIMED_INTERACTION` — a device returns this when a write/invoke
 /// that requires a timed interaction arrives without a preceding `TimedRequest`.
 /// Triggers the transparent timed retry (see [`response_needs_timed`]).
@@ -365,15 +371,49 @@ enum PendingReply {
         node_id: u64,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
-    /// Chunked write: the final `WriteRequest` of a multi-chunk write is in
-    /// flight (all preceding chunks were already sent reliably on the SAME
-    /// exchange). On the device's single `WriteResponse` the actor resolves
-    /// `reply` with the raw response bytes (the `Node` parses them into per-path
-    /// statuses). There is exactly ONE such pending per exchange — the
-    /// intermediate chunks are reliable sends awaiting MRP transport acks, NOT
-    /// app-level pendings.
+    /// Chunked write: ONE `WriteRequest` chunk is in flight at a time on this
+    /// exchange (chip's `WriteClient`: exactly one outstanding reliable
+    /// message per exchange — Matter §8.7.4 / §10.6). `remaining` holds the
+    /// chunks not yet sent, in order; `statuses` accumulates every chunk's
+    /// parsed per-path statuses as they arrive.
+    ///
+    /// chip's `WriteClient` does NOT abort on a non-Success element status —
+    /// it forwards every status to its callback and unconditionally sends the
+    /// next chunk (`WriteClient.cpp:583-593`). So each `WriteResponse` (opcode
+    /// [`OP_WRITE_RESPONSE`]) is parsed, its statuses appended to `statuses`,
+    /// and — if `remaining` is non-empty — the next chunk is sent on the SAME
+    /// exchange regardless of what those statuses were; the final chunk's
+    /// `WriteResponse` (`remaining` empty) resolves `reply` with the FULL
+    /// accumulated `statuses`.
+    ///
+    /// This is terminal (drops `remaining`, resolves `reply` with an `Err`)
+    /// on: a malformed `WriteResponse` (parse failure — chip only aborts on a
+    /// malformed response, not a bad element status); a message that is not a
+    /// `WriteResponse` at all (a device that rejects a chunk outright — e.g.
+    /// Busy 0x9C — replies with a message-level `StatusResponse` instead,
+    /// which chip's `WriteHandler` sends via `StatusResponse::Send` then
+    /// `Close`; parsing that as a `WriteResponse` would misread it as
+    /// `Ok(vec![])`, a vacuous "all Success"); a send failure for the next
+    /// chunk; or a pending timeout.
     ChunkedWrite {
-        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+        reply: oneshot::Sender<
+            Result<
+                Vec<(
+                    matter_interaction::AttributePath,
+                    matter_interaction::ImStatus,
+                )>,
+                Error,
+            >,
+        >,
+        /// Chunks not yet sent, in order; popped from the front as each
+        /// preceding chunk's `WriteResponse` arrives.
+        remaining: VecDeque<Vec<u8>>,
+        /// Per-path statuses accumulated across every chunk's `WriteResponse`
+        /// so far, in arrival order.
+        statuses: Vec<(
+            matter_interaction::AttributePath,
+            matter_interaction::ImStatus,
+        )>,
     },
     /// Chunked read: accumulate parsed `ReportData` chunks; resolve on the
     /// final chunk. Each chunk is parsed exactly once here (in the actor's
@@ -608,18 +648,36 @@ pub(crate) enum Command {
         action_payload: Vec<u8>,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
     },
-    /// Send a chunked write as N `WriteRequestMessage`s on ONE exchange. All but
-    /// the last chunk carry `MoreChunkedMessages=true`; every chunk is sent
-    /// reliably (MRP). The server processes the chunks and replies with a SINGLE
-    /// `WriteResponseMessage` after the final chunk — there is no per-chunk
-    /// app-level response (intermediate chunks are acknowledged at the MRP
-    /// transport layer only). A single [`PendingReply::ChunkedWrite`] is
-    /// registered on the final chunk's exchange (one pending per
-    /// `(session, exchange)`); it resolves with the `WriteResponse` bytes.
+    /// Send a chunked write as N `WriteRequestMessage`s on ONE exchange, ONE
+    /// chunk in flight at a time — chip's `WriteClient` allows exactly one
+    /// outstanding reliable message per exchange, gating each chunk on the
+    /// device's `WriteResponse` to the previous one (see
+    /// `Actor::handle_chunked_write` / `Actor::resolve_chunked_write`). All
+    /// but the last chunk carry `MoreChunkedMessages=true`; every chunk is
+    /// sent reliably (MRP). The device replies with a `WriteResponse` to
+    /// EVERY chunk; every chunk's statuses are accumulated and the next chunk
+    /// is sent UNCONDITIONALLY (chip's `WriteClient` pumps every chunk
+    /// regardless of individual element statuses — it does not abort on a
+    /// non-Success status). Terminal failure (no further chunks, `reply`
+    /// resolves `Err`) happens only on a malformed `WriteResponse`, a
+    /// non-`WriteResponse` reply (e.g. the device rejecting a chunk with a
+    /// `StatusResponse`), a send failure, or a timeout. A single
+    /// [`PendingReply::ChunkedWrite`] occupies `(session, exchange)` at any
+    /// time — inserted after the first chunk, re-inserted after each
+    /// subsequent chunk — and resolves with the FULL accumulated per-path
+    /// status list on success.
     ChunkedWrite {
         node_id: u64,
         chunks: Vec<Vec<u8>>,
-        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+        reply: oneshot::Sender<
+            Result<
+                Vec<(
+                    matter_interaction::AttributePath,
+                    matter_interaction::ImStatus,
+                )>,
+                Error,
+            >,
+        >,
     },
     /// Return the actor's stored commissioner node id (the sole fabric's
     /// `commissioner.node_id`). Used by the ACL lockout guard, which must avoid
@@ -1085,9 +1143,12 @@ fn fail_command(cmd: Command, err: Error) {
         Command::Read { reply, .. } => {
             let _ = reply.send(Err(err));
         }
-        Command::Action { reply, .. }
-        | Command::TimedRoundTrip { reply, .. }
-        | Command::ChunkedWrite { reply, .. } => {
+        Command::Action { reply, .. } | Command::TimedRoundTrip { reply, .. } => {
+            let _ = reply.send(Err(err));
+        }
+        // Distinct arm: `ChunkedWrite`'s reply carries parsed per-path
+        // statuses, not raw bytes, so it cannot merge into the arm above.
+        Command::ChunkedWrite { reply, .. } => {
             let _ = reply.send(Err(err));
         }
         Command::Subscribe { reply, .. } => {
@@ -3382,26 +3443,39 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    /// Send a chunked write: all `chunks` go reliably on ONE exchange (mirrors
-    /// [`Self::begin_timed`]'s two-messages-on-one-exchange pattern). The first
-    /// chunk allocates the exchange (`encode_outbound(.., None, ..)`); every
-    /// later chunk reuses it (`Some(exchange)`). All but the last carry
-    /// `MoreChunkedMessages=true` (the caller built them via
-    /// `build_list_write_chunks`). The server replies with ONE `WriteResponse`
-    /// after the final chunk; intermediate chunks are acknowledged at the MRP
-    /// transport layer only (no per-chunk app response — Matter §8.7.4 / §10.6,
-    /// chip `WriteHandler` accumulates and only `SendWriteResponse` once
-    /// `MoreChunkedMessages` is clear).
+    /// Send a chunked write: `chunks` go on ONE exchange, ONE chunk in flight
+    /// at a time (mirrors chip's `WriteClient`: exactly one outstanding
+    /// reliable `WriteRequest` per exchange — Matter §8.7.4 / §10.6). The
+    /// first chunk allocates the exchange (`encode_outbound(.., None, ..)`)
+    /// via `send_request`; every later chunk reuses it (`Some(exchange)`),
+    /// sent one at a time by [`Self::resolve_chunked_write`] as each
+    /// preceding chunk's `WriteResponse` arrives. All but the last chunk
+    /// carry `MoreChunkedMessages=true` (the caller built them via
+    /// `build_list_write_chunks`). The device replies with a `WriteResponse`
+    /// to EVERY chunk (chip's `WriteHandler` sends one per received
+    /// `WriteRequest`); every chunk's statuses are accumulated and pumping
+    /// continues UNCONDITIONALLY regardless of individual element statuses
+    /// (chip's `WriteClient` does not abort on a non-Success status — see
+    /// [`PendingReply::ChunkedWrite`]'s doc for the full terminal-failure list).
     ///
-    /// Exactly ONE [`Pending`] is registered, keyed by the final chunk's
-    /// `(session, exchange)`. The intermediate chunks are reliable sends whose
-    /// MRP acks are driven by the central recv/`drive_mrp` loop — they are NOT
-    /// app-level pendings, so no second pending ever shares the exchange.
+    /// Only ONE [`Pending`] is registered for this exchange at any time,
+    /// keyed by `(session, exchange)`: registered here after the first
+    /// chunk, then re-registered by [`Self::resolve_chunked_write`] after
+    /// each subsequent chunk until the final chunk's `WriteResponse`
+    /// resolves `reply` with the accumulated per-path status list.
     async fn handle_chunked_write(
         &mut self,
         node_id: u64,
         chunks: Vec<Vec<u8>>,
-        reply: oneshot::Sender<Result<Vec<u8>, Error>>,
+        reply: oneshot::Sender<
+            Result<
+                Vec<(
+                    matter_interaction::AttributePath,
+                    matter_interaction::ImStatus,
+                )>,
+                Error,
+            >,
+        >,
     ) {
         if chunks.is_empty() {
             let _ = reply.send(Err(Error::Operational(
@@ -3417,8 +3491,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         };
 
-        // First chunk allocates the exchange; capture it so every later chunk
-        // (and the final pending) rides the same one.
+        // First chunk allocates the exchange; capture it so later chunks
+        // (sent one at a time, gated on each WriteResponse — see
+        // resolve_chunked_write) reuse it.
         let exchange = match self
             .send_request(
                 sid,
@@ -3435,28 +3510,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return;
             }
         };
-        // Remaining chunks reuse the same exchange, reliably (MRP). The central
-        // loop drives each chunk's MRP ack; we only register a pending on the
-        // FINAL chunk so the single WriteResponse resolves it.
-        for chunk in &chunks[1..] {
-            if let Err(e) = self
-                .send_on_exchange(sid, exchange, peer, OP_WRITE_REQUEST, chunk)
-                .await
-            {
-                let _ = reply.send(Err(e));
-                return;
-            }
-        }
 
-        // SH.1: the single pending for this exchange — the final WriteResponse.
-        // We retain the LAST chunk as the request bytes; the reconnect-once
-        // retry on a stale session re-sends only the final message, which is the
-        // expected behaviour for a fresh-session re-attempt (a partially-sent
-        // chunked write on a dead session cannot be resumed mid-stream — the
-        // device discards an incomplete chunked transaction, so re-sending the
-        // whole thing would be required; we keep parity with the other verbs'
-        // single-message retry and let the caller re-issue on a hard failure).
-        let last = chunks.into_iter().next_back().unwrap_or_default();
+        // The remaining chunks are NOT sent here — chip's WriteClient gates
+        // each chunk on the previous chunk's WriteResponse, so they wait in
+        // `remaining` until resolve_chunked_write drains them one at a time.
+        let mut remaining: VecDeque<Vec<u8>> = chunks.into();
+        // The first chunk (just sent above) is also the request bytes this
+        // pending retains — `remaining.pop_front()` re-yields it since
+        // nothing has been popped yet.
+        let first = remaining.pop_front().unwrap_or_default();
+
         self.pending.insert(
             (sid, exchange),
             Pending {
@@ -3465,15 +3528,27 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 request: PendingRequest {
                     opcode: OP_WRITE_REQUEST,
                     protocol_id: ProtocolId::INTERACTION_MODEL,
-                    payload: last,
+                    // The chunk actually in flight right now (chunks[0]), not
+                    // the final chunk — this is what a reconnect-resend would
+                    // conceptually retry. `retried: true` below means a
+                    // timeout never actually replays it (see that field's
+                    // comment).
+                    payload: first,
                 },
-                // The chunked write spans multiple reliable messages on one
-                // exchange; a transparent reconnect-and-resend of only the final
-                // chunk would corrupt the device's accumulation. Mark it already
-                // retried so a timeout fails the op cleanly rather than re-sending
-                // half a transaction onto a fresh session.
+                // A chunked write spans multiple reliable messages on one
+                // exchange; a transparent reconnect-and-resend mid-transaction
+                // would corrupt the device's accumulation (a partially-sent
+                // chunked write on a dead session cannot be resumed — the
+                // device discards an incomplete chunked transaction, and only
+                // the caller re-issuing the whole write is correct). Mark it
+                // already retried so a timeout fails the op cleanly instead
+                // of attempting a reconnect-resend.
                 retried: true,
-                reply: PendingReply::ChunkedWrite { reply },
+                reply: PendingReply::ChunkedWrite {
+                    reply,
+                    remaining,
+                    statuses: Vec::new(),
+                },
             },
         );
     }
@@ -3565,12 +3640,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 }
             }
             Kind::ChunkedWrite => {
-                // The single WriteResponse for the whole chunked transaction.
-                if let Some(PendingReply::ChunkedWrite { reply }) =
-                    self.pending.remove(&key).map(|p| p.reply)
-                {
-                    let _ = reply.send(Ok(payload));
-                }
+                self.resolve_chunked_write(session_id, exchange_id, opcode, payload)
+                    .await;
             }
             Kind::Read => {
                 let peer = self.pending.get(&key).map(|p| p.peer);
@@ -3682,6 +3753,113 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 },
                 retried: true, // mid-handshake; do not trigger the reconnect-once dance
                 reply: PendingReply::RoundTrip(reply),
+            },
+        );
+    }
+
+    /// Drive a chunked write's next chunk on the response to the chunk that
+    /// just came back — chip's `WriteClient` allows exactly one outstanding
+    /// `WriteRequest` per exchange (Matter §8.7.4 / §10.6). Mirrors
+    /// [`Self::resolve_timed`]'s re-register-on-the-same-exchange shape, but
+    /// unlike `resolve_timed` this checks `opcode` explicitly: a device that
+    /// rejects a chunk outright (e.g. Busy) replies with a message-level
+    /// `StatusResponse` (chip's `WriteHandler`: `StatusResponse::Send` then
+    /// `Close`), not a `WriteResponse` — parsing that as a `WriteResponse`
+    /// would misread it as `Ok(vec![])` (a vacuous "all Success") and pump
+    /// the next chunk into a transaction the device has already closed.
+    ///
+    /// - If `opcode` is not [`OP_WRITE_RESPONSE`]: TERMINAL. If it's
+    ///   [`OP_STATUS_RESPONSE`], parse the status and resolve `reply` with an
+    ///   `Err` naming it; for any other opcode, resolve `reply` with an `Err`
+    ///   naming the unexpected opcode. Either way, `remaining` is dropped —
+    ///   no further chunks are sent.
+    /// - Otherwise parse `payload` as a `WriteResponse`
+    ///   ([`matter_interaction::parse_write_response`]). A parse failure is
+    ///   also TERMINAL (`Err` to `reply`, `remaining` dropped) — chip only
+    ///   aborts on a malformed response, not a bad element status.
+    /// - On a successful parse, append its statuses to the accumulated
+    ///   `statuses`. If `remaining` is empty, this was the final chunk:
+    ///   resolve `reply` with `Ok(statuses)` (the full accumulated list).
+    ///   Otherwise send the next chunk on the SAME exchange UNCONDITIONALLY
+    ///   (chip's `WriteClient` pumps every chunk regardless of individual
+    ///   element statuses — `WriteClient.cpp:583-593`) and re-register the
+    ///   pending with what remains. A send failure resolves `reply` with the
+    ///   error.
+    async fn resolve_chunked_write(
+        &mut self,
+        sid: SessionId,
+        exchange: u16,
+        opcode: u8,
+        payload: Vec<u8>,
+    ) {
+        let Some(p) = self.pending.remove(&(sid, exchange)) else {
+            return;
+        };
+        let PendingReply::ChunkedWrite {
+            reply,
+            mut remaining,
+            mut statuses,
+        } = p.reply
+        else {
+            return;
+        };
+
+        if opcode != OP_WRITE_RESPONSE {
+            let err = if opcode == OP_STATUS_RESPONSE {
+                match matter_interaction::parse_status_response(&payload) {
+                    Ok(Some(status)) => Error::Operational(format!(
+                        "chunked write rejected by device: IM status 0x{status:02x}"
+                    )),
+                    _ => Error::Operational(
+                        "chunked write rejected by device: malformed StatusResponse".into(),
+                    ),
+                }
+            } else {
+                Error::Operational(format!(
+                    "chunked write: unexpected response opcode 0x{opcode:02x} (expected WriteResponse)"
+                ))
+            };
+            let _ = reply.send(Err(err));
+            return;
+        }
+
+        let chunk_statuses = match matter_interaction::parse_write_response(&payload) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = reply.send(Err(Error::InteractionModel(e)));
+                return;
+            }
+        };
+        statuses.extend(chunk_statuses);
+
+        let Some(next) = remaining.pop_front() else {
+            // Final chunk: resolve with every chunk's accumulated statuses.
+            let _ = reply.send(Ok(statuses));
+            return;
+        };
+        if let Err(e) = self
+            .send_on_exchange(sid, exchange, p.peer, OP_WRITE_REQUEST, &next)
+            .await
+        {
+            let _ = reply.send(Err(e));
+            return;
+        }
+        self.pending.insert(
+            (sid, exchange),
+            Pending {
+                node_id: p.node_id,
+                peer: p.peer,
+                request: PendingRequest {
+                    opcode: OP_WRITE_REQUEST,
+                    protocol_id: ProtocolId::INTERACTION_MODEL,
+                    payload: next,
+                },
+                retried: true, // see the ChunkedWrite insert in handle_chunked_write
+                reply: PendingReply::ChunkedWrite {
+                    reply,
+                    remaining,
+                    statuses,
+                },
             },
         );
     }
@@ -4116,6 +4294,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             return;
         }
+        // ChunkedWrite pendings are always inserted with `retried: true` —
+        // both the initial insert in `handle_chunked_write` and every
+        // re-insert in `resolve_chunked_write` set it — so a timeout on one
+        // always skips the `!p.retried` branch below and falls straight
+        // through to `fail_pending`, never attempting a reconnect-resend
+        // mid-transaction (see the rationale at those insert sites).
         if !p.retried {
             let Ok(fabric_id) = self.sole_fabric().map(|f| f.fabric_id) else {
                 Self::fail_pending(p, Error::Operational("round-trip timed out".into()));
@@ -4155,8 +4339,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         match p.reply {
             PendingReply::RoundTrip(reply)
             | PendingReply::TimedAction { reply, .. }
-            | PendingReply::Action { reply, .. }
-            | PendingReply::ChunkedWrite { reply } => {
+            | PendingReply::Action { reply, .. } => {
+                let _ = reply.send(Err(err));
+            }
+            // Distinct arm: `ChunkedWrite`'s reply carries parsed per-path
+            // statuses, not raw bytes, so it cannot merge into the arm above.
+            PendingReply::ChunkedWrite { reply, .. } => {
                 let _ = reply.send(Err(err));
             }
             PendingReply::Read { reply, .. } => {
@@ -11551,11 +11739,15 @@ mod tests {
     }
 
     /// Loopback device for the chunked-write primitive. Completes CASE, then
-    /// receives `expected_chunks` `WriteRequest`s (opcode 0x06) on ONE exchange,
-    /// asserting `MoreChunkedMessages=true` on all but the last. Each
-    /// non-final chunk is acknowledged at the MRP transport layer with a
-    /// standalone ack (faithful to Matter §8.7.4: no per-chunk app response);
-    /// after the final chunk it replies ONE `write_response` (opcode 0x07).
+    /// receives `expected_chunks` `WriteRequest`s (opcode 0x06) on ONE
+    /// exchange, asserting `MoreChunkedMessages=true` on all but the last
+    /// (decoded from each request, not just counted). Chip-faithful AND
+    /// strict: replies to EVERY chunk with `write_response` (opcode 0x07) on
+    /// the same exchange — chip's `WriteHandler` sends one `WriteResponse`
+    /// per received `WriteRequest`, and `WriteClient` gates the next chunk on
+    /// it (Matter §8.7.4 / §10.6) — and PANICS if a second `WriteRequest`
+    /// arrives before this device has sent the response to the previous one
+    /// (the pipelining detector this mock exists to catch).
     #[allow(clippy::too_many_lines)] // CASE-handshake boilerplate, as the sibling mocks.
     async fn run_chunked_write_device(
         io: InMemoryDatagram,
@@ -11627,6 +11819,7 @@ mod tests {
             let DecodeInboundOutput::AppMessage {
                 exchange_id,
                 opcode,
+                payload,
                 ..
             } = sessions.decode_inbound(&w, recv_at).unwrap()
             else {
@@ -11642,52 +11835,67 @@ mod tests {
                     "every chunk must reuse the same exchange (one-exchange invariant)"
                 ),
             }
+            // Decode MoreChunkedMessages from the request itself (not just
+            // the loop index) and cross-check it against `expected_chunks`.
+            let more = write_request_has_more_chunked(&payload);
+            assert_eq!(
+                more,
+                i + 1 != expected_chunks,
+                "chunk {i} MoreChunkedMessages flag disagrees with expected_chunks"
+            );
 
-            if i + 1 == expected_chunks {
-                // Final chunk: MoreChunkedMessages must be clear (the last one).
-                // Reply ONE WriteResponse on the same exchange — this piggybacks
-                // the final chunk's MRP ack.
-                let out = sessions
-                    .encode_outbound(
-                        sid,
-                        Some(exchange_id),
-                        0x07, // WriteResponse
-                        ProtocolId::INTERACTION_MODEL,
-                        &write_response,
-                        MrpFlags { reliable: false },
-                        Instant::now(),
-                    )
-                    .unwrap();
-                io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
-            } else {
-                // Intermediate chunk: MoreChunkedMessages must be set. Ack it at
-                // the MRP transport layer with a STANDALONE ack (no app payload)
-                // — there is no per-chunk WriteResponse. We flush the buffered
-                // piggyback ack by advancing the device's MRP clock past the
-                // standalone-ack deadline (200ms), producing the ack packet.
-                // (decode_inbound at `recv_at` buffered the pending ack.)
-                let events =
-                    sessions.handle_timeout(recv_at + std::time::Duration::from_millis(250));
-                let mut sent_ack = false;
-                for ev in events {
-                    if let matter_transport::MrpEvent::SendStandaloneAck { packet, .. } = ev {
-                        io.send_to(&packet, ctrl_addr).await.unwrap();
-                        sent_ack = true;
-                    }
+            // STRICT pipelining detector: a client that correctly gates each
+            // chunk on the previous chunk's WriteResponse cannot have sent
+            // chunk i+1 yet — doing so requires first receiving OUR response
+            // to chunk i, which we have not sent. If another datagram is
+            // already sitting in the queue, the client pipelined ahead of
+            // the gate. `yield_now` gives already-enqueued work exactly one
+            // chance to surface; it introduces no wall-clock race because a
+            // correctly-gated next chunk cannot exist yet at all.
+            tokio::select! {
+                biased;
+                extra = io.recv_from() => {
+                    let len = extra.map_or(0, |(b, _)| b.len());
+                    panic!(
+                        "chunked-write pipelining detected: a WriteRequest for chunk {} \
+                         ({len} bytes) arrived before the device replied to chunk {i} — \
+                         the client must gate each chunk on its WriteResponse",
+                        i + 1
+                    );
                 }
-                assert!(
-                    sent_ack,
-                    "intermediate chunk {i} must produce a standalone MRP ack"
-                );
+                () = tokio::task::yield_now() => {}
             }
+
+            // Chip-faithful: reply to EVERY chunk with a WriteResponse on the
+            // same exchange (chip's WriteHandler sends one per WriteRequest;
+            // WriteClient sends the next chunk only after receiving this).
+            // `reliable: true` (a real device's WriteResponse is a reliable
+            // MRP message) so the client's NEXT chunk on this exchange must
+            // piggyback an ack for it — exercises that piggyback-ack path,
+            // not just unreliable sends.
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x07, // WriteResponse
+                    ProtocolId::INTERACTION_MODEL,
+                    &write_response,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
     }
 
     /// The chunked-write primitive sends N `WriteRequest`s on ONE exchange (all
-    /// but the last carrying `MoreChunkedMessages`), the device acks the
-    /// intermediates at the MRP layer and replies one `WriteResponse(Success)`
-    /// after the last; `chunked_write` returns those bytes, which parse to a
-    /// per-path Success.
+    /// but the last carrying `MoreChunkedMessages`), gated one chunk at a time
+    /// on the device's per-chunk `WriteResponse(Success)` (chip parity — see
+    /// `run_chunked_write_device`'s strict pipelining detector); `chunked_write`
+    /// parses EVERY chunk's `WriteResponse` and accumulates its statuses, so
+    /// the result has one status entry per chunk (all Success here, since the
+    /// mock replies with the same single-status `WriteResponse` to every
+    /// chunk).
     #[tokio::test]
     async fn chunked_write_sends_all_chunks_one_exchange() {
         use matter_codec::{Tag, TlvWriter};
@@ -11780,16 +11988,465 @@ mod tests {
         )
         .expect("open");
 
-        let resp = controller
+        let statuses = controller
             .node(device_node_id)
             .chunked_write(chunks)
             .await
             .expect("chunked_write");
 
-        let statuses =
-            matter_interaction::parse_write_response(&resp).expect("parse WriteResponse");
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
+        // One accumulated status per chunk (chip-faithful: every chunk's
+        // WriteResponse is parsed and appended, not just the final one).
+        assert_eq!(statuses.len(), n_chunks);
+        for (path, status) in &statuses {
+            assert_eq!(*status, matter_interaction::ImStatus::Success);
+            assert_eq!(path.cluster, 0x001F);
+        }
+
+        device.await.unwrap();
+    }
+
+    /// Loopback device for the "pump despite a bad element status" case.
+    /// Completes CASE, then receives ALL `expected_chunks` `WriteRequest`s
+    /// (opcode 0x06) on ONE exchange — same shape as `run_chunked_write_device`
+    /// (strict pipelining detector, decoded `MoreChunkedMessages` cross-check
+    /// against the loop index) — but replies to chunk 0 with `first_response`
+    /// (a `WriteResponse` carrying a non-Success element status) and to every
+    /// later chunk with `rest_response` (`Success`). Chip's `WriteClient` does
+    /// NOT abort on a bad element status (`WriteClient.cpp:583-593`: it only
+    /// forwards statuses to its callback and unconditionally sends the next
+    /// chunk), so a correctly-implemented client sends every chunk regardless
+    /// — this mock's `for` loop actually receiving all `expected_chunks` IS
+    /// the assertion that the client kept pumping.
+    #[allow(clippy::too_many_lines)] // CASE-handshake boilerplate, as the sibling mocks.
+    #[allow(clippy::too_many_arguments)] // Test-only mock; mirrors the sibling mocks' shape.
+    async fn run_chunked_write_device_pumps_all_despite_failure(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        expected_chunks: usize,
+        first_response: Vec<u8>,
+        rest_response: Vec<u8>,
+    ) {
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+
+        // --- CASE handshake (identical to run_chunked_write_device) ---
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        let mut exchange_seen: Option<u16> = None;
+        for i in 0..expected_chunks {
+            let (w, _) = io.recv_from().await.unwrap();
+            let DecodeInboundOutput::AppMessage {
+                exchange_id,
+                opcode,
+                payload,
+                ..
+            } = sessions.decode_inbound(&w, Instant::now()).unwrap()
+            else {
+                panic!("expected a WriteRequest app message for chunk {i}");
+            };
+            assert_eq!(opcode, 0x06, "chunk {i} must be a WriteRequest (0x06)");
+            match exchange_seen {
+                None => exchange_seen = Some(exchange_id),
+                Some(ex) => assert_eq!(
+                    ex, exchange_id,
+                    "every chunk must reuse the same exchange (one-exchange invariant)"
+                ),
+            }
+            let more = write_request_has_more_chunked(&payload);
+            assert_eq!(
+                more,
+                i + 1 != expected_chunks,
+                "chunk {i} MoreChunkedMessages flag disagrees with expected_chunks"
+            );
+
+            // Same strict pipelining detector as run_chunked_write_device:
+            // pumping unconditionally still means ONE chunk in flight at a
+            // time, gated on the previous chunk's WriteResponse — a bad
+            // element status changes what the client does with THIS
+            // response's statuses, not whether it waits for the response.
+            tokio::select! {
+                biased;
+                extra = io.recv_from() => {
+                    let len = extra.map_or(0, |(b, _)| b.len());
+                    panic!(
+                        "chunked-write pipelining detected: a WriteRequest for chunk {} \
+                         ({len} bytes) arrived before the device replied to chunk {i}",
+                        i + 1
+                    );
+                }
+                () = tokio::task::yield_now() => {}
+            }
+
+            let response = if i == 0 {
+                &first_response
+            } else {
+                &rest_response
+            };
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x07, // WriteResponse
+                    ProtocolId::INTERACTION_MODEL,
+                    response,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        }
+    }
+
+    /// chip does NOT abort a chunked write on a non-Success element status:
+    /// the device rejects chunk 0's write (a `FAILURE` element status) but
+    /// `chunked_write` keeps pumping every remaining chunk regardless (mock
+    /// receives ALL of them — see
+    /// `run_chunked_write_device_pumps_all_despite_failure`'s doc), and the
+    /// caller gets back the FULL accumulated status list, including the
+    /// chunk-0 failure.
+    #[tokio::test]
+    async fn chunked_write_pumps_all_chunks_despite_non_success_element_status() {
+        use matter_codec::{Tag, TlvWriter};
+
+        // Helper: a WriteResponse with one AttributeStatusIB carrying `status`.
+        fn write_response_with_status(
+            path: matter_interaction::AttributePath,
+            status: u8,
+        ) -> Vec<u8> {
+            let mut buf = Vec::new();
+            let mut w = TlvWriter::new(&mut buf);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.start_array(Tag::Context(0)).unwrap(); // WriteResponses
+            w.start_structure(Tag::Anonymous).unwrap(); // AttributeStatusIB
+            w.start_list(Tag::Context(0)).unwrap(); // Path
+            w.put_uint(Tag::Context(2), u64::from(path.endpoint))
+                .unwrap();
+            w.put_uint(Tag::Context(3), u64::from(path.cluster))
+                .unwrap();
+            w.put_uint(Tag::Context(4), u64::from(path.attribute))
+                .unwrap();
+            w.end_container().unwrap();
+            w.start_structure(Tag::Context(1)).unwrap(); // StatusIB
+            w.put_uint(Tag::Context(0), u64::from(status)).unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap(); // /AttributeStatusIB
+            w.end_container().unwrap(); // /WriteResponses
+            w.put_uint(Tag::Context(0xFF), 11).unwrap();
+            w.end_container().unwrap();
+            buf
+        }
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let path = matter_interaction::AttributePath {
+            endpoint: 1,
+            cluster: 0x001F,
+            attribute: 0x0000,
+        };
+        let elems: Vec<Vec<u8>> = (0u64..4)
+            .map(|n| {
+                let mut buf = Vec::new();
+                let mut w = TlvWriter::new(&mut buf);
+                w.put_uint(Tag::Anonymous, n).unwrap();
+                buf
+            })
+            .collect();
+        let chunks = matter_interaction::build_list_write_chunks(path, &elems, 40, false);
+        assert!(
+            chunks.len() >= 2,
+            "test needs a multi-chunk write; got {} chunk(s)",
+            chunks.len()
+        );
+        let n_chunks = chunks.len();
+
+        let first_response = write_response_with_status(path, 0x01); // FAILURE
+        let rest_response = write_response_with_status(path, 0x00); // SUCCESS
+
+        let device = tokio::spawn(run_chunked_write_device_pumps_all_despite_failure(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00DD,
+            n_chunks,
+            first_response,
+            rest_response,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let statuses = controller
+            .node(device_node_id)
+            .chunked_write(chunks)
+            .await
+            .expect("chunked_write must still resolve Ok — a bad element status is not terminal");
+
+        // One accumulated status per chunk; chunk 0's is the FAILURE, every
+        // later one is SUCCESS (mock proved the client sent them all, or the
+        // spawned device task above would still be blocked in recv_from and
+        // this .await would time out instead of returning).
+        assert_eq!(statuses.len(), n_chunks);
+        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Failure(0x01));
+        for status in &statuses[1..] {
+            assert_eq!(status.1, matter_interaction::ImStatus::Success);
+        }
+
+        device.await.unwrap();
+    }
+
+    /// Loopback device for the chunked-write TERMINAL-REJECTION path.
+    /// Completes CASE, then receives the FIRST `WriteRequest` chunk (asserting
+    /// `MoreChunkedMessages` is set — the test needs ≥2 chunks) and replies
+    /// with a message-level `StatusResponse(status)` (opcode 0x01) INSTEAD OF
+    /// a `WriteResponse` — chip's `WriteHandler` rejects a chunk outright this
+    /// way (e.g. Busy 0x9C) via `StatusResponse::Send` then `Close`, not via a
+    /// `WriteResponse` with a per-path status. It then reads with a short
+    /// grace timeout and PANICS if anything further arrives — a
+    /// correctly-implemented client must treat this as terminal (the
+    /// transaction the device already closed) rather than pump the remaining
+    /// chunks into it.
+    async fn run_chunked_write_device_rejects_with_status(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        status: u8,
+    ) {
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+
+        // --- CASE handshake (identical to run_chunked_write_device) ---
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(matches!(
+            responder.handle_sigma1(&m.payload).unwrap(),
+            Sigma1Outcome::NewSession
+        ));
+        let sigma2 = responder.next_message().unwrap();
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x31,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        responder.handle_sigma3(&m.payload).unwrap();
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u16.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u16.to_le_bytes());
+        let report = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x40,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &body,
+        );
+        io.send_to(&report, ctrl_addr).await.unwrap();
+        let _ack = io.recv_from().await.unwrap();
+        let output = responder.finish().unwrap();
+
+        // --- Reject chunk 0 with a message-level StatusResponse ---
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+
+        let (w, _) = io.recv_from().await.unwrap();
+        let DecodeInboundOutput::AppMessage {
+            exchange_id,
+            opcode,
+            payload,
+            ..
+        } = sessions.decode_inbound(&w, Instant::now()).unwrap()
+        else {
+            panic!("expected a WriteRequest app message for chunk 0");
+        };
+        assert_eq!(opcode, 0x06, "chunk 0 must be a WriteRequest (0x06)");
+        assert!(
+            write_request_has_more_chunked(&payload),
+            "chunk 0 must carry MoreChunkedMessages (test needs a multi-chunk write)"
+        );
+        let status_bytes = matter_interaction::build_status_response(status);
+        let out = sessions
+            .encode_outbound(
+                sid,
+                Some(exchange_id),
+                0x01, // StatusResponse — NOT a WriteResponse
+                ProtocolId::INTERACTION_MODEL,
+                &status_bytes,
+                MrpFlags { reliable: false },
+                Instant::now(),
+            )
+            .unwrap();
+        io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+        // Grace read: a correctly-implemented client sends nothing further
+        // after the device closes the transaction with a rejection.
+        let grace =
+            tokio::time::timeout(std::time::Duration::from_millis(200), io.recv_from()).await;
+        assert!(
+            grace.is_err(),
+            "client sent a further chunk after the device rejected the chunked write"
+        );
+    }
+
+    /// Terminal path: the device rejects chunk 0 outright with
+    /// `StatusResponse(0x9C Busy)` instead of a `WriteResponse` (chip's
+    /// `WriteHandler` closing the transaction). `chunked_write` resolves
+    /// `Err` naming the status (0x9c), and sends NO further chunks (verified
+    /// by `run_chunked_write_device_rejects_with_status`'s grace-read
+    /// assertion) — pumping a chunk into a transaction the device already
+    /// closed would just hang until the device's own response timeout.
+    #[tokio::test]
+    async fn chunked_write_terminal_on_status_response_rejection() {
+        use matter_codec::{Tag, TlvWriter};
+
+        const BUSY: u8 = 0x9C;
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let path = matter_interaction::AttributePath {
+            endpoint: 1,
+            cluster: 0x001F,
+            attribute: 0x0000,
+        };
+        let elems: Vec<Vec<u8>> = (0u64..4)
+            .map(|n| {
+                let mut buf = Vec::new();
+                let mut w = TlvWriter::new(&mut buf);
+                w.put_uint(Tag::Anonymous, n).unwrap();
+                buf
+            })
+            .collect();
+        let chunks = matter_interaction::build_list_write_chunks(path, &elems, 40, false);
+        assert!(
+            chunks.len() >= 2,
+            "test needs a multi-chunk write; got {} chunk(s)",
+            chunks.len()
+        );
+
+        let device = tokio::spawn(run_chunked_write_device_rejects_with_status(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00DE,
+            BUSY,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let err = controller
+            .node(device_node_id)
+            .chunked_write(chunks)
+            .await
+            .expect_err("a StatusResponse rejection must be an Err, not Ok(vec![])");
+
+        let msg = err.to_string();
+        assert!(
+            msg.to_lowercase().contains("0x9c"),
+            "error must name the IM status (0x9c); got: {msg}"
+        );
 
         device.await.unwrap();
     }
@@ -12218,16 +12875,19 @@ mod tests {
         )
         .expect("open");
 
-        let resp = controller
+        let statuses = controller
             .node(device_node_id)
             .chunked_write(chunks)
             .await
             .expect("chunked_write must succeed");
 
-        let statuses =
-            matter_interaction::parse_write_response(&resp).expect("parse WriteResponse");
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
+        // One accumulated status per chunk (every chunk's WriteResponse is
+        // parsed and appended); the mock replies with the same single-status
+        // WriteResponse to every chunk, so all `n_chunks` entries are Success.
+        assert_eq!(statuses.len(), n_chunks);
+        for (_, status) in &statuses {
+            assert_eq!(*status, matter_interaction::ImStatus::Success);
+        }
 
         device.await.unwrap();
     }
@@ -12399,10 +13059,15 @@ mod tests {
             .await
             .expect("write_acl_with_budget must succeed");
 
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].1, matter_interaction::ImStatus::Success);
-        assert_eq!(statuses[0].0.cluster, crate::acl::ACCESS_CONTROL_CLUSTER);
-        assert_eq!(statuses[0].0.attribute, crate::acl::ATTR_ACL);
+        // One accumulated status per chunk (every chunk's WriteResponse is
+        // parsed and appended); the mock replies with the same single-status
+        // WriteResponse to every chunk.
+        assert_eq!(statuses.len(), expected_chunks);
+        for (path, status) in &statuses {
+            assert_eq!(*status, matter_interaction::ImStatus::Success);
+            assert_eq!(path.cluster, crate::acl::ACCESS_CONTROL_CLUSTER);
+            assert_eq!(path.attribute, crate::acl::ATTR_ACL);
+        }
 
         device.await.unwrap();
     }

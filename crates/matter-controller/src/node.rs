@@ -302,15 +302,29 @@ impl Node {
     /// Send a multi-chunk write: each element of `chunks` is one
     /// `WriteRequestMessage` (built by
     /// [`build_list_write_chunks`](matter_interaction::build_list_write_chunks),
-    /// which sets `MoreChunkedMessages` on all but the last). All chunks are sent
-    /// reliably on ONE exchange; the device replies with a single
-    /// `WriteResponseMessage` after the final chunk, whose bytes are returned.
+    /// which sets `MoreChunkedMessages` on all but the last). All chunks go on
+    /// ONE exchange, ONE in flight at a time — the actor sends the next chunk
+    /// only after the device's `WriteResponseMessage` to the previous one
+    /// (chip's `WriteClient` parity; see `Actor::handle_chunked_write` /
+    /// `Actor::resolve_chunked_write`).
+    ///
+    /// Every chunk's `WriteResponseMessage` is parsed and its per-path
+    /// statuses accumulated; the next chunk is sent regardless of what those
+    /// statuses were (chip's `WriteClient` does not abort on a non-Success
+    /// element status — it pumps every chunk unconditionally). Returns the
+    /// FULL accumulated per-path status list on success.
     ///
     /// # Errors
     ///
-    /// [`Error::ControllerStopped`] if the owning task stopped, or any
-    /// connect / transport / driver error.
-    pub(crate) async fn chunked_write(&self, chunks: Vec<Vec<u8>>) -> Result<Vec<u8>, Error> {
+    /// [`Error::ControllerStopped`] if the owning task stopped; an interaction
+    /// error if a `WriteResponse` fails to parse; [`Error::Operational`] if
+    /// the device rejects a chunk outright (e.g. with a `StatusResponse`
+    /// instead of a `WriteResponse`) rather than returning a per-path status;
+    /// or any connect / transport / driver error.
+    pub(crate) async fn chunked_write(
+        &self,
+        chunks: Vec<Vec<u8>>,
+    ) -> Result<Vec<(AttributePath, ImStatus)>, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Command::ChunkedWrite {
@@ -818,18 +832,19 @@ impl Node {
             .map(|t| value_to_tlv(&crate::binding::binding_target_value(t)))
             .collect::<Result<_, _>>()?;
         let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
-        let resp = if chunks.len() == 1 {
-            self.action(
-                OP_WRITE_REQUEST,
-                chunks[0].clone(),
-                chunks[0].clone(),
-                vec![(path.cluster, path.attribute)],
-            )
-            .await?
+        if chunks.len() == 1 {
+            let resp = self
+                .action(
+                    OP_WRITE_REQUEST,
+                    chunks[0].clone(),
+                    chunks[0].clone(),
+                    vec![(path.cluster, path.attribute)],
+                )
+                .await?;
+            Ok(parse_write_response(&resp)?)
         } else {
-            self.chunked_write(chunks).await?
-        };
-        Ok(parse_write_response(&resp)?)
+            self.chunked_write(chunks).await
+        }
     }
 
     /// Register the controller as a check-in client with this ICD
@@ -1053,22 +1068,23 @@ impl Node {
             .map(|e| value_to_tlv(&crate::acl::acl_entry_value(e)))
             .collect::<Result<_, _>>()?;
         let chunks = build_list_write_chunks(path, &element_tlvs, budget, false);
-        let resp = if chunks.len() == 1 {
+        if chunks.len() == 1 {
             // Single message: reuse the plain Action path (byte-identical to a
             // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
             // plain and timed payload so the retry — if the device demands timed —
             // re-sends identical bytes (safe for a full-list replace).
-            self.action(
-                OP_WRITE_REQUEST,
-                chunks[0].clone(),
-                chunks[0].clone(),
-                vec![(path.cluster, path.attribute)],
-            )
-            .await?
+            let resp = self
+                .action(
+                    OP_WRITE_REQUEST,
+                    chunks[0].clone(),
+                    chunks[0].clone(),
+                    vec![(path.cluster, path.attribute)],
+                )
+                .await?;
+            Ok(parse_write_response(&resp)?)
         } else {
-            self.chunked_write(chunks).await?
-        };
-        Ok(parse_write_response(&resp)?)
+            self.chunked_write(chunks).await
+        }
     }
 
     /// Read the device's `AccessControl.Acl` list (the ACL entries on this fabric).
@@ -1432,22 +1448,23 @@ impl Node {
             .map(|e| value_to_tlv(&crate::group::group_key_map_entry_value(*e)))
             .collect::<Result<_, _>>()?;
         let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
-        let resp = if chunks.len() == 1 {
+        if chunks.len() == 1 {
             // Single message: reuse the plain Action path (byte-identical to a
             // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
             // plain and timed payload so the retry — if the device demands timed —
             // re-sends identical bytes (safe for a full-list replace).
-            self.action(
-                OP_WRITE_REQUEST,
-                chunks[0].clone(),
-                chunks[0].clone(),
-                vec![(path.cluster, path.attribute)],
-            )
-            .await?
+            let resp = self
+                .action(
+                    OP_WRITE_REQUEST,
+                    chunks[0].clone(),
+                    chunks[0].clone(),
+                    vec![(path.cluster, path.attribute)],
+                )
+                .await?;
+            Ok(parse_write_response(&resp)?)
         } else {
-            self.chunked_write(chunks).await?
-        };
-        Ok(parse_write_response(&resp)?)
+            self.chunked_write(chunks).await
+        }
     }
 
     /// Subscribe to attribute reports for `attrs` and/or event reports for
