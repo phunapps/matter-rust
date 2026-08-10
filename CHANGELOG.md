@@ -36,6 +36,12 @@ and session vectors) is unchanged and is what pins this. The only new public
 API is `matter_crypto::aead::SessionAead` and the two additive group-framing
 variants below; everything else is internal caching.
 
+Algorithmic performance phase 3: no O(n²) loop and no per-event linear scan on
+a hot path. **No wire bytes move** — the chunked-write byte-identity tests, the
+CASE/matter.js vectors, and the chip check-in KAT pin every change. The only
+new public API is the additive `Session::peer_addr` routing hint in
+matter-transport; everything else is internal.
+
 ### `matter-controller`
 
 #### Fixed
@@ -76,6 +82,18 @@ variants below; everything else is internal caching.
   a rotated key set (`create_group` / `KeySetWrite`) still re-derives before
   anything goes out under it. Covered by a test that rotates the epoch key and
   asserts the next frame decrypts under the NEW key and not the cached one.
+- **Steady-state reports route to their subscription in O(1).** `deliver_report`
+  scanned every live subscription per report; a secondary index keyed by
+  `(session, wire subscription id)` — maintained by the only two helpers allowed
+  to mutate the subscription map — replaces the scan. A non-compliant device
+  that reuses a subscription id on one session cannot poison the index: the
+  first owner keeps the key (the old scan's graceful degradation, kept
+  deliberately) and index keys are only ever removed by the entry they map to.
+- **MRP retransmit routing no longer triple-scans per timer event.**
+  `peer_for_session` walked subscriptions, pending ops, and the session cache
+  on every retransmit/ack; the peer address is now stamped on the transport
+  session at registration (see `matter-transport` below) and read O(1), with
+  the old scan kept only as a fallback for unstamped sessions.
 
 #### Changed
 
@@ -127,6 +145,50 @@ variants below; everything else is internal caching.
   `aead::encrypt` / `aead::decrypt` functions are unchanged; this is purely an
   additional way to reach the same cipher, and the same primitive
   implementation underneath.
+
+#### Performance
+
+- **CASE TBS signatures are verified over the peer's received NOC/ICAC bytes.**
+  `TbeData2`/`TbeData3` now keep the raw certificate TLV exactly as it arrived,
+  and Sigma2/Sigma3 signature verification feeds those bytes into the signed
+  data instead of re-serializing the parsed certificates. This removes two
+  encodes per handshake — and, more importantly, removes the assumption that
+  our `to_tlv` re-encodes a peer's certificate byte-identically (chip and
+  matter.js also sign over received bytes). Trust decisions are unchanged:
+  chain validation still runs on the parsed certificates, and the verifying key
+  is still taken from the chain-validated NOC.
+- **Check-in decode drains its counter prefix in place** instead of copying the
+  application payload into a second allocation.
+
+### `matter-cert`
+
+#### Performance
+
+- **Trust-anchor verification computes the top certificate's TBS-DER once**,
+  not once per candidate anchor. Behavioural note: a top certificate whose
+  X.509 conversion fails now surfaces that conversion error from
+  `CertificateChain::validate` instead of falling through to `UntrustedRoot`
+  (no previously-valid chain changes outcome; the error is strictly more
+  precise).
+
+### `matter-interaction`
+
+#### Performance
+
+- **`skip_container` streams past discarded sub-trees** instead of collecting
+  them into an owned `Value` tree. Skipped (unobserved) payload is structurally
+  validated but never retained — a peer can no longer force full
+  materialisation of fields we throw away. Skipped containers are bounded by
+  input size rather than the tree-builder element budget (which this path, as
+  a pure streaming walk, never charged in its current form).
+- **Chunked list writes are packed with incremental size accounting.**
+  `build_list_write_chunks` re-encoded the whole candidate chunk for every
+  element it considered (O(n²) in elements per chunk); it now derives the
+  per-element cost once and packs in one pass, with one real encode per emitted
+  chunk. Output bytes are identical for every input — the previous
+  implementation is retained as a test oracle and a property test pins
+  equivalence across random element sets. A new `write_chunks` micro-bench
+  documents the win (100×64 B elements: −86% multi-chunk, −98% single-chunk).
 
 ## matter-ble 0.3.1
 
