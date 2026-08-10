@@ -812,6 +812,12 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// current device `(session, wire_sub_id)`; steady-state `ReportData` is
     /// routed by matching those (see [`Self::deliver_report`]).
     subscriptions: HashMap<SubId, SubEntry>,
+    /// Secondary index over `subscriptions`: the device-facing identity
+    /// `(session, wire subscription id)` → our stable [`SubId`]. Maintained
+    /// exclusively by [`Self::insert_subscription`]/[`Self::remove_subscription`]
+    /// so `deliver_report` resolves a steady-state report in O(1) instead of
+    /// scanning every subscription per report.
+    sub_index: HashMap<(SessionId, u32), SubId>,
     /// In-flight round-trips/reads/subscribe-handshakes, keyed by
     /// `(session, exchange)`. Resolved by [`Self::handle_inbound`].
     pending: HashMap<(SessionId, u16), Pending>,
@@ -1259,6 +1265,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             trust: trust.map(Arc::new),
             admin_vendor_id,
             subscriptions: HashMap::new(),
+            sub_index: HashMap::new(),
             pending: HashMap::new(),
             next_sub_id: 1,
             snapshot_seq: 0,
@@ -1615,7 +1622,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // on its next liveness deadline, drive the resubscribe engine to
                 // open a fresh CASE handshake to the very node we just forgot —
                 // reintroducing the exact hazard the local-only routing avoids.
-                self.subscriptions.retain(|_, s| s.node_id != node_id);
+                self.remove_subscriptions_for_node(node_id);
                 self.resubscribes.retain(|pr| pr.node_id != node_id);
                 self.pending.retain(|_, p| p.node_id != node_id);
                 let outcome = if removed {
@@ -1681,7 +1688,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 );
             }
             Command::CancelSubscription { key } => {
-                self.subscriptions.remove(&key);
+                self.remove_subscription(key);
                 // Also drop any scheduled resubscribe for this handle. An
                 // in-flight resubscribe attempt (a pending Subscribe) will
                 // re-insert a SubEntry on its response — a benign tiny window
@@ -3737,11 +3744,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             return; // steady-state reports must carry a subscriptionId
         };
         let now = Instant::now();
-        let Some((sub_id, entry)) = self
-            .subscriptions
-            .iter_mut()
-            .find(|(_, e)| e.session_id == session_id && e.wire_sub_id == wire_sub_id)
-        else {
+        let Some(&sub_id) = self.sub_index.get(&(session_id, wire_sub_id)) else {
+            return;
+        };
+        let Some(entry) = self.subscriptions.get_mut(&sub_id) else {
+            debug_assert!(false, "sub_index points at a missing subscription");
             return;
         };
         entry.liveness_deadline =
@@ -3777,8 +3784,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         }
         if consumer_gone {
-            let sub_id = *sub_id;
-            self.subscriptions.remove(&sub_id);
+            self.remove_subscription(sub_id);
             return;
         }
         let _ = self.send_status_ack(session_id, exchange_id, peer).await;
@@ -3959,7 +3965,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     }) {
                         return;
                     }
-                    self.subscriptions.insert(
+                    self.insert_subscription(
                         sub_id,
                         SubEntry {
                             tx: report_tx,
@@ -4158,6 +4164,79 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
+    /// Insert/replace a subscription, keeping `sub_index` in lock-step.
+    /// A resubscribe re-inserts the same `SubId` with a NEW
+    /// `(session_id, wire_sub_id)` — the old index key is removed first
+    /// (guarded: only if it still points at this `SubId`, see below).
+    ///
+    /// `wire_sub_id` comes from the device's `SubscribeResponse` — it is
+    /// remote-influenced input, not our own bookkeeping. A non-compliant or
+    /// hostile device can reuse a subscription id it already owns on a
+    /// session for a second, distinct subscription, so two live `SubEntry`s
+    /// CAN legitimately contend for one `(session_id, wire_sub_id)` key.
+    /// This is handled as **keep-first-owner**: the key is claimed only when
+    /// vacant or already owned by this `sub_id`; if a different `SubId`
+    /// already holds it, that owner's index entry is left untouched and the
+    /// new entry is simply left unindexed. An unindexed entry is dark to
+    /// `deliver_report` until its own liveness deadline drives a resubscribe
+    /// (which asks the device for a fresh id) — no worse than the old linear
+    /// scan's arbitrary pick between two colliding entries, and unlike a
+    /// blind overwrite it can never orphan the surviving owner's routing.
+    fn insert_subscription(&mut self, sub_id: SubId, entry: SubEntry) {
+        let new_key = (entry.session_id, entry.wire_sub_id);
+        if let Some(old) = self.subscriptions.insert(sub_id, entry) {
+            let old_key = (old.session_id, old.wire_sub_id);
+            // Only clear the old key if it still maps to us — a collision
+            // on that key (this `sub_id` never won it, see below) means
+            // there is nothing of ours to remove there.
+            if self.sub_index.get(&old_key) == Some(&sub_id) {
+                self.sub_index.remove(&old_key);
+            }
+        }
+        match self.sub_index.get(&new_key) {
+            None => {
+                self.sub_index.insert(new_key, sub_id);
+            }
+            Some(&existing) if existing == sub_id => {
+                // Already ours (re-insert under an unchanged key) — no-op.
+            }
+            Some(_) => {
+                // Deliberate keep-first-owner: a different live subscription
+                // already holds this device-issued key. Leave it alone.
+            }
+        }
+    }
+
+    /// Remove a subscription and its index entry (the only removal path —
+    /// a bare `subscriptions.remove` would silently corrupt `sub_index`).
+    /// The index key is cleared only if it still maps to this `sub_id`: a
+    /// subscription that lost a `(session, wire_sub_id)` collision in
+    /// [`Self::insert_subscription`] was never indexed, so there is nothing
+    /// to clear for it (and clearing unconditionally would delete the
+    /// colliding survivor's live entry).
+    fn remove_subscription(&mut self, sub_id: SubId) -> Option<SubEntry> {
+        let entry = self.subscriptions.remove(&sub_id)?;
+        let key = (entry.session_id, entry.wire_sub_id);
+        if self.sub_index.get(&key) == Some(&sub_id) {
+            self.sub_index.remove(&key);
+        }
+        Some(entry)
+    }
+
+    /// Remove every subscription bound to `node_id` (`forget_node`). Replaces
+    /// the former bulk `retain`, which bypassed index maintenance.
+    fn remove_subscriptions_for_node(&mut self, node_id: u64) {
+        let ids: Vec<SubId> = self
+            .subscriptions
+            .iter()
+            .filter(|(_, s)| s.node_id == node_id)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.remove_subscription(id);
+        }
+    }
+
     /// Re-subscribe any subscription whose liveness deadline has passed.
     fn check_liveness(&mut self) {
         let now = Instant::now();
@@ -4178,7 +4257,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Move a stale subscription into the resubscribe queue: emit `Resubscribing`,
     /// drop the dead `SubEntry`, and schedule the first attempt (retry 0 ≈ immediate).
     fn begin_resubscribe(&mut self, sub_id: SubId, cause: Error) {
-        let Some(entry) = self.subscriptions.remove(&sub_id) else {
+        let Some(entry) = self.remove_subscription(sub_id) else {
             return;
         };
         // If the consumer dropped its receiver, reap the subscription instead of
@@ -4609,7 +4688,7 @@ mod tests {
         // fresh CASE handshake to the very node we forgot (the "no device
         // contact" guarantee would be silently violated).
         let (sink, _report_rx, _ctrl_rx) = test_report_sink();
-        actor.subscriptions.insert(
+        actor.insert_subscription(
             SubId(1),
             SubEntry {
                 tx: sink,
@@ -4689,6 +4768,90 @@ mod tests {
             !repeat_rx.await.unwrap().expect("forget_node second call"),
             "a second forget of the same node finds nothing"
         );
+    }
+
+    /// `sub_index` must track `subscriptions` through insert, resubscribe
+    /// (re-insert under a new `(session, wire_sub_id)` key), single cancel,
+    /// and the bulk `forget_node` removal path — the index is only ever
+    /// touched by `insert_subscription`/`remove_subscription`, so a bug in
+    /// either would leave stale or missing index entries.
+    #[test]
+    fn sub_index_tracks_subscribe_resubscribe_cancel_and_forget() {
+        let mut actor = actor_with_one_fabric();
+        let sid_a = SessionId(7);
+        let sid_b = SessionId(9);
+        let peer: std::net::SocketAddr = "127.0.0.1:5540".parse().unwrap();
+        let entry_for = |session_id, wire_sub_id, node_id| {
+            let (sink, _report_rx, _ctrl_rx) = test_report_sink();
+            SubEntry {
+                tx: sink,
+                peer,
+                reassembler: ReportReassembler::default(),
+                session_id,
+                wire_sub_id,
+                node_id,
+                paths: vec![matter_interaction::ReadPath::all()],
+                event_paths: vec![],
+                event_filters: vec![],
+                min_interval: 1,
+                max_interval: 30,
+                liveness_deadline: Instant::now(),
+            }
+        };
+
+        let id = SubId(1);
+        actor.insert_subscription(id, entry_for(sid_a, 0x1111, 7));
+        assert_eq!(actor.sub_index.get(&(sid_a, 0x1111)), Some(&id));
+
+        // Resubscribe: same SubId, new session + wire id — old key must vanish.
+        actor.insert_subscription(id, entry_for(sid_b, 0x2222, 7));
+        assert!(!actor.sub_index.contains_key(&(sid_a, 0x1111)));
+        assert_eq!(actor.sub_index.get(&(sid_b, 0x2222)), Some(&id));
+        assert_eq!(actor.sub_index.len(), 1);
+
+        // Cancel: entry and index entry both go.
+        actor.remove_subscription(id);
+        assert!(actor.sub_index.is_empty() && actor.subscriptions.is_empty());
+
+        // forget_node bulk removal maintains the index.
+        actor.insert_subscription(SubId(2), entry_for(sid_a, 0x3333, 9));
+        actor.insert_subscription(SubId(3), entry_for(sid_b, 0x4444, 9));
+        actor.remove_subscriptions_for_node(9);
+        assert!(actor.sub_index.is_empty() && actor.subscriptions.is_empty());
+
+        // Collision: `wire_sub_id` is device-issued, remote-influenced input,
+        // so a non-compliant/hostile device can reuse one on the same
+        // session for a second, distinct subscription. Keep-first-owner:
+        // the index must not panic and must not budge from the first
+        // claimant; both `SubEntry`s stay live in `subscriptions`.
+        let key = (sid_a, 0x5555);
+        let sub_a = SubId(10);
+        let sub_b = SubId(11);
+        actor.insert_subscription(sub_a, entry_for(sid_a, 0x5555, 20));
+        actor.insert_subscription(sub_b, entry_for(sid_a, 0x5555, 21));
+        assert_eq!(
+            actor.sub_index.get(&key),
+            Some(&sub_a),
+            "the index keeps the first owner of a colliding key"
+        );
+        assert!(
+            actor.subscriptions.contains_key(&sub_a) && actor.subscriptions.contains_key(&sub_b),
+            "both colliding subscriptions stay live in the primary map"
+        );
+
+        // Removing the shadowed loser must not disturb the winner's entry.
+        actor.remove_subscription(sub_b);
+        assert_eq!(
+            actor.sub_index.get(&key),
+            Some(&sub_a),
+            "removing the shadowed loser leaves the winner's index entry intact"
+        );
+        assert!(!actor.subscriptions.contains_key(&sub_b));
+
+        // Removing the winner frees the key.
+        actor.remove_subscription(sub_a);
+        assert!(!actor.sub_index.contains_key(&key));
+        assert!(actor.subscriptions.is_empty());
     }
 
     /// Final-review C1 regression: a connect that completes AFTER the node was
@@ -8013,12 +8176,8 @@ mod tests {
         // receivers below are the control (unbounded) ones.
         let (sink_a, _report_rx_a, mut rx_a) = test_report_sink();
         let (sink_b, _report_rx_b, mut rx_b) = test_report_sink();
-        actor
-            .subscriptions
-            .insert(SubId(1), mk(sink_a, SessionId(7)));
-        actor
-            .subscriptions
-            .insert(SubId(2), mk(sink_b, SessionId(9)));
+        actor.insert_subscription(SubId(1), mk(sink_a, SessionId(7)));
+        actor.insert_subscription(SubId(2), mk(sink_b, SessionId(9)));
 
         // Session 7 was replaced → only SubId(1) is resubscribed.
         actor.resubscribe_stranded(SessionId(7));
@@ -8665,7 +8824,7 @@ mod tests {
         // A subscription that is ALREADY past its liveness deadline: the very
         // next `check_liveness` must mark it stale and emit `Resubscribing`.
         let (sink, _report_rx, mut ctrl_rx) = test_report_sink();
-        actor.subscriptions.insert(
+        actor.insert_subscription(
             SubId(1),
             SubEntry {
                 tx: sink,
