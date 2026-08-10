@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::invoke::{command_path_from_reader, reencode_anonymous, write_command_path};
+use crate::invoke::{command_path_from_reader, retag_container_anonymous, write_command_path};
 use crate::path::CommandPath;
 use crate::status::ImStatus;
 use crate::{expect_message_struct, skip_container, IM_REVISION};
@@ -15,8 +15,9 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 pub struct InvokedCommand {
     /// `(endpoint, cluster, command)` the requester invoked.
     pub path: CommandPath,
-    /// The command-fields struct, re-encoded with an anonymous tag (ready to
-    /// hand to a `matter-clusters` decoder).
+    /// The device's original `CommandFields` body under a fresh anonymous
+    /// tag — original byte widths preserved (ready to hand to a
+    /// `matter-clusters` decoder).
     pub fields_tlv: Vec<u8>,
     /// The `CommandRef` (`CommandDataIB` tag 2), present only in batched invokes.
     pub command_ref: Option<u16>,
@@ -116,9 +117,7 @@ fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImE
                 tag: Tag::Context(1),
                 kind: ContainerKind::Structure,
             }) => {
-                // Re-anonymise the CommandFields struct as a standalone blob.
-                let value = read_struct_value(r)?;
-                fields_tlv = Some(reencode_anonymous(&value));
+                fields_tlv = Some(retag_container_anonymous(r, ContainerKind::Structure)?);
             }
             Some(Element::Scalar {
                 tag: Tag::Context(2),
@@ -137,12 +136,6 @@ fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImE
             .ok_or(crate::ImError::MissingField("CommandDataIB.CommandFields"))?,
         command_ref,
     })
-}
-
-/// Read a `Value::Structure` (reader positioned after the struct start) and
-/// return it as a `Value::Structure` for re-anonymising.
-fn read_struct_value(r: &mut TlvReader<'_>) -> Result<Value, crate::ImError> {
-    crate::read_container_value(r, ContainerKind::Structure)
 }
 
 /// Build a single-response `InvokeResponseMessage` carrying a response **command**
@@ -272,6 +265,39 @@ mod tests {
             }
             InvokeResponse::Status(s) => panic!("expected Command, got Status({s:?})"),
         }
+    }
+
+    #[test]
+    fn command_fields_preserve_device_integer_widths() {
+        // Mirror of invoke.rs's test on the server-side (request) parse path.
+        // Device encodes CommandFields with a NON-minimal width (uint16 42);
+        // span-copy + retag must return those bytes verbatim.
+        let nonminimal_fields = [0x15u8, 0x25, 0x00, 0x2A, 0x00, 0x18];
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+        w.put_bool(Tag::Context(1), false).unwrap(); // TimedRequest
+        w.start_array(Tag::Context(2)).unwrap(); // InvokeRequests
+        w.start_structure(Tag::Anonymous).unwrap(); // CommandDataIB
+        w.start_list(Tag::Context(0)).unwrap(); // CommandPath
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0x0029).unwrap();
+        w.put_uint(Tag::Context(2), 0x00).unwrap();
+        w.end_container().unwrap();
+        w.put_preencoded(Tag::Context(1), &nonminimal_fields)
+            .unwrap();
+        w.end_container().unwrap(); // CommandDataIB
+        w.end_container().unwrap(); // InvokeRequests array
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+
+        let parsed = parse_invoke_request(&buf).expect("parse");
+        assert_eq!(parsed.commands.len(), 1);
+        assert_eq!(
+            parsed.commands[0].fields_tlv, nonminimal_fields,
+            "device widths must be preserved verbatim"
+        );
     }
 
     #[test]

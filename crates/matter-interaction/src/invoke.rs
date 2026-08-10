@@ -5,7 +5,7 @@
 use crate::error::ImError;
 use crate::path::CommandPath;
 use crate::status::ImStatus;
-use crate::{expect_message_struct, read_container_value, skip_container, IM_REVISION};
+use crate::{expect_message_struct, skip_container, IM_REVISION};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// Write a `CommandPathIB` (a TLV **list**: 0=endpoint, 1=cluster,
@@ -155,7 +155,8 @@ pub enum InvokeResponse {
     Command {
         /// Path of the response command (`(endpoint, cluster, command)`).
         path: CommandPath,
-        /// The command-fields struct, re-encoded with an anonymous tag.
+        /// The device's original `CommandFields` body under a fresh
+        /// anonymous tag — original byte widths preserved.
         fields_tlv: Vec<u8>,
     },
     /// The device returned a bare status (no response command payload).
@@ -172,20 +173,48 @@ pub struct InvokeResponseEntry {
     pub response: InvokeResponse,
 }
 
-/// Re-encode a [`Value`] as a standalone, anonymous-tagged TLV blob. Used
-/// to lift an embedded `CommandFields` struct back out as bytes the state
-/// machine can consume.
-///
-/// Integer wire widths are normalized to the minimal width, so the re-encoded
-/// bytes are not guaranteed byte-identical to the device's original encoding
-/// (this path is consumed locally, never retransmitted).
-pub(crate) fn reencode_anonymous(value: &Value) -> Vec<u8> {
-    let mut buf = Vec::new();
-    let mut w = TlvWriter::new(&mut buf);
-    #[allow(clippy::expect_used)] // Vec-backed writer is infallible.
-    w.write_value(Tag::Anonymous, value)
+/// Copy the body of the container whose `ContainerStart` was just returned
+/// (reader positioned right after it) under a fresh **anonymous** header of
+/// the same kind. The copied span excludes the original element's control
+/// and tag bytes and includes its end-of-container marker, so the result is
+/// a standalone anonymous-tagged TLV blob with the device's original byte
+/// widths preserved verbatim.
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible (repo idiom).
+pub(crate) fn retag_container_anonymous(
+    r: &mut TlvReader<'_>,
+    kind: ContainerKind,
+) -> Result<Vec<u8>, ImError> {
+    let span = r.skip_container_span().map_err(ImError::Codec)?;
+    let body = r.span_bytes(span.body());
+    let mut out = Vec::with_capacity(1 + body.len());
+    {
+        let mut w = TlvWriter::new(&mut out);
+        match kind {
+            ContainerKind::Structure => w.start_structure(Tag::Anonymous),
+            ContainerKind::Array => w.start_array(Tag::Anonymous),
+            // List and any future non-exhaustive kinds re-emit as a list,
+            // mirroring read_container_value's fallback.
+            _ => w.start_list(Tag::Anonymous),
+        }
         .expect("infallible: vec writer");
-    buf
+    }
+    out.extend_from_slice(body);
+    Ok(out)
+}
+
+/// An anonymous empty structure (`0x15 0x18`) — the canonical stand-in when
+/// a `CommandDataIB` carries no `CommandFields` member, so callers always
+/// receive a valid TLV blob.
+#[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible (repo idiom).
+fn empty_anonymous_struct() -> Vec<u8> {
+    let mut out = Vec::with_capacity(2);
+    {
+        let mut w = TlvWriter::new(&mut out);
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        w.end_container().expect("infallible: vec writer");
+    }
+    out
 }
 
 /// Consume a `CommandPathIB` list body (reader positioned just after the
@@ -409,8 +438,7 @@ fn parse_command_data_ref(
                 tag: Tag::Context(1),
                 kind,
             }) => {
-                let v = read_container_value(r, kind)?;
-                fields = reencode_anonymous(&v);
+                fields = retag_container_anonymous(r, kind)?;
             }
             // CommandRef (tag 2), a scalar uint.
             Some(Element::Scalar {
@@ -425,7 +453,7 @@ fn parse_command_data_ref(
     // is not valid TLV. Canonicalize to an anonymous empty struct so callers
     // always receive a valid TLV blob.
     let fields = if fields.is_empty() {
-        reencode_anonymous(&Value::Structure(Vec::new()))
+        empty_anonymous_struct()
     } else {
         fields
     };
@@ -936,6 +964,46 @@ mod tests {
             }
         }
         assert_eq!(refs, vec![0, 1], "CommandRefs must be 0 then 1");
+    }
+
+    #[test]
+    fn command_fields_preserve_device_integer_widths() {
+        // Device encodes CommandFields with a NON-minimal width (uint16 42).
+        // Span-copy + retag must return those bytes verbatim under a fresh
+        // anonymous tag — the old Value round-trip collapsed them to uint8.
+        // Hand-assembled fields: anon struct { ctx0: uint16 0x2A } =
+        // [0x15, 0x25, 0x00, 0x2A, 0x00, 0x18]; embedded at ctx1 via
+        // put_preencoded (which keeps the body bytes verbatim).
+        let nonminimal_fields = [0x15u8, 0x25, 0x00, 0x2A, 0x00, 0x18];
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+        w.start_structure(Tag::Context(0)).unwrap(); // CommandDataIB
+        w.start_list(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0x0030).unwrap();
+        w.put_uint(Tag::Context(2), 0x05).unwrap();
+        w.end_container().unwrap();
+        w.put_preencoded(Tag::Context(1), &nonminimal_fields)
+            .unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+
+        match parse_invoke_response(&buf).unwrap() {
+            InvokeResponse::Command { fields_tlv, .. } => {
+                assert_eq!(
+                    fields_tlv, nonminimal_fields,
+                    "device widths must be preserved verbatim"
+                );
+            }
+            InvokeResponse::Status(_) => panic!("expected Command"),
+        }
     }
 
     #[test]
