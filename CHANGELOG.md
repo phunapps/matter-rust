@@ -49,6 +49,36 @@ two entries under `matter-controller` → *Fixed* and `matter-interaction` →
 "no wire bytes move" claim above is about the phase-3 performance changes,
 which these two fixes are not part of.
 
+Codec zero-copy performance phase 4: swap the TLV reader's owned-tree walk
+for a borrowed, zero-copy streaming walk (`ValueRef`/`ElementRef`/
+`next_ref`), and adopt it through `matter-interaction`'s report/invoke parse
+paths so a report no longer allocates one member `Vec` per parsed item just
+to discard most of it. **No wire bytes move** — the golden TLV vectors, the
+IM byte-parity tests, and the chunk byte-parity tests are all unchanged and
+are what pins this; `matter-codec`'s next publish is an additive MINOR (new
+public API only, nothing removed or retyped).
+
+**Validation for this phase (Task 10) measured mixed results against the
+`pre-phase4` criterion baseline**, each suspect delta re-run 2-3 times
+(including at low system load, to rule out contention) before being
+believed. Encode is a net win on realistic report-shaped payloads
+(`encode/report_170attr_64B` 5.51 µs → 4.53 µs, −17.7%;
+`encode/nested_30deep` −11.3%) but small-element flat encode paths regressed
+12-20% (`encode/array_2000_uint`, `encode/struct_500_uint`,
+`encode/struct_5_uint`). **Decode regressed broadly and substantially** —
+`decode/report_170attr_64B` 25.67 µs → 64.64 µs (+152%), and every other
+decode bench between +45% and +186% — and `matter-interaction`'s streaming
+report parse regressed with it (`parse_report_data/170attr_64B` 19.36 µs →
+34.41 µs, +78%; `20attr_4B` +73%). This is the risk the phase-4 spec itself
+flagged ("`next()` now routes through `next_ref` — watch for regression here
+specifically") landing as a real, reproducible regression rather than noise:
+the deltas hold under repeated measurement and low contention, and the
+absolute point estimates (not just the percentage) move by the same
+multiple. Fuzz smoke (`fuzz_decode`, 200k runs) is clean — no crashes, no
+correctness issue found; this is a performance-only concern.
+**Flagged for follow-up investigation before the next `matter-codec`
+publish — not fixed by this task, which is validation-only in scope.**
+
 ### `matter-controller`
 
 #### Fixed
@@ -188,6 +218,32 @@ which these two fixes are not part of.
   (no previously-valid chain changes outcome; the error is strictly more
   precise).
 
+### `matter-codec`
+
+#### Added
+
+- `ValueRef`/`ElementRef`/`TlvReader::next_ref` — a zero-copy streaming walk
+  over borrowed input; `TlvReader::next` is now implemented on top of
+  `next_ref` rather than the other way around. See the phase-4 paragraph
+  above for the decode-side regression this routing introduced.
+- `ElementSpan`/`element_span`/`skip_container_span`/`span_bytes` — a
+  two-form span contract (the full span including the tag/length header, and
+  the body-only span) that discharges the exact-byte `RawElement` promise
+  documented on `Value`, for callers that need to re-emit an element with its
+  original width preserved.
+
+#### Changed
+
+- `skip_container` is now an allocation-free raw walk instead of building and
+  discarding an owned `Value` tree. **Skipped (unobserved) string data is no
+  longer UTF-8 validated** — a deliberate loosening (perf spec §4.1); this is
+  intentional and future differential tests must not flag it as a
+  divergence.
+- The writer now batches element headers into a stack buffer and reserves
+  capacity ahead of copying string payloads, instead of writing header bytes
+  one field at a time.
+- `#[inline]` added to a short list of small, cross-crate hot functions.
+
 ### `matter-interaction`
 
 #### Fixed
@@ -218,6 +274,22 @@ which these two fixes are not part of.
   implementation is retained as a test oracle and a property test pins
   equivalence across random element sets. A new `write_chunks` micro-bench
   documents the win (100×64 B elements: −86% multi-chunk, −98% single-chunk).
+
+#### Changed
+
+- Attribute, command, and event report parsing is now a streaming walk over
+  `matter-codec`'s zero-copy reader — no member `Vec` allocated per report
+  item just to be read once and dropped. See the phase-4 paragraph above:
+  this path inherited the decode-side regression along with the adoption.
+- Invoke `fields_tlv` now preserves the device's original integer widths
+  (span-copy + retag, rather than re-encoding to minimal widths). Consumers
+  decoding either the old minimal-width form or a device's native width
+  still work — only the wire bytes matter-interaction itself produces here
+  are affected, and only when re-emitting a peer's own fields.
+- `read_container_value` is now kind-aware: arrays build `Vec<Value>`
+  directly instead of routing through the generic struct/list path.
+- The chunked-report accumulator now merges into a single map slot per
+  attribute instead of separate value and data-version maps.
 
 ## matter-ble 0.3.1
 
