@@ -60,3 +60,48 @@ pub enum Value {
     /// The TLV null value (element type `0x14`).
     Null,
 }
+
+/// A borrowed view of one decoded scalar TLV value — the zero-copy sibling
+/// of [`Value`]. Strings and byte strings borrow directly from the reader's
+/// input; scalars are carried by value. Containers never appear here: the
+/// streaming [`crate::TlvReader::next_ref`] API reports them as
+/// `ContainerStart`/`ContainerEnd` events, so no owned children are built.
+///
+/// `Utf8` carries the same IS1-truncated text the owned path presents (the
+/// text before the first `0x1F` localized-string separator); access to the
+/// raw suffix (LSID) remains a separate additive follow-up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum ValueRef<'a> {
+    /// A boolean.
+    Bool(bool),
+    /// An unsigned integer (any wire width).
+    Uint(u64),
+    /// A signed integer (any wire width).
+    Int(i64),
+    /// A 4-byte IEEE 754 single-precision float.
+    Float(f32),
+    /// An 8-byte IEEE 754 double-precision float.
+    Double(f64),
+    /// A UTF-8 string borrowing the reader's input (IS1-truncated text).
+    Utf8(&'a str),
+    /// An octet string borrowing the reader's input.
+    Bytes(&'a [u8]),
+    /// The TLV null value.
+    Null,
+}
+
+impl From<ValueRef<'_>> for Value {
+    fn from(v: ValueRef<'_>) -> Self {
+        match v {
+            ValueRef::Bool(b) => Value::Bool(b),
+            ValueRef::Uint(n) => Value::Uint(n),
+            ValueRef::Int(n) => Value::Int(n),
+            ValueRef::Float(f) => Value::Float(f),
+            ValueRef::Double(f) => Value::Double(f),
+            ValueRef::Utf8(s) => Value::Utf8(String::from(s)),
+            ValueRef::Bytes(b) => Value::Bytes(b.to_vec()),
+            ValueRef::Null => Value::Null,
+        }
+    }
+}

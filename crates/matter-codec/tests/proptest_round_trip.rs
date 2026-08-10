@@ -141,4 +141,24 @@ proptest! {
         );
         prop_assert!(at_sentinel);
     }
+
+    /// The borrowed streaming walk is the owned walk, modulo ownership:
+    /// for every encoded (tag, value), `next_ref()` yields the same element
+    /// sequence as `next()` (compared through `Element::from`).
+    #[test]
+    fn next_ref_equals_next_modulo_ownership(tag in arb_tag(), value in arb_value()) {
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf).write_value(tag, &value).unwrap();
+        let mut owned = TlvReader::new(&buf);
+        let mut byref = TlvReader::new(&buf);
+        loop {
+            let o = owned.next().unwrap();
+            let r = byref.next_ref().unwrap();
+            match (o, r) {
+                (None, None) => break,
+                (Some(o), Some(r)) => prop_assert_eq!(o, Element::from(r)),
+                (o, r) => prop_assert!(false, "walk mismatch: {:?} vs {:?}", o, r),
+            }
+        }
+    }
 }

@@ -8,7 +8,7 @@
 
 use crate::error::{Error, Result};
 use crate::tag::Tag;
-use crate::value::Value;
+use crate::value::{Value, ValueRef};
 use crate::{element_type as et, tag_control as tc};
 
 /// Which kind of TLV container a [`ContainerStart`](Element::ContainerStart)
@@ -48,6 +48,44 @@ pub enum Element {
 
     /// The most recently-opened container has been closed.
     ContainerEnd,
+}
+
+/// One step of the streaming reader, borrowing string/bytes payloads from
+/// the input — the zero-copy sibling of [`Element`]. Produced by
+/// [`TlvReader::next_ref`]; convert with `Element::from` when ownership is
+/// needed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum ElementRef<'a> {
+    /// A complete scalar (or string/bytes) element.
+    Scalar {
+        /// The tag that identifies this element within its enclosing context.
+        tag: Tag,
+        /// The decoded value, borrowing from the reader's input.
+        value: ValueRef<'a>,
+    },
+    /// A container has just been opened (see [`Element::ContainerStart`]).
+    ContainerStart {
+        /// The tag that identifies this container within its enclosing context.
+        tag: Tag,
+        /// Which container kind was opened.
+        kind: ContainerKind,
+    },
+    /// The most recently-opened container has been closed.
+    ContainerEnd,
+}
+
+impl From<ElementRef<'_>> for Element {
+    fn from(e: ElementRef<'_>) -> Self {
+        match e {
+            ElementRef::Scalar { tag, value } => Element::Scalar {
+                tag,
+                value: Value::from(value),
+            },
+            ElementRef::ContainerStart { tag, kind } => Element::ContainerStart { tag, kind },
+            ElementRef::ContainerEnd => Element::ContainerEnd,
+        }
+    }
 }
 
 /// Maximum container nesting depth the reader accepts. The Matter spec
@@ -124,7 +162,12 @@ impl<'a> TlvReader<'a> {
         self.pos >= self.bytes.len()
     }
 
-    /// Advance one TLV element. Returns `Ok(None)` at end of input.
+    /// Advance one TLV element, returning an [`Element`] that owns its
+    /// string/bytes payloads. Implemented over [`Self::next_ref`] — the
+    /// borrowed walk IS the decode core, so the two can never disagree.
+    /// Returns `Ok(None)` at end of input. See [`Self::next_ref`] for the
+    /// zero-copy variant, which borrows string/bytes payloads from the
+    /// input instead of allocating.
     ///
     /// # Errors
     ///
@@ -148,6 +191,27 @@ impl<'a> TlvReader<'a> {
     #[allow(clippy::should_implement_trait)] // See note above; Iterator requires Option<Item>, not Result<Option<Item>>.
     #[inline]
     pub fn next(&mut self) -> Result<Option<Element>> {
+        Ok(self.next_ref()?.map(Element::from))
+    }
+
+    /// Advance one TLV element, returning an [`ElementRef`] whose
+    /// string/bytes payloads borrow directly from the reader's input — the
+    /// zero-copy sibling of [`Self::next`], and the single decode core both
+    /// methods share. Returns `Ok(None)` at end of input.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the input is malformed:
+    ///
+    /// - [`Error::InvalidTagControl`] — unrecognised tag-control byte form.
+    /// - [`Error::InvalidElementType`] — unknown element-type code.
+    /// - [`Error::UnexpectedEof`] — truncated payload bytes.
+    /// - [`Error::UnexpectedEndOfContainer`] — end-of-container marker (`0x18`)
+    ///   at the top level, with no container open.
+    /// - [`Error::ContainerTooDeep`] — a container open would exceed
+    ///   [`MAX_DEPTH`] nesting levels.
+    #[inline]
+    pub fn next_ref(&mut self) -> Result<Option<ElementRef<'a>>> {
         if self.is_empty() {
             return Ok(None);
         }
@@ -163,7 +227,7 @@ impl<'a> TlvReader<'a> {
                 return Err(Error::UnexpectedEndOfContainer);
             }
             self.depth -= 1;
-            return Ok(Some(Element::ContainerEnd));
+            return Ok(Some(ElementRef::ContainerEnd));
         }
 
         let tag = self.read_tag(control)?;
@@ -180,11 +244,11 @@ impl<'a> TlvReader<'a> {
                 return Err(Error::ContainerTooDeep);
             }
             self.depth += 1;
-            return Ok(Some(Element::ContainerStart { tag, kind }));
+            return Ok(Some(ElementRef::ContainerStart { tag, kind }));
         }
 
-        let value = self.read_value_body(elem_type)?;
-        Ok(Some(Element::Scalar { tag, value }))
+        let value = self.read_value_body_ref(elem_type)?;
+        Ok(Some(ElementRef::Scalar { tag, value }))
     }
 
     /// Skip the remaining body of the container whose
@@ -612,79 +676,79 @@ impl<'a> TlvReader<'a> {
     }
 
     #[allow(clippy::cast_possible_wrap)] // `b as i8`: reinterprets the byte pattern as signed, not truncation.
-    fn read_value_body(&mut self, elem_type: u8) -> Result<Value> {
+    fn read_value_body_ref(&mut self, elem_type: u8) -> Result<ValueRef<'a>> {
         match elem_type {
-            et::BOOL_FALSE => Ok(Value::Bool(false)),
-            et::BOOL_TRUE => Ok(Value::Bool(true)),
-            et::NULL => Ok(Value::Null),
-            et::UINT8 => Ok(Value::Uint(u64::from(self.next_byte()?))),
+            et::BOOL_FALSE => Ok(ValueRef::Bool(false)),
+            et::BOOL_TRUE => Ok(ValueRef::Bool(true)),
+            et::NULL => Ok(ValueRef::Null),
+            et::UINT8 => Ok(ValueRef::Uint(u64::from(self.next_byte()?))),
             et::UINT16 => {
                 let raw: [u8; 2] = self
                     .next_bytes(2)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Uint(u64::from(u16::from_le_bytes(raw))))
+                Ok(ValueRef::Uint(u64::from(u16::from_le_bytes(raw))))
             }
             et::UINT32 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Uint(u64::from(u32::from_le_bytes(raw))))
+                Ok(ValueRef::Uint(u64::from(u32::from_le_bytes(raw))))
             }
             et::UINT64 => {
                 let raw: [u8; 8] = self
                     .next_bytes(8)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Uint(u64::from_le_bytes(raw)))
+                Ok(ValueRef::Uint(u64::from_le_bytes(raw)))
             }
             et::INT8 => {
                 let b = self.next_byte()?;
-                Ok(Value::Int(i64::from(b as i8)))
+                Ok(ValueRef::Int(i64::from(b as i8)))
             }
             et::INT16 => {
                 let raw: [u8; 2] = self
                     .next_bytes(2)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Int(i64::from(i16::from_le_bytes(raw))))
+                Ok(ValueRef::Int(i64::from(i16::from_le_bytes(raw))))
             }
             et::INT32 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Int(i64::from(i32::from_le_bytes(raw))))
+                Ok(ValueRef::Int(i64::from(i32::from_le_bytes(raw))))
             }
             et::INT64 => {
                 let raw: [u8; 8] = self
                     .next_bytes(8)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Int(i64::from_le_bytes(raw)))
+                Ok(ValueRef::Int(i64::from_le_bytes(raw)))
             }
             et::FLOAT32 => {
                 let raw: [u8; 4] = self
                     .next_bytes(4)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Float(f32::from_le_bytes(raw)))
+                Ok(ValueRef::Float(f32::from_le_bytes(raw)))
             }
             et::FLOAT64 => {
                 let raw: [u8; 8] = self
                     .next_bytes(8)?
                     .try_into()
                     .map_err(|_| Error::InternalSliceConversion)?;
-                Ok(Value::Double(f64::from_le_bytes(raw)))
+                Ok(ValueRef::Double(f64::from_le_bytes(raw)))
             }
             et::UTF8_LEN8 | et::UTF8_LEN16 | et::UTF8_LEN32 | et::UTF8_LEN64 => {
                 let len = self.read_payload_len(elem_type)?;
-                self.read_utf8(len)
+                self.read_utf8_ref(len)
             }
             et::BYTES_LEN8 | et::BYTES_LEN16 | et::BYTES_LEN32 | et::BYTES_LEN64 => {
                 let len = self.read_payload_len(elem_type)?;
-                self.read_bytes(len)
+                self.read_bytes_ref(len)
             }
             other => Err(Error::InvalidElementType(other)),
         }
@@ -710,7 +774,7 @@ impl<'a> TlvReader<'a> {
         Ok(u64::from_le_bytes(raw))
     }
 
-    fn read_utf8(&mut self, len: usize) -> Result<Value> {
+    fn read_utf8_ref(&mut self, len: usize) -> Result<ValueRef<'a>> {
         let bytes = self.next_bytes(len)?;
         // Validate UTF-8 across the ENTIRE payload (a malformed suffix still
         // fails), then present only the text before the first IS1 (0x1F)
@@ -728,12 +792,11 @@ impl<'a> TlvReader<'a> {
             Some(i) => &s[..i],
             None => s,
         };
-        Ok(Value::Utf8(String::from(text)))
+        Ok(ValueRef::Utf8(text))
     }
 
-    fn read_bytes(&mut self, len: usize) -> Result<Value> {
-        let bytes = self.next_bytes(len)?;
-        Ok(Value::Bytes(bytes.to_vec()))
+    fn read_bytes_ref(&mut self, len: usize) -> Result<ValueRef<'a>> {
+        Ok(ValueRef::Bytes(self.next_bytes(len)?))
     }
 }
 
@@ -1656,5 +1719,49 @@ mod tests {
             r.skip_container(),
             Err(Error::UnexpectedEndOfContainer)
         ));
+    }
+
+    // --- Task 4 (perf phase 4): next_ref zero-copy core ---
+
+    #[test]
+    fn next_ref_borrows_utf8_and_bytes() {
+        let mut buf = Vec::new();
+        let mut w = crate::writer::TlvWriter::new(&mut buf);
+        w.put_utf8(Tag::Context(1), "Kitchen\u{1F}0409").unwrap();
+        w.put_bytes(Tag::Context(2), &[0xDE, 0xAD]).unwrap();
+        let mut r = TlvReader::new(&buf);
+        match r.next_ref().unwrap().unwrap() {
+            ElementRef::Scalar {
+                tag: Tag::Context(1),
+                value: ValueRef::Utf8(s),
+            } => {
+                // Same IS1 truncation contract as the owned path.
+                assert_eq!(s, "Kitchen");
+            }
+            other => panic!("expected borrowed Utf8, got {other:?}"),
+        }
+        match r.next_ref().unwrap().unwrap() {
+            ElementRef::Scalar {
+                tag: Tag::Context(2),
+                value: ValueRef::Bytes(b),
+            } => {
+                assert_eq!(b, &[0xDE, 0xAD]);
+            }
+            other => panic!("expected borrowed Bytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn value_ref_converts_to_owned_value() {
+        assert_eq!(
+            Value::from(ValueRef::Utf8("hi")),
+            Value::Utf8(String::from("hi"))
+        );
+        assert_eq!(
+            Value::from(ValueRef::Bytes(&[1, 2])),
+            Value::Bytes(vec![1, 2])
+        );
+        assert_eq!(Value::from(ValueRef::Uint(7)), Value::Uint(7));
+        assert_eq!(Value::from(ValueRef::Null), Value::Null);
     }
 }

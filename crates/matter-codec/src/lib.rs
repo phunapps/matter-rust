@@ -36,7 +36,7 @@ pub mod value;
 pub mod writer;
 
 pub use error::{Error, Result};
-pub use reader::{ContainerKind, Element, TlvReader, MAX_DEPTH};
+pub use reader::{ContainerKind, Element, ElementRef, TlvReader, MAX_DEPTH};
 pub use tag::Tag;
-pub use value::Value;
+pub use value::{Value, ValueRef};
 pub use writer::TlvWriter;
