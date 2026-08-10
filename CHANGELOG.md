@@ -58,26 +58,41 @@ IM byte-parity tests, and the chunk byte-parity tests are all unchanged and
 are what pins this; `matter-codec`'s next publish is an additive MINOR (new
 public API only, nothing removed or retyped).
 
-**Validation for this phase (Task 10) measured mixed results against the
-`pre-phase4` criterion baseline**, each suspect delta re-run 2-3 times
-(including at low system load, to rule out contention) before being
-believed. Encode is a net win on realistic report-shaped payloads
-(`encode/report_170attr_64B` 5.51 µs → 4.53 µs, −17.7%;
-`encode/nested_30deep` −11.3%) but small-element flat encode paths regressed
-12-20% (`encode/array_2000_uint`, `encode/struct_500_uint`,
-`encode/struct_5_uint`). **Decode regressed broadly and substantially** —
-`decode/report_170attr_64B` 25.67 µs → 64.64 µs (+152%), and every other
-decode bench between +45% and +186% — and `matter-interaction`'s streaming
-report parse regressed with it (`parse_report_data/170attr_64B` 19.36 µs →
-34.41 µs, +78%; `20attr_4B` +73%). This is the risk the phase-4 spec itself
-flagged ("`next()` now routes through `next_ref` — watch for regression here
-specifically") landing as a real, reproducible regression rather than noise:
-the deltas hold under repeated measurement and low contention, and the
-absolute point estimates (not just the percentage) move by the same
-multiple. Fuzz smoke (`fuzz_decode`, 200k runs) is clean — no crashes, no
-correctness issue found; this is a performance-only concern.
-**Flagged for follow-up investigation before the next `matter-codec`
-publish — not fixed by this task, which is validation-only in scope.**
+**Validation for this phase (Task 10) caught a real, reproducible decode-side
+regression against the `pre-phase4` criterion baseline** — exactly the risk
+the phase-4 spec itself flagged ("`next()` now routes through `next_ref` —
+watch for regression here specifically"). At its peak
+`decode/report_170attr_64B` went 25.67 µs → 64.64 µs (+152%), every other
+decode bench moved +45% to +186%, and `matter-interaction`'s streaming report
+parse regressed with it (`parse_report_data/170attr_64B` +78%). Each delta was
+re-run 2-3 times (including at low system load, to rule out contention) and
+held: the absolute point estimates moved by the same multiple as the
+percentages. Root cause was two things, separated by ablation: the
+tree-builder still drove `next()`, so every materialised element was built
+into an owned `Element` and immediately destructured again; and marking the
+relocated decode core `#[inline]` changed the inlining context of the private
+per-element decode helpers, which LLVM then stopped inlining, so each element
+paid a real call per decode step. **Both were fixed inside this phase** — the
+tree-builder now consumes the borrowed walk directly and converts
+`ValueRef` → `Value` at push time, and `#[inline]` is restored on the helpers.
+Final numbers vs `pre-phase4`: `parse_report_data/170attr_64B` 19.36 µs →
+17.35 µs (−10.6%, i.e. the streaming-parse win the phase was for now shows
+through), four of the six decode benches at or below baseline, and
+`decode/report_170attr_64B` within +4.5% — that residual is attributed to the
+per-element span bookkeeping this phase added, on a shape that is ~1700
+mostly-empty container elements; the remedy (cheaper span fields) is known and
+deliberately deferred rather than made without a measurement to justify it.
+Fuzz smoke (`fuzz_decode`, 200k runs) is clean — no crashes, and no
+correctness issue was ever in play here.
+
+The writer's header-batching work in this phase is a deliberate trade, and
+worth stating plainly: realistic message shapes won
+(`encode/report_170attr_64B` 5.51 µs → 4.59 µs, −17%; `encode/nested_30deep`
+−11%) while tiny-element synthetic microbenches regressed 12-19%
+(`encode/struct_500_uint`, `encode/array_2000_uint`,
+`encode/array_1000x32B`). Matter traffic is report- and
+command-shaped, not thousand-element flat arrays, so the batching stays —
+documented here rather than left for someone to rediscover in a baseline diff.
 
 ### `matter-controller`
 
@@ -225,7 +240,8 @@ publish — not fixed by this task, which is validation-only in scope.**
 - `ValueRef`/`ElementRef`/`TlvReader::next_ref` — a zero-copy streaming walk
   over borrowed input; `TlvReader::next` is now implemented on top of
   `next_ref` rather than the other way around. See the phase-4 paragraph
-  above for the decode-side regression this routing introduced.
+  above for the decode-side regression this routing initially introduced and
+  its same-phase fix.
 - `ElementSpan`/`element_span`/`skip_container_span`/`span_bytes` — a
   two-form span contract (the full span including the tag/length header, and
   the body-only span) that discharges the exact-byte `RawElement` promise
@@ -279,8 +295,10 @@ publish — not fixed by this task, which is validation-only in scope.**
 
 - Attribute, command, and event report parsing is now a streaming walk over
   `matter-codec`'s zero-copy reader — no member `Vec` allocated per report
-  item just to be read once and dropped. See the phase-4 paragraph above:
-  this path inherited the decode-side regression along with the adoption.
+  item just to be read once and dropped. This path initially inherited the
+  codec's decode-side regression along with the adoption; with that fixed in
+  the same phase it is a net win — `parse_report_data/170attr_64B` 19.36 µs →
+  17.35 µs (−10.6%) vs `pre-phase4`. See the phase-4 paragraph above.
 - Invoke `fields_tlv` now preserves the device's original integer widths
   (span-copy + retag, rather than re-encoding to minimal widths). Consumers
   decoding either the old minimal-width form or a device's native width
