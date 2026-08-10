@@ -84,7 +84,7 @@ pub fn decode_checkin(
     let (nonce_bytes, ct_tag) = payload.split_at(NONCE_LEN);
     let mut nonce = [0u8; NONCE_LEN];
     nonce.copy_from_slice(nonce_bytes);
-    let plaintext =
+    let mut plaintext =
         aead::decrypt(key, &nonce, &[], ct_tag).map_err(|_| CheckinError::AuthFailed)?;
     if plaintext.len() < COUNTER_LEN {
         return Err(CheckinError::TooShort);
@@ -96,7 +96,8 @@ pub fn decode_checkin(
     if checkin_nonce(key, counter) != nonce {
         return Err(CheckinError::NonceMismatch);
     }
-    Ok((counter, plaintext[COUNTER_LEN..].to_vec()))
+    plaintext.drain(..COUNTER_LEN);
+    Ok((counter, plaintext))
 }
 
 #[cfg(test)]
