@@ -54,6 +54,13 @@ fn estimate_value_bytes(v: &Value) -> usize {
     }
 }
 
+/// One accumulated attribute: its current value and the `DataVersion` it
+/// was stored under (`None` when the report carried no version).
+struct Slot {
+    value: Value,
+    version: Option<u32>,
+}
+
 /// Accumulates attribute reports across chunked `ReportData` messages and
 /// produces the final concrete `(path, value)` set.
 ///
@@ -91,8 +98,7 @@ fn estimate_value_bytes(v: &Value) -> usize {
 /// ```
 pub struct ReportAccumulator {
     order: Vec<AttributePath>,
-    values: HashMap<(u16, u32, u32), Value>,
-    versions: HashMap<(u16, u32, u32), Option<u32>>,
+    slots: HashMap<(u16, u32, u32), Slot>,
     /// Estimated total byte size of every currently-stored value.
     bytes: usize,
     max_elements: usize,
@@ -123,8 +129,7 @@ impl ReportAccumulator {
     pub fn with_limits(max_elements: usize, max_bytes: usize) -> Self {
         Self {
             order: Vec::new(),
-            values: HashMap::new(),
-            versions: HashMap::new(),
+            slots: HashMap::new(),
             bytes: 0,
             max_elements,
             max_bytes,
@@ -159,7 +164,7 @@ impl ReportAccumulator {
             let item_bytes = estimate_value_bytes(&item.value);
             // A genuinely new key would add one element; reject before inserting
             // so the element count never exceeds the cap.
-            if !self.values.contains_key(&key) && self.order.len() >= self.max_elements {
+            if !self.slots.contains_key(&key) && self.order.len() >= self.max_elements {
                 return Err(self.overflow());
             }
             // Adding this value's bytes must not exceed the byte cap.
@@ -167,53 +172,62 @@ impl ReportAccumulator {
                 return Err(self.overflow());
             }
             match item.op {
-                ReportOp::Replace => {
-                    let newer = match (self.versions.get(&key), item.data_version) {
-                        (Some(Some(old)), Some(new)) => new >= *old,
-                        _ => true, // unknown versions ⇒ last write wins
-                    };
-                    if newer {
-                        if !self.values.contains_key(&key) {
-                            self.order.push(item.path);
-                        } else if let Some(prev) = self.values.get(&key) {
+                ReportOp::Replace => match self.slots.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        let slot = e.get_mut();
+                        let newer = match (slot.version, item.data_version) {
+                            (Some(old), Some(new)) => new >= old,
+                            _ => true, // unknown versions ⇒ last write wins
+                        };
+                        if newer {
                             // Replacing an existing value: drop its byte charge
                             // before adding the new one so the running total
                             // tracks what is actually held.
-                            self.bytes = self.bytes.saturating_sub(estimate_value_bytes(prev));
-                        }
-                        self.bytes = self.bytes.saturating_add(item_bytes);
-                        self.values.insert(key, item.value);
-                        self.versions.insert(key, item.data_version);
-                    }
-                }
-                ReportOp::Append => {
-                    // IM-3: apply the same DataVersion guard `Replace` uses — a
-                    // stale-version append (older than what we already hold for
-                    // this list) must not land on a newer list. A chunked list's
-                    // appends share one DataVersion, so same/unknown versions
-                    // proceed; only a strictly older version is dropped.
-                    if let (Some(Some(old)), Some(new)) =
-                        (self.versions.get(&key), item.data_version)
-                    {
-                        if new < *old {
-                            continue;
+                            self.bytes = self
+                                .bytes
+                                .saturating_sub(estimate_value_bytes(&slot.value))
+                                .saturating_add(item_bytes);
+                            slot.value = item.value;
+                            slot.version = item.data_version;
                         }
                     }
-                    if !self.values.contains_key(&key) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
                         self.order.push(item.path);
-                        self.values.insert(key, Value::Array(Vec::new()));
+                        self.bytes = self.bytes.saturating_add(item_bytes);
+                        e.insert(Slot {
+                            value: item.value,
+                            version: item.data_version,
+                        });
                     }
-                    self.versions.insert(key, item.data_version);
-                    self.bytes = self.bytes.saturating_add(item_bytes);
-                    match self.values.get_mut(&key) {
-                        Some(Value::Array(list)) => list.push(item.value),
-                        // Malformed: an append targeting a non-list value (e.g.
-                        // a prior scalar `Replace` for the same path). A
-                        // conformant device never does this; coerce to a fresh
-                        // single-element list rather than silently dropping the
-                        // element.
-                        Some(slot) => *slot = Value::Array(vec![item.value]),
-                        None => {}
+                },
+                ReportOp::Append => {
+                    if let Some(slot) = self.slots.get_mut(&key) {
+                        // IM-3: a strictly-older DataVersion append must not
+                        // land on a newer list; same/unknown versions proceed.
+                        if let (Some(old), Some(new)) = (slot.version, item.data_version) {
+                            if new < old {
+                                continue;
+                            }
+                        }
+                        slot.version = item.data_version;
+                        self.bytes = self.bytes.saturating_add(item_bytes);
+                        match &mut slot.value {
+                            Value::Array(list) => list.push(item.value),
+                            // Malformed: an append targeting a non-list value.
+                            // Coerce to a fresh single-element list rather than
+                            // silently dropping the element.
+                            other => *other = Value::Array(vec![item.value]),
+                        }
+                    } else {
+                        self.order.push(item.path);
+                        self.bytes = self.bytes.saturating_add(item_bytes);
+                        self.slots.insert(
+                            key,
+                            Slot {
+                                value: Value::Array(vec![item.value]),
+                                version: item.data_version,
+                            },
+                        );
                     }
                 }
             }
@@ -234,8 +248,8 @@ impl ReportAccumulator {
         let mut out = Vec::with_capacity(self.order.len());
         for path in std::mem::take(&mut self.order) {
             let key = (path.endpoint, path.cluster, path.attribute);
-            if let Some(v) = self.values.remove(&key) {
-                out.push((path, v));
+            if let Some(slot) = self.slots.remove(&key) {
+                out.push((path, slot.value));
             }
         }
         out
