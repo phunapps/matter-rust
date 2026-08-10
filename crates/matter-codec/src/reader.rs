@@ -91,6 +91,7 @@ pub struct TlvReader<'a> {
 impl<'a> TlvReader<'a> {
     /// Construct a reader that walks `bytes` from the start, using the
     /// [`DEFAULT_ELEMENT_BUDGET`] for tree-builder decodes.
+    #[inline]
     pub fn new(bytes: &'a [u8]) -> Self {
         Self {
             bytes,
@@ -107,6 +108,7 @@ impl<'a> TlvReader<'a> {
     /// [`Value`] elements fails with [`Error::ElementBudgetExceeded`]. The
     /// budget only affects the tree-builder path; the streaming [`Self::next`]
     /// API is unaffected because it allocates nothing per element.
+    #[inline]
     pub fn with_element_budget(bytes: &'a [u8], budget: usize) -> Self {
         Self {
             bytes,
@@ -117,6 +119,7 @@ impl<'a> TlvReader<'a> {
     }
 
     /// Whether there is no more input to consume.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.pos >= self.bytes.len()
     }
@@ -143,6 +146,7 @@ impl<'a> TlvReader<'a> {
     /// use `?` naturally. Implementing `std::iter::Iterator` is deferred to
     /// a later phase when a fallible-iterator adapter is available.
     #[allow(clippy::should_implement_trait)] // See note above; Iterator requires Option<Item>, not Result<Option<Item>>.
+    #[inline]
     pub fn next(&mut self) -> Result<Option<Element>> {
         if self.is_empty() {
             return Ok(None);
@@ -514,12 +518,14 @@ impl<'a> TlvReader<'a> {
         }
     }
 
+    #[inline]
     fn next_byte(&mut self) -> Result<u8> {
         let b = *self.bytes.get(self.pos).ok_or(Error::UnexpectedEof)?;
         self.pos += 1;
         Ok(b)
     }
 
+    #[inline]
     fn next_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.pos.checked_add(n).ok_or(Error::LengthOverflow)?;
         let slice = self.bytes.get(self.pos..end).ok_or(Error::UnexpectedEof)?;

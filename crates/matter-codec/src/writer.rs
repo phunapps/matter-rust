@@ -19,6 +19,7 @@ pub struct TlvWriter<'a> {
 /// Assemble the control octet + tag bytes for `tag` into the front of `buf`,
 /// returning the byte count (1..=9). Byte layout is identical to what the
 /// old per-push `write_tag` emitted; the golden vectors pin it.
+#[inline]
 fn encode_tag(tag: Tag, element_type: u8, buf: &mut [u8; MAX_HEADER]) -> usize {
     match tag {
         Tag::Anonymous => {
@@ -75,11 +76,13 @@ fn encode_tag(tag: Tag, element_type: u8, buf: &mut [u8; MAX_HEADER]) -> usize {
 impl<'a> TlvWriter<'a> {
     /// Construct a writer that appends to `out`. The writer borrows `out`
     /// mutably; release the borrow by dropping the writer.
+    #[inline]
     pub fn new(out: &'a mut Vec<u8>) -> Self {
         Self { out }
     }
 
     /// Write a control octet + tag bytes as a single append.
+    #[inline]
     fn write_tag(&mut self, tag: Tag, element_type: u8) {
         let mut buf = [0u8; MAX_HEADER];
         let n = encode_tag(tag, element_type, &mut buf);
@@ -89,6 +92,7 @@ impl<'a> TlvWriter<'a> {
     /// Header + fixed-width payload assembled in one stack buffer, single
     /// `extend_from_slice`. `payload` is at most 8 bytes (widest scalar), so
     /// `n + payload.len() <= 17` always holds.
+    #[inline]
     fn put_scalar(&mut self, tag: Tag, element_type: u8, payload: &[u8]) {
         let mut buf = [0u8; MAX_HEADER];
         let n = encode_tag(tag, element_type, &mut buf);
@@ -102,6 +106,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn put_bool(&mut self, tag: Tag, v: bool) -> Result<()> {
         let et = if v { et::BOOL_TRUE } else { et::BOOL_FALSE };
         self.put_scalar(tag, et, &[]);
@@ -114,6 +119,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn put_null(&mut self, tag: Tag) -> Result<()> {
         self.put_scalar(tag, et::NULL, &[]);
         Ok(())
@@ -127,6 +133,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn put_uint(&mut self, tag: Tag, v: u64) -> Result<()> {
         if let Ok(n) = u8::try_from(v) {
             self.put_scalar(tag, et::UINT8, &n.to_le_bytes());
@@ -148,6 +155,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn put_int(&mut self, tag: Tag, v: i64) -> Result<()> {
         if let Ok(n) = i8::try_from(v) {
             self.put_scalar(tag, et::INT8, &n.to_le_bytes());
@@ -167,6 +175,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn put_float(&mut self, tag: Tag, v: f32) -> Result<()> {
         self.put_scalar(tag, et::FLOAT32, &v.to_le_bytes());
         Ok(())
@@ -178,6 +187,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn put_double(&mut self, tag: Tag, v: f64) -> Result<()> {
         self.put_scalar(tag, et::FLOAT64, &v.to_le_bytes());
         Ok(())
@@ -191,6 +201,7 @@ impl<'a> TlvWriter<'a> {
     /// Returns [`Error::LengthOverflow`] if the string is longer than
     /// `u64::MAX` bytes (impossible in practice on any supported platform,
     /// but the return type is `Result` for portability).
+    #[inline]
     pub fn put_utf8(&mut self, tag: Tag, v: &str) -> Result<()> {
         self.put_string_payload(
             tag,
@@ -210,6 +221,7 @@ impl<'a> TlvWriter<'a> {
     /// Returns [`Error::LengthOverflow`] if the slice is longer than
     /// `u64::MAX` bytes (impossible in practice on any supported platform,
     /// but the return type is `Result` for portability).
+    #[inline]
     pub fn put_bytes(&mut self, tag: Tag, v: &[u8]) -> Result<()> {
         self.put_string_payload(
             tag,
@@ -296,6 +308,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn start_structure(&mut self, tag: Tag) -> Result<()> {
         self.write_tag(tag, et::STRUCTURE);
         Ok(())
@@ -308,6 +321,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn start_array(&mut self, tag: Tag) -> Result<()> {
         self.write_tag(tag, et::ARRAY);
         Ok(())
@@ -320,6 +334,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn start_list(&mut self, tag: Tag) -> Result<()> {
         self.write_tag(tag, et::LIST);
         Ok(())
@@ -332,6 +347,7 @@ impl<'a> TlvWriter<'a> {
     ///
     /// Currently infallible; returns `Ok(())` always. The `Result` return
     /// type is reserved for future I/O-backed writers.
+    #[inline]
     pub fn end_container(&mut self) -> Result<()> {
         self.out.push(et::END_OF_CONTAINER);
         Ok(())
