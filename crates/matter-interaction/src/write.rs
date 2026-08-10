@@ -173,6 +173,9 @@ pub(crate) fn parse_attribute_status_ib(
 }
 
 /// Reserve for the `MoreChunkedMessages`(ctx3) bool we may add after packing.
+/// Covers the 2-byte explicit flag element (control byte + tag byte for a
+/// boolean) whether it ends up encoding `Some(true)` or `Some(false)` — both
+/// cost the same 2 bytes.
 const CHUNK_FLAG_RESERVE: usize = 4;
 
 /// Build one or more `WriteRequestMessage`s that write `element_tlvs` (each a
@@ -181,12 +184,23 @@ const CHUNK_FLAG_RESERVE: usize = 4;
 ///
 /// Chunk 0 is a `ReplaceAll` (path without `ListIndex`; `Data` = an array of
 /// the elements that fit). Remaining elements are emitted as `AppendItem` IBs
-/// (path with `ListIndex`=null). `MoreChunkedMessages` (ctx3) is set on every
-/// message except the last.
+/// (path with `ListIndex`=null).
 ///
-/// When everything fits one message the result is a single `ReplaceAll`
-/// byte-identical to `build_write_request(&[AttributeWriteRequest{path,
-/// value_tlv: <the full array encoded>}])`.
+/// When the write fits a single message, the result is one `ReplaceAll` with
+/// `MoreChunkedMessages` (ctx3) omitted entirely — byte-identical to
+/// `build_write_request(&[AttributeWriteRequest{path, value_tlv: <the full
+/// array encoded>}])`.
+///
+/// When the write spans multiple messages, `MoreChunkedMessages` is encoded
+/// **explicitly on every chunk**: `true` on all but the last, and an explicit
+/// `false` on the last. This is required for chip interop: chip's
+/// `WriteHandler::ProcessWriteRequest` (connectedhomeip
+/// `src/app/WriteHandler.cpp:649-656`) initializes its parsed
+/// `MoreChunkedMessages` from the *previous* chunk's stored state before
+/// attempting to read the field, so an absent field on the final chunk
+/// silently inherits `true` from chunk N-1 and the device never considers the
+/// write transaction finished. Only the single-message (no-chunking) shape
+/// omits the field, matching `build_write_request`.
 ///
 /// An empty `element_tlvs` yields a single empty-array `ReplaceAll`.
 #[must_use]
@@ -244,13 +258,20 @@ pub fn build_list_write_chunks(
         append_batches.push(batch);
     }
 
-    // 2) Encode each chunk, setting MoreChunkedMessages on all but the last.
+    // 2) Encode each chunk. Single-message output omits MoreChunkedMessages
+    // entirely (None); multi-chunk output sets it explicitly on every chunk —
+    // Some(true) on all but the last, Some(false) on the last (chip parity:
+    // see the rustdoc above for why the final chunk cannot merely omit it).
+    // Note: when chunked is true, append_batches is always non-empty (total =
+    // 1 + append_batches.len() > 1), so the first (ReplaceAll) chunk is never
+    // the last chunk — it always carries Some(true).
     let total = 1 + append_batches.len();
     let mut messages: Vec<Vec<u8>> = Vec::with_capacity(total);
-    let first_more = total > 1;
+    let chunked = total > 1;
+    let first_more = if chunked { Some(true) } else { None };
     messages.push(encode_replace_all(path, &first_batch, timed, first_more));
     for (i, batch) in append_batches.iter().enumerate() {
-        let more = i + 1 < append_batches.len();
+        let more = Some(i + 1 < append_batches.len());
         messages.push(encode_append_items(path, batch, timed, more));
     }
     messages
@@ -258,12 +279,18 @@ pub fn build_list_write_chunks(
 
 /// Encode a `ReplaceAll` `WriteRequestMessage` containing one `AttributeDataIB`
 /// whose `Data` is an anonymous array of `elems`.
+///
+/// `more_chunked`: `None` omits `MoreChunkedMessages` (ctx3) entirely —
+/// the single-chunk shape. `Some(v)` encodes it explicitly, `true` or
+/// `false` alike — required on every chunk of a multi-chunk sequence (see
+/// [`build_list_write_chunks`] rustdoc for why the final chunk cannot omit
+/// an explicit `false`).
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 fn encode_replace_all(
     path: AttributePath,
     elems: &[&[u8]],
     timed: bool,
-    more_chunked: bool,
+    more_chunked: Option<bool>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
@@ -299,8 +326,8 @@ fn encode_replace_all(
     w.end_container().expect("infallible: vec writer"); // AttributeDataIB
 
     w.end_container().expect("infallible: vec writer"); // WriteRequests array
-    if more_chunked {
-        w.put_bool(Tag::Context(3), true)
+    if let Some(v) = more_chunked {
+        w.put_bool(Tag::Context(3), v)
             .expect("infallible: vec writer"); // MoreChunkedMessages
     }
     w.put_uint(Tag::Context(0xFF), u64::from(IM_REVISION))
@@ -311,12 +338,15 @@ fn encode_replace_all(
 
 /// Encode an `AppendItem` `WriteRequestMessage` containing one
 /// `AttributeDataIB` per element — each IB has `ListIndex`=null in its path.
+///
+/// `more_chunked`: see [`encode_replace_all`] — `None` omits
+/// `MoreChunkedMessages`, `Some(v)` encodes it explicitly.
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 fn encode_append_items(
     path: AttributePath,
     elems: &[&[u8]],
     timed: bool,
-    more_chunked: bool,
+    more_chunked: Option<bool>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
@@ -348,8 +378,8 @@ fn encode_append_items(
     }
 
     w.end_container().expect("infallible: vec writer"); // WriteRequests array
-    if more_chunked {
-        w.put_bool(Tag::Context(3), true)
+    if let Some(v) = more_chunked {
+        w.put_bool(Tag::Context(3), v)
             .expect("infallible: vec writer"); // MoreChunkedMessages
     }
     w.put_uint(Tag::Context(0xFF), u64::from(IM_REVISION))
@@ -358,12 +388,17 @@ fn encode_append_items(
     buf
 }
 
+/// Size-accounting base: always uses the flag-omitted (`None`) shape. The
+/// caller reserves [`CHUNK_FLAG_RESERVE`] bytes on top to cover the explicit
+/// flag that may be added afterward.
 fn encoded_replace_all_len(path: AttributePath, elems: &[&[u8]], timed: bool) -> usize {
-    encode_replace_all(path, elems, timed, false).len()
+    encode_replace_all(path, elems, timed, None).len()
 }
 
+/// Size-accounting base: always uses the flag-omitted (`None`) shape. See
+/// [`encoded_replace_all_len`].
 fn encoded_append_len(path: AttributePath, elems: &[&[u8]], timed: bool) -> usize {
-    encode_append_items(path, elems, timed, false).len()
+    encode_append_items(path, elems, timed, None).len()
 }
 
 /// Parse the element TLVs out of a sequence of `WriteRequestMessage`s produced
@@ -749,13 +784,16 @@ mod chunk_tests {
             append_batches.push(batch);
         }
 
-        // 2) Encode each chunk, setting MoreChunkedMessages on all but the last.
+        // 2) Encode each chunk. Same Option semantics as the incremental
+        // packer: None (omitted) for single-message output, Some(true)/
+        // Some(false) explicitly on every chunk of a multi-chunk sequence.
         let total = 1 + append_batches.len();
         let mut messages: Vec<Vec<u8>> = Vec::with_capacity(total);
-        let first_more = total > 1;
+        let chunked = total > 1;
+        let first_more = if chunked { Some(true) } else { None };
         messages.push(encode_replace_all(path, &first_batch, timed, first_more));
         for (i, batch) in append_batches.iter().enumerate() {
-            let more = i + 1 < append_batches.len();
+            let more = Some(i + 1 < append_batches.len());
             messages.push(encode_append_items(path, batch, timed, more));
         }
         messages
@@ -820,9 +858,16 @@ mod chunk_tests {
             "expected multiple chunks, got {}",
             chunks.len()
         );
-        // all but last carry MoreChunkedMessages (ctx3 == true); last does not
+        // every chunk of a multi-chunk sequence carries MoreChunkedMessages
+        // explicitly: Some(true) on all but the last, Some(false) — present,
+        // not merely absent — on the last (chip parity: WriteHandler.cpp
+        // inherits the previous chunk's value when the field is absent).
         for (i, c) in chunks.iter().enumerate() {
-            assert_eq!(has_more_chunked(c), i + 1 != chunks.len(), "chunk {i}");
+            assert_eq!(
+                more_chunked_flag(c),
+                Some(i + 1 != chunks.len()),
+                "chunk {i}"
+            );
         }
     }
 
@@ -833,8 +878,43 @@ mod chunk_tests {
         assert_eq!(reassemble_list_write(&chunks), elems);
     }
 
-    // test helper: does this WriteRequestMessage carry MoreChunkedMessages(ctx3)=true?
-    fn has_more_chunked(msg: &[u8]) -> bool {
+    /// NEW: forces a 3-chunk output and asserts the MoreChunkedMessages(ctx3)
+    /// presence/value on each chunk, plus that a single-chunk output carries
+    /// no ctx3 element at all.
+    #[test]
+    fn multi_chunk_carries_explicit_flag_final_chunk_explicit_false() {
+        // Budget tight enough that 3 entries each land in their own message:
+        // chunk 0 = ReplaceAll[entry 1], chunk 1 = AppendItem[entry 2],
+        // chunk 2 = AppendItem[entry 3].
+        let elems = vec![entry_tlv(1), entry_tlv(2), entry_tlv(3)];
+        let chunks = build_list_write_chunks(p(), &elems, 40, false);
+        assert_eq!(
+            chunks.len(),
+            3,
+            "expected exactly 3 chunks, got {}",
+            chunks.len()
+        );
+        assert_eq!(more_chunked_flag(&chunks[0]), Some(true), "chunk 0");
+        assert_eq!(more_chunked_flag(&chunks[1]), Some(true), "chunk 1");
+        assert_eq!(
+            more_chunked_flag(&chunks[2]),
+            Some(false),
+            "final chunk must carry an EXPLICIT MoreChunkedMessages=false, not omit it"
+        );
+
+        // A single-chunk (unsplit) write carries no ctx3 element at all.
+        let single = build_list_write_chunks(p(), &[entry_tlv(1)], 4096, false);
+        assert_eq!(single.len(), 1);
+        assert_eq!(
+            more_chunked_flag(&single[0]),
+            None,
+            "single-chunk output must omit MoreChunkedMessages entirely"
+        );
+    }
+
+    /// test helper: does this `WriteRequestMessage` carry `MoreChunkedMessages`
+    /// (ctx3)? `None` = absent, `Some(v)` = explicitly present with value `v`.
+    fn more_chunked_flag(msg: &[u8]) -> Option<bool> {
         use matter_codec::{Element, TlvReader};
         let mut r = TlvReader::new(msg);
         // enter the anonymous message struct
@@ -844,11 +924,11 @@ mod chunk_tests {
                 Ok(Some(Element::Scalar {
                     tag: Tag::Context(3),
                     value: Value::Bool(b),
-                })) => return b,
+                })) => return Some(b),
                 Ok(Some(Element::ContainerStart { .. })) => {
                     let _ = super::skip_container(&mut r);
                 }
-                Ok(Some(Element::ContainerEnd) | None) | Err(_) => return false,
+                Ok(Some(Element::ContainerEnd) | None) | Err(_) => return None,
                 Ok(Some(_)) => {}
             }
         }
@@ -860,9 +940,15 @@ mod chunk_tests {
             let elems: Vec<Vec<u8>> = (0..count as u64).map(entry_tlv).collect();
             let chunks = build_list_write_chunks(p(), &elems, budget, false);
             prop_assert_eq!(reassemble_list_write(&chunks), elems.clone());
-            // MoreChunked invariant
+            // MoreChunked invariant: explicit on every chunk when multi-chunk,
+            // absent entirely when single-chunk.
             for (i, c) in chunks.iter().enumerate() {
-                prop_assert_eq!(has_more_chunked(c), i + 1 != chunks.len());
+                let expected = if chunks.len() > 1 {
+                    Some(i + 1 != chunks.len())
+                } else {
+                    None
+                };
+                prop_assert_eq!(more_chunked_flag(c), expected);
             }
         }
     }
