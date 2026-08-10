@@ -1265,17 +1265,10 @@ fn process_sigma3(
     // (field names defined from Sigma2 perspective; re-used symmetrically).
     // Pinned from CaseServer.ts: initiatorEphPub → "responderPublicKey",
     //                             responderEphPub → "initiatorPublicKey".
-    let peer_noc_tlv = peer_tbe
-        .peer_noc
-        .to_tlv()
-        .map_err(Error::InvalidPeerNocChain)?;
-    let peer_icac_tlv: Option<Vec<u8>> = match &peer_tbe.peer_icac {
-        Some(icac) => Some(icac.to_tlv().map_err(Error::InvalidPeerNocChain)?),
-        None => None,
-    };
+    // — over the peer's exact wire bytes (kept in TbeData3), not a re-encoding.
     let peer_signed_data = encode_tbs_data(
-        &peer_noc_tlv,
-        peer_icac_tlv.as_deref(),
+        &peer_tbe.peer_noc_tlv,
+        peer_tbe.peer_icac_tlv.as_deref(),
         initiator_eph_pub, // initiator's eph pub = "responderPublicKey" in TBSData3
         eph_pub,           // our eph pub = "initiatorPublicKey" in TBSData3
     )?;

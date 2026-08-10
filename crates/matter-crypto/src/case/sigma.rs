@@ -724,6 +724,13 @@ pub(crate) struct TbeData2 {
     pub peer_noc: MatterCertificate,
     /// Responder's Intermediate CA Certificate (optional).
     pub peer_icac: Option<MatterCertificate>,
+    /// Raw NOC TLV bytes exactly as received. TBS signature verification
+    /// must run over the peer's wire bytes — keeping them here removes both
+    /// a per-handshake re-serialization and the (previously load-bearing)
+    /// assumption that `MatterCertificate::to_tlv` re-encodes byte-identically.
+    pub peer_noc_tlv: Vec<u8>,
+    /// Raw ICAC TLV bytes exactly as received (optional, as the ICAC is).
+    pub peer_icac_tlv: Option<Vec<u8>>,
     /// Raw 64-byte r||s ECDSA signature from the responder.
     pub peer_signature: Vec<u8>,
     /// 16-byte fresh resumption ID from the responder. Paired with the
@@ -805,14 +812,16 @@ pub(crate) fn decode_tbedata2(plaintext: &[u8]) -> Result<TbeData2> {
     let rid = resumption_id.ok_or(Error::InvalidParameter)?;
 
     let peer_noc = MatterCertificate::from_tlv(&noc_b).map_err(Error::InvalidPeerNocChain)?;
-    let peer_icac = match icac_bytes {
-        Some(b) => Some(MatterCertificate::from_tlv(&b).map_err(Error::InvalidPeerNocChain)?),
+    let peer_icac = match &icac_bytes {
+        Some(b) => Some(MatterCertificate::from_tlv(b).map_err(Error::InvalidPeerNocChain)?),
         None => None,
     };
 
     Ok(TbeData2 {
         peer_noc,
         peer_icac,
+        peer_noc_tlv: noc_b,
+        peer_icac_tlv: icac_bytes,
         peer_signature: sig,
         resumption_id: rid,
     })
@@ -858,13 +867,20 @@ pub(crate) fn encode_tbedata3(
 /// Maps to `TlvEncryptedDataSigma3` in matter.js CaseMessages.ts.
 /// Used by the *responder* when verifying a received Sigma3.
 // `peer_` prefix is intentional: mirrors `TbeData2` naming convention for symmetry.
-// All three fields describe the peer (initiator) so the prefix is meaningful, not redundant.
+// All fields describe the peer (initiator) so the prefix is meaningful, not redundant.
 #[allow(clippy::struct_field_names)]
 pub(crate) struct TbeData3 {
     /// Initiator's Node Operational Certificate.
     pub peer_noc: MatterCertificate,
     /// Initiator's Intermediate CA Certificate (optional).
     pub peer_icac: Option<MatterCertificate>,
+    /// Raw NOC TLV bytes exactly as received. TBS signature verification
+    /// must run over the peer's wire bytes — keeping them here removes both
+    /// a per-handshake re-serialization and the (previously load-bearing)
+    /// assumption that `MatterCertificate::to_tlv` re-encodes byte-identically.
+    pub peer_noc_tlv: Vec<u8>,
+    /// Raw ICAC TLV bytes exactly as received (optional, as the ICAC is).
+    pub peer_icac_tlv: Option<Vec<u8>>,
     /// Raw 64-byte r||s ECDSA signature from the initiator.
     pub peer_signature: Vec<u8>,
 }
@@ -930,14 +946,16 @@ pub(crate) fn decode_tbedata3(plaintext: &[u8]) -> Result<TbeData3> {
     let sig = signature.ok_or(Error::InvalidParameter)?;
 
     let peer_noc = MatterCertificate::from_tlv(&noc_b).map_err(Error::InvalidPeerNocChain)?;
-    let peer_icac = match icac_bytes {
-        Some(b) => Some(MatterCertificate::from_tlv(&b).map_err(Error::InvalidPeerNocChain)?),
+    let peer_icac = match &icac_bytes {
+        Some(b) => Some(MatterCertificate::from_tlv(b).map_err(Error::InvalidPeerNocChain)?),
         None => None,
     };
 
     Ok(TbeData3 {
         peer_noc,
         peer_icac,
+        peer_noc_tlv: noc_b,
+        peer_icac_tlv: icac_bytes,
         peer_signature: sig,
     })
 }

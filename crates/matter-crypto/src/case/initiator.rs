@@ -1083,17 +1083,10 @@ fn process_sigma2(
 
     // Step 7: Verify peer's ECDSA signature over TBSData2.
     // TBSData2 = TlvSignedData { responderNoc, responderIcac?, responderEphPub, initiatorEphPub }
-    let peer_noc_tlv = peer_tbe
-        .peer_noc
-        .to_tlv()
-        .map_err(Error::InvalidPeerNocChain)?;
-    let peer_icac_tlv: Option<Vec<u8>> = match &peer_tbe.peer_icac {
-        Some(icac) => Some(icac.to_tlv().map_err(Error::InvalidPeerNocChain)?),
-        None => None,
-    };
+    // — over the peer's exact wire bytes (kept in TbeData2), not a re-encoding.
     let peer_signed_data = encode_tbs_data(
-        &peer_noc_tlv,
-        peer_icac_tlv.as_deref(),
+        &peer_tbe.peer_noc_tlv,
+        peer_tbe.peer_icac_tlv.as_deref(),
         &sigma2.responder_eph_pub,
         eph_pub,
     )?;
