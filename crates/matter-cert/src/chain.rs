@@ -161,6 +161,8 @@ impl<'a> CertificateChain<'a> {
     /// [`Error::MissingKeyCertSign`] is returned when a non-leaf CA cert
     /// lacks the `keyCertSign` `KeyUsage` bit, and [`Error::LeafIsCa`] when
     /// the end-entity leaf asserts `basic_constraints.is_ca = true`.
+    /// Returns any error [`MatterCertificate::to_x509_tbs_der`] returns for
+    /// the top certificate.
     pub fn validate(&self, roots: &TrustedRoots, at: MatterTime) -> Result<()> {
         if self.certs.is_empty() {
             return Err(Error::UntrustedRoot);
@@ -254,6 +256,8 @@ impl<'a> CertificateChain<'a> {
 
         // ---- Anchor the top cert against TrustedRoots ----
         let top = &self.certs[len - 1];
+        // TBS depends only on `top` — compute once, not per anchor.
+        let top_tbs = top.to_x509_tbs_der()?;
         for anchor in roots.iter() {
             if top.issuer() != anchor.subject() {
                 continue;
@@ -267,7 +271,11 @@ impl<'a> CertificateChain<'a> {
                     continue;
                 }
             }
-            if top.verify_signed_by(anchor.public_key()).is_ok() {
+            if anchor
+                .public_key()
+                .verify(&top_tbs, top.signature())
+                .is_ok()
+            {
                 return Ok(());
             }
         }
