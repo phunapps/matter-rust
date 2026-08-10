@@ -148,10 +148,59 @@ pub fn read_container_value(
 /// reader in any other position yields an [`error::ImError`] or misattributed
 /// members — never a panic or UB.
 ///
+/// Streaming: the skipped sub-tree is structurally validated (tag/length
+/// walking, depth-capped) but never collected into an owned subtree — per-scalar
+/// values are decoded and immediately discarded — and it does not charge the codec's
+/// tree-builder element budget; a discarded payload is bounded by its input size only.
+/// (Deliberate: see the 2026-08-09 performance-remediation spec §3.1.)
+///
 /// # Errors
 ///
-/// Propagates any error from [`read_container_members`].
+/// Propagates any [`matter_codec::Error`] from the underlying streaming
+/// walk (e.g. `UnclosedContainer` on truncated input) as
+/// [`error::ImError::Codec`].
 pub fn skip_container(r: &mut TlvReader<'_>) -> Result<(), error::ImError> {
-    let _ = read_container_members(r)?;
-    Ok(())
+    r.skip_container().map_err(error::ImError::Codec)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
+    use super::*;
+    use matter_codec::{Tag, TlvWriter};
+
+    #[test]
+    fn skip_container_leaves_reader_at_next_sibling() {
+        // { deep nested container with mixed scalars } followed by a sentinel uint.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap(); // the container we skip
+        w.put_uint(Tag::Context(0), 7).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.put_bytes(Tag::Anonymous, &[0xAA; 40]).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap(); // ctx1 struct
+        w.put_uint(Tag::Context(2), 42).unwrap(); // sentinel sibling
+        w.end_container().unwrap();
+
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        )); // outer
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        )); // ctx1
+        skip_container(&mut r).unwrap();
+        // Reader must now be positioned at the sentinel.
+        match r.next().unwrap() {
+            Some(Element::Scalar {
+                tag: Tag::Context(2),
+                value: Value::Uint(42),
+            }) => {}
+            other => panic!("expected sentinel after skip, got {other:?}"),
+        }
+    }
 }
