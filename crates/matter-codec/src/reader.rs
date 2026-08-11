@@ -4,7 +4,10 @@
 //! returned as [`Element::Scalar`]; containers emit a [`Element::ContainerStart`]
 //! immediately followed by the children's elements and then a matching
 //! [`Element::ContainerEnd`]. Use [`TlvReader::read_value`] to materialise an
-//! entire element tree in one call.
+//! entire element tree in one call. [`TlvReader::next_ref`] is the zero-copy
+//! sibling of [`TlvReader::next`]: it borrows string/bytes payloads straight
+//! from the input instead of allocating, and is the decode core `next` itself
+//! is implemented over.
 
 use crate::error::{Error, Result};
 use crate::tag::Tag;
@@ -168,6 +171,13 @@ pub struct TlvReader<'a> {
     /// [`Self::next_ref`] (or the whole container after a `skip_container*`
     /// call). `None` before the first element.
     last_span: Option<ElementSpan>,
+    /// Whether the element most recently returned by [`Self::next_ref`] (and
+    /// therefore [`Self::next`]) was a `ContainerStart` — the precondition
+    /// [`Self::skip_container_span`] enforces so that a span is only ever
+    /// handed out for a container the caller actually just opened. Set/cleared
+    /// only on a returned element; untouched by `Ok(None)` and by errors, in
+    /// lockstep with [`Self::last_span`].
+    last_was_container_start: bool,
 }
 
 impl<'a> TlvReader<'a> {
@@ -181,6 +191,7 @@ impl<'a> TlvReader<'a> {
             depth: 0,
             element_budget: DEFAULT_ELEMENT_BUDGET,
             last_span: None,
+            last_was_container_start: false,
         }
     }
 
@@ -199,6 +210,7 @@ impl<'a> TlvReader<'a> {
             depth: 0,
             element_budget: budget,
             last_span: None,
+            last_was_container_start: false,
         }
     }
 
@@ -279,6 +291,7 @@ impl<'a> TlvReader<'a> {
                 body_start: self.pos,
                 end: self.pos,
             });
+            self.last_was_container_start = false;
             return Ok(Some(ElementRef::ContainerEnd));
         }
 
@@ -302,6 +315,7 @@ impl<'a> TlvReader<'a> {
                 body_start,
                 end: self.pos,
             });
+            self.last_was_container_start = true;
             return Ok(Some(ElementRef::ContainerStart { tag, kind }));
         }
 
@@ -311,6 +325,7 @@ impl<'a> TlvReader<'a> {
             body_start,
             end: self.pos,
         });
+        self.last_was_container_start = false;
         Ok(Some(ElementRef::Scalar { tag, value }))
     }
 
@@ -378,6 +393,9 @@ impl<'a> TlvReader<'a> {
                 end: self.pos,
             });
         }
+        // The container that was open has been consumed: a following
+        // `skip_container_span` must not treat this as a fresh ContainerStart.
+        self.last_was_container_start = false;
         Ok(())
     }
 
@@ -385,14 +403,24 @@ impl<'a> TlvReader<'a> {
     /// [`ElementSpan`] (marked at the `ContainerStart` just returned by
     /// `next()`; ended at the read position after the raw skip).
     ///
+    /// This method has a precondition: the immediately preceding
+    /// [`Self::next`] / [`Self::next_ref`] call must have returned a
+    /// `ContainerStart`. Anywhere else — after a scalar, after an
+    /// end-of-container, after a [`Self::read_value`] that walked a whole
+    /// tree, after another skip, or before any element at all — it consumes
+    /// nothing and returns [`Error::UnexpectedEndOfContainer`], rather than
+    /// handing back a span over unrelated bytes that a retag caller would
+    /// re-emit as malformed TLV.
+    ///
     /// # Errors
     ///
-    /// [`Error::UnexpectedEndOfContainer`] if no element has been returned
-    /// yet, plus every error [`Self::skip_container`] can return. As with
-    /// `skip_container`, calling this anywhere other than immediately after
-    /// a `ContainerStart` yields an error or a meaningless span — never a
-    /// panic.
+    /// [`Error::UnexpectedEndOfContainer`] if the precondition above does not
+    /// hold, plus every error [`Self::skip_container`] can return. Misuse is
+    /// always an error — never a panic, and never a meaningless span.
     pub fn skip_container_span(&mut self) -> Result<ElementSpan> {
+        if !self.last_was_container_start {
+            return Err(Error::UnexpectedEndOfContainer);
+        }
         let header = self.last_span.ok_or(Error::UnexpectedEndOfContainer)?;
         self.skip_container_body()?;
         let span = ElementSpan {
@@ -401,6 +429,7 @@ impl<'a> TlvReader<'a> {
             end: self.pos,
         };
         self.last_span = Some(span);
+        self.last_was_container_start = false;
         Ok(span)
     }
 
@@ -408,6 +437,12 @@ impl<'a> TlvReader<'a> {
     /// [`Self::next_ref`] (or the whole container after a
     /// `skip_container*` call). `None` before the first element; unchanged
     /// by calls that return `Ok(None)` or an error.
+    ///
+    /// Tree-builder reads drive the same core: [`Self::read_value`] walks its
+    /// element via [`Self::next_ref`] internally, so afterwards the span
+    /// refers to the last *interior* element it consumed, not the tree as a
+    /// whole. Read the span only immediately after the `next` / `next_ref`
+    /// call whose element you care about.
     #[inline]
     #[must_use]
     pub fn element_span(&self) -> Option<ElementSpan> {
@@ -2000,6 +2035,62 @@ mod tests {
         out.extend_from_slice(r.span_bytes(span.body()));
         // Anonymous struct, SAME body bytes: uint16 width preserved, tag gone.
         assert_eq!(out, [0x15, 0x25, 0x00, 0x2A, 0x00, 0x18]);
+    }
+
+    #[test]
+    fn skip_container_span_after_scalar_is_rejected() {
+        // anon struct { ctx1: uint8 0x2A }: position the reader on the SCALAR,
+        // then ask for a container span. Without the precondition guard this
+        // returned Ok with a span over the scalar's bytes, which a retag caller
+        // would happily re-emit as malformed TLV.
+        let bytes = [0x15, 0x24, 0x01, 0x2A, 0x18];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // ContainerStart
+        r.next().unwrap(); // Scalar ctx1
+        assert!(matches!(
+            r.skip_container_span(),
+            Err(Error::UnexpectedEndOfContainer)
+        ));
+        // Rejected without consuming: the struct's end marker is still there.
+        assert!(matches!(r.next().unwrap(), Some(Element::ContainerEnd)));
+    }
+
+    #[test]
+    fn skip_container_span_before_any_element_is_rejected() {
+        let mut r = TlvReader::new(&[0x15, 0x18]);
+        assert!(matches!(
+            r.skip_container_span(),
+            Err(Error::UnexpectedEndOfContainer)
+        ));
+    }
+
+    #[test]
+    fn skip_container_span_twice_is_rejected() {
+        // A successful skip consumes the container, so the flag must clear:
+        // a second call has no ContainerStart to span.
+        let bytes = [0x35, 0x09, 0x24, 0x01, 0x2A, 0x18];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // ctx9 ContainerStart
+        assert!(r.skip_container_span().is_ok());
+        assert!(matches!(
+            r.skip_container_span(),
+            Err(Error::UnexpectedEndOfContainer)
+        ));
+    }
+
+    #[test]
+    fn skip_container_span_after_plain_skip_is_rejected() {
+        // `skip_container` also consumes the open container and so clears the
+        // flag, even though it keeps its own (unguarded) contract.
+        let bytes = [0x15, 0x35, 0x09, 0x18, 0x24, 0x02, 0x07, 0x18];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // outer ContainerStart
+        r.next().unwrap(); // ctx9 ContainerStart
+        r.skip_container().unwrap();
+        assert!(matches!(
+            r.skip_container_span(),
+            Err(Error::UnexpectedEndOfContainer)
+        ));
     }
 
     #[test]
