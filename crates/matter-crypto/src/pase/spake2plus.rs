@@ -40,6 +40,8 @@
 
 // The dead_code allow was removed when M3.2 landed (prover.rs + verifier.rs).
 
+use std::sync::LazyLock;
+
 use p256::elliptic_curve::group::ff::{Field, PrimeField}; // Field for is_zero; PrimeField for from_repr
 use p256::elliptic_curve::sec1::FromEncodedPoint;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
@@ -87,6 +89,13 @@ const N_BYTES: [u8; 65] = [
     0xc6, 0x4d, 0x9b, 0xd3, 0x60, 0x34, 0x80, 0x8c, 0xd5, 0x64, 0x49, 0x0b, 0x1e, 0x65, 0x6e, 0xdb,
     0xe7,
 ];
+
+/// SPAKE2+ M, decoded once — SEC1 point decompression costs a modular
+/// square root, and M is needed on every `compute_x`/`compute_z_v_verifier`.
+static M_POINT: LazyLock<ProjectivePoint> = LazyLock::new(|| point_from_spec_bytes(&M_BYTES));
+
+/// SPAKE2+ N, decoded once (see [`M_POINT`]).
+static N_POINT: LazyLock<ProjectivePoint> = LazyLock::new(|| point_from_spec_bytes(&N_BYTES));
 
 /// HKDF info-string for confirmation keys (32 bytes → KcA||KcB, 16 each).
 ///
@@ -172,7 +181,7 @@ pub(crate) fn sample_scalar(rng: &dyn SecureRandom) -> Result<Scalar> {
 /// via [`crate::pase::kdf::derive_w0_w1`]. Output is 65-byte SEC1 uncompressed.
 pub(crate) fn compute_x(x: &Scalar, w0: &Scalar) -> [u8; 65] {
     let xp = ProjectivePoint::GENERATOR * x;
-    let w0m = point_from_spec_bytes(&M_BYTES) * w0;
+    let w0m = *M_POINT * w0;
     encode_point(&(xp + w0m))
 }
 
@@ -182,7 +191,7 @@ pub(crate) fn compute_x(x: &Scalar, w0: &Scalar) -> [u8; 65] {
 /// value. Output is 65-byte SEC1 uncompressed.
 pub(crate) fn compute_y(y: &Scalar, w0: &Scalar) -> [u8; 65] {
     let yp = ProjectivePoint::GENERATOR * y;
-    let w0n = point_from_spec_bytes(&N_BYTES) * w0;
+    let w0n = *N_POINT * w0;
     encode_point(&(yp + w0n))
 }
 
@@ -202,7 +211,7 @@ pub(crate) fn compute_z_v_prover(
 ) -> Result<([u8; 65], [u8; 65])> {
     let y = decode_peer_point(y_bytes)?;
     // yn = Y - w0·N
-    let w0n = point_from_spec_bytes(&N_BYTES) * w0;
+    let w0n = *N_POINT * w0;
     let yn = y - w0n;
     let z = yn * x;
     let v = yn * w1;
@@ -223,7 +232,7 @@ pub(crate) fn compute_z_v_verifier(
 ) -> Result<([u8; 65], [u8; 65])> {
     let x_point = decode_peer_point(x_bytes)?;
     // x_minus_w0m = X - w0·M
-    let w0m = point_from_spec_bytes(&M_BYTES) * w0;
+    let w0m = *M_POINT * w0;
     let x_minus_w0m = x_point - w0m;
     let z_point = x_minus_w0m * y;
     let l_point = decode_peer_point(l_bytes)?;
@@ -525,6 +534,13 @@ mod tests {
         let n = point_from_spec_bytes(&N_BYTES);
         assert_eq!(encode_point(&m), M_BYTES);
         assert_eq!(encode_point(&n), N_BYTES);
+    }
+
+    #[test]
+    fn lazylock_m_n_points_pin_to_decoded_bytes() {
+        // Ensure the lazy-initialized statics match the independent decoder.
+        assert_eq!(*M_POINT, point_from_spec_bytes(&M_BYTES));
+        assert_eq!(*N_POINT, point_from_spec_bytes(&N_BYTES));
     }
 
     // ─── Scalar sampling ──────────────────────────────────────────────────
