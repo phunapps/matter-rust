@@ -155,8 +155,23 @@ pub enum InvokeResponse {
     Command {
         /// Path of the response command (`(endpoint, cluster, command)`).
         path: CommandPath,
-        /// The device's original `CommandFields` body under a fresh
-        /// anonymous tag — original byte widths preserved.
+        /// The device's original `CommandFields` bytes, **verbatim**, under
+        /// a fresh anonymous tag: only the container's own control/tag bytes
+        /// are replaced, the body is copied unexamined. Original integer
+        /// widths are preserved, and so is everything else the device sent —
+        /// which has three consequences for consumers:
+        ///
+        /// - A localized-string suffix (element type `0x1F`, IS1) survives in
+        ///   the blob rather than being dropped by a re-encode. Decoded
+        ///   `Value`s are unchanged: the downstream decoder still truncates at
+        ///   the IS1 separator.
+        /// - Invalid UTF-8 inside `CommandFields` is **not** rejected here —
+        ///   the copy never decodes it — so it surfaces from your own decoder
+        ///   instead of from IM parsing.
+        /// - An off-spec `Array` whose children carry non-anonymous tags is
+        ///   copied through as-is and fails in your decoder with
+        ///   `NonAnonymousArrayTag`; the older decode-then-re-encode path
+        ///   silently normalised those tags away.
         fields_tlv: Vec<u8>,
     },
     /// The device returned a bare status (no response command payload).

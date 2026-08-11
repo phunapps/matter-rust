@@ -177,7 +177,9 @@ pub(crate) fn attribute_path_from_reader(
 mod tests {
     #![allow(clippy::unwrap_used)] // Test code: CLAUDE.md carve-out.
     use super::*;
-    use matter_codec::{Element, TlvReader, TlvWriter};
+    // `Element` / `TlvReader` / `Tag` arrive via `use super::*` (the module's
+    // own matter_codec import); only the writer is extra here.
+    use matter_codec::TlvWriter;
 
     /// Drive `attribute_path_from_reader` over a writer-built `AttributePathIB`.
     fn parse(build: impl FnOnce(&mut TlvWriter<'_>)) -> Result<(AttributePath, bool), ImError> {

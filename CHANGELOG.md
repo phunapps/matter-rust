@@ -258,7 +258,10 @@ documented here rather than left for someone to rediscover in a baseline diff.
 - The writer now batches element headers into a stack buffer and reserves
   capacity ahead of copying string payloads, instead of writing header bytes
   one field at a time.
-- `#[inline]` added to a short list of small, cross-crate hot functions.
+- `#[inline]` added to a short list of cross-crate hot functions. This is not
+  limited to trivially small ones: the decode core itself (`next_ref` and its
+  `read_value_body_ref` helper) is inlined, which is what the regression fix
+  described above turned on.
 
 ### `matter-interaction`
 
@@ -299,11 +302,23 @@ documented here rather than left for someone to rediscover in a baseline diff.
   codec's decode-side regression along with the adoption; with that fixed in
   the same phase it is a net win — `parse_report_data/170attr_64B` 19.36 µs →
   17.35 µs (−10.6%) vs `pre-phase4`. See the phase-4 paragraph above.
-- Invoke `fields_tlv` now preserves the device's original integer widths
-  (span-copy + retag, rather than re-encoding to minimal widths). Consumers
-  decoding either the old minimal-width form or a device's native width
-  still work — only the wire bytes matter-interaction itself produces here
-  are affected, and only when re-emitting a peer's own fields.
+- **Invoke `fields_tlv` is now the peer's original `CommandFields` bytes,
+  verbatim, under a fresh anonymous tag** (span-copy + retag) rather than a
+  decode-then-re-encode round trip. Preserved integer widths are the visible
+  part; the blob is no longer normalised at all, which has three further
+  consequences. (1) A localized-string suffix (element type `0x1F`, IS1) now
+  survives in the blob instead of being dropped by the re-encode; decoded
+  `Value`s are unchanged, because the downstream decoder still truncates at
+  the IS1 separator. (2) Invalid UTF-8 inside `CommandFields` is no longer
+  rejected at IM parse time — the copy never validates it, so it surfaces from
+  the consumer's own decoder instead. This is the same class of deliberate
+  loosening as this phase's skip change, and future differential tests must
+  not flag it as a divergence. (3) An off-spec `Array` `CommandFields` whose
+  children carry non-anonymous tags is now copied through as-is and fails in
+  the consumer's decoder with `NonAnonymousArrayTag`, where the old
+  decode-then-re-encode path silently normalised those tags away. Only the
+  wire bytes matter-interaction itself produces here are affected, and only
+  when re-emitting a peer's own fields.
 - `read_container_value` is now kind-aware: arrays build `Vec<Value>`
   directly instead of routing through the generic struct/list path.
 - The chunked-report accumulator now merges into a single map slot per

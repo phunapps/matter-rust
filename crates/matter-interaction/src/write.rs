@@ -170,7 +170,7 @@ pub(crate) fn parse_attribute_status_ib(
 /// Consume a `StatusIB` struct body (reader just after its start),
 /// returning the last `Status` (context tag 0) seen, mapped to
 /// [`ImStatus`]. Out-of-range codes error as `InvalidStatusCode`.
-pub(crate) fn parse_status_ib_body(r: &mut TlvReader<'_>) -> Result<Option<ImStatus>, ImError> {
+fn parse_status_ib_body(r: &mut TlvReader<'_>) -> Result<Option<ImStatus>, ImError> {
     let mut status = None;
     loop {
         match r.next()? {

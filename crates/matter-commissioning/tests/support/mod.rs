@@ -962,7 +962,8 @@ pub fn parse_read_request(bytes: &[u8]) -> Vec<matter_commissioning::im::Attribu
                 let mut attribute = None;
                 for (tag, v) in members {
                     match (tag, v) {
-                        // ctx(2) = endpoint (matches build_read_request / attribute_path_from_value)
+                        // ctx(2) = endpoint (matches build_read_request /
+                        // the streaming attribute_path_from_reader parser)
                         (Tag::Context(2), Value::Uint(n)) => {
                             endpoint = Some(u16::try_from(n).expect("endpoint fits u16"));
                         }
