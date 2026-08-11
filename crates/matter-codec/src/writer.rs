@@ -1040,4 +1040,34 @@ mod tests {
         let (_, decoded) = crate::reader::TlvReader::new(&buf).read_value().unwrap();
         assert_eq!(decoded, ok);
     }
+
+    // --- Phase 5 hygiene: MAX_HEADER saturation ---
+
+    /// The widest possible element: FQ-8 tag (control + 8 tag bytes) + u64
+    /// payload = exactly `MAX_HEADER` (17) bytes. Pins that the stack buffer
+    /// saturates without truncation.
+    #[test]
+    fn put_uint_fq8_u64_max_is_seventeen_bytes() {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.put_uint(
+            Tag::FullyQualified {
+                vendor: 0xFFF1,
+                profile: 0x0006,
+                tag: u32::MAX,
+            },
+            u64::MAX,
+        )
+        .unwrap();
+        // control = FULLY_QUALIFIED_8 | UINT64 = 0xE7; then vendor LE,
+        // profile LE, 4 tag bytes LE, 8 payload bytes.
+        assert_eq!(
+            buf,
+            [
+                0xE7, 0xF1, 0xFF, 0x06, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                0xFF, 0xFF, 0xFF
+            ]
+        );
+        assert_eq!(buf.len(), 17);
+    }
 }

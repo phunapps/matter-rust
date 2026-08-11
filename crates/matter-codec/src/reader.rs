@@ -127,6 +127,8 @@ pub const DEFAULT_ELEMENT_BUDGET: usize = 1 << 20;
 ///   [`skip_container_span`](TlvReader::skip_container_span) for the full
 ///   container, whose [`body`](Self::body) covers the children plus the
 ///   end-of-container marker and EXCLUDES the original control/tag bytes.
+/// - **`ContainerEnd` span** — after `next()` returns `ContainerEnd`, the span
+///   covers the 1-byte end-of-container marker and [`body`](Self::body) is empty.
 ///
 /// Resolve ranges against the input with [`TlvReader::span_bytes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +386,9 @@ impl<'a> TlvReader<'a> {
     /// assert!(matches!(r.next()?, Some(Element::Scalar { tag: Tag::Context(1), .. })));
     /// # Ok::<(), matter_codec::Error>(())
     /// ```
+    ///
+    /// After an `Err` from this method, the reader's position and depth are
+    /// unspecified — discard the reader rather than continuing to iterate.
     pub fn skip_container(&mut self) -> Result<()> {
         self.skip_container_body()?;
         if let Some(h) = self.last_span {
@@ -417,6 +422,9 @@ impl<'a> TlvReader<'a> {
     /// [`Error::UnexpectedEndOfContainer`] if the precondition above does not
     /// hold, plus every error [`Self::skip_container`] can return. Misuse is
     /// always an error — never a panic, and never a meaningless span.
+    ///
+    /// After an `Err` from this method, the reader's position and depth are
+    /// unspecified — discard the reader rather than continuing to iterate.
     pub fn skip_container_span(&mut self) -> Result<ElementSpan> {
         if !self.last_was_container_start {
             return Err(Error::UnexpectedEndOfContainer);
@@ -534,9 +542,7 @@ impl<'a> TlvReader<'a> {
             }
             other => return Err(Error::InvalidElementType(other)),
         };
-        if n > 0 {
-            let _ = self.next_bytes(n)?;
-        }
+        let _ = self.next_bytes(n)?;
         Ok(())
     }
 
@@ -2097,5 +2103,113 @@ mod tests {
     fn span_bytes_out_of_range_returns_empty() {
         let r = TlvReader::new(&[0x14]);
         assert_eq!(r.span_bytes(5..9), &[] as &[u8]);
+    }
+
+    // --- Phase 5 hygiene: next/next_ref parity, span/depth pins ---
+
+    /// `next()` is documented as `next_ref().map(Element::from)`. Pin that the
+    /// two agree — value AND error — over hostile inputs, element by element.
+    /// Errors don't all derive `PartialEq`, so compare Debug renderings.
+    #[test]
+    fn next_and_next_ref_agree_on_hostile_inputs() {
+        // 0x0C = anonymous UTF-8 string, 1-byte length.
+        let cases: &[(&[u8], &str)] = &[
+            (
+                &[0x0C, 0x03, 0x1F, 0x61, 0x62],
+                "IS1 at index 0 -> empty string",
+            ),
+            (&[0x0C, 0x01, 0x1F], "IS1 only -> empty string"),
+            (&[0x0C, 0x03, 0x61, 0x1F, 0xFF], "invalid UTF-8 after IS1"),
+            (&[0x0C, 0x05, 0x61, 0x62], "truncated string payload"),
+            (&[0x24, 0x01], "truncated scalar payload"),
+            (&[0x18], "stray end-of-container"),
+            (&[0x1F, 0x00], "invalid element type code"),
+        ];
+        for (bytes, what) in cases {
+            let mut a = TlvReader::new(bytes);
+            let mut b = TlvReader::new(bytes);
+            loop {
+                let ra = a.next();
+                let rb = b.next_ref().map(|o| o.map(Element::from));
+                assert_eq!(
+                    format!("{ra:?}"),
+                    format!("{rb:?}"),
+                    "next vs next_ref diverged on: {what}"
+                );
+                match ra {
+                    Ok(Some(_)) => {}
+                    _ => break, // Ok(None) or Err: both readers are done.
+                }
+            }
+        }
+    }
+
+    /// `next_ref`'s payloads borrow from the INPUT (`'a`), not from the
+    /// reader borrow — two `ElementRef`s from successive calls coexist.
+    #[test]
+    fn next_ref_payloads_borrow_from_input_across_calls() {
+        let mut buf = Vec::new();
+        {
+            let mut w = crate::writer::TlvWriter::new(&mut buf);
+            w.put_utf8(Tag::Context(0), "abc").unwrap();
+            w.put_bytes(Tag::Context(1), b"xyz").unwrap();
+        }
+        let mut r = TlvReader::new(&buf);
+        let first = r.next_ref().unwrap().unwrap();
+        let second = r.next_ref().unwrap().unwrap();
+        // Both alive here: the 'a lifetime outlives the &mut self calls.
+        let (
+            ElementRef::Scalar {
+                value: ValueRef::Utf8(a),
+                ..
+            },
+            ElementRef::Scalar {
+                value: ValueRef::Bytes(b),
+                ..
+            },
+        ) = (first, second)
+        else {
+            panic!("unexpected shapes: {first:?} / {second:?}");
+        };
+        assert_eq!((a, b), ("abc", &b"xyz"[..]));
+    }
+
+    /// Plain `skip_container()` (not just the `_span` variant) must update
+    /// `element_span()` to the WHOLE skipped container.
+    #[test]
+    fn plain_skip_container_updates_element_span_to_full_container() {
+        // struct_with_nested() bytes:
+        //   0: 0x15            outer struct start
+        // 1-3: 0x24 0x00 0x07  ctx0 = 7
+        // 4-5: 0x35 0x09       ctx9 struct start
+        // 6-8: 0x24 0x00 0x01  inner ctx0 = 1
+        //   9: 0x18            inner end
+        // 10-12: 0x24 0x01 0x2A  ctx1 = 42
+        //  13: 0x18            outer end
+        let buf = struct_with_nested();
+        let mut r = TlvReader::new(&buf);
+        r.next().unwrap(); // outer start
+        r.next().unwrap(); // ctx0 scalar
+        r.next().unwrap(); // ctx9 start — header-only span
+        assert_eq!(r.element_span().unwrap().full(), 4..6);
+        r.skip_container().unwrap();
+        let span = r.element_span().unwrap();
+        assert_eq!(span.full(), 4..10, "whole container incl. end marker");
+        assert_eq!(r.span_bytes(span.body()), &[0x24, 0x00, 0x01, 0x18]);
+    }
+
+    /// After a successful skip, `self.depth` is rebalanced: the outer close
+    /// is consumed normally and a STRAY trailing 0x18 errors instead of
+    /// closing a phantom container.
+    #[test]
+    fn depth_rebalanced_after_skip_rejects_stray_end_marker() {
+        // outer struct { ctx9 struct {} } , outer end, then a stray end.
+        let bytes = [0x15, 0x35, 0x09, 0x18, 0x18, 0x18];
+        let mut r = TlvReader::new(&bytes);
+        r.next().unwrap(); // outer start (depth 1)
+        r.next().unwrap(); // ctx9 start (depth 2)
+        r.skip_container().unwrap(); // must leave depth == 1
+        assert!(matches!(r.next(), Ok(Some(Element::ContainerEnd)))); // outer close
+        assert!(matches!(r.next(), Err(Error::UnexpectedEndOfContainer)));
     }
 }
