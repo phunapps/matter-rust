@@ -138,9 +138,14 @@ with zero subscriptions went from 239 (the old fixed 250 ms tick) to 0.
 - **New default-on `ota` feature** (`ota = ["dep:matter-ota", "dep:matter-bdx"]`,
   `default = ["ota"]`) gating `serve_ota` / `serve_ota_with_block_size` /
   `serve_ota_once` / `announce_ota_provider`. The default build surface is
-  unchanged — this is purely additive — but `default-features = false` now
-  sheds both `matter-ota` and `matter-bdx` for a consumer that never serves
-  OTA images. A new `controller-no-ota` CI job builds, tests, and doc-checks
+  unchanged — this is purely additive for consumers who build with the crate
+  defaults. It is **not** additive for anyone who already sets
+  `default-features = false`: that combination used to still yield the full
+  API (there was no `default` key to opt out of), and now silently sheds
+  `serve_ota` / `serve_ota_with_block_size` / `serve_ota_once` /
+  `announce_ota_provider` along with the `matter-ota` and `matter-bdx`
+  dependencies. Such consumers must add `features = ["ota"]` to keep the OTA
+  provider API. A new `controller-no-ota` CI job builds, tests, and doc-checks
   the crate with `--no-default-features` so the gated surface can't silently
   rot.
 
@@ -485,9 +490,10 @@ with zero subscriptions went from 239 (the old fixed 250 ms tick) to 0.
   `DataBlock` from it.** The per-block double copy is gone. Wire bytes are
   byte-identical — the loopback roundtrip suite (multi-block, exact-multiple,
   single-block, provider-cap-wins) pins reassembly, and a new
-  `from_shared_serves_without_copying_the_image` test additionally asserts
-  `Arc::strong_count` never rises above the sender's own handle across a
-  full transfer.
+  `from_shared_serves_without_copying_the_image` test additionally samples
+  `Arc::strong_count` right after `from_shared` and again after the transfer's
+  `BlockAckEOF`, pinning it at 2 (image + sender's clone) at both ends — no
+  copy made.
 - `TransferInit::encode` / `ReceiveAccept::encode` / `SendAccept::encode` now
   start their output buffer at a computed capacity instead of `Vec::new()`.
   No wire bytes change.

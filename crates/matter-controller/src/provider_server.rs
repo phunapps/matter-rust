@@ -12,6 +12,12 @@
 //! widen them, so `unreachable_pub` is a false positive in the feature-off
 //! build — allow it module-wide.
 #![allow(unreachable_pub)]
+// With `ota` off, this module is still compiled — `build_operational_service`
+// serves the non-OTA check-in listener, and `unstable-provider` re-exports
+// `ProviderServer` from here — but most of the OTA-serving machinery
+// (`serve_ota_once` and its helpers) has no caller in that configuration,
+// so `dead_code`/`unused_imports` would otherwise fire workspace-wide.
+#![cfg_attr(not(feature = "ota"), allow(dead_code, unused_imports))]
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -603,7 +609,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// layers.
     ///
     /// Part of the unstable generic-provider surface (see the module docs); the
-    /// stable OTA path uses [`Self::serve_ota_once`]. Compiled only under
+    /// stable OTA path uses `serve_ota_once`. Compiled only under
     /// `unstable-provider` (its sole caller, `serve_provider_once`) or in tests.
     #[cfg(any(feature = "unstable-provider", test))]
     pub async fn accept_and_dispatch_once<H>(

@@ -76,10 +76,15 @@ embedded:
     cargo build -p matter-transport --no-default-features --features mdns-sd
 
 # matter-controller no-default-features build/test/doc matrix (CI: controller-no-ota job).
+# Also docs-builds each off-by-default feature individually against a bare
+# --no-default-features base (mirroring `embedded` below), since `ota` off
+# changes which items are compiled and a feature combination missing here
+# can break `cargo doc` without `docs` (--all-features) catching it.
 controller-no-ota:
     cargo build -p matter-controller --no-default-features
     cargo nextest run -p matter-controller --no-default-features --no-fail-fast
     RUSTDOCFLAGS="-D warnings" cargo doc -p matter-controller --no-default-features --no-deps
+    RUSTDOCFLAGS="-D warnings" cargo doc -p matter-controller --no-default-features --features unstable-provider --no-deps
 
 # -------------------------------------------------------- build / msrv ---
 

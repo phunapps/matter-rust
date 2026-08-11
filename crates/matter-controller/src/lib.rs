@@ -164,7 +164,7 @@ pub use node_info::NodeInfo;
 pub use opcreds::FabricDescriptor;
 /// Low-level provider-server building blocks. **Unstable** — gated behind the
 /// `unstable-provider` feature and not covered by semver. The stable OTA path is
-/// [`MatterController::serve_ota`](controller::MatterController::serve_ota).
+/// `MatterController::serve_ota`.
 #[cfg(feature = "unstable-provider")]
 pub use provider_server::{build_operational_service, ProviderServer};
 pub use state::{
