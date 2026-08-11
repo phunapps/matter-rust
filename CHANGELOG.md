@@ -94,7 +94,55 @@ worth stating plainly: realistic message shapes won
 command-shaped, not thousand-element flat arrays, so the batching stays —
 documented here rather than left for someone to rediscover in a baseline diff.
 
+Memory & platform performance phase 5: reduce copies and idle wakeups outside
+the hot decode/encode path — one shared image allocation instead of one per
+OTA send, one BlueZ D-Bus query instead of one per BLE advertisement, and an
+actor loop that parks on a computed deadline instead of polling four times a
+second. **No wire bytes move** — every byte-parity suite (the BDX loopback
+reassembly tests, the CASE/PASE matter.js vectors, the IM message-level
+byte-parity tests) is unchanged and is what pins this; the one exception is
+CASE peer-chain validation, which changes *how* the peer's NOC/ICAC are held
+in memory (move + `swap_remove` instead of clone) but not the bytes validated
+or signed. New public API is additive only —
+`matter_bdx::BlockSender::from_shared`, `matter-controller`'s default-on
+`ota` feature, and `matter-ble`'s `MATTER_BLE_SCAN_TRACE` diagnostic — so the
+next publish is a MINOR for `matter-bdx`, `matter-controller`, `matter-ble`,
+`matter-crypto`, `matter-cert`, `matter-interaction`, and `matter-codec`.
+
+This phase's first task also folded in the phase-4 hygiene batch left over
+from that phase's validation pass: reader/writer test gaps around
+`next`/`next_ref` parity and `skip_container` span/depth bookkeeping, two
+doc clarifications (see `matter-codec` → *Changed* below), the
+`matter-interaction` accumulator single-lookup refactor (see below), and a
+`matter-clusters` proptest generator fix — its `node_label_roundtrip`
+strategy generated raw `0x1F` (the IS1 localized-string separator), which
+`matter-codec`'s decoder deliberately truncates at by design. That was a
+generator defect, not a codec bug, and is fixed by excluding `0x1F` from the
+generated character set.
+
+Bench validation against the pre-phase5 baseline (Task 14): `report_parse`
+and codec decode/encode are unmoved (encode/report slightly improved —
+`encode/report_170attr` −0.7%/−2.5%), and CASE handshake benches are unmoved
+once re-measured on a quiet machine — a first, contended run of
+`case/full_handshake` showed a spurious +10.2% that vanished on rerun
+(654 µs vs. a 637 µs baseline, +1.5%, within noise), judged by interval
+width rather than the point estimate, per this project's established bench
+discipline (see the phase-4 paragraph above for where that discipline was
+first written down). The actor's idle timer-wake count over a 60 s window
+with zero subscriptions went from 239 (the old fixed 250 ms tick) to 0.
+
 ### `matter-controller`
+
+#### Added
+
+- **New default-on `ota` feature** (`ota = ["dep:matter-ota", "dep:matter-bdx"]`,
+  `default = ["ota"]`) gating `serve_ota` / `serve_ota_with_block_size` /
+  `serve_ota_once` / `announce_ota_provider`. The default build surface is
+  unchanged — this is purely additive — but `default-features = false` now
+  sheds both `matter-ota` and `matter-bdx` for a consumer that never serves
+  OTA images. A new `controller-no-ota` CI job builds, tests, and doc-checks
+  the crate with `--no-default-features` so the gated surface can't silently
+  rot.
 
 #### Fixed
 
@@ -156,6 +204,39 @@ documented here rather than left for someone to rediscover in a baseline diff.
   on every retransmit/ack; the peer address is now stamped on the transport
   session at registration (see `matter-transport` below) and read O(1), with
   the old scan kept only as a fallback for unstamped sessions.
+- **The OTA provider holds one `Arc<[u8]>` image and hands out cheap handles
+  instead of cloning the whole image.** `serve_ota_once` previously cloned
+  the full image `Vec<u8>` into every `BlockSender::new` call — once per
+  `QueryImage`, and again on every cross-session BDX re-arm — so a large
+  image was copied end-to-end on each new download attempt. It now wraps the
+  image once (`Arc::from(image)`) and hands out `Arc::clone` handles via
+  `matter_bdx::BlockSender::from_shared` (see `matter-bdx` below);
+  `image.len()` and every other read-only use is unaffected via `Deref`.
+- **The actor now parks on a computed timer deadline instead of waking
+  4×/s.** The idle tick previously fired every 250 ms unconditionally; it
+  now parks on the minimum of MRP retransmit/ack-flush, subscription
+  liveness, scheduled resubscribes, and — only while an mDNS resolve is
+  parked — a 250 ms resolve-polling anchor, falling back to a 1-hour
+  backstop when nothing is outstanding. Measured idle timer wakeups over a
+  60 s window with zero subscriptions: 239 → 0. The resolve-polling anchor
+  is deliberately an **absolute** instant, re-armed each time it's
+  consulted, rather than a relative `now + tick` recomputed every loop
+  iteration — a relative tick is starvable, since any other `select!` arm
+  firing faster than the tick pushes the deadline forward forever, which
+  would silently stall mDNS discovery under a report flood. A hung test
+  (spinning ~793k iterations without ever expiring its parked resolve)
+  caught the relative version before it shipped.
+- **`Node::write` and `Node::invoke_tlv` build the timed-variant payload
+  lazily instead of always pre-encoding it.** Both actions used to TLV-encode
+  a plain request *and* its timed variant up front and hand both to the
+  actor, even though the timed one is only consumed on two rare paths (a
+  learned-timed cache hit, or a `0x00D9` / `0xc6` `NEEDS_TIMED_INTERACTION`
+  escalation). The timed payload is now a boxed `FnOnce() -> Vec<u8>` builder
+  invoked only on those two paths; the common case (plain write/invoke
+  accepted) no longer pays for a second encode it discards. Wire bytes on the
+  timed-escalation path are unchanged — the builder calls the same
+  `build_write_request_timed` / `build_invoke_request_timed` functions with
+  the same inputs, just later.
 
 #### Changed
 
@@ -221,6 +302,44 @@ documented here rather than left for someone to rediscover in a baseline diff.
   is still taken from the chain-validated NOC.
 - **Check-in decode drains its counter prefix in place** instead of copying the
   application payload into a second allocation.
+- **SPAKE2+ constant points M and N are decoded once, not once per handshake
+  call site.** `M_POINT` / `N_POINT` are now `LazyLock<ProjectivePoint>`
+  statics computed on first access instead of re-running a SEC1 decode plus
+  point decompression (a modular square root) at each of `compute_x` /
+  `compute_y` / `compute_z_v_prover` / `compute_z_v_verifier`. A pin test
+  asserts both statics equal a fresh `point_from_spec_bytes` decode; the
+  transcript path still hashes the raw constant bytes, so nothing the
+  handshake transcript depends on changes.
+- **CASE transcript hashing feeds each message slice to one
+  `ring::digest::Context` instead of concatenating into an intermediate
+  buffer first.** Byte-identical because the transcript is pure
+  concatenation with no length or version prefixes between messages —
+  pinned by the existing `transcript_hash_single_message_matches_sha256`
+  guard test, which compares the incremental result against `ring`'s
+  one-shot `digest()` on the same bytes.
+- **CASE peer-chain validation moves the peer's NOC/ICAC into the validation
+  `Vec` instead of deep-cloning them, and takes the NOC back out with
+  `swap_remove(0)`** (index 0 because the NOC is always pushed first) in
+  both `process_sigma2` (initiator) and `process_sigma3` (responder). Trust
+  decisions, chain order, and every failure path (`InvalidPeerNocChain`,
+  `PeerNodeIdMismatch`, `FabricIdMismatch`, `PeerSignatureInvalid`) are
+  unchanged — the bytes validated and later read are identical, just moved
+  instead of copied. A second, smaller clone on the CASE session-resumption
+  path was investigated and deliberately left in place: removing it would
+  need a public, dummy-constructible `MatterCertificate` that `matter-cert`
+  doesn't expose (no `Default`, no public fields, no cheap constructor
+  reachable outside the crate), and adding one just to shave a cold-path
+  clone wasn't judged worth the new public API surface on a
+  certificate-parsing crate. Recorded as a candidate follow-up:
+  `ResumptionRecord.peer: Arc<PeerInfo>` would make it an `Arc::clone` at the
+  cost of a breaking field-type change, deferred to its own task.
+- **CASE and PASE message encoders (`Sigma1`/`Sigma2`/`Sigma2Resume`/
+  `Sigma3`, `PbkdfParamsInner`/`PbkdfParamRequest`/`PbkdfParamResponse`,
+  `Pake1`/`Pake2`/`Pake3`) now start their output buffer at a computed
+  capacity** instead of `Vec::new()`, sized from known field lengths (fixed
+  constants plus `self.field.len()` where the payload is variable). No wire
+  bytes change — capacity is purely a reservation hint, and the byte-parity
+  / matter.js vector suites pin the encoded bytes.
 
 ### `matter-cert`
 
@@ -232,6 +351,9 @@ documented here rather than left for someone to rediscover in a baseline diff.
   `CertificateChain::validate` instead of falling through to `UntrustedRoot`
   (no previously-valid chain changes outcome; the error is strictly more
   precise).
+- **`MatterCertificate::to_tlv` starts its output buffer at
+  `Vec::with_capacity(512)`** instead of growing from empty. No wire bytes
+  change.
 
 ### `matter-codec`
 
@@ -262,6 +384,12 @@ documented here rather than left for someone to rediscover in a baseline diff.
   limited to trivially small ones: the decode core itself (`next_ref` and its
   `read_value_body_ref` helper) is inlined, which is what the regression fix
   described above turned on.
+- Reader rustdoc now states explicitly that reader position and depth are
+  unspecified after a **failed** `skip_container` / `skip_container_span` —
+  callers should discard the reader rather than continue from it.
+  `ElementSpan`'s contract doc gained a third bullet documenting the
+  `ContainerEnd` span shape (1-byte full span, empty body). Doc-only; no
+  behaviour changed.
 
 ### `matter-interaction`
 
@@ -293,6 +421,20 @@ documented here rather than left for someone to rediscover in a baseline diff.
   implementation is retained as a test oracle and a property test pins
   equivalence across random element sets. A new `write_chunks` micro-bench
   documents the win (100×64 B elements: −86% multi-chunk, −98% single-chunk).
+- **The report accumulator's element-cap check folded into the map's vacant
+  arms**, so pushing a new attribute key now costs one `HashMap` lookup
+  instead of two — the old top-of-loop `contains_key` pre-check duplicated
+  the lookup that `entry()` / `get_mut()` / `insert()` already perform. Same
+  `AccumulatorOverflow` error, same fields, cap still enforced before insert;
+  a new pin test (`element_ceiling_is_enforced_for_append_new_key`) covers
+  the branch whose check moved.
+- **IM request/response builders now start their output buffer at a computed
+  capacity** instead of `Vec::new()` — `build_read_request_full`,
+  `build_write_request_inner`, `build_invoke_request_inner` /
+  `build_invoke_request_batch`, `build_invoke_response_command` /
+  `build_invoke_response_status`, `build_subscribe_request`,
+  `build_status_response`, `build_timed_request`. No wire bytes change; the
+  IM byte-parity suites pin it.
 
 #### Changed
 
@@ -323,6 +465,53 @@ documented here rather than left for someone to rediscover in a baseline diff.
   directly instead of routing through the generic struct/list path.
 - The chunked-report accumulator now merges into a single map slot per
   attribute instead of separate value and data-version maps.
+
+### `matter-bdx`
+
+#### Added
+
+- `BlockSender::from_shared(image: Arc<[u8]>, max_block_size: u16)` — an
+  additive constructor that shares one image allocation across every
+  `BlockSender` built from it, instead of each one owning its own copy.
+  `BlockSender::new(image: Vec<u8>, max_block_size: u16)` is unchanged and
+  now delegates (`Arc::from(image)`); every existing call site keeps
+  compiling and behaving identically.
+
+#### Performance
+
+- **`handle_block_query` builds the block payload directly** —
+  `counter.to_le_bytes()` followed by the image slice, into one pre-sized
+  `Vec` — **instead of copying the slice into a `Vec` and then encoding a
+  `DataBlock` from it.** The per-block double copy is gone. Wire bytes are
+  byte-identical — the loopback roundtrip suite (multi-block, exact-multiple,
+  single-block, provider-cap-wins) pins reassembly, and a new
+  `from_shared_serves_without_copying_the_image` test additionally asserts
+  `Arc::strong_count` never rises above the sender's own handle across a
+  full transfer.
+- `TransferInit::encode` / `ReceiveAccept::encode` / `SendAccept::encode` now
+  start their output buffer at a computed capacity instead of `Vec::new()`.
+  No wire bytes change.
+
+### `matter-ble`
+
+#### Added
+
+- `MATTER_BLE_SCAN_TRACE=1` (or `true`) emits one `[ble-scan]` line per real
+  BlueZ name query, for diagnosing scan behaviour on real hardware. Off by
+  default and side-effect-free when unset; a distinct env var and prefix
+  from the existing pump-scoped `[btp-pump]` tracing.
+
+#### Performance
+
+- **Nameless peripherals no longer cost a BlueZ D-Bus properties round trip
+  per advertisement.** `CommissionableScan` previously re-queried a
+  peripheral's name on every single advertisement it observed; a device
+  advertising 2-10×/s was re-queried indefinitely. Negative lookups (device
+  has no name yet) are now cached with a 10 s TTL; positive lookups persist
+  for the scan's lifetime, since a name legitimately can't un-arrive once
+  seen. `FoundDevice::local_name` semantics are unchanged — a name can still
+  arrive in a later scan response, which is exactly why the negative cache
+  entry expires instead of sticking permanently.
 
 ## matter-ble 0.3.1
 
