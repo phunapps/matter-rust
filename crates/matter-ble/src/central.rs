@@ -630,6 +630,17 @@ enum NameSlot {
     UnknownUntil(Instant),
 }
 
+/// What a scan should do about one advertisement's local name — the result of
+/// [`NameCache::decide`].
+enum NameLookup<'a> {
+    /// Answered from the cache; no D-Bus traffic. `None` is a *nameless*
+    /// result whose TTL has not expired yet, not "unknown".
+    Cached(Option<&'a str>),
+    /// Cache miss, or a negative entry that has expired: pay one `BlueZ`
+    /// round trip and feed the result back via [`NameCache::record`].
+    Query,
+}
+
 /// Local-name cache policy, sans-IO (`now` injected) and key-generic so the
 /// TTL logic is unit-testable without a real `PeripheralId`.
 struct NameCache<K> {
@@ -643,18 +654,16 @@ impl<K: std::hash::Hash + Eq> NameCache<K> {
         }
     }
 
-    /// `Some(cached)` — use without querying (`cached` is `None` while a
-    /// negative entry's TTL holds). `None` — the caller must query and
-    /// [`Self::record`] the result.
-    ///
-    /// The nested `Option` encodes two independent questions (cache hit vs.
-    /// name known), not a "double-maybe" of the same thing.
-    #[allow(clippy::option_option)]
-    fn lookup(&self, id: &K, now: Instant) -> Option<Option<&str>> {
+    /// Whether this advertisement needs a `BlueZ` round trip, or can be
+    /// answered from the cache. This is the whole decision the scan makes per
+    /// advertisement — kept pure and separate from the I/O so the
+    /// query-per-advertisement behaviour is testable without an adapter (see
+    /// `nameless_device_queries_are_bounded_by_ttl_not_advert_rate`).
+    fn decide(&self, id: &K, now: Instant) -> NameLookup<'_> {
         match self.slots.get(id) {
-            Some(NameSlot::Known(name)) => Some(Some(name.as_str())),
-            Some(NameSlot::UnknownUntil(until)) if now < *until => Some(None),
-            _ => None,
+            Some(NameSlot::Known(name)) => NameLookup::Cached(Some(name.as_str())),
+            Some(NameSlot::UnknownUntil(until)) if now < *until => NameLookup::Cached(None),
+            _ => NameLookup::Query,
         }
     }
 
@@ -729,13 +738,14 @@ impl CommissionableScan {
                 continue;
             };
             let now = Instant::now();
-            let local_name = if let Some(cached) = self.names.lookup(&id, now) {
-                cached.map(str::to_owned)
-            } else {
-                scan_trace("name query");
-                let name = local_name_for(&self.adapter, &id).await;
-                self.names.record(id.clone(), name.clone(), now);
-                name
+            let local_name = match self.names.decide(&id, now) {
+                NameLookup::Cached(cached) => cached.map(str::to_owned),
+                NameLookup::Query => {
+                    scan_trace("name query");
+                    let name = local_name_for(&self.adapter, &id).await;
+                    self.names.record(id.clone(), name.clone(), now);
+                    name
+                }
             };
             return Some(FoundDevice {
                 peripheral_id: id,
@@ -1334,28 +1344,90 @@ mod tests {
         let mut cache: NameCache<u32> = NameCache::new();
 
         // Unknown key: caller must query.
-        assert_eq!(cache.lookup(&7, t0), None);
+        assert!(matches!(cache.decide(&7, t0), NameLookup::Query));
 
         // Negative result: suppressed until the TTL passes…
         cache.record(7, None, t0);
-        assert_eq!(cache.lookup(&7, t0), Some(None));
-        assert_eq!(
-            cache.lookup(
+        assert!(matches!(cache.decide(&7, t0), NameLookup::Cached(None)));
+        assert!(matches!(
+            cache.decide(
                 &7,
                 (t0 + NAMELESS_RETRY_TTL)
                     .checked_sub(Duration::from_millis(1))
                     .unwrap()
             ),
-            Some(None)
-        );
+            NameLookup::Cached(None)
+        ));
         // …then re-queried (names often arrive in a later scan response).
-        assert_eq!(cache.lookup(&7, t0 + NAMELESS_RETRY_TTL), None);
+        assert!(matches!(
+            cache.decide(&7, t0 + NAMELESS_RETRY_TTL),
+            NameLookup::Query
+        ));
 
         // A late name upgrades the entry permanently.
         cache.record(7, Some("Onvis".into()), t0 + NAMELESS_RETRY_TTL);
+        assert!(matches!(
+            cache.decide(&7, t0 + Duration::from_secs(3600)),
+            NameLookup::Cached(Some("Onvis"))
+        ));
+    }
+
+    /// Drive `decide`/`record` exactly as `CommissionableScan::next` drives
+    /// them, over a simulated advertisement stream, and count the D-Bus
+    /// queries that would result. This is the property the negative cache
+    /// exists for, and the reason it is worth its complexity: query cost is
+    /// bounded by [`NAMELESS_RETRY_TTL`], not by how fast the device
+    /// advertises. Without the negative entry every one of these 600
+    /// advertisements pays a `BlueZ` round trip.
+    #[test]
+    fn nameless_device_queries_are_bounded_by_ttl_not_advert_rate() {
+        let t0 = Instant::now();
+        let mut cache: NameCache<u32> = NameCache::new();
+        let mut queries = 0u32;
+        let mut adverts = 0u32;
+
+        // A nameless device advertising 10×/s for 60 s.
+        for tick in 0..600u32 {
+            let now = t0 + Duration::from_millis(u64::from(tick) * 100);
+            adverts += 1;
+            match cache.decide(&7, now) {
+                NameLookup::Cached(_) => {}
+                NameLookup::Query => {
+                    queries += 1;
+                    // The device stays nameless, so the query comes back empty.
+                    cache.record(7, None, now);
+                }
+            }
+        }
+
+        assert_eq!(adverts, 600);
+        // One at t=0, then one at each 10 s expiry (t=10,20,30,40,50). The
+        // final tick is t=59.9 s, still inside the window opened at t=50 s.
         assert_eq!(
-            cache.lookup(&7, t0 + Duration::from_secs(3600)),
-            Some(Some("Onvis"))
+            queries, 6,
+            "one query per {NAMELESS_RETRY_TTL:?} window, not one per advert"
         );
+    }
+
+    /// The counterpart, and a caveat worth pinning: a device that *does*
+    /// advertise a name is cached positively on its first query and never
+    /// re-queried, so it never exercises the negative path at all. A hardware
+    /// check aimed at the negative cache therefore needs a NAMELESS
+    /// advertiser to be meaningful.
+    #[test]
+    fn named_device_is_queried_once_for_the_whole_scan() {
+        let t0 = Instant::now();
+        let mut cache: NameCache<u32> = NameCache::new();
+        let mut queries = 0u32;
+
+        for tick in 0..600u32 {
+            let now = t0 + Duration::from_millis(u64::from(tick) * 100);
+            if matches!(cache.decide(&7, now), NameLookup::Query) {
+                queries += 1;
+                cache.record(7, Some("MATTER-3840".into()), now);
+            }
+        }
+
+        assert_eq!(queries, 1, "a named device is queried once, then cached");
     }
 }
