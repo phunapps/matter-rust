@@ -16,7 +16,7 @@ use matter_codec::{Tag, TlvWriter};
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn build_timed_request(timeout_ms: u16) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(16);
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");

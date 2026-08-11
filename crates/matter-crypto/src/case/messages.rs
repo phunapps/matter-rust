@@ -360,7 +360,7 @@ impl Sigma1 {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(256);
         {
             let mut w = TlvWriter::new(&mut buf);
             w.start_structure(Tag::Anonymous)?;
@@ -535,7 +535,7 @@ impl Sigma2 {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(128 + self.encrypted.len());
         {
             let mut w = TlvWriter::new(&mut buf);
             w.start_structure(Tag::Anonymous)?;
@@ -691,7 +691,7 @@ impl Sigma2Resume {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(64);
         {
             let mut w = TlvWriter::new(&mut buf);
             w.start_structure(Tag::Anonymous)?;
@@ -810,7 +810,7 @@ impl Sigma3 {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(16 + self.encrypted.len());
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous)?;
         w.put_bytes(Tag::Context(1), &self.encrypted)?;

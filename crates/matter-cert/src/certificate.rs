@@ -243,7 +243,7 @@ impl MatterCertificate {
     ///
     /// Propagates any [`matter_codec::Error`] from the underlying writer.
     pub fn to_tlv(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(512);
         let mut w = TlvWriter::new(&mut buf);
 
         w.start_structure(Tag::Anonymous)?;

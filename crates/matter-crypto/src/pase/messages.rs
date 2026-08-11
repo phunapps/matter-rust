@@ -340,7 +340,7 @@ impl PbkdfParamsInner {
         if self.salt.len() < SALT_MIN_LEN || self.salt.len() > SALT_MAX_LEN {
             return Err(Error::InvalidParameter);
         }
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(24 + self.salt.len());
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(outer_tag)?;
         // context tag 1: iterations (u32, widened to u64 for the API).
@@ -436,7 +436,7 @@ impl PbkdfParamRequest {
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
         // Build the fixed fields inside the writer's borrow, then drop the
         // writer so we can push optional raw bytes and the end-container byte.
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(128);
         {
             let mut w = TlvWriter::new(&mut buf);
             w.start_structure(Tag::Anonymous)?;
@@ -572,7 +572,7 @@ impl PbkdfParamResponse {
     ///   the salt length is outside \[16, 32\].
     /// - [`Error::Codec`] on any codec error.
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(160);
         {
             let mut w = TlvWriter::new(&mut buf);
             w.start_structure(Tag::Anonymous)?;
@@ -697,7 +697,7 @@ impl Pake1 {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(80);
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous)?;
         w.put_bytes(Tag::Context(1), &self.x)?;
@@ -768,7 +768,7 @@ impl Pake2 {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(112);
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous)?;
         w.put_bytes(Tag::Context(1), &self.y)?;
@@ -848,7 +848,7 @@ impl Pake3 {
     ///
     /// Propagates any [`matter_codec::Error`] via [`Error::Codec`].
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(48);
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous)?;
         w.put_bytes(Tag::Context(1), &self.verifier)?;

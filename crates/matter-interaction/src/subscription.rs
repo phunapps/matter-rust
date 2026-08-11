@@ -66,7 +66,7 @@ pub struct SubscribeResponse {
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn build_subscribe_request(req: &SubscribeRequest) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(48 + req.paths.len() * 24 + req.event_paths.len() * 24);
     let mut w = TlvWriter::new(&mut buf);
 
     w.start_structure(Tag::Anonymous)
@@ -197,7 +197,7 @@ pub fn parse_subscribe_response(bytes: &[u8]) -> Result<SubscribeResponse, ImErr
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn build_status_response(status: u8) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(16);
     let mut w = TlvWriter::new(&mut buf);
 
     w.start_structure(Tag::Anonymous)

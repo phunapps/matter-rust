@@ -74,7 +74,7 @@ fn build_invoke_request_inner(
     timed: bool,
     suppress_response: bool,
 ) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(48 + command_fields_tlv.len());
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
@@ -116,7 +116,7 @@ fn build_invoke_request_inner(
 #[must_use]
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 pub fn build_invoke_request_batch(commands: &[(CommandPath, &[u8])]) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(32 + commands.iter().map(|c| 32 + c.1.len()).sum::<usize>());
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");

@@ -167,7 +167,7 @@ fn read_command_data(r: &mut TlvReader<'_>) -> Result<InvokedCommand, crate::ImE
 #[must_use]
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 pub fn build_invoke_response_command(path: CommandPath, response_fields_tlv: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(48 + response_fields_tlv.len());
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
@@ -199,7 +199,7 @@ pub fn build_invoke_response_command(path: CommandPath, response_fields_tlv: &[u
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn build_invoke_response_status(path: CommandPath, status: ImStatus) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(64);
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");

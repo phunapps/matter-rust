@@ -46,7 +46,12 @@ pub fn build_write_request_timed(writes: &[AttributeWriteRequest]) -> Vec<u8> {
 
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
 fn build_write_request_inner(writes: &[AttributeWriteRequest], timed: bool) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(
+        48 + writes
+            .iter()
+            .map(|wr| 24 + wr.value_tlv.len())
+            .sum::<usize>(),
+    );
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");

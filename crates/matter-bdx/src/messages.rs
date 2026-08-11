@@ -120,7 +120,7 @@ impl TransferInit {
         range.set(RangeControl::START_OFFSET, self.start_offset > 0);
         range.set(RangeControl::WIDE_RANGE, wide);
 
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(16 + self.file_designator.len() + self.metadata.len());
         buf.push((self.version & VERSION_MASK) | self.control.bits());
         buf.push(range.bits());
         buf.extend_from_slice(&self.max_block_size.to_le_bytes());
@@ -209,7 +209,7 @@ impl ReceiveAccept {
         range.set(RangeControl::START_OFFSET, self.start_offset > 0);
         range.set(RangeControl::WIDE_RANGE, wide);
 
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(16 + self.metadata.len());
         buf.push((self.version & VERSION_MASK) | self.control.bits());
         buf.push(range.bits());
         buf.extend_from_slice(&self.max_block_size.to_le_bytes());
@@ -282,7 +282,7 @@ impl SendAccept {
     /// Encode to the BDX message body.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
+        let mut buf = Vec::with_capacity(3 + self.metadata.len());
         buf.push((self.version & VERSION_MASK) | self.control.bits());
         buf.extend_from_slice(&self.max_block_size.to_le_bytes());
         buf.extend_from_slice(&self.metadata);

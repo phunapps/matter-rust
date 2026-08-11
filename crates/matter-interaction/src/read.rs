@@ -24,7 +24,7 @@ pub fn build_read_request_full(
     event_paths: &[EventPath],
     event_filters: &[EventFilter],
 ) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = Vec::with_capacity(32 + attr_paths.len() * 24 + event_paths.len() * 24);
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
