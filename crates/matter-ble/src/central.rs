@@ -498,7 +498,7 @@ impl BleCentral {
             adapter: self.adapter.clone(),
             events,
             scan: Arc::clone(&self.scan),
-            names: HashMap::new(),
+            names: NameCache::new(),
             released: false,
         })
     }
@@ -616,6 +616,73 @@ impl BleCentral {
     }
 }
 
+/// How long a nameless lookup result is trusted before the `BlueZ` properties
+/// round trip is retried. Names usually arrive in a scan response shortly
+/// after the first advertisement, so negatives must expire quickly — but a
+/// nameless device advertising 2-10×/s must not cost a D-Bus round trip per
+/// advertisement.
+const NAMELESS_RETRY_TTL: Duration = Duration::from_secs(10);
+
+/// One name-cache slot: a name, once seen, is kept for the scan's lifetime;
+/// an empty lookup is suppressed only until its TTL passes.
+enum NameSlot {
+    Known(String),
+    UnknownUntil(Instant),
+}
+
+/// Local-name cache policy, sans-IO (`now` injected) and key-generic so the
+/// TTL logic is unit-testable without a real `PeripheralId`.
+struct NameCache<K> {
+    slots: HashMap<K, NameSlot>,
+}
+
+impl<K: std::hash::Hash + Eq> NameCache<K> {
+    fn new() -> Self {
+        Self {
+            slots: HashMap::new(),
+        }
+    }
+
+    /// `Some(cached)` — use without querying (`cached` is `None` while a
+    /// negative entry's TTL holds). `None` — the caller must query and
+    /// [`Self::record`] the result.
+    ///
+    /// The nested `Option` encodes two independent questions (cache hit vs.
+    /// name known), not a "double-maybe" of the same thing.
+    #[allow(clippy::option_option)]
+    fn lookup(&self, id: &K, now: Instant) -> Option<Option<&str>> {
+        match self.slots.get(id) {
+            Some(NameSlot::Known(name)) => Some(Some(name.as_str())),
+            Some(NameSlot::UnknownUntil(until)) if now < *until => Some(None),
+            _ => None,
+        }
+    }
+
+    fn record(&mut self, id: K, name: Option<String>, now: Instant) {
+        let slot = match name {
+            Some(n) => NameSlot::Known(n),
+            None => NameSlot::UnknownUntil(now + NAMELESS_RETRY_TTL),
+        };
+        self.slots.insert(id, slot);
+    }
+}
+
+/// Diagnostic scan tracing, enabled by setting `MATTER_BLE_SCAN_TRACE=1` —
+/// one line per `BlueZ` D-Bus name query, for verifying the negative cache
+/// bounds queries by TTL rather than advertisement rate. Same off-by-default,
+/// side-effect-free shape as [`pump_trace_enabled`].
+fn scan_trace(msg: &str) {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    let enabled = *ENABLED.get_or_init(|| {
+        std::env::var("MATTER_BLE_SCAN_TRACE")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    });
+    if enabled {
+        eprintln!("[ble-scan] {msg}");
+    }
+}
+
 /// A live, unfiltered scan for commissionable Matter devices, from
 /// [`BleCentral::scan_commissionables`].
 ///
@@ -637,9 +704,9 @@ pub struct CommissionableScan {
     scan: Arc<TokioMutex<ScanRefCount>>,
     /// Cache of observed local names, so repeated adverts from the same
     /// device don't re-pay the `BlueZ` D-Bus properties round trip. Only
-    /// `Some` results are cached — a name often arrives in a later scan
-    /// response, so `None` is re-queried.
-    names: HashMap<PeripheralId, String>,
+    /// names are kept permanently; empty results are retried after
+    /// [`NAMELESS_RETRY_TTL`].
+    names: NameCache<PeripheralId>,
     /// Set by [`Self::stop`] so `Drop` doesn't release the scan slot twice.
     released: bool,
 }
@@ -661,14 +728,13 @@ impl CommissionableScan {
             let Some(advert) = commissionable_from_service_data(&service_data) else {
                 continue;
             };
-            let cached = self.names.get(&id).cloned();
-            let local_name = if let Some(name) = cached {
-                Some(name)
+            let now = Instant::now();
+            let local_name = if let Some(cached) = self.names.lookup(&id, now) {
+                cached.map(str::to_owned)
             } else {
+                scan_trace("name query");
                 let name = local_name_for(&self.adapter, &id).await;
-                if let Some(n) = &name {
-                    self.names.insert(id.clone(), n.clone());
-                }
+                self.names.record(id.clone(), name.clone(), now);
                 name
             };
             return Some(FoundDevice {
@@ -1259,5 +1325,37 @@ mod tests {
         let e = CentralError::ServiceDiscovery("2 attempts".into());
         assert!(matches!(e, CentralError::ServiceDiscovery(_)));
         assert!(e.to_string().contains("service discovery"));
+    }
+
+    #[test]
+    fn name_cache_negative_ttl_policy() {
+        // Sans-IO: `now` injected, key generic (u32) — no Adapter needed.
+        let t0 = Instant::now();
+        let mut cache: NameCache<u32> = NameCache::new();
+
+        // Unknown key: caller must query.
+        assert_eq!(cache.lookup(&7, t0), None);
+
+        // Negative result: suppressed until the TTL passes…
+        cache.record(7, None, t0);
+        assert_eq!(cache.lookup(&7, t0), Some(None));
+        assert_eq!(
+            cache.lookup(
+                &7,
+                (t0 + NAMELESS_RETRY_TTL)
+                    .checked_sub(Duration::from_millis(1))
+                    .unwrap()
+            ),
+            Some(None)
+        );
+        // …then re-queried (names often arrive in a later scan response).
+        assert_eq!(cache.lookup(&7, t0 + NAMELESS_RETRY_TTL), None);
+
+        // A late name upgrades the entry permanently.
+        cache.record(7, Some("Onvis".into()), t0 + NAMELESS_RETRY_TTL);
+        assert_eq!(
+            cache.lookup(&7, t0 + Duration::from_secs(3600)),
+            Some(Some("Onvis"))
+        );
     }
 }
