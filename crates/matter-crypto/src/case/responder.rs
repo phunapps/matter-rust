@@ -1228,22 +1228,26 @@ fn process_sigma3(
     let sigma3_decrypted = aead_decrypt(&s3k, NONCE_TBE_DATA3, b"", &sigma3.encrypted)?;
 
     // Step 3: Parse TBEData3.
-    let peer_tbe = decode_tbedata3(&sigma3_decrypted)?;
+    let mut peer_tbe = decode_tbedata3(&sigma3_decrypted)?;
 
     // Step 4: Validate initiator NOC chain against trusted roots at the
-    // injected wall-clock instant (`not_before <= now <= not_after`). The clock
-    // is supplied by the caller via the constructor; this crate never reads the
-    // system clock.
-    let chain_certs: Vec<MatterCertificate> = match &peer_tbe.peer_icac {
-        Some(icac) => vec![peer_tbe.peer_noc.clone(), icac.clone()],
-        None => vec![peer_tbe.peer_noc.clone()],
+    // injected wall-clock instant (`not_before <= now <= not_after`). The
+    // certs are MOVED into the chain Vec (no clones); the NOC is taken back
+    // out after validation for the subject/key checks and the returned
+    // PeerInfo.
+    let mut chain_certs: Vec<MatterCertificate> = match peer_tbe.peer_icac.take() {
+        Some(icac) => vec![peer_tbe.peer_noc, icac],
+        None => vec![peer_tbe.peer_noc],
     };
     CertificateChain::new(&chain_certs)
         .validate(trusted_roots, now)
         .map_err(Error::InvalidPeerNocChain)?;
+    // O(1); index 0 is the NOC in both arms. A leftover ICAC is dropped —
+    // later code reads the raw `peer_icac_tlv` bytes, not the parsed cert.
+    let peer_noc = chain_certs.swap_remove(0);
 
     // Step 5: Extract initiator NodeId + FabricId from NOC subject.
-    let peer_dn = peer_tbe.peer_noc.subject();
+    let peer_dn = peer_noc.subject();
     let peer_node_id = peer_dn
         .node_id()
         .ok_or(Error::PeerNodeIdMismatch(0, credentials.node_id))?;
@@ -1274,8 +1278,7 @@ fn process_sigma3(
     )?;
     let peer_sig =
         Signature::from_slice(&peer_tbe.peer_signature).map_err(|_| Error::PeerSignatureInvalid)?;
-    peer_tbe
-        .peer_noc
+    peer_noc
         .public_key()
         .verify(&peer_signed_data, &peer_sig)
         .map_err(|_| Error::PeerSignatureInvalid)?;
@@ -1318,7 +1321,7 @@ fn process_sigma3(
     let peer = PeerInfo {
         node_id: peer_node_id,
         fabric_id: peer_fabric_id,
-        noc: peer_tbe.peer_noc,
+        noc: peer_noc,
         session_id: initiator_session_id,
     };
     let local = LocalInfo {
