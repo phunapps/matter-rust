@@ -375,11 +375,13 @@ enum PendingReply {
     },
     /// A plain write/invoke awaiting its response. On a `NEEDS_TIMED_INTERACTION`
     /// rejection the actor records `keys` in the learned timed-cache and retries
-    /// the action timed (`timed_payload`); otherwise it resolves `reply` with the
-    /// response bytes. (See [`Actor::resolve_action`].)
+    /// the action timed (invoking `timed_payload`, which encodes the timed
+    /// variant only at that point); otherwise it resolves `reply` with the
+    /// response bytes and the unused closure is dropped. (See
+    /// [`Actor::resolve_action`].)
     Action {
         opcode: u8,
-        timed_payload: Vec<u8>,
+        timed_payload: TimedPayload,
         keys: Vec<(u32, u32)>,
         timeout_ms: u16,
         node_id: u64,
@@ -562,6 +564,14 @@ impl ReportReassembler {
     }
 }
 
+/// Lazily-built timed-variant payload for a write/invoke `Action`. The plain
+/// payload is pre-encoded (it is always sent, except on a known-timed path);
+/// the timed variant is built only when the device actually demands a timed
+/// interaction (`NEEDS_TIMED_INTERACTION` escalation or learned-timed cache
+/// hit) — the rare path. The common case drops this closure unused, so the
+/// timed encode never runs.
+pub(crate) type TimedPayload = Box<dyn FnOnce() -> Vec<u8> + Send>;
+
 /// Messages the handles send to the owning task. Each carries a `oneshot`
 /// reply sender; a dropped reply sender means the caller gave up.
 pub(crate) enum Command {
@@ -640,13 +650,14 @@ pub(crate) enum Command {
     /// `(cluster, id)` is in the learned timed-cache, go straight to a timed
     /// interaction; otherwise send `plain_payload`, and on a
     /// `NEEDS_TIMED_INTERACTION (0xc6)` rejection record the `keys` and transparently
-    /// retry with `timed_payload`. Returns the final response bytes. (Explicit
-    /// timed is [`Command::TimedRoundTrip`] via `write_timed`/`invoke_timed`.)
+    /// retry with `timed_payload` (built lazily, only on those two paths).
+    /// Returns the final response bytes. (Explicit timed is
+    /// [`Command::TimedRoundTrip`] via `write_timed`/`invoke_timed`.)
     Action {
         node_id: u64,
         opcode: u8, // OP_WRITE_REQUEST | OP_INVOKE_REQUEST
         plain_payload: Vec<u8>,
-        timed_payload: Vec<u8>,
+        timed_payload: TimedPayload,
         keys: Vec<(u32, u32)>,
         timeout_ms: u16,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
@@ -3363,7 +3374,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         node_id: u64,
         opcode: u8,
         plain_payload: Vec<u8>,
-        timed_payload: Vec<u8>,
+        timed_payload: TimedPayload,
         keys: Vec<(u32, u32)>,
         timeout_ms: u16,
         reply: oneshot::Sender<Result<Vec<u8>, Error>>,
@@ -3375,10 +3386,19 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return;
             }
         };
-        // Fast-path: a known-timed path skips the wasted plain attempt.
+        // Fast-path: a known-timed path skips the wasted plain attempt. This is
+        // one of the two places the timed payload is actually encoded.
         if keys.iter().any(|k| self.timed_paths.contains(k)) {
-            self.begin_timed(sid, peer, node_id, timeout_ms, opcode, timed_payload, reply)
-                .await;
+            self.begin_timed(
+                sid,
+                peer,
+                node_id,
+                timeout_ms,
+                opcode,
+                timed_payload(),
+                reply,
+            )
+            .await;
             return;
         }
         match self
@@ -3444,7 +3464,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             return;
         }
         // Learn these paths so future ops skip the wasted plain attempt, then
-        // retry the action as a timed interaction feeding the same reply.
+        // retry the action as a timed interaction feeding the same reply. This
+        // is the second (and only other) place the timed payload is encoded —
+        // the same `build_*_timed` bytes as before, just built now instead of
+        // up-front.
         for k in keys {
             self.timed_paths.insert(k);
         }
@@ -3454,7 +3477,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             node_id,
             timeout_ms,
             opcode,
-            timed_payload,
+            timed_payload(),
             reply,
         )
         .await;

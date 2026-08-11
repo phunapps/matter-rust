@@ -412,11 +412,15 @@ impl Node {
     /// learned timed-cache (skips the plain attempt for known-timed paths) and
     /// transparently retries timed on a `NEEDS_TIMED_INTERACTION` rejection.
     /// Returns the final response bytes.
+    ///
+    /// `timed_payload` is a *builder*: the timed variant is encoded only if the
+    /// actor actually needs it (cache hit or `0xc6` escalation), so the common
+    /// plain path pays for one encode, not two.
     async fn action(
         &self,
         opcode: u8,
         plain_payload: Vec<u8>,
-        timed_payload: Vec<u8>,
+        timed_payload: crate::actor::TimedPayload,
         keys: Vec<(u32, u32)>,
     ) -> Result<Vec<u8>, Error> {
         let (reply, rx) = oneshot::channel();
@@ -461,11 +465,12 @@ impl Node {
             .iter()
             .map(|(p, _)| (p.cluster, p.attribute))
             .collect();
+        let plain = build_write_request(&reqs);
         let resp = self
             .action(
                 OP_WRITE_REQUEST,
-                build_write_request(&reqs),
-                build_write_request_timed(&reqs),
+                plain,
+                Box::new(move || build_write_request_timed(&reqs)),
                 keys,
             )
             .await?;
@@ -536,11 +541,12 @@ impl Node {
         path: CommandPath,
         fields_tlv: Vec<u8>,
     ) -> Result<InvokeResult, Error> {
+        let plain = build_invoke_request(path, &fields_tlv);
         let resp = self
             .action(
                 OP_INVOKE_REQUEST,
-                build_invoke_request(path, &fields_tlv),
-                build_invoke_request_timed(path, &fields_tlv),
+                plain,
+                Box::new(move || build_invoke_request_timed(path, &fields_tlv)),
                 vec![(path.cluster, path.command)],
             )
             .await?;
@@ -834,13 +840,18 @@ impl Node {
             .iter()
             .map(|t| value_to_tlv(&crate::binding::binding_target_value(t)))
             .collect::<Result<_, _>>()?;
-        let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
+        let mut chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
         if chunks.len() == 1 {
+            // Single message: reuse the plain Action path. The timed retry —
+            // if the device demands timed — re-sends identical bytes (safe for
+            // a full-list replace), so the builder just hands back the chunk.
+            let chunk = chunks.swap_remove(0);
+            let plain = chunk.clone();
             let resp = self
                 .action(
                     OP_WRITE_REQUEST,
-                    chunks[0].clone(),
-                    chunks[0].clone(),
+                    plain,
+                    Box::new(move || chunk),
                     vec![(path.cluster, path.attribute)],
                 )
                 .await?;
@@ -1070,17 +1081,19 @@ impl Node {
             .iter()
             .map(|e| value_to_tlv(&crate::acl::acl_entry_value(e)))
             .collect::<Result<_, _>>()?;
-        let chunks = build_list_write_chunks(path, &element_tlvs, budget, false);
+        let mut chunks = build_list_write_chunks(path, &element_tlvs, budget, false);
         if chunks.len() == 1 {
             // Single message: reuse the plain Action path (byte-identical to a
-            // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
-            // plain and timed payload so the retry — if the device demands timed —
+            // normal write, 0xc6 auto-upgrade intact). The timed builder hands
+            // back the same chunk, so the retry — if the device demands timed —
             // re-sends identical bytes (safe for a full-list replace).
+            let chunk = chunks.swap_remove(0);
+            let plain = chunk.clone();
             let resp = self
                 .action(
                     OP_WRITE_REQUEST,
-                    chunks[0].clone(),
-                    chunks[0].clone(),
+                    plain,
+                    Box::new(move || chunk),
                     vec![(path.cluster, path.attribute)],
                 )
                 .await?;
@@ -1450,17 +1463,19 @@ impl Node {
             .iter()
             .map(|e| value_to_tlv(&crate::group::group_key_map_entry_value(*e)))
             .collect::<Result<_, _>>()?;
-        let chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
+        let mut chunks = build_list_write_chunks(path, &element_tlvs, WRITE_CHUNK_BUDGET, false);
         if chunks.len() == 1 {
             // Single message: reuse the plain Action path (byte-identical to a
-            // normal write, 0xc6 auto-upgrade intact). Pass `chunks[0]` as both
-            // plain and timed payload so the retry — if the device demands timed —
+            // normal write, 0xc6 auto-upgrade intact). The timed builder hands
+            // back the same chunk, so the retry — if the device demands timed —
             // re-sends identical bytes (safe for a full-list replace).
+            let chunk = chunks.swap_remove(0);
+            let plain = chunk.clone();
             let resp = self
                 .action(
                     OP_WRITE_REQUEST,
-                    chunks[0].clone(),
-                    chunks[0].clone(),
+                    plain,
+                    Box::new(move || chunk),
                     vec![(path.cluster, path.attribute)],
                 )
                 .await?;
