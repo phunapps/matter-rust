@@ -14,6 +14,7 @@
 #![allow(unreachable_pub)]
 
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Instant;
 
 use matter_cert::{MatterTime, TrustedRoots};
@@ -694,6 +695,11 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     ) -> Result<(), Error> {
         use matter_bdx::{BdxMessage, BlockSender, MessageType, SenderOutcome};
 
+        // Shared once so every `BlockSender` (the initial QueryImage arm and
+        // any cross-session ReceiveInit re-arm below) clones the `Arc`
+        // handle rather than the image bytes.
+        let image: Arc<[u8]> = Arc::from(image);
+
         // Flow state spans sessions: the requestor downloads + applies on its
         // first session, REBOOTS into the image, and sends NotifyUpdateApplied
         // on a fresh session (usually resuming the record rotated during the
@@ -797,7 +803,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                         .first()
                         .ok_or_else(|| Error::Operational("OTA invoke had no command".into()))?;
                     let response = if cmd.path.command == CMD_QUERY_IMAGE {
-                        bdx = Some(BlockSender::new(image.clone(), max_block_size));
+                        bdx = Some(BlockSender::from_shared(Arc::clone(&image), max_block_size));
                         let fields = matter_ota::handle_query_image(&cmd.fields_tlv, Some(&offer))
                             .map_err(|e| Error::Operational(format!("QueryImage: {e}")))?;
                         build_invoke_response_command(
@@ -892,7 +898,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     // the per-session step budget bounds a requestor that
                     // loops `ReceiveInit`.
                     if matches!(msg, BdxMessage::ReceiveInit(_)) && bdx.is_some() {
-                        bdx = Some(BlockSender::new(image.clone(), max_block_size));
+                        bdx = Some(BlockSender::from_shared(Arc::clone(&image), max_block_size));
                     }
                     let sender = bdx.as_mut().ok_or_else(|| {
                         Error::Operational("BDX message before QueryImage".into())
