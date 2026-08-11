@@ -11,9 +11,11 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use crate::message_type::{BdxStatusCode, MessageType};
 use crate::messages::BDX_VERSION;
-use crate::messages::{CounterMessage, DataBlock, ReceiveAccept, TransferControl, TransferInit};
+use crate::messages::{CounterMessage, ReceiveAccept, TransferControl, TransferInit};
 
 /// A BDX message the state machine wants sent, tagged with its opcode.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +49,7 @@ enum State {
 /// Receiver-driven BDX sender serving `image` to a pulling receiver.
 #[derive(Debug, Clone)]
 pub struct BlockSender {
-    image: Vec<u8>,
+    image: Arc<[u8]>,
     max_block_size: u16,
     offset: usize,
     next_block_counter: u32,
@@ -58,8 +60,18 @@ pub struct BlockSender {
 impl BlockSender {
     /// Create a sender for `image`, proposing up to `max_block_size` bytes per
     /// block (the negotiated size is `min(max_block_size, receiver proposal)`).
+    /// Copies `image` into a shared allocation; use [`Self::from_shared`] to
+    /// serve an image you already hold in an `Arc` without copying.
     #[must_use]
     pub fn new(image: Vec<u8>, max_block_size: u16) -> Self {
+        Self::from_shared(Arc::from(image), max_block_size)
+    }
+
+    /// Create a sender serving a shared image. Clones of the `Arc` share one
+    /// allocation, so a provider serving the same image across many transfers
+    /// (or re-arming mid-flow) holds exactly one copy of the bytes.
+    #[must_use]
+    pub fn from_shared(image: Arc<[u8]>, max_block_size: u16) -> Self {
         Self {
             image,
             max_block_size,
@@ -121,13 +133,13 @@ impl BlockSender {
             .offset
             .saturating_add(usize::from(self.max_block_size))
             .min(self.image.len());
-        let data = self.image[self.offset..end].to_vec();
         let is_eof = end == self.image.len();
         let counter = self.next_block_counter;
-        let block = DataBlock {
-            block_counter: counter,
-            data,
-        };
+        // counter LE ++ block bytes — exactly DataBlock::encode's layout,
+        // built once from the shared image (no intermediate Vec).
+        let mut payload = Vec::with_capacity(4 + (end - self.offset));
+        payload.extend_from_slice(&counter.to_le_bytes());
+        payload.extend_from_slice(&self.image[self.offset..end]);
 
         self.offset = end;
         self.last_block_counter = counter;
@@ -141,7 +153,7 @@ impl BlockSender {
         };
         SenderOutcome::Send(OutgoingMessage {
             message_type,
-            payload: block.encode(),
+            payload,
         })
     }
 
@@ -170,6 +182,51 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)] // Test code: CLAUDE.md carve-out.
     use super::*;
     use crate::messages::{DataBlock, ReceiveAccept, TransferControl, TransferInit};
+    use std::sync::Arc;
+
+    #[test]
+    fn from_shared_serves_without_copying_the_image() {
+        let image: Arc<[u8]> = Arc::from(&b"0123456789ABCDEF"[..]); // 16 bytes
+        let mut sender = BlockSender::from_shared(Arc::clone(&image), 8);
+        // The sender holds a handle, not a copy.
+        assert_eq!(Arc::strong_count(&image), 2);
+
+        let _ = sender.accept_receive_init(&receiver_init(8));
+
+        // Block 0
+        let SenderOutcome::Send(o0) =
+            sender.handle_block_query(&CounterMessage { block_counter: 0 })
+        else {
+            panic!()
+        };
+        assert_eq!(o0.message_type, MessageType::Block);
+        let d0 = DataBlock::decode(&o0.payload).unwrap();
+        assert_eq!(d0.data, b"01234567");
+
+        // Block 1 -> BlockEOF (exact multiple: 16 bytes / 8 = 2 blocks)
+        let SenderOutcome::Send(o1) =
+            sender.handle_block_query(&CounterMessage { block_counter: 1 })
+        else {
+            panic!()
+        };
+        assert_eq!(o1.message_type, MessageType::BlockEof);
+        let d1 = DataBlock::decode(&o1.payload).unwrap();
+        assert_eq!(d1.data, b"89ABCDEF");
+
+        let mut reassembled = d0.data.clone();
+        reassembled.extend_from_slice(&d1.data);
+        assert_eq!(reassembled.as_slice(), &image[..]);
+
+        assert!(!sender.is_complete());
+        assert_eq!(
+            sender.handle_block_ack_eof(&CounterMessage { block_counter: 1 }),
+            SenderOutcome::Done
+        );
+        assert!(sender.is_complete());
+
+        // Still just the two handles (image + sender's clone) — no copy made.
+        assert_eq!(Arc::strong_count(&image), 2);
+    }
 
     fn receiver_init(max_block_size: u16) -> TransferInit {
         TransferInit {
