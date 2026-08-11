@@ -82,9 +82,23 @@ fn response_needs_timed(opcode: u8, payload: &[u8]) -> bool {
     }
 }
 
-/// How often the loop wakes to drive MRP / liveness when no MRP deadline is
-/// pending.
+/// How often the loop wakes while at least one operational resolve is parked.
+///
+/// mDNS results arrive by *polling* ([`Actor::drive_pending_resolves`] drains
+/// [`Discovery::poll_results`]), not on a stored deadline, so this is the only
+/// remaining periodic component of the actor's park: it applies solely while
+/// `pending_resolves` is non-empty. Every other timer source contributes a real
+/// deadline through [`Actor::next_timer_deadline`].
+///
+/// [`Discovery::poll_results`]: matter_transport::Discovery::poll_results
 const LIVENESS_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Backstop park duration when no timer work is scheduled at all. Timer
+/// deadlines are recomputed after every loop iteration, so this only bounds
+/// how long an unforeseen, unenumerated deadline source could stall; the
+/// four known sources (MRP, liveness, resubscribe, resolve polling) all
+/// flow through [`Actor::next_timer_deadline`].
+const IDLE_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// How long a parked operational resolve ([`Actor::park_resolve`]) waits for its
 /// device's mDNS record before its waiters are failed. Matches the budget the
@@ -919,6 +933,18 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// known parks here instead of blocking the loop on a poll loop; at most one
     /// entry per node (`pending_connects` coalesces concurrent connects).
     pending_resolves: Vec<PendingResolve>,
+    /// When the next mDNS poll of `pending_resolves` is due.
+    ///
+    /// mDNS results arrive by *polling*, so unlike every other timer source the
+    /// resolve tick has no naturally-occurring deadline — but it must still be
+    /// an ABSOLUTE instant rather than a `now + LIVENESS_TICK` computed per
+    /// iteration: any other `select!` arm that fires more often than
+    /// [`LIVENESS_TICK`] (a busy device, or a transport whose `recv_from`
+    /// returns errors back-to-back) would otherwise push a relative tick
+    /// forward forever and starve discovery. Advanced by
+    /// [`Self::drive_pending_resolves`]; only consulted while
+    /// `pending_resolves` is non-empty.
+    next_resolve_poll: Instant,
     /// The ONE `_matter._tcp` browse shared by every parked resolve, opened when
     /// the first entry parks and stopped when the last one leaves.
     ///
@@ -1338,6 +1364,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             pending_connects: HashMap::new(),
             connect_mrp: HashMap::new(),
             pending_resolves: Vec::new(),
+            next_resolve_poll: Instant::now(),
             resolve_query: None,
             seen_records: HashMap::new(),
             multicast_if: None,
@@ -1402,10 +1429,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// the timer arm (which would delay MRP retransmits and subscription-liveness
     /// checks past their deadlines), the timer work is gated on an *explicit
     /// overdue check* evaluated at the top of every iteration BEFORE the
-    /// `select!`: we compute the earliest moment timer work is due (the min of
-    /// the next MRP deadline and the periodic liveness tick — subscription
-    /// liveness is not part of `sessions.poll_timeout()`, so it is tracked
-    /// separately), and whenever that moment has already passed we run
+    /// `select!`: [`Self::next_timer_deadline`] computes the earliest moment any
+    /// timer work is due, and whenever that moment has already passed we run
     /// [`Self::drive_mrp`]/[`Self::check_liveness`]/[`Self::drive_resubscribes`]/
     /// [`Self::drive_pending_resolves`] immediately, then `continue`, regardless
     /// of how much inbound is pending.
@@ -1416,29 +1441,31 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// It does not starve recv — the overdue path only fires when a timer is
     /// actually due (bounded by how many deadlines elapse, not by inbound rate),
     /// and otherwise we fall through to the `select!` where a ready recv is
-    /// served. It does not busy-loop when idle — with no inbound and no due
-    /// deadline the `select!` parks on the `sleep` until the next deadline (or
-    /// `LIVENESS_TICK`). The trade-off versus simply dropping `biased` (letting
-    /// tokio randomize) is determinism: the explicit check gives a hard "timers
-    /// fire within one inbound-packet of their deadline" bound rather than a
+    /// served. The trade-off versus simply dropping `biased` (letting tokio
+    /// randomize) is determinism: the explicit check gives a hard "timers fire
+    /// within one inbound-packet of their deadline" bound rather than a
     /// probabilistic one, which matters for MRP retransmit timing.
+    ///
+    /// ## Parking on the computed deadline
+    ///
+    /// The park is not periodic. Every iteration recomputes the deadline from
+    /// the *scheduled work that actually exists* — MRP retransmit/ack-flush
+    /// deadlines, subscription liveness deadlines, and pending resubscribe
+    /// attempt times — with one exception: mDNS results arrive by polling rather
+    /// than on a deadline, so while `pending_resolves` is non-empty the deadline
+    /// also includes the [`LIVENESS_TICK`] polling anchor `next_resolve_poll`.
+    /// With nothing at all scheduled the loop parks on [`IDLE_PARK_MAX`];
+    /// because all four sources are re-derived from live state after every
+    /// iteration, work scheduled by any other `select!` arm shortens the very
+    /// next park, so the backstop only bounds an unenumerated source.
+    ///
+    /// The consequence is that a fully idle controller (no in-flight MRP, no
+    /// subscriptions, no parked resolves) wakes essentially never, instead of
+    /// four times a second as the earlier fixed liveness tick did.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
-        // The next time the timer work is guaranteed to run even if no MRP
-        // deadline is pending. Subscription-liveness deadlines and due
-        // resubscribes are NOT reflected in `sessions.poll_timeout()` (that only
-        // covers MRP/session timers), so the loop must wake at least every
-        // `LIVENESS_TICK` to service them. We track this explicitly rather than
-        // recomputing a sleep duration so the overdue guard below can also cover
-        // the liveness tick under inbound pressure.
-        let mut next_liveness_tick = Instant::now() + LIVENESS_TICK;
         loop {
             let now = Instant::now();
-            // Earliest moment any timer work (MRP retransmit/expiry, or the
-            // periodic liveness/resubscribe tick) must run.
-            let next_deadline = match self.sessions.poll_timeout() {
-                Some(mrp) => mrp.min(next_liveness_tick),
-                None => next_liveness_tick,
-            };
+            let next_deadline = self.next_timer_deadline();
 
             // Fairness guard: if timer work is already due, service it before
             // draining any more inbound. This is what prevents a sustained
@@ -1446,19 +1473,20 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             // starving the timer arm and pushing MRP retransmits / subscription
             // liveness past their deadlines. It only fires when a deadline has
             // actually elapsed, so it cannot starve recv or busy-loop: each pass
-            // either advances every MRP deadline forward (handle_timeout
-            // reschedules or drops) or advances `next_liveness_tick`, so the
+            // advances every deadline forward — MRP `handle_timeout` reschedules
+            // or drops, liveness/resubscribe entries are consumed or re-armed,
+            // and `drive_pending_resolves` re-arms `next_resolve_poll` — so the
             // guard yields back to recv on the next iteration.
-            if next_deadline <= now {
+            if next_deadline.is_some_and(|d| d <= now) {
                 self.drive_mrp().await;
                 self.check_liveness();
                 self.drive_resubscribes().await;
                 self.drive_pending_resolves();
-                next_liveness_tick = Instant::now() + LIVENESS_TICK;
                 continue;
             }
 
-            let sleep_for = next_deadline.saturating_duration_since(now);
+            let sleep_for =
+                next_deadline.map_or(IDLE_PARK_MAX, |d| d.saturating_duration_since(now));
             tokio::select! {
                 biased;
                 maybe = rx.recv() => match maybe {
@@ -1490,14 +1518,44 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     }
                 }
                 () = tokio::time::sleep(sleep_for) => {
+                    tracing::trace!(target: "matter_controller::actor", "timer wake");
                     self.drive_mrp().await;
                     self.check_liveness();
                     self.drive_resubscribes().await;
                     self.drive_pending_resolves();
-                    next_liveness_tick = Instant::now() + LIVENESS_TICK;
                 }
             }
         }
+    }
+
+    /// Earliest instant any timer work is due: MRP retransmit/ack-flush,
+    /// subscription liveness, scheduled resubscribes — plus a polling tick
+    /// ([`LIVENESS_TICK`]) only while mDNS resolves are parked, because
+    /// discovery results arrive by polling, not by deadline. `None` means
+    /// nothing is scheduled and the loop parks on inbound/commands alone
+    /// (bounded by [`IDLE_PARK_MAX`]).
+    ///
+    /// Recomputed from live state on every loop iteration, so any work
+    /// scheduled by another `select!` arm is reflected in the very next park —
+    /// there is no cached deadline to invalidate. Every component is an
+    /// ABSOLUTE instant (including the resolve anchor, see
+    /// `next_resolve_poll`), never `now + interval`: a relative component would
+    /// be pushed forward by every unrelated wakeup and could be starved
+    /// indefinitely by a busy loop.
+    fn next_timer_deadline(&self) -> Option<Instant> {
+        let mrp = self.sessions.poll_timeout();
+        let liveness = self
+            .subscriptions
+            .values()
+            .map(|e| e.liveness_deadline)
+            .min();
+        let resub = self.resubscribes.iter().map(|pr| pr.attempt_at).min();
+        let resolve = if self.pending_resolves.is_empty() {
+            None
+        } else {
+            Some(self.next_resolve_poll)
+        };
+        [mrp, liveness, resub, resolve].into_iter().flatten().min()
     }
 
     /// Process one command, parking device verbs behind an off-loop connect.
@@ -2617,6 +2675,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Returns immediately when nothing is parked — an idle controller pays
     /// nothing.
     fn drive_pending_resolves(&mut self) {
+        // Re-arm the polling tick FIRST, before any early return: the loop only
+        // consults it while entries are parked, and arming it unconditionally
+        // means no path can leave a due-in-the-past anchor behind that would
+        // spin the fairness guard.
+        self.next_resolve_poll = Instant::now() + LIVENESS_TICK;
         let Some(handle) = self.resolve_query else {
             return;
         };
