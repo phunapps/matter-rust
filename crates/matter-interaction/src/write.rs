@@ -723,6 +723,46 @@ mod tests {
         let statuses = parse_write_response(&buf).unwrap();
         assert!(statuses.is_empty());
     }
+
+    /// Drive the private `parse_status_ib_body` over a writer-built `StatusIB`.
+    fn parse_status(build: impl FnOnce(&mut TlvWriter<'_>)) -> Result<Option<ImStatus>, ImError> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        build(&mut w);
+        w.end_container().unwrap();
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        parse_status_ib_body(&mut r)
+    }
+
+    #[test]
+    fn status_ib_body_parses_status_none_and_range_error() {
+        assert!(matches!(
+            parse_status(|w| w.put_uint(Tag::Context(0), 0).unwrap()),
+            Ok(Some(ImStatus::Success))
+        ));
+        // No status member at all -> Ok(None).
+        assert!(matches!(parse_status(|_| {}), Ok(None)));
+        // Out-of-range code errors.
+        assert!(matches!(
+            parse_status(|w| w.put_uint(Tag::Context(0), 0x1_00).unwrap()),
+            Err(ImError::InvalidStatusCode { code: 0x100 })
+        ));
+        // Unknown nested container is skipped, status still found after it.
+        assert!(matches!(
+            parse_status(|w| {
+                w.start_structure(Tag::Context(7)).unwrap();
+                w.put_uint(Tag::Context(0), 9).unwrap();
+                w.end_container().unwrap();
+                w.put_uint(Tag::Context(0), 0).unwrap();
+            }),
+            Ok(Some(ImStatus::Success))
+        ));
+    }
 }
 
 #[cfg(test)]

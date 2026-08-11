@@ -15,7 +15,10 @@ proptest! {
     }
 
     #[test]
-    fn node_label_roundtrip(s in ".{0,32}") {
+    // Exclude IS1 (0x1F): the codec truncates UTF-8 at the localized-string
+    // separator by design (CODEC-1), so a raw 0x1F is outside the round-trip
+    // domain — mirrors matter-codec's own proptest regex.
+    fn node_label_roundtrip(s in "[^\u{1F}]{0,32}") {
         let bytes = gen::basic_information::encode_node_label(&s);
         prop_assert_eq!(gen::basic_information::decode_node_label(&bytes).unwrap(), s);
     }

@@ -253,4 +253,53 @@ mod tests {
             Err(ImError::MissingField("AttributePath.attribute"))
         ));
     }
+
+    #[test]
+    fn truncated_path_body_errors_unclosed_container() {
+        // Build a full valid path, then chop the trailing end-of-container.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_list(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_uint(Tag::Context(3), 6).unwrap();
+        w.put_uint(Tag::Context(4), 0).unwrap();
+        w.end_container().unwrap();
+        buf.pop(); // remove the list's 0x18
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        assert!(matches!(
+            attribute_path_from_reader(&mut r),
+            Err(ImError::Codec(matter_codec::Error::UnclosedContainer))
+        ));
+    }
+
+    #[test]
+    fn non_null_list_index_leaves_append_false() {
+        let (path, append) = parse(|w| {
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.put_uint(Tag::Context(3), 6).unwrap();
+            w.put_uint(Tag::Context(4), 0).unwrap();
+            w.put_uint(Tag::Context(5), 3).unwrap(); // concrete index, not null
+        })
+        .unwrap();
+        assert_eq!((path.endpoint, path.cluster, path.attribute), (1, 6, 0));
+        assert!(!append, "only ListIndex=null signals append");
+    }
+
+    #[test]
+    fn wrong_typed_member_is_ignored() {
+        // A wrong-typed duplicate AFTER the valid member must not clobber it.
+        let (path, append) = parse(|w| {
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.put_uint(Tag::Context(3), 6).unwrap();
+            w.put_uint(Tag::Context(4), 0).unwrap();
+            w.put_utf8(Tag::Context(2), "nope").unwrap(); // ignored
+        })
+        .unwrap();
+        assert_eq!((path.endpoint, path.cluster, path.attribute), (1, 6, 0));
+        assert!(!append);
+    }
 }

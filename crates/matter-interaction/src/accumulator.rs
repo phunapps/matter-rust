@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use matter_codec::Value;
@@ -162,18 +163,15 @@ impl ReportAccumulator {
         for item in report.items {
             let key = (item.path.endpoint, item.path.cluster, item.path.attribute);
             let item_bytes = estimate_value_bytes(&item.value);
-            // A genuinely new key would add one element; reject before inserting
-            // so the element count never exceeds the cap.
-            if !self.slots.contains_key(&key) && self.order.len() >= self.max_elements {
-                return Err(self.overflow());
-            }
-            // Adding this value's bytes must not exceed the byte cap.
+            // Adding this value's bytes must not exceed the byte cap. (The
+            // element-cap check moved to each op arm below, single-lookup —
+            // see the Vacant/else-branch comments.)
             if self.bytes.saturating_add(item_bytes) > self.max_bytes {
                 return Err(self.overflow());
             }
             match item.op {
                 ReportOp::Replace => match self.slots.entry(key) {
-                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                    Entry::Occupied(mut e) => {
                         let slot = e.get_mut();
                         let newer = match (slot.version, item.data_version) {
                             (Some(old), Some(new)) => new >= old,
@@ -191,7 +189,20 @@ impl ReportAccumulator {
                             slot.version = item.data_version;
                         }
                     }
-                    std::collections::hash_map::Entry::Vacant(e) => {
+                    Entry::Vacant(e) => {
+                        // A genuinely new key adds an element; reject before
+                        // inserting so the count never exceeds the cap.
+                        // (`overflow()` needs `&self`, which the Entry's
+                        // `&mut self.slots` borrow forbids — build inline
+                        // from the disjoint fields.)
+                        if self.order.len() >= self.max_elements {
+                            return Err(ImError::AccumulatorOverflow {
+                                elements: self.order.len(),
+                                bytes: self.bytes,
+                                max_elements: self.max_elements,
+                                max_bytes: self.max_bytes,
+                            });
+                        }
                         self.order.push(item.path);
                         self.bytes = self.bytes.saturating_add(item_bytes);
                         e.insert(Slot {
@@ -219,6 +230,13 @@ impl ReportAccumulator {
                             other => *other = Value::Array(vec![item.value]),
                         }
                     } else {
+                        // A genuinely new key adds an element; reject before
+                        // inserting so the count never exceeds the cap. No
+                        // entry borrow is held here, so `overflow()` is usable
+                        // directly.
+                        if self.order.len() >= self.max_elements {
+                            return Err(self.overflow());
+                        }
                         self.order.push(item.path);
                         self.bytes = self.bytes.saturating_add(item_bytes);
                         self.slots.insert(
@@ -465,6 +483,26 @@ mod tests {
             ),
             "expected AccumulatorOverflow, got {err:?}"
         );
+    }
+
+    #[test]
+    fn element_ceiling_is_enforced_for_append_new_key() {
+        // The Append "new key via insert" path had its own cap check inline
+        // with the deleted top-of-loop `contains_key` check; this pins that
+        // it still enforces the ceiling after the single-lookup refactor.
+        let mut acc = ReportAccumulator::with_limits(1, usize::MAX);
+        acc.push(report(vec![replace(ap(0, 0x06, 0), Value::Uint(1))]))
+            .unwrap();
+        let err = acc
+            .push(report(vec![append(ap(0, 0x06, 1), Value::Uint(2))]))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ImError::AccumulatorOverflow {
+                max_elements: 1,
+                ..
+            }
+        ));
     }
 
     #[test]

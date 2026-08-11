@@ -194,6 +194,17 @@ pub struct InvokeResponseEntry {
 /// and tag bytes and includes its end-of-container marker, so the result is
 /// a standalone anonymous-tagged TLV blob with the device's original byte
 /// widths preserved verbatim.
+///
+/// The copied bytes are NOT UTF-8-revalidated here: string payloads inside
+/// the span pass through verbatim, and validation defers to whatever decoder
+/// eventually consumes the blob.
+///
+/// # Errors
+///
+/// Any error from [`TlvReader::skip_container_span`] — including its
+/// precondition: the immediately preceding `next()` must have returned the
+/// `ContainerStart` being retagged. After an error the reader state is
+/// unspecified; abandon the parse.
 #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible (repo idiom).
 pub(crate) fn retag_container_anonymous(
     r: &mut TlvReader<'_>,
@@ -1080,6 +1091,86 @@ mod tests {
         match parse_invoke_response(&buf).unwrap() {
             InvokeResponse::Command { path, .. } => assert_eq!(path.endpoint, 1),
             InvokeResponse::Status(_) => panic!("expected the first IB (a Command)"),
+        }
+    }
+
+    /// Drive `command_path_from_reader` over a writer-built `CommandPathIB`.
+    fn parse_cmd_path(build: impl FnOnce(&mut TlvWriter<'_>)) -> Result<CommandPath, ImError> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_list(Tag::Anonymous).unwrap();
+        build(&mut w);
+        w.end_container().unwrap();
+        let mut r = TlvReader::new(&buf);
+        assert!(matches!(
+            r.next().unwrap(),
+            Some(Element::ContainerStart { .. })
+        ));
+        command_path_from_reader(&mut r)
+    }
+
+    #[test]
+    fn command_path_parses_members_and_errors() {
+        let p = parse_cmd_path(|w| {
+            w.put_uint(Tag::Context(0), 1).unwrap();
+            w.put_uint(Tag::Context(1), 6).unwrap();
+            w.put_uint(Tag::Context(2), 2).unwrap();
+        })
+        .unwrap();
+        assert_eq!((p.endpoint, p.cluster, p.command), (1, 6, 2));
+
+        assert!(matches!(
+            parse_cmd_path(|w| {
+                w.put_uint(Tag::Context(0), 1).unwrap();
+                w.put_uint(Tag::Context(1), 6).unwrap();
+            }),
+            Err(ImError::MissingField("CommandPath.command"))
+        ));
+
+        assert!(matches!(
+            parse_cmd_path(|w| {
+                w.put_uint(Tag::Context(0), u64::from(u16::MAX) + 1)
+                    .unwrap();
+                w.put_uint(Tag::Context(1), 6).unwrap();
+                w.put_uint(Tag::Context(2), 2).unwrap();
+            }),
+            Err(ImError::UnexpectedValue(_))
+        ));
+    }
+
+    #[test]
+    fn empty_command_fields_fallback_to_anonymous_empty_struct() {
+        // Same shape as `parses_command_response_payload`, but the CommandFields
+        // (ctx1) member is OMITTED entirely — exercises the fallback at
+        // `parse_command_data_ref` that canonicalizes an absent CommandFields to
+        // the anonymous empty struct `[0x15, 0x18]`.
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_bool(Tag::Context(0), false).unwrap(); // SuppressResponse
+        w.start_array(Tag::Context(1)).unwrap(); // InvokeResponses
+        {
+            w.start_structure(Tag::Anonymous).unwrap(); // InvokeResponseIB
+            w.start_structure(Tag::Context(0)).unwrap(); // Command = CommandDataIB
+            w.start_list(Tag::Context(0)).unwrap(); // CommandPath
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_uint(Tag::Context(1), 0x0030).unwrap();
+            w.put_uint(Tag::Context(2), 0x05).unwrap();
+            w.end_container().unwrap();
+            // No CommandFields (ctx1) member at all.
+            w.end_container().unwrap(); // CommandDataIB
+            w.end_container().unwrap(); // InvokeResponseIB
+        }
+        w.end_container().unwrap(); // array
+        w.put_uint(Tag::Context(0xFF), 11).unwrap();
+        w.end_container().unwrap();
+
+        let parsed = parse_invoke_response(&buf).unwrap();
+        match parsed {
+            InvokeResponse::Command { fields_tlv, .. } => {
+                assert_eq!(fields_tlv, vec![0x15, 0x18]);
+            }
+            InvokeResponse::Status(_) => panic!("expected Command, got Status"),
         }
     }
 }
