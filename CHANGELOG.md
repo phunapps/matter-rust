@@ -22,7 +22,32 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## 0.5.0
+
+The performance & memory remediation release: five phases from the 2026-08-09
+whole-workspace audit, landed one phase at a time, each hardware-validated
+against a real ESP32-C6 before the next began. **It is not only a performance
+release** — phases 1 and 3 fixed correctness bugs that only a real chip stack
+exposed (multi-chunk writes violating MRP's one-outstanding-message rule, a
+sticky `MoreChunkedMessages` parse, persisted state that could roll backwards,
+one unresolvable node freezing every other session). Nothing in it is
+breaking; the recorded breaking items stay parked for a future deliberate
+breaking release.
+
+Crate versions in this release: **`matter-codec` 0.3.0**, **`matter-cert`
+0.3.0**, **`matter-crypto` 0.3.0**, **`matter-transport` 0.3.0**,
+**`matter-interaction` 0.4.0**, **`matter-clusters` 0.3.0** (dependency bump
+only), **`matter-commissioning` 0.4.0**, **`matter-bdx` 0.3.0**, **`matter-ota`
+0.4.0** (dependency bump only), **`matter-ble` 0.3.2** (internal only — no API
+change), and **`matter-controller` 0.5.0**.
+
+Three things to read before upgrading, all detailed in their crate sections
+below: consumers who already build `matter-controller` with
+`default-features = false` must add `features = ["ota"]` to keep the OTA
+provider API; `FabricEntry::outbound_group_counter` changed *meaning* (same
+type, same encoding — it is now a reserved ceiling, not the next counter to
+send); and `matter-interaction` now hands back a command's `fields_tlv` as the
+device's verbatim bytes.
 
 Controller-liveness performance phase 1: nothing on the actor's `select!` loop
 may block on I/O that is not the thing the loop is there to do. Four changes,
