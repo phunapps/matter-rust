@@ -508,6 +508,47 @@ remaining fail-closed residuals are now fixed with loopback regressions:
 
 ## matter-ble
 
+### Nameless-device negative cache — empirical D-Bus count not yet taken
+
+**Status:** logic pinned in CI 2026-08-11 (`0d0b131f`); the on-hardware
+*number* is outstanding.
+
+Perf phase 5 (§5.2) gave `CommissionableScan` a 10 s negative cache so a
+nameless peripheral stops costing one `BlueZ` properties round trip per
+advertisement. `NameCache::decide`/`record` are driven directly by tests over a
+simulated advertisement stream (600 adverts at 10/s ⇒ 6 queries, one per TTL
+window), so the property is regression-proof without hardware. What has **not**
+been measured is the real D-Bus query count against a live advertiser
+(`MATTER_BLE_SCAN_TRACE=1` emits one `[ble-scan]` line per query for exactly
+this purpose).
+
+The 2026-08-11 attempt could not run: the rig's ESP32-C6 is commissioned, and
+this firmware does enhanced-commissioning advertising over IP only — with a
+window open (discriminator 2426, confirmed on its console) a 60 s scan saw zero
+Matter adverts, and an independent `bluetoothctl` scan saw no `fff6` service
+data on air at all.
+
+**Constraint any future attempt must respect:** the advertiser has to be
+*nameless*. A device that advertises a local name is cached positively on its
+first query and never re-queried, so it exercises the positive path only — a
+named advertiser would pass the check vacuously (pinned by
+`named_device_is_queried_once_for_the_whole_scan`).
+
+**Two ways to get the number:**
+
+1. **Opportunistic, free** — a Matter device advertises CHIPoBLE exactly while
+   uncommissioned, which is the state immediately before any BLE commissioning
+   run. Fold a 60 s `MATTER_BLE_SCAN_TRACE=1` scan into the next C6
+   re-commission (see `docs/runbooks/c2-thread-commission.md` §2 for getting it
+   back to advertising; note our own `remove_fabric` refuses to remove our own
+   fabric by design, so unpairing needs chip-tool as a second admin, a re-flash,
+   or the devkit's factory-reset sequence).
+2. **Controlled, non-destructive** — a second BLE radio near the Pi (USB dongle
+   or any spare Linux box) advertising Matter-shaped service data (UUID
+   `0xFFF6`, commissionable payload) with **no** local name at a 100 ms
+   interval. Reproduces the amplification exactly and on demand: ~600 queries/
+   minute without the cache, ~6 with it.
+
 ### BLE central on macOS — ROOT-CAUSED; Linux-only for live commissioning
 
 **Status:** root cause CONFIRMED on hardware 2026-07-21 (real ESP32-C6, macOS
