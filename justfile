@@ -75,6 +75,12 @@ embedded:
     cargo build -p matter-transport --no-default-features --features tokio
     cargo build -p matter-transport --no-default-features --features mdns-sd
 
+# matter-controller no-default-features build/test/doc matrix (CI: controller-no-ota job).
+controller-no-ota:
+    cargo build -p matter-controller --no-default-features
+    cargo nextest run -p matter-controller --no-default-features --no-fail-fast
+    RUSTDOCFLAGS="-D warnings" cargo doc -p matter-controller --no-default-features --no-deps
+
 # -------------------------------------------------------- build / msrv ---
 
 # Build the whole workspace (CI: msrv job runs this under the 1.88 toolchain).
@@ -96,7 +102,7 @@ audit:
 # Stops at the first failing recipe.
 
 # Full pre-push gate, mirroring CI end-to-end (run before every push).
-gate: fmt-check lint test doctest codegen-check docs embedded deny audit
+gate: fmt-check lint test doctest codegen-check docs embedded controller-no-ota deny audit
     @echo "gate: all green ✓"
 
 # ------------------------------------------------------------ benchmarks ---

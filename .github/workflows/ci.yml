@@ -115,6 +115,18 @@ jobs:
       # default feature on its own.
       - run: just embedded
 
+  controller-no-ota:
+    name: controller-no-ota (matter-controller no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,nextest
+      - run: just controller-no-ota
+
   audit:
     name: cargo audit
     runs-on: ubuntu-latest

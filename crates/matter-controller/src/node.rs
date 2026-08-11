@@ -624,6 +624,7 @@ impl Node {
     /// Returns [`Error::InteractionModel`] if the invoke fails to build or parse,
     /// or [`Error::Operational`] if the device rejects the command with a
     /// non-success IM status or answers with an unexpected response command.
+    #[cfg(feature = "ota")]
     pub async fn announce_ota_provider(
         &self,
         provider_node_id: u64,

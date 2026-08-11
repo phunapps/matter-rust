@@ -9484,6 +9484,7 @@ mod tests {
         device.await.unwrap();
     }
 
+    #[cfg(feature = "ota")]
     #[tokio::test]
     async fn announce_ota_provider_over_loopback() {
         let Harness {
@@ -9731,6 +9732,7 @@ mod tests {
         assert_eq!(dispatched, 1);
     }
 
+    #[cfg(feature = "ota")]
     #[tokio::test]
     async fn serve_ota_once_full_flow_over_loopback() {
         use crate::provider_server::ProviderServer;
@@ -9812,6 +9814,7 @@ mod tests {
     /// then serves the full OTA flow on the resumed session. Also pins the
     /// record rotation: the provider returns a rotated record (fresh id, same
     /// secret) for the caller to persist.
+    #[cfg(feature = "ota")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_ota_once_resumed_session_over_loopback() {
         use crate::provider_server::ProviderServer;
@@ -9925,6 +9928,7 @@ mod tests {
     /// returning the reassembled image bytes. Uses `secured_round_trip` for each
     /// request/response (our server is BDX-exchange-agnostic, so per-message
     /// exchanges are fine in-process; the live requestor uses one BDX exchange).
+    #[cfg(feature = "ota")]
     #[allow(clippy::too_many_lines)] // Linear OTA-requestor test driver; kept as one flow.
     async fn ota_test_requestor(
         io: matter_commissioning::driver::InMemoryDatagram,
@@ -9960,6 +9964,7 @@ mod tests {
     /// does Sigma1-with-resumption → `Sigma2_Resume` → `StatusReport` → ack) and
     /// then drives the same OTA flow. Mirrors chip's requestor behaviour after
     /// `AnnounceOTAProvider` (it always tries to resume the announce session).
+    #[cfg(feature = "ota")]
     #[allow(clippy::too_many_arguments)] // Test driver mirroring ota_test_requestor + a record.
     async fn ota_test_requestor_resumed(
         io: matter_commissioning::driver::InMemoryDatagram,
@@ -9988,6 +9993,7 @@ mod tests {
     /// Drive the full OTA flow on an already-established session, splitting the
     /// work across [`drive_ota_download_and_apply`] (steps 1-3) and
     /// [`send_notify_update_applied`] (step 4). Returns the reassembled image.
+    #[cfg(feature = "ota")]
     async fn drive_ota_flow(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10014,6 +10020,7 @@ mod tests {
     /// already-established secured session, returning `(reassembled_image,
     /// update_token)`. The token is needed for `NotifyUpdateApplied` which may
     /// run on a DIFFERENT session (the post-reboot shape).
+    #[cfg(feature = "ota")]
     async fn drive_ota_download_and_apply(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10039,6 +10046,7 @@ mod tests {
 
     /// `QueryImage` → `QueryImageResponse` (`UpdateAvailable`), returning the
     /// update token (needed later by Apply/Notify, possibly cross-session).
+    #[cfg(feature = "ota")]
     async fn ota_query_image(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10099,6 +10107,7 @@ mod tests {
     /// BDX `ReceiveInit` → `ReceiveAccept`, returning the accepted transfer
     /// length. Callable mid-serve (no preceding `QueryImage` on THIS session)
     /// — the cross-session re-init regression needs exactly that shape.
+    #[cfg(feature = "ota")]
     async fn bdx_receive_init(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10134,6 +10143,7 @@ mod tests {
     }
 
     /// One `BlockQuery` → `Block` round, returning the block's data bytes.
+    #[cfg(feature = "ota")]
     async fn bdx_query_one_block(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10162,6 +10172,7 @@ mod tests {
 
     /// Pull `BlockQuery`/`Block` rounds until `length` bytes are reassembled,
     /// then fire the closing `BlockAckEOF`. Returns the reassembled image.
+    #[cfg(feature = "ota")]
     async fn bdx_pull_blocks_and_ack_eof(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10202,6 +10213,7 @@ mod tests {
 
     /// `ApplyUpdateRequest` → `ApplyUpdateResponse` (Proceed). `target_version`
     /// is the version being applied (download's `current_version + 1`).
+    #[cfg(feature = "ota")]
     async fn ota_apply_update(
         io: &matter_commissioning::driver::InMemoryDatagram,
         provider_addr: std::net::SocketAddr,
@@ -10436,6 +10448,7 @@ mod tests {
     /// Sigma1 (undecodable noise + a stale unsecured ack) must not consume
     /// pooled credentials — the pool here is a SINGLE credential, so the old
     /// pop-before-validate behavior would exhaust it and fail the serve.
+    #[cfg(feature = "ota")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_ota_survives_stray_frames_before_sigma1() {
         use crate::provider_server::ProviderServer;
@@ -10554,6 +10567,7 @@ mod tests {
     /// authenticated session from a DIFFERENT fabric member (here the pin is
     /// set to an id the requestor does not hold), consuming the credential
     /// but leaving no resumption state behind.
+    #[cfg(feature = "ota")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_ota_rejects_unpinned_peer() {
         use crate::provider_server::ProviderServer;
@@ -10662,6 +10676,7 @@ mod tests {
     /// This mirrors the real chip OTA requestor shape: it reboots into the
     /// new image before sending `NotifyUpdateApplied`, so the notification
     /// arrives on a fresh session.
+    #[cfg(feature = "ota")]
     #[allow(clippy::too_many_lines)] // Linear cross-session OTA protocol test; splitting hurts clarity.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_ota_spans_sessions_for_post_reboot_notify() {
@@ -10935,6 +10950,7 @@ mod tests {
     /// (bounded by the timeout below), and a live requestor's Sigma1
     /// retransmit would burn a retry credential this two-entry pool does not
     /// have.
+    #[cfg(feature = "ota")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_ota_carries_sigma1_arriving_in_place_of_close_ack() {
         use crate::provider_server::ProviderServer;
@@ -11045,6 +11061,7 @@ mod tests {
     /// session 1's `QueryImage` is mid-transfer; the serve must re-arm it and
     /// serve the transfer from the start — pre-fix it aborted the whole serve
     /// with "BDX transfer aborted".
+    #[cfg(feature = "ota")]
     #[allow(clippy::too_many_lines)] // Linear cross-session OTA protocol test; splitting hurts clarity.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn serve_ota_rearms_bdx_for_cross_session_receive_init() {

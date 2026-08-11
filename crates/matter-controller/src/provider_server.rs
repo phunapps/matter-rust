@@ -185,7 +185,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// sessions never reuse the same local id.
     ///
     /// The pool is consumed one entry per accept. When it is empty, the next
-    /// call to [`Self::serve_ota_once`] (or any method that calls `accept_case`)
+    /// call to `serve_ota_once` (or any method that calls `accept_case`)
     /// returns an [`Error::Operational`] containing
     /// `"provider server: credential pool exhausted"`.
     #[must_use]
@@ -686,6 +686,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// unexpected OTA command, or if a session exhausts its step budget without
     /// an unsecured carry-frame; [`Error::Transport`] / [`Error::InteractionModel`]
     /// from the session / IM layers.
+    #[cfg(feature = "ota")]
     #[allow(clippy::too_many_lines)] // Linear OTA protocol-dispatch loop; splitting hurts clarity.
     pub async fn serve_ota_once(
         mut self,
@@ -995,6 +996,7 @@ mod tests {
         assert_eq!(svc.addresses, vec![addr]);
     }
 
+    #[cfg(feature = "ota")]
     #[test]
     fn status_report_body_byte_layout_and_roundtrip() {
         // BDX-3: a BDX abort StatusReport = Failure || BDX proto id (0x00000002)
@@ -1056,6 +1058,7 @@ mod tests {
     /// An empty credential pool must fail fast (before any IO) with the
     /// canonical error message. This exercises the pool-exhaustion guard in
     /// `accept_case` without requiring a real CASE peer.
+    #[cfg(feature = "ota")]
     #[tokio::test]
     async fn empty_credential_pool_errors_before_any_io() {
         let (io, _peer) = matter_commissioning::driver::InMemoryDatagram::pair();

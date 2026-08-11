@@ -55,7 +55,7 @@ fn advertise_addrs(local: std::net::SocketAddr) -> Vec<std::net::IpAddr> {
 #[derive(Clone)]
 pub struct MatterController {
     tx: mpsc::Sender<Command>,
-    /// Retained so the OTA provider server ([`Self::serve_provider_once`]) can
+    /// Retained so the OTA provider server (`serve_provider_once`) can
     /// load the stable, committed operational identity without routing through
     /// the actor (the identity is minted once and never mutated after).
     store: Arc<dyn ControllerStore>,
@@ -272,6 +272,7 @@ impl MatterController {
     ///
     /// [`Error::NotCommissioned`] if no fabric exists; [`Error::Operational`] on
     /// bind / mDNS / clock failure; otherwise any announce or serve error.
+    #[cfg(feature = "ota")]
     pub async fn serve_ota(
         &self,
         target_node_id: u64,
@@ -296,6 +297,7 @@ impl MatterController {
     /// # Errors
     ///
     /// Same as [`Self::serve_ota`].
+    #[cfg(feature = "ota")]
     pub async fn serve_ota_with_block_size(
         &self,
         target_node_id: u64,
@@ -784,7 +786,7 @@ impl MatterController {
 
     /// Fetch the stored CASE resumption record for `node_id` from the actor's
     /// live state (deserialized; `None` if the device has none). Used by
-    /// [`Self::serve_ota`] to let the provider server accept the requestor's
+    /// `serve_ota` to let the provider server accept the requestor's
     /// resumption attempt.
     ///
     /// # Errors
@@ -810,7 +812,7 @@ impl MatterController {
     }
 
     /// Store `record` as the CASE resumption record for `node_id` (replacing
-    /// any prior one; best-effort persist). Invoked by [`Self::serve_ota`]'s
+    /// any prior one; best-effort persist). Invoked by `serve_ota`'s
     /// provider server's `record_sink`, once per completed CASE accept.
     ///
     /// # Errors
