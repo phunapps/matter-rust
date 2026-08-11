@@ -40,7 +40,7 @@
 
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{NonZeroScalar, PublicKey as P256PublicKey, SecretKey};
-use ring::digest::{digest, SHA256};
+use ring::digest::{Context, SHA256};
 use ring::hkdf;
 use ring::rand::SecureRandom;
 use subtle::ConstantTimeEq;
@@ -284,13 +284,15 @@ impl hkdf::KeyType for OutLen {
 /// IPK-derived `operationalIdentityProtectionKey` that also appears in every
 /// salt (pinned from `CaseClient.ts`).
 pub(crate) fn transcript_hash(messages: &[&[u8]]) -> [u8; 32] {
-    // Allocate a single buffer to avoid multiple digest invocations.
-    let total_len = messages.iter().map(|m| m.len()).sum();
-    let mut buf: Vec<u8> = Vec::with_capacity(total_len);
+    // Incremental digest: feed each slice to one SHA-256 context instead of
+    // concatenating into an intermediate buffer. The transcript is pure
+    // concatenation (no length or version prefixes), so this is
+    // byte-identical to hashing the joined buffer.
+    let mut ctx = Context::new(&SHA256);
     for msg in messages {
-        buf.extend_from_slice(msg);
+        ctx.update(msg);
     }
-    let d = digest(&SHA256, &buf);
+    let d = ctx.finish();
     let mut out = [0u8; 32];
     out.copy_from_slice(d.as_ref());
     out
