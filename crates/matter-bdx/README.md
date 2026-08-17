@@ -2,18 +2,21 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../LICENSE)
 
-Matter **BDX** (Bulk Data Exchange) — the protocol Matter uses to move large
-payloads, most visibly OTA firmware images, over an exchange.
+Matter **BDX** (Bulk Data Exchange, Core Spec §11.21) — the protocol Matter uses
+to move large payloads, most visibly OTA firmware images, over an exchange.
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust), a Rust Matter
 controller.
 
 ## What's here
 
-Message codecs (`SendInit`, `SendAccept`, `ReceiveInit`, `ReceiveAccept`,
-`Block`, `BlockEOF`, `BlockAck`, `BlockAckEOF`, `BlockQuery`, `BlockQueryWithSkip`,
-`BlockEOFAck`, `Status`) and `BlockSender` — a **receiver-driven, sans-IO**
-sender state machine.
+Message codecs for the nine BDX message types the transfer needs — `SendInit`
+(0x01), `SendAccept` (0x02), `ReceiveInit` (0x04), `ReceiveAccept` (0x05),
+`BlockQuery` (0x10), `Block` (0x11), `BlockEOF` (0x12), `BlockAck` (0x13),
+`BlockAckEOF` (0x14) — and `BlockSender`, a **receiver-driven, sans-IO** sender
+state machine. Abort reasons surface as `BdxStatusCode`; the `StatusReport`
+message that carries one on the wire is a Secure Channel message, encoded by the
+caller.
 
 Sans-IO by design: `BlockSender` takes an incoming BDX message and returns the
 message to send, with no sockets or async involved. The caller owns the
@@ -39,6 +42,12 @@ The sender role only — enough for a controller to serve an OTA image. There is
 receiver/downloader here (a device stack's job), and no session, exchange, or
 socket handling: [`matter-controller`](../matter-controller/) drives this over a
 CASE session for [`matter-ota`](../matter-ota/).
+
+Within the sender role, `BlockSender` implements the receiver-driven happy path
+plus abort. Transfer resumption, acting on `BlockQueryWithSkip` (the message
+decodes, but the sender does not honour a skip), and sender-drive mode are not
+implemented. BDX `Metadata` is an opaque byte passthrough — empty for OTA — so
+no TLV dependency is needed.
 
 ## Status
 

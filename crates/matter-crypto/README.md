@@ -1,8 +1,10 @@
 # matter-crypto
 
-Matter protocol session-establishment primitives — PASE (Password
-Authenticated Session Establishment) via SPAKE2+ and CASE (Certificate
-Authenticated Session Establishment) via SIGMA-I. Part of the
+Matter protocol session establishment and the key derivations around it
+— PASE (Password Authenticated Session Establishment) via SPAKE2+, CASE
+(Certificate Authenticated Session Establishment) via SIGMA-I,
+operational identity derivations, the ICD check-in codec, and the
+AES-CCM AEAD the secured-message layer uses. Part of the
 [matter-rust](https://github.com/phunapps/matter-rust) workspace.
 
 ## Scope
@@ -27,13 +29,37 @@ Authenticated Session Establishment) via SIGMA-I. Part of the
   HSM/TPM/secure-element by implementing one method.
 - Session resumption: Sigma1 + Sigma2_Resume fast path. The caller
   drives record lookup via the `Sigma1Outcome` enum (sans-IO purity).
-- Byte-for-byte verified against matter.js for the new-session scenario.
-  Resumption byte-parity is deferred — see
-  [`TODO-1.0.md`](../../TODO-1.0.md).
+- Byte-for-byte verified against matter.js for three scenarios:
+  new session, resumption accepted, and resumption declined.
+
+### Operational identity — spec §4.3
+
+- Compressed Fabric Identifier and operational IPK derivation.
+- Group session key, group privacy key, and the group multicast IPv6
+  address.
+
+### ICD check-in — spec §4.18.2
+
+- The Check-In message codec: the payload an intermittently-connected
+  device sends a registered client when it briefly wakes.
+
+### AEAD
+
+- AES-128-CCM-128 helpers, used by CASE here and by
+  `matter-transport`'s secured-message framing. `SessionAead` keeps the
+  expanded AES key across calls; prefer it over the free functions on
+  any path that encrypts or decrypts more than once per key.
 
 ## Status
 
-**0.3.0.** PASE and CASE feature-complete.
+**0.3.0**, published on crates.io. PASE and CASE feature-complete, and
+validated against real silicon through the higher-level crates.
+Stability: a `0.x` crate, so a **minor** bump may break API.
+
+```toml
+[dependencies]
+matter-crypto = "0.3"
+```
 
 ## Minimal example
 
@@ -168,9 +194,10 @@ byte-identical to matter.js's output for the same inputs. CI runs
 this verification on every PR against three captured handshake
 scenarios.
 
-CASE new-session messages (Sigma1/2/3) are byte-identical to matter.js's
-output for the same inputs. Resumption byte-parity is deferred —
-known divergences are documented in [`TODO-1.0.md`](../../TODO-1.0.md).
+CASE messages are byte-identical to matter.js's output for the same
+inputs, on all three captured scenarios in `test-vectors/case/`:
+new session (Sigma1/2/3), resumption accepted (Sigma1 →
+Sigma2_Resume), and resumption declined (Sigma1 → full Sigma2/3).
 
 ## License
 

@@ -10,33 +10,41 @@ Implements Matter Core Specification §4 (network transport) plus the
 MRP reliability layer (§4.11) and the application protocol header
 (§4.4.5).
 
-- **Framing (M5.1):** secured-message header encode/decode + AES-CCM-128
-  payload encryption + sliding-window replay protection. Byte-identical
-  to matter.js across 3 captured fixtures.
-- **MRP + protocol header (M5.2):** per-session sans-IO state machine
-  (pending acks, piggyback queue, exchange table, recent-reliable
-  cache); Matter application protocol header codec (skip-and-ignore
-  SX/V extensions). Byte-identical to matter.js across 3 more captured
-  fixtures. Retransmit timing is sized to the **peer** — the active/idle
-  base is chosen from the peer's activity within its Session Active
-  Threshold (re-evaluated per retransmit, chip `GetMRPBaseTimeout`) using
-  the peer's advertised `SII`/`SAI`/`SAT` (`MrpConfig::for_peer`), so a
-  sleepy/ICD device is never hammered with active-interval spacing.
-- **Transport + Discovery adapters (M5.3):** sans-IO `Transport` /
-  `Discovery` traits + default Tokio UDP + mdns-sd implementations.
+- **Framing:** secured-message header encode/decode, AES-CCM-128 payload
+  encryption, and sliding-window replay protection — for both unicast
+  sessions and **group (multicast) messages**, including message
+  privacy obfuscation.
+- **Sessions:** `SessionManager` owns per-session counters, replay
+  windows, and MRP state, and is the seam through which messages are
+  encoded outbound and decoded inbound. The session table is bounded
+  with idle-first eviction (DoS defence).
+- **MRP:** a per-session sans-IO state machine (pending acks, piggyback
+  queue, exchange table, recent-reliable cache). Retransmit timing is
+  sized to the **peer** — the active/idle base is chosen from the peer's
+  activity within its Session Active Threshold (re-evaluated per
+  retransmit, chip `GetMRPBaseTimeout`) using the peer's advertised
+  `SII`/`SAI`/`SAT` (`MrpConfig::for_peer`), so a sleepy/ICD device is
+  never hammered with active-interval spacing.
+- **Protocol header:** the Matter application protocol header codec,
+  with skip-and-ignore handling of SX/V extensions.
+- **Transport + Discovery:** sans-IO `Transport` / `Discovery` traits
+  and the service-record types for Matter's commissionable and
+  operational mDNS records, plus default Tokio UDP and `mdns-sd`
+  adapters behind Cargo features.
 
 ## Status
 
-**0.2.0.** Feature-complete and validated against real silicon (ESP32-C6
-over Wi-Fi and Thread) via the higher-level crates. The session table is
-bounded with idle-first eviction (DoS defense).
+**0.3.0**, published on crates.io. Feature-complete and validated
+against real silicon (ESP32-C6 over Wi-Fi and Thread) via the
+higher-level crates. Stability: a `0.x` crate, so a **minor** bump may
+break API.
 
 ## Cargo features
 
 - `tokio` (default): enables `TokioUdpTransport` and the `Error::Io`
   variant. Pulls `tokio` 1.x with features `net + rt + io-util`.
 - `mdns-sd` (default): enables `MdnsSdDiscovery` and the `Error::Mdns`
-  variant. Pulls `mdns-sd` 0.13.
+  variant. Pulls `mdns-sd` 0.20.
 
 Embedded callers disable defaults:
 
@@ -82,7 +90,9 @@ See `tests/loopback.rs` for a complete two-side example.
 ## Cross-verification
 
 Framing and protocol-header layers are verified byte-for-byte against
-matter.js across 6 captured fixtures (3 framing, 3 protocol header).
+captured fixtures in `test-vectors/transport/`: three framing and three
+protocol-header vectors from matter.js, a matter.js group-message
+vector, and a `connectedhomeip` vector for group message privacy.
 MRP behaviour (including peer-activity classification and peer-config
 sizing) is covered by simulated-clock state-machine tests. Real-device
 interop is validated end-to-end by the higher-level crates against an

@@ -176,6 +176,26 @@ APIs have had no outside users yet and are expected to move.
   `Stage::ReadCommissioningInfo` when `Stage::ReadNetworkCommissioningInfo`
   emits it too. **No API change** — documentation only.
 
+- **Crate READMEs swept for false capability claims.** The rustdoc rewrite above
+  left several READMEs — the first thing crates.io renders — staler than the
+  `lib.rs` beside them, and some understated the crate to a reader's face.
+  `matter-interaction` was the worst: its "deliberate subset" paragraph denied
+  batch invoke, wildcard paths, subscriptions, events, timed actions, and
+  chunked writes, all six of which ship. `matter-cert` said "not yet on
+  crates.io" at a version two minors behind and disclaimed issuance it has;
+  `matter-crypto` called CASE resumption byte-parity "deferred" though
+  `test-vectors/case/` carries the accepted and declined fixtures, and omitted
+  the `operational`, `checkin`, and `aead` modules entirely; `matter-transport`
+  was organised around internal phase numbering, claimed `mdns-sd` 0.13 (it is
+  0.20), and never mentioned group framing; `matter-clusters` claimed every
+  generated codec had a byte-parity oracle when coverage is deliberately tiered;
+  `matter-codec` pointed at four sibling crates as "(future)" when all four are
+  published; `matter-bdx` listed codecs for three messages it does not
+  implement; and `matter-ble` called the macOS BLE failure "root cause unknown"
+  after it was root-caused on hardware. Stale version banners and dependency
+  lines were corrected against each `Cargo.toml`, and internal milestone
+  numbering removed. **No API change** — documentation only.
+
 - **Every README's Rust examples are now compiled by `just doctest`** (i.e. by
   `cargo test --workspace --all-features --doc`, which the gate and CI run).
   Each crate carries the standard idiom in its `lib.rs`:

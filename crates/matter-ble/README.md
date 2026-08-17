@@ -36,10 +36,14 @@ matter-ble = { version = "0.3", features = ["central"] }  # + BLE central role
 
 ## Platform support
 
-**Live commissioning works on Linux/BlueZ. The central currently hangs on macOS
-(CoreBluetooth)** — scanning is fine, but GATT/BTP stalls. Root cause unknown;
-tracked in [`TODO-1.0.md`](../../TODO-1.0.md). Drive live BLE commissioning from
-Linux until that is resolved.
+**Live commissioning works on Linux/BlueZ. It does not work on macOS
+(CoreBluetooth)** — scanning is fine, but the first GATT operation fails, before
+PASE. The cause is root-caused and confirmed on hardware: CoreBluetooth rejects
+the CHIPoBLE operations with `CBError.uuidNotAllowed`, which also explains the
+long-standing macOS `chip-tool` BLE GATT-write failures on the same rig — it is
+not specific to this crate. The central bounds every wait, so macOS fails within
+~15-30 s with a clear error rather than hanging. Full writeup and options are in
+[`TODO-1.0.md`](../../TODO-1.0.md). Drive live BLE commissioning from Linux.
 
 `central` pulls platform Bluetooth stacks (libdbus on Linux, CoreBluetooth on
 macOS), which is why it is opt-in. On macOS, constructing a `BleCentral` triggers

@@ -22,11 +22,26 @@ Encodes and decodes Matter TLV per the Matter Core Specification §A.2:
 - Recursive `read_value` / `write_value` for containers, with a 32-level
   nesting limit enforced by the reader.
 
+Reading is available element-at-a-time, zero-copy (`ElementRef` /
+`ValueRef` borrow strings and octet strings straight out of the input),
+or as a whole tree. Containers you do not care about can be skipped
+outright with `skip_container`, or with `skip_container_span` when you
+want the raw bytes back to forward verbatim.
+
+```toml
+[dependencies]
+matter-codec = "0.3"
+```
+
 ## What this crate does not do
 
-- Cluster definitions. See `matter-clusters` (future).
-- Certificates. See `matter-cert` (future).
-- Anything network. See `matter-transport` (future).
+- Cluster definitions. See
+  [`matter-clusters`](https://crates.io/crates/matter-clusters).
+- Certificates. See [`matter-cert`](https://crates.io/crates/matter-cert).
+- Interaction Model messages. See
+  [`matter-interaction`](https://crates.io/crates/matter-interaction).
+- Anything network. See
+  [`matter-transport`](https://crates.io/crates/matter-transport).
 - Cryptographic primitives. See `ring` / `aws-lc-rs`.
 
 ## Usage
@@ -46,10 +61,11 @@ assert_eq!(value, Value::Uint(42));
 # Ok::<(), matter_codec::Error>(())
 ```
 
-For streaming use cases that need to avoid the allocating tree builder,
-call `TlvReader::next()` directly. It returns `Element::Scalar`,
-`Element::ContainerStart`, or `Element::ContainerEnd` and tracks the
-nesting depth internally.
+`read_value` builds an owned tree. To avoid that allocation, call
+`TlvReader::next()` (returning `Element::Scalar`,
+`Element::ContainerStart`, or `Element::ContainerEnd`, with nesting
+depth tracked internally) or `TlvReader::next_ref()` for the borrowing
+`ElementRef` / `ValueRef` equivalents.
 
 ## Correctness posture
 
