@@ -134,7 +134,7 @@ let now_unix = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)?
     .as_secs();
 let _ = ctrl_b.create_fabric(FabricConfig::new(2, 2, 1,
-    (MatterTime::from_unix_secs(now_unix - 3600), MatterTime::NO_EXPIRY))).await?;
+    (MatterTime::from_unix_secs(now_unix.saturating_sub(3600)), MatterTime::NO_EXPIRY))).await?;
 let node_id_b = ctrl_b.commission(&win.manual_code, None).await?.node_id;
 println!("Fabric B commissioned node_id={node_id_b}");
 ```

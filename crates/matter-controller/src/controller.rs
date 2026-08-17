@@ -490,12 +490,21 @@ impl MatterController {
     /// [`Error::FabricAlreadyExists`] if `cfg.fabric_id` already exists;
     /// [`Error::InvalidFabricValidity`] if `cfg.validity` names a window
     /// devices cannot use — a `not_before` at the Matter epoch, a `not_before`
-    /// implausibly far ahead of this host's clock, or an inverted/empty window
-    /// (see [`FabricConfig::validity`], issue #111);
-    /// [`Error::SystemClockUnset`] if this host's clock reads before the Matter
-    /// epoch (the future-`not_before` check needs a trustworthy clock, and an
-    /// unset one would go on to mint unusable device NOCs);
+    /// implausibly far ahead of this host's clock, an already-expired
+    /// `not_after`, or an inverted/empty window (see
+    /// [`FabricConfig::validity`], issue #111);
     /// otherwise any minting / persistence error.
+    ///
+    /// This call does **not** require a set host clock: the certificates are
+    /// minted entirely from `cfg.validity`, and the clock is only used to
+    /// sanity-check that window, so on a host whose clock reads before the
+    /// Matter epoch (no RTC, before NTP) the clock-relative checks are skipped
+    /// with a warning and the fabric is still created. The clock-independent
+    /// checks still apply — notably a `not_before` of `MatterTime(0)`, which is
+    /// what deriving it from an unset `SystemTime::now()` produces. Operations
+    /// that genuinely need a real time — [`Self::commission`] (it mints the
+    /// device's NOC) and every operational CASE session — do fail with
+    /// [`Error::SystemClockUnset`] until the clock is set.
     pub async fn create_fabric(&self, cfg: FabricConfig) -> Result<u64, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx

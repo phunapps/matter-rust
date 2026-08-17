@@ -25,9 +25,16 @@ APIs have had no outside users yet and are expected to move.
 ## Unreleased
 
 Fixes from friction the first external adopter hit setting up a fabric, all on
-`matter-controller`, plus the rest of the class each one belongs to: every way
-we could mint a certificate that a device cannot use is now refused locally,
-with an error that names the cause.
+`matter-controller`, plus the rest of the class each one belongs to. A validity
+window that would produce a certificate a device installs but cannot use — a
+`not_before` at the Matter epoch, one implausibly far in the future, an
+already-expired `not_after`, an inverted or empty window — is now refused
+locally, with an error that names the cause, instead of surfacing as an opaque
+device-side failure later. Two known gaps remain, both documented on
+`FabricConfig::validity`: a pre-2000 `not_after` clamps to `MatterTime(0)`,
+which *is* `MatterTime::NO_EXPIRY`, so a units mistake there silently means
+"never expires" and is indistinguishable from the intent; and on a host whose
+clock is unset the two clock-relative checks cannot run at all (see below).
 
 ### `matter-controller`
 
@@ -85,14 +92,31 @@ with an error that names the cause.
   `kNotYetValid` with nothing naming the cause. The tolerance is one day —
   callers are told to backdate `not_before`, never to postdate it, so any
   forward gap is pure clock disagreement.
-- **An unset host clock is refused at the source.** `current_matter_time()`
-  built on `MatterTime::from_unix_secs`, which saturates any pre-2000 reading
-  to `MatterTime(0)` — so a host with no RTC that had not yet reached an NTP
-  server (a very plausible embedded deployment) minted **device NOCs** with
-  `notBefore == 0` during commissioning, hitting the identical chip
-  TBS-signature failure as #111 one stage later, at `AddNOC`. It now returns
-  the new `Error::SystemClockUnset`, naming the unset clock, instead of
-  minting a certificate that cannot work.
+- **`create_fabric` also refuses an already-expired `not_after`.** The exact
+  symmetric twin of the case above — the same `ValidateChipRCAC` exemption
+  means an expired root installs just as happily, and every CASE session then
+  fails with `kExpired` on the commissioner NOC instead of `kNotYetValid`. The
+  route in is a `(not_before, not_after)` pair copied from an older document:
+  the ordering check passes, `not_before` is in the past so the upper bound
+  passes, and nothing else compared `not_after` to the present.
+  `MatterTime::NO_EXPIRY` remains exempt (it is numerically `MatterTime(0)`,
+  which would otherwise read as "expired in 2000").
+- **An unset host clock is refused where it does damage.**
+  `current_matter_time()` builds on `MatterTime::from_unix_secs`, which
+  saturates any pre-2000 reading to `MatterTime(0)` — so a host with no RTC
+  that had not yet reached an NTP server (a very plausible embedded
+  deployment) minted **device NOCs** with `notBefore == 0` during
+  commissioning, hitting the identical chip TBS-signature failure as #111 one
+  stage later, at `AddNOC`. Commissioning and operational CASE now return the
+  new `Error::SystemClockUnset`, naming the unset clock, instead of minting a
+  certificate that cannot work. **`create_fabric` deliberately does not fail
+  on this**: it mints from `FabricConfig::validity` alone and needs no clock,
+  so an unusable clock only means its clock-relative checks are skipped (with
+  a `tracing` warning) — an RTC-less board that creates its fabric during init
+  with a known-good window and syncs NTP seconds later keeps working. The
+  clock-independent checks still run there, so the epoch-zero `not_before`
+  that such a host produces if it derives one from `SystemTime::now()` is
+  still rejected — and the error names the unset clock as the likely source.
 
 #### Documentation
 

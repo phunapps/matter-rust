@@ -1867,15 +1867,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         {
             return Err(Error::FabricAlreadyExists(cfg.fabric_id));
         }
-        // Clock-relative half of the validity check (issue #111's worse case:
-        // a `not_before` far in the future — typically a millisecond
-        // timestamp). It lives here rather than in `crate::fabric` so that
-        // `create_fabric` stays a pure function of its inputs; this is the
-        // layer that already owns a clock reading. `current_matter_time` also
-        // rejects an unset host clock, which would otherwise mint certificates
-        // stamped at the Matter epoch.
-        let now = current_matter_time()?;
-        crate::fabric::validate_not_before_against_now(cfg.validity, now)?;
+        // Clock-relative half of the validity check (issue #111's worse cases:
+        // a `not_before` far in the future — typically a millisecond timestamp
+        // — or an already-expired `not_after`). It lives here rather than in
+        // `crate::fabric` so that `create_fabric` stays a pure function of its
+        // inputs; this is the layer that already owns a clock reading.
+        validate_validity_against_clock(cfg.validity, current_matter_time())?;
         let entry = crate::fabric::create_fabric(cfg, self.rng.as_ref())?;
         let fabric_id = entry.fabric_id;
         self.state.fabrics.push(entry);
@@ -4708,6 +4705,61 @@ pub(crate) fn current_matter_time() -> Result<matter_cert::MatterTime, Error> {
     matter_time_from_unix_secs(secs)
 }
 
+/// Apply the clock-relative validity checks to a fabric's window, given
+/// whatever this host's clock had to say.
+///
+/// Fabric creation itself needs no clock: `crate::fabric::create_fabric` mints
+/// the RCAC, the optional ICAC and the commissioner NOC entirely from
+/// `cfg.validity`. The clock is used only to *sanity-check* that caller-supplied
+/// window, so an unusable clock means "cannot perform the check", not "cannot
+/// create a fabric". We skip it and carry on: a board with no RTC that creates
+/// its fabric during init with a hardcoded sane window and reaches an NTP server
+/// seconds later is a normal deployment, and refusing it would buy nothing —
+/// the certificates are entirely caller-supplied and may be perfectly good.
+///
+/// What is *not* skipped:
+///
+/// - The clock-independent half of the check still runs inside `create_fabric`
+///   ([`crate::fabric`]'s `validate_validity`): epoch-zero `not_before` and an
+///   inverted/empty window are rejected regardless. That matters here, because
+///   code following our own documentation derives `not_before` from
+///   `SystemTime::now()` — which on an unset clock is pre-2000, i.e. exactly the
+///   `MatterTime(0)` that gets rejected. Since we know both facts at this point,
+///   we say so explicitly rather than leaving the caller to guess why the
+///   wall-clock time they passed was called "the Matter epoch".
+/// - Every site that genuinely needs a real time — minting a *device* NOC during
+///   commissioning, operational CASE — still calls [`current_matter_time`]
+///   directly and still hard-fails with [`Error::SystemClockUnset`].
+fn validate_validity_against_clock(
+    validity: (matter_cert::MatterTime, matter_cert::MatterTime),
+    clock: Result<matter_cert::MatterTime, Error>,
+) -> Result<(), Error> {
+    match clock {
+        Ok(now) => crate::fabric::validate_validity_against_now(validity, now),
+        Err(Error::SystemClockUnset(secs)) => {
+            if validity.0 == matter_cert::MatterTime(0) {
+                return Err(Error::InvalidFabricValidity(format!(
+                    "not_before is the Matter epoch (MatterTime(0), 2000-01-01T00:00:00Z), and \
+                     this host's clock is unset — it reads unix {secs}, before the Matter epoch — \
+                     which is the likely source: MatterTime::from_unix_secs clamps any pre-2000 \
+                     time to MatterTime(0). Set the host clock (NTP/RTC) before creating the \
+                     fabric, or pass a known-good not_before explicitly"
+                )));
+            }
+            tracing::warn!(
+                target: "matter_controller::actor",
+                unix_secs = secs,
+                "host clock reads before the Matter epoch (unset RTC / pre-NTP); creating the \
+                 fabric anyway from the caller-supplied validity window, but its plausibility \
+                 could not be checked against a clock. Commissioning and CASE will still fail \
+                 until the clock is set."
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Convert Unix seconds to a [`matter_cert::MatterTime`], refusing a reading
 /// that predates the Matter epoch.
 ///
@@ -5240,6 +5292,91 @@ mod tests {
             matter_time_from_unix_secs(1_700_000_000).expect("set clock"),
             MatterTime::from_unix_secs(1_700_000_000)
         );
+    }
+
+    /// An unusable host clock must NOT block fabric creation. `create_fabric`
+    /// needs no clock — the certificates come entirely from the caller's
+    /// `validity` — so a failed clock reading means the *sanity check* cannot
+    /// run, not that the fabric is bad. An RTC-less board that creates its
+    /// fabric at boot with a hardcoded sane window and syncs NTP seconds later
+    /// is a normal deployment.
+    ///
+    /// The clock reading is injected here because `current_matter_time()` reads
+    /// the real system clock, which a unit test cannot move.
+    #[test]
+    fn unset_clock_does_not_block_fabric_creation() {
+        let window = (
+            MatterTime::from_unix_secs(1_700_000_000),
+            MatterTime::NO_EXPIRY,
+        );
+        validate_validity_against_clock(window, Err(Error::SystemClockUnset(0)))
+            .expect("an unusable clock must not refuse a good caller-supplied window");
+    }
+
+    /// The clock-independent half still bites: a `not_before` at the Matter
+    /// epoch is refused on an unset-clock host too — which is exactly the host
+    /// where documentation-following code produces one, since it derives
+    /// `not_before` from `SystemTime::now()`. The message must name the unset
+    /// clock as the likely source rather than just calling the caller's
+    /// wall-clock time "the Matter epoch".
+    #[test]
+    fn unset_clock_with_epoch_zero_not_before_is_still_rejected() {
+        let window = (MatterTime(0), MatterTime::NO_EXPIRY);
+        let err = validate_validity_against_clock(window, Err(Error::SystemClockUnset(0)))
+            .expect_err("epoch-zero not_before must be refused");
+        assert!(
+            matches!(err, Error::InvalidFabricValidity(_)),
+            "expected InvalidFabricValidity, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("clock is unset"),
+            "error must name the unset clock as the likely source: {err}"
+        );
+    }
+
+    /// A usable clock still runs the full clock-relative check — both the
+    /// far-future `not_before` bound and the already-expired `not_after` one.
+    #[test]
+    fn usable_clock_still_applies_the_clock_relative_checks() {
+        let now = MatterTime::from_unix_secs(1_795_000_000);
+        let far_future = (
+            MatterTime::from_unix_secs(1_700_000_000_000),
+            MatterTime::NO_EXPIRY,
+        );
+        assert!(matches!(
+            validate_validity_against_clock(far_future, Ok(now)),
+            Err(Error::InvalidFabricValidity(_))
+        ));
+        let expired = (
+            MatterTime::from_unix_secs(1_700_000_000),
+            MatterTime::from_unix_secs(1_731_536_000),
+        );
+        assert!(matches!(
+            validate_validity_against_clock(expired, Ok(now)),
+            Err(Error::InvalidFabricValidity(_))
+        ));
+        let good = (
+            MatterTime::from_unix_secs(1_794_996_400),
+            MatterTime::NO_EXPIRY,
+        );
+        validate_validity_against_clock(good, Ok(now)).expect("a sane window must be accepted");
+    }
+
+    /// A clock error that is *not* `SystemClockUnset` (e.g. a reading before
+    /// the Unix epoch) still propagates — we only forgive the one case we know
+    /// is harmless here.
+    #[test]
+    fn non_clock_unset_errors_still_propagate() {
+        let window = (
+            MatterTime::from_unix_secs(1_700_000_000),
+            MatterTime::NO_EXPIRY,
+        );
+        let err = validate_validity_against_clock(
+            window,
+            Err(Error::Operational("clock: before Unix epoch".into())),
+        )
+        .expect_err("a non-SystemClockUnset clock error must propagate");
+        assert!(matches!(err, Error::Operational(_)), "got {err:?}");
     }
 
     /// `nodes()` must enumerate every commissioned device across every fabric

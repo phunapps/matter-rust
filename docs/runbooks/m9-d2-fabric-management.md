@@ -108,7 +108,7 @@ ctrl_b.create_fabric(FabricConfig::new(
     2,
     1,
     (
-        MatterTime::from_unix_secs(now_unix - 3600),
+        MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
         MatterTime::NO_EXPIRY,
     ),
 )).await?;

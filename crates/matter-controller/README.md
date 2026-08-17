@@ -83,7 +83,9 @@ let node = controller.node(info.node_id);
 // Read all OnOff attributes; subscribe to changes.
 let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;
 let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
-while let Some(change) = sub.next().await { /* … */ }
+// `next()` yields `SubscriptionEvent` — attribute/event reports plus
+// (re-)establishment status changes.
+while let Some(event) = sub.next().await { /* … */ }
 
 // Enumerate and manage commissioned nodes.
 for n in controller.nodes().await? {

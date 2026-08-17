@@ -188,14 +188,17 @@ let controller = MatterController::builder(store)
     .attestation_trust(AttestationTrust::from_dirs(&paa_dir, &cd_dir)?)
     .build()
     .await?;
+// One-time only — `create_fabric` refuses a `fabric_id` it already has, so gate
+// it on `fabrics()` being empty (a run that loaded an existing store has one).
 controller.create_fabric(fabric_config).await?;
 let info = controller.commission("MT:...", Some("kitchen plug".into())).await?;
 let node = controller.node(info.node_id);
 
-node.invoke(toggle_path, Value::Structure(vec![])).await?;       // commands
-let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;   // wildcard read
-let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], 1, 30).await?;
-while let Some(change) = sub.next().await { /* live reports */ }
+node.invoke(toggle_path, Value::Structure(vec![])).await?;         // commands
+let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;     // wildcard read
+// attribute paths, event paths, min/max reporting interval (seconds)
+let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
+while let Some(event) = sub.next().await { /* reports and status changes */ }
 ```
 
 See [`crates/matter-controller`](crates/matter-controller/) and the
