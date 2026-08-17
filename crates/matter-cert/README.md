@@ -32,24 +32,29 @@ bundle).
 
 ## Minimal example
 
-```rust
+```rust,no_run
 use matter_cert::{
     CertificateChain, MatterCertificate, MatterTime, TrustAnchor, TrustedRoots,
 };
 
-let rcac = MatterCertificate::from_tlv(&std::fs::read("rcac.bin")?)?;
-let icac = MatterCertificate::from_tlv(&std::fs::read("icac.bin")?)?;
-let noc = MatterCertificate::from_tlv(&std::fs::read("noc.bin")?)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rcac = MatterCertificate::from_tlv(&std::fs::read("rcac.bin")?)?;
+    let icac = MatterCertificate::from_tlv(&std::fs::read("icac.bin")?)?;
+    let noc = MatterCertificate::from_tlv(&std::fs::read("noc.bin")?)?;
 
-let mut roots = TrustedRoots::new();
-roots.add(TrustAnchor::from_root_cert(&rcac));
+    let mut roots = TrustedRoots::new();
+    roots.add(TrustAnchor::from_root_cert(&rcac));
 
-let chain = CertificateChain::new(&[noc, icac]);
-let now = MatterTime::from_unix_secs(1_750_000_000);
-chain.validate(&roots, now)?;
-// Ok(()) means: every cert is time-valid, the issuer/subject chain
-// is structurally sound, every signature verifies, and the top cert
-// anchors against rcac.
+    // `CertificateChain` borrows the leaf-to-root slice, so bind it first.
+    let certs = [noc, icac];
+    let chain = CertificateChain::new(&certs);
+    let now = MatterTime::from_unix_secs(1_750_000_000);
+    chain.validate(&roots, now)?;
+    // Ok(()) means: every cert is time-valid, the issuer/subject chain
+    // is structurally sound, every signature verifies, and the top cert
+    // anchors against rcac.
+    Ok(())
+}
 ```
 
 ## Cryptographic primitives
