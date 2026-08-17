@@ -135,6 +135,31 @@ clock is unset the two clock-relative checks cannot run at all (see below).
 - The per-crate `crates/matter-controller/CHANGELOG.md` (stale since M8.1, but
   shipped inside the published crate) now redirects to this file.
 
+### xtask (codegen)
+
+#### Added
+
+- **The cluster code generator can now emit float attributes and fields.**
+  `single` and `double` already mapped to `f32`/`f64` on the *type* side, but
+  the codec emitter had no `float` arm on either the read or the write
+  dispatch, so a float element fell through to the unsigned-integer path —
+  emitting `w.put_uint(tag, u64::from(<f32>))`, which does not compile. Both
+  dispatches now emit width-matched TLV calls (`Value::Float`/`put_float` for
+  `single`, `Value::Double`/`put_double` for `double`), including the nullable
+  and list-element forms. No cluster in the model had a float attribute until
+  now, so this path had never been exercised; it is the reusable part of the
+  concentration-measurement work below.
+
+#### Changed
+
+- **An unsupported metatype is now a hard generator error rather than a silent
+  fallthrough.** The `_ =>` arms in the scalar read/write emitters previously
+  defaulted to an unsigned-integer codec for *any* unrecognised metatype,
+  which either failed to compile or — worse — compiled and encoded the value
+  wrongly. `cargo xtask codegen` now panics with the offending metatype and
+  type name. No currently generated cluster reached the fallthrough, so the
+  generated tree is unchanged by this.
+
 ## 0.5.0
 
 The performance & memory remediation release: five phases from the 2026-08-09

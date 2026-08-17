@@ -99,8 +99,27 @@ fn named_backing(ty: &str, dts: &DatatypeMap<'_>) -> Option<&'static str> {
     })
 }
 
+/// True when a model `float` metatype is double-precision (`double` → `f64`)
+/// rather than single (`single` → `f32`).
+///
+/// The TLV wire types are distinct (FLOAT32 vs FLOAT64) and the reader keeps
+/// them apart ([`matter_codec::Value::Float`] vs `Double`), so the decoder
+/// pattern and the writer call must follow the width the model declares.
+fn is_double(ty: &str, entry: Option<&str>) -> bool {
+    base_type(ty, entry) == "f64"
+}
+
 /// Read one TLV scalar into a Rust value expression. Returns
 /// `(match_pattern, build_expr)` for use inside a decoder arm.
+///
+/// # Panics
+///
+/// Panics on a metatype with no emitter arm. This is a hard generator stop by
+/// design: the former silent fallthrough emitted an integer read for *any*
+/// unknown metatype, which either failed to compile or — worse — compiled and
+/// mis-decoded the value. Failing `cargo xtask codegen` loudly is the safe
+/// behaviour when a newly allowlisted cluster introduces a shape we cannot yet
+/// encode or decode.
 fn read_scalar(
     metatype: &str,
     ty: &str,
@@ -126,6 +145,16 @@ fn read_scalar(
         }
         "string" => ("Value::Utf8(v)".into(), "v".into()),
         "bytes" => ("Value::Bytes(v)".into(), "v".into()),
+        // IEEE 754 floats (`single`/`double`), e.g. the concentration
+        // measurement clusters' MeasuredValue. Matched strictly on wire width,
+        // exactly as the signed/unsigned integer arms are.
+        "float" => {
+            if is_double(ty, entry) {
+                ("Value::Double(v)".into(), "v".into())
+            } else {
+                ("Value::Float(v)".into(), "v".into())
+            }
+        }
         "enum" => {
             if let Some(backing) = named_backing(ty, dts) {
                 (
@@ -156,12 +185,20 @@ fn read_scalar(
                 )
             }
         }
-        _ => ("Value::Uint(v)".into(), "v".into()),
+        other => panic!(
+            "codegen: no read_scalar arm for metatype {other:?} (type {ty:?}, at {context}) — \
+             add one before allowlisting a cluster that uses it"
+        ),
     }
 }
 
 /// Write a Rust value expression `expr` of the given metatype as a scalar at
 /// `tag` into writer `w`. Returns the `w.put_*` statement.
+///
+/// # Panics
+///
+/// Panics on a metatype with no emitter arm — see [`read_scalar`] for why this
+/// is a hard stop rather than a silent integer fallthrough.
 fn write_scalar(
     metatype: &str,
     ty: &str,
@@ -182,6 +219,15 @@ fn write_scalar(
         }
         "string" => format!("w.put_utf8({tag}, &{expr}).expect(\"infallible: vec writer\");"),
         "bytes" => format!("w.put_bytes({tag}, &{expr}).expect(\"infallible: vec writer\");"),
+        // IEEE 754 floats: emit the matching wire width. No integer coercion —
+        // `u64::from(<f32>)` (the old fallthrough) does not even compile.
+        "float" => {
+            if is_double(ty, entry) {
+                format!("w.put_double({tag}, {expr}).expect(\"infallible: vec writer\");")
+            } else {
+                format!("w.put_float({tag}, {expr}).expect(\"infallible: vec writer\");")
+            }
+        }
         "enum" => {
             if named_backing(ty, dts).is_some() {
                 format!("w.put_uint({tag}, u64::from({expr}.to_raw())).expect(\"infallible: vec writer\");")
@@ -196,7 +242,10 @@ fn write_scalar(
                 format!("w.put_uint({tag}, u64::from({expr})).expect(\"infallible: vec writer\");")
             }
         }
-        _ => format!("w.put_uint({tag}, u64::from({expr})).expect(\"infallible: vec writer\");"),
+        other => panic!(
+            "codegen: no write_scalar arm for metatype {other:?} (type {ty:?}) — \
+             add one before allowlisting a cluster that uses it"
+        ),
     }
 }
 
@@ -227,6 +276,10 @@ fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
     }
     if rust == "String" {
         return "string";
+    }
+    // list<single> / list<double> elements decode as Float/Double.
+    if rust == "f32" || rust == "f64" {
+        return "float";
     }
     "integer"
 }
@@ -494,7 +547,7 @@ fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'
     let tag = format!("Tag::Context({})", f.id);
     let scalar = matches!(
         f.metatype.as_str(),
-        "boolean" | "integer" | "string" | "bytes" | "enum" | "bitmap"
+        "boolean" | "integer" | "float" | "string" | "bytes" | "enum" | "bitmap"
     );
     if scalar {
         let inner =
@@ -706,7 +759,7 @@ fn struct_is_write_capable(d: &Datatype) -> bool {
     d.fields.iter().all(|f| {
         matches!(
             f.metatype.as_str(),
-            "boolean" | "integer" | "string" | "bytes" | "enum" | "bitmap"
+            "boolean" | "integer" | "float" | "string" | "bytes" | "enum" | "bitmap"
         )
     })
 }
@@ -999,7 +1052,7 @@ fn emit_struct_field_read_arm(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_
     let var = snake(&f.name);
     let scalar = matches!(
         f.metatype.as_str(),
-        "boolean" | "integer" | "string" | "bytes" | "enum" | "bitmap"
+        "boolean" | "integer" | "float" | "string" | "bytes" | "enum" | "bitmap"
     );
     if scalar {
         let ctx = f.name.clone();
@@ -1269,6 +1322,117 @@ mod tests {
         assert!(s.contains("w.start_structure(Tag::Anonymous)"), "{s}");
         assert!(s.contains(".write_fields(&mut w)"), "{s}");
         assert!(!s.contains("compile_error!"), "{s}");
+    }
+
+    // ---- float metatype (M9-A2.6 concentration measurement) --------------
+
+    #[test]
+    fn read_scalar_float_matches_wire_width() {
+        let dts: DatatypeMap<'_> = HashMap::new();
+        // `single` -> TLV FLOAT32 -> Value::Float(f32).
+        assert_eq!(
+            read_scalar("float", "single", None, "MeasuredValue", &dts),
+            ("Value::Float(v)".to_string(), "v".to_string())
+        );
+        // `double` -> TLV FLOAT64 -> Value::Double(f64).
+        assert_eq!(
+            read_scalar("float", "double", None, "MeasuredValue", &dts),
+            ("Value::Double(v)".to_string(), "v".to_string())
+        );
+    }
+
+    #[test]
+    fn write_scalar_float_uses_put_float_and_put_double() {
+        let dts: DatatypeMap<'_> = HashMap::new();
+        let single = write_scalar("float", "single", None, "Tag::Anonymous", "value", &dts);
+        assert!(
+            single.starts_with("w.put_float(Tag::Anonymous, value)"),
+            "{single}"
+        );
+        // Regression guard: the pre-M9-A2.6 fallthrough emitted
+        // `u64::from(<f32>)`, which does not compile.
+        assert!(!single.contains("u64::from"), "{single}");
+        let double = write_scalar("float", "double", None, "Tag::Context(0)", "value", &dts);
+        assert!(
+            double.starts_with("w.put_double(Tag::Context(0), value)"),
+            "{double}"
+        );
+    }
+
+    #[test]
+    fn nullable_float_attribute_decoder_has_null_and_float_arms() {
+        let a = Attribute {
+            id: 0,
+            name: "MeasuredValue".to_string(),
+            ty: "single".to_string(),
+            metatype: "float".to_string(),
+            entry_type: None,
+            nullable: true,
+            optional: true,
+            writable: false,
+        };
+        let mut s = String::new();
+        emit_attr_decoder(&mut s, &a, &HashMap::new());
+        assert!(
+            s.contains(
+                "pub fn decode_measured_value(tlv: &[u8]) -> Result<Nullable<f32>, ClusterError>"
+            ),
+            "{s}"
+        );
+        assert!(
+            s.contains("value: Value::Null, .. }) => Ok(Nullable::Null)"),
+            "{s}"
+        );
+        assert!(
+            s.contains("value: Value::Float(v), .. }) => Ok(Nullable::Value(v))"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn float_struct_field_writes_and_reads() {
+        // A scalar-only struct carrying a float field stays write-capable and
+        // both codec halves emit float calls (no generated cluster exercises
+        // this yet — the guard is here so the next one that does cannot regress).
+        let mut f = field(1, "Value", "single", "float", None);
+        f.nullable = true;
+        let d = struct_dt("FloatStruct", vec![f]);
+        assert!(struct_is_write_capable(&d));
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &HashSet::new());
+        assert!(s.contains("w.put_float(Tag::Context(1), *value)"), "{s}");
+        assert!(
+            s.contains("value: Value::Float(v) }) => f_value = Some(Nullable::Value(v))"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn entry_metatype_classifies_float_elements() {
+        let dts: DatatypeMap<'_> = HashMap::new();
+        assert_eq!(entry_metatype("single", &dts), "float");
+        assert_eq!(entry_metatype("double", &dts), "float");
+    }
+
+    #[test]
+    #[should_panic(expected = "no read_scalar arm for metatype")]
+    fn read_scalar_panics_on_unknown_metatype() {
+        // The former silent `_ =>` Uint fallthrough turned "unsupported shape"
+        // into "emits wrong or uncompilable code"; codegen now hard-stops.
+        let _ = read_scalar("quantum", "qubit", None, "Ctx", &HashMap::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "no write_scalar arm for metatype")]
+    fn write_scalar_panics_on_unknown_metatype() {
+        let _ = write_scalar(
+            "quantum",
+            "qubit",
+            None,
+            "Tag::Anonymous",
+            "v",
+            &HashMap::new(),
+        );
     }
 
     #[test]
