@@ -174,7 +174,7 @@ Published on crates.io — depend on the high-level crate directly:
 
 ```toml
 [dependencies]
-matter-controller = "0.5"
+matter-controller = "0.6"
 ```
 
 Each crate is independently usable: take `matter-codec` alone for TLV, or

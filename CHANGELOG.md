@@ -22,7 +22,28 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## 0.6.0
+
+The first release driven by outside users. Every change here comes from issues
+[#110], [#111] and [#112], filed by [@qwandor] within days of `0.5.0` — fabric
+setup that was easy to get wrong in ways that failed far from the mistake, and
+a cluster family the library had never generated. Nothing is breaking.
+
+Crate versions in this release: **`matter-clusters` 0.4.0**,
+**`matter-commissioning` 0.5.0** (dependency bump only),
+**`matter-ota` 0.5.0** (dependency bump only), and **`matter-controller`
+0.6.0**. Every other crate is unchanged from `0.5.0` and is not republished.
+
+One behaviour change to be aware of before upgrading, detailed below:
+`create_fabric` now **refuses** a `fabric_id` that already exists rather than
+silently creating a duplicate. Code that called it unconditionally on every
+startup — which the old quickstart in this repo demonstrated — must now gate on
+`fabrics()` being empty.
+
+[#110]: https://github.com/phunapps/matter-rust/issues/110
+[#111]: https://github.com/phunapps/matter-rust/issues/111
+[#112]: https://github.com/phunapps/matter-rust/issues/112
+[@qwandor]: https://github.com/qwandor
 
 Fixes from friction the first external adopter hit setting up a fabric, all on
 `matter-controller`, plus the rest of the class each one belongs to. A validity

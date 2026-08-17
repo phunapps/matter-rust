@@ -1171,7 +1171,7 @@ dependencies = [
 
 [[package]]
 name = "matter-clusters"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "bitflags",
@@ -1194,7 +1194,7 @@ dependencies = [
 
 [[package]]
 name = "matter-commissioning"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "matter-controller"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "matter-ota"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "hex",
  "matter-clusters",
