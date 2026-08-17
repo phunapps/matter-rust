@@ -1,69 +1,51 @@
-//! Matter commissioning state machine.
+//! Matter commissioning: setup payloads, device attestation, NOC issuance,
+//! network commissioning, and the state machine that sequences them.
 //!
-//! This is Milestone 6 of the `matter-rust` roadmap. The crate is currently
-//! shipping in phases:
+//! The commissioning flow here has been driven against real Matter hardware —
+//! over IP and over BLE, onto Wi-Fi and onto Thread.
 //!
-//! - **M6.1:** setup payload codec — see [`setup`].
-//! - **M6.2.1:** typed attestation cert wrappers ([`Dac`], [`Pai`],
-//!   [`Paa`]) and [`PaaTrustStore`] — see [`attestation`].
-//! - **M6.2.2 (current):** [`verify_chain`] — `rustls-webpki` path
-//!   validation with `KeyUsage::client_auth()`, plus a Matter
-//!   VID/PID equality overlay. Six new [`AttestationError`] variants.
-//! - **M6.2.3:** `verify_attestation_response` + matter.js
-//!   byte-parity capture.
-//! - **M6.2.4–M6.2.6:** see [`attestation`].
-//! - **M6.3:** Node Operational Certificate issuance — see [`noc`].
-//! - **M6.4.2:** attestation on-wire flow + off-wire
-//!   `AttestationVerification`. State machine drives
-//!   `SendPaiCertRequest` → `SendDacCertRequest` →
-//!   `SendAttestationRequest` → `AttestationVerification`, chaining
-//!   M6.2's `verify_chain` + `verify_attestation_response` + the
-//!   `extract_attestation_elements_fields` helper.
-//! - **M6.4.3:** CD verification wired into
-//!   `AttestationVerification`. The state machine now calls
-//!   `verify_certification_declaration` against
-//!   [`attestation::CdSigningRoots`] and advances past attestation on
-//!   a valid CD; `CommissionerConfig` gains a `cd_signing_roots`
-//!   reference.
-//! - **M6.4.4:** CSR + NOC issuance flow. State machine
-//!   drives `SendOpCertSigningRequest` → `ValidateCsr` →
-//!   `GenerateNocChain` → `SendTrustedRootCert` → `SendNoc`, then
-//!   advances to `Stage::ReadNetworkCommissioningInfo` (M6.5.2 expands
-//!   the network subgraph). Integrates M6.3's
-//!   `verify_csr_response` + `issue_noc` + the `OpCreds`
-//!   `AddTrustedRoot` / `AddNOC` encoders.
-//! - **M6.4.5:** PASE→CASE handoff + `CommissioningComplete`.
-//!   The state machine drives end-to-end from `SecurePairing` through
-//!   `Action::Done(CommissionedFabric)` on canned responses plus a
-//!   mock `on_case_established()` callback. New public API
-//!   `Commissioner::on_case_established` for the M6.6 driver's CASE
-//!   handshake success signal; `Expectation::CaseFailed` for the
-//!   failure path.
-//! - **M6.4 (complete):** commissioning state machine. End-to-end
-//!   cursor from `SecurePairing` through
-//!   `Action::Done(CommissionedFabric)` on canned responses + a
-//!   mock CASE-established callback. matter.js byte-parity gate
-//!   infrastructure shipped — see [`state_machine`] for the API.
-//! - **M6.5 (current):** Wi-Fi network commissioning. Expands the
-//!   `NetworkCommissioning` no-op slot into the real Wi-Fi sub-cursor
-//!   (`ReadNetworkCommissioningInfo` → `NetworkSetup` →
-//!   `FailsafeBeforeNetworkEnable` → `NetworkEnable`; the generic stages
-//!   also carry the M9-C2 Thread provisioning path). Ethernet-only
-//!   devices skip the Wi-Fi sub-cursor entirely; Thread-only devices
-//!   fail fast with a typed `NetworkFeatureUnsupported` error. New
-//!   `RemediationHint` enum surfaces actionable categories for
-//!   `NetworkRejected`. Failsafe-expiry now derives from
-//!   `BasicCommissioningInfo` (was hardcoded 60s in M6.4). Optional
-//!   `tracing` feature instruments every dispatch arm.
-//! - **M6.6.1 (current):** Interaction Model framing — see [`im`].
-//!   `build_invoke_request` / `parse_invoke_response`,
-//!   `build_read_request` / `parse_report_data`. Pure codec over
-//!   `matter-codec`; the wire-I/O driver follows in M6.6.2+.
-//! - **M6.6 (next-next):** Tokio driver + first real-device
-//!   commission. Wires the M6.4 state machine into `matter-transport`'s
-//!   session layer + drives `matter-crypto`'s SIGMA-I CASE handshake.
+//! If you want a complete controller — commissioning plus reading, writing,
+//! invoking, and subscribing — use [`matter-controller`], which is built on
+//! this crate. Reach for `matter-commissioning` directly when you want the
+//! commissioning pieces on their own, or want to drive the state machine from
+//! your own IO layer.
 //!
-//! ## Quick-start (M6.1 only)
+//! [`matter-controller`]: https://crates.io/crates/matter-controller
+//!
+//! ## What's here
+//!
+//! - [`setup`] — QR and manual pairing codes, decode and encode.
+//! - [`attestation`] — typed [`Dac`] / [`Pai`] / [`Paa`] wrappers,
+//!   chain validation against a [`PaaTrustStore`] via [`verify_chain`]
+//!   (`rustls-webpki` path validation plus a Matter VID/PID overlay),
+//!   [`verify_attestation_response`] for the device's signed attestation, and
+//!   CSA Certification Declaration (CMS) verification against
+//!   [`CdSigningRoots`].
+//! - [`noc`] — Node Operational Certificate issuance: [`FabricRecord`],
+//!   CSR verification, RCAC/NOC minting, and the `OperationalCredentials`
+//!   command codecs.
+//! - [`state_machine`] — a sans-IO cursor over the whole flow, from
+//!   `Stage::SecurePairing` through `Action::Done(CommissionedFabric)`:
+//!   attestation, CSR and NOC installation, the network-commissioning
+//!   subgraph, and the PASE→CASE handoff. It emits [`Action`]s and consumes
+//!   responses; it performs no IO of its own.
+//! - [`clusters`] and [`thread_dataset`] — the `GeneralCommissioning` and
+//!   `NetworkCommissioning` command codecs, and Thread Operational Dataset
+//!   parsing.
+//! - [`im`] — Interaction Model framing, re-exported from
+//!   [`matter_interaction`].
+//! - `driver` (behind the off-by-default `driver` feature) — the async Tokio
+//!   IO layer that runs the state machine for real: PASE, mDNS discovery,
+//!   CASE, and the Invoke/Read round-trips in between.
+//!
+//! Network commissioning covers Wi-Fi and Thread; a device already on its
+//! operational network (Ethernet, or Wi-Fi it has already joined) skips the
+//! network sub-cursor entirely. A device whose `NetworkCommissioning` feature
+//! map does not match the credentials you supplied fails fast with a typed
+//! `NetworkFeatureUnsupported` error, and [`RemediationHint`] categorises
+//! `NetworkRejected` failures into actionable causes.
+//!
+//! ## Quick-start: parse a setup payload
 //!
 //! ```
 //! use matter_commissioning::setup::{parse_qr, parse_manual_code};
@@ -77,9 +59,8 @@
 //! # let _ = run;
 //! ```
 //!
-//! Replace the QR string + manual code above with values captured for
-//! your own devices via `cargo xtask capture-setup` if you change the
-//! fixture set.
+//! Those are the spec's example codes; substitute the ones printed on your
+//! own device.
 //!
 //! ## Optional `tracing` feature
 //!
@@ -113,8 +94,8 @@ pub(crate) mod hexdump {
             })
     }
 }
-/// Interaction Model message framing — re-exported from [`matter_interaction`]
-/// (lifted out of this crate in M7.1; all `im::` paths are unchanged).
+/// Interaction Model message framing — re-exported from [`matter_interaction`],
+/// which this crate used to host. All `im::` paths still resolve.
 pub use matter_interaction as im;
 pub mod noc;
 pub mod setup;

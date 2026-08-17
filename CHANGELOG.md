@@ -152,6 +152,30 @@ APIs have had no outside users yet and are expected to move.
 
 ### Documentation / CI
 
+- **Crate-level rustdoc rewritten to describe what each crate does, not how it
+  was built.** The `//!` block at the top of `lib.rs` *is* the docs.rs landing
+  page, and in eight crates it was still an internal milestone development log:
+  phase bullets, `(current)` markers, and roadmap language. `matter-commissioning`
+  was the worst — a 0.5.0 crate that has commissioned real hardware over Wi-Fi,
+  Thread, and BLE opened with a changelog ending in "M6.6 (next-next): Tokio
+  driver + first real-device commission". A reader arriving from crates.io could
+  not tell which parts of the crate existed.
+
+  Rewritten for `matter-commissioning`, `matter-cert`, `matter-clusters`,
+  `matter-transport`, `matter-crypto`, `matter-codec`, `matter-bdx`, and
+  `matter-interaction`, along with the commissioning `state_machine`, `driver`,
+  and `clusters` module docs and the crypto `pase` / `case` module docs. Content
+  was re-derived from each crate's own source, which surfaced four stale claims
+  now corrected: `matter-interaction` advertised "no chunked writes" though
+  `build_list_write_chunks` ships, and did not mention its server-side invoke
+  surface; `matter-clusters` listed 43 of its 47 generated clusters and said a
+  wildcard read API would "arrive in later milestones" when `matter-controller`
+  already has one; `matter-cert` documented no issuance despite shipping
+  `Builder` and the role-aware RCAC/ICAC/NOC constructors; and
+  `Action::ReadAttribute` claimed to be emitted only by
+  `Stage::ReadCommissioningInfo` when `Stage::ReadNetworkCommissioningInfo`
+  emits it too. **No API change** — documentation only.
+
 - **Every README's Rust examples are now compiled by `just doctest`** (i.e. by
   `cargo test --workspace --all-features --doc`, which the gate and CI run).
   Each crate carries the standard idiom in its `lib.rs`:

@@ -15,39 +15,48 @@
 //! with `cargo xtask codegen --check`. **Do not edit `src/gen/` by hand** —
 //! change the emitter in `xtask/src/codegen/` and regenerate.
 //!
-//! Correctness: the generated codecs are **byte-parity tested against matter.js
-//! 0.16.11** (`test-vectors/clusters/`), with `proptest` roundtrips and a
-//! `cargo-fuzz` target.
+//! Correctness: the generated codecs are checked against matter.js 0.16.11
+//! byte-parity vectors (`test-vectors/clusters/`), with `proptest` roundtrips
+//! and a `cargo-fuzz` target. See [Clusters](#clusters) for what is covered
+//! at which level.
 //!
 //! # Clusters
 //!
-//! M7 (byte-parity tested): `BasicInformation`, `Descriptor`, `Identify`,
-//! `OnOff`, `LevelControl`, `ColorControl`, `OccupancySensing`,
-//! `TemperatureMeasurement`, `RelativeHumidityMeasurement`, and `DoorLock`
-//! (Aliro features excluded). M9-A2.1 pilot (decode-smoke tested):
-//! `IlluminanceMeasurement`, `PressureMeasurement`, `FlowMeasurement`,
-//! `BooleanState`, and `Switch`. M9-A2.2 energy (decode-smoke + one nested
-//! byte-parity vector): `PowerSource`, `ElectricalPowerMeasurement`,
-//! `ElectricalEnergyMeasurement`, and `AirQuality`. M9-A2.3 actuators
-//! (roundtrip + decode-smoke, with a byte-parity vector for the list-typed
-//! `AtomicRequest` command): `Thermostat`, `FanControl`,
-//! `ThermostatUserInterfaceConfiguration`, `PumpConfigurationAndControl`, and
-//! `WindowCovering`. M9-A2.4 utility (decode-smoke + one struct-with-byte-fields
-//! byte-parity vector for `GeneralDiagnostics` `NetworkInterface`): `Groups`,
-//! `Binding`, `GeneralDiagnostics`, `FixedLabel`, and `UserLabel`. M9-A2.5
-//! management (codecs only — protocol logic deferred to later milestones;
-//! decode-smoke + a byte-parity vector for the recursive list-of-struct command
-//! encode `AccessControl::ReviewFabricRestrictions`): `AccessControl`,
-//! `GroupKeyManagement`, `AdministratorCommissioning`, and
-//! `OtaSoftwareUpdateRequestor`. Concentration measurement (Matter 1.2, #112 —
-//! decode-smoke per cluster, plus a matter.js byte-parity vector and a
-//! `proptest` wire round-trip for the float attributes they introduce):
-//! `CarbonMonoxide`, `CarbonDioxide`, `NitrogenDioxide`, `Ozone`, `Pm25`,
-//! `Formaldehyde`, `Pm1`, `Pm10`, `TotalVolatileOrganicCompounds`, and
-//! `Radon` `ConcentrationMeasurement`.
+//! 47 clusters are generated today. The full list is [`gen`]; by area:
 //!
-//! For any attribute not covered by these typed codecs — optional,
-//! manufacturer-specific, or a cluster not in this list — the generic `Value`
+//! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
+//!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
+//!   `GeneralDiagnostics`.
+//! - **Lighting and actuators:** `OnOff`, `LevelControl`, `ColorControl`,
+//!   `DoorLock` (Aliro features excluded), `WindowCovering`, `Thermostat`,
+//!   `ThermostatUserInterfaceConfiguration`, `FanControl`,
+//!   `PumpConfigurationAndControl`.
+//! - **Sensing:** `OccupancySensing`, `TemperatureMeasurement`,
+//!   `RelativeHumidityMeasurement`, `IlluminanceMeasurement`,
+//!   `PressureMeasurement`, `FlowMeasurement`, `BooleanState`, `Switch`,
+//!   `AirQuality`, and the ten `ConcentrationMeasurement` clusters
+//!   (`CarbonMonoxide`, `CarbonDioxide`, `NitrogenDioxide`, `Ozone`, `Pm25`,
+//!   `Formaldehyde`, `Pm1`, `Pm10`, `TotalVolatileOrganicCompounds`,
+//!   `Radon`).
+//! - **Energy:** `ElectricalPowerMeasurement`, `ElectricalEnergyMeasurement`.
+//! - **Administration:** `AccessControl`, `GroupKeyManagement`,
+//!   `AdministratorCommissioning`, `OperationalCredentials`,
+//!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,
+//!   `OtaSoftwareUpdateProvider`.
+//!
+//! Note that this crate holds **codecs only**. For the administration
+//! clusters in particular, encoding a command is not the same as running the
+//! protocol around it: ACL evaluation, group multicast, commissioning-window
+//! orchestration, and OTA live in `matter-controller` and its siblings.
+//!
+//! Verification varies by cluster. Every cluster has decode-smoke coverage;
+//! matter.js byte-parity vectors cover the core, lighting, and sensing sets
+//! plus one vector for each novel wire shape the later batches introduced
+//! (nested measurement-accuracy structs, list-typed commands,
+//! struct-with-byte-fields, recursive list-of-struct, and floats).
+//!
+//! For any attribute not covered by these typed codecs — a cluster not in
+//! this list, or a manufacturer-specific attribute — the generic `Value`
 //! path in `matter-controller` remains the universal answer.
 //!
 //! # Usage
@@ -81,9 +90,9 @@
 //! `UNSUPPORTED_ATTRIBUTE`). To read attributes of clusters NOT in this set, or
 //! manufacturer-specific attributes, use the generic Interaction Model path:
 //! `matter_interaction::parse_report_data` decodes any attribute to a
-//! `(AttributePath, matter_codec::Value)` pair without a typed codec. A
-//! high-level generic + wildcard read API, and more typed clusters, arrive in
-//! later milestones.
+//! `(AttributePath, matter_codec::Value)` pair without a typed codec, and
+//! `matter-controller` wraps that in a generic read/write/subscribe API with
+//! wildcard paths.
 
 #![forbid(unsafe_code)]
 

@@ -39,8 +39,8 @@ pub enum Action {
         session: SessionContext,
         /// Matter endpoint (always `0` for commissioning).
         endpoint: u16,
-        /// Cluster ID (`0x0030` `GeneralCommissioning` or `0x003E`
-        /// `OperationalCredentials` for all M6.4 stages).
+        /// Cluster ID — `0x0030` `GeneralCommissioning`, `0x003E`
+        /// `OperationalCredentials`, or `0x0031` `NetworkCommissioning`.
         cluster: u32,
         /// Cluster command ID.
         command: u32,
@@ -50,8 +50,9 @@ pub enum Action {
         expect: Expectation,
     },
 
-    /// Read attributes from a cluster. Used only by
-    /// [`Stage::ReadCommissioningInfo`].
+    /// Read attributes from a cluster. Emitted by
+    /// [`Stage::ReadCommissioningInfo`] and
+    /// [`Stage::ReadNetworkCommissioningInfo`].
     ReadAttribute {
         /// Which session to route the Read over.
         session: SessionContext,
@@ -67,9 +68,9 @@ pub enum Action {
 
     /// Evict any prior CASE session for this fabric/peer pair.
     ///
-    /// **Reserved for M8 multi-fabric work; never emitted by M6.4's
-    /// state machine.** Kept in the enum so M8 can wire eviction in
-    /// without a `SemVer` bump.
+    /// **Never emitted today** — commissioning onto a new fabric has no
+    /// prior CASE session to evict. Reserved for multi-fabric eviction, and
+    /// kept in the enum so that can be wired in without a `SemVer` bump.
     EvictCase {
         /// Fabric ID to evict on.
         fabric_id: u64,
@@ -79,7 +80,7 @@ pub enum Action {
 
     /// Discover the device on its operational network and establish a
     /// CASE session. Caller calls `Commissioner::on_case_established`
-    /// (added in M6.4.5) on success or
+    /// on success or
     /// `on_response(Expectation::CaseFailed, &[])` on failure.
     EstablishCase {
         /// Fabric ID to establish CASE on.

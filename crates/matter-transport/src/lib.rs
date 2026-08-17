@@ -1,17 +1,31 @@
 //! Matter network transport: secured-message framing, session management,
 //! UDP, mDNS, and MRP reliability.
 //!
-//! Milestone 5 of the `matter-rust` roadmap. Consumes session keys
-//! produced by completed PASE handshakes (`matter_crypto::pase`) or
-//! CASE handshakes (`matter_crypto::case`) and ships them over the wire
-//! in Matter's secured-message format.
+//! Consumes session keys produced by completed PASE handshakes
+//! (`matter_crypto::pase`) or CASE handshakes (`matter_crypto::case`) and
+//! ships messages over the wire in Matter's secured-message format.
 //!
-//! # Phase status
+//! # What's here
 //!
-//! - **M5.1:** framing + session manager skeleton.
-//! - **M5.2:** MRP + application protocol header codec.
-//! - **M5.3 (this revision):** Transport + Discovery traits + default
-//!   Tokio UDP + mdns-sd adapters. Crate reaches `0.1.0-pre`.
+//! - [`framing`] — secured-message header encode/decode, AES-CCM-128 payload
+//!   encryption, sliding-window replay protection, and the group (multicast)
+//!   variants with message privacy.
+//! - [`session`] — [`SessionManager`] owns per-session counters, replay
+//!   windows, and MRP state, and is the seam through which messages are
+//!   encoded outbound and decoded inbound.
+//! - [`mrp`] — the Message Reliability Protocol as a sans-IO state machine:
+//!   pending acks, piggybacking, the exchange table, retransmit scheduling.
+//!   Retransmit timing is sized to the *peer* from its advertised
+//!   `SII`/`SAI`/`SAT` ([`MrpConfig::for_peer`]), so a sleepy device is not
+//!   hammered with active-interval spacing.
+//! - [`protocol_header`] — the Matter application protocol header codec.
+//! - [`transport`] and [`discovery`] — the sans-IO [`Transport`] and
+//!   [`Discovery`] traits, plus the service-record types for Matter's
+//!   commissionable and operational mDNS records.
+//! - Default adapters behind Cargo features: Tokio UDP and `mdns-sd`.
+//!
+//! Framing, MRP, and the protocol header are byte-checked against matter.js
+//! fixtures.
 //!
 //! # Cargo features
 //!

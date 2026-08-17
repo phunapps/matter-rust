@@ -1,11 +1,17 @@
-//! Async Tokio commissioning driver (M6.6) — the IO layer beneath the sans-IO
-//! [`Commissioner`](crate::Commissioner).
+//! Async Tokio commissioning driver — the IO layer beneath the sans-IO
+//! [`Commissioner`](crate::Commissioner). Gated behind the `driver` feature.
 //!
-//! Gated behind the `driver` feature. M6.6.2 ships the foundation only:
-//! the [`AsyncDatagram`] transport seam, the secured-exchange round-trip
-//! helper, and the unsecured (session-id 0) framing the PASE handshake uses.
-//! The PASE/CASE bridges (M6.6.3) and the `commission()` orchestration
-//! (M6.6.4) build on top of these in later slices.
+//! [`commission()`] is the entry point: it discovers the device, runs PASE,
+//! then drives the state machine's [`Action`](crate::Action)s over the wire —
+//! Invoke and Read round-trips, the CASE handshake, and the operational
+//! mDNS resolve — through to a `CommissionedFabric`. [`commission_ble`] does
+//! the same over a BLE (BTP) transport.
+//!
+//! The layers underneath are public too, so you can assemble your own flow:
+//! [`AsyncDatagram`] is the transport seam, [`secured_round_trip`] and
+//! [`secured_read`] are the exchange helpers, [`UnsecuredExchange`] is the
+//! session-id-0 framing the PASE handshake runs over, and [`run_pase`] /
+//! [`run_case`] are the handshake bridges.
 
 mod case;
 mod commission;

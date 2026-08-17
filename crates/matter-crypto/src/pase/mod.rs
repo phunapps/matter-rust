@@ -1,9 +1,11 @@
-//! Matter PASE (Password Authenticated Session Establishment).
+//! Matter PASE (Password Authenticated Session Establishment) via SPAKE2+.
 //!
-//! Implementation lands across phases:
-//! - M3.1 (current): math + KDF primitives in submodules.
-//! - M3.2: wire-format messages + PaseProver/PaseVerifier state machines.
-//! - M3.3: matter.js byte-parity verification + readiness markers.
+//! SPAKE2+ math over P-256 with Matter's M and N constants, the PBKDF2 and
+//! HKDF derivations, the wire-format messages, and the sans-IO
+//! [`PaseProver`] / [`PaseVerifier`] state machines that drive them.
+//! Byte-checked against matter.js fixtures.
+//!
+//! See Matter Core Specification §3.10.
 
 pub(crate) mod kdf;
 pub(crate) mod messages;
@@ -17,7 +19,7 @@ pub use verifier::PaseVerifier;
 
 /// Identifies one of the 5 PASE message types. Used by
 /// [`crate::Error::UnexpectedMessage`] and `expected_inbound()` accessors
-/// on the state machines (added in M3.2).
+/// on the state machines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PaseMessageKind {

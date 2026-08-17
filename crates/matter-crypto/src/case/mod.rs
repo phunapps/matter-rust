@@ -1,12 +1,14 @@
 //! Matter CASE (Certificate Authenticated Session Establishment) via SIGMA-I.
 //!
-//! Implementation lands across phases:
-//! - M4.1 (current): math + Sigma1/2/3 state machines + new-session wire messages.
-//! - M4.2: session resumption (`Sigma2_Resume`, `Sigma3_Resume`).
-//! - M4.3: matter.js byte-parity verification + readiness markers.
+//! Ephemeral P-256 ECDH, mutual ECDSA signatures over AES-CCM-128 encrypted
+//! blobs, the Sigma1/2/3 wire messages, and the sans-IO
+//! [`CaseInitiator`](crate::CaseInitiator) /
+//! [`CaseResponder`](crate::CaseResponder) state machines. Resumption takes the
+//! Sigma1 + `Sigma2_Resume` fast path; the caller owns resumption-record
+//! lookup, driven by [`Sigma1Outcome`]. Byte-checked against matter.js
+//! fixtures for the new-session case.
 //!
-//! See Matter Core Specification §4.13 and
-//! `docs/superpowers/specs/2026-05-19-matter-crypto-case-design.md`.
+//! See Matter Core Specification §4.13.
 
 pub(crate) mod initiator;
 pub(crate) mod messages;
@@ -29,9 +31,9 @@ pub enum CaseMessageKind {
     Sigma2,
     /// The initiator's final message completing the handshake (new-session path).
     Sigma3,
-    /// Resumption response (M4.2).
+    /// Resumption response.
     Sigma2Resume,
-    /// Resumption finish (M4.2).
+    /// Resumption finish.
     Sigma3Resume,
 }
 
@@ -70,8 +72,8 @@ pub struct CaseCredentials {
     /// Used as the HKDF salt in CASE key derivations (`DestinationId`, S2RK,
     /// S3SK, and attestation-challenge). Provides cross-fabric domain
     /// separation: two fabrics sharing a NOC but using different IPKs cannot
-    /// impersonate each other. The IPK is derived during commissioning (M6
-    /// fabric storage persists it alongside the NOC).
+    /// impersonate each other. The IPK is derived during commissioning, which
+    /// persists it alongside the NOC.
     ///
     /// Pinned from matter.js: `operationalIdentityProtectionKey` (16 bytes).
     pub ipk: [u8; 16],
@@ -114,7 +116,7 @@ impl Drop for CaseCredentials {
 /// Output of a successful CASE handshake.
 #[derive(Debug, Clone)]
 pub struct CaseSessionOutput {
-    /// Pure key material for the symmetric cipher (consumed by M5 transport).
+    /// Pure key material for the symmetric cipher (consumed by `matter-transport`).
     pub keys: CaseSessionKeys,
     /// Peer's identity discovered during the handshake.
     pub peer: PeerInfo,
@@ -131,7 +133,7 @@ pub struct CaseSessionOutput {
 
 /// Symmetric session keys derived by a completed CASE handshake.
 ///
-/// Consumed by M5 transport's AES-CCM cipher wrapper.
+/// Consumed by `matter-transport`'s AES-CCM cipher wrapper.
 ///
 /// # Secret hygiene
 ///
@@ -190,7 +192,7 @@ pub struct ResumptionId(pub [u8; 16]);
 
 /// State persisted by the caller after a successful CASE handshake,
 /// allowing a future session to skip the full 3-message handshake via
-/// `Sigma2_Resume`. Resumption flow lands in M4.2.
+/// `Sigma2_Resume`.
 ///
 /// # Secret hygiene
 ///
@@ -243,7 +245,7 @@ impl core::fmt::Debug for ResumptionRecord {
 /// On `ResumptionRequested`, the caller looks up the corresponding
 /// `ResumptionRecord` in their session store and calls either
 /// `accept_resumption(record)` or `reject_resumption()` on the
-/// `CaseResponder`. (Resumption flow lands in M4.2.)
+/// `CaseResponder`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sigma1Outcome {
     /// Initiator wants a fresh CASE session.

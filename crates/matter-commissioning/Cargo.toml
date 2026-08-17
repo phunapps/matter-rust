@@ -23,9 +23,10 @@ __test_shortcuts = []
 ## methods (`poll`, `on_response`, `on_case_established`).
 ## Off by default; opt-in per Matter-rust's zero-cost-when-unused policy.
 tracing = ["dep:tracing"]
-## Async Tokio commissioning driver (M6.6). Pulls in `tokio` and the
-## `matter-transport` IO layer. Off by default: the sans-IO state machine,
-## codecs, and `im` module do not require an async runtime.
+## Async Tokio commissioning driver — the IO layer that runs the state
+## machine for real. Pulls in `tokio` and the `matter-transport` IO layer.
+## Off by default: the sans-IO state machine, codecs, and `im` module do not
+## require an async runtime.
 driver = ["dep:tokio"]
 ## Enables `matter_commissioning::test_support` — a canned-`CommissionedFabric`
 ## constructor for downstream crates whose tests need a successful

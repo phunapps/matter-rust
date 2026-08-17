@@ -9,17 +9,29 @@
 //! `matter-clusters` codecs) and compose them with the concrete paths in
 //! [`path`].
 //!
-//! Scope: single- and multi-command invoke (the latter via
-//! `build_invoke_request_batch` / `parse_invoke_response_batch` with `CommandRef`
-//! — the controller-side verb + `MaxPathsPerInvoke` gating are deferred until a
-//! batch-capable device exists), concrete and wildcard read paths, **events**
-//! (event paths/filters in `ReadRequest` and `SubscribeRequest`, `EventReportIB`
-//! parsing), **timed write/invoke** (the `TimedRequest` message + the
-//! `TimedRequest` flag), no chunked writes (deferred to the ACL/groups work).
+//! Scope:
 //!
-//! Lifted from `matter-commissioning` in M7.1 (the M6.6 design kept this
-//! module free of state-machine dependencies for exactly this move).
-//! Byte-parity with matter.js is enforced by `tests/im_byte_parity.rs`
+//! - **Invoke** — single command, group (broadcast) invoke, and batched
+//!   multi-command invoke via [`build_invoke_request_batch`] /
+//!   [`parse_invoke_response_batch`]. A controller-side batching verb and
+//!   `MaxPathsPerInvoke` gating are not here; the batch builders are.
+//! - **Read and subscribe** — concrete and wildcard paths ([`ReadPath`]),
+//!   [`SubscribeRequest`] with its response and `StatusResponse` handshake,
+//!   and [`ReportAccumulator`] for reassembling chunked reports across
+//!   messages and across list boundaries.
+//! - **Write** — single-message writes, plus [`build_list_write_chunks`] for
+//!   a list attribute too large for one message.
+//! - **Events** — event paths and filters in `ReadRequest` and
+//!   `SubscribeRequest`, and `EventReportIB` parsing.
+//! - **Timed interactions** — the `TimedRequest` message and the
+//!   `TimedRequest` flag on writes and invokes.
+//! - **Server side** — [`parse_invoke_request`] and the
+//!   `build_invoke_response_*` builders, for responding to an invoke rather
+//!   than issuing one (used by this workspace's OTA provider).
+//!
+//! This crate depends only on `matter-codec`: it frames and parses IM
+//! messages and does no IO. Byte-parity with matter.js is enforced by
+//! `tests/im_byte_parity.rs`
 //! against fixtures captured via `cargo xtask capture-im`.
 
 #![forbid(unsafe_code)]

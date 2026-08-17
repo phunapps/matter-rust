@@ -6,25 +6,25 @@
 //!
 //! # Scope
 //!
-//! M2.1: types, TLV parser, TLV serialiser. Byte-for-byte round-trip
-//! is enforced by the integration test against captured CSA test
-//! certificates.
-//!
-//! M2.2: public-key extraction + ECDSA-P256-SHA256 signature verification
-//! primitive via `ring`.
-//!
-//! M2.3: Matter-TLV → X.509-DER `TBSCertificate` conversion that
-//! lets `MatterCertificate::verify_signed_by` work on signatures
-//! produced by matter.js (and the broader Matter ecosystem). Byte parity
-//! against matter.js's `asUnsignedDer()` is the correctness gate.
-//!
-//! M2.4 (current): `CertificateChain::validate` against trusted roots,
-//! plus `TrustAnchor` / `TrustedRoots`. Per-cert checks: time bounds,
-//! CA bit (above the leaf), DN linkage, path-length constraint, and
-//! signature verification via M2.3's `verify_signed_by`.
-//!
-//! crates.io publish remains user-driven (the crate is feature-complete
-//! at `0.1.0-pre` after M2.4).
+//! - **Parse and serialise** — [`MatterCertificate`] over the Matter TLV
+//!   form, byte-exact on round-trip. Distinguished names including the
+//!   Matter-specific OIDs ([`name`]) and the extension set
+//!   ([`extensions`]: basic constraints, key usage, extended key usage,
+//!   subject and authority key identifiers).
+//! - **Public keys and signatures** — P-256 key extraction
+//!   ([`public_key`]) and the raw `r || s` Matter [`signature`] form.
+//! - **X.509 DER conversion** — real Matter signatures are made over the
+//!   X.509 DER `TBSCertificate`, not over the TLV form, so
+//!   [`MatterCertificate::verify_signed_by`] reconstructs it. Byte parity
+//!   against matter.js's `asUnsignedDer()` is the correctness gate.
+//! - **Chain validation** — [`CertificateChain::validate`] against
+//!   [`TrustedRoots`], checking time bounds, the CA bit above the leaf,
+//!   DN linkage, the path-length constraint, and each signature.
+//! - **Issuance** — [`Builder`] constructs an [`UnsignedCertificate`], and
+//!   [`operational`] adds role-aware constructors that bake in the
+//!   extension and DN profile the spec mandates for RCAC, ICAC, and NOC.
+//!   Signing is a separate step, so it can happen in an HSM, an OS
+//!   keychain, or an offline ceremony rather than in this process.
 //!
 //! Cryptographic verification is delegated to `ring`. This crate
 //! never implements the underlying maths.

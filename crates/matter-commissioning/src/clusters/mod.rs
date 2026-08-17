@@ -1,9 +1,9 @@
 //! Per-cluster command + attribute codecs for clusters used during
 //! commissioning.
 //!
-//! Cluster command codecs in `noc/commands.rs` (the
-//! `OperationalCredentials` cluster's NOC-issuance subset, M6.3) predate
-//! this directory. Future M6.5 / M6.7 cluster work lands here.
+//! The `OperationalCredentials` cluster's NOC-issuance subset lives in
+//! `noc/commands.rs` rather than here, alongside the certificate work it
+//! serves.
 
 #![forbid(unsafe_code)]
 

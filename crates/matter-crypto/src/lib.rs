@@ -1,19 +1,32 @@
 //! Matter session-establishment protocols.
 //!
-//! Milestones 3 (PASE / SPAKE2+) and 4 (CASE / SIGMA) of the `matter-rust`
-//! roadmap.
-//!
 //! # Scope
 //!
-//! - [`pase`]: Password Authenticated Session Establishment (SPAKE2+).
-//!   M3.1 (current): math + KDF primitives. M3.2: state machines.
-//!   M3.3: matter.js byte-parity verification.
-//! - [`case`]: Certificate Authenticated Session Establishment (SIGMA-I).
-//!   Placeholder; M4 territory.
-//! - [`aead`]: AES-128-CCM-128 AEAD helpers. Prefer [`SessionAead`] over
-//!   the free functions on any path that encrypts/decrypts more than once
-//!   per key, to avoid repeating AES key expansion per call.
+//! - [`pase`]: Password Authenticated Session Establishment via SPAKE2+
+//!   (spec §3.10). Sans-IO [`PaseProver`] / [`PaseVerifier`] state machines,
+//!   PBKDF2 setup-PIN derivation, HKDF session-key derivation, and
+//!   constant-time confirmation-tag comparison.
+//! - [`case`]: Certificate Authenticated Session Establishment via SIGMA-I
+//!   (spec §4.13). Sans-IO [`CaseInitiator`] / [`CaseResponder`] state
+//!   machines, NOC chain validation via `matter-cert`, and session
+//!   resumption (Sigma1 + `Sigma2_Resume`). Signing goes through the
+//!   [`CaseSigner`] trait, so an HSM, TPM, or secure element can hold the
+//!   operational key instead of this process.
+//! - [`operational`]: operational identity derivations (spec §4.3) — the
+//!   Compressed Fabric Identifier, the operational IPK, and the group
+//!   session/privacy keys and multicast address.
+//! - [`checkin`]: the ICD Check-In message codec (spec §4.18.2), the payload
+//!   an intermittently-connected device sends a registered client when it
+//!   briefly wakes.
+//! - [`aead`]: AES-128-CCM-128 AEAD helpers, used by CASE here and by
+//!   `matter-transport`'s secured-message framing. Prefer [`SessionAead`]
+//!   over the free functions on any path that encrypts/decrypts more than
+//!   once per key, to avoid repeating AES key expansion per call.
 //! - [`error`]: the crate error type.
+//!
+//! Both handshakes are sans-IO: they consume and produce message bytes, and
+//! the caller owns the transport. PASE and CASE are byte-checked against
+//! matter.js fixtures.
 //!
 //! # Cryptographic discipline
 //!
@@ -41,9 +54,8 @@ pub use case::signer::{CaseSigner, RingSigner, SignerError};
 
 /// Canonical name for the ECDSA-P256-SHA256 signer trait outside CASE.
 ///
-/// `CaseSigner` is the original name (introduced in M4.1). Outside the
-/// CASE handshake, callers should import this re-export — the trait
-/// itself is identical.
+/// `CaseSigner` is the original name. Outside the CASE handshake, callers
+/// should import this re-export — the trait itself is identical.
 pub use case::signer::CaseSigner as Signer;
 pub use case::{
     CaseCredentials, CaseMessageKind, CaseSessionKeys, CaseSessionOutput, LocalInfo, PeerInfo,
