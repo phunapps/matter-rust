@@ -10,6 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 keywords = ["matter", "ble", "btp", "commissioning", "iot"]
 categories = ["network-programming", "embedded"]
+readme = "README.md"
 
 [lints]
 workspace = true

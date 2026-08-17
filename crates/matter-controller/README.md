@@ -6,7 +6,7 @@ to commission and control Matter devices from pure Rust. It wraps every other
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **0.5.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
+> Status: **0.6.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
 > (M9): BLE→Wi-Fi/Thread commissioning, full interaction model, groups, OTA
 > provider, ICD client, multi-admin/ACL — extensively validated against real
 > silicon (ESP32-C6 over Wi-Fi and Thread).
@@ -47,6 +47,7 @@ callers address a device by node id and never manage sessions.
 ## Quickstart
 
 ```rust,no_run
+use std::path::Path;
 use std::sync::Arc;
 use matter_controller::{AttestationTrust, FabricConfig, FileStore, MatterController, MatterTime, ReadPath};
 
@@ -54,7 +55,13 @@ use matter_controller::{AttestationTrust, FabricConfig, FileStore, MatterControl
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(FileStore::new("controller-state.bin"));
     let controller = MatterController::builder(store)
-        .attestation_trust(AttestationTrust::example_device_roots())
+        // Arbitrary certified devices need real CSA roots. The bundled
+        // `example_device_roots()` covers only CSA-test / example devices
+        // (chip's example apps, esp-matter) — not a production trust set.
+        .attestation_trust(AttestationTrust::from_dirs(
+            Path::new("paa-roots"),
+            Path::new("cd-roots"),
+        )?)
         .build()
         .await?;
 
@@ -69,7 +76,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs();
         controller.create_fabric(FabricConfig::new(
-            1, 1, 1,
+            /* fabric_id */ 1,
+            /* rcac_id */ 1,
+            /* commissioner_node_id */ 1,
             (
                 MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
                 MatterTime::NO_EXPIRY,

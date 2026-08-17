@@ -41,7 +41,7 @@ bounded with idle-first eviction (DoS defense).
 Embedded callers disable defaults:
 
 ```toml
-matter-transport = { version = "0.2.0", default-features = false }
+matter-transport = { version = "0.3", default-features = false }
 ```
 
 …and implement `Transport` + `Discovery` themselves against their HAL.

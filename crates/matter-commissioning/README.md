@@ -5,7 +5,7 @@ attestation, NOC issuance, and network commissioning.
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
 
-> Status: **0.2.0**.
+> Status: **0.5.0**.
 >
 > **Milestone 6.4 (Commissioning State Machine): complete** — the
 > state machine drives end-to-end from `SecurePairing` through
@@ -147,7 +147,7 @@ use matter_crypto::{RingSigner, Signer};
 
 # fn run(
 #     pase_attestation_challenge: [u8; 16],
-#     setup: &SetupPayload,
+#     setup: SetupPayload,
 # ) -> Result<(), Box<dyn std::error::Error>> {
 let (signer, _pkcs8) = RingSigner::generate()?;
 let signer: Arc<dyn Signer> = Arc::new(signer);
@@ -167,7 +167,7 @@ let rng: Arc<dyn NocRng> = Arc::new(SystemNocRng);
 let cfg = CommissionerConfig {
     pase_attestation_challenge,
     fabric: &fabric,
-    setup_payload: setup,
+    setup_payload: &setup,
     paa_trust_store: &paa,
     cd_signing_roots: &cd_signing_roots,
     commissioner_node_id: 0x1,
@@ -222,9 +222,7 @@ calls (PAI cert, DAC cert, AttestationRequest) and one off-wire
 so on a valid CD the cursor advances past attestation:
 
 ```rust,no_run
-use matter_commissioning::{
-    Action, Commissioner, CommissionerConfig, CommissioningError, Expectation,
-};
+use matter_commissioning::{Commissioner, Expectation};
 
 # fn run(
 #     sm: &mut Commissioner,
@@ -311,8 +309,7 @@ handshake when the state machine signals `Action::EstablishCase`:
 
 ```rust,no_run
 use matter_commissioning::{
-    Action, CommissionedFabric, Commissioner, CommissionerConfig,
-    CommissioningError, Expectation,
+    Action, CommissionedFabric, Commissioner, CommissioningError,
 };
 
 # fn run(mut sm: Commissioner) -> Result<CommissionedFabric, CommissioningError> {
@@ -350,9 +347,11 @@ loop {
             }
             return Err(CommissioningError::CaseEstablishmentFailed); // pick a representative error
         }
-        // `Action` is `#[non_exhaustive]`: a future variant must not silently
-        // break this loop, so handle the unknown case explicitly.
-        other => unreachable!("unhandled action {other:?}"),
+        // `Action` is `#[non_exhaustive]`: a future minor release can add a
+        // variant this loop has never seen. Return an error rather than
+        // panicking — the driver stays in control and can still disarm the
+        // failsafe on the device before giving up.
+        _ => return Err(CommissioningError::InvalidConfig("unhandled action")),
     }
 }
 # }
@@ -378,18 +377,20 @@ use matter_commissioning::{
 
 # fn run(
 #     pase_attestation_challenge: [u8; 16],
-#     fabric: &FabricRecord,
-#     setup: &SetupPayload,
-#     paa: &PaaTrustStore,
-#     cd_signing_roots: &CdSigningRoots,
+#     fabric: FabricRecord,
+#     setup: SetupPayload,
+#     paa: PaaTrustStore,
+#     cd_roots: CdSigningRoots,
 #     rng: Arc<dyn NocRng>,
 # ) -> Result<(), Box<dyn std::error::Error>> {
+// `CommissionerConfig` borrows the fabric, payload and trust stores — they
+// must outlive the `Commissioner`.
 let config = CommissionerConfig {
     pase_attestation_challenge,
-    fabric,
-    setup_payload: setup,
-    paa_trust_store: paa,
-    cd_signing_roots,
+    fabric: &fabric,
+    setup_payload: &setup,
+    paa_trust_store: &paa,
+    cd_signing_roots: &cd_roots,
     commissioner_node_id: 0x1,
     assigned_node_id: 0x2,
     ipk_epoch_key: [0x42_u8; 16],

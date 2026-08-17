@@ -65,13 +65,43 @@ APIs have had no outside users yet and are expected to move.
     `CaseSigner`/`Signer` trait.
   - `matter-commissioning`: `CommissionerConfig` gained the required `network`
     field (`NetworkCredentials`), and `Action` is `#[non_exhaustive]`, so the
-    documented driver loop needs a catch-all match arm.
+    documented driver loop needs a catch-all match arm. That arm **returns
+    `CommissioningError::InvalidConfig`; it does not panic.** `Action` is
+    `#[non_exhaustive]` precisely so a future minor release can add a variant,
+    and this loop is the driver skeleton integrators copy — a downstream driver
+    meeting an unknown action must stay in control and disarm the failsafe on
+    the device, not `unreachable!()` mid-commissioning with the failsafe armed.
   - `matter-cert`: the chain example bound `CertificateChain::new(&[noc, icac])`
     to a temporary that is dropped while still borrowed — it never compiled as
     written.
 
   Fences that perform I/O (networking, commissioning, file stores) are marked
   `no_run`: compiled, never executed. No fence is `ignore`.
+
+  A review pass over the same READMEs corrected what the compiler cannot see:
+
+  - **Stale version claims.** Every crate README's status line or dependency
+    snippet now matches its `Cargo.toml`: `matter-crypto` 0.3, `matter-interaction`
+    0.4, `matter-commissioning` 0.5, `matter-controller` 0.6, `matter-transport`
+    0.3, `matter-bdx` 0.3, `matter-ota` 0.5, and `matter-ble` 0.3 — the last
+    mattering most, since the snippet pinned `0.1`, predating the 0.3.1 D-Bus
+    file-descriptor-leak fix.
+  - **Trust roots.** The `matter-controller` quickstart — the page crates.io
+    renders, and the document behind [#111] — now shows `AttestationTrust::from_dirs`
+    with the caveat inline in the fence rather than `example_device_roots()` with
+    the caveat in distant prose. The root README no longer claims the example
+    roots verify *no* real device: they verify chip's example devices, including
+    the esp-matter ESP32-C6 this project validates against nightly.
+  - **Readability.** `FabricConfig::new(1, 1, 1, validity)` — three
+    indistinguishable `u64`s — is now written with `/* fabric_id */`-style
+    argument labels, and the `CommissionerConfig` fences show the `&` each
+    borrowed field requires instead of hiding it in a `# fn run(…)` line a
+    GitHub reader never sees.
+  - `matter-bdx`, `matter-ble` and `matter-ota` gained an explicit
+    `readme = "README.md"` manifest key. Cargo auto-detection already found the
+    file, but `#[cfg(doctest)]` is stripped before `include_str!` expands, so a
+    packaging change that dropped the README from the tarball would have
+    published cleanly and broken only downstream `cargo test --doc`.
 
   [#111]: https://github.com/phunapps/matter-rust/issues/111
 

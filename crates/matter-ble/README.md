@@ -30,8 +30,8 @@ The engine is verified byte-for-byte against `connectedhomeip`'s
 
 ```toml
 [dependencies]
-matter-ble = "0.1"                                   # BTP engine only
-matter-ble = { version = "0.1", features = ["central"] }  # + BLE central role
+matter-ble = "0.3"                                   # BTP engine only
+matter-ble = { version = "0.3", features = ["central"] }  # + BLE central role
 ```
 
 ## Platform support

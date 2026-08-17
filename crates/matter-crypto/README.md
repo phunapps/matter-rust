@@ -33,7 +33,7 @@ Authenticated Session Establishment) via SIGMA-I. Part of the
 
 ## Status
 
-**0.2.0.** PASE and CASE feature-complete.
+**0.3.0.** PASE and CASE feature-complete.
 
 ## Minimal example
 

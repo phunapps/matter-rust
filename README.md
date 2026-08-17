@@ -128,9 +128,11 @@ In-process loopback E2E tests prove each flow with no hardware; the runbooks und
 
 **Attestation roots:** commissioning any real device requires the PAA and CD trust
 roots, and they do not come from the same place —
-`AttestationTrust::example_device_roots()` is for our own tests and verifies no real
-device; production callers pass real root directories to
-`AttestationTrust::from_dirs`. The runbooks give the specifics.
+`AttestationTrust::example_device_roots()` bundles the CSA **test** roots plus the
+CD signing roots for chip's example devices (including the esp-matter ESP32-C6 we
+validate against nightly) — it is not the CSA production trust set, so an arbitrary
+certified product will fail against it. Production callers pass real root
+directories to `AttestationTrust::from_dirs`. The runbooks give the specifics.
 
 ## How we verify correctness
 
@@ -217,7 +219,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             MatterTime::NO_EXPIRY,
         );
         controller
-            .create_fabric(FabricConfig::new(1, 1, 1, validity))
+            .create_fabric(FabricConfig::new(
+                /* fabric_id */ 1,
+                /* rcac_id */ 1,
+                /* commissioner_node_id */ 1,
+                validity,
+            ))
             .await?;
     }
 
