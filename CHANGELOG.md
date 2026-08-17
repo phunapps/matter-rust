@@ -231,6 +231,25 @@ APIs have had no outside users yet and are expected to move.
 
   [#111]: https://github.com/phunapps/matter-rust/issues/111
 
+- **`matter-commissioning`'s README now describes the shipped crate instead of
+  the milestone that was in progress when it was written.** The crates.io
+  landing page still announced "Milestone 6.4 … complete" and "Next: M6.5
+  (Wi-Fi network commissioning) and M6.6 (Tokio driver + first real-device
+  commission)" — work that shipped long ago, along with all of M7–M9. Headings
+  and prose were milestone-relative throughout ("Chain validation … is M6.2.2",
+  "M6.4.4 will land the CSR / NOC issuance stages"), which is unreadable for
+  anyone who has not read this repository's roadmap.
+
+  The status block is replaced by a capability list (setup payloads,
+  attestation, NOC issuance, the sans-IO state machine, the optional `driver`
+  feature) plus a stability note and a pointer to `matter-controller` for
+  callers who want a whole controller. Every internal milestone number is gone;
+  where one was load-bearing it is restated as a capability. The previously
+  undocumented `driver` feature now has its own section, explicit that
+  `commission_ble` contains no Bluetooth stack. **Documentation only** — no API
+  change, and the ten Rust fences are unchanged apart from four comments and one
+  `unreachable!` message that named milestones.
+
 ### Changed
 
 - **`p256` upgraded from 0.13 to 0.14** (`matter-crypto`, `matter-commissioning`).

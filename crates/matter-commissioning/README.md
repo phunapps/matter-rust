@@ -1,43 +1,38 @@
 # matter-commissioning
 
-Matter commissioning: setup payloads, the ten-stage state machine, device
+Matter commissioning: setup payloads, the commissioning state machine, device
 attestation, NOC issuance, and network commissioning.
 
-Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 6.
+Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **0.5.0**.
+> Status: **0.5.0**, published on crates.io. The commissioning flow here has
+> been driven against real Matter hardware — over IP and over BLE, onto Wi-Fi
+> and onto Thread — not only against tests.
 >
-> **Milestone 6.4 (Commissioning State Machine): complete** — the
-> state machine drives end-to-end from `SecurePairing` through
-> `Action::Done(CommissionedFabric)` on canned responses + a mock
-> `on_case_established` callback. matter.js byte-parity gate
-> infrastructure shipped (operator-touch wiring deferred —
-> see `TODO-1.0.md`).
+> What the crate gives you:
+> - **Setup payloads** — QR and manual pairing codes, decode and encode.
+> - **Device attestation** — typed `Dac` / `Pai` / `Paa` wrappers, chain
+>   validation against a `PaaTrustStore`, `AttestationResponse` signature
+>   verification, and CSA Certification Declaration (CMS) verification.
+> - **NOC issuance** — `FabricRecord`, CSR verification, RCAC/NOC minting,
+>   and the `OperationalCredentials` command codecs.
+> - **The commissioning state machine** — a sans-IO cursor over the whole
+>   flow, `SecurePairing` through `Action::Done(CommissionedFabric)`,
+>   including the network-commissioning subgraph (Wi-Fi, Thread, or a device
+>   already on its operational network) and the PASE→CASE handoff.
+> - **An async driver**, behind the off-by-default `driver` feature: the
+>   Tokio IO layer that runs that state machine for real (PASE, mDNS, CASE,
+>   Invoke/Read round-trips). See [below](#optional-driver-feature).
 >
-> Phases available:
-> - **M6.1:** the setup-payload codec (QR + manual pairing code).
-> - **M6.2.1:** typed attestation cert wrappers (`Dac` / `Pai` /
->   `Paa`), `PaaTrustStore` with bundled CSA test roots, `VendorId` /
->   `ProductId` newtypes. Parsing only.
-> - **M6.2.2:** `verify_chain` — `rustls-webpki` 0.103 path validation
->   with `KeyUsage::client_auth()` plus a Matter VID/PID equality
->   overlay. Six granular `AttestationError` variants with a
->   documented `webpki::Error` mapping. 8-row negative-fixture matrix.
-> - **M6.2.3 (M6.2 feature-complete):** `verify_attestation_response`
->   — pure ECDSA P-256/SHA-256 verification via `ring` over
->   `attestation_elements || attestation_challenge`. Single coarse
->   `BadResponseSignature` error variant; matter.js byte-parity for
->   happy-path + four single-byte mutations.
-> - **M6.3 (feature-complete):** NOC issuance — `FabricRecord`,
->   `verify_csr_response`, `issue_noc`, OpCreds command codecs with
->   matter.js byte-parity.
-> - **M6.4 (complete):** commissioning state machine — all six
->   sub-phases (M6.4.1 skeleton → M6.4.6 byte-parity gate
->   infrastructure) shipped.
+> Stability: this is a `0.x` crate, so a **minor** bump may break API.
+> Encodings are byte-checked against matter.js where fixtures exist.
 >
-> Next: **M6.5** (Wi-Fi network commissioning subgraph) and **M6.6**
-> (Tokio driver + first real-device commission). With M6.6 lands the
-> first public demo of the library commissioning a real Matter device.
+> If you want a complete controller — commissioning plus reading, writing,
+> invoking and subscribing — use
+> [`matter-controller`](https://crates.io/crates/matter-controller), which is
+> built on this crate. Reach for `matter-commissioning` directly when you want
+> the commissioning pieces on their own, or want to drive the state machine
+> from your own IO layer.
 
 ## Example: parse a QR code
 
@@ -50,8 +45,9 @@ assert_eq!(payload.passcode.as_u32(), 20_202_021);
 # Ok::<(), matter_commissioning::SetupError>(())
 ```
 
-(Replace the QR string with the actual captured value from
-`test-vectors/commissioning/setup/qr-spec-example.json`.)
+(That QR string is the spec's example payload, kept as a fixture at
+`test-vectors/commissioning/setup/qr-spec-example.json`. Substitute the code
+printed on your own device.)
 
 ## Example: parse a manual pairing code
 
@@ -63,7 +59,7 @@ assert_eq!(payload.discriminator.short(), 0x5);
 # Ok::<(), matter_commissioning::SetupError>(())
 ```
 
-## Example: parse a DAC and reach for a trusted root (M6.2.1)
+## Example: parse a DAC and reach for a trusted root
 
 ```rust,no_run
 use matter_commissioning::{Dac, PaaTrustStore, VendorId};
@@ -78,9 +74,10 @@ assert!(trust_store.len() > 0);
 # }
 ```
 
-Chain validation against the trust store is M6.2.2.
+Parsing a DAC does not validate it. Chain validation against the trust store is
+the next example.
 
-## Example: validate an attestation chain (M6.2.2)
+## Example: validate an attestation chain
 
 ```rust,no_run
 use matter_cert::time::MatterTime;
@@ -100,10 +97,13 @@ println!("DAC verified for VID={} PID={}", chain.vendor_id, chain.product_id);
 ```
 
 Production callers build their own `PaaTrustStore` from CSA-published
-production roots (M8 deliverable). The bundled `with_example_device_roots()`
-is for examples and integration tests only.
+production roots — `PaaTrustStore::empty()` plus `add()` per root, or
+`matter-controller`'s `AttestationTrust::from_dirs`, which loads PAA and CD
+roots from two directories. The bundled `with_example_device_roots()` carries
+the CSA **test** roots: fine for examples and integration tests, and it will
+reject an arbitrary certified product.
 
-## Example: verify an attestation response (M6.2.3)
+## Example: verify an attestation response
 
 ```rust,no_run
 use matter_commissioning::{
@@ -132,7 +132,13 @@ key blob (exposed as `CaseSessionKeys::attestation_challenge` or
 `PaseSessionKeys::attestation_key`). Any verification failure folds
 into the single coarse `AttestationError::BadResponseSignature`.
 
-## Example: drive the early commissioning stages (M6.4.1)
+## Example: configure the state machine and drive it
+
+`Commissioner` is sans-IO: it emits an `Action` describing what to send, and you
+feed the device's reply back with `on_response`. The loop below is cut down to
+the two action shapes the early stages produce — the
+[full loop](#example-full-commissioning-driver-loop-reaching-actiondone) further
+down handles every variant.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -185,9 +191,9 @@ let mut sm = Commissioner::new(cfg)?;
 loop {
     match sm.poll()? {
         Action::ReadAttribute { expect, .. } | Action::Invoke { expect, .. } => {
-            // The caller (M6.6 driver) frames the request into an
-            // Invoke/Read envelope, routes via matter-transport over
-            // the PASE session, and feeds the decoded response back:
+            // The caller (or the `driver` feature) frames the request
+            // into an Invoke/Read envelope, routes via matter-transport
+            // over the PASE session, and feeds the response back:
             let response_bytes: &[u8] = unimplemented!("driver supplies the bytes");
             sm.on_response(expect, response_bytes)?;
         }
@@ -199,27 +205,24 @@ loop {
             break;
         }
         Action::Done(_) => break,
-        other => unreachable!("M6.4.1 doesn't emit {other:?} yet"),
+        other => unreachable!("this cut-down example doesn't handle {other:?}"),
     }
 }
 # Ok(())
 # }
 ```
 
-M6.4.1 only drives `SecurePairing` → `ReadCommissioningInfo` →
-`ArmFailsafe` → `ConfigRegulatory`. M6.4.2 extends the flow through
-the attestation request/response stages, and M6.4.3 wires the
-CSA-signed Certification Declaration check into the off-wire
-`AttestationVerification` step so the cursor can advance past
-attestation into the (M6.4.4) CSR + NOC issuance stages.
+Those first stages are `SecurePairing` → `ReadCommissioningInfo` →
+`ArmFailsafe` → `ConfigRegulatory`. The cursor then continues through
+attestation, CSR and NOC issuance, network commissioning, and the CASE
+handoff, as the following sections show.
 
-## Example: attestation flow through CD verification (M6.4.3)
+## Example: attestation flow through CD verification
 
-The same driver loop from the M6.4.1 example works unchanged — after
-`ConfigRegulatory` the state machine emits four more `Action::Invoke`
-calls (PAI cert, DAC cert, AttestationRequest) and one off-wire
-`AttestationVerification` step. M6.4.3 wires the CD-verify step in,
-so on a valid CD the cursor advances past attestation:
+The same driver loop works unchanged — after `ConfigRegulatory` the state
+machine emits three more `Action::Invoke` calls (PAI cert, DAC cert,
+AttestationRequest) and one off-wire `AttestationVerification` step, which
+includes the CSA-signed Certification Declaration check:
 
 ```rust,no_run
 use matter_commissioning::{Commissioner, Expectation};
@@ -244,7 +247,7 @@ sm.on_response(Expectation::DacCertChainResponse, dac_response_tlv)?;
 let _ = sm.poll()?;
 sm.on_response(Expectation::AttestationResponse, attestation_response_tlv)?;
 
-// Stage 7: AttestationVerification (off-wire). Runs the M6.2/M6.4.3
+// Stage 7: AttestationVerification (off-wire). Runs the whole
 // verifier chain — chain validation, attestation signature, nonce
 // echo, then CD verification — and advances past attestation on
 // success. On failure, `poll()` returns a typed `CommissioningError`
@@ -254,10 +257,11 @@ let _ = sm.poll()?;
 # }
 ```
 
-M6.4.4 will land the CSR / NOC issuance stages that consume the
-advanced cursor.
+From there the cursor walks into the CSR and NOC issuance stages
+(`SendOpCertSigningRequest` → `ValidateCsr` → `GenerateNocChain` →
+`SendTrustedRootCert` → `SendNoc`).
 
-## Example: verify a Certification Declaration standalone (M6.4.3)
+## Example: verify a Certification Declaration standalone
 
 `verify_certification_declaration` can be called directly without
 involving the state machine — useful for offline analysis of captured
@@ -299,13 +303,14 @@ The verifier performs five checks in order:
 Any failure surfaces as a specific
 `AttestationError::CertificationDeclaration*` variant.
 
-## Example: full commissioning driver loop reaching `Action::Done` (M6.4.5)
+## Example: full commissioning driver loop reaching `Action::Done`
 
 The complete cursor walks from `SecurePairing` through
-`Action::Done(CommissionedFabric)`. The caller (M6.6's Tokio driver in
-the next major milestone) frames Invoke envelopes + routes via
-`matter-transport`, then performs mDNS find-operational + the SIGMA
-handshake when the state machine signals `Action::EstablishCase`:
+`Action::Done(CommissionedFabric)`. The caller frames Invoke envelopes +
+routes via `matter-transport`, then performs mDNS find-operational + the
+SIGMA handshake when the state machine signals `Action::EstablishCase`.
+The `driver` feature ships exactly such a caller, so you only need to write
+this loop yourself if you are supplying your own IO:
 
 ```rust,no_run
 use matter_commissioning::{
@@ -323,7 +328,7 @@ loop {
             sm.on_response(expect, response_bytes)?;
         }
         Action::EstablishCase { fabric_id, peer_node_id } => {
-            // M6.6 driver: mDNS find-operational for the operational
+            // Driver work: mDNS find-operational for the operational
             // service name keyed off (compressed_fabric_id, peer_node_id),
             // then run the SIGMA-I handshake from matter-crypto.
             // Pretend success here:
@@ -334,8 +339,8 @@ loop {
             //   sm.on_response(Expectation::CaseFailed, &[])?;
         }
         Action::EvictCase { .. } => {
-            // Reserved for M8 multi-fabric work; never emitted by
-            // M6.4's new-fabric flow.
+            // Reserved for multi-fabric eviction; never emitted by
+            // the current new-fabric flow.
         }
         Action::Done(commissioned_fabric) => {
             return Ok(commissioned_fabric);
@@ -362,7 +367,7 @@ The returned `CommissionedFabric` carries the long-lived fabric record
 NOC public key, and the terminal stage cursor (always
 `Stage::Cleanup`).
 
-## Wi-Fi commissioning configuration (M6.5+)
+## Wi-Fi commissioning configuration
 
 ```rust,no_run
 use std::sync::Arc;
@@ -424,7 +429,41 @@ the Thread bit — commissioning fails fast with
 `CommissioningError::NetworkFeatureUnsupported { needed }`, naming the
 network type the device is missing.
 
-### Optional `tracing` feature
+## Optional `driver` feature
+
+Everything above is sans-IO: the state machine says what to send and consumes
+what comes back, but never touches a socket. The `driver` feature adds the
+Tokio IO layer that closes the loop:
+
+```toml
+matter-commissioning = { version = "0.5", features = ["driver"] }
+```
+
+`driver::commission` takes a `DriverConfig` — the same `CommissionerConfig` as
+above, the passcode, and the controller's persistent commissioner operational
+identity (its NOC plus PKCS#8 key, which the caller owns and stores) — along
+with an `AsyncDatagram` transport and an mDNS `Discovery`. It then runs the
+whole thing: resolve the commissionable device, PASE (SPAKE2+),
+the poll loop with each action framed as an Invoke or Read over the right
+session, mDNS find-operational, the CASE handshake, and `CommissioningComplete`.
+
+`driver::commission_ble` is the same flow over a BLE/BTP `AsyncDatagram` — MRP
+suppressed, since BTP is already reliable and ordered (spec §4.12) — with a
+separate UDP transport for the operational phase. It does **not** contain a
+Bluetooth stack: scanning and the GATT/BTP connection happen above this crate.
+`matter-ble` provides them and `matter-controller` wires the two together.
+
+The transport seam is the `AsyncDatagram` trait, so the driver is not tied to
+one socket implementation; `InMemoryDatagram` is what the in-process end-to-end
+tests commission over.
+
+There is a runnable operator binary for the IP path:
+
+```bash
+cargo run -p matter-commissioning --example commission_ip --features driver -- --help
+```
+
+## Optional `tracing` feature
 
 Enable per-method spans for observability:
 
