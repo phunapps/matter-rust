@@ -96,11 +96,17 @@ const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 /// How many consecutive `recv_from` errors the loop absorbs at full speed
 /// before it starts backing off.
 ///
-/// A real UDP socket returns isolated errors as a matter of course — most
-/// commonly `ECONNREFUSED`, which Linux synthesises from the ICMP
-/// port-unreachable of a device that has gone away, and which must NOT cost the
-/// loop anything. Only a *run* of errors with no successful receive in between
-/// suggests a wedged transport rather than a blip, so the first few are free.
+/// A socket surfaces isolated, recoverable errors as a matter of course — a
+/// signal interrupting the syscall (`EINTR`), a spurious wakeup (`EWOULDBLOCK`),
+/// or a queued ICMP error (`ECONNREFUSED`; that one reaches only a *connected*
+/// UDP socket, which our `TokioUdpTransport` is not, but an out-of-tree
+/// `AsyncDatagram` may well be) — and a blip must NOT cost the loop anything.
+/// Only a *run* of errors, with no successful receive in between, suggests a
+/// wedged transport rather than a blip, so the first few are free.
+///
+/// The run must also be close together in *time*: see [`RECV_ERROR_DECAY`],
+/// which clears the counter after a quiet gap so the free budget is genuinely
+/// restored rather than being a once-per-process allowance.
 const RECV_ERROR_FREE_RETRIES: u32 = 8;
 
 /// First backoff step (milliseconds) applied once [`RECV_ERROR_FREE_RETRIES`]
@@ -113,9 +119,33 @@ const RECV_ERROR_BACKOFF_MIN_MS: u64 = 1;
 /// Chosen below the ~300 ms floor of an MRP retransmit interval, so even a
 /// permanently-erroring transport cannot suppress the recv arm long enough to
 /// swallow a whole retransmit window for the datagrams that *do* arrive. It
-/// bounds a wedged transport to ~5 wakeups per second — versus the ~130 000 per
-/// second measured when the loop discarded the error and immediately re-polled.
+/// bounds a wedged transport to ~5 wakeups per second — versus the ~75 000 per
+/// second (~447 000 in 6 s) measured when the loop discarded the error and
+/// immediately re-polled.
 const RECV_ERROR_BACKOFF_MAX_MS: u64 = 200;
+
+/// Quiet gap after which a run of `recv_from` errors is considered over, so the
+/// consecutive counter (and the escalation state in [`RecvWarnStage`]) decays
+/// back to zero.
+///
+/// Without this, `consecutive_recv_errors` would only ever be cleared by a
+/// *successful* receive, and a controller whose only peer is offline — one
+/// error per MRP retransmit, no intervening `Ok` for minutes — would march to
+/// [`RECV_ERROR_BACKOFF_MAX_MS`] and stay pinned there for the life of the
+/// process, delaying the first datagram from a returning device by up to that
+/// cap. With the decay, the "an isolated blip costs nothing" property of
+/// [`RECV_ERROR_FREE_RETRIES`] holds for every blip, not just the first few of a
+/// process's life.
+///
+/// Deliberately LARGER than [`RECV_ERROR_BACKOFF_MAX_MS`]: at saturation the
+/// backoff itself spaces polls ~200 ms apart, so a decay window at (or below)
+/// the cap would be tripped by the backoff's own pacing and hand a permanently
+/// wedged transport its free retries back on every cycle — re-opening a slow
+/// version of the spin. Twice the cap leaves a comfortable margin over that
+/// pacing while still being far shorter than any interval at which a healthy
+/// controller sees repeated errors.
+const RECV_ERROR_DECAY: std::time::Duration =
+    std::time::Duration::from_millis(2 * RECV_ERROR_BACKOFF_MAX_MS);
 
 /// Whether a `recv_from` error means the transport itself is gone, so the actor
 /// should shut down rather than keep polling a socket that will never deliver.
@@ -132,12 +162,18 @@ const RECV_ERROR_BACKOFF_MAX_MS: u64 = 200;
 /// - [`std::io::ErrorKind::NotConnected`] — `ENOTCONN`: the descriptor is no
 ///   longer a usable socket. No amount of retrying recovers it.
 ///
-/// Everything else — `ConnectionRefused` (the ICMP case above),
-/// `ConnectionReset`, `Interrupted` (`EINTR`), `WouldBlock`, `TimedOut`,
-/// `HostUnreachable`/`NetworkUnreachable`, and any kind added by a future
-/// std — is transient. Only the two kinds above are named, and both have been
-/// stable since Rust 1.0, so nothing here depends on a variant newer than the
-/// 1.88 MSRV.
+/// Everything else — `ConnectionRefused`, `ConnectionReset`, `Interrupted`
+/// (`EINTR`), `WouldBlock`, `TimedOut`, `HostUnreachable`/`NetworkUnreachable`,
+/// and any kind added by a future std — is transient. Only the two kinds above
+/// are named, and both have been stable since Rust 1.0, so nothing here depends
+/// on a variant newer than the 1.88 MSRV.
+///
+/// This split is part of the [`AsyncDatagram`] contract, not a private
+/// heuristic: an out-of-tree transport that reports a *recoverable* gap as
+/// `BrokenPipe` stops the controller for good. It is documented as such on
+/// `AsyncDatagram::recv_from`.
+///
+/// [`AsyncDatagram`]: matter_commissioning::driver::AsyncDatagram
 fn recv_error_is_terminal(kind: std::io::ErrorKind) -> bool {
     matches!(
         kind,
@@ -168,6 +204,59 @@ fn recv_error_backoff(consecutive: u32) -> Option<std::time::Duration> {
         .unwrap_or(u64::MAX)
         .min(RECV_ERROR_BACKOFF_MAX_MS);
     Some(std::time::Duration::from_millis(ms))
+}
+
+/// How far the current run of transient `recv_from` errors has already been
+/// escalated to `warn`.
+///
+/// A transient error is logged at `debug`, which is right for the blip it
+/// usually is — but a transport that fails EVERY receive is also "transient" by
+/// the classification above, and it leaves the controller permanently deaf:
+/// every read, write, subscribe and connect fails with a timeout while the
+/// actor is alive and polling a handful of times a second. At the default
+/// `info`/`warn` filter, nothing would ever say why. So the loop escalates to
+/// `warn` on the *edges* of that condition — never per error, or a wedged
+/// transport would become a log flood in its own right.
+///
+/// The stage only ever rises within a run; it is reset by a successful receive
+/// and by [`RECV_ERROR_DECAY`], so a *later* wedge warns again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum RecvWarnStage {
+    /// Nothing warned for this run: either there is no run, or it is still
+    /// inside the [`RECV_ERROR_FREE_RETRIES`] budget.
+    #[default]
+    Quiet,
+    /// The run crossed [`RECV_ERROR_FREE_RETRIES`], so the receive arm is now
+    /// being backed off — the first point at which "this is not a blip" is
+    /// knowable.
+    BackingOff,
+    /// The backoff has reached [`RECV_ERROR_BACKOFF_MAX_MS`]: the transport has
+    /// failed every receive across the whole ramp and looks wedged for good.
+    Saturated,
+}
+
+/// The escalation stage implied by the backoff `recv_error_backoff` just
+/// returned: `None` (still free) is [`RecvWarnStage::Quiet`], a capped backoff
+/// is [`RecvWarnStage::Saturated`], anything in between is
+/// [`RecvWarnStage::BackingOff`].
+fn recv_error_warn_stage(backoff: Option<std::time::Duration>) -> RecvWarnStage {
+    match backoff {
+        None => RecvWarnStage::Quiet,
+        Some(d) if d >= std::time::Duration::from_millis(RECV_ERROR_BACKOFF_MAX_MS) => {
+            RecvWarnStage::Saturated
+        }
+        Some(_) => RecvWarnStage::BackingOff,
+    }
+}
+
+/// Whether an error arriving at `now`, with the previous one at `prev`, starts a
+/// NEW run — i.e. whether the quiet gap between them exceeded
+/// [`RECV_ERROR_DECAY`], so the consecutive counter must decay to zero first.
+///
+/// `None` (no previous error, the state after every successful receive) is not a
+/// broken run: there is nothing to decay.
+fn recv_error_run_broken(prev: Option<Instant>, now: Instant) -> bool {
+    prev.is_some_and(|prev| now.saturating_duration_since(prev) > RECV_ERROR_DECAY)
 }
 
 /// Backstop park duration when no timer work is scheduled at all. Timer
@@ -1041,12 +1130,23 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// [`Self::drive_pending_resolves`]; only consulted while
     /// `pending_resolves` is non-empty.
     next_resolve_poll: Instant,
-    /// Consecutive `recv_from` errors since the last successful receive.
+    /// Consecutive `recv_from` errors in the current run.
     ///
-    /// Reset to zero by every `Ok` from the transport; it exists only to size
-    /// [`recv_error_backoff`], which is what stops a transport that errors
-    /// forever from spinning the loop.
+    /// Reset to zero by every `Ok` from the transport, and by a quiet gap of
+    /// more than [`RECV_ERROR_DECAY`] between two errors (see
+    /// [`recv_error_run_broken`] — without that decay the counter would only
+    /// ever rise across the life of a controller whose peer is simply offline).
+    /// It exists to size [`recv_error_backoff`], which is what stops a transport
+    /// that errors forever from spinning the loop.
     consecutive_recv_errors: u32,
+    /// When the most recent `recv_from` error arrived, or `None` if the last
+    /// receive succeeded. Only used to age out a run of errors
+    /// ([`RECV_ERROR_DECAY`]).
+    last_recv_error_at: Option<Instant>,
+    /// Which edge-triggered `warn!` about the current run of transient errors has
+    /// already fired, so a permanently wedged transport is visible at default log
+    /// levels without emitting a line per failed receive. See [`RecvWarnStage`].
+    recv_warn_stage: RecvWarnStage,
     /// While `Some`, the `select!`'s recv arm is disabled until this instant —
     /// the backoff imposed after [`RECV_ERROR_FREE_RETRIES`] consecutive
     /// `recv_from` errors.
@@ -1479,6 +1579,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             pending_resolves: Vec::new(),
             next_resolve_poll: Instant::now(),
             consecutive_recv_errors: 0,
+            last_recv_error_at: None,
+            recv_warn_stage: RecvWarnStage::Quiet,
             recv_backoff_until: None,
             resolve_query: None,
             seen_records: HashMap::new(),
@@ -1585,22 +1687,31 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// `recv_from` failures are classified rather than discarded. Discarding
     /// them (the original code) meant a transport whose error is *permanent*
     /// made the recv arm instantly ready forever and pegged a core — measured at
-    /// ~130 000 error returns per second against an
+    /// ~447 000 error returns in 6 s (~75 000 per second) against an
     /// [`InMemoryDatagram`](matter_commissioning::driver::InMemoryDatagram)
     /// whose peer half had dropped.
     ///
     /// - A **terminal** kind ([`recv_error_is_terminal`]) means the socket will
     ///   never deliver again, so the actor shuts down through the same
     ///   [`Self::shutdown_discovery`] path a dropped command channel takes.
-    /// - Anything else is **transient** and merely logged, because real UDP
-    ///   surfaces isolated errors (notably `ECONNREFUSED` from a peer's ICMP
-    ///   port-unreachable) that must not kill a controller. To keep "transient"
-    ///   from re-introducing the spin, [`RECV_ERROR_FREE_RETRIES`] consecutive
-    ///   errors with no successful receive between them start a doubling backoff
+    /// - Anything else is **transient** and merely logged, because a socket
+    ///   surfaces isolated, recoverable errors (`EINTR`, spurious wakeups, ICMP
+    ///   errors queued on a connected socket) that must not kill a controller,
+    ///   and because `ErrorKind` is `#[non_exhaustive]`: a kind we failed to
+    ///   anticipate must back off, not stop the actor. To keep "transient" from
+    ///   re-introducing the spin, [`RECV_ERROR_FREE_RETRIES`] consecutive errors
+    ///   with no successful receive between them start a doubling backoff
     ///   ([`recv_error_backoff`]) that disables the recv arm until
     ///   `recv_backoff_until`. Because that is a deadline the loop parks on
     ///   rather than a sleep inside the arm, commands, MRP and liveness continue
     ///   at full speed while a wedged transport is backed off.
+    ///
+    /// A run of transient errors also decays ([`RECV_ERROR_DECAY`]), so a
+    /// controller that sees one error every few seconds never creeps up to the
+    /// backoff ceiling and stays there; and it escalates to `warn` on the edges
+    /// of the condition ([`RecvWarnStage`]), so a transport that is wedged
+    /// *transiently* — which leaves the controller unable to receive anything,
+    /// at `debug` — is diagnosable at default log levels.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
             let now = Instant::now();
@@ -1666,7 +1777,21 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 }
                 recv = self.transport.recv_from(), if recv_enabled => match recv {
                     Ok((packet, from)) => {
+                        // Close the edge as loudly as it was opened: whoever saw
+                        // "this transport is wedged" at `warn` must be able to
+                        // see it recover at the same filter level. Bounded to one
+                        // line per wedge, because the stage only leaves `Quiet`
+                        // via the edge-triggered warnings below.
+                        if self.recv_warn_stage > RecvWarnStage::Quiet {
+                            tracing::warn!(
+                                target: "matter_controller::actor",
+                                after_consecutive_errors = self.consecutive_recv_errors,
+                                "transport recv_from recovered; the controller is receiving again",
+                            );
+                        }
                         self.consecutive_recv_errors = 0;
+                        self.last_recv_error_at = None;
+                        self.recv_warn_stage = RecvWarnStage::Quiet;
                         self.handle_inbound(&packet, from).await;
                     }
                     // The transport is gone for good — leave through exactly the
@@ -1682,18 +1807,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     }
                     // Transient: keep serving, but back the recv arm off once a
                     // run of errors says the transport is not merely blipping.
-                    Err(e) => {
-                        self.consecutive_recv_errors = self.consecutive_recv_errors.saturating_add(1);
-                        if let Some(backoff) = recv_error_backoff(self.consecutive_recv_errors) {
-                            self.recv_backoff_until = Some(Instant::now() + backoff);
-                        }
-                        tracing::debug!(
-                            target: "matter_controller::actor",
-                            error = %e,
-                            consecutive = self.consecutive_recv_errors,
-                            "transport recv_from failed transiently; continuing",
-                        );
-                    }
+                    Err(e) => self.note_transient_recv_error(&e, Instant::now()),
                 },
                 () = tokio::time::sleep(sleep_for) => {
                     tracing::trace!(target: "matter_controller::actor", "timer wake");
@@ -1703,6 +1817,57 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.drive_pending_resolves();
                 }
             }
+        }
+    }
+
+    /// Record a transient `recv_from` failure that arrived at `at`: age out a
+    /// stale run, extend the current one, arm the backoff, and log it.
+    ///
+    /// Split out of [`Self::run`]'s `select!` so the loop body stays readable;
+    /// `at` is a parameter (rather than an inner `Instant::now()`) so the
+    /// decay's timing is testable.
+    fn note_transient_recv_error(&mut self, e: &std::io::Error, at: Instant) {
+        // Errors far enough apart are unrelated blips, not a run: decay first,
+        // so the free-retry budget is genuinely restored rather than being a
+        // once-per-process allowance.
+        if recv_error_run_broken(self.last_recv_error_at, at) {
+            self.consecutive_recv_errors = 0;
+            self.recv_warn_stage = RecvWarnStage::Quiet;
+        }
+        self.last_recv_error_at = Some(at);
+        self.consecutive_recv_errors = self.consecutive_recv_errors.saturating_add(1);
+        let backoff = recv_error_backoff(self.consecutive_recv_errors);
+        if let Some(backoff) = backoff {
+            self.recv_backoff_until = Some(at + backoff);
+        }
+        // Edge-triggered escalation: `warn` exactly once when the run stops
+        // looking like a blip, and once more when the backoff saturates. A
+        // transport wedged on a transient kind makes the controller deaf, which
+        // must not be invisible at `info` — but it must not be a log flood
+        // either, so every other error stays at `debug`.
+        let stage = recv_error_warn_stage(backoff);
+        if stage > self.recv_warn_stage {
+            self.recv_warn_stage = stage;
+            let outlook = if stage == RecvWarnStage::Saturated {
+                "the transport looks wedged for good; requests will time out until it recovers"
+            } else {
+                "backing the receive arm off; the controller receives nothing while this persists"
+            };
+            tracing::warn!(
+                target: "matter_controller::actor",
+                error = %e,
+                kind = ?e.kind(),
+                consecutive = self.consecutive_recv_errors,
+                backoff = ?backoff,
+                "transport recv_from keeps failing: {outlook}",
+            );
+        } else {
+            tracing::debug!(
+                target: "matter_controller::actor",
+                error = %e,
+                consecutive = self.consecutive_recv_errors,
+                "transport recv_from failed transiently; continuing",
+            );
         }
     }
 
@@ -7078,8 +7243,13 @@ mod tests {
     /// process.
     ///
     /// (Before the recv-error classification, the resulting `BrokenPipe` was
-    /// silently discarded and the actor loop spun on it at ~130 000 iterations
-    /// per second for the remainder of each such test.)
+    /// silently discarded instead. Nine tests fail without this helper; in the
+    /// subset that actually drives [`Actor::run`] against a closed endpoint the
+    /// loop also spun on the discarded error — measured on
+    /// `actor_stays_live_while_resolve_pends`, which burned 2.21 s of user CPU
+    /// over 2.22 s of wall clock before the fix and 0.31 s after it. Several of
+    /// the other call sites drive `Actor` methods directly without ever running
+    /// the loop, so the broken transport was never polled there.)
     fn keep_endpoint_open(io: InMemoryDatagram) {
         std::mem::forget(io);
     }
@@ -8173,9 +8343,9 @@ mod tests {
     ///
     /// This replaces coverage that was previously accidental. Before `recv_from`
     /// errors were classified, the harness's dropped device endpoint made the
-    /// recv arm return `BrokenPipe` ~130 000 times a second, which starved a
-    /// relative anchor as a side effect of a bug — so fixing that bug would
-    /// otherwise have deleted the only test of this invariant.
+    /// recv arm return `BrokenPipe` tens of thousands of times a second, which
+    /// starved a relative anchor as a side effect of a bug — so fixing that bug
+    /// would otherwise have deleted the only test of this invariant.
     #[tokio::test]
     async fn parked_resolve_expires_while_the_inbound_arm_is_hot() {
         /// Same unmatchable node id as `actor_stays_live_while_resolve_pends`.
@@ -8199,9 +8369,12 @@ mod tests {
         } = loopback_harness();
 
         // The hot arm: junk datagrams the actor decodes, rejects and discards,
-        // one per millisecond, for the whole test. The task owns `dev_io` and is
-        // only ever aborted, never allowed to drop it, so the controller's own
-        // endpoint stays open (see `keep_endpoint_open`).
+        // one per millisecond, for the whole test. The task owns `dev_io`, and
+        // `JoinHandle::abort` DOES drop the task's future — and with it `dev_io`,
+        // which closes the controller's own endpoint (see `keep_endpoint_open`
+        // for why that is terminal). What keeps this test sound is ordering, not
+        // ownership: the abort is the last statement, after every assertion, so
+        // nothing observes the controller once its endpoint is gone.
         let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let flood_counter = Arc::clone(&sent);
         let flooder = tokio::spawn(async move {
@@ -8251,6 +8424,8 @@ mod tests {
             "the inbound arm must have been genuinely hot for this to prove \
              anything; only {flood} datagrams were sent"
         );
+        // Last statement on purpose: this drops `dev_io` and therefore ends the
+        // controller's transport (see the comment above the spawn).
         flooder.abort();
     }
 
@@ -8260,7 +8435,8 @@ mod tests {
     /// `InMemoryDatagram` returns [`std::io::ErrorKind::BrokenPipe`] for good
     /// once its paired endpoint is gone, which is exactly the permanent-error
     /// shape this guards: the old `if let Ok(..) = recv` arm dropped it on the
-    /// floor and re-polled immediately, spinning at ~130 000 iterations/second.
+    /// floor and re-polled immediately, spinning at ~75 000 iterations/second
+    /// (~447 000 measured over 6 s).
     ///
     /// The command channel is deliberately held open across the assertion, so
     /// the only thing that can end the loop here is the transport.
@@ -8286,13 +8462,14 @@ mod tests {
     /// A transport failing with a TRANSIENT error must not stop the loop, and
     /// must not spin on it either.
     ///
-    /// `WouldBlock` stands in for the real-world case that forced the
-    /// transient/terminal split — Linux returning `ECONNREFUSED` from a peer's
-    /// ICMP port-unreachable, which must never kill a controller. The transport
-    /// here fails EVERY receive, i.e. it is a permanently-transient one, the
-    /// case the backoff exists for: the loop must still be alive and serving
-    /// commands afterwards, and must have polled the transport a bounded number
-    /// of times rather than as fast as the CPU allows.
+    /// `WouldBlock` stands in for the whole transient class — the recoverable
+    /// errors a socket surfaces (spurious wakeup, `EINTR`, a queued ICMP error),
+    /// plus every kind std may add to a `#[non_exhaustive]` `ErrorKind`, none of
+    /// which may kill a controller. The transport here fails EVERY receive, i.e.
+    /// it is a permanently-transient one — the case the backoff exists for: the
+    /// loop must still be alive and serving commands afterwards, and must have
+    /// polled the transport a bounded number of times rather than as fast as the
+    /// CPU allows.
     #[tokio::test]
     async fn transient_transport_errors_neither_stop_nor_spin_the_loop() {
         /// Always-failing datagram transport that counts its receive attempts.
@@ -8357,9 +8534,12 @@ mod tests {
 
         // And bounded: RECV_ERROR_FREE_RETRIES free polls, then a doubling ramp
         // saturating at RECV_ERROR_BACKOFF_MAX_MS, i.e. ~18 polls over this
-        // window (measured). The ceiling below leaves an order of magnitude of
-        // slack for a loaded CI box while still failing by three orders of
-        // magnitude against an un-backed-off loop (~130 000 polls per second).
+        // window (measured). Errors this dense never decay — at saturation they
+        // are ~200 ms apart, well inside RECV_ERROR_DECAY — so the ramp is
+        // climbed once and stays climbed. The ceiling below leaves an order of
+        // magnitude of slack for a loaded CI box while still failing by more
+        // than two orders of magnitude against an un-backed-off loop (~75 000
+        // polls per second, i.e. ~37 000 across this window).
         let polls = attempts.load(std::sync::atomic::Ordering::Relaxed);
         assert!(
             polls < 200,
@@ -8378,9 +8558,13 @@ mod tests {
         // Terminal: the socket is gone and retrying cannot recover it.
         assert!(recv_error_is_terminal(ErrorKind::BrokenPipe));
         assert!(recv_error_is_terminal(ErrorKind::NotConnected));
-        // Transient: routine on a real UDP socket. ConnectionRefused in
-        // particular is Linux surfacing a peer's ICMP port-unreachable, and
-        // must never be allowed to kill a controller.
+        // Transient: recoverable, and routine on a real socket. ErrorKind is
+        // #[non_exhaustive], so `Other` here also stands for every kind std has
+        // yet to add — none of which may be allowed to kill a controller.
+        // (ConnectionRefused is Linux surfacing a peer's ICMP port-unreachable;
+        // it reaches only a *connected* UDP socket, which our TokioUdpTransport
+        // is not — it binds `[::]:port` and never calls connect. It is listed
+        // because an out-of-tree AsyncDatagram may well be connected.)
         for kind in [
             ErrorKind::ConnectionRefused,
             ErrorKind::ConnectionReset,
@@ -8421,6 +8605,120 @@ mod tests {
             assert!(d >= prev, "backoff must never shrink (at n = {n})");
             prev = d;
         }
+    }
+
+    /// A run of receive errors must DECAY, or the counter only ever rises: a
+    /// controller whose only peer is offline sees one error per MRP retransmit
+    /// with no successful receive in between, and would otherwise creep to the
+    /// backoff ceiling and stay pinned there for the life of the process,
+    /// delaying the first datagram from a returning device by up to the cap.
+    #[test]
+    fn recv_error_run_decays_after_a_quiet_gap() {
+        // Instants are built by ADDING to a base rather than subtracting from
+        // `now`: `Instant` subtraction can underflow, and clippy rejects it.
+        let prev = Instant::now();
+
+        // Nothing to decay before the first error of a run.
+        assert!(!recv_error_run_broken(None, prev));
+        // Errors inside the window are one run…
+        assert!(!recv_error_run_broken(
+            Some(prev),
+            prev + RECV_ERROR_DECAY / 2
+        ));
+        // …including exactly at the boundary (the break is a strict `>`)…
+        assert!(!recv_error_run_broken(Some(prev), prev + RECV_ERROR_DECAY));
+        // …and a longer gap breaks it, restoring the free-retry budget.
+        assert!(recv_error_run_broken(
+            Some(prev),
+            prev + RECV_ERROR_DECAY + std::time::Duration::from_millis(1)
+        ));
+
+        // The decay window MUST exceed the backoff ceiling. At saturation the
+        // backoff itself paces polls ~RECV_ERROR_BACKOFF_MAX_MS apart, so a
+        // window at or below the cap would be tripped by the backoff's own
+        // pacing and hand a wedged transport its free retries back every cycle.
+        assert!(
+            RECV_ERROR_DECAY > std::time::Duration::from_millis(RECV_ERROR_BACKOFF_MAX_MS),
+            "the decay window must be longer than the saturated backoff interval"
+        );
+    }
+
+    /// The `warn` escalation must be EDGE-triggered: a wedged transport has to
+    /// be visible at default log levels without turning into a log flood.
+    #[test]
+    fn recv_error_warn_stage_marks_the_two_edges() {
+        use std::time::Duration;
+
+        // Inside the free budget: nothing to say yet.
+        assert_eq!(
+            recv_error_warn_stage(recv_error_backoff(RECV_ERROR_FREE_RETRIES)),
+            RecvWarnStage::Quiet
+        );
+        // First backoff step — the run stopped looking like a blip.
+        assert_eq!(
+            recv_error_warn_stage(recv_error_backoff(RECV_ERROR_FREE_RETRIES + 1)),
+            RecvWarnStage::BackingOff
+        );
+        // Ceiling reached — the transport looks wedged for good.
+        assert_eq!(
+            recv_error_warn_stage(recv_error_backoff(u32::MAX)),
+            RecvWarnStage::Saturated
+        );
+        assert_eq!(
+            recv_error_warn_stage(Some(Duration::from_millis(RECV_ERROR_BACKOFF_MAX_MS))),
+            RecvWarnStage::Saturated
+        );
+
+        // Ordered, because `run` fires a warning only when the stage RISES; an
+        // unordered (or re-orderable) enum would re-warn per error.
+        assert!(RecvWarnStage::Quiet < RecvWarnStage::BackingOff);
+        assert!(RecvWarnStage::BackingOff < RecvWarnStage::Saturated);
+        assert_eq!(RecvWarnStage::default(), RecvWarnStage::Quiet);
+
+        // Every step of the ramp lands on exactly one of the two escalations, so
+        // the stage can never skip back down mid-run.
+        let mut prev = RecvWarnStage::Quiet;
+        for n in 0..64 {
+            let stage = recv_error_warn_stage(recv_error_backoff(n));
+            assert!(stage >= prev, "the warn stage must never fall (at n = {n})");
+            prev = stage;
+        }
+    }
+
+    /// The decay and the warn edge must be wired into the actor's STATE, not
+    /// just available as helpers: a long run climbs to the ceiling and warns
+    /// twice; a quiet gap then starts a fresh run, with the free-retry budget
+    /// and the warn edge both restored (so a later wedge warns again).
+    #[tokio::test]
+    async fn actor_recv_error_run_decays_and_re_arms_the_warn_edge() {
+        let mut actor = actor_with_one_fabric();
+        let err = std::io::Error::new(std::io::ErrorKind::WouldBlock, "synthetic");
+        let start = Instant::now();
+
+        // A dense run: one error per millisecond, far inside RECV_ERROR_DECAY.
+        let run_len = RECV_ERROR_FREE_RETRIES + 40;
+        for i in 0..run_len {
+            actor.note_transient_recv_error(
+                &err,
+                start + std::time::Duration::from_millis(i.into()),
+            );
+        }
+        assert_eq!(actor.consecutive_recv_errors, run_len);
+        assert_eq!(actor.recv_warn_stage, RecvWarnStage::Saturated);
+
+        // A quiet gap: the next error is a NEW run, so it is free again and the
+        // stage is back to Quiet (i.e. a later wedge warns rather than being
+        // swallowed by the previous wedge's edge).
+        let after_gap = start
+            + std::time::Duration::from_millis(run_len.into())
+            + RECV_ERROR_DECAY
+            + std::time::Duration::from_millis(1);
+        actor.note_transient_recv_error(&err, after_gap);
+        assert_eq!(
+            actor.consecutive_recv_errors, 1,
+            "a blip after a quiet gap must not inherit the previous run's count"
+        );
+        assert_eq!(actor.recv_warn_stage, RecvWarnStage::Quiet);
     }
 
     /// A record drained from the shared browse while NO resolve was parked for

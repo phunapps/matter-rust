@@ -31,8 +31,8 @@ APIs have had no outside users yet and are expected to move.
   arm was `if let Ok((packet, from)) = recv { … }` — an `Err` fell through
   silently and the loop re-polled at once. Against a transport whose `recv_from`
   fails *permanently*, the arm is therefore ready forever and the loop spins:
-  measured at ~130 000 error returns in 6 seconds against an
-  `InMemoryDatagram` whose paired endpoint had been dropped (it returns
+  measured at ~447 000 error returns in 6 seconds (~75 000 per second) against
+  an `InMemoryDatagram` whose paired endpoint had been dropped (it returns
   `BrokenPipe` for good in that state).
 
   Blast radius before the fix was the in-process test harness only — the real
@@ -41,9 +41,14 @@ APIs have had no outside users yet and are expected to move.
   pegging a core.
 
   Errors are now **classified**, because neither "ignore all" (the bug) nor
-  "treat all as fatal" is correct: a real UDP socket returns transient errors
-  routinely, most importantly `ECONNREFUSED` — which Linux synthesises from a
-  departed peer's ICMP port-unreachable, and which must never kill a controller.
+  "treat all as fatal" is correct. The forcing argument is that `io::ErrorKind`
+  is `#[non_exhaustive]` and recoverable receive errors exist (`EINTR`, spurious
+  wakeups, and — on a *connected* UDP socket — `ECONNREFUSED` synthesised from a
+  peer's ICMP port-unreachable): an error we did not anticipate must cost a
+  bounded backoff, never a dead controller. (`ECONNREFUSED` is the textbook
+  example, but it cannot reach this workspace's own transport, which binds
+  `[::]:port` and never calls `connect()`. It applies to out-of-tree
+  `AsyncDatagram` implementations that are connected.)
 
   - **Terminal** — `BrokenPipe`, `NotConnected`. The socket will never deliver
     again. The actor logs at `warn` and shuts down through exactly the path a
@@ -63,11 +68,40 @@ APIs have had no outside users yet and are expected to move.
     commands, MRP and subscription liveness keep running at full speed
     throughout.
 
-  **No public API change** (`AsyncDatagram` is untouched). Users of the
-  in-process `InMemoryDatagram` harness should note that dropping one endpoint
-  now stops the controller's actor instead of being silently ignored; the
-  in-crate test devices keep their endpoint open, which is what a real UDP
-  socket does when the device at the other end goes quiet.
+    A run of transient errors **decays**: two errors more than 400 ms apart are
+    not a run, so the counter (and the escalation below) resets. Without that,
+    the counter fell only on a *successful* receive, and a controller whose only
+    peer is offline — one error per MRP retransmit, no intervening `Ok` — would
+    creep to the 200 ms ceiling and stay pinned there for the process's life,
+    delaying the first datagram from a returning device. The decay window is
+    deliberately longer than the ceiling, so a genuinely wedged transport is not
+    handed its free retries back by the backoff's own pacing.
+
+    A transport that fails *every* receive with a transient kind is also
+    escalated to `warn`, **edge-triggered**: once when the run leaves the
+    free-retry budget, once more when the backoff saturates, and once when a
+    receive finally succeeds. Such a transport leaves the controller alive but
+    deaf — every read/write/subscribe fails with a timeout — which at `debug`
+    was invisible to anyone running at the default `info`. Edge-triggering keeps
+    a wedged transport from becoming a log flood in its own right.
+
+  **No signature change** — `AsyncDatagram` is source- and ABI-compatible, and
+  no published API gained or lost an item.
+
+  **But the `AsyncDatagram` behaviour contract did change**, and out-of-tree
+  implementors must read this: returning `BrokenPipe` or `NotConnected` from
+  `recv_from` **once** now permanently stops the controller's actor, after which
+  every call fails with `ControllerStopped` and only a rebuilt
+  `MatterController` recovers. A transport wrapping a reconnecting relay, an IPC
+  hop, or a socket being re-bound must therefore not report a momentary gap as
+  `BrokenPipe` — natural though that reading is — but keep awaiting, or use a
+  transient kind (`WouldBlock`, `ConnectionReset`, `TimedOut`, `Interrupted`).
+  The contract is now documented on `AsyncDatagram::recv_from` itself.
+
+  Users of the in-process `InMemoryDatagram` harness should likewise note that
+  dropping one endpoint now stops the controller's actor instead of being
+  silently ignored; the in-crate test devices keep their endpoint open, which is
+  what a real UDP socket does when the device at the other end goes quiet.
 
 ### Changed
 
@@ -101,9 +135,20 @@ APIs have had no outside users yet and are expected to move.
 - **`matter-controller`: direct coverage for the receive-error classification** —
   a terminal error stops the loop while its command channel is still open; a
   permanently-*transient* transport leaves the loop responsive and is polled ~18
-  times per 500 ms instead of tens of thousands; plus a unit test pinning the
-  terminal/transient split and the backoff ramp's saturation at the arithmetic
-  edge.
+  times per 500 ms instead of tens of thousands; plus unit tests pinning the
+  terminal/transient split, the backoff ramp's saturation at the arithmetic
+  edge, the decay of a run after a quiet gap (including that the decay window
+  outlasts the saturated backoff's own pacing), and the edge-triggering of the
+  `warn` escalation.
+
+- **`matter-controller`: correction to the record on the test-harness change.**
+  The commit that introduced `keep_endpoint_open` described nine in-crate tests
+  as "spinning a core each". Nine tests do fail without the harness change —
+  that part is confirmed, and the change is required — but most of them never
+  spun: several call sites drive `Actor` methods directly and never run the
+  actor loop at all, so the broken transport was never polled there. Only
+  `actor_stays_live_while_resolve_pends` was measured burning CPU: 2.21 s of
+  user time over 2.22 s of wall clock before the fix, 0.31 s after it.
 
 ### Documentation / CI
 

@@ -44,8 +44,40 @@ pub trait AsyncDatagram {
     ///
     /// # Errors
     ///
-    /// Returns an [`io::Error`] on socket-level failures or when the peer
-    /// endpoint is closed ([`io::ErrorKind::BrokenPipe`]).
+    /// Returns an [`io::Error`] on socket-level failures, or when the transport
+    /// can never deliver another datagram (see the contract below).
+    ///
+    /// # Error-kind contract
+    ///
+    /// The [`io::ErrorKind`] returned here is part of the contract, not merely
+    /// diagnostic text. `matter-controller`'s session actor classifies it, and
+    /// the two classes have very different consequences:
+    ///
+    /// - **Terminal** — [`io::ErrorKind::BrokenPipe`] and
+    ///   [`io::ErrorKind::NotConnected`]. Returning either of these **once**
+    ///   permanently stops the controller's actor task: every later call on that
+    ///   `MatterController` fails with `ControllerStopped`, and nothing short of
+    ///   building a new controller brings it back. Return them only when the
+    ///   transport is gone for good.
+    /// - **Transient** — every other kind, including any kind a future std adds
+    ///   (`ErrorKind` is `#[non_exhaustive]`). The controller logs it and keeps
+    ///   serving; if such errors recur with no successful receive in between it
+    ///   backs the receive arm off by a bounded amount (well under an MRP
+    ///   retransmit interval) and escalates to `warn`, then recovers by itself
+    ///   the moment a receive succeeds.
+    ///
+    /// So an implementor whose channel can come back — a reconnecting relay, an
+    /// IPC hop, a socket being re-bound, a peer that merely went quiet — must
+    /// **not** report that gap as `BrokenPipe`, however natural that reads:
+    /// doing so kills the caller's controller on a recoverable blip. Either keep
+    /// awaiting until the channel returns, or report it with a transient kind
+    /// ([`io::ErrorKind::WouldBlock`], [`io::ErrorKind::ConnectionReset`],
+    /// [`io::ErrorKind::TimedOut`] and [`io::ErrorKind::Interrupted`] are all
+    /// handled identically).
+    ///
+    /// Note that a transport whose errors are transient but *permanent* leaves
+    /// the controller alive and deaf — reads and subscriptions all time out — so
+    /// "transient" is the safe default, not a way to paper over a dead socket.
     fn recv_from(
         &self,
     ) -> impl std::future::Future<Output = io::Result<(Vec<u8>, SocketAddr)>> + Send;
@@ -160,6 +192,13 @@ impl AsyncDatagram for InMemoryDatagram {
     }
 
     /// Await the next inbound datagram for this endpoint.
+    ///
+    /// Returns [`io::ErrorKind::BrokenPipe`] — forever — once the paired
+    /// endpoint has been dropped, which is a **terminal** kind by the contract
+    /// on [`AsyncDatagram::recv_from`]. A test that drops one endpoint while a
+    /// `MatterController` is driving the other therefore stops that controller's
+    /// actor; keep both endpoints alive for the test's duration (in-crate test
+    /// devices leak theirs deliberately for exactly this reason).
     ///
     /// # Concurrency
     ///
