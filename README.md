@@ -6,7 +6,7 @@
 A Rust implementation of the **Matter** protocol — controller side.
 
 > Status: **feature-complete against Matter 1.4 and published to crates.io**
-> (`matter-controller` `0.3.0`; the lower-level crates `0.2.0`). The controller
+> (`matter-controller` `0.6.0`; the lower-level crates `0.3.0`–`0.5.0`). The controller
 > commissions and controls real Matter devices over IP, and over BLE onto Wi-Fi
 > or Thread — all validated against hardware, not just tests.
 
@@ -31,7 +31,7 @@ for the **device** side. The controller side is the gap we are filling.
 
 ## Workspace layout
 
-```
+```text
 matter-rust/
 ├── crates/
 │   ├── matter-codec/           # M1 — TLV encode/decode
@@ -127,8 +127,10 @@ In-process loopback E2E tests prove each flow with no hardware; the runbooks und
 [`docs/runbooks/`](docs/runbooks/) perform the real-device runs.
 
 **Attestation roots:** commissioning any real device requires the PAA and CD trust
-roots, and they do not come from the same place — `AttestationTrust::csa_test_roots()`
-is for our own tests and verifies no real device. The runbooks give the specifics.
+roots, and they do not come from the same place —
+`AttestationTrust::example_device_roots()` is for our own tests and verifies no real
+device; production callers pass real root directories to
+`AttestationTrust::from_dirs`. The runbooks give the specifics.
 
 ## How we verify correctness
 
@@ -182,23 +184,61 @@ Each crate is independently usable: take `matter-codec` alone for TLV, or
 
 The high-level API (M8, `matter-controller`) looks like:
 
-```rust,ignore
-let controller = MatterController::builder(store)
-    // Real devices need real roots — csa_test_roots() is for our own tests only.
-    .attestation_trust(AttestationTrust::from_dirs(&paa_dir, &cd_dir)?)
-    .build()
-    .await?;
-// One-time only — `create_fabric` refuses a `fabric_id` it already has, so gate
-// it on `fabrics()` being empty (a run that loaded an existing store has one).
-controller.create_fabric(fabric_config).await?;
-let info = controller.commission("MT:...", Some("kitchen plug".into())).await?;
-let node = controller.node(info.node_id);
+```rust,no_run
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-node.invoke(toggle_path, Value::Structure(vec![])).await?;         // commands
-let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;     // wildcard read
-// attribute paths, event paths, min/max reporting interval (seconds)
-let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
-while let Some(event) = sub.next().await { /* reports and status changes */ }
+use matter_controller::{
+    AttestationTrust, CommandPath, FabricConfig, FileStore, MatterController, MatterTime,
+    ReadPath, Value,
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(FileStore::new("controller-state.bin"));
+    let controller = MatterController::builder(store)
+        // Real devices need real roots — example_device_roots() verifies no real device.
+        .attestation_trust(AttestationTrust::from_dirs(
+            Path::new("paa-roots"),
+            Path::new("cd-roots"),
+        )?)
+        .build()
+        .await?;
+
+    // One-time only — `create_fabric` refuses a `fabric_id` it already has, so gate
+    // it on `fabrics()` being empty (a run that loaded an existing store has one).
+    if controller.fabrics().await?.is_empty() {
+        // `not_before` must be a real wall-clock time, backdated ~1h for device clock
+        // skew. The Matter epoch (`from_unix_secs(0)`) is rejected — see issue #111.
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        let validity = (
+            MatterTime::from_unix_secs(now.saturating_sub(3600)),
+            MatterTime::NO_EXPIRY,
+        );
+        controller
+            .create_fabric(FabricConfig::new(1, 1, 1, validity))
+            .await?;
+    }
+
+    let info = controller.commission("MT:...", Some("kitchen plug".into())).await?;
+    let node = controller.node(info.node_id);
+
+    // Commands: OnOff::Toggle on endpoint 1.
+    let toggle = CommandPath { endpoint: 1, cluster: 0x0006, command: 0x02 };
+    node.invoke(toggle, Value::Structure(vec![])).await?;
+
+    // Wildcard read: every OnOff attribute on endpoint 1.
+    let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;
+    println!("read {} attributes", report.len());
+
+    // Attribute paths, event paths, min/max reporting interval (seconds).
+    let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
+    while let Some(event) = sub.next().await {
+        println!("{event:?}"); // reports and status changes
+    }
+    Ok(())
+}
 ```
 
 See [`crates/matter-controller`](crates/matter-controller/) and the

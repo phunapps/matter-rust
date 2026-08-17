@@ -100,3 +100,14 @@ macro_rules! dut_or_skip {
         }
     }};
 }
+
+/// Compile-checks the Rust examples in the workspace root `README.md`.
+///
+/// The root README lives outside any crate directory, so `include_str!` on it
+/// would break `cargo package` verification for a published crate. This
+/// harness crate is `publish = false` and already depends on
+/// `matter-controller` + Tokio, which is exactly what the root README's
+/// quickstart needs, so it hosts the check instead.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct RootReadmeDoctests;
