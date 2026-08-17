@@ -27,7 +27,7 @@ issuing all live here.
 
 ## Status
 
-**0.3.0**, published on crates.io. Feature-complete, and cross-verified
+**0.3.1**, published on crates.io. Feature-complete, and cross-verified
 byte-for-byte against both matter.js and `connectedhomeip`'s `chip-cert`
 on 3-tier RCAC/ICAC/NOC chains. Stability: a `0.x` crate, so a **minor**
 bump may break API.

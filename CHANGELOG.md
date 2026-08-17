@@ -22,7 +22,41 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## 0.7.0
+
+A robustness-and-honesty release. The code change is one fix in the controller's
+event loop; the bulk of the work is making the crates' *documentation* true,
+prompted by issue [#111] — where an adopter hit a wall because our own README
+told him to.
+
+**Documentation is now compile-checked.** Every crate README is wired in as a
+doctest (`#[cfg(doctest)] #[doc = include_str!("../README.md")]`), so an example
+that stops compiling fails the build. Turning that on surfaced eleven kinds of
+API drift, including three examples that could never have compiled at all —
+a `CertificateChain::new` call that fails to borrow-check, a `CommissionerConfig`
+missing a required field added in an earlier release, and a driver loop matching
+every variant of a `#[non_exhaustive]` enum. A follow-up pass rewrote the
+crate-level rustdoc (the docs.rs landing pages) and the READMEs, which were
+written as internal milestone logs and in several places claimed the crates
+could do *less* than they can: `matter-interaction` advertised no subscriptions,
+no events, no timed actions and no chunked writes, all four of which ship.
+24 false claims corrected across 8 crates.
+
+**The controller's event loop can no longer spin on a failing transport.** It
+previously discarded every `recv_from` error and immediately re-polled, so a
+transport returning a permanent error pegged a core. Errors are now classified:
+terminal kinds shut the actor down cleanly, everything else is transient and
+backed off. See the `matter-controller` and `matter-commissioning` sections for
+the behaviour contract this places on `AsyncDatagram` implementors.
+
+**`p256` moved from 0.13 to 0.14**, under SPAKE2+ and CASE. No wire bytes, no
+derived keys and no signatures change, and every test vector passes unmodified.
+
+Crate versions: **`matter-controller` 0.7.0** (the loop behaviour change),
+and patch releases for the rest — **`matter-codec`**, **`matter-cert`**,
+**`matter-crypto`**, **`matter-transport`** 0.3.1, **`matter-bdx`** 0.3.1,
+**`matter-interaction`**, **`matter-clusters`** 0.4.1, **`matter-commissioning`**,
+**`matter-ota`** 0.5.1, **`matter-ble`** 0.3.3.
 
 ### Fixed
 

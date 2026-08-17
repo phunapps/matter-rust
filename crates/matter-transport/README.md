@@ -34,7 +34,7 @@ MRP reliability layer (§4.11) and the application protocol header
 
 ## Status
 
-**0.3.0**, published on crates.io. Feature-complete and validated
+**0.3.1**, published on crates.io. Feature-complete and validated
 against real silicon (ESP32-C6 over Wi-Fi and Thread) via the
 higher-level crates. Stability: a `0.x` crate, so a **minor** bump may
 break API.

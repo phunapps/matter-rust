@@ -37,7 +37,7 @@ matter-clusters = "0.4"
 
 ## Status
 
-**0.4.0**, published on crates.io. Stability: a `0.x` crate, so a **minor** bump
+**0.4.1**, published on crates.io. Stability: a `0.x` crate, so a **minor** bump
 may break API — and adding clusters is a routine minor bump.
 
 ## Clusters

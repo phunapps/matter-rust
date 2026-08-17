@@ -10,7 +10,7 @@ want [`matter-controller`](https://crates.io/crates/matter-controller), which
 drives these codecs over a live CASE session. Reach for `matter-interaction`
 directly when you own the transport and want the IM message layer on its own.
 
-> Status: **0.4.0**, published on crates.io. Depends only on `matter-codec`,
+> Status: **0.4.1**, published on crates.io. Depends only on `matter-codec`,
 > and performs no IO. Stability: a `0.x` crate, so a **minor** bump may break
 > API.
 

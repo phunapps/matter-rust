@@ -1,6 +1,6 @@
 [package]
 name = "matter-bdx"
-version = "0.3.0"
+version = "0.3.1"
 description = "Matter Bulk Data Exchange (BDX) protocol: message codecs + receiver-driven sender."
 edition.workspace = true
 rust-version.workspace = true

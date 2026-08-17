@@ -1,6 +1,6 @@
 [package]
 name = "matter-cert"
-version = "0.3.0"
+version = "0.3.1"
 description = "Matter protocol certificate parsing and chain validation."
 edition.workspace = true
 rust-version.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "matter-crypto"
-version = "0.3.0"
+version = "0.3.1"
 description = "Matter protocol session establishment: PASE (SPAKE2+) and CASE (SIGMA)."
 edition.workspace = true
 rust-version.workspace = true

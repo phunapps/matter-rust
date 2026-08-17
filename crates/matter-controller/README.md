@@ -6,7 +6,7 @@ to commission and control Matter devices from pure Rust. It wraps every other
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **0.6.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
+> Status: **0.7.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
 > (M9): BLE→Wi-Fi/Thread commissioning, full interaction model, groups, OTA
 > provider, ICD client, multi-admin/ACL — extensively validated against real
 > silicon (ESP32-C6 over Wi-Fi and Thread).

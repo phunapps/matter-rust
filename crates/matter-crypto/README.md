@@ -52,7 +52,7 @@ AES-CCM AEAD the secured-message layer uses. Part of the
 
 ## Status
 
-**0.3.0**, published on crates.io. PASE and CASE feature-complete, and
+**0.3.1**, published on crates.io. PASE and CASE feature-complete, and
 validated against real silicon through the higher-level crates.
 Stability: a `0.x` crate, so a **minor** bump may break API.
 
