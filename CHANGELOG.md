@@ -24,6 +24,57 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased
 
+### Documentation / CI
+
+- **Every README's Rust examples are now compiled by `just doctest`** (i.e. by
+  `cargo test --workspace --all-features --doc`, which the gate and CI run).
+  Each crate carries the standard idiom in its `lib.rs`:
+
+  ```rust
+  #[cfg(doctest)]
+  #[doc = include_str!("../README.md")]
+  struct ReadmeDoctests;
+  ```
+
+  `#[cfg(doctest)]` means the item exists only while rustdoc collects doctests,
+  so the README is compile-checked without being duplicated into the rendered
+  docs. The workspace-root README is attached to the unpublished
+  `integration-tests` crate instead of a published one, because an
+  `include_str!` reaching outside a crate directory breaks `cargo package`
+  verification. **No API change** — this is documentation and CI hygiene.
+
+  Motivation: [#111]. The reporter lost significant time to a quickstart in the
+  `matter-controller` README that showed `MatterTime::from_unix_secs(0)` as a
+  certificate `not_before`; commissioning then failed with an opaque
+  `IM status 0x85`. The same README carried a `FabricConfig { .. }` struct
+  literal that could not compile outside the crate at all (`FabricConfig` is
+  `#[non_exhaustive]`). No README in this workspace had ever been compiled, so
+  nothing caught either. Making the examples compile makes that class of bug a
+  build failure.
+
+  API drift the compiler surfaced and this change corrects:
+
+  - Root README: `Node::subscribe` was shown with three arguments; it takes
+    four (attribute paths, **event paths**, min interval, max interval).
+    `AttestationTrust::csa_test_roots()` no longer exists — it is
+    `example_device_roots()`.
+  - `matter-crypto`: `PaseProver::new_with_negotiation` gained an
+    `initiator_session_id`; `PaseVerifier::new_from_pin` gained a
+    `responder_session_id`; `CaseInitiator::new` and `CaseResponder::new` both
+    gained a `now: MatterTime`; `RingSigner::public_key` is reached through the
+    `CaseSigner`/`Signer` trait.
+  - `matter-commissioning`: `CommissionerConfig` gained the required `network`
+    field (`NetworkCredentials`), and `Action` is `#[non_exhaustive]`, so the
+    documented driver loop needs a catch-all match arm.
+  - `matter-cert`: the chain example bound `CertificateChain::new(&[noc, icac])`
+    to a temporary that is dropped while still borrowed — it never compiled as
+    written.
+
+  Fences that perform I/O (networking, commissioning, file stores) are marked
+  `no_run`: compiled, never executed. No fence is `ignore`.
+
+  [#111]: https://github.com/phunapps/matter-rust/issues/111
+
 ### Changed
 
 - **`p256` upgraded from 0.13 to 0.14** (`matter-crypto`, `matter-commissioning`).
