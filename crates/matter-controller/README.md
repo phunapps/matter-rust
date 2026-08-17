@@ -46,50 +46,57 @@ callers address a device by node id and never manage sessions.
 
 ## Quickstart
 
-```rust
+```rust,no_run
 use std::sync::Arc;
 use matter_controller::{AttestationTrust, FabricConfig, FileStore, MatterController, MatterTime, ReadPath};
 
-let store = Arc::new(FileStore::new("controller-state.bin"));
-let controller = MatterController::builder(store)
-    .attestation_trust(AttestationTrust::example_device_roots())
-    .build()
-    .await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = Arc::new(FileStore::new("controller-state.bin"));
+    let controller = MatterController::builder(store)
+        .attestation_trust(AttestationTrust::example_device_roots())
+        .build()
+        .await?;
 
-// Only create a fabric that doesn't exist yet — `create_fabric` refuses a
-// `fabric_id` it already has, so check `fabrics()` first (or gate on a fresh
-// store). `not_before` must be a real wall-clock time, backdated a little (an
-// hour is plenty) for device clock skew: MatterTime(0) / from_unix_secs(0)
-// (the Matter epoch) is rejected, and so is a time far in the future — see
-// `FabricConfig::validity` and issue #111.
-if controller.fabrics().await?.is_empty() {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-    controller.create_fabric(FabricConfig::new(
-        1, 1, 1,
-        (
-            MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
-            MatterTime::NO_EXPIRY,
-        ),
-    )).await?;
-}
+    // Only create a fabric that doesn't exist yet — `create_fabric` refuses a
+    // `fabric_id` it already has, so check `fabrics()` first (or gate on a fresh
+    // store). `not_before` must be a real wall-clock time, backdated a little (an
+    // hour is plenty) for device clock skew: MatterTime(0) / from_unix_secs(0)
+    // (the Matter epoch) is rejected, and so is a time far in the future — see
+    // `FabricConfig::validity` and issue #111.
+    if controller.fabrics().await?.is_empty() {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
+        controller.create_fabric(FabricConfig::new(
+            1, 1, 1,
+            (
+                MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
+                MatterTime::NO_EXPIRY,
+            ),
+        )).await?;
+    }
 
-let info = controller
-    .commission("MT:Y.K90AFN00KA0648G00", Some("kitchen plug".into()))
-    .await?;
-let node = controller.node(info.node_id);
+    let info = controller
+        .commission("MT:Y.K90AFN00KA0648G00", Some("kitchen plug".into()))
+        .await?;
+    let node = controller.node(info.node_id);
 
-// Read all OnOff attributes; subscribe to changes.
-let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;
-let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
-// `next()` yields `SubscriptionEvent` — attribute/event reports plus
-// (re-)establishment status changes.
-while let Some(event) = sub.next().await { /* … */ }
+    // Read all OnOff attributes; subscribe to changes.
+    let report = node.read(&[ReadPath::cluster(1, 0x0006)]).await?;
+    println!("read {} attributes", report.len());
+    let mut sub = node.subscribe(&[ReadPath::cluster(1, 0x0006)], &[], 1, 30).await?;
+    // `next()` yields `SubscriptionEvent` — attribute/event reports plus
+    // (re-)establishment status changes.
+    while let Some(event) = sub.next().await {
+        println!("{event:?}");
+    }
 
-// Enumerate and manage commissioned nodes.
-for n in controller.nodes().await? {
-    println!("node 0x{:016X} — {:?}", n.node_id, n.label);
+    // Enumerate and manage commissioned nodes.
+    for n in controller.nodes().await? {
+        println!("node 0x{:016X} — {:?}", n.node_id, n.label);
+    }
+    Ok(())
 }
 ```
 
