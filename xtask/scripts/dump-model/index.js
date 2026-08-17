@@ -44,6 +44,13 @@ const DUMP_SCRIPT_VERSION = 1;
 const SPEC_REVISION = '1.5.1';
 
 // The M7 clusters plus the M9-A2.1 pilot, M9-A2.2 energy, M9-A2.3 actuator, M9-A2.4 utility, and M9-A2.5 mgmt batches.
+//
+// NOTE on the concentration-measurement batch: those 10 clusters are *derived*
+// (`base: ConcentrationMeasurement`, itself an id-less base cluster). The walk
+// below reads `cluster.attributes` / `.datatypes` / `.features`, which are the
+// model's RESOLVED views and already include everything inherited from the
+// base — `cluster.children` is empty for them. Do not switch this script to
+// `.children`: it would silently emit attribute-less clusters.
 const ALLOWLIST = [
   { id: 0x0028, name: 'BasicInformation' },
   { id: 0x001d, name: 'Descriptor' },
@@ -91,6 +98,19 @@ const ALLOWLIST = [
   { id: 0x0038, name: 'TimeSynchronization' },
   // M9-G-c ICD Management:
   { id: 0x0046, name: 'IcdManagement' },
+  // Concentration measurement family (Matter 1.2), reported missing in #112.
+  // All 10 share one derived shape, so they are allowlisted as one batch —
+  // partial coverage would just invite the follow-up issue.
+  { id: 0x040c, name: 'CarbonMonoxideConcentrationMeasurement' },
+  { id: 0x040d, name: 'CarbonDioxideConcentrationMeasurement' },
+  { id: 0x0413, name: 'NitrogenDioxideConcentrationMeasurement' },
+  { id: 0x0415, name: 'OzoneConcentrationMeasurement' },
+  { id: 0x042a, name: 'Pm25ConcentrationMeasurement' },
+  { id: 0x042b, name: 'FormaldehydeConcentrationMeasurement' },
+  { id: 0x042c, name: 'Pm1ConcentrationMeasurement' },
+  { id: 0x042d, name: 'Pm10ConcentrationMeasurement' },
+  { id: 0x042e, name: 'TotalVolatileOrganicCompoundsConcentrationMeasurement' },
+  { id: 0x042f, name: 'RadonConcentrationMeasurement' },
 ];
 
 const excluded = [];

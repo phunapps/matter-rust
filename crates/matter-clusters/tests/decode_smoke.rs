@@ -579,3 +579,170 @@ fn time_sync_set_time_zone_response_decodes() {
     let decoded = SetTimeZoneResponse::decode(&buf).expect("decode SetTimeZoneResponse");
     assert!(decoded.dst_offset_required);
 }
+
+// ---- concentration measurement family (#112) -----------------------------
+//
+// The 10 concentration-measurement clusters (Matter 1.2) are *derived* from one
+// base cluster, so they share a single shape: nullable `single` (float32)
+// measurements, two `elapsed-s` windows, and three enums. That shape is the
+// first FLOAT on the wire in this crate, so it also gets a matter.js
+// byte-parity vector (`byte_parity.rs::float_attribute_decodes_matter_js_bytes`)
+// on CarbonDioxide as the family representative; the per-cluster tests below
+// are the usual synthetic decode-smoke, proving every generated module is
+// wired up and decodes its float.
+
+/// Encode a single anonymous-tagged FLOAT32 (the wire shape of a `single`
+/// attribute value). These clusters are read-only, so there is no generated
+/// `encode_*` to pair with — the codec writer is the encoder half here.
+fn float_attr(v: f32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    TlvWriter::new(&mut buf)
+        .put_float(Tag::Anonymous, v)
+        .unwrap();
+    buf
+}
+
+/// Assert two `f32`s are the same value **bit for bit**. Stricter than `==`
+/// (which accepts `-0.0` for `0.0` and can never match a NaN), and it keeps
+/// `clippy::float_cmp` quiet without an allow.
+#[track_caller]
+fn assert_f32_eq(actual: f32, expected: f32) {
+    assert_eq!(
+        actual.to_bits(),
+        expected.to_bits(),
+        "expected {expected}, got {actual}"
+    );
+}
+
+#[test]
+fn carbon_dioxide_concentration_full_attribute_set_decodes() {
+    use co2::{LevelValueEnum, MeasurementMediumEnum, MeasurementUnitEnum};
+    use gen::carbon_dioxide_concentration_measurement as co2;
+
+    // Nullable float32 measurements: a value, and TLV null.
+    assert_eq!(
+        co2::decode_measured_value(&float_attr(415.5)).unwrap(),
+        Nullable::Value(415.5)
+    );
+    assert_eq!(
+        co2::decode_measured_value(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        co2::decode_min_measured_value(&float_attr(0.0)).unwrap(),
+        Nullable::Value(0.0)
+    );
+    assert_eq!(
+        co2::decode_max_measured_value(&float_attr(5000.0)).unwrap(),
+        Nullable::Value(5000.0)
+    );
+    assert_eq!(
+        co2::decode_peak_measured_value(&float_attr(1200.25)).unwrap(),
+        Nullable::Value(1200.25)
+    );
+    assert_eq!(
+        co2::decode_average_measured_value(&float_attr(-12.5)).unwrap(),
+        Nullable::Value(-12.5)
+    );
+    // Non-nullable float32.
+    assert_f32_eq(co2::decode_uncertainty(&float_attr(0.25)).unwrap(), 0.25);
+    // elapsed-s windows are plain u32, not floats.
+    assert_eq!(
+        co2::decode_peak_measured_value_window(&uint_attr(3600)).unwrap(),
+        3600
+    );
+    assert_eq!(
+        co2::decode_average_measured_value_window(&uint_attr(300)).unwrap(),
+        300
+    );
+    // The three enums.
+    assert_eq!(
+        co2::decode_measurement_unit(&uint_attr(0)).unwrap(),
+        MeasurementUnitEnum::Ppm
+    );
+    assert_eq!(
+        co2::decode_measurement_medium(&uint_attr(0)).unwrap(),
+        MeasurementMediumEnum::Air
+    );
+    assert_eq!(
+        co2::decode_level_value(&uint_attr(4)).unwrap(),
+        LevelValueEnum::Critical
+    );
+    // Forward-compat: an unknown enum discriminant is preserved, not rejected.
+    assert_eq!(
+        co2::decode_level_value(&uint_attr(99)).unwrap(),
+        LevelValueEnum::Unrecognized(99)
+    );
+}
+
+#[test]
+fn float_attribute_rejects_non_float_wire_types() {
+    use gen::carbon_dioxide_concentration_measurement as co2;
+    // A float attribute encoded as an integer (or any other type) is a type
+    // mismatch, not a silent coercion — the pre-#112 emitter fallthrough would
+    // have decoded these as integers.
+    assert!(co2::decode_measured_value(&uint_attr(415)).is_err());
+    assert!(co2::decode_uncertainty(&int_attr(-1)).is_err());
+    assert!(co2::decode_uncertainty(&bool_attr(true)).is_err());
+    // …and a null in a non-nullable float attribute is still an error.
+    assert!(co2::decode_uncertainty(&null_attr()).is_err());
+}
+
+#[test]
+fn float_wire_roundtrip_including_edge_values() {
+    use gen::carbon_dioxide_concentration_measurement as co2;
+    // encode (matter-codec) -> decode (generated) -> equal, across the edges of
+    // the binary32 space. Compared by BITS: NaN != NaN and 0.0 == -0.0 under
+    // value equality, either of which would make this test lie.
+    for v in [
+        0.0_f32,
+        -0.0,
+        1.0,
+        -1.0,
+        f32::MIN,
+        f32::MAX,
+        f32::MIN_POSITIVE,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ] {
+        match co2::decode_measured_value(&float_attr(v)).unwrap() {
+            Nullable::Value(d) => assert_f32_eq(d, v),
+            Nullable::Null => panic!("float {v} decoded as null"),
+        }
+    }
+}
+
+#[test]
+fn every_concentration_cluster_decodes_its_measured_value() {
+    // One assertion per generated module: the family was added as a batch
+    // (#112) precisely so no member is left out, and this is the guard.
+    macro_rules! assert_family_member {
+        ($m:ident, $id:expr) => {{
+            use gen::$m as m;
+            assert_eq!(m::CLUSTER_ID, $id, concat!(stringify!($m), " cluster id"));
+            assert_eq!(
+                m::decode_measured_value(&float_attr(1.5)).unwrap(),
+                Nullable::Value(1.5)
+            );
+            assert_eq!(
+                m::decode_measured_value(&null_attr()).unwrap(),
+                Nullable::Null
+            );
+            assert_f32_eq(m::decode_uncertainty(&float_attr(0.5)).unwrap(), 0.5);
+        }};
+    }
+    assert_family_member!(carbon_monoxide_concentration_measurement, 0x040C);
+    assert_family_member!(carbon_dioxide_concentration_measurement, 0x040D);
+    assert_family_member!(nitrogen_dioxide_concentration_measurement, 0x0413);
+    assert_family_member!(ozone_concentration_measurement, 0x0415);
+    assert_family_member!(pm25_concentration_measurement, 0x042A);
+    assert_family_member!(formaldehyde_concentration_measurement, 0x042B);
+    assert_family_member!(pm1_concentration_measurement, 0x042C);
+    assert_family_member!(pm10_concentration_measurement, 0x042D);
+    assert_family_member!(
+        total_volatile_organic_compounds_concentration_measurement,
+        0x042E
+    );
+    assert_family_member!(radon_concentration_measurement, 0x042F);
+}

@@ -15,7 +15,7 @@
 
 import {
   TlvUInt8, TlvUInt16, TlvUInt32, TlvUInt64, TlvInt16, TlvInt64,
-  TlvBoolean, TlvString, TlvByteString,
+  TlvBoolean, TlvString, TlvByteString, TlvFloat,
   TlvArray, TlvNullable,
   TlvObject, TlvField, TlvOptionalField,
 } from '@matter/types';
@@ -306,5 +306,35 @@ cmd('access_control', 'cmd_review_fabric_restrictions.json',
       { endpoint: 1, cluster: 0x0006, restrictions: [{ type: 0, id: 0x1234 }] },
     ],
   }));
+
+// ---------------------------------------------------------------------------
+// CarbonDioxideConcentrationMeasurement (0x040D) — the FIRST float on the wire
+// in this crate (#112). Every concentration-measurement cluster shares this
+// shape, so one representative cluster proves the whole family. `single` must
+// encode as TLV FLOAT32 (control byte 0x0A), not FLOAT64 and not an integer.
+// Values are chosen to be exactly representable in binary32 so the assertion
+// is an equality, not an epsilon comparison.
+// ---------------------------------------------------------------------------
+
+attr('carbon_dioxide_concentration_measurement', 'attr_measured_value_present.json',
+  { cluster: 'CarbonDioxideConcentrationMeasurement', cluster_id: 0x040d,
+    attribute: 'MeasuredValue', attribute_id: 0x0000,
+    type: 'single', writable: false,
+    note: 'nullable float32 (single), present — exactly representable value' },
+  TlvNullable(TlvFloat).encode(415.5));
+
+attr('carbon_dioxide_concentration_measurement', 'attr_measured_value_null.json',
+  { cluster: 'CarbonDioxideConcentrationMeasurement', cluster_id: 0x040d,
+    attribute: 'MeasuredValue', attribute_id: 0x0000,
+    type: 'single', writable: false,
+    note: 'nullable float32 (single), TLV null' },
+  TlvNullable(TlvFloat).encode(null));
+
+attr('carbon_dioxide_concentration_measurement', 'attr_uncertainty.json',
+  { cluster: 'CarbonDioxideConcentrationMeasurement', cluster_id: 0x040d,
+    attribute: 'Uncertainty', attribute_id: 0x0007,
+    type: 'single', writable: false,
+    note: 'non-nullable float32 (single)' },
+  TlvFloat.encode(0.25));
 
 console.log('capture-clusters: all vectors written.');

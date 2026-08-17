@@ -10,7 +10,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  19 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  47 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -18,8 +18,8 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 
 ## What this crate does not do
 
-- It is **not** a full cluster set — only the 19 clusters below today. More
-  arrive in later M9-A2 batches.
+- It is **not** a full cluster set — only the 47 clusters below today. More
+  arrive in later batches.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
   publishes is the Interaction Model layer / high-level controller (see *Reading
@@ -59,6 +59,18 @@ byte-parity vector for the recursive list-of-struct command encode
 (`AccessControl.ReviewFabricRestrictions`, whose `Arl` is a list of structs each
 carrying a nested list-of-struct). This completes the cluster-library widening
 (10 → 33 clusters).
+The concentration measurement family (Matter 1.2), reported missing by an
+external adopter in [#112], adds the last 10 read-only clusters —
+CarbonMonoxide (0x040C), CarbonDioxide (0x040D), NitrogenDioxide (0x0413),
+Ozone (0x0415), Pm25 (0x042A), Formaldehyde (0x042B), Pm1 (0x042C),
+Pm10 (0x042D), TotalVolatileOrganicCompounds (0x042E), and Radon (0x042F)
+ConcentrationMeasurement. They derive from one base cluster and so share a
+single shape, which is why they are added as a family rather than piecemeal.
+That shape carries this crate's first **float** (`single`/FLOAT32) attributes,
+so alongside the per-cluster decode-smoke tests it gets a matter.js byte-parity
+vector and a `proptest` wire round-trip over every binary32 bit pattern.
+
+[#112]: https://github.com/phunapps/matter-rust/issues/112
 For any attribute not covered by these typed codecs — optional,
 manufacturer-specific, or a cluster not in this list — the generic `Value` path
 in `matter-controller` remains the universal answer. Hand-written support lives

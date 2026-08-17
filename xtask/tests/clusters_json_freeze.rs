@@ -13,8 +13,9 @@ use std::path::PathBuf;
 
 /// The M7 target clusters (CLAUDE.md milestone / spec §8) plus the M9-A2.1
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
-/// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, and M9-D2 operational credentials.
-const TARGET_CLUSTERS: [&str; 37] = [
+/// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
+/// operational credentials, and the concentration measurement family (#112).
+const TARGET_CLUSTERS: [&str; 47] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -61,6 +62,17 @@ const TARGET_CLUSTERS: [&str; 37] = [
     "TimeSynchronization",
     // M9-G-c ICD Management:
     "IcdManagement",
+    // Concentration measurement family (Matter 1.2), #112:
+    "CarbonMonoxideConcentrationMeasurement",
+    "CarbonDioxideConcentrationMeasurement",
+    "NitrogenDioxideConcentrationMeasurement",
+    "OzoneConcentrationMeasurement",
+    "Pm25ConcentrationMeasurement",
+    "FormaldehydeConcentrationMeasurement",
+    "Pm1ConcentrationMeasurement",
+    "Pm10ConcentrationMeasurement",
+    "TotalVolatileOrganicCompoundsConcentrationMeasurement",
+    "RadonConcentrationMeasurement",
 ];
 
 fn load() -> Value {

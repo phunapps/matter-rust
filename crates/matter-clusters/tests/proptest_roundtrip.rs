@@ -5,6 +5,7 @@
 
 use matter_clusters::gen;
 use matter_clusters::types::Nullable;
+use matter_codec::{Tag, TlvWriter};
 use proptest::prelude::*;
 
 proptest! {
@@ -104,5 +105,26 @@ proptest! {
         let v = gen::window_covering::ModeBitmap::from_bits_retain(raw);
         let bytes = gen::window_covering::encode_mode(v);
         prop_assert_eq!(gen::window_covering::decode_mode(&bytes).unwrap(), v);
+    }
+
+    // ---- concentration measurement (#112): the first float on the wire ----
+
+    #[test]
+    fn co2_measured_value_wire_roundtrip(bits in any::<u32>()) {
+        // These clusters are read-only, so there is no generated `encode_*`;
+        // the codec's `put_float` is the encoder half. Drawing the raw BITS
+        // (rather than `any::<f32>()`) covers every binary32 pattern including
+        // every NaN payload, infinities, and subnormals.
+        //
+        // Compared by bits as well: `f32::NAN != f32::NAN` and `0.0 == -0.0`
+        // under value equality, so a naive `prop_assert_eq!` would either flake
+        // on NaN or quietly accept a lost sign.
+        let v = f32::from_bits(bits);
+        let mut buf = Vec::new();
+        TlvWriter::new(&mut buf).put_float(Tag::Anonymous, v).unwrap();
+        match gen::carbon_dioxide_concentration_measurement::decode_measured_value(&buf).unwrap() {
+            Nullable::Value(d) => prop_assert_eq!(d.to_bits(), v.to_bits()),
+            Nullable::Null => prop_assert!(false, "float decoded as null"),
+        }
     }
 }

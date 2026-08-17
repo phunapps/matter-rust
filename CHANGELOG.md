@@ -135,6 +135,40 @@ clock is unset the two clock-relative checks cannot run at all (see below).
 - The per-crate `crates/matter-controller/CHANGELOG.md` (stale since M8.1, but
   shipped inside the published crate) now redirects to this file.
 
+### `matter-clusters`
+
+#### Added
+
+- **The concentration measurement cluster family (Matter 1.2) — 10 new
+  generated modules**, reported missing by `qwandor`, the project's first
+  external adopter, in [#112]: `CarbonMonoxideConcentrationMeasurement`
+  (0x040C), `CarbonDioxideConcentrationMeasurement` (0x040D),
+  `NitrogenDioxideConcentrationMeasurement` (0x0413),
+  `OzoneConcentrationMeasurement` (0x0415), `Pm25ConcentrationMeasurement`
+  (0x042A), `FormaldehydeConcentrationMeasurement` (0x042B),
+  `Pm1ConcentrationMeasurement` (0x042C), `Pm10ConcentrationMeasurement`
+  (0x042D), `TotalVolatileOrganicCompoundsConcentrationMeasurement` (0x042E),
+  and `RadonConcentrationMeasurement` (0x042F). The issue named two; all ten
+  are here because they *derive from one base cluster* and therefore share a
+  single shape — shipping a subset would only invite the follow-up issue. Every
+  id and name was verified against the pinned `@matter/model` 0.17.1 dump, not
+  from memory. They were never absent from the data model, only from the
+  codegen allowlist, so this is a purely additive regeneration: no existing
+  cluster's generated code changed, and `@matter/model` stays pinned at 0.17.1.
+  All attributes are read-only, so the modules expose decoders (and the three
+  `MeasurementUnitEnum` / `MeasurementMediumEnum` / `LevelValueEnum` enums, the
+  feature bitflags, and the attribute-id constants) but no encoders.
+- These clusters bring the **first float attributes** in the crate
+  (`MeasuredValue`, `Min`/`Max`/`Peak`/`AverageMeasuredValue`, `Uncertainty`
+  are all `single` → `f32`), which required teaching the generator to emit
+  floats at all — see *xtask (codegen)* below. Tested with a per-cluster
+  decode-smoke, a matter.js byte-parity vector for the FLOAT32 wire encoding
+  (`test-vectors/clusters/carbon_dioxide_concentration_measurement/`), and a
+  `proptest` wire round-trip over every binary32 bit pattern (NaN payloads,
+  infinities, subnormals, and signed zero compared by bits).
+
+[#112]: https://github.com/phunapps/matter-rust/issues/112
+
 ### xtask (codegen)
 
 #### Added

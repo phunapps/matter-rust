@@ -220,6 +220,39 @@ fn network_interface_struct_decodes() {
 }
 
 #[test]
+fn float_attribute_decodes_matter_js_bytes() {
+    // #112: the concentration-measurement family is the first cluster shape in
+    // this crate with a float (`single`) on the wire, so it earns a matter.js
+    // vector rather than a hand-built one. The bytes must be TLV FLOAT32
+    // (control byte 0x0A) — a FLOAT64 or an integer encoding would decode to
+    // the wrong value or not at all. Both values are exactly representable in
+    // binary32, so these are exact equalities. All 10 clusters share this
+    // shape, so CarbonDioxide stands in for the family.
+    let present = attr("carbon_dioxide_concentration_measurement/attr_measured_value_present.json");
+    assert_eq!(present[0], 0x0a, "matter.js must emit anonymous FLOAT32");
+    assert_eq!(
+        gen::carbon_dioxide_concentration_measurement::decode_measured_value(&present).unwrap(),
+        Nullable::Value(415.5)
+    );
+
+    let null = attr("carbon_dioxide_concentration_measurement/attr_measured_value_null.json");
+    assert_eq!(
+        gen::carbon_dioxide_concentration_measurement::decode_measured_value(&null).unwrap(),
+        Nullable::Null
+    );
+
+    // Uncertainty is the non-nullable float in the same cluster. Compared by
+    // bits (stricter than `==`, which would accept `-0.0` for `0.0`).
+    let unc = attr("carbon_dioxide_concentration_measurement/attr_uncertainty.json");
+    assert_eq!(
+        gen::carbon_dioxide_concentration_measurement::decode_uncertainty(&unc)
+            .unwrap()
+            .to_bits(),
+        0.25_f32.to_bits()
+    );
+}
+
+#[test]
 fn review_fabric_restrictions_recursive_list_encodes() {
     // AccessControl.ReviewFabricRestrictions — Arl is list<struct{.., list<struct>}>;
     // the recursive list-of-struct command encode (M9-A2.5 gap 2) must match

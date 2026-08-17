@@ -40,7 +40,17 @@
       "PressureMeasurement",
       "FlowMeasurement",
       "RelativeHumidityMeasurement",
-      "OccupancySensing"
+      "OccupancySensing",
+      "CarbonMonoxideConcentrationMeasurement",
+      "CarbonDioxideConcentrationMeasurement",
+      "NitrogenDioxideConcentrationMeasurement",
+      "OzoneConcentrationMeasurement",
+      "Pm25ConcentrationMeasurement",
+      "FormaldehydeConcentrationMeasurement",
+      "Pm1ConcentrationMeasurement",
+      "Pm10ConcentrationMeasurement",
+      "TotalVolatileOrganicCompoundsConcentrationMeasurement",
+      "RadonConcentrationMeasurement"
     ],
     "excluded": [
       {
@@ -16257,6 +16267,2626 @@
             {
               "value": 3,
               "name": "PhysicalContact",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1036,
+      "name": "CarbonMonoxideConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1037,
+      "name": "CarbonDioxideConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1043,
+      "name": "NitrogenDioxideConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1045,
+      "name": "OzoneConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1066,
+      "name": "Pm25ConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1067,
+      "name": "FormaldehydeConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1068,
+      "name": "Pm1ConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1069,
+      "name": "Pm10ConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1070,
+      "name": "TotalVolatileOrganicCompoundsConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1071,
+      "name": "RadonConcentrationMeasurement",
+      "revision": 4,
+      "features": [
+        {
+          "bit": 0,
+          "code": "MEA",
+          "name": "NumericMeasurement",
+          "description": "Cluster supports numeric measurement of substance"
+        },
+        {
+          "bit": 1,
+          "code": "LEV",
+          "name": "LevelIndication",
+          "description": "Cluster supports basic level indication for substance using the ConcentrationLevel enum"
+        },
+        {
+          "bit": 2,
+          "code": "MED",
+          "name": "MediumLevel",
+          "description": "Cluster supports the Medium Concentration Level"
+        },
+        {
+          "bit": 3,
+          "code": "CRI",
+          "name": "CriticalLevel",
+          "description": "Cluster supports the Critical Concentration Level"
+        },
+        {
+          "bit": 4,
+          "code": "PEA",
+          "name": "PeakMeasurement",
+          "description": "Cluster supports peak numeric measurement of substance"
+        },
+        {
+          "bit": 5,
+          "code": "AVG",
+          "name": "AverageMeasurement",
+          "description": "Cluster supports average numeric measurement of substance"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the most recent measurement as a single-precision floating-point number. MeasuredValue's unit is represented by MeasurementUnit.\nA value of null indicates that the measurement is unknown or outside the valid range.\nMinMeasuredValue and MaxMeasuredValue define the valid range for MeasuredValue."
+        },
+        {
+          "id": 1,
+          "name": "MinMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value of MeasuredValue that is capable of being measured. A MinMeasuredValue of null indicates that the MinMeasuredValue is not defined."
+        },
+        {
+          "id": 2,
+          "name": "MaxMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that is capable of being measured. A MaxMeasuredValue of null indicates that the MaxMeasuredValue is not defined."
+        },
+        {
+          "id": 3,
+          "name": "PeakMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value of MeasuredValue that has been measured during the PeakMeasuredValueWindow. If this attribute is provided, the PeakMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 4,
+          "name": "PeakMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the PeakMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 5,
+          "name": "AverageMeasuredValue",
+          "type": "single",
+          "metatype": "float",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the average value of MeasuredValue that has been measured during the AverageMeasuredValueWindow. If this attribute is provided, the AverageMeasuredValueWindow attribute shall also be provided."
+        },
+        {
+          "id": 6,
+          "name": "AverageMeasuredValueWindow",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the window of time used for determining the AverageMeasuredValue. The value is in seconds."
+        },
+        {
+          "id": 7,
+          "name": "Uncertainty",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the range of error or deviation that can be found in MeasuredValue and PeakMeasuredValue. This is considered a +/- value and should be considered to be in MeasurementUnit."
+        },
+        {
+          "id": 8,
+          "name": "MeasurementUnit",
+          "type": "MeasurementUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the unit of MeasuredValue. See MeasurementUnitEnum."
+        },
+        {
+          "id": 9,
+          "name": "MeasurementMedium",
+          "type": "MeasurementMediumEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the medium in which MeasuredValue or LevelValue is being measured. See MeasurementMediumEnum."
+        },
+        {
+          "id": 10,
+          "name": "LevelValue",
+          "type": "LevelValueEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the level of the substance detected. See LevelValueEnum."
+        }
+      ],
+      "commands": [],
+      "datatypes": [
+        {
+          "name": "LevelValueEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementMediumEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Air",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Water",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Soil",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MeasurementUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Where mentioned, Billion refers to 10^9, Trillion refers to 10^12 (short scale).",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ppm",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Ppb",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ppt",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Mgm3",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ugm3",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ngm3",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Pm3",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Bqm3",
               "description": null
             }
           ]

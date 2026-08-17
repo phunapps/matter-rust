@@ -39,7 +39,12 @@
 //! decode-smoke + a byte-parity vector for the recursive list-of-struct command
 //! encode `AccessControl::ReviewFabricRestrictions`): `AccessControl`,
 //! `GroupKeyManagement`, `AdministratorCommissioning`, and
-//! `OtaSoftwareUpdateRequestor`.
+//! `OtaSoftwareUpdateRequestor`. Concentration measurement (Matter 1.2, #112 —
+//! decode-smoke per cluster, plus a matter.js byte-parity vector and a
+//! `proptest` wire round-trip for the float attributes they introduce):
+//! `CarbonMonoxide`, `CarbonDioxide`, `NitrogenDioxide`, `Ozone`, `Pm25`,
+//! `Formaldehyde`, `Pm1`, `Pm10`, `TotalVolatileOrganicCompounds`, and
+//! `Radon` `ConcentrationMeasurement`.
 //!
 //! For any attribute not covered by these typed codecs — optional,
 //! manufacturer-specific, or a cluster not in this list — the generic `Value`
