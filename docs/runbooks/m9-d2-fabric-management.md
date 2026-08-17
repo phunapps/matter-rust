@@ -98,11 +98,19 @@ let ctrl_b = MatterController::builder(store_b)
     .await?;
 
 // Fabric 2, vendor 2, node 1 — must be different from Fabric A's fabric_id.
+// `not_before` must be a real wall-clock time (backdated an hour for device
+// clock skew); the Matter epoch is rejected — see `FabricConfig::validity`.
+let now_unix = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)?
+    .as_secs();
 ctrl_b.create_fabric(FabricConfig::new(
     2,
     2,
     1,
-    (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
+    (
+        MatterTime::from_unix_secs(now_unix - 3600),
+        MatterTime::NO_EXPIRY,
+    ),
 )).await?;
 
 let node_id_b = ctrl_b.commission(&win.manual_code, None).await?.node_id;

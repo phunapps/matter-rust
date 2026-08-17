@@ -117,20 +117,63 @@ pub enum Error {
     /// on every startup instead of only on a fresh store). Call
     /// [`MatterController::fabrics`](crate::MatterController::fabrics) first
     /// to check which fabrics already exist.
+    ///
+    /// To recover: the existing fabric is already usable — just skip the
+    /// `create_fabric` call and carry on with it. If you genuinely want a
+    /// second fabric, pass a different `fabric_id`; if you want to start over,
+    /// point the controller at a fresh store. There is no API to delete a
+    /// fabric from the controller's own store, so once a `fabric_id` is in a
+    /// store, `create_fabric` refuses it for that store's lifetime.
+    /// ([`Node::remove_fabric`](crate::Node::remove_fabric) removes *our*
+    /// fabric from a **device**, not from the controller.)
     #[error(
         "fabric {0:#018x} already exists — call MatterController::fabrics() to check before \
-         calling create_fabric"
+         calling create_fabric; to recover, use the existing fabric, pass a different fabric_id, \
+         or start from a fresh store"
     )]
     FabricAlreadyExists(u64),
 
     /// [`FabricConfig::validity`](crate::FabricConfig::validity) names a
-    /// window a device will reject (issue #111): either `not_before` is the
-    /// Matter epoch (`MatterTime(0)`, i.e. 2000-01-01T00:00:00Z — real devices
-    /// reject a root certificate whose validity starts there), or the window
-    /// is inverted/empty (`not_after <= not_before`, excluding
-    /// `MatterTime::NO_EXPIRY`). The detail string names which.
+    /// window that cannot work on a device (issue #111). Rejected windows:
+    ///
+    /// - `not_before` at the Matter epoch (`MatterTime(0)`, i.e.
+    ///   2000-01-01T00:00:00Z). Not a validity-policy rejection: chip's
+    ///   `ChipEpochToASN1Time`
+    ///   (`connectedhomeip/src/credentials/CHIPCert.cpp`) encodes epoch 0 as
+    ///   `99991231235959Z` for both `notBefore` and `notAfter`, so the X.509
+    ///   TBS the device rebuilds from our TLV certificate differs from the one
+    ///   we signed and the **signature** check fails — surfacing as an opaque
+    ///   `IM status 0x85` on `AddTrustedRootCertificate`.
+    /// - `not_before` more than a day ahead of this host's clock — usually a
+    ///   millisecond timestamp passed to `MatterTime::from_unix_secs`, which
+    ///   saturates to ≈ year 2136. Such a root *installs* (chip's
+    ///   `ValidateChipRCAC` skips RCAC validity times) and then fails every
+    ///   CASE session with `kNotYetValid`.
+    /// - An inverted or empty window (`not_after <= not_before`, excluding
+    ///   `MatterTime::NO_EXPIRY`).
+    ///
+    /// The detail string names which.
     #[error("invalid fabric validity window: {0}")]
     InvalidFabricValidity(String),
+
+    /// The host's wall clock reads before the Matter epoch
+    /// (2000-01-01T00:00:00Z) — almost always an **unset system clock** on a
+    /// host with no RTC that has not yet reached an NTP server. Payload: the
+    /// Unix seconds actually read.
+    ///
+    /// Refused rather than used, because `MatterTime::from_unix_secs` saturates
+    /// such a reading to `MatterTime(0)`, and a certificate minted with
+    /// `notBefore == 0` cannot be installed on a device at all: chip re-encodes
+    /// epoch 0 as `99991231235959Z` when rebuilding the X.509 TBS, breaking the
+    /// signature (`ChipEpochToASN1Time`,
+    /// `connectedhomeip/src/credentials/CHIPCert.cpp` — the same root cause as
+    /// issue #111). Set the clock (or wait for time sync) and retry.
+    #[error(
+        "system clock reads {0} (before the Matter epoch, 2000-01-01T00:00:00Z) — it is probably \
+         unset; certificates minted against it cannot be installed on a device. Set the host \
+         clock or wait for time sync, then retry"
+    )]
+    SystemClockUnset(u64),
 }
 
 impl Error {

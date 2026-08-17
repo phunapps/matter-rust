@@ -59,14 +59,36 @@ require production roots: `AttestationTrust::from_dirs(paa_dir, cd_dir)`.
 In matter.js the commissioner's operational identity is managed for you inside
 the fabric. matter-rust surfaces it: `create_fabric` mints and **persists** the
 controller's stable operational identity (its own NOC under the fabric RCAC)
-once, and every later operational session reuses it. Call it once; on restart,
-load the snapshot rather than re-creating.
+once, and every later operational session reuses it. Call it **once**, on a
+fresh store: on restart the snapshot already carries the fabric and identity, so
+gate the call on `controller.fabrics()` being empty. Calling it again with a
+`fabric_id` that already exists returns `Error::FabricAlreadyExists` (it is not
+idempotent).
+
+`FabricConfig` is `#[non_exhaustive]` — construct it with `FabricConfig::new`,
+not a struct literal. Its `validity.0` (`not_before`) must be a real wall-clock
+time, backdated a little to tolerate device clock skew; the Matter epoch
+(`MatterTime::from_unix_secs(0)`) and times far in the future are both rejected
+(see `FabricConfig::validity`).
 
 ```rust
-let fabric_id = controller.create_fabric(FabricConfig {
-    fabric_id: 1, rcac_id: 1, commissioner_node_id: 1,
-    validity: (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
-})?;
+if controller.fabrics().await?.is_empty() {
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let fabric_id = controller
+        .create_fabric(FabricConfig::new(
+            1, // fabric_id
+            1, // rcac_id
+            1, // commissioner_node_id
+            (
+                MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
+                MatterTime::NO_EXPIRY,
+            ),
+        ))
+        .await?;
+    println!("created fabric {fabric_id}");
+}
 ```
 
 ## Commissioning

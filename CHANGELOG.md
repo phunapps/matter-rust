@@ -24,8 +24,10 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased
 
-Two fixes from friction the first external adopter hit setting up a fabric,
-both on `matter-controller`.
+Fixes from friction the first external adopter hit setting up a fabric, all on
+`matter-controller`, plus the rest of the class each one belongs to: every way
+we could mint a certificate that a device cannot use is now refused locally,
+with an error that names the cause.
 
 ### `matter-controller`
 
@@ -35,7 +37,12 @@ both on `matter-controller`.
   snapshot-decoupled accessor mirroring `nodes()`. Returns each fabric's
   `fabric_id`, the controller's own `commissioner_node_id` on it, its
   commissioned node count, and whether it uses a 3-tier ICAC chain. Call it
-  before `create_fabric` to check which fabrics already exist (#110).
+  before `create_fabric` to check which fabrics already exist (#110). Note the
+  distinction from `Node::list_fabrics`, which reads the *device's* fabric
+  table over the wire; both rustdocs now cross-reference the other.
+- **`Error::SystemClockUnset(u64)`** — a new variant (the `Error` enum is
+  `#[non_exhaustive]`, so this is additive) returned when this host's wall
+  clock reads before the Matter epoch.
 
 #### Fixed
 
@@ -49,15 +56,60 @@ both on `matter-controller`.
   **behaviour change**: a caller that (incorrectly) relied on repeat
   `create_fabric` calls being silently idempotent now gets an error back;
   gate the call on `fabrics()` being empty, or on a fresh store, as the
-  crate's examples and README now show.
+  crate's examples, README and rustdoc quickstart now show. The error also
+  says how to recover (use the existing fabric, pick a different `fabric_id`,
+  or start from a fresh store — there is no local fabric-removal API).
 - **`create_fabric` validates `FabricConfig::validity` up front** and returns
   `Error::InvalidFabricValidity` instead of letting a bad window surface deep
-  in commissioning as an opaque `IM status 0x85` on `SendTrustedRootCert`
-  (#111). Rejected: a `not_before` at the Matter epoch (`MatterTime(0)` /
-  `MatterTime::from_unix_secs(0)`) — the reporter's evidenced failure — and
-  an inverted or empty window (`not_after <= not_before`). `MatterTime::
-  NO_EXPIRY` for `not_after` remains valid regardless of `not_before`.
-  `FabricConfig::validity` and `FabricConfig::new` now document what to pass.
+  in commissioning as an opaque `IM status 0x85` on
+  `AddTrustedRootCertificate` (#111). Rejected: a `not_before` at the Matter
+  epoch (`MatterTime(0)` / `MatterTime::from_unix_secs(0)`) — the reporter's
+  evidenced failure — and an inverted or empty window
+  (`not_after <= not_before`). `MatterTime::NO_EXPIRY` for `not_after` remains
+  valid regardless of `not_before`. `FabricConfig::validity` and
+  `FabricConfig::new` now document what to pass, including the exact cause:
+  chip's `ChipEpochToASN1Time`
+  (`connectedhomeip/src/credentials/CHIPCert.cpp`) re-encodes epoch 0 as
+  `99991231235959Z` for both `notBefore` and `notAfter`, so the X.509 TBS a
+  device rebuilds from our TLV certificate differs from the one we signed and
+  the *signature* check fails — chip's own comment says such certificates
+  "are not usable with this code".
+- **`create_fabric` also refuses a `not_before` more than 24 h ahead of this
+  host's clock.** Same failure class as #111, worse consequence: the most
+  common time-unit mistake — a *millisecond* timestamp passed to
+  `MatterTime::from_unix_secs` — saturates to `MatterTime(u32::MAX)`
+  (≈ 2136), and with `not_after = NO_EXPIRY` the ordering check exempts it.
+  Such a root is not rejected by the device: `ValidateChipRCAC` deliberately
+  skips RCAC validity times, so `AddTrustedRootCertificate` *succeeds*, the
+  fabric half-commissions, and every CASE session afterwards fails with
+  `kNotYetValid` with nothing naming the cause. The tolerance is one day —
+  callers are told to backdate `not_before`, never to postdate it, so any
+  forward gap is pure clock disagreement.
+- **An unset host clock is refused at the source.** `current_matter_time()`
+  built on `MatterTime::from_unix_secs`, which saturates any pre-2000 reading
+  to `MatterTime(0)` — so a host with no RTC that had not yet reached an NTP
+  server (a very plausible embedded deployment) minted **device NOCs** with
+  `notBefore == 0` during commissioning, hitting the identical chip
+  TBS-signature failure as #111 one stage later, at `AddNOC`. It now returns
+  the new `Error::SystemClockUnset`, naming the unset clock, instead of
+  minting a certificate that cannot work.
+
+#### Documentation
+
+- The crate rustdoc quickstart (the docs.rs landing page), the crate README
+  quickstart, `docs/matter-js-migration-guide.md`, and the two multi-admin
+  runbooks all demonstrated one or both of the fixed anti-patterns
+  (unconditional `create_fabric`, `MatterTime::from_unix_secs(0)`). They now
+  gate on `fabrics()` and derive `not_before` from the real clock, backdated
+  an hour for device clock skew, rather than passing a magic constant. The
+  migration guide's snippet additionally built `FabricConfig` with a struct
+  literal (illegal outside the crate since it became `#[non_exhaustive]`) and
+  omitted `.await`; both fixed.
+- `FabricConfig::validity` now also warns that `from_unix_secs` clamps a
+  pre-2000 time to `MatterTime(0)`, which *is* `MatterTime::NO_EXPIRY` — so a
+  units mistake in `not_after` silently means "never expires".
+- The per-crate `crates/matter-controller/CHANGELOG.md` (stale since M8.1, but
+  shipped inside the published crate) now redirects to this file.
 
 ## 0.5.0
 

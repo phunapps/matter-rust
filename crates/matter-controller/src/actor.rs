@@ -1867,6 +1867,15 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         {
             return Err(Error::FabricAlreadyExists(cfg.fabric_id));
         }
+        // Clock-relative half of the validity check (issue #111's worse case:
+        // a `not_before` far in the future — typically a millisecond
+        // timestamp). It lives here rather than in `crate::fabric` so that
+        // `create_fabric` stays a pure function of its inputs; this is the
+        // layer that already owns a clock reading. `current_matter_time` also
+        // rejects an unset host clock, which would otherwise mint certificates
+        // stamped at the Matter epoch.
+        let now = current_matter_time()?;
+        crate::fabric::validate_not_before_against_now(cfg.validity, now)?;
         let entry = crate::fabric::create_fabric(cfg, self.rng.as_ref())?;
         let fabric_id = entry.fabric_id;
         self.state.fabrics.push(entry);
@@ -4689,13 +4698,43 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 /// # Errors
 ///
 /// Returns [`Error::Operational`] if the system clock is before the Unix epoch
-/// (extremely unlikely in practice).
+/// (extremely unlikely in practice), or [`Error::SystemClockUnset`] if it reads
+/// before the Matter epoch (see [`matter_time_from_unix_secs`]).
 pub(crate) fn current_matter_time() -> Result<matter_cert::MatterTime, Error> {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| Error::Operational(format!("clock: {e}")))?
         .as_secs();
-    Ok(matter_cert::MatterTime::from_unix_secs(secs))
+    matter_time_from_unix_secs(secs)
+}
+
+/// Convert Unix seconds to a [`matter_cert::MatterTime`], refusing a reading
+/// that predates the Matter epoch.
+///
+/// `MatterTime::from_unix_secs` **saturates** any pre-2000 time to
+/// `MatterTime(0)`. On a host whose clock has not been set — embedded Linux
+/// with no RTC, before NTP converges, a very plausible deployment — that is
+/// exactly what we would get, and `MatterTime(0)` is the one value certificates
+/// must never carry as `notBefore`: chip maps it to `99991231235959Z` when it
+/// rebuilds the X.509 TBS, so the signature check fails and the certificate is
+/// unusable (`ChipEpochToASN1Time`,
+/// `connectedhomeip/src/credentials/CHIPCert.cpp`; the same root cause as issue
+/// #111, one stage later at `AddNOC` rather than at
+/// `AddTrustedRootCertificate`).
+///
+/// Failing here names the cause — an unset host clock — instead of minting a
+/// device NOC that cannot work and letting it fail opaquely on the device.
+///
+/// # Errors
+///
+/// Returns [`Error::SystemClockUnset`] if `secs` is before the Matter epoch
+/// (2000-01-01T00:00:00Z, Unix `946_684_800`).
+fn matter_time_from_unix_secs(secs: u64) -> Result<matter_cert::MatterTime, Error> {
+    let now = matter_cert::MatterTime::from_unix_secs(secs);
+    if now.0 == 0 {
+        return Err(Error::SystemClockUnset(secs));
+    }
+    Ok(now)
 }
 
 #[cfg(test)]
@@ -5002,6 +5041,204 @@ mod tests {
                 node_count: 0,
                 icac_enabled: false,
             }]
+        );
+    }
+
+    /// `FabricInfo::icac_enabled` must reflect the fabric's ACTUAL chain
+    /// depth, not a hardcoded `false`: a fabric created with
+    /// `issue_icac = true` reports `true`.
+    #[tokio::test]
+    async fn fabrics_reports_icac_enabled_for_an_icac_fabric() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let mut icac_cfg = cfg();
+        icac_cfg.issue_icac = true;
+        controller
+            .create_fabric(icac_cfg)
+            .await
+            .expect("create_fabric with icac");
+
+        let fabrics = controller.fabrics().await.expect("fabrics");
+        assert_eq!(
+            fabrics,
+            vec![crate::FabricInfo {
+                fabric_id: 0xAABB_CCDD_0000_0001,
+                commissioner_node_id: 1,
+                node_count: 0,
+                icac_enabled: true,
+            }]
+        );
+    }
+
+    /// `FabricInfo::node_count` must count the fabric's commissioned devices,
+    /// not report a hardcoded `0`. Seeded the same way as
+    /// `nodes_lists_commissioned_devices_with_metadata` (a hand-built
+    /// `ControllerState` written straight to the store), because commissioning
+    /// a device through the public API is impractical in a unit test.
+    #[tokio::test]
+    async fn fabrics_reports_the_commissioned_node_count() {
+        let mut fabric =
+            crate::fabric::create_fabric(&cfg(), &SystemNocRng).expect("create_fabric");
+        fabric.devices.push(crate::state::DeviceEntry {
+            node_id: 0x0000_0000_0000_0042,
+            peer_noc_public_key: [0u8; 65],
+            resumption_record: None,
+            last_known_addr: None,
+            vendor_id: Some(0xFFF1),
+            product_id: Some(0x8000),
+            label: Some("plug".to_string()),
+        });
+
+        let store = Arc::new(MemStore::default());
+        store
+            .save(
+                &crate::snapshot::serialize(&ControllerState {
+                    fabrics: vec![fabric],
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let fabrics = controller.fabrics().await.expect("fabrics");
+        assert_eq!(
+            fabrics,
+            vec![crate::FabricInfo {
+                fabric_id: 0xAABB_CCDD_0000_0001,
+                commissioner_node_id: 1,
+                node_count: 1,
+                icac_enabled: false,
+            }]
+        );
+    }
+
+    /// A `create_fabric` rejected for an invalid validity window must leave no
+    /// trace: `fabrics()` stays empty (the epoch-zero `not_before` is caught
+    /// before any key generation or state mutation).
+    #[tokio::test]
+    async fn create_fabric_rejected_for_validity_leaves_no_fabric() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let mut bad = cfg();
+        bad.validity = (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY);
+        let err = controller
+            .create_fabric(bad)
+            .await
+            .expect_err("epoch-zero not_before must be refused");
+        assert!(
+            matches!(err, Error::InvalidFabricValidity(_)),
+            "expected InvalidFabricValidity, got {err:?}"
+        );
+
+        assert_eq!(
+            controller.fabrics().await.expect("fabrics"),
+            Vec::new(),
+            "a rejected create_fabric must not leave a fabric behind"
+        );
+    }
+
+    /// The clock-relative half of the validity check is wired into the actor:
+    /// a MILLISECOND timestamp as `not_before` (saturating to ≈ 2136) is
+    /// refused, and leaves no fabric behind. Without this the root would
+    /// install on the device (`ValidateChipRCAC` skips validity times) and
+    /// then fail every CASE session with `kNotYetValid`.
+    #[tokio::test]
+    async fn create_fabric_refuses_a_millisecond_not_before() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let mut bad = cfg();
+        bad.validity = (
+            MatterTime::from_unix_secs(1_700_000_000_000),
+            MatterTime::NO_EXPIRY,
+        );
+        let err = controller
+            .create_fabric(bad)
+            .await
+            .expect_err("far-future not_before must be refused");
+        assert!(
+            matches!(err, Error::InvalidFabricValidity(_)),
+            "expected InvalidFabricValidity, got {err:?}"
+        );
+        assert_eq!(
+            controller.fabrics().await.expect("fabrics"),
+            Vec::new(),
+            "a rejected create_fabric must not leave a fabric behind"
+        );
+    }
+
+    /// An unset host clock (pre-2000 reading) must fail loudly instead of
+    /// saturating to `MatterTime(0)` and minting certificates whose rebuilt
+    /// X.509 TBS no longer matches their signature.
+    #[test]
+    fn matter_time_refuses_a_pre_matter_epoch_clock() {
+        // Unix 0 — a host that booted with no RTC and no time sync.
+        let err = matter_time_from_unix_secs(0).expect_err("unset clock must be refused");
+        match err {
+            Error::SystemClockUnset(secs) => assert_eq!(secs, 0),
+            other => panic!("expected SystemClockUnset, got {other:?}"),
+        }
+
+        // One second before the Matter epoch: still saturates to
+        // `MatterTime(0)`, still refused.
+        let err = matter_time_from_unix_secs(946_684_799).expect_err("pre-epoch must be refused");
+        assert!(matches!(err, Error::SystemClockUnset(_)));
+        assert!(
+            err.to_string().contains("unset"),
+            "error must name the likely cause: {err}"
+        );
+    }
+
+    /// The boundary on the other side: the Matter epoch plus one second is a
+    /// legitimate (if implausible) clock reading and converts normally.
+    #[test]
+    fn matter_time_accepts_a_set_clock() {
+        assert_eq!(
+            matter_time_from_unix_secs(946_684_801).expect("set clock"),
+            MatterTime(1)
+        );
+        assert_eq!(
+            matter_time_from_unix_secs(1_700_000_000).expect("set clock"),
+            MatterTime::from_unix_secs(1_700_000_000)
         );
     }
 

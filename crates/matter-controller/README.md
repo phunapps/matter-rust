@@ -6,7 +6,7 @@ to commission and control Matter devices from pure Rust. It wraps every other
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **0.4.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
+> Status: **0.5.0**. The v1.0 controller (M8) plus Matter-1.4 completeness work
 > (M9): BLE→Wi-Fi/Thread commissioning, full interaction model, groups, OTA
 > provider, ICD client, multi-admin/ACL — extensively validated against real
 > silicon (ESP32-C6 over Wi-Fi and Thread).
@@ -56,13 +56,22 @@ let controller = MatterController::builder(store)
     .build()
     .await?;
 
-// Only create a fabric that doesn't exist yet — check `fabrics()` first, or
-// gate on a fresh store. `not_before` must be a real time: MatterTime(0) /
-// from_unix_secs(0) (the Matter epoch) is rejected — see issue #111.
+// Only create a fabric that doesn't exist yet — `create_fabric` refuses a
+// `fabric_id` it already has, so check `fabrics()` first (or gate on a fresh
+// store). `not_before` must be a real wall-clock time, backdated a little (an
+// hour is plenty) for device clock skew: MatterTime(0) / from_unix_secs(0)
+// (the Matter epoch) is rejected, and so is a time far in the future — see
+// `FabricConfig::validity` and issue #111.
 if controller.fabrics().await?.is_empty() {
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
     controller.create_fabric(FabricConfig::new(
         1, 1, 1,
-        (MatterTime::from_unix_secs(1_700_000_000), MatterTime::NO_EXPIRY),
+        (
+            MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
+            MatterTime::NO_EXPIRY,
+        ),
     )).await?;
 }
 

@@ -489,7 +489,12 @@ impl MatterController {
     /// [`Error::ControllerStopped`] if the task has stopped;
     /// [`Error::FabricAlreadyExists`] if `cfg.fabric_id` already exists;
     /// [`Error::InvalidFabricValidity`] if `cfg.validity` names a window
-    /// devices will reject (see [`FabricConfig::validity`], issue #111);
+    /// devices cannot use — a `not_before` at the Matter epoch, a `not_before`
+    /// implausibly far ahead of this host's clock, or an inverted/empty window
+    /// (see [`FabricConfig::validity`], issue #111);
+    /// [`Error::SystemClockUnset`] if this host's clock reads before the Matter
+    /// epoch (the future-`not_before` check needs a trustworthy clock, and an
+    /// unset one would go on to mint unusable device NOCs);
     /// otherwise any minting / persistence error.
     pub async fn create_fabric(&self, cfg: FabricConfig) -> Result<u64, Error> {
         let (reply, rx) = oneshot::channel();
@@ -677,6 +682,11 @@ impl MatterController {
     /// [`crate::FabricInfo`]. Check this before calling [`Self::create_fabric`] —
     /// since issue #110, `create_fabric` refuses to create a second fabric
     /// with a `fabric_id` that already exists here.
+    ///
+    /// This is **our own** fabric list, read from the controller's store with
+    /// no network traffic. For the fabrics a *device* is commissioned onto
+    /// (including other administrators' fabrics), read the device's own table
+    /// with [`Node::list_fabrics`](crate::Node::list_fabrics).
     ///
     /// # Errors
     ///

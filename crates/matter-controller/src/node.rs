@@ -1005,6 +1005,12 @@ impl Node {
 
     /// Read the device's `Fabrics` list (every fabric it is commissioned onto).
     ///
+    /// This is the **device's** table, read over the wire — it includes other
+    /// administrators' fabrics and says nothing about what this controller has
+    /// created. For the controller's own fabrics (local, no network traffic)
+    /// use
+    /// [`MatterController::fabrics`](crate::MatterController::fabrics).
+    ///
     /// # Errors
     ///
     /// An interaction error if the read fails.

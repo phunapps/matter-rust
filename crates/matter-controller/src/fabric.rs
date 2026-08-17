@@ -30,15 +30,39 @@ pub struct FabricConfig {
     ///
     /// Pass a real wall-clock `not_before` — e.g.
     /// `MatterTime::from_unix_secs(current_unix_time)`, typically backdated a
-    /// little (an hour is plenty) to tolerate device clock skew. Do **not**
-    /// pass `MatterTime::from_unix_secs(0)` or `MatterTime(0)`: devices
-    /// reject a root certificate whose validity starts at the Matter epoch
-    /// (2000-01-01T00:00:00Z), surfacing as an opaque `IM status 0x85`
-    /// rejection of `SendTrustedRootCert` deep in commissioning rather than
-    /// as a clear error here (issue #111). `create_fabric` validates this
-    /// window and returns [`crate::Error::InvalidFabricValidity`] instead of
-    /// letting it reach a device. Use `MatterTime::NO_EXPIRY` for `not_after`
-    /// if the fabric should not expire.
+    /// little (an hour is plenty) to tolerate device clock skew. Use
+    /// `MatterTime::NO_EXPIRY` for `not_after` if the fabric should not
+    /// expire.
+    ///
+    /// [`MatterController::create_fabric`](crate::MatterController::create_fabric)
+    /// validates this window and returns
+    /// [`crate::Error::InvalidFabricValidity`] rather than letting a bad one
+    /// reach a device. Three ways to get it wrong:
+    ///
+    /// - **`not_before` at the Matter epoch** (`MatterTime(0)`, equivalently
+    ///   `MatterTime::from_unix_secs(0)`) — the reporter's failure in issue
+    ///   #111. The cause is a signature mismatch, not a validity policy:
+    ///   chip's `ChipEpochToASN1Time`
+    ///   (`connectedhomeip/src/credentials/CHIPCert.cpp`) maps epoch 0 to the
+    ///   X.509 sentinel `99991231235959Z` for **both** `notBefore` and
+    ///   `notAfter`, so a device rebuilding the X.509 TBS from our TLV
+    ///   certificate hashes `99991231235959Z` where we signed
+    ///   `20000101000000Z` and the **signature check fails**. chip's own
+    ///   comment: such certificates "are not usable with this code" and
+    ///   "attempted installation of such certficates will fail during
+    ///   commissioning" — surfacing as an opaque `IM status 0x85` rejection of
+    ///   `AddTrustedRootCertificate` deep in commissioning.
+    /// - **`not_before` far in the future** — most often a *millisecond*
+    ///   timestamp handed to `MatterTime::from_unix_secs`, which saturates to
+    ///   `MatterTime(u32::MAX)` (≈ year 2136). This one is worse than a
+    ///   rejection: `ValidateChipRCAC` deliberately does not check RCAC
+    ///   validity times (`CHIPCert.cpp`), so `AddTrustedRootCertificate`
+    ///   *succeeds* and the fabric half-commissions, then every CASE session
+    ///   fails with `kNotYetValid`.
+    /// - **A units mistake in `not_after`** — `from_unix_secs` clamps any
+    ///   pre-2000 Unix time to `MatterTime(0)`, and `MatterTime(0)` **is**
+    ///   `MatterTime::NO_EXPIRY`, so such a mistake silently yields "never
+    ///   expires" — the opposite of the intent — and cannot be rejected here.
     pub validity: (MatterTime, MatterTime),
     /// When `true`, `create_fabric` mints an intermediate CA (ICAC) under
     /// the RCAC and signs the commissioner NOC (and, later, all NOCs
@@ -76,10 +100,12 @@ impl FabricConfig {
 /// (issue #111), before any key generation runs.
 ///
 /// - `not_before` must not be the Matter epoch (`MatterTime(0)`, i.e.
-///   2000-01-01T00:00:00Z) — the reporter's evidenced failure: a root
-///   certificate with that `notBefore` is rejected by real devices deep in
-///   commissioning (`IM status 0x85` on `SendTrustedRootCert`), which gives
-///   no hint that the validity window was the cause.
+///   2000-01-01T00:00:00Z) — the reporter's evidenced failure: a certificate
+///   with that `notBefore` round-trips through chip's `ChipEpochToASN1Time` as
+///   `99991231235959Z`, so the rebuilt X.509 TBS no longer matches what we
+///   signed and the device's **signature** check fails, surfacing as an opaque
+///   `IM status 0x85` on `AddTrustedRootCertificate` deep in commissioning.
+///   See [`FabricConfig::validity`] for the full citation.
 /// - `not_after` must be strictly after `not_before`, UNLESS `not_after` is
 ///   `MatterTime::NO_EXPIRY` — that sentinel is a legitimate "does not
 ///   expire" and is exempt from the ordering check.
@@ -91,10 +117,58 @@ fn validate_validity(window: (MatterTime, MatterTime)) -> Result<(), Error> {
              real wall-clock time, e.g. MatterTime::from_unix_secs(current_unix_time)"
         )));
     }
+    // Deliberate divergence from the C++ reference: chip's
+    // `GenerateChipX509Cert.cpp` accepts a zero-width window
+    // (`ValidityEnd >= ValidityStart`); we reject `not_after == not_before`
+    // because a certificate that is valid for zero seconds is never what a
+    // caller meant, and rejecting it here is cheaper than debugging a fabric
+    // that expires the instant it is created.
     if not_after != MatterTime::NO_EXPIRY && not_after <= not_before {
         return Err(Error::InvalidFabricValidity(format!(
             "not_after ({not_after:?}) must be after not_before ({not_before:?}), or \
              MatterTime::NO_EXPIRY for no expiry"
+        )));
+    }
+    Ok(())
+}
+
+/// How far ahead of the controller's own clock a `not_before` may sit before
+/// [`validate_not_before_against_now`] refuses it.
+///
+/// Rationale: a legitimate `not_before` is "about now" — callers are told to
+/// *backdate* it for device clock skew, never to postdate it. Anything ahead of
+/// now is therefore only ever disagreement between the caller's time source and
+/// this host's clock, and a full day is far more slack than any real deployment
+/// needs (chip's own commissioning flows assume the two agree to within
+/// minutes). It is still tight enough to catch every plausible units mistake:
+/// a millisecond timestamp saturates `MatterTime::from_unix_secs` to
+/// `u32::MAX`, ≈ 110 years ahead.
+const MAX_NOT_BEFORE_AHEAD_SECS: u32 = 24 * 60 * 60;
+
+/// Reject a `not_before` implausibly far ahead of `now` (this host's clock).
+///
+/// Separate from [`validate_validity`] because it needs a clock reading, which
+/// keeps [`create_fabric`] itself pure — the caller (the actor, which already
+/// holds `current_matter_time()`) supplies `now`.
+///
+/// This is the *worse* half of the issue-#111 class. A too-late `not_before` is
+/// not rejected by the device at install time: `ValidateChipRCAC`
+/// (`connectedhomeip/src/credentials/CHIPCert.cpp`) explicitly does not check
+/// RCAC `notBefore`/`notAfter`, so `AddTrustedRootCertificate` succeeds, the
+/// fabric half-commissions, and then every CASE session fails with
+/// `kNotYetValid` — with nothing in the failure naming the cause.
+pub(crate) fn validate_not_before_against_now(
+    window: (MatterTime, MatterTime),
+    now: MatterTime,
+) -> Result<(), Error> {
+    let not_before = window.0;
+    let limit = now.0.saturating_add(MAX_NOT_BEFORE_AHEAD_SECS);
+    if not_before.0 > limit {
+        return Err(Error::InvalidFabricValidity(format!(
+            "not_before ({not_before:?}) is more than {MAX_NOT_BEFORE_AHEAD_SECS}s ahead of this \
+             host's clock ({now:?}) — the certificate would install but be not-yet-valid, failing \
+             every CASE session afterwards. A common cause is passing a MILLISECOND timestamp to \
+             MatterTime::from_unix_secs, which saturates to MatterTime(u32::MAX)"
         )));
     }
     Ok(())
@@ -380,6 +454,62 @@ mod tests {
         // underlying value is numerically <= a real not_before.
         let cfg = sample_cfg(); // already (from_unix_secs(1_700_000_000), NO_EXPIRY)
         create_fabric(&cfg, &SystemNocRng).expect("NO_EXPIRY must be accepted");
+    }
+
+    #[test]
+    fn rejects_not_before_far_in_the_future() {
+        // The seconds-vs-milliseconds mistake: a millisecond timestamp handed
+        // to `from_unix_secs` saturates to `MatterTime(u32::MAX)` (≈ 2136).
+        // With `not_after = NO_EXPIRY` the ordering check is exempted, so only
+        // this upper bound catches it — and the device would *accept* the RCAC
+        // (`ValidateChipRCAC` skips validity times) then fail every CASE
+        // session with `kNotYetValid`.
+        let now = MatterTime::from_unix_secs(1_700_000_000);
+        let window = (
+            MatterTime::from_unix_secs(1_700_000_000_000),
+            MatterTime::NO_EXPIRY,
+        );
+        assert_eq!(window.0, MatterTime(u32::MAX), "precondition: saturated");
+        let err = validate_not_before_against_now(window, now)
+            .expect_err("millisecond not_before must be rejected");
+        assert!(
+            matches!(err, Error::InvalidFabricValidity(_)),
+            "expected InvalidFabricValidity, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("MILLISECOND"),
+            "error must name the likely cause: {err}"
+        );
+    }
+
+    #[test]
+    fn not_before_within_the_skew_window_is_accepted() {
+        // Just inside the allowance: exactly `now + MAX_NOT_BEFORE_AHEAD_SECS`
+        // is still fine (the check is strictly-greater-than).
+        let now = MatterTime::from_unix_secs(1_700_000_000);
+        let edge = MatterTime(now.0 + MAX_NOT_BEFORE_AHEAD_SECS);
+        validate_not_before_against_now((edge, MatterTime::NO_EXPIRY), now)
+            .expect("not_before exactly at the skew limit must be accepted");
+    }
+
+    #[test]
+    fn not_before_one_second_past_the_skew_window_is_rejected() {
+        // The other side of the same boundary.
+        let now = MatterTime::from_unix_secs(1_700_000_000);
+        let over = MatterTime(now.0 + MAX_NOT_BEFORE_AHEAD_SECS + 1);
+        let err = validate_not_before_against_now((over, MatterTime::NO_EXPIRY), now)
+            .expect_err("one second past the skew limit must be rejected");
+        assert!(matches!(err, Error::InvalidFabricValidity(_)));
+    }
+
+    #[test]
+    fn backdated_not_before_is_always_accepted() {
+        // The documented recommendation (backdate an hour for device clock
+        // skew) must never trip the upper bound.
+        let now = MatterTime::from_unix_secs(1_700_000_000);
+        let backdated = MatterTime::from_unix_secs(1_700_000_000 - 3600);
+        validate_not_before_against_now((backdated, MatterTime::NO_EXPIRY), now)
+            .expect("a backdated not_before must be accepted");
     }
 
     #[test]

@@ -88,10 +88,15 @@ async fn main() -> Result<()> {
     if fresh {
         // RCAC / commissioner-NOC validity: a real `notBefore` (backdated an hour
         // to tolerate device clock skew), no expiry. A zero `notBefore` (the
-        // Matter 2000 epoch) trips a cert-encoding edge that devices reject.
+        // Matter 2000 epoch) re-encodes as the X.509 `99991231235959Z` sentinel
+        // inside the device, breaking the certificate's signature — see
+        // `FabricConfig::validity`. Take the clock reading as fallible rather
+        // than substituting a constant: a wrong `notBefore` is exactly the
+        // failure this guards against.
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(1_700_000_000, |d| d.as_secs());
+            .context("reading the system clock")?
+            .as_secs();
         controller
             .create_fabric(FabricConfig::new(
                 1,

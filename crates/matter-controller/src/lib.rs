@@ -69,15 +69,29 @@
 //!     .build()
 //!     .await?;
 //!
-//! // One-time: create the fabric (idempotent across restarts — load the
-//! // snapshot instead of re-creating in real apps).
-//! let fabric_id = controller.create_fabric(FabricConfig::new(
-//!     1,
-//!     1,
-//!     1,
-//!     (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
-//! )).await?;
-//! let _ = fabric_id;
+//! // One-time: create the fabric. `create_fabric` is NOT idempotent — a
+//! // second call with an existing `fabric_id` returns
+//! // `Error::FabricAlreadyExists` — so gate it on `fabrics()` (a run that
+//! // loaded an existing store already has its fabric and identity).
+//! if controller.fabrics().await?.is_empty() {
+//!     // `not_before` must be a real wall-clock time, backdated a little (an
+//!     // hour is plenty) to tolerate device clock skew. `MatterTime(0)` /
+//!     // `from_unix_secs(0)` — the Matter epoch — is rejected; so is a time
+//!     // far in the future. See `FabricConfig::validity`.
+//!     let now_unix = std::time::SystemTime::now()
+//!         .duration_since(std::time::UNIX_EPOCH)
+//!         .map_err(|e| matter_controller::Error::Operational(e.to_string()))?
+//!         .as_secs();
+//!     controller.create_fabric(FabricConfig::new(
+//!         1,
+//!         1,
+//!         1,
+//!         (
+//!             MatterTime::from_unix_secs(now_unix.saturating_sub(3600)),
+//!             MatterTime::NO_EXPIRY,
+//!         ),
+//!     )).await?;
+//! }
 //!
 //! // Commission a device, then control it. `label` is an opaque
 //! // caller-supplied string persisted on the device entry; pass `None` if
