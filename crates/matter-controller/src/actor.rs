@@ -91,13 +91,90 @@ fn response_needs_timed(opcode: u8, payload: &[u8]) -> bool {
 /// deadline through [`Actor::next_timer_deadline`].
 ///
 /// [`Discovery::poll_results`]: matter_transport::Discovery::poll_results
-const LIVENESS_TICK: std::time::Duration = std::time::Duration::from_millis(250);
+const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How many consecutive `recv_from` errors the loop absorbs at full speed
+/// before it starts backing off.
+///
+/// A real UDP socket returns isolated errors as a matter of course — most
+/// commonly `ECONNREFUSED`, which Linux synthesises from the ICMP
+/// port-unreachable of a device that has gone away, and which must NOT cost the
+/// loop anything. Only a *run* of errors with no successful receive in between
+/// suggests a wedged transport rather than a blip, so the first few are free.
+const RECV_ERROR_FREE_RETRIES: u32 = 8;
+
+/// First backoff step (milliseconds) applied once [`RECV_ERROR_FREE_RETRIES`]
+/// consecutive `recv_from` errors have gone by; it doubles per further
+/// consecutive error, capped at [`RECV_ERROR_BACKOFF_MAX_MS`].
+const RECV_ERROR_BACKOFF_MIN_MS: u64 = 1;
+
+/// Ceiling (milliseconds) on the recv backoff.
+///
+/// Chosen below the ~300 ms floor of an MRP retransmit interval, so even a
+/// permanently-erroring transport cannot suppress the recv arm long enough to
+/// swallow a whole retransmit window for the datagrams that *do* arrive. It
+/// bounds a wedged transport to ~5 wakeups per second — versus the ~130 000 per
+/// second measured when the loop discarded the error and immediately re-polled.
+const RECV_ERROR_BACKOFF_MAX_MS: u64 = 200;
+
+/// Whether a `recv_from` error means the transport itself is gone, so the actor
+/// should shut down rather than keep polling a socket that will never deliver.
+///
+/// Deliberately a SHORT list: everything not named here is treated as transient,
+/// because killing a live controller over an error we failed to anticipate is
+/// far worse than backing off on it (which [`Actor::run`] does, bounding the
+/// cost of a permanently-transient error to
+/// [`RECV_ERROR_BACKOFF_MAX_MS`]).
+///
+/// - [`std::io::ErrorKind::BrokenPipe`] — the endpoint's peer half is gone for
+///   good. This is what [`matter_commissioning::driver::InMemoryDatagram`]
+///   returns once its paired endpoint drops, and it is the case that spun.
+/// - [`std::io::ErrorKind::NotConnected`] — `ENOTCONN`: the descriptor is no
+///   longer a usable socket. No amount of retrying recovers it.
+///
+/// Everything else — `ConnectionRefused` (the ICMP case above),
+/// `ConnectionReset`, `Interrupted` (`EINTR`), `WouldBlock`, `TimedOut`,
+/// `HostUnreachable`/`NetworkUnreachable`, and any kind added by a future
+/// std — is transient. Only the two kinds above are named, and both have been
+/// stable since Rust 1.0, so nothing here depends on a variant newer than the
+/// 1.88 MSRV.
+fn recv_error_is_terminal(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected
+    )
+}
+
+/// How long the recv arm stays suppressed after `consecutive` back-to-back
+/// `recv_from` errors, or `None` while still inside the free-retry budget.
+///
+/// This is the backstop that makes the loop *incapable* of busy-looping on a
+/// transport whose errors are transient-classified but recur forever: the delay
+/// doubles from [`RECV_ERROR_BACKOFF_MIN_MS`] and saturates at
+/// [`RECV_ERROR_BACKOFF_MAX_MS`], so a permanently-erroring transport settles at
+/// a handful of wakeups per second. The suppression is expressed as a deadline
+/// the loop parks on (not a `sleep` inside the arm), so commands, timers and MRP
+/// keep running at full speed while it is in effect.
+fn recv_error_backoff(consecutive: u32) -> Option<std::time::Duration> {
+    let step = consecutive.saturating_sub(RECV_ERROR_FREE_RETRIES);
+    if step == 0 {
+        return None;
+    }
+    // `min(63)` keeps the shift in range; `unwrap_or` covers the (unreachable)
+    // overflow return of `checked_shl` without an `unwrap`.
+    let shift = (step - 1).min(63);
+    let ms = RECV_ERROR_BACKOFF_MIN_MS
+        .checked_shl(shift)
+        .unwrap_or(u64::MAX)
+        .min(RECV_ERROR_BACKOFF_MAX_MS);
+    Some(std::time::Duration::from_millis(ms))
+}
 
 /// Backstop park duration when no timer work is scheduled at all. Timer
 /// deadlines are recomputed after every loop iteration, so this only bounds
 /// how long an unforeseen, unenumerated deadline source could stall; the
-/// four known sources (MRP, liveness, resubscribe, resolve polling) all
-/// flow through [`Actor::next_timer_deadline`].
+/// five known sources (MRP, liveness, resubscribe, resolve polling, recv
+/// backoff) all flow through [`Actor::next_timer_deadline`].
 const IDLE_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// How long a parked operational resolve ([`Actor::park_resolve`]) waits for its
@@ -105,7 +182,8 @@ const IDLE_PARK_MAX: std::time::Duration = std::time::Duration::from_secs(3600);
 /// old inline resolve spent (`RESOLVE_POLL_ATTEMPTS` × 100 ms in
 /// `matter_commissioning::driver`), which is of the same order as chip's
 /// session-establishment discovery budget. The wait now costs the actor nothing
-/// — it is one entry polled on the [`LIVENESS_TICK`] arm, not a blocked loop.
+/// — it is one entry polled on the [`RESOLVE_POLL_INTERVAL`] arm, not a blocked
+/// loop.
 #[cfg(not(test))]
 const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 /// Shortened under `cfg(test)` so `actor_stays_live_while_resolve_pends` can
@@ -955,14 +1033,31 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     ///
     /// mDNS results arrive by *polling*, so unlike every other timer source the
     /// resolve tick has no naturally-occurring deadline — but it must still be
-    /// an ABSOLUTE instant rather than a `now + LIVENESS_TICK` computed per
+    /// an ABSOLUTE instant rather than a `now + RESOLVE_POLL_INTERVAL` computed per
     /// iteration: any other `select!` arm that fires more often than
-    /// [`LIVENESS_TICK`] (a busy device, or a transport whose `recv_from`
+    /// [`RESOLVE_POLL_INTERVAL`] (a busy device, or a transport whose `recv_from`
     /// returns errors back-to-back) would otherwise push a relative tick
     /// forward forever and starve discovery. Advanced by
     /// [`Self::drive_pending_resolves`]; only consulted while
     /// `pending_resolves` is non-empty.
     next_resolve_poll: Instant,
+    /// Consecutive `recv_from` errors since the last successful receive.
+    ///
+    /// Reset to zero by every `Ok` from the transport; it exists only to size
+    /// [`recv_error_backoff`], which is what stops a transport that errors
+    /// forever from spinning the loop.
+    consecutive_recv_errors: u32,
+    /// While `Some`, the `select!`'s recv arm is disabled until this instant —
+    /// the backoff imposed after [`RECV_ERROR_FREE_RETRIES`] consecutive
+    /// `recv_from` errors.
+    ///
+    /// Held as a deadline rather than a `sleep` inside the arm so a wedged
+    /// transport never delays commands, MRP or subscription liveness: it is one
+    /// more component of [`Self::next_timer_deadline`], and it is cleared at the
+    /// top of every [`Self::run`] iteration once it has elapsed (an
+    /// already-passed value here would make the loop's overdue-timer guard fire
+    /// on every pass — the very spin this whole mechanism exists to prevent).
+    recv_backoff_until: Option<Instant>,
     /// The ONE `_matter._tcp` browse shared by every parked resolve, opened when
     /// the first entry parks and stopped when the last one leaves.
     ///
@@ -1383,6 +1478,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             connect_mrp: HashMap::new(),
             pending_resolves: Vec::new(),
             next_resolve_poll: Instant::now(),
+            consecutive_recv_errors: 0,
+            recv_backoff_until: None,
             resolve_query: None,
             seen_records: HashMap::new(),
             multicast_if: None,
@@ -1471,18 +1568,53 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// deadlines, subscription liveness deadlines, and pending resubscribe
     /// attempt times — with one exception: mDNS results arrive by polling rather
     /// than on a deadline, so while `pending_resolves` is non-empty the deadline
-    /// also includes the [`LIVENESS_TICK`] polling anchor `next_resolve_poll`.
+    /// also includes the [`RESOLVE_POLL_INTERVAL`] polling anchor
+    /// `next_resolve_poll` — and, while a receive backoff is in force, the
+    /// instant it expires (`recv_backoff_until`, see below).
     /// With nothing at all scheduled the loop parks on [`IDLE_PARK_MAX`];
-    /// because all four sources are re-derived from live state after every
+    /// because all five sources are re-derived from live state after every
     /// iteration, work scheduled by any other `select!` arm shortens the very
     /// next park, so the backstop only bounds an unenumerated source.
     ///
     /// The consequence is that a fully idle controller (no in-flight MRP, no
     /// subscriptions, no parked resolves) wakes essentially never, instead of
     /// four times a second as the earlier fixed liveness tick did.
+    ///
+    /// ## Transport receive errors
+    ///
+    /// `recv_from` failures are classified rather than discarded. Discarding
+    /// them (the original code) meant a transport whose error is *permanent*
+    /// made the recv arm instantly ready forever and pegged a core — measured at
+    /// ~130 000 error returns per second against an
+    /// [`InMemoryDatagram`](matter_commissioning::driver::InMemoryDatagram)
+    /// whose peer half had dropped.
+    ///
+    /// - A **terminal** kind ([`recv_error_is_terminal`]) means the socket will
+    ///   never deliver again, so the actor shuts down through the same
+    ///   [`Self::shutdown_discovery`] path a dropped command channel takes.
+    /// - Anything else is **transient** and merely logged, because real UDP
+    ///   surfaces isolated errors (notably `ECONNREFUSED` from a peer's ICMP
+    ///   port-unreachable) that must not kill a controller. To keep "transient"
+    ///   from re-introducing the spin, [`RECV_ERROR_FREE_RETRIES`] consecutive
+    ///   errors with no successful receive between them start a doubling backoff
+    ///   ([`recv_error_backoff`]) that disables the recv arm until
+    ///   `recv_backoff_until`. Because that is a deadline the loop parks on
+    ///   rather than a sleep inside the arm, commands, MRP and liveness continue
+    ///   at full speed while a wedged transport is backed off.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
             let now = Instant::now();
+
+            // Retire an elapsed recv backoff BEFORE the deadline is computed.
+            // `recv_backoff_until` feeds `next_timer_deadline`, so a value left
+            // behind in the past would make the overdue guard below fire on
+            // every iteration — a spin of exactly the kind the backoff exists to
+            // prevent. Cleared here, the field is only ever a future instant.
+            if self.recv_backoff_until.is_some_and(|until| until <= now) {
+                self.recv_backoff_until = None;
+            }
+            let recv_enabled = self.recv_backoff_until.is_none();
+
             let next_deadline = self.next_timer_deadline();
 
             // Fairness guard: if timer work is already due, service it before
@@ -1494,7 +1626,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             // advances every deadline forward — MRP `handle_timeout` reschedules
             // or drops, liveness/resubscribe entries are consumed or re-armed,
             // and `drive_pending_resolves` re-arms `next_resolve_poll` — so the
-            // guard yields back to recv on the next iteration.
+            // guard yields back to recv on the next iteration. The recv-backoff
+            // deadline is the fifth source and is retired above before it can
+            // ever be seen here as due.
             if next_deadline.is_some_and(|d| d <= now) {
                 self.drive_mrp().await;
                 self.check_liveness();
@@ -1530,11 +1664,37 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 Some(done) = self.connect_done_rx.recv() => {
                     self.handle_connect_done(done).await;
                 }
-                recv = self.transport.recv_from() => {
-                    if let Ok((packet, from)) = recv {
+                recv = self.transport.recv_from(), if recv_enabled => match recv {
+                    Ok((packet, from)) => {
+                        self.consecutive_recv_errors = 0;
                         self.handle_inbound(&packet, from).await;
                     }
-                }
+                    // The transport is gone for good — leave through exactly the
+                    // path a dropped command channel uses, so the shared mDNS
+                    // browse is released rather than left running.
+                    Err(e) if recv_error_is_terminal(e.kind()) => {
+                        tracing::warn!(
+                            target: "matter_controller::actor",
+                            error = %e,
+                            "transport recv_from failed terminally; stopping the actor loop",
+                        );
+                        return self.shutdown_discovery();
+                    }
+                    // Transient: keep serving, but back the recv arm off once a
+                    // run of errors says the transport is not merely blipping.
+                    Err(e) => {
+                        self.consecutive_recv_errors = self.consecutive_recv_errors.saturating_add(1);
+                        if let Some(backoff) = recv_error_backoff(self.consecutive_recv_errors) {
+                            self.recv_backoff_until = Some(Instant::now() + backoff);
+                        }
+                        tracing::debug!(
+                            target: "matter_controller::actor",
+                            error = %e,
+                            consecutive = self.consecutive_recv_errors,
+                            "transport recv_from failed transiently; continuing",
+                        );
+                    }
+                },
                 () = tokio::time::sleep(sleep_for) => {
                     tracing::trace!(target: "matter_controller::actor", "timer wake");
                     self.drive_mrp().await;
@@ -1548,10 +1708,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Earliest instant any timer work is due: MRP retransmit/ack-flush,
     /// subscription liveness, scheduled resubscribes — plus a polling tick
-    /// ([`LIVENESS_TICK`]) only while mDNS resolves are parked, because
-    /// discovery results arrive by polling, not by deadline. `None` means
-    /// nothing is scheduled and the loop parks on inbound/commands alone
-    /// (bounded by [`IDLE_PARK_MAX`]).
+    /// ([`RESOLVE_POLL_INTERVAL`]) only while mDNS resolves are parked, because
+    /// discovery results arrive by polling, not by deadline, and plus the recv
+    /// backoff deadline while the recv arm is suppressed (else a loop with no
+    /// other scheduled work would park past it and leave the arm disabled).
+    /// `None` means nothing is scheduled and the loop parks on inbound/commands
+    /// alone (bounded by [`IDLE_PARK_MAX`]).
     ///
     /// Recomputed from live state on every loop iteration, so any work
     /// scheduled by another `select!` arm is reflected in the very next park —
@@ -1573,7 +1735,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         } else {
             Some(self.next_resolve_poll)
         };
-        [mrp, liveness, resub, resolve].into_iter().flatten().min()
+        [mrp, liveness, resub, resolve, self.recv_backoff_until]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Process one command, parking device verbs behind an off-loop connect.
@@ -2623,7 +2788,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// [`RESOLVE_DEADLINE`] budget. The node's waiters stay in
     /// `pending_connects` and are resolved when the record lands or the deadline
     /// passes.
+    ///
+    /// Re-arms the polling anchor when this is the FIRST entry to park.
+    /// `next_resolve_poll` is only consulted while `pending_resolves` is
+    /// non-empty, so between resolves it goes stale (an instant far in the
+    /// past); becoming due the moment the list refills would make
+    /// [`Self::run`]'s overdue-timer guard spend one pass on a poll that was
+    /// just performed. Re-arming here makes the invariant "the anchor is fresh
+    /// whenever `pending_resolves` becomes non-empty" hold locally, instead of
+    /// resting on the caller happening to call
+    /// [`Self::drive_pending_resolves`] (which re-arms as its first statement)
+    /// afterwards. Entries that join a non-empty list leave the existing anchor
+    /// alone, so parking a second resolve cannot postpone the first's poll.
     fn park_resolve(&mut self, fabric_id: u64, node_id: u64, target: String) {
+        if self.pending_resolves.is_empty() {
+            self.next_resolve_poll = Instant::now() + RESOLVE_POLL_INTERVAL;
+        }
         self.pending_resolves.push(PendingResolve {
             fabric_id,
             node_id,
@@ -2720,8 +2900,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// stops a record that arrived before its resolve did from being lost (see
     /// [`SEEN_RECORD_TTL`]).
     ///
-    /// Called from the timer arm, so [`LIVENESS_TICK`] is the resolve's polling
-    /// interval (the inline resolve it replaces polled every 100 ms), and once
+    /// Called from the timer arm, so [`RESOLVE_POLL_INTERVAL`] is the resolve's
+    /// polling interval (the inline resolve it replaces polled every 100 ms), and once
     /// from [`Self::spawn_connect`] so an already-known record connects at once.
     /// Returns immediately when nothing is parked — an idle controller pays
     /// nothing.
@@ -2730,7 +2910,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // consults it while entries are parked, and arming it unconditionally
         // means no path can leave a due-in-the-past anchor behind that would
         // spin the fairness guard.
-        self.next_resolve_poll = Instant::now() + LIVENESS_TICK;
+        self.next_resolve_poll = Instant::now() + RESOLVE_POLL_INTERVAL;
         let Some(handle) = self.resolve_query else {
             return;
         };
@@ -6881,6 +7061,29 @@ mod tests {
         buf
     }
 
+    /// Keep a simulated device's endpoint open for the rest of the process.
+    ///
+    /// [`InMemoryDatagram`] is a *paired* transport: dropping one endpoint closes
+    /// the channel feeding the other, so the surviving endpoint's `recv_from`
+    /// returns [`std::io::ErrorKind::BrokenPipe`] forever. A device task that
+    /// simply returned would therefore kill the CONTROLLER's socket — which
+    /// [`Actor::run`] correctly treats as terminal and shuts down on (see
+    /// [`recv_error_is_terminal`]), breaking every assertion a test makes after
+    /// its device task finishes.
+    ///
+    /// No real UDP socket dies because the device on the other end went quiet, so
+    /// the harness must not simulate that. Leaking the endpoint models the true
+    /// situation — "the device stopped answering; the socket is still there" —
+    /// and the leak is one small struct per device task in a short-lived test
+    /// process.
+    ///
+    /// (Before the recv-error classification, the resulting `BrokenPipe` was
+    /// silently discarded and the actor loop spun on it at ~130 000 iterations
+    /// per second for the remainder of each such test.)
+    fn keep_endpoint_open(io: InMemoryDatagram) {
+        std::mem::forget(io);
+    }
+
     /// Loopback device that completes CASE, then answers ONE `Node::read` with a
     /// two-chunk `ReportData` sequence: chunk 0 (`MoreChunkedMessages=true`),
     /// then — after the controller's `StatusResponse` ack — the final chunk.
@@ -6999,6 +7202,7 @@ mod tests {
             )
             .unwrap();
         io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        keep_endpoint_open(io);
     }
 
     /// Loopback device: completes CASE, then replies to each secured IM request
@@ -7123,6 +7327,7 @@ mod tests {
                 .unwrap();
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
+        keep_endpoint_open(io);
     }
 
     /// Device side of one timed handshake: ack a `TimedRequest` (0x0a) with
@@ -7276,6 +7481,7 @@ mod tests {
         // Cycle 2: the path is cached → the controller skips the plain attempt and
         // sends a TimedRequest first.
         ack_timed_then_reply(&io, &mut sessions, sid, ctrl_addr, &write_response).await;
+        keep_endpoint_open(io);
     }
 
     /// Build a `SubscribeResponse` TLV (device side): ctx0=subscriptionId,
@@ -7406,6 +7612,7 @@ mod tests {
             let _ =
                 tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
         }
+        keep_endpoint_open(io);
     }
 
     /// Device that establishes a subscription, then — when a round-trip request
@@ -7543,6 +7750,7 @@ mod tests {
 
         // 5. Drain the controller's StatusResponse ack for the steady report.
         let _ = tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
+        keep_endpoint_open(io);
     }
 
     /// Device that answers two subscribe cycles: it establishes (priming report
@@ -7672,6 +7880,7 @@ mod tests {
                 // re-subscribe attempts go unanswered — fine, the test cancels).
                 let _ = tokio::time::timeout(std::time::Duration::from_millis(200), io.recv_from())
                     .await;
+                keep_endpoint_open(io);
                 return;
             }
         }
@@ -7945,6 +8154,273 @@ mod tests {
         );
 
         device.await.unwrap();
+    }
+
+    /// Anti-starvation regression for the ABSOLUTE resolve-poll anchor.
+    ///
+    /// `next_resolve_poll` is a fixed instant, advanced only by
+    /// [`Actor::drive_pending_resolves`]. The obvious alternative — having
+    /// [`Actor::next_timer_deadline`] return `now + RESOLVE_POLL_INTERVAL`
+    /// recomputed per iteration — is starvable: ANY `select!` arm firing more
+    /// often than the interval pushes that relative deadline forward before it
+    /// can elapse, so the timer arm never runs, `drive_pending_resolves` is
+    /// never called, and every parked mDNS resolve stalls for as long as the
+    /// traffic lasts (a device streaming reports is enough).
+    ///
+    /// So: keep the inbound arm genuinely hot while a resolve is parked, and
+    /// assert the parked resolve still reaches its deadline. Against a relative
+    /// anchor this hangs until the timeout and fails.
+    ///
+    /// This replaces coverage that was previously accidental. Before `recv_from`
+    /// errors were classified, the harness's dropped device endpoint made the
+    /// recv arm return `BrokenPipe` ~130 000 times a second, which starved a
+    /// relative anchor as a side effect of a bug — so fixing that bug would
+    /// otherwise have deleted the only test of this invariant.
+    #[tokio::test]
+    async fn parked_resolve_expires_while_the_inbound_arm_is_hot() {
+        /// Same unmatchable node id as `actor_stays_live_while_resolve_pends`.
+        const UNRESOLVABLE_NODE: u64 = 0x0000_0000_0000_0099;
+        /// Pacing of the synthetic inbound flood. 1 ms is 250x more frequent
+        /// than [`RESOLVE_POLL_INTERVAL`], so a relative anchor could never
+        /// elapse — while being slow enough that the queued junk stays tiny.
+        const FLOOD_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
+        /// Floor on the flood the assertions accept as "genuinely hot". Even a
+        /// heavily loaded machine managing only this many sends across the
+        /// resolve's lifetime fires the arm far above the 4 Hz poll interval.
+        const MIN_FLOOD: usize = 100;
+
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            ..
+        } = loopback_harness();
+
+        // The hot arm: junk datagrams the actor decodes, rejects and discards,
+        // one per millisecond, for the whole test. The task owns `dev_io` and is
+        // only ever aborted, never allowed to drop it, so the controller's own
+        // endpoint stays open (see `keep_endpoint_open`).
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let flood_counter = Arc::clone(&sent);
+        let flooder = tokio::spawn(async move {
+            loop {
+                dev_io
+                    .send_to(b"not-a-matter-frame", ctrl_addr)
+                    .await
+                    .unwrap();
+                flood_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tokio::time::sleep(FLOOD_INTERVAL).await;
+            }
+        });
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        // `FixedDiscovery` only ever advertises the harness's own device, so
+        // this node's resolve parks and can only ever end at its deadline — a
+        // deadline reachable only if the timer arm is not starved by the flood.
+        let err = tokio::time::timeout(
+            RESOLVE_DEADLINE * 3,
+            controller.node(UNRESOLVABLE_NODE).round_trip(
+                0x02,
+                ProtocolId::INTERACTION_MODEL,
+                b"ping".to_vec(),
+            ),
+        )
+        .await
+        .expect("a parked resolve must reach its deadline even under a hot select arm")
+        .expect_err("an unresolvable node must fail its waiters");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not found via mDNS"),
+            "expiry must report the mDNS-not-found error, got: {msg}"
+        );
+
+        let flood = sent.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            flood >= MIN_FLOOD,
+            "the inbound arm must have been genuinely hot for this to prove \
+             anything; only {flood} datagrams were sent"
+        );
+        flooder.abort();
+    }
+
+    /// A transport whose `recv_from` fails TERMINALLY must stop the actor loop,
+    /// not have its error discarded and be re-polled forever.
+    ///
+    /// `InMemoryDatagram` returns [`std::io::ErrorKind::BrokenPipe`] for good
+    /// once its paired endpoint is gone, which is exactly the permanent-error
+    /// shape this guards: the old `if let Ok(..) = recv` arm dropped it on the
+    /// floor and re-polled immediately, spinning at ~130 000 iterations/second.
+    ///
+    /// The command channel is deliberately held open across the assertion, so
+    /// the only thing that can end the loop here is the transport.
+    #[tokio::test]
+    async fn terminal_transport_error_stops_the_actor_loop() {
+        let (io, peer) = InMemoryDatagram::pair();
+        // Every `recv_from` on `io` now fails with BrokenPipe, immediately.
+        drop(peer);
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(8);
+        let loop_handle = tokio::spawn(actor_with_one_fabric_on(io).run(cmd_rx));
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), loop_handle)
+            .await
+            .expect("a terminally-failing transport must stop the loop, not spin on it")
+            .expect("the loop must return normally, not panic");
+
+        // Held to here on purpose: the loop exited on the transport, not on a
+        // dropped command channel.
+        drop(cmd_tx);
+    }
+
+    /// A transport failing with a TRANSIENT error must not stop the loop, and
+    /// must not spin on it either.
+    ///
+    /// `WouldBlock` stands in for the real-world case that forced the
+    /// transient/terminal split — Linux returning `ECONNREFUSED` from a peer's
+    /// ICMP port-unreachable, which must never kill a controller. The transport
+    /// here fails EVERY receive, i.e. it is a permanently-transient one, the
+    /// case the backoff exists for: the loop must still be alive and serving
+    /// commands afterwards, and must have polled the transport a bounded number
+    /// of times rather than as fast as the CPU allows.
+    #[tokio::test]
+    async fn transient_transport_errors_neither_stop_nor_spin_the_loop() {
+        /// Always-failing datagram transport that counts its receive attempts.
+        struct AlwaysWouldBlock(Arc<std::sync::atomic::AtomicUsize>);
+        impl AsyncDatagram for AlwaysWouldBlock {
+            async fn send_to(&self, _buf: &[u8], _peer: SocketAddr) -> std::io::Result<()> {
+                Ok(())
+            }
+            async fn recv_from(&self) -> std::io::Result<(Vec<u8>, SocketAddr)> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "synthetic transient failure",
+                ))
+            }
+        }
+
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let transport = AlwaysWouldBlock(Arc::clone(&attempts));
+        let fabric = {
+            let cfg = FabricConfig {
+                fabric_id: 0x0A0B_0C0D_0E0F_1011,
+                rcac_id: 1,
+                commissioner_node_id: 1,
+                validity: (
+                    MatterTime::from_unix_secs(1_700_000_000),
+                    MatterTime::NO_EXPIRY,
+                ),
+                issue_icac: false,
+            };
+            crate::fabric::create_fabric(&cfg, &SystemNocRng).unwrap()
+        };
+        let actor = Actor::new(
+            transport,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(SystemNocRng),
+            ControllerState {
+                fabrics: vec![fabric],
+            },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(8);
+        let loop_handle = tokio::spawn(actor.run(cmd_rx));
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Still alive and serving commands despite a transport that has never
+        // once succeeded.
+        let (count_tx, count_rx) = oneshot::channel();
+        cmd_tx
+            .send(Command::SessionCount { reply: count_tx })
+            .await
+            .unwrap();
+        let count = tokio::time::timeout(std::time::Duration::from_secs(1), count_rx)
+            .await
+            .expect("a transient transport error must leave the loop responsive")
+            .expect("SessionCount reply");
+        assert_eq!(count, 0);
+
+        // And bounded: RECV_ERROR_FREE_RETRIES free polls, then a doubling ramp
+        // saturating at RECV_ERROR_BACKOFF_MAX_MS, i.e. ~18 polls over this
+        // window (measured). The ceiling below leaves an order of magnitude of
+        // slack for a loaded CI box while still failing by three orders of
+        // magnitude against an un-backed-off loop (~130 000 polls per second).
+        let polls = attempts.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            polls < 200,
+            "the recv arm must be backed off, not spun: {polls} polls in ~500 ms"
+        );
+
+        drop(cmd_tx);
+        let _ = loop_handle.await;
+    }
+
+    /// The classification itself, and the shape of the backoff ramp.
+    #[test]
+    fn recv_error_classification_and_backoff_ramp() {
+        use std::io::ErrorKind;
+
+        // Terminal: the socket is gone and retrying cannot recover it.
+        assert!(recv_error_is_terminal(ErrorKind::BrokenPipe));
+        assert!(recv_error_is_terminal(ErrorKind::NotConnected));
+        // Transient: routine on a real UDP socket. ConnectionRefused in
+        // particular is Linux surfacing a peer's ICMP port-unreachable, and
+        // must never be allowed to kill a controller.
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::Interrupted,
+            ErrorKind::WouldBlock,
+            ErrorKind::TimedOut,
+            ErrorKind::Other,
+        ] {
+            assert!(!recv_error_is_terminal(kind), "{kind:?} must be transient");
+        }
+
+        // The first RECV_ERROR_FREE_RETRIES cost nothing, so an isolated blip
+        // never delays inbound.
+        assert_eq!(recv_error_backoff(0), None);
+        assert_eq!(recv_error_backoff(RECV_ERROR_FREE_RETRIES), None);
+        // Then it doubles from RECV_ERROR_BACKOFF_MIN_MS…
+        assert_eq!(
+            recv_error_backoff(RECV_ERROR_FREE_RETRIES + 1),
+            Some(std::time::Duration::from_millis(RECV_ERROR_BACKOFF_MIN_MS))
+        );
+        assert_eq!(
+            recv_error_backoff(RECV_ERROR_FREE_RETRIES + 3),
+            Some(std::time::Duration::from_millis(
+                4 * RECV_ERROR_BACKOFF_MIN_MS
+            ))
+        );
+        // …and saturates, including at the arithmetic edge (no overflow, no
+        // wrap back to a zero-length backoff — either would restore the spin).
+        let capped = Some(std::time::Duration::from_millis(RECV_ERROR_BACKOFF_MAX_MS));
+        assert_eq!(recv_error_backoff(RECV_ERROR_FREE_RETRIES + 64), capped);
+        assert_eq!(recv_error_backoff(u32::MAX), capped);
+
+        // Monotonic non-decreasing across the whole ramp.
+        let mut prev = std::time::Duration::ZERO;
+        for n in 0..64 {
+            let d = recv_error_backoff(n).unwrap_or(std::time::Duration::ZERO);
+            assert!(d >= prev, "backoff must never shrink (at n = {n})");
+            prev = d;
+        }
     }
 
     /// A record drained from the shared browse while NO resolve was parked for
@@ -9062,7 +9538,18 @@ mod tests {
     /// is null, so any `connect()` the timeout path attempts will fail without
     /// touching the cached session — exactly what we want to observe the guard.
     fn actor_with_one_fabric() -> Actor<InMemoryDatagram, NullDiscovery> {
-        let (io, _peer) = InMemoryDatagram::pair();
+        let (io, peer) = InMemoryDatagram::pair();
+        // Nothing ever answers this actor, but its socket must stay OPEN rather
+        // than break: dropping `peer` here would `BrokenPipe` the actor's
+        // `recv_from` immediately, which `Actor::run` shuts down on.
+        keep_endpoint_open(peer);
+        actor_with_one_fabric_on(io)
+    }
+
+    /// [`actor_with_one_fabric`] over a caller-supplied transport, so a test can
+    /// control what that transport does (notably: hand in an endpoint whose peer
+    /// has been dropped, i.e. one that fails every `recv_from`).
+    fn actor_with_one_fabric_on(io: InMemoryDatagram) -> Actor<InMemoryDatagram, NullDiscovery> {
         let fabric = {
             let cfg = FabricConfig {
                 fabric_id: 0x0A0B_0C0D_0E0F_1011,
@@ -12328,6 +12815,7 @@ mod tests {
                 .unwrap();
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
+        keep_endpoint_open(io);
     }
 
     /// Does this `WriteRequestMessage` carry `MoreChunkedMessages` (ctx tag 3) =
@@ -12511,6 +12999,7 @@ mod tests {
                 .unwrap();
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
+        keep_endpoint_open(io);
     }
 
     /// The chunked-write primitive sends N `WriteRequest`s on ONE exchange (all
@@ -12770,6 +13259,7 @@ mod tests {
                 .unwrap();
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
+        keep_endpoint_open(io);
     }
 
     /// chip does NOT abort a chunked write on a non-Success element status:
@@ -12996,6 +13486,7 @@ mod tests {
             grace.is_err(),
             "client sent a further chunk after the device rejected the chunked write"
         );
+        keep_endpoint_open(io);
     }
 
     /// Terminal path: the device rejects chunk 0 outright with

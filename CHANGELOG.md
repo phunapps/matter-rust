@@ -24,6 +24,87 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased
 
+### Fixed
+
+- **`matter-controller`: the actor loop no longer discards transport receive
+  errors, which could make it busy-loop at 100% CPU.** The `select!`'s inbound
+  arm was `if let Ok((packet, from)) = recv { … }` — an `Err` fell through
+  silently and the loop re-polled at once. Against a transport whose `recv_from`
+  fails *permanently*, the arm is therefore ready forever and the loop spins:
+  measured at ~130 000 error returns in 6 seconds against an
+  `InMemoryDatagram` whose paired endpoint had been dropped (it returns
+  `BrokenPipe` for good in that state).
+
+  Blast radius before the fix was the in-process test harness only — the real
+  `TokioUdpTransport` has no permanent-error mode — so this is a robustness fix,
+  not a reported outage. But the loop should not be one bad transport away from
+  pegging a core.
+
+  Errors are now **classified**, because neither "ignore all" (the bug) nor
+  "treat all as fatal" is correct: a real UDP socket returns transient errors
+  routinely, most importantly `ECONNREFUSED` — which Linux synthesises from a
+  departed peer's ICMP port-unreachable, and which must never kill a controller.
+
+  - **Terminal** — `BrokenPipe`, `NotConnected`. The socket will never deliver
+    again. The actor logs at `warn` and shuts down through exactly the path a
+    dropped command channel takes (`shutdown_discovery`), so the shared mDNS
+    browse is released rather than left running. The list is deliberately short:
+    an unanticipated kind is treated as transient, since backing off on an error
+    we did not foresee is far better than killing a live controller over it.
+  - **Transient** — everything else. Logged at `debug` and the loop continues.
+    To stop "transient" from re-introducing the spin, 8 consecutive errors with
+    no successful receive in between start a doubling backoff (1 ms, capped at
+    200 ms) that suppresses the receive arm. The cap sits below the ~300 ms floor
+    of an MRP retransmit interval, so a wedged transport cannot swallow a whole
+    retransmit window for datagrams that *do* arrive, and it bounds such a
+    transport to ~5 wakeups/second. The backoff is expressed as a deadline the
+    loop parks on — one more component of `next_timer_deadline`, retired at the
+    top of each iteration once elapsed — not a `sleep` inside the arm, so
+    commands, MRP and subscription liveness keep running at full speed
+    throughout.
+
+  **No public API change** (`AsyncDatagram` is untouched). Users of the
+  in-process `InMemoryDatagram` harness should note that dropping one endpoint
+  now stops the controller's actor instead of being silently ignored; the
+  in-crate test devices keep their endpoint open, which is what a real UDP
+  socket does when the device at the other end goes quiet.
+
+### Changed
+
+- **`matter-controller`: `LIVENESS_TICK` renamed to `RESOLVE_POLL_INTERVAL`**
+  (private const; no API impact). It has not been a liveness tick since the
+  actor's park became deadline-driven — it is exclusively the mDNS
+  resolve-polling interval, which is what its own rustdoc already said.
+
+- **`matter-controller`: `park_resolve` re-arms the resolve-poll anchor itself**
+  when it is the first entry to park. The invariant "the anchor is fresh
+  whenever `pending_resolves` becomes non-empty" previously held only because
+  the sole caller happened to call `drive_pending_resolves()` two lines later.
+  Behaviour is unchanged (breaking the coupling cost one self-healing guard
+  pass); the invariant is now local to the function that establishes it.
+
+### Testing
+
+- **`matter-controller`: real coverage for the absolute resolve-poll anchor.**
+  The anchor is stored as an absolute instant precisely so that a `select!` arm
+  firing faster than `RESOLVE_POLL_INTERVAL` cannot push it forward forever and
+  starve mDNS discovery. Until now that property was only exercised *by
+  accident*, via the receive-error spin above — so fixing the spin would have
+  silently deleted its only coverage. The new
+  `parked_resolve_expires_while_the_inbound_arm_is_hot` keeps the inbound arm
+  genuinely hot on purpose (a paced sender, ~1000 datagrams/second, with an
+  assertion that the flood really happened) while a resolve is parked, and
+  asserts the parked resolve still expires at its deadline. Verified to fail
+  against a relative `now + RESOLVE_POLL_INTERVAL` anchor and pass against the
+  absolute one.
+
+- **`matter-controller`: direct coverage for the receive-error classification** —
+  a terminal error stops the loop while its command channel is still open; a
+  permanently-*transient* transport leaves the loop responsive and is polled ~18
+  times per 500 ms instead of tens of thousands; plus a unit test pinning the
+  terminal/transient split and the backoff ramp's saturation at the arithmetic
+  edge.
+
 ### Documentation / CI
 
 - **Every README's Rust examples are now compiled by `just doctest`** (i.e. by
