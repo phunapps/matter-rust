@@ -110,6 +110,27 @@ pub enum Error {
     /// first to mint and persist the key set.
     #[error("group key set {0} is not provisioned on this fabric")]
     GroupNotProvisioned(u16),
+
+    /// [`MatterController::create_fabric`](crate::MatterController::create_fabric)
+    /// was called with a `fabric_id` that already exists on this controller
+    /// (issue #110 — commonly hit by calling `create_fabric` unconditionally
+    /// on every startup instead of only on a fresh store). Call
+    /// [`MatterController::fabrics`](crate::MatterController::fabrics) first
+    /// to check which fabrics already exist.
+    #[error(
+        "fabric {0:#018x} already exists — call MatterController::fabrics() to check before \
+         calling create_fabric"
+    )]
+    FabricAlreadyExists(u64),
+
+    /// [`FabricConfig::validity`](crate::FabricConfig::validity) names a
+    /// window a device will reject (issue #111): either `not_before` is the
+    /// Matter epoch (`MatterTime(0)`, i.e. 2000-01-01T00:00:00Z — real devices
+    /// reject a root certificate whose validity starts there), or the window
+    /// is inverted/empty (`not_after <= not_before`, excluding
+    /// `MatterTime::NO_EXPIRY`). The detail string names which.
+    #[error("invalid fabric validity window: {0}")]
+    InvalidFabricValidity(String),
 }
 
 impl Error {

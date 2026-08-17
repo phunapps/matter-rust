@@ -22,6 +22,43 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+Two fixes from friction the first external adopter hit setting up a fabric,
+both on `matter-controller`.
+
+### `matter-controller`
+
+#### Added
+
+- **`MatterController::fabrics() -> Vec<FabricInfo>`** — a typed,
+  snapshot-decoupled accessor mirroring `nodes()`. Returns each fabric's
+  `fabric_id`, the controller's own `commissioner_node_id` on it, its
+  commissioned node count, and whether it uses a 3-tier ICAC chain. Call it
+  before `create_fabric` to check which fabrics already exist (#110).
+
+#### Fixed
+
+- **`create_fabric` now refuses to create a fabric whose `fabric_id` already
+  exists**, returning `Error::FabricAlreadyExists` instead of silently
+  pushing a duplicate `FabricEntry` (#110). The duplicate previously broke
+  `sole_fabric()` addressing — every subsequent read/write/commission failed
+  with an opaque "multiple fabrics" error — which is exactly what the
+  reporter hit: `create_fabric` called unconditionally on every startup,
+  including runs that loaded an existing fabric from the store. This is a
+  **behaviour change**: a caller that (incorrectly) relied on repeat
+  `create_fabric` calls being silently idempotent now gets an error back;
+  gate the call on `fabrics()` being empty, or on a fresh store, as the
+  crate's examples and README now show.
+- **`create_fabric` validates `FabricConfig::validity` up front** and returns
+  `Error::InvalidFabricValidity` instead of letting a bad window surface deep
+  in commissioning as an opaque `IM status 0x85` on `SendTrustedRootCert`
+  (#111). Rejected: a `not_before` at the Matter epoch (`MatterTime(0)` /
+  `MatterTime::from_unix_secs(0)`) — the reporter's evidenced failure — and
+  an inverted or empty window (`not_after <= not_before`). `MatterTime::
+  NO_EXPIRY` for `not_after` remains valid regardless of `not_before`.
+  `FabricConfig::validity` and `FabricConfig::new` now document what to pass.
+
 ## 0.5.0
 
 The performance & memory remediation release: five phases from the 2026-08-09

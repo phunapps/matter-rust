@@ -479,10 +479,18 @@ impl MatterController {
     /// Create and persist a new fabric (mints the stable commissioner
     /// identity). Returns the new fabric id.
     ///
+    /// Refuses to create a fabric whose `fabric_id` already exists on this
+    /// controller (issue #110) — call [`Self::fabrics`] first if you are not
+    /// sure whether one does. Call this only on a fresh store, or after
+    /// checking `fabrics()`; do not call it unconditionally on every startup.
+    ///
     /// # Errors
     ///
-    /// [`Error::ControllerStopped`] if the task has stopped; otherwise any
-    /// minting / persistence error.
+    /// [`Error::ControllerStopped`] if the task has stopped;
+    /// [`Error::FabricAlreadyExists`] if `cfg.fabric_id` already exists;
+    /// [`Error::InvalidFabricValidity`] if `cfg.validity` names a window
+    /// devices will reject (see [`FabricConfig::validity`], issue #111);
+    /// otherwise any minting / persistence error.
     pub async fn create_fabric(&self, cfg: FabricConfig) -> Result<u64, Error> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -660,6 +668,23 @@ impl MatterController {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Command::ListNodes { reply })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)
+    }
+
+    /// Enumerate every fabric this controller has created, as typed
+    /// [`crate::FabricInfo`]. Check this before calling [`Self::create_fabric`] —
+    /// since issue #110, `create_fabric` refuses to create a second fabric
+    /// with a `fabric_id` that already exists here.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task has stopped.
+    pub async fn fabrics(&self) -> Result<Vec<crate::FabricInfo>, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::ListFabrics { reply })
             .await
             .map_err(|_| Error::ControllerStopped)?;
         rx.await.map_err(|_| Error::ControllerStopped)

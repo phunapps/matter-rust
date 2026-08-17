@@ -16,7 +16,9 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 - **Fabric & identity** — `create_fabric` mints and persists the controller's
   stable operational identity once per fabric, through a pluggable
   `ControllerStore` (a default `FileStore` ships). Opt-in per-fabric ICAC for
-  a 3-tier RCAC→ICAC→NOC chain.
+  a 3-tier RCAC→ICAC→NOC chain. `fabrics() -> Vec<FabricInfo>` enumerates
+  fabrics already created — check it before calling `create_fabric` again;
+  a second call with an existing `fabric_id` is refused.
 - **Commissioning** — `commission("MT:…" | "<manual-code>", label)` brings a
   device onto the fabric over IP, verifying device attestation against an
   `AttestationTrust` (`example_device_roots()`, or production PAA/CD roots via
@@ -54,10 +56,15 @@ let controller = MatterController::builder(store)
     .build()
     .await?;
 
-let _fabric = controller.create_fabric(FabricConfig {
-    fabric_id: 1, rcac_id: 1, commissioner_node_id: 1,
-    validity: (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY),
-}).await?;
+// Only create a fabric that doesn't exist yet — check `fabrics()` first, or
+// gate on a fresh store. `not_before` must be a real time: MatterTime(0) /
+// from_unix_secs(0) (the Matter epoch) is rejected — see issue #111.
+if controller.fabrics().await?.is_empty() {
+    controller.create_fabric(FabricConfig::new(
+        1, 1, 1,
+        (MatterTime::from_unix_secs(1_700_000_000), MatterTime::NO_EXPIRY),
+    )).await?;
+}
 
 let info = controller
     .commission("MT:Y.K90AFN00KA0648G00", Some("kitchen plug".into()))

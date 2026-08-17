@@ -715,6 +715,13 @@ pub(crate) enum Command {
     ListNodes {
         reply: oneshot::Sender<Vec<crate::NodeInfo>>,
     },
+    /// Enumerate every fabric this controller has created as typed
+    /// [`FabricInfo`](crate::FabricInfo) — the snapshot-decoupled accessor.
+    /// Lets a caller check which `fabric_id`s already exist before calling
+    /// [`Command::CreateFabric`] (issue #110).
+    ListFabrics {
+        reply: oneshot::Sender<Vec<crate::FabricInfo>>,
+    },
     /// Drop ALL of the controller's own local state for `node_id` — the
     /// persisted `DeviceEntry`, its cached CASE session, and any parked
     /// connect bookkeeping — WITHOUT contacting the device. A local-state
@@ -1724,6 +1731,20 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     .collect();
                 let _ = reply.send(nodes);
             }
+            Command::ListFabrics { reply } => {
+                let fabrics = self
+                    .state
+                    .fabrics
+                    .iter()
+                    .map(|f| crate::FabricInfo {
+                        fabric_id: f.fabric_id,
+                        commissioner_node_id: f.commissioner.node_id,
+                        node_count: f.devices.len(),
+                        icac_enabled: f.icac.is_some(),
+                    })
+                    .collect();
+                let _ = reply.send(fabrics);
+            }
             Command::ForgetNode { node_id, reply } => {
                 // Drop all LOCAL state for this node — no device round-trip, so
                 // it works even when the device is unreachable or already reset.
@@ -1833,6 +1854,19 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     async fn handle_create_fabric(&mut self, cfg: &FabricConfig) -> Result<u64, Error> {
+        // Refuse a duplicate `fabric_id` before any key generation (issue
+        // #110): loading a store that already has this fabric and calling
+        // `create_fabric` unconditionally used to push a second `FabricEntry`
+        // with the same id, after which `sole_fabric()` sees "multiple
+        // fabrics" and every subsequent commission attempt fails opaquely.
+        if self
+            .state
+            .fabrics
+            .iter()
+            .any(|f| f.fabric_id == cfg.fabric_id)
+        {
+            return Err(Error::FabricAlreadyExists(cfg.fabric_id));
+        }
         let entry = crate::fabric::create_fabric(cfg, self.rng.as_ref())?;
         let fabric_id = entry.fabric_id;
         self.state.fabrics.push(entry);
@@ -4856,6 +4890,119 @@ mod tests {
         let restored = crate::snapshot::deserialize(&bytes).expect("deserialize");
         assert_eq!(restored.fabrics.len(), 1);
         assert_eq!(restored.fabrics[0].commissioner.node_id, 1);
+    }
+
+    /// Issue #110: a second `create_fabric` call with the SAME `fabric_id`
+    /// (the shape of the bug — a fresh-store guard missing on a later run
+    /// that loaded an existing fabric from the store) must be refused with
+    /// `Error::FabricAlreadyExists`, not silently push a duplicate
+    /// `FabricEntry` that later breaks `sole_fabric()` addressing.
+    #[tokio::test]
+    async fn create_fabric_twice_same_id_is_refused() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        controller
+            .create_fabric(cfg())
+            .await
+            .expect("first create_fabric");
+
+        let err = controller
+            .create_fabric(cfg())
+            .await
+            .expect_err("second create_fabric with the same fabric_id must fail");
+        match err {
+            Error::FabricAlreadyExists(id) => assert_eq!(id, cfg().fabric_id),
+            other => panic!("expected FabricAlreadyExists, got {other:?}"),
+        }
+
+        // Confirm no duplicate was pushed: exactly one fabric on disk.
+        let fabrics = controller.fabrics().await.expect("fabrics");
+        assert_eq!(fabrics.len(), 1);
+    }
+
+    /// A second `create_fabric` call with a DIFFERENT `fabric_id` must still
+    /// succeed — the duplicate guard is keyed on `fabric_id`, not "has any
+    /// fabric already been created".
+    #[tokio::test]
+    async fn create_fabric_twice_different_id_still_works() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let first = controller
+            .create_fabric(cfg())
+            .await
+            .expect("first create_fabric");
+
+        let mut cfg2 = cfg();
+        cfg2.fabric_id = 0xAABB_CCDD_0000_0002;
+        cfg2.commissioner_node_id = 2;
+        let second = controller
+            .create_fabric(cfg2)
+            .await
+            .expect("second create_fabric with a different fabric_id must succeed");
+
+        assert_ne!(first, second);
+        let fabrics = controller.fabrics().await.expect("fabrics");
+        assert_eq!(fabrics.len(), 2);
+    }
+
+    /// `fabrics()` is empty before any fabric is created, and reflects each
+    /// fabric's typed metadata (fabric id, commissioner node id, node count,
+    /// ICAC-in-use) after creation.
+    #[tokio::test]
+    async fn fabrics_empty_before_populated_after() {
+        let store = Arc::new(MemStore::default());
+        let (io, _peer) = InMemoryDatagram::pair();
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            io,
+            NullDiscovery,
+            Arc::new(matter_commissioning::SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        assert_eq!(
+            controller.fabrics().await.expect("fabrics"),
+            Vec::new(),
+            "no fabric created yet"
+        );
+
+        controller
+            .create_fabric(cfg())
+            .await
+            .expect("create_fabric");
+
+        let fabrics = controller.fabrics().await.expect("fabrics");
+        assert_eq!(
+            fabrics,
+            vec![crate::FabricInfo {
+                fabric_id: 0xAABB_CCDD_0000_0001,
+                commissioner_node_id: 1,
+                node_count: 0,
+                icac_enabled: false,
+            }]
+        );
     }
 
     /// `nodes()` must enumerate every commissioned device across every fabric

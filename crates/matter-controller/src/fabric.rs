@@ -27,6 +27,18 @@ pub struct FabricConfig {
     /// The stable node ID the controller takes on this fabric.
     pub commissioner_node_id: u64,
     /// `(not_before, not_after)` validity for the RCAC and commissioner NOC.
+    ///
+    /// Pass a real wall-clock `not_before` — e.g.
+    /// `MatterTime::from_unix_secs(current_unix_time)`, typically backdated a
+    /// little (an hour is plenty) to tolerate device clock skew. Do **not**
+    /// pass `MatterTime::from_unix_secs(0)` or `MatterTime(0)`: devices
+    /// reject a root certificate whose validity starts at the Matter epoch
+    /// (2000-01-01T00:00:00Z), surfacing as an opaque `IM status 0x85`
+    /// rejection of `SendTrustedRootCert` deep in commissioning rather than
+    /// as a clear error here (issue #111). `create_fabric` validates this
+    /// window and returns [`crate::Error::InvalidFabricValidity`] instead of
+    /// letting it reach a device. Use `MatterTime::NO_EXPIRY` for `not_after`
+    /// if the fabric should not expire.
     pub validity: (MatterTime, MatterTime),
     /// When `true`, `create_fabric` mints an intermediate CA (ICAC) under
     /// the RCAC and signs the commissioner NOC (and, later, all NOCs
@@ -41,7 +53,8 @@ impl FabricConfig {
     ///
     /// This is the supported construction path now that [`FabricConfig`] is
     /// `#[non_exhaustive]`; the public fields remain readable/writable in
-    /// place.
+    /// place. See [`FabricConfig::validity`] for what to pass as `validity` —
+    /// in particular, a real wall-clock `not_before`, not the Matter epoch.
     #[must_use]
     pub fn new(
         fabric_id: u64,
@@ -59,6 +72,34 @@ impl FabricConfig {
     }
 }
 
+/// Reject a `(not_before, not_after)` validity window devices would reject
+/// (issue #111), before any key generation runs.
+///
+/// - `not_before` must not be the Matter epoch (`MatterTime(0)`, i.e.
+///   2000-01-01T00:00:00Z) — the reporter's evidenced failure: a root
+///   certificate with that `notBefore` is rejected by real devices deep in
+///   commissioning (`IM status 0x85` on `SendTrustedRootCert`), which gives
+///   no hint that the validity window was the cause.
+/// - `not_after` must be strictly after `not_before`, UNLESS `not_after` is
+///   `MatterTime::NO_EXPIRY` — that sentinel is a legitimate "does not
+///   expire" and is exempt from the ordering check.
+fn validate_validity(window: (MatterTime, MatterTime)) -> Result<(), Error> {
+    let (not_before, not_after) = window;
+    if not_before.0 == 0 {
+        return Err(Error::InvalidFabricValidity(format!(
+            "not_before is {not_before:?} (the Matter epoch, 2000-01-01T00:00:00Z) — pass a \
+             real wall-clock time, e.g. MatterTime::from_unix_secs(current_unix_time)"
+        )));
+    }
+    if not_after != MatterTime::NO_EXPIRY && not_after <= not_before {
+        return Err(Error::InvalidFabricValidity(format!(
+            "not_after ({not_after:?}) must be after not_before ({not_before:?}), or \
+             MatterTime::NO_EXPIRY for no expiry"
+        )));
+    }
+    Ok(())
+}
+
 /// Create a fabric: generate the RCAC root key + self-signed RCAC, a fresh
 /// IPK, the commissioner operational keypair, and the commissioner NOC.
 ///
@@ -67,9 +108,16 @@ impl FabricConfig {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Signer`] if key generation fails, or [`Error::Noc`] if
-/// RCAC construction or NOC issuance fails.
+/// Returns [`Error::InvalidFabricValidity`] if `cfg.validity` names a window
+/// devices will reject (see [`FabricConfig::validity`], issue #111);
+/// [`Error::Signer`] if key generation fails; or [`Error::Noc`] if RCAC
+/// construction or NOC issuance fails.
 pub(crate) fn create_fabric(cfg: &FabricConfig, rng: &dyn NocRng) -> Result<FabricEntry, Error> {
+    // Validate the validity window FIRST — before any key generation — so a
+    // bad window is rejected for free instead of surfacing later as an
+    // opaque device-side rejection mid-commissioning (issue #111).
+    validate_validity(cfg.validity)?;
+
     // 1. RCAC root key + self-signed root certificate.
     let (root_signer, rcac_pkcs8) =
         RingSigner::generate().map_err(|e| Error::Signer(e.to_string()))?;
@@ -267,6 +315,71 @@ mod tests {
             icac.cert.to_tlv().expect("tlv"),
             "restored icac cert must byte-match the original"
         );
+    }
+
+    #[test]
+    fn rejects_not_before_at_matter_epoch_zero() {
+        // Issue #111's evidenced failure: `MatterTime(0)` as `not_before`
+        // (whether via the raw tuple or `from_unix_secs(0)`, which saturates
+        // to the same value) must be rejected here, not surface later as an
+        // opaque device-side `IM status 0x85`.
+        let mut cfg = sample_cfg();
+        cfg.validity = (MatterTime::from_unix_secs(0), MatterTime::NO_EXPIRY);
+        let err = create_fabric(&cfg, &SystemNocRng).expect_err("epoch-zero not_before");
+        assert!(
+            matches!(err, Error::InvalidFabricValidity(_)),
+            "expected InvalidFabricValidity, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not_before"),
+            "error must name not_before: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_not_before_at_matter_epoch_zero_via_raw_constructor() {
+        let mut cfg = sample_cfg();
+        cfg.validity = (MatterTime(0), MatterTime::NO_EXPIRY);
+        let err = create_fabric(&cfg, &SystemNocRng).expect_err("epoch-zero not_before");
+        assert!(matches!(err, Error::InvalidFabricValidity(_)));
+    }
+
+    #[test]
+    fn rejects_inverted_validity_window() {
+        let mut cfg = sample_cfg();
+        cfg.validity = (
+            MatterTime::from_unix_secs(1_700_000_100),
+            MatterTime::from_unix_secs(1_700_000_000),
+        );
+        let err = create_fabric(&cfg, &SystemNocRng).expect_err("inverted window");
+        assert!(
+            matches!(err, Error::InvalidFabricValidity(_)),
+            "expected InvalidFabricValidity, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("not_after"),
+            "error must name not_after: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_validity_window() {
+        // not_after == not_before (neither is NO_EXPIRY): a zero-width
+        // window can never be valid.
+        let mut cfg = sample_cfg();
+        let t = MatterTime::from_unix_secs(1_700_000_000);
+        cfg.validity = (t, t);
+        let err = create_fabric(&cfg, &SystemNocRng).expect_err("empty window");
+        assert!(matches!(err, Error::InvalidFabricValidity(_)));
+    }
+
+    #[test]
+    fn accepts_no_expiry_sentinel() {
+        // `MatterTime::NO_EXPIRY` for not_after is legitimate and exempt from
+        // the not_after > not_before ordering check, even though its
+        // underlying value is numerically <= a real not_before.
+        let cfg = sample_cfg(); // already (from_unix_secs(1_700_000_000), NO_EXPIRY)
+        create_fabric(&cfg, &SystemNocRng).expect("NO_EXPIRY must be accepted");
     }
 
     #[test]
