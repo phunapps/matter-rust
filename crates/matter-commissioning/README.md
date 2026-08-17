@@ -47,6 +47,7 @@ use matter_commissioning::setup::parse_qr;
 let payload = parse_qr("MT:Y.K90AFN00KA0648G00")?;
 assert_eq!(payload.vendor_id, Some(0xFFF1));
 assert_eq!(payload.passcode.as_u32(), 20_202_021);
+# Ok::<(), matter_commissioning::SetupError>(())
 ```
 
 (Replace the QR string with the actual captured value from
@@ -59,6 +60,7 @@ use matter_commissioning::setup::parse_manual_code;
 
 let payload = parse_manual_code("11693312331")?;
 assert_eq!(payload.discriminator.short(), 0x5);
+# Ok::<(), matter_commissioning::SetupError>(())
 ```
 
 ## Example: parse a DAC and reach for a trusted root (M6.2.1)
@@ -139,7 +141,7 @@ use matter_cert::time::MatterTime;
 use matter_commissioning::attestation::CdSigningRoots;
 use matter_commissioning::noc::{FabricRecord, NocRng, SystemNocRng};
 use matter_commissioning::{
-    Action, Commissioner, CommissionerConfig, Expectation, PaaTrustStore, SetupPayload,
+    Action, Commissioner, CommissionerConfig, NetworkCredentials, PaaTrustStore, SetupPayload,
 };
 use matter_crypto::{RingSigner, Signer};
 
@@ -175,6 +177,9 @@ let cfg = CommissionerConfig {
     admin_vendor_id: 0xFFF1,
     now: MatterTime::from_unix_secs(1_704_067_200),
     rng,
+    // This device is already on its operational network; see the Wi-Fi /
+    // Thread section below for the provisioning variants.
+    network: NetworkCredentials::AlreadyOnNetwork,
 };
 let mut sm = Commissioner::new(cfg)?;
 loop {
@@ -345,6 +350,9 @@ loop {
             }
             return Err(CommissioningError::CaseEstablishmentFailed); // pick a representative error
         }
+        // `Action` is `#[non_exhaustive]`: a future variant must not silently
+        // break this loop, so handle the unknown case explicitly.
+        other => unreachable!("unhandled action {other:?}"),
     }
 }
 # }
@@ -357,15 +365,31 @@ NOC public key, and the terminal stage cursor (always
 
 ## Wi-Fi commissioning configuration (M6.5+)
 
-```rust
-use matter_commissioning::{CommissionerConfig, NetworkCredentials, WiFiCredentials};
+```rust,no_run
+use std::sync::Arc;
 
+use matter_cert::time::MatterTime;
+use matter_commissioning::attestation::CdSigningRoots;
+use matter_commissioning::noc::{FabricRecord, NocRng};
+use matter_commissioning::{
+    Commissioner, CommissionerConfig, NetworkCredentials, PaaTrustStore, SetupPayload,
+    WiFiCredentials,
+};
+
+# fn run(
+#     pase_attestation_challenge: [u8; 16],
+#     fabric: &FabricRecord,
+#     setup: &SetupPayload,
+#     paa: &PaaTrustStore,
+#     cd_signing_roots: &CdSigningRoots,
+#     rng: Arc<dyn NocRng>,
+# ) -> Result<(), Box<dyn std::error::Error>> {
 let config = CommissionerConfig {
     pase_attestation_challenge,
-    fabric: &fabric,
-    setup_payload: &setup,
-    paa_trust_store: &paa,
-    cd_signing_roots: &cd_signing_roots,
+    fabric,
+    setup_payload: setup,
+    paa_trust_store: paa,
+    cd_signing_roots,
     commissioner_node_id: 0x1,
     assigned_node_id: 0x2,
     ipk_epoch_key: [0x42_u8; 16],
@@ -379,6 +403,9 @@ let config = CommissionerConfig {
     }),
 };
 let mut sm = Commissioner::new(config)?;
+# let _ = &mut sm;
+# Ok(())
+# }
 ```
 
 For Ethernet-only devices (or devices already on their operational
