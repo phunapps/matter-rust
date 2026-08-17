@@ -82,3 +82,17 @@ pub use tokio_udp::TokioUdpTransport;
 
 #[cfg(feature = "mdns-sd")]
 pub use mdns_sd_discovery::MdnsSdDiscovery;
+
+/// Compile-checks the Rust examples in this crate's `README.md`.
+///
+/// `#[cfg(doctest)]` means the item exists only while rustdoc is collecting
+/// doctests, so the README is compiled by `cargo test --doc` without being
+/// duplicated into the rendered crate docs.
+///
+/// Additionally gated on `feature = "tokio"`: the README's minimal example
+/// uses `TokioUdpTransport`, which that feature gates. `just embedded` runs
+/// `cargo test --no-default-features --doc` for this crate, so without the
+/// gate the sans-IO build would fail on an example it cannot compile.
+#[cfg(all(doctest, feature = "tokio"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
