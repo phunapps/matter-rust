@@ -366,7 +366,7 @@ mod tests {
         scalar[0] = seed;
         let signing_key = SigningKey::from_slice(&scalar).unwrap();
         let verifying_key = signing_key.verifying_key();
-        let encoded = verifying_key.to_encoded_point(false);
+        let encoded = verifying_key.to_sec1_point(false);
         let mut public_key = [0u8; 65];
         public_key.copy_from_slice(encoded.as_bytes());
 
@@ -506,7 +506,7 @@ mod tests {
         let mut scalar = [0u8; 32];
         scalar[0] = dac_seed;
         let dac_key = SigningKey::from_slice(&scalar).unwrap();
-        let dac_pub = dac_key.verifying_key().to_encoded_point(false);
+        let dac_pub = dac_key.verifying_key().to_sec1_point(false);
         let mut dac_pub_arr = [0u8; 65];
         dac_pub_arr.copy_from_slice(dac_pub.as_bytes());
 

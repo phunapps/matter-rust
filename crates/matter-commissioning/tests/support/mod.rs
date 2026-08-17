@@ -259,7 +259,7 @@ fn mint_pkcs10_csr(seed: u8) -> (Vec<u8>, [u8; 65]) {
     scalar[0] = seed;
     let signing_key = SigningKey::from_slice(&scalar).unwrap();
     let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_encoded_point(false);
+    let encoded = verifying_key.to_sec1_point(false);
     let mut public_key = [0u8; 65];
     public_key.copy_from_slice(encoded.as_bytes());
 

@@ -35,7 +35,10 @@
 
 use std::num::NonZeroU32;
 
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+// `ToSec1Point` is the p256 0.14 name for the trait 0.13 called
+// `ToEncodedPoint`; `to_sec1_point` is the same function as the old
+// `to_encoded_point` (which now survives only as a deprecated forwarder).
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{ProjectivePoint, Scalar};
 use ring::hkdf;
 use ring::pbkdf2;
@@ -149,18 +152,21 @@ pub(crate) fn derive_w0_w1(pin: u32, salt: &[u8], iterations: u32) -> Result<(Sc
 /// 3. Compute `rem = input mod n` using crypto-bigint's constant-time division.
 /// 4. Extract the low 32 bytes of the 40-byte result (upper 8 bytes are zero
 ///    because the remainder is < n < 2^256).
-/// 5. Wrap in a `Scalar` via [`Reduce<U256>::reduce`], which handles the final
-///    Barrett reduction for uniformity.
+/// 5. Wrap in a `Scalar` via `Reduce<U256>::reduce`, which applies a final
+///    conditional subtraction of the order (a no-op here, since step 3 already
+///    produced a value < n) and yields a canonically-reduced `Scalar`.
 fn reduce_40_bytes_mod_q(input: &[u8]) -> Result<Scalar> {
-    use p256::elliptic_curve::bigint::{Encoding, NonZero, U256};
+    use p256::elliptic_curve::bigint::{ArrayEncoding, NonZero, U256, U320};
     use p256::elliptic_curve::ops::Reduce;
-    use p256::elliptic_curve::{bigint::ArrayEncoding, Curve};
+    use p256::elliptic_curve::Curve;
 
-    // Internal type alias: U320 is available via the crypto-bigint re-export
-    // inside elliptic_curve::bigint (which p256 re-exports as
-    // `p256::elliptic_curve::bigint`).
-    // 40 bytes = 320 bits = 5 × 64-bit limbs.
-    type U320 = p256::elliptic_curve::bigint::Uint<5>;
+    // `U320` is crypto-bigint's own 320-bit alias, re-exported through
+    // `elliptic_curve::bigint`. It is `Uint<{nlimbs(320)}>` — five 64-bit limbs
+    // on a 64-bit target, ten 32-bit limbs on a 32-bit target. (Before the
+    // p256 0.14 bump this module spelled the type as a hand-written
+    // `Uint<5>`; on 64-bit — every target this crate is built for — the two are
+    // the *same type*, so the arithmetic below is unchanged. The named alias is
+    // simply the width-correct spelling.)
 
     if input.len() != W_HALF_LEN {
         return Err(Error::PinDerivationFailed);
@@ -171,9 +177,11 @@ fn reduce_40_bytes_mod_q(input: &[u8]) -> Result<Scalar> {
 
     // Step 2: embed the P-256 order (32 bytes, 256 bits) into a U320 by
     // zero-padding the upper 8 bytes.
-    // `NistP256::ORDER` is a U256; `Curve` trait brings it into scope.
-    let order_u256: U256 = p256::NistP256::ORDER;
-    let order_be = order_u256.to_be_byte_array(); // 32-byte generic array
+    // `NistP256::ORDER` is an `Odd<U256>` in p256 0.14 (it was a bare `U256`
+    // in 0.13); `Odd<T>` derefs to `T`, and the numeric value is identical.
+    // The `Curve` trait brings `ORDER` into scope.
+    let order_u256: U256 = *p256::NistP256::ORDER;
+    let order_be = order_u256.to_be_byte_array(); // 32-byte array
     let mut order_buf = [0u8; 40];
     order_buf[8..].copy_from_slice(&order_be); // top 8 bytes remain 0
     let order_u320 = U320::from_be_slice(&order_buf);
@@ -187,16 +195,19 @@ fn reduce_40_bytes_mod_q(input: &[u8]) -> Result<Scalar> {
 
     // Step 4: extract the low 32 bytes from the 40-byte remainder.
     // The result is < n < 2^256, so the upper 8 bytes are always zero.
-    // `Encoding::to_be_bytes` is brought into scope above.
-    let rem_be: [u8; 40] = rem_u320.to_be_bytes();
+    // `Uint::to_be_bytes` returns crypto-bigint 0.7's `EncodedUint`, a
+    // big-endian byte buffer; the `[u8; 40]` annotation is checked at compile
+    // time by the `EncodedSize` bound, so the width cannot silently drift.
+    let rem_be: [u8; 40] = rem_u320.to_be_bytes().into();
     // rem_be[0..8] is always zero; the scalar occupies rem_be[8..40].
     let mut scalar_bytes = [0u8; 32];
     scalar_bytes.copy_from_slice(&rem_be[8..]);
 
     // Step 5: wrap via `Reduce<U256>` for a well-formed scalar.
-    // `reduce()` performs Barrett reduction; since the value is already < n,
-    // this is effectively a no-op that gives us a typed Scalar.
-    let scalar = <Scalar as Reduce<U256>>::reduce(U256::from_be_slice(&scalar_bytes));
+    // `reduce()` performs a single conditional subtraction of the order; since
+    // the value is already < n, this is a no-op that gives us a typed Scalar.
+    // (p256 0.14 takes the value by reference; the arithmetic is unchanged.)
+    let scalar = <Scalar as Reduce<U256>>::reduce(&U256::from_be_slice(&scalar_bytes));
     Ok(scalar)
 }
 
@@ -209,7 +220,7 @@ fn reduce_40_bytes_mod_q(input: &[u8]) -> Result<Scalar> {
 /// matter.js: `Point.BASE.multiply(w1).toBytes(false)`.
 pub(crate) fn derive_l(w1: &Scalar) -> [u8; 65] {
     let l_point = ProjectivePoint::GENERATOR * w1;
-    let encoded = l_point.to_affine().to_encoded_point(false);
+    let encoded = l_point.to_affine().to_sec1_point(false);
     let mut out = [0u8; 65];
     out.copy_from_slice(encoded.as_bytes());
     out

@@ -129,7 +129,7 @@ fn end_to_end_csr_verify_then_issue() {
     csr_scalar[0] = 0x55;
     let csr_key = SigningKey::from_slice(&csr_scalar).unwrap();
     let mut csr_pub = [0u8; 65];
-    csr_pub.copy_from_slice(csr_key.verifying_key().to_encoded_point(false).as_bytes());
+    csr_pub.copy_from_slice(csr_key.verifying_key().to_sec1_point(false).as_bytes());
     let csr_der = mint_csr(&csr_pub, &csr_key);
 
     // DAC keypair + sign elements || challenge.
@@ -140,7 +140,7 @@ fn end_to_end_csr_verify_then_issue() {
     dac_scalar[0] = 0x77;
     let dac_key = SigningKey::from_slice(&dac_scalar).unwrap();
     let mut dac_pub = [0u8; 65];
-    dac_pub.copy_from_slice(dac_key.verifying_key().to_encoded_point(false).as_bytes());
+    dac_pub.copy_from_slice(dac_key.verifying_key().to_sec1_point(false).as_bytes());
     let mut tbs = Vec::with_capacity(elements.len() + 16);
     tbs.extend_from_slice(&elements);
     tbs.extend_from_slice(&challenge);

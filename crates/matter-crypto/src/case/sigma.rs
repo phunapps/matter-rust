@@ -38,7 +38,7 @@
 //! acts as the domain-separating context in every HKDF salt (CaseClient.ts
 //! lines 153–159, 199–203, 220–223).
 
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{NonZeroScalar, PublicKey as P256PublicKey, SecretKey};
 use ring::digest::{Context, SHA256};
 use ring::hkdf;
@@ -157,9 +157,13 @@ pub(crate) fn generate_ephemeral_keypair(rng: &dyn SecureRandom) -> Result<(Secr
         // which is `Some` iff the bytes represent a value in [1, n-1].
         let scalar_opt = NonZeroScalar::from_repr(bytes.into());
         if let Some(scalar) = Option::<NonZeroScalar>::from(scalar_opt) {
-            let sk = SecretKey::new(scalar.into());
+            // `SecretKey::from(NonZeroScalar)` is the p256 0.14 spelling of
+            // 0.13's `SecretKey::new(scalar.into())` — in 0.13 the `From` impl
+            // *was* `SecretKey::new(scalar.into())`, so this is the identical
+            // construction, not a re-derivation.
+            let sk = SecretKey::from(scalar);
             let pk = sk.public_key();
-            let encoded = pk.to_encoded_point(false); // false = uncompressed
+            let encoded = pk.to_sec1_point(false); // false = uncompressed
             let mut pub_bytes = [0u8; 65];
             pub_bytes.copy_from_slice(encoded.as_bytes());
             return Ok((sk, pub_bytes));

@@ -22,6 +22,76 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### Changed
+
+- **`p256` upgraded from 0.13 to 0.14** (`matter-crypto`, `matter-commissioning`).
+  This moves the elliptic-curve library underneath SPAKE2+ (PASE) and
+  CASE/SIGMA. It is a **library-API migration only** — the protocol logic is
+  untouched. **No wire bytes, no derived keys, and no signatures change.** Every
+  existing test vector passes unmodified: the Matter spec SPAKE2+ vectors, the
+  matter.js byte-parity captures for PASE and CASE, and the chip-derived KATs.
+
+  What actually changed at the call sites, and why each is a no-op:
+
+  - `p256::EncodedPoint` → `p256::Sec1Point`, and the `FromEncodedPoint` /
+    `ToEncodedPoint` traits → `FromSec1Point` / `ToSec1Point`. Renames only;
+    0.14 keeps the old names as deprecated forwarders to the new ones.
+  - `SecretKey::new(scalar.into())` → `SecretKey::from(scalar)`. In 0.13 the
+    `From<NonZeroScalar>` impl *was* `SecretKey::new(scalar.into())`, so this is
+    the same construction under the name that survived.
+  - `Signature::normalize_s()` returned `Option<Signature>` in 0.13 (`Some` only
+    when it flipped `s` to `n - s`) and returns `Signature` in 0.14, folding the
+    already-low case in. `sig.normalize_s().unwrap_or(sig)` therefore becomes
+    `sig.normalize_s()` with identical output — CASE signatures stay low-`s`, as
+    matter.js produces them.
+  - The SPAKE2+ `w0`/`w1` derivation reduces a 40-byte PBKDF2 output modulo the
+    curve order `n`. `NistP256::ORDER` is now `Odd<U256>` rather than `U256` (same
+    numeric value, dereferenced), `Uint::to_be_bytes` returns crypto-bigint 0.7's
+    `EncodedUint` rather than a bare `[u8; 40]` (same big-endian bytes), and
+    `Reduce::reduce` takes its argument by reference. The 320-bit intermediate is
+    now spelled with crypto-bigint's own `U320` alias instead of a hand-written
+    `Uint<5>` — literally the same type on 64-bit targets, and the width-correct
+    one on 32-bit, where the hand-written `Uint<5>` would have been 160 bits and
+    `from_be_slice`'s length assertion would have *panicked* on the 40-byte
+    input (loudly, on the first PASE derivation — never a wrong-but-plausible
+    scalar). This workspace builds for no 32-bit target today, so the swap is a
+    no-op in practice. Big-endian interpretation, operand widths, and the final
+    conditional subtraction are all unchanged; the derived `w0`/`L` bytes were
+    re-checked against an independent `int.from_bytes(be, "big") % n` oracle in
+    addition to the committed vectors.
+
+  Randomness plumbing is unaffected. `p256` 0.14 pulls `rand_core` 0.10 (0.13
+  pulled 0.6), but this workspace never uses `p256`'s RNG entry points — every
+  scalar, nonce and keypair still comes from `ring::rand::SystemRandom` via the
+  `NocRng` abstraction, and `rand_core` is not a direct dependency.
+
+  **The ECDSA stack under CASE moved wholesale, not just `p256` itself**, and
+  that is worth stating plainly because it is where the assurance has to come
+  from: `rfc6979` 0.4 → 0.6 (the deterministic-nonce generator sitting directly
+  under CASE signing), `sha2` 0.10 → 0.11 (the hash `Signer::sign` uses),
+  `signature` 2 → 3, `sec1` 0.7 → 0.8, `pkcs8` 0.10 → 0.11, `hmac` 0.12 → 0.13,
+  `hkdf` 0.12 → 0.13, `digest` 0.10 → 0.11, `crypto-bigint` 0.5 → 0.7, and
+  `ff`/`group`/`primeorder` 0.13 → 0.14. Additionally
+  `PublicKey::from_secret_scalar` — which produces every CASE ephemeral public
+  key — changed internally from `generator() * scalar` to
+  `ProjectivePoint::mul_by_generator(scalar)`. None of this is taken on trust:
+  the matter.js byte-parity fixtures assert full hex equality of Sigma1
+  (carrying the ephemeral public key in the clear), Sigma2 and Sigma3 (carrying
+  the ECDSA signature inside TBEData under a deterministic key), so byte-equal
+  messages imply a byte-equal `r‖s` and an unchanged nonce derivation.
+
+- **Dependency-tree consequence:** the workspace now contains two RustCrypto
+  generations side by side. `p256` 0.14 brings `der` 0.8, `const-oid` 0.10,
+  `spki` 0.8, `crypto-common` 0.2 and `rand_core` 0.10, while `matter-cert`
+  continues to use `der` 0.7 / `const-oid` 0.9 / `spki` 0.7. The two generations
+  only ever meet at `&[u8]` boundaries — the sole adjacency is a `#[cfg(test)]`
+  CSR path that hands a `Vec<u8>` to our own DER encoders — so this is a
+  compile-time and binary-size cost, not a correctness one. `cargo deny` is
+  content with the duplication. Unifying them is separate work, and it
+  strengthens the case for the planned X.509 stack consolidation.
+
 ## 0.6.0
 
 The first release driven by outside users. Every change here comes from issues

@@ -376,13 +376,13 @@ impl CaseResponder {
         responder_random: [u8; 32],
         now: MatterTime,
     ) -> Result<Self> {
-        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        use p256::elliptic_curve::sec1::ToSec1Point;
         use p256::NonZeroScalar;
         let scalar_opt = NonZeroScalar::from_repr(eph_private_key.into());
         let scalar =
             Option::<NonZeroScalar>::from(scalar_opt).ok_or(Error::EphemeralKeyGenerationFailed)?;
-        let eph_secret = SecretKey::new(scalar.into());
-        let encoded = eph_secret.public_key().to_encoded_point(false);
+        let eph_secret = SecretKey::from(scalar);
+        let encoded = eph_secret.public_key().to_sec1_point(false);
         let mut eph_pub = [0u8; 65];
         eph_pub.copy_from_slice(encoded.as_bytes());
         Ok(Self {

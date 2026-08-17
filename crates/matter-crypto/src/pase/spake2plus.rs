@@ -42,10 +42,15 @@
 
 use std::sync::LazyLock;
 
-use p256::elliptic_curve::group::ff::{Field, PrimeField}; // Field for is_zero; PrimeField for from_repr
-use p256::elliptic_curve::sec1::FromEncodedPoint;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::{AffinePoint, EncodedPoint, ProjectivePoint, Scalar};
+// Field for is_zero; PrimeField for from_repr.
+use p256::elliptic_curve::group::ff::{Field, PrimeField};
+// `FromSec1Point` / `ToSec1Point` are the p256 0.14 names for the traits 0.13
+// called `FromEncodedPoint` / `ToEncodedPoint`, and `Sec1Point` is the 0.14
+// name for the type 0.13 exported as `p256::EncodedPoint`. Same traits, same
+// type, same SEC1 encoding — the 0.13 names survive only as deprecated
+// forwarders.
+use p256::elliptic_curve::sec1::{FromSec1Point, ToSec1Point};
+use p256::{AffinePoint, ProjectivePoint, Scalar, Sec1Point};
 use ring::digest::{digest, SHA256};
 use ring::hmac;
 use ring::rand::SecureRandom;
@@ -116,9 +121,9 @@ const INFO_SESSION_KEYS: &[u8] = b"SessionKeys";
 /// because the bytes are compile-time constants that are correct by specification.
 #[allow(clippy::expect_used)] // M and N are spec-fixed constants, not user input.
 fn point_from_spec_bytes(bytes: &[u8; 65]) -> ProjectivePoint {
-    let encoded = EncodedPoint::from_bytes(bytes.as_slice())
+    let encoded = Sec1Point::from_bytes(bytes.as_slice())
         .expect("M/N bytes are valid SEC1 uncompressed encoding");
-    let affine_opt: Option<AffinePoint> = AffinePoint::from_encoded_point(&encoded).into();
+    let affine_opt: Option<AffinePoint> = AffinePoint::from_sec1_point(&encoded).into();
     affine_opt
         .map(ProjectivePoint::from)
         .expect("M/N bytes are a valid P-256 affine point")
@@ -127,9 +132,8 @@ fn point_from_spec_bytes(bytes: &[u8; 65]) -> ProjectivePoint {
 /// Decode a peer-supplied point. Returns `Err(InvalidParameter)` if
 /// the bytes are not a valid P-256 SEC1 uncompressed point.
 fn decode_peer_point(bytes: &[u8; 65]) -> Result<ProjectivePoint> {
-    let encoded =
-        EncodedPoint::from_bytes(bytes.as_slice()).map_err(|_| Error::InvalidParameter)?;
-    let affine_opt: Option<AffinePoint> = AffinePoint::from_encoded_point(&encoded).into();
+    let encoded = Sec1Point::from_bytes(bytes.as_slice()).map_err(|_| Error::InvalidParameter)?;
+    let affine_opt: Option<AffinePoint> = AffinePoint::from_sec1_point(&encoded).into();
     affine_opt
         .map(ProjectivePoint::from)
         .ok_or(Error::InvalidParameter)
@@ -137,7 +141,7 @@ fn decode_peer_point(bytes: &[u8; 65]) -> Result<ProjectivePoint> {
 
 /// Encode a projective point as SEC1 uncompressed (65 bytes, prefix 0x04).
 fn encode_point(p: &ProjectivePoint) -> [u8; 65] {
-    let encoded = p.to_affine().to_encoded_point(false);
+    let encoded = p.to_affine().to_sec1_point(false);
     let mut out = [0u8; 65];
     out.copy_from_slice(encoded.as_bytes());
     out
@@ -314,9 +318,9 @@ fn append_length_prefixed(buf: &mut Vec<u8>, data: &[u8]) {
 }
 
 fn scalar_to_be_bytes(s: &Scalar) -> [u8; 32] {
-    // p256::Scalar::to_bytes() returns FieldBytes (GenericArray<u8, U32>)
-    // in big-endian format, matching matter.js's `numberToBytesBE(w0, 32)`.
-    // We use `&*fb` (Deref to &[u8]) to avoid the deprecated `GenericArray::as_slice`.
+    // p256::Scalar::to_bytes() returns FieldBytes (a 32-byte `Array`) in
+    // big-endian format, matching matter.js's `numberToBytesBE(w0, 32)`.
+    // `&fb` derefs to `&[u8]`, so no explicit `as_slice` is needed.
     let fb = s.to_bytes();
     let mut out = [0u8; 32];
     out.copy_from_slice(&fb);

@@ -167,7 +167,7 @@ fn build_trusted_roots(rcac_noc_hex: &str) -> TrustedRoots {
 fn debug_tbs_data2_and_signature() {
     use matter_codec::{Tag, TlvWriter};
     use matter_crypto::CaseSigner;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::{NonZeroScalar, SecretKey};
 
     let fx = load_fixture("handshake-new-session");
@@ -182,14 +182,14 @@ fn debug_tbs_data2_and_signature() {
     let init_eph_priv_bytes = hex_to_array::<32>(&fx.inputs.initiator_eph_priv);
 
     let resp_eph_scalar = NonZeroScalar::from_repr(resp_eph_priv_bytes.into()).unwrap();
-    let resp_eph_sk = SecretKey::new(resp_eph_scalar.into());
-    let resp_eph_pub_encoded = resp_eph_sk.public_key().to_encoded_point(false);
+    let resp_eph_sk = SecretKey::from(resp_eph_scalar);
+    let resp_eph_pub_encoded = resp_eph_sk.public_key().to_sec1_point(false);
     let mut resp_eph_pub = [0u8; 65];
     resp_eph_pub.copy_from_slice(resp_eph_pub_encoded.as_bytes());
 
     let init_eph_scalar = NonZeroScalar::from_repr(init_eph_priv_bytes.into()).unwrap();
-    let init_eph_sk = SecretKey::new(init_eph_scalar.into());
-    let init_eph_pub_encoded = init_eph_sk.public_key().to_encoded_point(false);
+    let init_eph_sk = SecretKey::from(init_eph_scalar);
+    let init_eph_pub_encoded = init_eph_sk.public_key().to_sec1_point(false);
     let mut init_eph_pub = [0u8; 65];
     init_eph_pub.copy_from_slice(init_eph_pub_encoded.as_bytes());
 
@@ -243,7 +243,7 @@ fn debug_tbs_data2_and_signature() {
 fn debug_tbs_data3_and_signature() {
     use matter_codec::{Tag, TlvWriter};
     use matter_crypto::CaseSigner;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::{NonZeroScalar, SecretKey};
 
     let fx = load_fixture("handshake-new-session");
@@ -261,14 +261,14 @@ fn debug_tbs_data3_and_signature() {
     let init_eph_priv_bytes = hex_to_array::<32>(&fx.inputs.initiator_eph_priv);
 
     let resp_eph_scalar = NonZeroScalar::from_repr(resp_eph_priv_bytes.into()).unwrap();
-    let resp_eph_sk = SecretKey::new(resp_eph_scalar.into());
-    let resp_eph_pub_encoded = resp_eph_sk.public_key().to_encoded_point(false);
+    let resp_eph_sk = SecretKey::from(resp_eph_scalar);
+    let resp_eph_pub_encoded = resp_eph_sk.public_key().to_sec1_point(false);
     let mut resp_eph_pub = [0u8; 65];
     resp_eph_pub.copy_from_slice(resp_eph_pub_encoded.as_bytes());
 
     let init_eph_scalar = NonZeroScalar::from_repr(init_eph_priv_bytes.into()).unwrap();
-    let init_eph_sk = SecretKey::new(init_eph_scalar.into());
-    let init_eph_pub_encoded = init_eph_sk.public_key().to_encoded_point(false);
+    let init_eph_sk = SecretKey::from(init_eph_scalar);
+    let init_eph_pub_encoded = init_eph_sk.public_key().to_sec1_point(false);
     let mut init_eph_pub = [0u8; 65];
     init_eph_pub.copy_from_slice(init_eph_pub_encoded.as_bytes());
 

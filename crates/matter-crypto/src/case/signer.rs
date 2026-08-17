@@ -107,8 +107,9 @@ impl RingSigner {
             .map_err(|_| Error::SigningFailed(SignerError::Internal))?;
 
         // Derive the 65-byte SEC1-uncompressed public key from the signing key.
-        let verifying_key = signing_key.verifying_key();
-        let encoded = verifying_key.to_encoded_point(false); // false = uncompressed
+        // `to_sec1_point` is the p256 0.14 name for 0.13's `to_encoded_point`;
+        // same SEC1 encoding, same `false = uncompressed` flag.
+        let encoded = signing_key.verifying_key().to_sec1_point(false);
         let encoded_bytes = encoded.as_bytes();
         if encoded_bytes.len() != 65 {
             return Err(Error::SigningFailed(SignerError::Internal));
@@ -178,10 +179,14 @@ impl CaseSigner for RingSigner {
         // messages. Both forms are mathematically equivalent and valid per ECDSA,
         // but byte-parity tests require the same representation as matter.js.
         //
-        // `Signature::normalize_s()` returns `Some(normalized)` when s > n/2
-        // (and flips s to n - s), or `None` when s is already low.
-        let sig = sig.normalize_s().unwrap_or(sig);
-        // `Signature::to_bytes()` returns the compact 64-byte r||s GenericArray.
+        // `Signature::normalize_s()` flips s to n - s when s > n/2 and returns
+        // the signature unchanged when s is already low. (In p256 0.13 it
+        // returned `Option<Signature>` — `Some` only on the flip — so the call
+        // site read `sig.normalize_s().unwrap_or(sig)`. p256 0.14 returns
+        // `Signature` directly, folding the "already low" case in. Same result
+        // in both branches.)
+        let sig = sig.normalize_s();
+        // `Signature::to_bytes()` returns the compact 64-byte r||s byte array.
         Ok(sig.to_bytes().into())
     }
 

@@ -275,7 +275,7 @@ mod tests {
         let signing_key = SigningKey::from_slice(&scalar)
             .expect("non-zero 32-byte scalar is a valid P-256 scalar");
         let verifying_key = signing_key.verifying_key();
-        let pubkey_point = verifying_key.to_encoded_point(false);
+        let pubkey_point = verifying_key.to_sec1_point(false);
         let pubkey_bytes = pubkey_point.as_bytes();
         let mut pubkey_arr = [0u8; 65];
         pubkey_arr.copy_from_slice(pubkey_bytes);
