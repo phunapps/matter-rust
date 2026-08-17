@@ -30,3 +30,12 @@ pub use messages::{
     TransferControl, TransferInit, BDX_VERSION,
 };
 pub use sender::{BlockSender, OutgoingMessage, SenderOutcome};
+
+/// Compile-checks the Rust examples in this crate's `README.md`.
+///
+/// `#[cfg(doctest)]` means the item exists only while rustdoc is collecting
+/// doctests, so the README is compiled by `cargo test --doc` without being
+/// duplicated into the rendered crate docs.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
