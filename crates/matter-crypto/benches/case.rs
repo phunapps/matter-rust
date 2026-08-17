@@ -14,13 +14,14 @@
 // and setup uses expect(). Mirrors the repo's test-code lint carve-outs.
 #![allow(missing_docs, clippy::doc_markdown, clippy::expect_used)]
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use matter_cert::test_support::{build_unsigned, with_signature, TestCertFields};
 use matter_cert::{
     BasicConstraints, DistinguishedName, DnAttribute, Extensions, KeyIdentifier, KeyUsage,
     MatterCertificate, MatterTime, PublicKey, Signature, TrustAnchor, TrustedRoots,
 };
 use matter_crypto::{CaseCredentials, CaseInitiator, CaseResponder, CaseSigner, RingSigner};
+use std::hint::black_box;
 
 const TEST_FABRIC_ID: u64 = 0x4242_4242_4242_4242;
 const INITIATOR_NODE_ID: u64 = 0xDEAD_BEEF_CAFE_F00D;

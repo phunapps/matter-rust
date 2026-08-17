@@ -8,9 +8,10 @@
 // Bench code, not library code: mirrors the repo's test-code lint carve-outs.
 #![allow(missing_docs, clippy::doc_markdown, clippy::expect_used)]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use matter_codec::{Tag, TlvWriter};
 use matter_interaction::{build_list_write_chunks, AttributePath};
+use std::hint::black_box;
 
 /// One pre-encoded anonymous-tagged list element carrying a `len`-byte
 /// octet string (the shape `write_list_chunked` callers pass).

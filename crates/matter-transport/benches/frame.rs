@@ -17,9 +17,10 @@
 
 use std::time::Instant;
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use matter_crypto::pase::PaseSessionKeys;
 use matter_transport::{MrpFlags, PeerHint, ProtocolId, SessionId, SessionManager, SessionRole};
+use std::hint::black_box;
 
 /// Two `SessionManager`s sharing one symmetric key set, cross-registered as
 /// Initiator/Responder (mirrors the session.rs unit-test pairing).

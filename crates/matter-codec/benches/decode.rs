@@ -15,8 +15,9 @@
     clippy::cast_sign_loss
 )]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use matter_codec::{Tag, TlvReader, TlvWriter};
+use std::hint::black_box;
 
 /// A TLV array of `n` byte-string elements, each `elem` bytes. Array children
 /// carry anonymous tags (required by the spec; enforced post-audit).

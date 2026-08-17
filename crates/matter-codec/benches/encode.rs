@@ -14,8 +14,9 @@
     clippy::cast_sign_loss
 )]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use matter_codec::{Tag, TlvWriter};
+use std::hint::black_box;
 
 fn encode_byte_array(n: usize, data: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();

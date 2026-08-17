@@ -19,9 +19,10 @@
     clippy::cast_sign_loss
 )]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use matter_codec::{Tag, TlvWriter};
 use matter_interaction::parse_report_data;
+use std::hint::black_box;
 
 /// Build a `ReportData` wire blob with `n_attrs` AttributeReportIBs, each
 /// carrying a `val_len`-byte octet-string Data value. Layout mirrors the

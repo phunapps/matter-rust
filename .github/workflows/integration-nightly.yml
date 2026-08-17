@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout matter-rust
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -45,7 +45,7 @@ jobs:
           tool: just
 
       - name: Checkout connectedhomeip
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: project-chip/connectedhomeip
           ref: ${{ env.CHIP_REF }}
@@ -81,7 +81,7 @@ jobs:
       # Pigweed/CIPD env is large; cache it keyed on the connectedhomeip ref and
       # the bootstrap scripts so most nightly runs skip the slow bootstrap.
       - name: Cache pigweed environment
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: connectedhomeip/.environment
           key: chip-env-${{ env.CHIP_REF }}-${{ hashFiles('connectedhomeip/scripts/setup/*', 'connectedhomeip/scripts/bootstrap.sh') }}
@@ -120,7 +120,7 @@ jobs:
       # needs to inspect.
       - name: Upload DUT log
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dut-app-log
           path: target/integration-dut/app.log
