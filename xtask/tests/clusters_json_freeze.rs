@@ -86,7 +86,7 @@ fn clusters(v: &Value) -> &Vec<Value> {
 }
 
 #[test]
-fn covers_exactly_the_ten_target_clusters() {
+fn covers_exactly_the_target_clusters() {
     let v = load();
     let names: Vec<&str> = clusters(&v)
         .iter()

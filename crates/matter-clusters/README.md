@@ -29,7 +29,7 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust). Milestone 7.
 
 ## Status
 
-0.2.0. The 10 M7 clusters are generated and **byte-parity
+0.3.0. The 10 M7 clusters are generated and **byte-parity
 tested against matter.js 0.16.11** (`test-vectors/clusters/`): BasicInformation,
 Descriptor, Identify, OnOff, LevelControl, ColorControl, OccupancySensing,
 TemperatureMeasurement, RelativeHumidityMeasurement, and DoorLock (Aliro
@@ -57,10 +57,15 @@ window-open orchestration, OTA — belongs to later milestones). Decode-smoke
 tested (incl. ACL entries whose `subject-id` subjects decode as `u64`), with a
 byte-parity vector for the recursive list-of-struct command encode
 (`AccessControl.ReviewFabricRestrictions`, whose `Arl` is a list of structs each
-carrying a nested list-of-struct). This completes the cluster-library widening
-(10 → 33 clusters).
+carrying a nested list-of-struct). Those five batches took the library from 10
+clusters to 33.
+Four more were added one at a time, each by the milestone that needed it:
+OperationalCredentials (M9-D2), OtaSoftwareUpdateProvider (M9-F1 — command-only,
+so it generates no attribute codecs), TimeSynchronization (M9-G-a), and
+IcdManagement (M9-G-c). That is 37.
 The concentration measurement family (Matter 1.2), reported missing by an
-external adopter in [#112], adds the last 10 read-only clusters —
+external adopter in [#112], adds the 10 read-only clusters that bring the total
+to the 47 generated today —
 CarbonMonoxide (0x040C), CarbonDioxide (0x040D), NitrogenDioxide (0x0413),
 Ozone (0x0415), Pm25 (0x042A), Formaldehyde (0x042B), Pm1 (0x042C),
 Pm10 (0x042D), TotalVolatileOrganicCompounds (0x042E), and Radon (0x042F)
@@ -68,7 +73,10 @@ ConcentrationMeasurement. They derive from one base cluster and so share a
 single shape, which is why they are added as a family rather than piecemeal.
 That shape carries this crate's first **float** (`single`/FLOAT32) attributes,
 so alongside the per-cluster decode-smoke tests it gets a matter.js byte-parity
-vector and a `proptest` wire round-trip over every binary32 bit pattern.
+vector, an explicit round-trip over the binary32 edges (signed zero, subnormals,
+infinities, NaN — compared by bits), and a `proptest` round-trip drawn uniformly
+from the whole binary32 bit space. A `single` attribute accepts a FLOAT32
+element only, matching chip's strict `TLVReader::Get(float&)`.
 
 [#112]: https://github.com/phunapps/matter-rust/issues/112
 For any attribute not covered by these typed codecs — optional,

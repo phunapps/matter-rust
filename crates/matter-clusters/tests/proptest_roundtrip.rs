@@ -113,8 +113,14 @@ proptest! {
     fn co2_measured_value_wire_roundtrip(bits in any::<u32>()) {
         // These clusters are read-only, so there is no generated `encode_*`;
         // the codec's `put_float` is the encoder half. Drawing the raw BITS
-        // (rather than `any::<f32>()`) covers every binary32 pattern including
-        // every NaN payload, infinities, and subnormals.
+        // (rather than `any::<f32>()`) draws uniformly from the *whole*
+        // binary32 space — every NaN payload, infinity and subnormal is
+        // reachable, which `any::<f32>()` shrinking toward tidy finite values
+        // is not. It does not follow that a run hits them: at the default 256
+        // cases the two infinities are essentially never drawn, and NaNs and
+        // subnormals about once each. Those edges are covered explicitly, by
+        // `float_wire_roundtrip_including_edge_values` in `decode_smoke.rs`;
+        // what this test adds is breadth over the ordinary space.
         //
         // Compared by bits as well: `f32::NAN != f32::NAN` and `0.0 == -0.0`
         // under value equality, so a naive `prop_assert_eq!` would either flake

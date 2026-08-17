@@ -146,8 +146,25 @@ fn read_scalar(
         "string" => ("Value::Utf8(v)".into(), "v".into()),
         "bytes" => ("Value::Bytes(v)".into(), "v".into()),
         // IEEE 754 floats (`single`/`double`), e.g. the concentration
-        // measurement clusters' MeasuredValue. Matched strictly on wire width,
-        // exactly as the signed/unsigned integer arms are.
+        // measurement clusters' MeasuredValue.
+        //
+        // These match on the wire width, which the integer arms above do *not*:
+        // `TlvReader` folds UINT8..UINT64 into one `Value::Uint(u64)` (and
+        // INT8..INT64 into `Value::Int(i64)`) — see
+        // `matter-codec/src/reader.rs` — so a single integer pattern matches
+        // any encoded width and `try_from` range-checks it. `Value` keeps
+        // FLOAT32 and FLOAT64 apart, so floats have to say which they accept.
+        //
+        // What they accept follows chip's `TLVReader`
+        // (`src/lib/core/TLVReader.cpp`, `Get(float&)` / `Get(double&)`):
+        // `Get(float&)` is strict — FLOAT32 only — so `single` here rejects a
+        // FLOAT64 element; `Get(double&)` is lenient — FLOAT32 *or* FLOAT64 —
+        // so `double` also accepts a narrowed float, emitted as the extra arm
+        // from [`read_scalar_widened`]. matter.js is lenient in both directions
+        // (`TlvFloat` and `TlvDouble` are the same `TlvType.Float`; the width
+        // is an encode-time choice only), so where the two references disagree
+        // we take the stricter one: device firmware is overwhelmingly built
+        // from chip, and that is the behaviour we must interoperate with.
         "float" => {
             if is_double(ty, entry) {
                 ("Value::Double(v)".into(), "v".into())
@@ -190,6 +207,23 @@ fn read_scalar(
              add one before allowlisting a cluster that uses it"
         ),
     }
+}
+
+/// The extra decoder arm, if any, that accepts a *narrower* wire encoding of
+/// the same value. Emitted immediately after the [`read_scalar`] arm at every
+/// call site, in the same `(match_pattern, build_expr)` shape.
+///
+/// Only `double` has one: chip's `TLVReader::Get(double&)`
+/// (`src/lib/core/TLVReader.cpp`) accepts a FLOAT32 element and widens it,
+/// whereas `Get(float&)` rejects a FLOAT64 — so `single` stays strict and gets
+/// no widening arm. See [`read_scalar`] for the full reasoning.
+///
+/// No cluster in the pinned model has a `double` attribute today, so this
+/// changes no generated code; it exists so the first one that does inherits
+/// the reference behaviour rather than a stricter guess.
+fn read_scalar_widened(metatype: &str, ty: &str, entry: Option<&str>) -> Option<(String, String)> {
+    (metatype == "float" && is_double(ty, entry))
+        .then(|| ("Value::Float(v)".to_string(), "f64::from(v)".to_string()))
 }
 
 /// Write a Rust value expression `expr` of the given metatype as a scalar at
@@ -315,6 +349,12 @@ fn emit_list_read_into(
             s,
             "{indent}        Some(Element::Scalar {{ value: {pat}, .. }}) => out.push({build}),"
         );
+        if let Some((pat, build)) = read_scalar_widened(entry_meta, entry, None) {
+            line!(
+                s,
+                "{indent}        Some(Element::Scalar {{ value: {pat}, .. }}) => out.push({build}),"
+            );
+        }
     }
     line!(s, "{indent}        None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),");
     line!(
@@ -414,7 +454,18 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
     }
 
     let ctx = a.name.clone();
-    let (pat, build) = read_scalar(&a.metatype, &a.ty, a.entry_type.as_deref(), &ctx, dts);
+    let mut arms = vec![read_scalar(
+        &a.metatype,
+        &a.ty,
+        a.entry_type.as_deref(),
+        &ctx,
+        dts,
+    )];
+    arms.extend(read_scalar_widened(
+        &a.metatype,
+        &a.ty,
+        a.entry_type.as_deref(),
+    ));
     line!(s, "    let mut r = TlvReader::new(tlv);");
     line!(s, "    match r.next()? {{");
     if a.nullable {
@@ -422,19 +473,23 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
             s,
             "        Some(Element::Scalar {{ value: Value::Null, .. }}) => Ok(Nullable::Null),"
         );
-        line!(
-            s,
-            "        Some(Element::Scalar {{ value: {}, .. }}) => Ok(Nullable::Value({})),",
-            pat,
-            build
-        );
-    } else {
-        line!(
-            s,
-            "        Some(Element::Scalar {{ value: {}, .. }}) => Ok({}),",
-            pat,
-            build
-        );
+    }
+    for (pat, build) in &arms {
+        if a.nullable {
+            line!(
+                s,
+                "        Some(Element::Scalar {{ value: {}, .. }}) => Ok(Nullable::Value({})),",
+                pat,
+                build
+            );
+        } else {
+            line!(
+                s,
+                "        Some(Element::Scalar {{ value: {}, .. }}) => Ok({}),",
+                pat,
+                build
+            );
+        }
     }
     line!(
         s,
@@ -1056,12 +1111,27 @@ fn emit_struct_field_read_arm(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_
     );
     if scalar {
         let ctx = f.name.clone();
-        let (pat, build) = read_scalar(&f.metatype, &f.ty, f.entry_type.as_deref(), &ctx, dts);
+        let mut arms = vec![read_scalar(
+            &f.metatype,
+            &f.ty,
+            f.entry_type.as_deref(),
+            &ctx,
+            dts,
+        )];
+        arms.extend(read_scalar_widened(
+            &f.metatype,
+            &f.ty,
+            f.entry_type.as_deref(),
+        ));
         if f.nullable {
             line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: Value::Null }}) => f_{} = Some(Nullable::Null),", f.id, var);
-            line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some(Nullable::Value({})),", f.id, pat, var, build);
-        } else {
-            line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some({}),", f.id, pat, var, build);
+        }
+        for (pat, build) in &arms {
+            if f.nullable {
+                line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some(Nullable::Value({})),", f.id, pat, var, build);
+            } else {
+                line!(s, "                Some(Element::Scalar {{ tag: Tag::Context({}), value: {} }}) => f_{} = Some({}),", f.id, pat, var, build);
+            }
         }
         let _ = ident;
         return;
@@ -1338,6 +1408,45 @@ mod tests {
         assert_eq!(
             read_scalar("float", "double", None, "MeasuredValue", &dts),
             ("Value::Double(v)".to_string(), "v".to_string())
+        );
+    }
+
+    #[test]
+    fn only_double_accepts_a_narrowed_float() {
+        // chip `TLVReader::Get(double&)` takes FLOAT32 *or* FLOAT64, while
+        // `Get(float&)` takes FLOAT32 only — so exactly one of these two has a
+        // widening arm. Widening a FLOAT32 to f64 is exact and lossless.
+        assert_eq!(
+            read_scalar_widened("float", "double", None),
+            Some(("Value::Float(v)".to_string(), "f64::from(v)".to_string()))
+        );
+        assert_eq!(read_scalar_widened("float", "single", None), None);
+        // Nothing else widens: integers already match any wire width in
+        // `read_scalar` because `TlvReader` folds UINT8..64 into one variant.
+        assert_eq!(read_scalar_widened("integer", "uint16", None), None);
+        assert_eq!(read_scalar_widened("string", "string", None), None);
+    }
+
+    #[test]
+    fn double_attribute_decoder_has_both_float_widths() {
+        // No cluster in the pinned model has a `double` attribute yet, so this
+        // is the only place the widening arm is observable.
+        let a = Attribute {
+            id: 0,
+            name: "MeasuredValue".to_string(),
+            ty: "double".to_string(),
+            metatype: "float".to_string(),
+            entry_type: None,
+            nullable: false,
+            optional: true,
+            writable: false,
+        };
+        let mut s = String::new();
+        emit_attr_decoder(&mut s, &a, &HashMap::new());
+        assert!(s.contains("value: Value::Double(v), .. }) => Ok(v)"), "{s}");
+        assert!(
+            s.contains("value: Value::Float(v), .. }) => Ok(f64::from(v))"),
+            "{s}"
         );
     }
 

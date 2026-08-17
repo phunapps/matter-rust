@@ -602,6 +602,17 @@ fn float_attr(v: f32) -> Vec<u8> {
     buf
 }
 
+/// Encode a single anonymous-tagged FLOAT64 — the *wrong* width for every
+/// float attribute the crate generates today (all are `single`). Used only to
+/// prove those decoders reject it; the control byte is `0x0B`.
+fn double_attr(v: f64) -> Vec<u8> {
+    let mut buf = Vec::new();
+    TlvWriter::new(&mut buf)
+        .put_double(Tag::Anonymous, v)
+        .unwrap();
+    buf
+}
+
 /// Assert two `f32`s are the same value **bit for bit**. Stricter than `==`
 /// (which accepts `-0.0` for `0.0` and can never match a NaN), and it keeps
 /// `clippy::float_cmp` quiet without an allow.
@@ -686,6 +697,20 @@ fn float_attribute_rejects_non_float_wire_types() {
     assert!(co2::decode_uncertainty(&bool_attr(true)).is_err());
     // …and a null in a non-nullable float attribute is still an error.
     assert!(co2::decode_uncertainty(&null_attr()).is_err());
+    // A FLOAT64 element in a `single` attribute is rejected too — the case
+    // with real interop consequences, so it is pinned rather than assumed.
+    // This is deliberate and matches chip: `TLVReader::Get(float&)`
+    // (`src/lib/core/TLVReader.cpp`) accepts FLOAT32 only and errors on a
+    // FLOAT64, while its `Get(double&)` accepts both. matter.js is lenient in
+    // both directions; we follow the stricter reference here. Anyone widening
+    // this arm is diverging from chip and must say so.
+    assert_eq!(
+        double_attr(415.5)[0],
+        0x0B,
+        "anonymous FLOAT64 control byte"
+    );
+    assert!(co2::decode_measured_value(&double_attr(415.5)).is_err());
+    assert!(co2::decode_uncertainty(&double_attr(0.25)).is_err());
 }
 
 #[test]
@@ -701,7 +726,12 @@ fn float_wire_roundtrip_including_edge_values() {
         -1.0,
         f32::MIN,
         f32::MAX,
+        // Smallest positive *normal*, then the smallest subnormal — a distinct
+        // encoding class (zero exponent field), and the one the uniform-bits
+        // proptest is least likely to draw.
         f32::MIN_POSITIVE,
+        f32::from_bits(1),
+        -f32::from_bits(1),
         f32::INFINITY,
         f32::NEG_INFINITY,
         f32::NAN,

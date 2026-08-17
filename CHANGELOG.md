@@ -163,9 +163,14 @@ clock is unset the two clock-relative checks cannot run at all (see below).
   are all `single` → `f32`), which required teaching the generator to emit
   floats at all — see *xtask (codegen)* below. Tested with a per-cluster
   decode-smoke, a matter.js byte-parity vector for the FLOAT32 wire encoding
-  (`test-vectors/clusters/carbon_dioxide_concentration_measurement/`), and a
-  `proptest` wire round-trip over every binary32 bit pattern (NaN payloads,
-  infinities, subnormals, and signed zero compared by bits).
+  (`test-vectors/clusters/carbon_dioxide_concentration_measurement/`), an
+  explicit wire round-trip over the binary32 edges (signed zero, the smallest
+  normal and the smallest subnormal, both infinities, NaN — all compared by
+  bits, since `NaN != NaN` and `0.0 == -0.0` would let a value-equality test
+  lie), and a `proptest` round-trip drawn uniformly from the whole binary32 bit
+  space. Because these attributes are `single`, their decoders accept a FLOAT32
+  element only; a FLOAT64 in the same attribute is a type error, and that is
+  pinned by a test.
 
 [#112]: https://github.com/phunapps/matter-rust/issues/112
 
@@ -183,6 +188,20 @@ clock is unset the two clock-relative checks cannot run at all (see below).
   and list-element forms. No cluster in the model had a float attribute until
   now, so this path had never been exercised; it is the reusable part of the
   concentration-measurement work below.
+- **Which wire widths a float decoder accepts now follows chip's `TLVReader`
+  exactly** (`src/lib/core/TLVReader.cpp`). A `single` decoder takes a FLOAT32
+  element and rejects a FLOAT64, matching the strict `Get(float&)`; a `double`
+  decoder takes FLOAT64 *or* FLOAT32 (widened losslessly), matching the lenient
+  `Get(double&)`. matter.js is lenient in both directions — `TlvFloat` and
+  `TlvDouble` are one `TlvType.Float`, the width being an encode-time choice —
+  so where the two references disagree we take the stricter, since device
+  firmware is overwhelmingly built from chip. Note this is unlike the *integer*
+  arms, which are width-flexible: `TlvReader` folds UINT8..UINT64 into a single
+  `Value::Uint(u64)` (and INT8..INT64 into `Value::Int(i64)`), so one pattern
+  matches any encoded width and the range check is `try_from`. The `double`
+  leniency changes no generated code today — no cluster in the pinned model has
+  a `double` attribute — and is recorded so the first one that does inherits
+  the reference behaviour rather than a stricter guess.
 
 #### Changed
 
