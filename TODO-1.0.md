@@ -508,46 +508,48 @@ remaining fail-closed residuals are now fixed with loopback regressions:
 
 ## matter-ble
 
-### Nameless-device negative cache — empirical D-Bus count not yet taken
+### Nameless-device negative cache — MEASURED; the negative path is unreachable on `BlueZ`
 
-**Status:** logic pinned in CI 2026-08-11 (`0d0b131f`); the on-hardware
-*number* is outstanding.
+**Status:** measured on hardware 2026-08-18. Logic pinned in CI since
+`0d0b131f`. The number is in, and it carries a finding worth more than the
+number.
 
-Perf phase 5 (§5.2) gave `CommissionableScan` a 10 s negative cache so a
-nameless peripheral stops costing one `BlueZ` properties round trip per
-advertisement. `NameCache::decide`/`record` are driven directly by tests over a
-simulated advertisement stream (600 adverts at 10/s ⇒ 6 queries, one per TTL
-window), so the property is regression-proof without hardware. What has **not**
-been measured is the real D-Bus query count against a live advertiser
-(`MATTER_BLE_SCAN_TRACE=1` emits one `[ble-scan]` line per query for exactly
-this purpose).
+**Result.** ESP32-C6 factory-reset (NVS partition erased) so it advertised
+CHIPoBLE at its 500 ms slow interval; `scan_commissionables` driven for 60 s on
+the Pi with `MATTER_BLE_SCAN_TRACE=1`:
 
-The 2026-08-11 attempt could not run: the rig's ESP32-C6 is commissioned, and
-this firmware does enhanced-commissioning advertising over IP only — with a
-window open (discriminator 2426, confirmed on its console) a 60 s scan saw zero
-Matter adverts, and an independent `bluetoothctl` scan saw no `fff6` service
-data on air at all.
+- **54 commissionable advertisements** yielded, from 1 peripheral
+- **1 D-Bus name query**
 
-**Constraint any future attempt must respect:** the advertiser has to be
-*nameless*. A device that advertises a local name is cached positively on its
-first query and never re-queried, so it exercises the positive path only — a
-named advertiser would pass the check vacuously (pinned by
-`named_device_is_queried_once_for_the_whole_scan`).
+So query cost is bounded by caching rather than by advertisement rate, which is
+what §5.2 set out to show. But it was the **positive** cache that did it, and
+that cache pre-dates phase 5.
 
-**Two ways to get the number:**
+**The finding: `local_name` is effectively never `None` on `BlueZ`.** The C6
+advertises no name at all — `bluetoothctl info` and a raw
+`org.freedesktop.DBus.Properties.GetAll` both show it has **no `Name`
+property**, only an `Alias`, and `BlueZ` synthesises that alias from the MAC
+(`C6-C8-CD-20-9C-C4`). btleplug surfaces that alias as `local_name`, so
+`local_name_for` returned `Some(..)` on the first advertisement and every one
+of the remaining 53 was a positive-cache hit. For any device `BlueZ` has a
+`Device1` object for, the `None` branch the 10 s TTL exists to bound simply
+does not occur.
 
-1. **Opportunistic, free** — a Matter device advertises CHIPoBLE exactly while
-   uncommissioned, which is the state immediately before any BLE commissioning
-   run. Fold a 60 s `MATTER_BLE_SCAN_TRACE=1` scan into the next C6
-   re-commission (see `docs/runbooks/c2-thread-commission.md` §2 for getting it
-   back to advertising; note our own `remove_fabric` refuses to remove our own
-   fabric by design, so unpairing needs chip-tool as a second admin, a re-flash,
-   or the devkit's factory-reset sequence).
-2. **Controlled, non-destructive** — a second BLE radio near the Pi (USB dongle
-   or any spare Linux box) advertising Matter-shaped service data (UUID
-   `0xFFF6`, commissionable payload) with **no** local name at a 100 ms
-   interval. Reproduces the amplification exactly and on demand: ~600 queries/
-   minute without the cache, ~6 with it.
+That makes the negative cache **defensive rather than load-bearing on Linux**.
+It still earns its place — `local_name_for` also returns `None` when
+`adapter.peripheral()` or `properties()` fails, and `CoreBluetooth` has no
+MAC-alias convention so the `None` case is real there — but nobody should
+expect to observe it on `BlueZ`, and a future attempt to "finally exercise the
+TTL path" against a Linux rig will fail for the same reason. Do not re-run this
+expecting a different answer.
+
+**Follow-up this surfaced:** `FoundDevice::local_name` now hands callers a
+MAC-shaped pseudo-name (`C6-C8-CD-20-9C-C4`) as though it were an observed BLE
+local name, which contradicts its own rustdoc ("BLE local name from the
+peripheral's cached advertisement properties, when one was observed"). A
+consumer building a device picker will render that string as a device name.
+Either filter alias-shaped values (they are the MAC with `:`→`-`) or correct the
+documentation to say it may be a `BlueZ`-synthesised alias.
 
 ### BLE central on macOS — ROOT-CAUSED; Linux-only for live commissioning
 
