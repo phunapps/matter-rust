@@ -4,6 +4,25 @@
 //! thread on creation) and translates between its [`ServiceEvent`]
 //! stream and our [`MatterService`] shape.
 //!
+//! # One browse per service type, shared by every handle
+//!
+//! `mdns-sd` keeps **one querier per service type**: its
+//! `service_queriers` map is keyed by `ty_domain`, so a second
+//! `browse("_matter._tcp.local.")` *replaces* the sender of the first and the
+//! first `Receiver` never sees another event; and `stop_browse` removes that
+//! shared querier — and drops the daemon's cached records for the type —
+//! whoever asks for it.
+//!
+//! [`QueryHandle`]s are therefore **not** independent browses. This adapter
+//! models what the daemon actually provides: it opens at most one browse per
+//! service type, reference-counts the handles attached to it, fans every
+//! surfaced record out to *all* of them, and calls `stop_browse` only when the
+//! last handle for that type is released. Without that, two concurrent
+//! `query(ServiceKind::Operational)` callers silently sabotage each other —
+//! the second one's `browse` orphans the first's receiver, and its
+//! `stop_query` tears down the browse the first is still waiting on, so the
+//! first never resolves again for the life of the process (issue #113).
+//!
 //! # Diagnostics
 //!
 //! Discovery is the one part of the stack whose failures are invisible from the
@@ -50,22 +69,50 @@ impl From<mdns_sd::Error> for Error {
     }
 }
 
-/// Internal per-query state.
-struct QueryState {
-    service_type: &'static str,
+/// The single browse we run for one DNS-SD service type, plus the handles
+/// sharing it.
+///
+/// `mdns-sd` gives us exactly one querier (and one `Receiver`) per service
+/// type — see the module docs — so this is the unit of ownership, not the
+/// [`QueryHandle`]. `pending` doubles as the refcount: the browse lives while
+/// it is non-empty.
+struct BrowseState {
+    /// The one `Receiver` mdns-sd handed back for this type. Drained by
+    /// whichever handle polls; the records go to every handle in `pending`.
     receiver: Receiver<ServiceEvent>,
+    /// Handles attached to this browse, each with the records surfaced since
+    /// that handle last called [`Discovery::poll_results`].
+    ///
+    /// A buffer grows until its handle polls or is stopped — the same
+    /// accumulation the per-handle `Receiver` used to provide, so a caller
+    /// that polls in a loop (every caller in this workspace) sees no
+    /// difference.
+    pending: HashMap<QueryHandle, Vec<MatterService>>,
 }
 
 /// Default mDNS discovery adapter for Matter, backed by `mdns-sd`.
 ///
 /// Construct via [`Self::new`] (the 90% path — owns its own daemon)
-/// or [`Self::with_daemon`] (advanced: share a daemon across multiple
-/// controllers, or inject a pre-configured daemon in tests).
+/// or [`Self::with_daemon`] (advanced: inject a pre-configured daemon).
+///
+/// Handles of the same [`ServiceKind`] share one browse and each receive
+/// every record it surfaces; see the module docs for why that is forced on us
+/// by mdns-sd's per-type querier.
 pub struct MdnsSdDiscovery {
     daemon: ServiceDaemon,
     owns_daemon: bool,
-    queries: HashMap<QueryHandle, QueryState>,
+    /// One entry per *service type* with at least one live handle.
+    browses: HashMap<&'static str, BrowseState>,
+    /// Which browse each live handle belongs to. Absent ⇒ stopped/unknown.
+    handle_types: HashMap<QueryHandle, &'static str>,
     next_handle: u64,
+    /// Test-only observation of the daemon calls this adapter makes, so a test
+    /// can assert "browsed once per type" and "stopped only on the last
+    /// release" without a public API or a live network.
+    #[cfg(test)]
+    browse_calls: HashMap<&'static str, u32>,
+    #[cfg(test)]
+    stop_browse_calls: HashMap<&'static str, u32>,
 }
 
 impl MdnsSdDiscovery {
@@ -77,24 +124,43 @@ impl MdnsSdDiscovery {
     /// the host has no mDNS support or port 5353 is unavailable).
     pub fn new() -> Result<Self> {
         let daemon = ServiceDaemon::new()?;
-        Ok(Self {
-            daemon,
-            owns_daemon: true,
-            queries: HashMap::new(),
-            next_handle: 1,
-        })
+        Ok(Self::from_daemon(daemon, true))
     }
 
-    /// Reuse an externally-managed [`ServiceDaemon`]. Use this to share
-    /// one daemon across multiple Matter controllers, or to inject a
-    /// pre-configured daemon in tests.
+    /// Reuse an externally-managed [`ServiceDaemon`] — e.g. one configured
+    /// with specific interfaces enabled.
+    ///
+    /// # Sharing one daemon across adapters is unsafe for browsing
+    ///
+    /// The refcounting described in the module docs is **per
+    /// `MdnsSdDiscovery` instance**, while mdns-sd's querier is per *daemon*
+    /// and keyed by service type. Two `MdnsSdDiscovery` values built over the
+    /// same daemon that browse the same [`ServiceKind`] therefore still
+    /// clobber each other exactly as two raw `browse` calls would: the second
+    /// instance's `browse` orphans the first's receiver, and its `stop_query`
+    /// tears down the browse the first still depends on.
+    ///
+    /// So: share a daemon freely for *publishing*, but give each component
+    /// that browses its own adapter over its own daemon — or, better, share
+    /// the one `MdnsSdDiscovery` instance itself (its handles are designed to
+    /// coexist). Sharing a daemon between one browsing adapter and any number
+    /// of publish-only adapters is also fine.
     #[must_use]
     pub fn with_daemon(daemon: ServiceDaemon) -> Self {
+        Self::from_daemon(daemon, false)
+    }
+
+    fn from_daemon(daemon: ServiceDaemon, owns_daemon: bool) -> Self {
         Self {
             daemon,
-            owns_daemon: false,
-            queries: HashMap::new(),
+            owns_daemon,
+            browses: HashMap::new(),
+            handle_types: HashMap::new(),
             next_handle: 1,
+            #[cfg(test)]
+            browse_calls: HashMap::new(),
+            #[cfg(test)]
+            stop_browse_calls: HashMap::new(),
         }
     }
 
@@ -110,6 +176,25 @@ impl MdnsSdDiscovery {
     /// DNS-SD instance fullname for a `(instance_name, kind)` pair.
     fn fullname(instance_name: &str, kind: ServiceKind) -> String {
         format!("{}.{}", instance_name, kind.service_type())
+    }
+
+    /// Test seam: hand a browse event to the `kind` browse exactly as a
+    /// [`Discovery::poll_results`] drain would.
+    ///
+    /// The browse `Receiver` is a re-exported `flume::Receiver` whose `Sender`
+    /// lives inside the daemon, so a test cannot put an event on the real
+    /// channel, and CI hosts do not deliver loopback mDNS (see the `#[ignore]`
+    /// on `self_publish_self_discover`). This bypasses **only** the delivery
+    /// of the event: translation, fan-out to every attached handle, buffering
+    /// and per-handle consumption all run the production code.
+    ///
+    /// No-op when no browse is open for `kind` — which is itself the assertion
+    /// some tests make.
+    #[cfg(test)]
+    fn deliver_for_test(&mut self, kind: ServiceKind, event: ServiceEvent) {
+        if let Some(browse) = self.browses.get_mut(kind.service_type()) {
+            fan_out_event(&mut browse.pending, event);
+        }
     }
 }
 
@@ -156,67 +241,174 @@ impl Discovery for MdnsSdDiscovery {
         Ok(())
     }
 
+    /// Attach a handle to this service type's browse, opening the browse only
+    /// if this is the first handle for the type.
+    ///
+    /// A second `daemon.browse` of a type we are already browsing would
+    /// *replace* the daemon's querier for it and orphan the receiver every
+    /// existing handle of that type reads from (module docs, issue #113), so
+    /// the reuse here is a correctness requirement, not an optimisation.
     fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle> {
-        let receiver = self.daemon.browse(kind.service_type())?;
+        let service_type = kind.service_type();
+        // Open the browse BEFORE allocating a handle so a daemon failure
+        // leaves no state behind.
+        let receiver = if self.browses.contains_key(service_type) {
+            None
+        } else {
+            let receiver = self.daemon.browse(service_type)?;
+            #[cfg(test)]
+            self.browse_calls
+                .entry(service_type)
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+            tracing::debug!(
+                target: LOG_TARGET,
+                service_type,
+                "mDNS browse started",
+            );
+            Some(receiver)
+        };
+        if let Some(receiver) = receiver {
+            self.browses.insert(
+                service_type,
+                BrowseState {
+                    receiver,
+                    pending: HashMap::new(),
+                },
+            );
+        }
         let handle = self.allocate_handle();
+        let Some(browse) = self.browses.get_mut(service_type) else {
+            // Unreachable: the entry was either already present or inserted
+            // just above. Reported as an error rather than asserted, because a
+            // handle with no browse behind it could only ever return nothing.
+            return Err(Error::Mdns(format!(
+                "internal: no browse state for {service_type} after opening it"
+            )));
+        };
+        browse.pending.insert(handle, Vec::new());
+        let handles = browse.pending.len();
+        self.handle_types.insert(handle, service_type);
         tracing::debug!(
             target: LOG_TARGET,
-            service_type = kind.service_type(),
+            service_type,
             handle = handle.0,
-            "mDNS browse started",
-        );
-        self.queries.insert(
-            handle,
-            QueryState {
-                service_type: kind.service_type(),
-                receiver,
-            },
+            handles,
+            "mDNS browse handle attached",
         );
         Ok(handle)
     }
 
+    /// Release one handle. The underlying browse is stopped only when its
+    /// **last** handle goes away.
+    ///
+    /// Note that `mdns_sd::ServiceDaemon::stop_browse` also drops the daemon's
+    /// cached records for the service type, so releasing the last handle
+    /// discards what the browse had learned; the next `query` for that type
+    /// starts from an empty cache and must wait for fresh announcements.
+    /// That is why stopping is deferred to the last release, and why a caller
+    /// that reconnects repeatedly is better off holding one handle open.
     fn stop_query(&mut self, handle: QueryHandle) {
-        if let Some(state) = self.queries.remove(&handle) {
-            let _ = self.daemon.stop_browse(state.service_type);
+        // Unknown or already-stopped handle: no-op.
+        let Some(service_type) = self.handle_types.remove(&handle) else {
+            return;
+        };
+        let remaining = match self.browses.get_mut(service_type) {
+            Some(browse) => {
+                browse.pending.remove(&handle);
+                browse.pending.len()
+            }
+            None => 0,
+        };
+        tracing::debug!(
+            target: LOG_TARGET,
+            service_type,
+            handle = handle.0,
+            remaining,
+            "mDNS browse handle released",
+        );
+        if remaining == 0 {
+            self.browses.remove(service_type);
+            let _ = self.daemon.stop_browse(service_type);
+            #[cfg(test)]
+            self.stop_browse_calls
+                .entry(service_type)
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+            tracing::debug!(
+                target: LOG_TARGET,
+                service_type,
+                "mDNS browse stopped (last handle released; mdns-sd also drops its cached records for this type)",
+            );
         }
-        // Unknown handle: no-op.
     }
 
+    /// Drain the shared browse once and return **this** handle's share.
+    ///
+    /// Every record drained here is appended to the buffer of *every* handle
+    /// attached to the same service type, then this handle's buffer is taken
+    /// and returned. So the documented contract still holds — a record is
+    /// returned to a given handle exactly once — while a second handle on the
+    /// same type no longer steals records the first is waiting for.
     fn poll_results(&mut self, handle: QueryHandle) -> Vec<MatterService> {
-        let Some(state) = self.queries.get(&handle) else {
+        let Some(service_type) = self.handle_types.get(&handle).copied() else {
             return Vec::new();
         };
-        let mut out = Vec::new();
-        // Drain pending events without blocking.
-        while let Ok(event) = state.receiver.try_recv() {
-            match event {
-                ServiceEvent::ServiceResolved(info) => {
-                    // `service_info_to_matter` logs its own drop reason, so a
-                    // `None` here is already accounted for in the trace.
-                    if let Some(svc) = service_info_to_matter(&info) {
-                        tracing::debug!(
-                            target: LOG_TARGET,
-                            instance = %svc.instance_name,
-                            kind = ?svc.kind,
-                            addresses = ?svc.addresses,
-                            port = svc.port,
-                            "mDNS record surfaced",
-                        );
-                        out.push(svc);
-                    }
+        let Some(browse) = self.browses.get_mut(service_type) else {
+            return Vec::new();
+        };
+        // Destructure so the receiver and the per-handle buffers are borrowed
+        // as the disjoint fields they are.
+        let BrowseState { receiver, pending } = browse;
+        // Drain pending events without blocking, fanning each out to every
+        // handle attached to this browse — including handles that are not the
+        // one polling, which is the whole point (issue #113).
+        while let Ok(event) = receiver.try_recv() {
+            fan_out_event(pending, event);
+        }
+        match pending.get_mut(&handle) {
+            Some(buffer) => std::mem::take(buffer),
+            // Unreachable: `handle_types` and `pending` are inserted and
+            // removed together. Empty is the safe answer either way.
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Translate one browse event and append the resulting record to the buffer of
+/// **every** handle attached to that browse.
+///
+/// Split out of [`Discovery::poll_results`] so the fan-out has one
+/// implementation, shared with the test seam that delivers synthetic events
+/// (mdns-sd's browse `Sender` lives inside the daemon, so an event cannot
+/// otherwise be injected without a live multicast network).
+fn fan_out_event(pending: &mut HashMap<QueryHandle, Vec<MatterService>>, event: ServiceEvent) {
+    match event {
+        ServiceEvent::ServiceResolved(info) => {
+            // `service_info_to_matter` logs its own drop reason, so a
+            // `None` here is already accounted for in the trace.
+            if let Some(svc) = service_info_to_matter(&info) {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    instance = %svc.instance_name,
+                    kind = ?svc.kind,
+                    addresses = ?svc.addresses,
+                    port = svc.port,
+                    handles = pending.len(),
+                    "mDNS record surfaced",
+                );
+                for buffer in pending.values_mut() {
+                    buffer.push(svc.clone());
                 }
-                // Other events (ServiceFound, ServiceRemoved,
-                // SearchStarted, SearchStopped, etc.) are intentionally
-                // discarded — poll_results only emits usable
-                // (address-resolved) services. Traced rather than dropped
-                // silently: a `ServiceFound` never followed by a
-                // `ServiceResolved` for the same instance is the signature of
-                // the resolver failing to complete SRV/address resolution, and
-                // is otherwise invisible.
-                other => trace_unused_event(&other),
             }
         }
-        out
+        // Other events (ServiceFound, ServiceRemoved, SearchStarted,
+        // SearchStopped, etc.) are intentionally discarded — poll_results only
+        // emits usable (address-resolved) services. Traced rather than dropped
+        // silently: a `ServiceFound` never followed by a `ServiceResolved` for
+        // the same instance is the signature of the resolver failing to
+        // complete SRV/address resolution, and is otherwise invisible.
+        other => trace_unused_event(&other),
     }
 }
 
@@ -477,6 +669,216 @@ mod tests {
                          // poll_results on a stopped handle returns empty.
         let results = d.poll_results(h);
         assert!(results.is_empty());
+    }
+
+    // ---------------------------------------------------------------------
+    // Shared-browse fan-out and refcounting (issue #113).
+    //
+    // mdns-sd keeps ONE querier per service type; these tests pin that this
+    // adapter models that rather than pretending each handle owns a browse.
+    // Events are delivered through `deliver_for_test` (see its docs) because
+    // the browse `Sender` is inside the daemon and CI hosts don't deliver
+    // loopback mDNS; everything downstream of delivery is production code.
+    // ---------------------------------------------------------------------
+
+    /// A `ServiceResolved` event for `instance`, shaped exactly like the one
+    /// mdns-sd emits for a Matter record of `kind`.
+    fn resolved_event(instance: &str, kind: ServiceKind) -> ServiceEvent {
+        let info = ServiceInfo::new(
+            kind.service_type(),
+            instance,
+            &format!("{instance}.local."),
+            &[std::net::IpAddr::V6(Ipv6Addr::LOCALHOST)][..],
+            5540,
+            Vec::<TxtProperty>::new(),
+        )
+        .unwrap();
+        ServiceEvent::ServiceResolved(Box::new(info.as_resolved_service()))
+    }
+
+    /// Whether a poll result carries `instance`. Used instead of comparing
+    /// whole vectors: a developer machine may have real Matter records on the
+    /// network, and they land in these browses too.
+    fn contains(results: &[MatterService], instance: &str) -> bool {
+        results.iter().any(|s| s.instance_name == instance)
+    }
+
+    #[test]
+    fn two_handles_of_one_type_share_one_browse_and_both_see_each_record() {
+        // THE #113 FAILURE: the second `query` used to open a second
+        // `daemon.browse` of the same type, which replaces the daemon's
+        // querier and orphans the first handle's receiver — so the first
+        // handle never saw another record.
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let a = d.query(ServiceKind::Operational).unwrap();
+        let b = d.query(ServiceKind::Operational).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(
+            d.browse_calls.get(ServiceKind::Operational.service_type()),
+            Some(&1),
+            "the second handle must reuse the first handle's browse",
+        );
+
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-shared", ServiceKind::Operational),
+        );
+
+        let first = d.poll_results(a);
+        let second = d.poll_results(b);
+        assert!(contains(&first, "113-shared"), "handle A must see it");
+        assert!(
+            contains(&second, "113-shared"),
+            "handle B must see it too — one handle polling must not consume \
+             another handle's copy",
+        );
+
+        // Per-handle consumption still holds: a record is handed to a given
+        // handle exactly once.
+        assert!(!contains(&d.poll_results(a), "113-shared"));
+        assert!(!contains(&d.poll_results(b), "113-shared"));
+
+        d.stop_query(a);
+        d.stop_query(b);
+    }
+
+    #[test]
+    fn stopping_one_handle_leaves_the_other_handles_browse_alive() {
+        // THE OTHER HALF OF #113: `stop_browse` is per service type, so the
+        // short-lived resolve's `stop_query` used to tear down the browse the
+        // long-lived handle was still waiting on (and wipe mdns-sd's cache
+        // for the type), permanently for the process.
+        let ty = ServiceKind::Operational.service_type();
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let long_lived = d.query(ServiceKind::Operational).unwrap();
+        let short_lived = d.query(ServiceKind::Operational).unwrap();
+
+        d.stop_query(short_lived);
+        assert_eq!(
+            d.stop_browse_calls.get(ty),
+            None,
+            "a browse with a handle still attached must not be stopped",
+        );
+
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-survivor", ServiceKind::Operational),
+        );
+        assert!(
+            contains(&d.poll_results(long_lived), "113-survivor"),
+            "the surviving handle must still receive records",
+        );
+        // The released handle is inert, not merely quiet.
+        assert!(d.poll_results(short_lived).is_empty());
+
+        d.stop_query(long_lived);
+        assert_eq!(
+            d.stop_browse_calls.get(ty),
+            Some(&1),
+            "only the LAST release stops the browse",
+        );
+    }
+
+    #[test]
+    fn browse_reopens_after_the_last_handle_is_released() {
+        // Refcount must drop to zero and be usable again — a stopped type is
+        // not permanently poisoned.
+        let ty = ServiceKind::Operational.service_type();
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let first = d.query(ServiceKind::Operational).unwrap();
+        d.stop_query(first);
+        assert_eq!(d.stop_browse_calls.get(ty), Some(&1));
+
+        // A delivery with no browse open goes nowhere (nothing to fan out to).
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-orphan", ServiceKind::Operational),
+        );
+
+        let second = d.query(ServiceKind::Operational).unwrap();
+        assert_eq!(
+            d.browse_calls.get(ty),
+            Some(&2),
+            "a type with no handles must be browsed afresh",
+        );
+        assert!(!contains(&d.poll_results(second), "113-orphan"));
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-reopened", ServiceKind::Operational),
+        );
+        assert!(contains(&d.poll_results(second), "113-reopened"));
+        d.stop_query(second);
+    }
+
+    #[test]
+    fn handles_of_different_types_are_independent() {
+        // Fan-out is per service type: an operational record must not leak
+        // into a commissionable browse, and stopping one type must not touch
+        // the other's browse.
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let operational = d.query(ServiceKind::Operational).unwrap();
+        let commissionable = d.query(ServiceKind::Commissionable).unwrap();
+
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-op-only", ServiceKind::Operational),
+        );
+        assert!(!contains(&d.poll_results(commissionable), "113-op-only"));
+        assert!(contains(&d.poll_results(operational), "113-op-only"));
+
+        d.stop_query(commissionable);
+        assert_eq!(
+            d.stop_browse_calls
+                .get(ServiceKind::Operational.service_type()),
+            None,
+            "stopping one type must not stop another",
+        );
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-still-live", ServiceKind::Operational),
+        );
+        assert!(contains(&d.poll_results(operational), "113-still-live"));
+        d.stop_query(operational);
+    }
+
+    #[test]
+    fn actor_usage_pattern_survives_a_nested_resolve() {
+        // The exact shape of the reported failure, at the adapter level: the
+        // controller actor holds ONE long-lived operational browse for its
+        // parked resolves, while another operational resolve (the connect
+        // fallback, or a commissioning driver sharing the same `Discovery`)
+        // runs its own query/poll/stop cycle underneath. Before the fix the
+        // nested resolve orphaned the actor's receiver and then stopped the
+        // shared browse, and every later parked resolve failed with
+        // "not found via mDNS" for the rest of the process.
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let actor_browse = d.query(ServiceKind::Operational).unwrap();
+
+        // ... a nested resolve runs to completion, exactly as
+        // `resolve_operational` does: query, poll, stop_query.
+        let nested = d.query(ServiceKind::Operational).unwrap();
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-nested-target", ServiceKind::Operational),
+        );
+        assert!(contains(&d.poll_results(nested), "113-nested-target"));
+        d.stop_query(nested);
+
+        // ... and afterwards the actor's browse is still live and still
+        // delivering, which is what #113 lost.
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-after-nested", ServiceKind::Operational),
+        );
+        let late = d.poll_results(actor_browse);
+        assert!(
+            contains(&late, "113-after-nested"),
+            "the long-lived browse must survive a nested resolve",
+        );
+        // It also still holds the record the nested resolve consumed for
+        // itself — the fan-out gave both handles a copy.
+        assert!(contains(&late, "113-nested-target"));
+        d.stop_query(actor_browse);
     }
 
     #[test]
