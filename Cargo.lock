@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "matter-commissioning"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "matter-controller"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "matter-transport"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bitflags",
  "criterion",

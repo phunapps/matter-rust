@@ -22,7 +22,16 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## 0.7.1
+
+A discovery-reliability release, prompted by [#113]. It fixes a real aliasing
+bug in our `mdns-sd` adapter and makes the discovery path diagnosable, which it
+previously was not — a failed operational resolve produced one opaque line
+thirty seconds later, with no way to tell whether a record had ever been seen.
+
+Crate versions: **`matter-transport` 0.3.2**, **`matter-commissioning` 0.5.2**,
+**`matter-controller` 0.7.1**. Every other crate is unchanged from `0.7.0` and
+is not republished.
 
 ### Fixed — concurrent mDNS queries aliased each other's browse ([#113])
 
