@@ -5,6 +5,7 @@
 //! protocol) — the operational secured session only exists once the handshake
 //! derives keys.
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 
 use matter_cert::{MatterTime, TrustedRoots};
@@ -159,6 +160,13 @@ async fn resolve_operational_service<D: Discovery>(
         .query(ServiceKind::Operational)
         .map_err(DriverError::Transport)?;
 
+    // Every operational instance name this search observed, so a failure can
+    // say whether the browse produced anything at all (see
+    // `discovery_failure_message`). Sorted + deduplicated by the set; capped at
+    // `SEEN_TRACK_CAP` so a large or hostile network cannot grow it without
+    // bound. Purely diagnostic — nothing below reads it to decide anything.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
     for _ in 0..attempts {
         for svc in discovery.poll_results(handle) {
             if svc.instance_name.eq_ignore_ascii_case(&target) {
@@ -167,13 +175,80 @@ async fn resolve_operational_service<D: Discovery>(
                     return Ok((SocketAddr::new(addr, svc.port), svc.peer_mrp_config()));
                 }
             }
+            if seen.len() < SEEN_TRACK_CAP {
+                seen.insert(svc.instance_name);
+            }
         }
         tokio::time::sleep(RESOLVE_POLL_INTERVAL).await;
     }
     discovery.stop_query(handle);
-    Err(DriverError::Discovery(format!(
-        "operational node {target} not found via mDNS"
+    let names: Vec<&str> = seen.iter().map(String::as_str).collect();
+    Err(DriverError::Discovery(discovery_failure_message(
+        &target, &names,
     )))
+}
+
+/// How many distinct instance names one resolve tracks for diagnostics.
+const SEEN_TRACK_CAP: usize = 64;
+
+/// How many observed instance names a discovery-failure message quotes.
+const SEEN_SAMPLE_MAX: usize = 5;
+
+/// Character bound on each quoted instance name. A Matter operational instance
+/// name is 33 characters (`<16 hex>-<16 hex>`); anything longer is a foreign
+/// record and is elided, so no advertisement on the network can make our error
+/// message unbounded.
+const SEEN_NAME_MAX: usize = 48;
+
+/// Build the "not found" text for a failed operational resolve, appending a
+/// bounded summary of the operational records that *were* seen.
+///
+/// The `not found via mDNS` substring is preserved verbatim — callers match on
+/// it. What follows is diagnosis: an empty `seen` means no `_matter._tcp`
+/// response reached this host at all (firewall, no multicast on the interface,
+/// wrong network), while a non-empty one means the browse works and this
+/// particular node was absent from it (device offline, different fabric, stale
+/// node id). `seen` is expected pre-sorted for a stable message.
+///
+/// Bounded on both axes ([`SEEN_SAMPLE_MAX`] names, [`SEEN_NAME_MAX`]
+/// characters each) so the message cannot grow with the size of the network.
+///
+/// A sibling of this lives in `matter_controller`'s actor, which produces the
+/// same error from the parked (steady-state) resolve path; the two are
+/// deliberately duplicated rather than shared through new public API.
+fn discovery_failure_message(target: &str, seen: &[&str]) -> String {
+    use std::fmt::Write as _;
+
+    let mut msg = format!("operational node {target} not found via mDNS");
+    if seen.is_empty() {
+        msg.push_str(
+            " (saw 0 operational mDNS records — no _matter._tcp response reached this host)",
+        );
+        return msg;
+    }
+    // Writing to a String is infallible; the Result exists only to satisfy the
+    // `fmt::Write` signature.
+    let _ = write!(
+        msg,
+        " (saw {} operational mDNS record(s), none matching: ",
+        seen.len()
+    );
+    for (i, name) in seen.iter().take(SEEN_SAMPLE_MAX).enumerate() {
+        if i > 0 {
+            msg.push_str(", ");
+        }
+        if name.chars().count() > SEEN_NAME_MAX {
+            msg.extend(name.chars().take(SEEN_NAME_MAX));
+            msg.push('…');
+        } else {
+            msg.push_str(name);
+        }
+    }
+    if seen.len() > SEEN_SAMPLE_MAX {
+        let _ = write!(msg, ", … {} more", seen.len() - SEEN_SAMPLE_MAX);
+    }
+    msg.push(')');
+    msg
 }
 
 // SecureChannel opcodes for the CASE handshake (Matter Core Spec §4.14.1).
@@ -338,6 +413,68 @@ pub async fn run_case_establish<T: AsyncDatagram>(
 #[allow(clippy::unwrap_used, clippy::expect_used)] // Test-code carve-out: see CLAUDE.md.
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_failure_message_distinguishes_nothing_seen_from_others_seen() {
+        let target = "F52AC107C954E38E-0000000000000002";
+
+        // Nothing at all reached this host.
+        let none = discovery_failure_message(target, &[]);
+        assert!(
+            none.contains("not found via mDNS"),
+            "substring is load-bearing"
+        );
+        assert!(
+            none.contains("saw 0 operational mDNS records"),
+            "got: {none}"
+        );
+
+        // Records arrived; none of them was the target.
+        let others = discovery_failure_message(
+            target,
+            &[
+                "F52AC107C954E38E-0000000000000003",
+                "F52AC107C954E38E-0000000000000004",
+            ],
+        );
+        assert!(
+            others.contains("not found via mDNS"),
+            "substring is load-bearing"
+        );
+        assert!(
+            others.contains(
+                "saw 2 operational mDNS record(s), none matching: \
+                             F52AC107C954E38E-0000000000000003, \
+                             F52AC107C954E38E-0000000000000004"
+            ),
+            "got: {others}"
+        );
+    }
+
+    #[test]
+    fn discovery_failure_message_is_bounded_in_names_and_length() {
+        // More names than the sample bound: only SEEN_SAMPLE_MAX are quoted and
+        // the remainder is summarised, so a big network cannot bloat the error.
+        let owned: Vec<String> = (0..20).map(|i| format!("NODE-{i:016X}")).collect();
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let msg = discovery_failure_message("T", &names);
+        assert!(
+            msg.contains("saw 20 operational mDNS record(s)"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("… 15 more"), "got: {msg}");
+        assert_eq!(msg.matches("NODE-").count(), SEEN_SAMPLE_MAX);
+
+        // An over-long (foreign) name is truncated, not quoted whole.
+        let long = "X".repeat(500);
+        let msg = discovery_failure_message("T", &[&long]);
+        assert!(msg.contains('…'), "over-long name must be elided: {msg}");
+        assert!(
+            msg.len() < 200,
+            "message must stay bounded, got {} chars",
+            msg.len()
+        );
+    }
 
     #[test]
     fn operational_instance_name_formats_16_16_uppercase_hex() {

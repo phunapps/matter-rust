@@ -4,6 +4,31 @@
 //! thread on creation) and translates between its [`ServiceEvent`]
 //! stream and our [`MatterService`] shape.
 //!
+//! # Diagnostics
+//!
+//! Discovery is the one part of the stack whose failures are invisible from the
+//! outside: a record that never arrives, and a record that arrives but is
+//! discarded during translation, look identical to a caller (a resolve that
+//! simply never completes). This adapter therefore traces every browse it
+//! starts, every record it surfaces, and — individually, with the offending
+//! value — every record it drops, under the `matter_transport::mdns` target:
+//!
+//! - `debug`: browse started, record surfaced, record dropped (no addresses,
+//!   unrecognised service type).
+//! - `warn`: record dropped because it is malformed (fullname with no instance
+//!   label) — that is a peer bug, not a normal condition.
+//! - `trace`: every non-`ServiceResolved` browse event, by variant. A
+//!   `ServiceFound` with no matching `ServiceResolved` means the resolver never
+//!   completed SRV/address resolution for that instance, which is otherwise
+//!   undiagnosable.
+//!
+//! Nothing is logged unless the caller installs a `tracing` subscriber; with
+//! none installed each site is a cheap dispatcher check.
+//!
+//! ```text
+//! RUST_LOG=matter_transport::mdns=trace,matter_controller::actor=debug
+//! ```
+//!
 //! [`ServiceEvent`]: mdns_sd::ServiceEvent
 
 use std::collections::HashMap;
@@ -13,6 +38,11 @@ use mdns_sd::{Receiver, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInf
 
 use crate::discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
 use crate::error::{Error, Result};
+
+/// `tracing` target for this adapter's diagnostics, so discovery can be turned
+/// up on its own (`RUST_LOG=matter_transport::mdns=trace`) without enabling
+/// every other target in the process.
+const LOG_TARGET: &str = "matter_transport::mdns";
 
 impl From<mdns_sd::Error> for Error {
     fn from(e: mdns_sd::Error) -> Self {
@@ -129,6 +159,12 @@ impl Discovery for MdnsSdDiscovery {
     fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle> {
         let receiver = self.daemon.browse(kind.service_type())?;
         let handle = self.allocate_handle();
+        tracing::debug!(
+            target: LOG_TARGET,
+            service_type = kind.service_type(),
+            handle = handle.0,
+            "mDNS browse started",
+        );
         self.queries.insert(
             handle,
             QueryState {
@@ -153,17 +189,70 @@ impl Discovery for MdnsSdDiscovery {
         let mut out = Vec::new();
         // Drain pending events without blocking.
         while let Ok(event) = state.receiver.try_recv() {
-            if let ServiceEvent::ServiceResolved(info) = event {
-                if let Some(svc) = service_info_to_matter(&info) {
-                    out.push(svc);
+            match event {
+                ServiceEvent::ServiceResolved(info) => {
+                    // `service_info_to_matter` logs its own drop reason, so a
+                    // `None` here is already accounted for in the trace.
+                    if let Some(svc) = service_info_to_matter(&info) {
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            instance = %svc.instance_name,
+                            kind = ?svc.kind,
+                            addresses = ?svc.addresses,
+                            port = svc.port,
+                            "mDNS record surfaced",
+                        );
+                        out.push(svc);
+                    }
                 }
+                // Other events (ServiceFound, ServiceRemoved,
+                // SearchStarted, SearchStopped, etc.) are intentionally
+                // discarded — poll_results only emits usable
+                // (address-resolved) services. Traced rather than dropped
+                // silently: a `ServiceFound` never followed by a
+                // `ServiceResolved` for the same instance is the signature of
+                // the resolver failing to complete SRV/address resolution, and
+                // is otherwise invisible.
+                other => trace_unused_event(&other),
             }
-            // Other events (ServiceFound, ServiceRemoved,
-            // SearchStarted, SearchStopped, etc.) are intentionally
-            // discarded — poll_results only emits usable
-            // (address-resolved) services.
         }
         out
+    }
+}
+
+/// Trace a browse event `poll_results` does not turn into a [`MatterService`],
+/// naming the variant and (where the variant carries one) the instance it
+/// concerns.
+///
+/// `ServiceEvent` is `#[non_exhaustive]`, so the catch-all arm is required and
+/// keeps a future variant visible as its `Debug` form rather than silent.
+fn trace_unused_event(event: &ServiceEvent) {
+    match event {
+        ServiceEvent::SearchStarted(ty) => {
+            tracing::trace!(target: LOG_TARGET, service_type = %ty, "mDNS event: SearchStarted");
+        }
+        ServiceEvent::ServiceFound(ty, fullname) => {
+            tracing::trace!(
+                target: LOG_TARGET,
+                service_type = %ty,
+                fullname = %fullname,
+                "mDNS event: ServiceFound (awaiting ServiceResolved)",
+            );
+        }
+        ServiceEvent::ServiceRemoved(ty, fullname) => {
+            tracing::trace!(
+                target: LOG_TARGET,
+                service_type = %ty,
+                fullname = %fullname,
+                "mDNS event: ServiceRemoved",
+            );
+        }
+        ServiceEvent::SearchStopped(ty) => {
+            tracing::trace!(target: LOG_TARGET, service_type = %ty, "mDNS event: SearchStopped");
+        }
+        other => {
+            tracing::trace!(target: LOG_TARGET, event = ?other, "mDNS event: unhandled variant");
+        }
     }
 }
 
@@ -178,6 +267,10 @@ impl Discovery for MdnsSdDiscovery {
 ///   `<instance>.<service-type>.local.`, so a dotless name is malformed —
 ///   we skip it rather than fabricate a service with an empty
 ///   `instance_name` (which would later fail to commission/resolve).
+///
+/// Every one of those drops is logged (see the module's Diagnostics section)
+/// with the value that caused it, because a dropped record is indistinguishable
+/// from an absent one at the caller.
 ///
 /// `ResolvedService` replaced `ServiceInfo` here in mdns-sd 0.20: the
 /// resolver now emits a plain data struct rather than the
@@ -194,12 +287,38 @@ fn service_info_to_matter(info: &ResolvedService) -> Option<MatterService> {
         .map(mdns_sd::ScopedIp::to_ip_addr)
         .collect();
     if addresses.is_empty() {
+        tracing::debug!(
+            target: LOG_TARGET,
+            fullname = %info.fullname,
+            "mDNS record dropped: resolved with no addresses",
+        );
         return None;
     }
-    let kind = kind_from_service_type(&info.ty_domain)?;
+    let Some(kind) = kind_from_service_type(&info.ty_domain) else {
+        // The compare is exact, so ANY unexpected `ty_domain` — including a
+        // record surfaced under a Matter subtype such as
+        // `_I<compressed-fabric>._sub._matter._tcp.local.` — dies here. Logging
+        // the actual value is what makes that distinguishable from "no record
+        // arrived at all".
+        tracing::debug!(
+            target: LOG_TARGET,
+            fullname = %info.fullname,
+            ty_domain = %info.ty_domain,
+            "mDNS record dropped: service type is not a recognised Matter type",
+        );
+        return None;
+    };
     // Skip malformed records whose fullname has no instance label (see the
     // helper). Surfacing as `None` is the adapter's "skip this record" path.
-    let instance_name = instance_name_from_fullname(&info.fullname)?;
+    let Some(instance_name) = instance_name_from_fullname(&info.fullname) else {
+        tracing::warn!(
+            target: LOG_TARGET,
+            fullname = %info.fullname,
+            ty_domain = %info.ty_domain,
+            "mDNS record dropped: malformed fullname (no leading instance label)",
+        );
+        return None;
+    };
     let txt = txt_properties_to_records(&info.txt_properties);
     Some(MatterService {
         instance_name,

@@ -22,6 +22,56 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### Diagnostics for operational-discovery failures ([#113])
+
+Issue [#113] reports reconnects to already-commissioned devices failing with
+
+```text
+device discovery failed: operational node <fabric>-<node> not found via mDNS
+```
+
+while `avahi-discover` shows the `_matter._tcp` records. It has not been
+reproduced here, and the discovery path offered nothing to reason with: an mDNS
+record could be discarded at four separate points without leaving any trace, and
+the caller saw a single opaque line 30 seconds later. **This release adds no fix
+and changes no discovery behaviour** — no retries, no timing changes, no new
+matching rules. It makes the path observable so the next report carries evidence.
+
+- **`matter-transport` now depends on `tracing`** and the `mdns-sd` adapter
+  instruments every decision it makes, under the `matter_transport::mdns`
+  target: the browse it starts, every record it surfaces (instance, addresses,
+  port), and — individually, with the offending value — every record it drops:
+  resolved with no addresses, unrecognised `ty_domain` (the compare is exact, so
+  the actual value is logged), and, at `warn`, a malformed fullname. Every
+  browse event that is *not* `ServiceResolved` is traced by variant at `trace`,
+  so a `ServiceFound` that never becomes a `ServiceResolved` — mdns-sd failing
+  to complete SRV/address resolution — is now visible instead of silent.
+  Nothing is emitted unless the application installs a subscriber.
+- **`matter-controller` traces the parked-resolve path** (`matter_controller::actor`):
+  which instance name each connect is waiting for, what the shared browse
+  actually drained each pass, records ignored for having no routable address,
+  and each resolve that matches or expires — so a target-vs-seen mismatch is
+  directly readable.
+- **The failure message now says what discovery did see.** Both producers of the
+  error (the controller's parked resolve and `matter-commissioning`'s inline
+  resolver) now append a bounded summary — either
+  `(saw 0 operational mDNS records — no _matter._tcp response reached this host)`
+  or `(saw 3 operational mDNS record(s), none matching: <up to five names>)`.
+  That distinguishes "nothing reached this host" (firewall, no multicast on the
+  interface, wrong network) from "the browse works and this node was not in it"
+  (device offline, different fabric, stale node id) without needing `RUST_LOG`.
+  The `not found via mDNS` substring is unchanged.
+
+Suggested filter when reporting a discovery problem:
+
+```text
+RUST_LOG=matter_transport::mdns=trace,matter_controller::actor=debug
+```
+
+[#113]: https://github.com/phunapps/matter-rust/issues/113
+
 ## 0.7.0
 
 A robustness-and-honesty release. The code change is one fix in the controller's

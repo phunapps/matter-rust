@@ -1313,6 +1313,66 @@ struct SeenRecord {
     seen: Instant,
 }
 
+/// How many observed instance names a discovery-failure message quotes.
+const SEEN_SAMPLE_MAX: usize = 5;
+
+/// Character bound on each quoted instance name. A Matter operational instance
+/// name is 33 characters (`<16 hex>-<16 hex>`); anything longer is a foreign
+/// record and is elided, so no advertisement on the network can make our error
+/// message unbounded.
+const SEEN_NAME_MAX: usize = 48;
+
+/// Build the "not found" text for a failed operational resolve, appending a
+/// bounded summary of the operational records that *were* seen.
+///
+/// The `not found via mDNS` substring is preserved verbatim — callers (and our
+/// own tests) match on it. What follows is diagnosis: an empty `seen` means no
+/// `_matter._tcp` response reached this host at all (firewall, no multicast on
+/// the interface, wrong network), while a non-empty one means the browse works
+/// and this particular node was absent from it (device offline, different
+/// fabric, stale node id). `seen` is expected pre-sorted for a stable message.
+///
+/// Bounded on both axes ([`SEEN_SAMPLE_MAX`] names, [`SEEN_NAME_MAX`]
+/// characters each) so the message cannot grow with the size of the network.
+///
+/// A sibling of this lives in `matter_commissioning::driver::case`, which
+/// produces the same error from the inline (commissioning-time) resolver; the
+/// two are deliberately duplicated rather than shared through new public API.
+fn discovery_failure_message(target: &str, seen: &[&str]) -> String {
+    use std::fmt::Write as _;
+
+    let mut msg = format!("operational node {target} not found via mDNS");
+    if seen.is_empty() {
+        msg.push_str(
+            " (saw 0 operational mDNS records — no _matter._tcp response reached this host)",
+        );
+        return msg;
+    }
+    // Writing to a String is infallible; the Result exists only to satisfy the
+    // `fmt::Write` signature.
+    let _ = write!(
+        msg,
+        " (saw {} operational mDNS record(s), none matching: ",
+        seen.len()
+    );
+    for (i, name) in seen.iter().take(SEEN_SAMPLE_MAX).enumerate() {
+        if i > 0 {
+            msg.push_str(", ");
+        }
+        if name.chars().count() > SEEN_NAME_MAX {
+            msg.extend(name.chars().take(SEEN_NAME_MAX));
+            msg.push('…');
+        } else {
+            msg.push_str(name);
+        }
+    }
+    if seen.len() > SEEN_SAMPLE_MAX {
+        let _ = write!(msg, ", … {} more", seen.len() - SEEN_SAMPLE_MAX);
+    }
+    msg.push(')');
+    msg
+}
+
 /// A unit of work parked behind an in-flight CASE connect. On connect
 /// success each is resumed on the freshly-established `(session, peer)`; on
 /// failure each is resolved/rescheduled per its kind ([`Actor::handle_connect_done`]
@@ -2928,6 +2988,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         };
         let target = matter_commissioning::driver::operational_instance_name(compressed, node_id);
+        tracing::debug!(
+            target: "matter_controller::actor",
+            node_id,
+            instance = %target,
+            browse_open = self.resolve_query.is_some(),
+            "connect: resolving operational record",
+        );
 
         if self.resolve_query.is_none() {
             match self.discovery.query(ServiceKind::Operational) {
@@ -2969,6 +3036,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if self.pending_resolves.is_empty() {
             self.next_resolve_poll = Instant::now() + RESOLVE_POLL_INTERVAL;
         }
+        tracing::debug!(
+            target: "matter_controller::actor",
+            node_id,
+            instance = %target,
+            deadline_secs = RESOLVE_DEADLINE.as_secs(),
+            "resolve parked on the mDNS poll arm",
+        );
         self.pending_resolves.push(PendingResolve {
             fabric_id,
             node_id,
@@ -2997,8 +3071,27 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     fn record_seen(&mut self, services: &[matter_transport::MatterService], now: Instant) {
         self.seen_records
             .retain(|_, r| now.saturating_duration_since(r.seen) < SEEN_RECORD_TTL);
+        if !services.is_empty() {
+            // Field expressions are only evaluated when the callsite is
+            // enabled, so the `collect` costs nothing without a subscriber.
+            tracing::debug!(
+                target: "matter_controller::actor",
+                count = services.len(),
+                instances = ?services
+                    .iter()
+                    .map(|s| s.instance_name.as_str())
+                    .collect::<Vec<_>>(),
+                "operational browse drained",
+            );
+        }
         for svc in services {
             let Some(addr) = matter_commissioning::driver::preferred_address(&svc.addresses) else {
+                tracing::debug!(
+                    target: "matter_controller::actor",
+                    instance = %svc.instance_name,
+                    addresses = ?svc.addresses,
+                    "operational record ignored: no routable address",
+                );
                 continue;
             };
             let key = Self::record_key(&svc.instance_name);
@@ -3082,6 +3175,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         if self.pending_resolves.is_empty() {
             return;
         }
+        tracing::debug!(
+            target: "matter_controller::actor",
+            parked = ?self
+                .pending_resolves
+                .iter()
+                .map(|pr| pr.target.as_str())
+                .collect::<Vec<_>>(),
+            cached = self.seen_records.len(),
+            "settling parked operational resolves",
+        );
         let services = self.discovery.poll_results(handle);
         let now = Instant::now();
         self.record_seen(&services, now);
@@ -3104,16 +3207,50 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.release_resolve_query_if_idle();
 
         for (node_id, target) in expired {
-            // Same error the inline resolve produced on budget exhaustion, so
-            // callers that match on the message text are unaffected.
+            // Same error the inline resolve produced on budget exhaustion (the
+            // `not found via mDNS` substring is unchanged, so callers matching
+            // on the message text are unaffected), plus a summary of what the
+            // browse DID surface — the difference between "nothing reached this
+            // host" and "records reached us, none of them this node" is the
+            // whole diagnosis, and it must be visible without `RUST_LOG`.
+            let message = self.resolve_failure_message(&target);
+            tracing::debug!(
+                target: "matter_controller::actor",
+                node_id,
+                instance = %target,
+                "resolve expired at its deadline",
+            );
             let err = Error::from(matter_commissioning::driver::DriverError::Discovery(
-                format!("operational node {target} not found via mDNS"),
+                message,
             ));
             self.fail_connect_waiters(node_id, &err);
         }
         for (fabric_id, node_id, peer, peer_mrp) in resolved {
+            tracing::debug!(
+                target: "matter_controller::actor",
+                node_id,
+                peer = %peer,
+                "resolve matched a cached operational record",
+            );
             self.finish_spawn_connect(fabric_id, node_id, peer, peer_mrp);
         }
+    }
+
+    /// The error text for a resolve that reached its deadline, enriched with
+    /// the operational records the shared browse has actually cached.
+    ///
+    /// `seen_records` is keyed by the LOWERCASED instance name (DNS-SD
+    /// comparison is case-insensitive), so the sampled names read lowercase
+    /// while `target` carries the spec's uppercase hex — read them
+    /// case-insensitively. The cache is bounded by [`SEEN_RECORD_CAP`] and aged
+    /// by [`SEEN_RECORD_TTL`], so the reported count is "recently seen", not a
+    /// lifetime total.
+    fn resolve_failure_message(&self, target: &str) -> String {
+        let mut names: Vec<&str> = self.seen_records.keys().map(String::as_str).collect();
+        // Sorted so repeated failures read identically instead of shuffling
+        // with HashMap iteration order.
+        names.sort_unstable();
+        discovery_failure_message(target, &names)
     }
 
     /// Spawn the CASE handshake to an already-resolved `peer` — the tail of a
@@ -5154,6 +5291,68 @@ mod tests {
         ServiceKind, SessionManager, SessionRole,
     };
     use std::time::Instant;
+
+    /// The expiry error must say what the browse DID see: "nothing arrived" and
+    /// "records arrived, none yours" are different faults with different fixes,
+    /// and the user gets only this one line without `RUST_LOG`.
+    #[test]
+    fn discovery_failure_message_distinguishes_nothing_seen_from_others_seen() {
+        let target = "F52AC107C954E38E-0000000000000002";
+
+        let none = discovery_failure_message(target, &[]);
+        assert!(
+            none.contains("not found via mDNS"),
+            "substring is load-bearing"
+        );
+        assert!(
+            none.contains("saw 0 operational mDNS records"),
+            "got: {none}"
+        );
+
+        let others = discovery_failure_message(
+            target,
+            &[
+                "f52ac107c954e38e-0000000000000003",
+                "f52ac107c954e38e-0000000000000004",
+            ],
+        );
+        assert!(
+            others.contains("not found via mDNS"),
+            "substring is load-bearing"
+        );
+        assert!(
+            others.contains(
+                "saw 2 operational mDNS record(s), none matching: \
+                             f52ac107c954e38e-0000000000000003, \
+                             f52ac107c954e38e-0000000000000004"
+            ),
+            "got: {others}"
+        );
+    }
+
+    /// Neither the number of records on the network nor the length of any one
+    /// instance name may make the error message unbounded.
+    #[test]
+    fn discovery_failure_message_is_bounded_in_names_and_length() {
+        let owned: Vec<String> = (0..20).map(|i| format!("node-{i:016x}")).collect();
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let msg = discovery_failure_message("T", &names);
+        assert!(
+            msg.contains("saw 20 operational mDNS record(s)"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("… 15 more"), "got: {msg}");
+        assert_eq!(msg.matches("node-").count(), SEEN_SAMPLE_MAX);
+
+        let long = "x".repeat(500);
+        let msg = discovery_failure_message("T", &[&long]);
+        assert!(msg.contains('…'), "over-long name must be elided: {msg}");
+        assert!(
+            msg.len() < 200,
+            "message must stay bounded, got {} chars",
+            msg.len()
+        );
+    }
 
     /// Build a `WriteResponseMessage` whose single `AttributeStatusIB` carries
     /// `status` for `(endpoint, cluster, attribute)` — the per-attribute form of
@@ -8322,6 +8521,10 @@ mod tests {
             msg.contains("not found via mDNS"),
             "expiry must report the mDNS-not-found error, got: {msg}"
         );
+        assert!(
+            msg.contains("operational mDNS record"),
+            "expiry must also report what discovery DID see, got: {msg}"
+        );
 
         device.await.unwrap();
     }
@@ -8416,6 +8619,10 @@ mod tests {
         assert!(
             msg.contains("not found via mDNS"),
             "expiry must report the mDNS-not-found error, got: {msg}"
+        );
+        assert!(
+            msg.contains("operational mDNS record"),
+            "expiry must also report what discovery DID see, got: {msg}"
         );
 
         let flood = sent.load(std::sync::atomic::Ordering::Relaxed);
