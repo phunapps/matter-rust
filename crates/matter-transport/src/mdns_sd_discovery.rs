@@ -23,6 +23,14 @@
 //! `stop_query` tears down the browse the first is still waiting on, so the
 //! first never resolves again for the life of the process (issue #113).
 //!
+//! Sharing the browse means a second handle never calls `browse`, so it never
+//! gets the cache replay a real `browse` performs — and mdns-sd emits a
+//! `ServiceResolved` only when a record *changes*, so a stable service that
+//! resolved before the handle attached would produce no event for the life of
+//! the browse. The adapter therefore keeps its own replay cache of the last
+//! record surfaced per instance name and seeds each newly attached handle from
+//! it, so attaching late is equivalent to having been attached all along.
+//!
 //! # Diagnostics
 //!
 //! Discovery is the one part of the stack whose failures are invisible from the
@@ -86,8 +94,29 @@ struct BrowseState {
     /// A buffer grows until its handle polls or is stopped — the same
     /// accumulation the per-handle `Receiver` used to provide, so a caller
     /// that polls in a loop (every caller in this workspace) sees no
-    /// difference.
+    /// difference. What accumulates is *fan-out events*, and mdns-sd emits a
+    /// `ServiceResolved` only when a record actually changes (`DnsCache::
+    /// add_or_update` reports `updated == false` for an unchanged record and
+    /// never pushes it into `changes`), so a never-polled handle grows with
+    /// record churn on the link, not with elapsed time.
     pending: HashMap<QueryHandle, Vec<MatterService>>,
+    /// The last record surfaced for each instance name, kept for the life of
+    /// the browse so a handle attached *after* a record was surfaced can be
+    /// seeded with it.
+    ///
+    /// This is our own replay cache and it exists because mdns-sd gives us
+    /// none: skipping `daemon.browse` for a type we already browse (which the
+    /// refcount requires — a second `browse` would orphan the first receiver)
+    /// also skips the cache replay a fresh `browse` performs, and the daemon
+    /// will not re-announce a record that has not changed. Without this map a
+    /// late-attaching handle sees **nothing** for a stable, already-resolved
+    /// service — a starvation the refcount would otherwise have introduced.
+    ///
+    /// Keyed by instance name, so it holds at most one entry per distinct
+    /// Matter instance on the link no matter how often that instance
+    /// re-announces: the replay handed to a new handle is bounded by the size
+    /// of the network, not by how long the browse has been open.
+    surfaced: HashMap<String, MatterService>,
 }
 
 /// Default mDNS discovery adapter for Matter, backed by `mdns-sd`.
@@ -193,7 +222,7 @@ impl MdnsSdDiscovery {
     #[cfg(test)]
     fn deliver_for_test(&mut self, kind: ServiceKind, event: ServiceEvent) {
         if let Some(browse) = self.browses.get_mut(kind.service_type()) {
-            fan_out_event(&mut browse.pending, event);
+            fan_out_event(&mut browse.pending, &mut browse.surfaced, event);
         }
     }
 }
@@ -248,6 +277,14 @@ impl Discovery for MdnsSdDiscovery {
     /// *replace* the daemon's querier for it and orphan the receiver every
     /// existing handle of that type reads from (module docs, issue #113), so
     /// the reuse here is a correctness requirement, not an optimisation.
+    ///
+    /// Reusing the browse costs the new handle mdns-sd's cache replay — that
+    /// only happens on a real `browse` call — and the daemon will not re-emit a
+    /// record that has not changed, so a handle attaching to a stable,
+    /// already-resolved service would otherwise wait out its whole budget and
+    /// see nothing. It is therefore seeded from this adapter's own record of
+    /// the last service surfaced per instance name (`BrowseState::surfaced`),
+    /// which restores the replay without a second browse.
     fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle> {
         let service_type = kind.service_type();
         // Open the browse BEFORE allocating a handle so a daemon failure
@@ -274,6 +311,7 @@ impl Discovery for MdnsSdDiscovery {
                 BrowseState {
                     receiver,
                     pending: HashMap::new(),
+                    surfaced: HashMap::new(),
                 },
             );
         }
@@ -286,7 +324,13 @@ impl Discovery for MdnsSdDiscovery {
                 "internal: no browse state for {service_type} after opening it"
             )));
         };
-        browse.pending.insert(handle, Vec::new());
+        // Seed with what this browse has already surfaced. Empty for a browse
+        // opened just above; for a reused one this is the replay mdns-sd will
+        // not give us (see the method docs). Each record is handed to this
+        // handle exactly once, as if it had been attached all along.
+        let replayed: Vec<MatterService> = browse.surfaced.values().cloned().collect();
+        let replayed_count = replayed.len();
+        browse.pending.insert(handle, replayed);
         let handles = browse.pending.len();
         self.handle_types.insert(handle, service_type);
         tracing::debug!(
@@ -294,6 +338,7 @@ impl Discovery for MdnsSdDiscovery {
             service_type,
             handle = handle.0,
             handles,
+            replayed = replayed_count,
             "mDNS browse handle attached",
         );
         Ok(handle)
@@ -359,12 +404,16 @@ impl Discovery for MdnsSdDiscovery {
         };
         // Destructure so the receiver and the per-handle buffers are borrowed
         // as the disjoint fields they are.
-        let BrowseState { receiver, pending } = browse;
+        let BrowseState {
+            receiver,
+            pending,
+            surfaced,
+        } = browse;
         // Drain pending events without blocking, fanning each out to every
         // handle attached to this browse — including handles that are not the
         // one polling, which is the whole point (issue #113).
         while let Ok(event) = receiver.try_recv() {
-            fan_out_event(pending, event);
+            fan_out_event(pending, surfaced, event);
         }
         match pending.get_mut(&handle) {
             Some(buffer) => std::mem::take(buffer),
@@ -376,13 +425,18 @@ impl Discovery for MdnsSdDiscovery {
 }
 
 /// Translate one browse event and append the resulting record to the buffer of
-/// **every** handle attached to that browse.
+/// **every** handle attached to that browse, recording it in `surfaced` so a
+/// handle attached later can be seeded with it ([`Discovery::query`]).
 ///
 /// Split out of [`Discovery::poll_results`] so the fan-out has one
 /// implementation, shared with the test seam that delivers synthetic events
 /// (mdns-sd's browse `Sender` lives inside the daemon, so an event cannot
 /// otherwise be injected without a live multicast network).
-fn fan_out_event(pending: &mut HashMap<QueryHandle, Vec<MatterService>>, event: ServiceEvent) {
+fn fan_out_event(
+    pending: &mut HashMap<QueryHandle, Vec<MatterService>>,
+    surfaced: &mut HashMap<String, MatterService>,
+    event: ServiceEvent,
+) {
     match event {
         ServiceEvent::ServiceResolved(info) => {
             // `service_info_to_matter` logs its own drop reason, so a
@@ -400,6 +454,10 @@ fn fan_out_event(pending: &mut HashMap<QueryHandle, Vec<MatterService>>, event: 
                 for buffer in pending.values_mut() {
                     buffer.push(svc.clone());
                 }
+                // Latest wins: a re-announce with new addresses replaces the
+                // entry rather than adding one, which is what keeps this map
+                // bounded by the number of instances on the link.
+                surfaced.insert(svc.instance_name.clone(), svc);
             }
         }
         // Other events (ServiceFound, ServiceRemoved, SearchStarted,
@@ -740,6 +798,74 @@ mod tests {
 
         d.stop_query(a);
         d.stop_query(b);
+    }
+
+    #[test]
+    fn a_handle_attached_after_a_record_was_surfaced_still_receives_it() {
+        // THE STARVATION THE REFCOUNT WOULD HAVE INTRODUCED: the second handle
+        // deliberately skips `daemon.browse`, so it gets no cache replay — and
+        // mdns-sd re-emits a record only when it CHANGES. A stable service that
+        // resolved before this handle attached would therefore never be
+        // surfaced to it again, and a resolve for it would burn its whole
+        // budget and fail with "not found via mDNS" while the record sits in
+        // the daemon's cache. The `surfaced` replay cache is what prevents it.
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let early = d.query(ServiceKind::Operational).unwrap();
+
+        // A record arrives and is consumed by the only handle open at the time.
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-already-resolved", ServiceKind::Operational),
+        );
+        assert!(contains(&d.poll_results(early), "113-already-resolved"));
+
+        // A late handle attaches to the SAME browse. No further event will ever
+        // arrive for this stable record, so everything it can learn must come
+        // from the adapter's own memory.
+        let late = d.query(ServiceKind::Operational).unwrap();
+        assert_eq!(
+            d.browse_calls.get(ServiceKind::Operational.service_type()),
+            Some(&1),
+            "the late handle must still reuse the shared browse",
+        );
+        let replayed = d.poll_results(late);
+        assert!(
+            contains(&replayed, "113-already-resolved"),
+            "a handle attaching after the record was surfaced must be seeded \
+             with it — without the replay it sees nothing for the life of the \
+             browse",
+        );
+
+        // Exactly once, as for any other handle: the replay is a delivery, not
+        // a permanent duplicate source.
+        assert!(!contains(&d.poll_results(late), "113-already-resolved"));
+
+        // Replay collapses per instance: a re-announce updates the cached entry
+        // rather than appending, so the next handle to attach is seeded with one
+        // copy however often the record was seen.
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-already-resolved", ServiceKind::Operational),
+        );
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-already-resolved", ServiceKind::Operational),
+        );
+        let _ = d.poll_results(early);
+        let later = d.query(ServiceKind::Operational).unwrap();
+        let seeded = d.poll_results(later);
+        assert_eq!(
+            seeded
+                .iter()
+                .filter(|s| s.instance_name == "113-already-resolved")
+                .count(),
+            1,
+            "the replay holds one entry per instance, not one per announcement",
+        );
+
+        d.stop_query(early);
+        d.stop_query(late);
+        d.stop_query(later);
     }
 
     #[test]

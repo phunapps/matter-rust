@@ -24,29 +24,44 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased
 
-### Fixed — mDNS discovery went permanently deaf after a second query ([#113])
+### Fixed — concurrent mDNS queries aliased each other's browse ([#113])
 
-**Symptom:** after the first reconnect attempt, every later attempt to reach an
-already-commissioned device failed with
+**What this is, precisely:** a **verified aliasing bug in our `mdns-sd`
+adapter**, found while investigating [#113] and fixed below. Its behaviour is
+consistent with what the issue reports. But **the reporter's failure has not
+been reproduced here**, so it is *not* confirmed to be the same fault, and this
+release does not claim to close #113. If you hit the reported symptom on a
+version with this fix, please say so on the issue — with the trace filter at the
+end of this section, the next report can be diagnosed instead of guessed at.
+
+**Reported symptom ([#113]):** after the first reconnect attempt, every later
+attempt to reach an already-commissioned device fails with
 
 ```text
 device discovery failed: operational node <fabric>-<node> not found via mDNS
 ```
 
-for the rest of the process — while `avahi-browse` showed the `_matter._tcp`
-records the whole time. Initial commissioning worked; only subsequent operational
-resolves were affected, and only a restart cleared it.
+for the rest of the process — while `avahi-browse` shows the `_matter._tcp`
+records the whole time. Initial commissioning works; only subsequent operational
+resolves are affected, and only a restart clears it.
 
-**Cause:** `MdnsSdDiscovery` handed out a `QueryHandle` per `query()` call and
-kept a `Receiver` per handle, as though each handle were an independent browse.
-`mdns-sd` does not work that way: its queriers are keyed by service type, so a
-second `browse("_matter._tcp.local.")` *replaces* the first handle's sender —
-that handle never receives another event — and `stop_browse` removes the shared
-querier (and drops the daemon's cached records) for the whole type, whichever
-handle asked. The controller holds one long-lived operational browse for its
-parked resolves; any second operational resolve on the same `Discovery` (the
-connect fallback, or a commissioning driver sharing the object) orphaned it and
-then tore it down, and nothing ever re-opened it.
+**The bug we found:** `MdnsSdDiscovery` handed out a `QueryHandle` per `query()`
+call and kept a `Receiver` per handle, as though each handle were an independent
+browse. `mdns-sd` does not work that way: its queriers are keyed by service
+type, so a second `browse("_matter._tcp.local.")` *replaces* the first handle's
+sender — that handle never receives another event — and `stop_browse` removes
+the shared querier (and drops the daemon's cached records) for the whole type,
+whichever handle asked.
+
+The controller opens its shared operational browse when a resolve is parked and
+drops it again as soon as none is (`release_resolve_query_if_idle`), so the
+exposure is not continuous: it is the window in which a resolve is outstanding,
+at most the ~30 s resolve budget. Within that window, a second operational
+resolve on the same `Discovery` (the connect fallback, or a commissioning driver
+sharing the object) orphaned the parked resolve's receiver and then tore the
+browse down. That is a narrow window, which is worth weighing when judging how
+likely this is to be *the* cause of #113 rather than *a* real bug found on the
+way.
 
 **Fix:** the adapter now models what the daemon actually provides — **one browse
 per service type, reference-counted across handles**. `query()` reuses the
@@ -57,12 +72,26 @@ exactly once); and `stop_query()` calls `stop_browse` only when the type's last
 handle is released. No API change — `Discovery`, `QueryHandle` and `with_daemon`
 are untouched.
 
-Two consequences are now documented rather than surprising: releasing the last
+Reusing a browse means the new handle never gets the cache replay a real
+`browse` performs, and `mdns-sd` re-emits a record only when it *changes* — so
+on its own, the reuse would starve a handle that attaches after a stable service
+has already resolved (it would poll its entire budget and see nothing that
+`avahi-browse` shows). The adapter therefore keeps its own record of the last
+service surfaced per instance name and seeds each newly attached handle from it.
+That restores replay from the adapter's own memory, keeps "each handle receives
+a given record exactly once", and is bounded by the number of distinct instances
+on the link rather than by how long the browse has been open.
+
+Three consequences are now documented rather than surprising: releasing the last
 handle for a type discards mdns-sd's cached records for it (`stop_browse` clears
-the cache), so the next query starts cold; and the refcount is **per
+the cache), so the next query starts cold; the refcount is **per
 `MdnsSdDiscovery` instance**, so two adapters sharing one `ServiceDaemon` and
 browsing the same service type still clobber each other — share the adapter, not
-just the daemon (see `MdnsSdDiscovery::with_daemon`).
+just the daemon (see `MdnsSdDiscovery::with_daemon`); and a leaked `QueryHandle`
+now holds the shared browse open as well as buffering records, so pair every
+`query` with a `stop_query` on all paths — the realistic leak is a dropped or
+cancelled future that never reaches its `stop_query`. Both points are now on the
+`Discovery::query` / `Discovery::stop_query` rustdoc.
 
 ### Diagnostics for operational-discovery failures ([#113])
 
@@ -78,8 +107,9 @@ record could be discarded at four separate points without leaving any trace, and
 the caller saw a single opaque line 30 seconds later. **The instrumentation
 below adds no fix and changes no discovery behaviour** — no retries, no timing
 changes, no new matching rules; it landed first, to make the path observable.
-(The root cause was then found by reading `mdns-sd`'s querier bookkeeping — see
-the fix above.)
+(Reading `mdns-sd`'s querier bookkeeping then turned up a real aliasing bug of
+our own — fixed above — but, not having reproduced the report, we cannot say it
+was *the* cause.)
 
 - **`matter-transport` now depends on `tracing`** and the `mdns-sd` adapter
   instruments every decision it makes, under the `matter_transport::mdns`
@@ -99,12 +129,18 @@ the fix above.)
 - **The failure message now says what discovery did see.** Both producers of the
   error (the controller's parked resolve and `matter-commissioning`'s inline
   resolver) now append a bounded summary — either
-  `(saw 0 operational mDNS records — no _matter._tcp response reached this host)`
-  or `(saw 3 operational mDNS record(s), none matching: <up to five names>)`.
-  That distinguishes "nothing reached this host" (firewall, no multicast on the
-  interface, wrong network) from "the browse works and this node was not in it"
-  (device offline, different fabric, stale node id) without needing `RUST_LOG`.
-  The `not found via mDNS` substring is unchanged.
+  `(saw 0 operational mDNS records — either no _matter._tcp response reached this
+  host, or responses arrived and were discarded before being counted;
+  RUST_LOG=matter_transport::mdns=debug distinguishes the two)` or
+  `(saw 3 operational mDNS record(s), none matching: <up to five names>)`. A
+  non-empty count says the browse works and this node was not in it (device
+  offline, different fabric, stale node id). A zero is deliberately the weaker
+  claim: records dropped during translation — an unrecognised `ty_domain`, no
+  routable address — are never counted, so zero does not by itself convict the
+  network, and the two producers do not even count the same population (the
+  controller counts records that survived address selection; the commissioning
+  resolver counts every record it polled). The `not found via mDNS` substring is
+  unchanged.
 
 Suggested filter when reporting a discovery problem:
 

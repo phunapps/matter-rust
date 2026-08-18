@@ -204,25 +204,41 @@ const SEEN_NAME_MAX: usize = 48;
 /// bounded summary of the operational records that *were* seen.
 ///
 /// The `not found via mDNS` substring is preserved verbatim — callers match on
-/// it. What follows is diagnosis: an empty `seen` means no `_matter._tcp`
-/// response reached this host at all (firewall, no multicast on the interface,
-/// wrong network), while a non-empty one means the browse works and this
-/// particular node was absent from it (device offline, different fabric, stale
-/// node id). `seen` is expected pre-sorted for a stable message.
+/// it. What follows is diagnosis: a non-empty `seen` means the browse works and
+/// this particular node was absent from it (device offline, different fabric,
+/// stale node id). `seen` is expected pre-sorted for a stable message.
+///
+/// An **empty** `seen` is deliberately worded as the weaker claim it is. It
+/// means nothing was *counted*, which covers both "no `_matter._tcp` response
+/// reached this host" (firewall, no multicast on the interface, wrong network)
+/// and "responses arrived and were discarded upstream of the count" — the mDNS
+/// adapter drops a record whose `ty_domain` it does not recognise (a Matter
+/// `_I<fabric>._sub._matter._tcp` subtype, say) or that resolved with no
+/// addresses, and nothing it drops ever reaches this function. The
+/// record-by-record trace under `matter_transport::mdns` is what separates the
+/// two.
 ///
 /// Bounded on both axes ([`SEEN_SAMPLE_MAX`] names, [`SEEN_NAME_MAX`]
 /// characters each) so the message cannot grow with the size of the network.
 ///
 /// A sibling of this lives in `matter_controller`'s actor, which produces the
 /// same error from the parked (steady-state) resolve path; the two are
-/// deliberately duplicated rather than shared through new public API.
+/// deliberately duplicated rather than shared through new public API. The
+/// *text* they produce is identical, but the populations they count are **not**:
+/// this resolver counts every record its poll returned, while the actor counts
+/// only those that survived address selection into its `seen_records` cache. So
+/// the two counts are not comparable, and neither is a measure of what arrived
+/// on the wire.
 fn discovery_failure_message(target: &str, seen: &[&str]) -> String {
     use std::fmt::Write as _;
 
     let mut msg = format!("operational node {target} not found via mDNS");
     if seen.is_empty() {
         msg.push_str(
-            " (saw 0 operational mDNS records — no _matter._tcp response reached this host)",
+            " (saw 0 operational mDNS records — either no _matter._tcp response \
+             reached this host, or responses arrived and were discarded before \
+             being counted; RUST_LOG=matter_transport::mdns=debug distinguishes \
+             the two)",
         );
         return msg;
     }

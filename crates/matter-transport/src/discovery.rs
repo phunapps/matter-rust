@@ -179,6 +179,24 @@ pub trait Discovery {
     /// caller passes to [`Self::poll_results`] to drain matches as they
     /// arrive.
     ///
+    /// # Every handle must be polled and stopped
+    ///
+    /// Discovered records are buffered per handle until that handle drains them
+    /// with [`Self::poll_results`], so a handle that is registered and never
+    /// polled accumulates records for as long as it lives. An implementation
+    /// may additionally share one underlying browse between the handles of a
+    /// kind and reference-count it — the default `mdns-sd` adapter does — in
+    /// which case a leaked handle also holds that shared browse open, and with
+    /// it whatever the OS-level browse costs (a socket, a background thread,
+    /// periodic multicast queries).
+    ///
+    /// The realistic way to leak one is a dropped or cancelled future that
+    /// never reaches its [`Self::stop_query`] — a `select!` branch that loses,
+    /// a timeout that fires around an `await`, a task aborted mid-resolve. Pair
+    /// every `query` with a `stop_query` on *all* paths (a guard type, or a
+    /// `stop_query` in the caller that owns the handle rather than in the
+    /// future that uses it).
+    ///
     /// # Errors
     #[cfg_attr(
         feature = "mdns-sd",
@@ -192,6 +210,11 @@ pub trait Discovery {
 
     /// Stop an in-progress query. Idempotent — calling on a stopped or
     /// unknown handle is a no-op.
+    ///
+    /// This is what releases the handle's buffered records and, where the
+    /// implementation shares one browse across the handles of a kind, its share
+    /// of that browse (see [`Self::query`] on leaking a handle). Not optional
+    /// housekeeping: a handle only stops costing anything once it is stopped.
     fn stop_query(&mut self, handle: QueryHandle);
 
     /// Drain any services discovered for `handle` since the last call.

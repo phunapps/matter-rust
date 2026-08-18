@@ -1326,11 +1326,19 @@ const SEEN_NAME_MAX: usize = 48;
 /// bounded summary of the operational records that *were* seen.
 ///
 /// The `not found via mDNS` substring is preserved verbatim — callers (and our
-/// own tests) match on it. What follows is diagnosis: an empty `seen` means no
-/// `_matter._tcp` response reached this host at all (firewall, no multicast on
-/// the interface, wrong network), while a non-empty one means the browse works
-/// and this particular node was absent from it (device offline, different
-/// fabric, stale node id). `seen` is expected pre-sorted for a stable message.
+/// own tests) match on it. What follows is diagnosis: a non-empty `seen` means
+/// the browse works and this particular node was absent from it (device
+/// offline, different fabric, stale node id). `seen` is expected pre-sorted for
+/// a stable message.
+///
+/// An **empty** `seen` is deliberately worded as the weaker claim it is. It
+/// means nothing was *counted*, which covers both "no `_matter._tcp` response
+/// reached this host" (firewall, no multicast on the interface, wrong network)
+/// and "responses arrived and were discarded upstream of the count" — the mDNS
+/// adapter drops a record whose `ty_domain` it does not recognise (a Matter
+/// `_I<fabric>._sub._matter._tcp` subtype, say) or that resolved with no
+/// addresses, and this caller's own filters drop more. The record-by-record
+/// trace under `matter_transport::mdns` is what separates the two.
 ///
 /// Bounded on both axes ([`SEEN_SAMPLE_MAX`] names, [`SEEN_NAME_MAX`]
 /// characters each) so the message cannot grow with the size of the network.
@@ -1338,13 +1346,22 @@ const SEEN_NAME_MAX: usize = 48;
 /// A sibling of this lives in `matter_commissioning::driver::case`, which
 /// produces the same error from the inline (commissioning-time) resolver; the
 /// two are deliberately duplicated rather than shared through new public API.
+/// The *text* they produce is identical, but the populations they count are
+/// **not**: this one is fed from the actor's `seen_records`, which holds only
+/// records that survived address selection, while the commissioning resolver
+/// counts every record its poll returned. Neither sees a record the adapter
+/// discarded during translation. So the counts are not comparable across the
+/// two messages, and neither is a measure of what arrived on the wire.
 fn discovery_failure_message(target: &str, seen: &[&str]) -> String {
     use std::fmt::Write as _;
 
     let mut msg = format!("operational node {target} not found via mDNS");
     if seen.is_empty() {
         msg.push_str(
-            " (saw 0 operational mDNS records — no _matter._tcp response reached this host)",
+            " (saw 0 operational mDNS records — either no _matter._tcp response \
+             reached this host, or responses arrived and were discarded before \
+             being counted; RUST_LOG=matter_transport::mdns=debug distinguishes \
+             the two)",
         );
         return msg;
     }
@@ -3245,6 +3262,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// case-insensitively. The cache is bounded by [`SEEN_RECORD_CAP`] and aged
     /// by [`SEEN_RECORD_TTL`], so the reported count is "recently seen", not a
     /// lifetime total.
+    ///
+    /// It also holds only records that made it through
+    /// [`record_seen`](Self::record_seen) — i.e. that the adapter recognised
+    /// *and* that carried a routable address. A reported count of zero
+    /// therefore does not prove nothing arrived, which is why the message says
+    /// so rather than blaming the network.
     fn resolve_failure_message(&self, target: &str) -> String {
         let mut names: Vec<&str> = self.seen_records.keys().map(String::as_str).collect();
         // Sorted so repeated failures read identically instead of shuffling

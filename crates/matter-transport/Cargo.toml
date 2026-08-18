@@ -32,6 +32,17 @@ mdns-sd = { version = "0.20", default-features = false, optional = true }
 # no subscriber is installed, so a caller that never sets one pays effectively
 # nothing — and a caller debugging discovery gets the record-by-record trace the
 # mDNS adapter emits (target `matter_transport::mdns`).
+#
+# DELIBERATELY UNGATED, unlike `matter-commissioning`, which puts `tracing`
+# behind a feature. Two reasons. (1) The value here is a bug report from someone
+# who did not build with a special feature: discovery failures are reported by
+# adopters, not reproduced by us (issue #113), and a diagnostic that has to be
+# recompiled in is a diagnostic that is not there when it is needed. (2) It
+# costs the sans-IO core nothing: `just embedded` builds this crate with
+# `--no-default-features`, which drops `tokio`/`mdns-sd` but not `std` — this
+# crate is not `no_std` — and `tracing` with default features off is a
+# leaf-level dependency with no runtime and no allocation on the disabled path.
+# Revisit if `no_std` is ever taken up (ADR 0002 defers it): then gate it.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
