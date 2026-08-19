@@ -22,6 +22,42 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### `matter-controller`
+
+#### Added
+
+- **`MatterControllerBuilder::discovery(impl Discovery + Send + 'static)`** —
+  supply your own mDNS stack instead of the built-in one. Requested on [#113],
+  where the reporter asked whether the controller should defer to Avahi or the
+  OS-native responder rather than run its own `mdns-sd` stack alongside them.
+
+  `matter_transport::Discovery` had been a public trait since `matter-transport`
+  `0.1.0`, but nothing on `MatterController` accepted an implementation of it:
+  the builder always constructed `MdnsSdDiscovery` internally, and the
+  component-injection constructors were `pub(crate)`. The abstraction existed
+  and could not be reached. This opens that seam — plug in an Avahi/Bonjour
+  backend, a platform resolver, or a deterministic test double without waiting
+  on us.
+
+  **The default is unchanged.** `MatterController::builder(store).build()` still
+  starts `MdnsSdDiscovery` exactly as before, and pure-Rust `mdns-sd` remains
+  the default backend. The change is purely additive: `MatterControllerBuilder`
+  stays a plain non-generic struct (it stores the deferred *spawn step*, not an
+  erased discovery), so no existing caller changes and no type inference
+  regresses.
+
+  **Scope.** The supplied discovery backs the controller actor — every client
+  resolve, commission and resubscribe. It does **not** back the self-hosted
+  server entry points (`serve_ota`, `listen_for_checkin_once`,
+  `serve_provider_once`), which run off the actor on their own sockets and each
+  need an exclusively-owned `Discovery`; they continue to construct their own
+  `MdnsSdDiscovery` to publish and withdraw one operational record. The builder
+  rustdoc says so explicitly. Closing that gap means accepting a discovery
+  *factory* rather than a value — worth doing on demand, so say so on [#113] if
+  it affects you.
+
 ## 0.7.1
 
 A discovery-reliability release, prompted by [#113]. It fixes a real aliasing
