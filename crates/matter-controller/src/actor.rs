@@ -281,6 +281,39 @@ const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30)
 #[cfg(test)]
 const RESOLVE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long the compressed-fabric subtype browse runs **alone** before the
+/// base-type `_matter._tcp` browse is opened behind it as a fallback.
+///
+/// The two must not run concurrently from the start. The underlying defect
+/// (keepsimple1/mdns-sd#493) is that the resolver completes per-instance
+/// SRV/address resolution roughly one instance per query cycle, from a queue
+/// shared by every open browse. The subtype helps *only* because it limits how
+/// many instances enter that queue — 3 instead of 18 on the reporter's network.
+/// Opening the base type alongside it re-discovers all 18 and puts our nodes
+/// back at the end of the same slow queue, which is exactly what the first
+/// attempt at this fix did: the reporter's log shows the subtype browse
+/// surfacing *nothing* in 30 s, every record credited to the base browse.
+///
+/// Two seconds is chosen from both ends: long enough that a healthy subtype
+/// responder always answers first (~266 ms on the reporter's network, ~250 ms on
+/// ours — 2 s is ~8x that, and covers a query that has to be retransmitted
+/// once), and short enough to be noise against the [`RESOLVE_DEADLINE`] budget,
+/// leaving ~28 s of the 30 s for a responder that genuinely publishes no subtype
+/// PTR.
+///
+/// Matches `SUBTYPE_ONLY_WINDOW` in `matter_commissioning::driver`, which
+/// applies the same policy to the commissioning-time resolve.
+#[cfg(not(test))]
+const SUBTYPE_ONLY_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+/// Shortened under `cfg(test)` for the same reason [`RESOLVE_DEADLINE`] is, and
+/// in the same proportion: the in-crate tests run against a 2 s deadline, so a
+/// 2 s window would leave a fallback no room to be observed. Still several
+/// [`RESOLVE_POLL_INTERVAL`] ticks, so "opened late, not immediately" remains
+/// the property under test. Only in-crate unit tests see this; integration tests
+/// link the lib without `cfg(test)` and get the real 2 s.
+#[cfg(test)]
+const SUBTYPE_ONLY_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// How long a drained operational record stays usable in `seen_records`.
 ///
 /// Records must be cached at all because [`Discovery::poll_results`] CONSUMES
@@ -1158,8 +1191,10 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// already-passed value here would make the loop's overdue-timer guard fire
     /// on every pass — the very spin this whole mechanism exists to prevent).
     recv_backoff_until: Option<Instant>,
-    /// The ONE `_matter._tcp` browse shared by every parked resolve, opened when
-    /// the first entry parks and stopped when the last one leaves.
+    /// The ONE `_matter._tcp` browse shared by every parked resolve — the
+    /// **delayed fallback**, opened only once the subtype browse has run for
+    /// [`SUBTYPE_ONLY_WINDOW`] without settling anything (see
+    /// [`Self::resolve_base_after`]), and stopped when the last entry leaves.
     ///
     /// It must be shared: [`Discovery::stop_query`] stops the daemon-side browse
     /// for the whole [`ServiceKind`], so per-resolve handles would cancel each
@@ -1168,19 +1203,34 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     resolve_query: Option<QueryHandle>,
     /// The ONE compressed-fabric **subtype** browse
     /// (`_I<compressed-fabric-id>._sub._matter._tcp`,
-    /// [`Discovery::query_operational_fabric`]) shared by every parked resolve,
-    /// opened and released alongside [`Self::resolve_query`].
+    /// [`Discovery::query_operational_fabric`]) shared by every parked resolve.
+    /// This is the browse a resolve normally opens and settles on; it is opened
+    /// the moment the first entry parks and released with [`Self::resolve_query`].
     ///
-    /// Both are held because the subtype is the fast, reliable one (it narrows
-    /// the browse to our own fabric, so a resolver that works through instances
-    /// with exponential backoff reaches our node at once — issue #113) while the
-    /// base type is the never-worse fallback for a responder that publishes no
-    /// subtype PTR. Whichever surfaces the record first settles the resolve.
+    /// The subtype is the fast, reliable one: it narrows the browse to our own
+    /// fabric, so a resolver that completes SRV/address resolution one discovered
+    /// instance per query cycle (mdns-sd does) reaches our node at once instead
+    /// of possibly never — issue #113. That narrowing is the entire fix, which is
+    /// why the base type is NOT opened next to it; see [`SUBTYPE_ONLY_WINDOW`].
     ///
     /// May equal `resolve_query` when the injected [`Discovery`] does not
     /// override `query_operational_fabric` (the trait default opens a base-type
     /// browse); the poll path deduplicates equal handles.
     resolve_query_fabric: Option<QueryHandle>,
+    /// When the base-type fallback browse becomes due, while it is still to be
+    /// opened. `Some(deadline)` means: a subtype browse is running, no parked
+    /// resolve has settled off it yet, and [`Self::drive_pending_resolves`] must
+    /// open [`Self::resolve_query`] once `Instant::now()` reaches `deadline`.
+    ///
+    /// `None` means there is nothing to do — either no resolve is parked, or the
+    /// base browse is already open, or it was opened up front because the subtype
+    /// browse could not be opened at all.
+    ///
+    /// Holding a deadline (rather than spawning a timer or a task) is what keeps
+    /// the delayed open on the existing poll arm: the loop already wakes every
+    /// [`RESOLVE_POLL_INTERVAL`] while resolves are parked, so the fallback opens
+    /// within one tick of becoming due and the actor gains no new timer source.
+    resolve_base_after: Option<Instant>,
     /// Operational records drained from that browse, keyed by ASCII-lowercased
     /// instance name. A drain consumes what it returns, so every record is
     /// cached — not just the ones a resolve is parked for right now — or a
@@ -1687,6 +1737,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             recv_backoff_until: None,
             resolve_query: None,
             resolve_query_fabric: None,
+            resolve_base_after: None,
             seen_records: HashMap::new(),
             multicast_if: None,
             group_counters: HashMap::new(),
@@ -3042,15 +3093,20 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             "connect: resolving operational record",
         );
 
-        // Two browses, whichever answers first (see `resolve_query_fabric`):
-        // the fabric subtype narrows the browse to our own nodes and is what
-        // makes a resolve land promptly on a link crowded with other fabrics'
-        // operational records (issue #113); the base type stays open as the
-        // never-worse fallback for a responder that publishes no subtype PTR.
+        // The fabric subtype ALONE to begin with (see `resolve_query_fabric`):
+        // it narrows the browse to our own nodes, which is what makes a resolve
+        // land promptly on a link crowded with other fabrics' operational
+        // records (issue #113). The base type is deliberately NOT opened next to
+        // it — that would re-discover every instance on the link and starve our
+        // nodes in the resolver's shared resolution queue, undoing the
+        // narrowing. It is armed as a delayed fallback instead
+        // (`resolve_base_after`, opened by `drive_pending_resolves`).
         //
         // A failure to open EITHER browse is only fatal if we end up with
         // neither: a daemon that refuses the subtype must not cost us the
-        // base-type resolve that works today.
+        // base-type resolve that works today, so that case opens the base
+        // browse at once rather than after the window — there is nothing left
+        // to wait for.
         let mut open_error: Option<Error> = None;
         if self.resolve_query_fabric.is_none() {
             match self.discovery.query_operational_fabric(compressed) {
@@ -3070,12 +3126,20 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         }
         if self.resolve_query.is_none() {
-            match self.discovery.query(ServiceKind::Operational) {
-                Ok(h) => self.resolve_query = Some(h),
-                Err(e) => {
-                    open_error = Some(Error::from(
-                        matter_commissioning::driver::DriverError::Transport(e),
-                    ));
+            if self.resolve_query_fabric.is_some() {
+                // Subtype browse up: defer the base type. Only arm the deadline
+                // if it is not already armed, so a second connect parking behind
+                // a first cannot push the first's fallback further out.
+                self.resolve_base_after
+                    .get_or_insert_with(|| Instant::now() + SUBTYPE_ONLY_WINDOW);
+            } else {
+                match self.discovery.query(ServiceKind::Operational) {
+                    Ok(h) => self.resolve_query = Some(h),
+                    Err(e) => {
+                        open_error = Some(Error::from(
+                            matter_commissioning::driver::DriverError::Transport(e),
+                        ));
+                    }
                 }
             }
         }
@@ -3236,6 +3300,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// query open.
     fn release_resolve_query_if_idle(&mut self) {
         if self.pending_resolves.is_empty() {
+            // Disarm the delayed fallback along with the browses. Nothing is
+            // waiting on a record any more, so opening a base-type browse now
+            // would serve no resolve — and the next connect to park arms a fresh
+            // window, giving its subtype browse the same clear run at it.
+            self.resolve_base_after = None;
             let base = self.resolve_query.take();
             let subtype = self.resolve_query_fabric.take();
             if let Some(handle) = base {
@@ -3275,15 +3344,66 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// from [`Self::spawn_connect`] so an already-known record connects at once.
     /// Returns immediately when nothing is parked — an idle controller pays
     /// nothing.
+    /// Open the base-type `_matter._tcp` fallback browse if its deadline has
+    /// come and it is not open already — the delayed half of the #113 fix.
+    ///
+    /// Driven from [`Self::drive_pending_resolves`], which the loop already runs
+    /// every [`RESOLVE_POLL_INTERVAL`] while resolves are parked, so the open
+    /// lands within one tick of becoming due without a timer or task of its own.
+    /// Called only with entries actually parked: a resolve that settled off the
+    /// subtype browse inside the window releases `resolve_base_after` (via
+    /// [`Self::release_resolve_query_if_idle`]) and the fallback never opens at
+    /// all, which is the property that keeps the narrowing intact.
+    ///
+    /// Attempted exactly once per armed deadline (`resolve_base_after` is
+    /// cleared regardless of outcome): a daemon that refuses the browse must not
+    /// be re-asked on every subsequent tick. Failure is not fatal — the subtype
+    /// browse is still running, and it is the one expected to answer.
+    fn open_base_fallback_if_due(&mut self) {
+        let Some(due) = self.resolve_base_after else {
+            return;
+        };
+        if Instant::now() < due || self.resolve_query.is_some() {
+            return;
+        }
+        self.resolve_base_after = None;
+        match self.discovery.query(ServiceKind::Operational) {
+            Ok(h) => {
+                self.resolve_query = Some(h);
+                tracing::debug!(
+                    target: "matter_controller::actor",
+                    after = ?SUBTYPE_ONLY_WINDOW,
+                    parked = self.pending_resolves.len(),
+                    "no subtype match after {}s; opening the base-type \
+                     _matter._tcp browse as a fallback",
+                    SUBTYPE_ONLY_WINDOW.as_secs_f32(),
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    target: "matter_controller::actor",
+                    error = %e,
+                    "base-type fallback browse could not be opened; \
+                     continuing on the subtype browse alone",
+                );
+            }
+        }
+    }
+
     fn drive_pending_resolves(&mut self) {
         // Re-arm the polling tick FIRST, before any early return: the loop only
         // consults it while entries are parked, and arming it unconditionally
         // means no path can leave a due-in-the-past anchor behind that would
         // spin the fairness guard.
         self.next_resolve_poll = Instant::now() + RESOLVE_POLL_INTERVAL;
+        if self.pending_resolves.is_empty() {
+            return;
+        }
+        self.open_base_fallback_if_due();
         // Poll BOTH browses (fabric subtype first — it is the one expected to
         // answer), deduplicating equal handles for a `Discovery` that does not
-        // override `query_operational_fabric`.
+        // override `query_operational_fabric`. The base one is present only once
+        // the delayed fallback above has opened it.
         let mut browses: Vec<(&'static str, QueryHandle)> = Vec::new();
         if let Some(h) = self.resolve_query_fabric {
             browses.push((BROWSE_SUBTYPE, h));
@@ -3294,9 +3414,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
         }
         if browses.is_empty() {
-            return;
-        }
-        if self.pending_resolves.is_empty() {
             return;
         }
         tracing::debug!(
@@ -8580,6 +8697,9 @@ mod tests {
         instance_name: String,
         subtype_handle: QueryHandle,
         fabric_queries: Arc<std::sync::Mutex<Vec<[u8; 8]>>>,
+        /// How many times the BASE-type browse was opened. Shared, because the
+        /// controller takes ownership of the discovery.
+        base_opens: Arc<std::sync::Mutex<usize>>,
     }
     impl Discovery for SubtypeOnlyDiscovery {
         fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
@@ -8589,6 +8709,9 @@ mod tests {
             Ok(())
         }
         fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            if let Ok(mut n) = self.base_opens.lock() {
+                *n += 1;
+            }
             Ok(QueryHandle(1))
         }
         fn query_operational_fabric(
@@ -8617,9 +8740,19 @@ mod tests {
     }
 
     /// The actor must resolve (and connect) off a record that arrives **only**
-    /// on the fabric-subtype browse. Before the #113 fix the actor opened the
-    /// base-type browse alone, so this connect would have parked until its
-    /// deadline and failed with "not found via mDNS".
+    /// on the fabric-subtype browse, **without ever opening the base-type
+    /// browse**. Before the #113 fix the actor opened the base-type browse
+    /// alone, so this connect would have parked until its deadline and failed
+    /// with "not found via mDNS".
+    ///
+    /// The second half of that is the correction to the first attempt at the
+    /// fix, which opened both browses concurrently. A base-type browse
+    /// re-discovers every operational instance on the link and feeds them into
+    /// the resolver's shared one-per-query-cycle resolution queue, starving the
+    /// nodes the subtype had narrowed down to — the reporter tested that build
+    /// and his subtype browse surfaced nothing in 30 s. Here the subtype answers
+    /// on the first drain, far inside `SUBTYPE_ONLY_WINDOW`, so the fallback must
+    /// never fire.
     ///
     /// The base-type fallback is covered by every other loopback test here:
     /// `FixedDiscovery` does not override `query_operational_fabric`, so it
@@ -8639,11 +8772,13 @@ mod tests {
         } = loopback_harness();
 
         let fabric_queries = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let base_opens = Arc::new(std::sync::Mutex::new(0usize));
         let subtype_discovery = SubtypeOnlyDiscovery {
             addr: discovery.addr,
             instance_name: discovery.instance_name.clone(),
             subtype_handle: QueryHandle(77),
             fabric_queries: Arc::clone(&fabric_queries),
+            base_opens: Arc::clone(&base_opens),
         };
 
         let device = tokio::spawn(run_loopback_device(
@@ -8693,6 +8828,133 @@ mod tests {
                 format!("_I{expected_prefix}._sub._matter._tcp.local."),
             );
         }
+        assert_eq!(
+            *base_opens.lock().unwrap(),
+            0,
+            "a promptly-answering subtype browse must NOT open the base-type \
+             browse — a concurrent base browse is what reintroduces the #113 \
+             starvation",
+        );
+
+        device.await.unwrap();
+    }
+
+    /// A [`Discovery`] that answers only on the BASE `_matter._tcp` browse and
+    /// never on the fabric subtype — a responder that publishes no subtype PTR.
+    /// Records whether (and when) the base browse was opened, so the test can
+    /// prove the fallback is *delayed* rather than concurrent.
+    struct LateBaseDiscovery {
+        addr: std::net::SocketAddr,
+        instance_name: String,
+        /// `Instant` at which the base-type browse was opened, and the actor's
+        /// own start instant, so the test can measure the delay.
+        started: Instant,
+        base_opened_after: Arc<std::sync::Mutex<Option<std::time::Duration>>>,
+    }
+    impl Discovery for LateBaseDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            if let Ok(mut at) = self.base_opened_after.lock() {
+                at.get_or_insert(self.started.elapsed());
+            }
+            Ok(QueryHandle(1))
+        }
+        fn query_operational_fabric(
+            &mut self,
+            _compressed_fabric_id: [u8; 8],
+        ) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(2))
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, h: QueryHandle) -> Vec<MatterService> {
+            if h == QueryHandle(1) {
+                vec![MatterService::new(
+                    self.instance_name.clone(),
+                    ServiceKind::Operational,
+                    vec![self.addr.ip()],
+                    self.addr.port(),
+                    std::collections::HashMap::new(),
+                )]
+            } else {
+                Vec::new() // no subtype PTR published by this responder
+            }
+        }
+    }
+
+    /// The delayed fallback: when the subtype browse yields nothing, the actor
+    /// must open the base-type browse after `SUBTYPE_ONLY_WINDOW` and connect off
+    /// a record that arrives there — a responder publishing no subtype PTR must
+    /// not become invisible.
+    ///
+    /// Also pins that the open is *delayed*, not immediate: opening it up front
+    /// is the regression this test exists to catch. The window is shortened under
+    /// `cfg(test)`, and the open is driven from the existing
+    /// [`RESOLVE_POLL_INTERVAL`] arm, so the observed delay is the window plus up
+    /// to one poll tick.
+    #[tokio::test]
+    async fn base_browse_opens_only_after_the_subtype_window() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let base_opened_after = Arc::new(std::sync::Mutex::new(None));
+        let late_base = LateBaseDiscovery {
+            addr: discovery.addr,
+            instance_name: discovery.instance_name.clone(),
+            started: Instant::now(),
+            base_opened_after: Arc::clone(&base_opened_after),
+        };
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            b"pong".to_vec(),
+            false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            late_base,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let resp = controller
+            .node(device_node_id)
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("connect must succeed off the delayed base-type browse");
+        assert_eq!(resp, b"pong");
+
+        let opened_after = base_opened_after
+            .lock()
+            .unwrap()
+            .expect("the base browse must be opened once the subtype yields nothing");
+        assert!(
+            opened_after >= SUBTYPE_ONLY_WINDOW,
+            "the base browse must open only AFTER the subtype window \
+             ({SUBTYPE_ONLY_WINDOW:?}), not concurrently with it; opened after \
+             {opened_after:?}",
+        );
 
         device.await.unwrap();
     }
