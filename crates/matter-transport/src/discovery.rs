@@ -139,6 +139,42 @@ impl MatterService {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct QueryHandle(pub u64);
 
+/// The DNS-SD **compressed-fabric subtype** of `_matter._tcp` for one fabric:
+/// `_I<compressed-fabric-id>._sub._matter._tcp.local.`, with the id as
+/// fixed-width uppercase hex (16 chars).
+///
+/// Matter Core Spec §4.3.1 requires every operational node to publish its
+/// `_matter._tcp` record under this subtype, and it exists precisely so a
+/// controller can ask for *its own fabric's* nodes instead of enumerating every
+/// operational node on the link. That matters in practice: browsing the base
+/// type on a busy LAN returns every node of every fabric, and an mDNS resolver
+/// that resolves instances one at a time with exponential backoff (mdns-sd
+/// does) may never reach a given node's SRV/TXT/address resolution inside a
+/// caller's budget — the failure reported in issue #113, where 18 base-type
+/// instances yielded no usable record in 30 s while the subtype resolved the
+/// three nodes of the reporter's fabric in ~266 ms.
+///
+/// The hex formatting matches the first field of the operational instance name
+/// (`matter_commissioning::driver::operational_instance_name`), which is
+/// deliberate: subtype and instance name name the same fabric, and a
+/// commissioning-side test pins the two against each other.
+///
+/// ```
+/// # use matter_transport::operational_fabric_subtype;
+/// assert_eq!(
+///     operational_fabric_subtype([0xF5, 0x2A, 0xC1, 0x07, 0xC9, 0x54, 0xE3, 0x8E]),
+///     "_IF52AC107C954E38E._sub._matter._tcp.local.",
+/// );
+/// ```
+#[must_use]
+pub fn operational_fabric_subtype(compressed_fabric_id: [u8; 8]) -> String {
+    let cfid = u64::from_be_bytes(compressed_fabric_id);
+    format!(
+        "_I{cfid:016X}._sub.{}",
+        ServiceKind::Operational.service_type()
+    )
+}
+
 /// What an mDNS adapter must do to publish and query Matter services.
 ///
 /// The default daemon adapter is available when the `mdns-sd` feature
@@ -208,6 +244,50 @@ pub trait Discovery {
     )]
     fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle>;
 
+    /// Begin a query restricted to the operational nodes of **one fabric**, via
+    /// that fabric's DNS-SD compressed-fabric subtype
+    /// ([`operational_fabric_subtype`]). The returned handle is used exactly
+    /// like [`Self::query`]'s, and the records it yields are ordinary
+    /// [`ServiceKind::Operational`] records.
+    ///
+    /// # Default implementation
+    ///
+    /// Delegates to `query(ServiceKind::Operational)` — i.e. an implementation
+    /// that does not override this keeps today's behaviour (browse every
+    /// operational node on the link and filter by instance name), which is
+    /// always correct, just slower on a busy network. Overriding it is a pure
+    /// optimisation, and callers must not assume the handle is subtype-scoped:
+    /// they still match the instance name they are looking for.
+    ///
+    /// Because the default returns a *base-type* browse, a caller that opens
+    /// both this and [`Self::query`] may receive the **same handle twice** from
+    /// such an implementation; callers that poll both should treat two equal
+    /// handles as one browse.
+    ///
+    /// # Why it exists
+    ///
+    /// See [`operational_fabric_subtype`]: on a link with many operational
+    /// nodes, a resolver that works through base-type instances with
+    /// exponential backoff may never resolve a given node inside a caller's
+    /// budget, while the fabric subtype narrows the browse to the handful of
+    /// nodes the controller actually shares a fabric with (issue #113).
+    ///
+    /// # Errors
+    #[cfg_attr(
+        feature = "mdns-sd",
+        doc = "- [`Error::Mdns`](crate::error::Error::Mdns) on daemon failure."
+    )]
+    #[cfg_attr(
+        not(feature = "mdns-sd"),
+        doc = "- `Error::Mdns` on daemon failure (only present with the `mdns-sd` feature)."
+    )]
+    fn query_operational_fabric(&mut self, compressed_fabric_id: [u8; 8]) -> Result<QueryHandle> {
+        // The id is unused here on purpose: without subtype support the honest
+        // answer is the unfiltered operational browse.
+        let _ = compressed_fabric_id;
+        self.query(ServiceKind::Operational)
+    }
+
     /// Stop an in-progress query. Idempotent — calling on a stopped or
     /// unknown handle is a no-op.
     ///
@@ -243,6 +323,71 @@ mod tests {
         assert_eq!(
             ServiceKind::Operational.service_type(),
             "_matter._tcp.local.",
+        );
+    }
+
+    #[test]
+    fn operational_fabric_subtype_is_uppercase_16_hex_under_sub() {
+        // The exact string a Matter responder publishes its operational record
+        // under (issue #113's reporter observed his nodes resolve in ~266 ms
+        // through it while the base type stalled).
+        assert_eq!(
+            operational_fabric_subtype([0xF5, 0x2A, 0xC1, 0x07, 0xC9, 0x54, 0xE3, 0x8E]),
+            "_IF52AC107C954E38E._sub._matter._tcp.local.",
+        );
+        // Leading zeroes are kept: the label is fixed-width, not minimal.
+        assert_eq!(
+            operational_fabric_subtype([0, 0, 0, 0, 0, 0, 0, 0x01]),
+            "_I0000000000000001._sub._matter._tcp.local.",
+        );
+        // Lower-case hex digits must be emitted upper-case.
+        let s = operational_fabric_subtype([0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89]);
+        assert_eq!(s, "_IABCDEF0123456789._sub._matter._tcp.local.");
+        // Structure: `_I` + 16 hex chars, then `._sub.` + the base type.
+        let label = s.split("._sub.").next().unwrap();
+        assert_eq!(label.len(), 18, "_I + 16 hex chars");
+        assert!(label
+            .strip_prefix("_I")
+            .unwrap()
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)));
+        assert!(s.ends_with(ServiceKind::Operational.service_type()));
+    }
+
+    /// The trait's default `query_operational_fabric` must fall back to the
+    /// base operational browse, so an out-of-tree implementation that never
+    /// heard of subtypes keeps compiling AND keeps working.
+    #[test]
+    fn default_query_operational_fabric_falls_back_to_base_type() {
+        struct LegacyDiscovery {
+            queried: Vec<ServiceKind>,
+        }
+        impl Discovery for LegacyDiscovery {
+            fn publish(&mut self, _s: &MatterService) -> Result<()> {
+                Ok(())
+            }
+            fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> Result<()> {
+                Ok(())
+            }
+            fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle> {
+                self.queried.push(kind);
+                Ok(QueryHandle(7))
+            }
+            fn stop_query(&mut self, _h: QueryHandle) {}
+            fn poll_results(&mut self, _h: QueryHandle) -> Vec<MatterService> {
+                Vec::new()
+            }
+        }
+
+        let mut d = LegacyDiscovery {
+            queried: Vec::new(),
+        };
+        let h = d.query_operational_fabric([0xF5, 0x2A, 0xC1, 0x07, 0xC9, 0x54, 0xE3, 0x8E]);
+        assert_eq!(h.unwrap(), QueryHandle(7));
+        assert_eq!(
+            d.queried,
+            vec![ServiceKind::Operational],
+            "the default must open a plain operational browse",
         );
     }
 

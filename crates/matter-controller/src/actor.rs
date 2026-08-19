@@ -1166,6 +1166,21 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// other's browse as they completed. One handle also means one
     /// [`Discovery::poll_results`] drain per tick serving all entries.
     resolve_query: Option<QueryHandle>,
+    /// The ONE compressed-fabric **subtype** browse
+    /// (`_I<compressed-fabric-id>._sub._matter._tcp`,
+    /// [`Discovery::query_operational_fabric`]) shared by every parked resolve,
+    /// opened and released alongside [`Self::resolve_query`].
+    ///
+    /// Both are held because the subtype is the fast, reliable one (it narrows
+    /// the browse to our own fabric, so a resolver that works through instances
+    /// with exponential backoff reaches our node at once — issue #113) while the
+    /// base type is the never-worse fallback for a responder that publishes no
+    /// subtype PTR. Whichever surfaces the record first settles the resolve.
+    ///
+    /// May equal `resolve_query` when the injected [`Discovery`] does not
+    /// override `query_operational_fabric` (the trait default opens a base-type
+    /// browse); the poll path deduplicates equal handles.
+    resolve_query_fabric: Option<QueryHandle>,
     /// Operational records drained from that browse, keyed by ASCII-lowercased
     /// instance name. A drain consumes what it returns, so every record is
     /// cached — not just the ones a resolve is parked for right now — or a
@@ -1311,7 +1326,18 @@ struct SeenRecord {
     peer_mrp: matter_transport::MrpConfig,
     /// When this record was last drained; ages the entry out.
     seen: Instant,
+    /// Which browse last surfaced this record — [`BROWSE_SUBTYPE`] (the
+    /// fabric-scoped `_I<id>._sub._matter._tcp` browse) or [`BROWSE_BASE`] (the
+    /// unfiltered `_matter._tcp` one). Diagnostics only: it is what a log shows
+    /// when a resolve is satisfied, so a field report says which browse did the
+    /// work (issue #113).
+    source: &'static str,
 }
+
+/// Labels for the two operational browses the actor runs concurrently, used in
+/// its resolve diagnostics.
+const BROWSE_SUBTYPE: &str = "subtype";
+const BROWSE_BASE: &str = "base";
 
 /// How many observed instance names a discovery-failure message quotes.
 const SEEN_SAMPLE_MAX: usize = 5;
@@ -1660,6 +1686,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             recv_warn_stage: RecvWarnStage::Quiet,
             recv_backoff_until: None,
             resolve_query: None,
+            resolve_query_fabric: None,
             seen_records: HashMap::new(),
             multicast_if: None,
             group_counters: HashMap::new(),
@@ -3010,18 +3037,56 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             node_id,
             instance = %target,
             browse_open = self.resolve_query.is_some(),
+            subtype_browse_open = self.resolve_query_fabric.is_some(),
+            subtype = %matter_transport::operational_fabric_subtype(compressed),
             "connect: resolving operational record",
         );
 
+        // Two browses, whichever answers first (see `resolve_query_fabric`):
+        // the fabric subtype narrows the browse to our own nodes and is what
+        // makes a resolve land promptly on a link crowded with other fabrics'
+        // operational records (issue #113); the base type stays open as the
+        // never-worse fallback for a responder that publishes no subtype PTR.
+        //
+        // A failure to open EITHER browse is only fatal if we end up with
+        // neither: a daemon that refuses the subtype must not cost us the
+        // base-type resolve that works today.
+        let mut open_error: Option<Error> = None;
+        if self.resolve_query_fabric.is_none() {
+            match self.discovery.query_operational_fabric(compressed) {
+                Ok(h) => self.resolve_query_fabric = Some(h),
+                Err(e) => {
+                    tracing::debug!(
+                        target: "matter_controller::actor",
+                        node_id,
+                        error = %e,
+                        "connect: fabric-subtype browse could not be opened; \
+                         falling back to the base-type browse",
+                    );
+                    open_error = Some(Error::from(
+                        matter_commissioning::driver::DriverError::Transport(e),
+                    ));
+                }
+            }
+        }
         if self.resolve_query.is_none() {
             match self.discovery.query(ServiceKind::Operational) {
                 Ok(h) => self.resolve_query = Some(h),
                 Err(e) => {
-                    let err = Error::from(matter_commissioning::driver::DriverError::Transport(e));
-                    self.fail_connect_waiters(node_id, &err);
-                    return;
+                    open_error = Some(Error::from(
+                        matter_commissioning::driver::DriverError::Transport(e),
+                    ));
                 }
             }
+        }
+        if self.resolve_query.is_none() && self.resolve_query_fabric.is_none() {
+            let err = open_error.unwrap_or_else(|| {
+                Error::from(matter_commissioning::driver::DriverError::Discovery(
+                    "no mDNS browse could be opened".to_string(),
+                ))
+            });
+            self.fail_connect_waiters(node_id, &err);
+            return;
         }
         self.park_resolve(fabric_id, node_id, target);
         // Settle immediately rather than draining the browse here: every
@@ -3085,7 +3150,16 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// routability pick, same `peer_mrp_config`) so the timer-driven path dials
     /// what the inline resolve would have dialled. A record with no usable
     /// address is dropped rather than cached as an un-dialable hit.
-    fn record_seen(&mut self, services: &[matter_transport::MatterService], now: Instant) {
+    ///
+    /// `source` names the browse the records came from ([`BROWSE_SUBTYPE`] or
+    /// [`BROWSE_BASE`]) and is carried into the cache purely so the resolve that
+    /// a record settles can report which browse produced it.
+    fn record_seen(
+        &mut self,
+        services: &[matter_transport::MatterService],
+        now: Instant,
+        source: &'static str,
+    ) {
         self.seen_records
             .retain(|_, r| now.saturating_duration_since(r.seen) < SEEN_RECORD_TTL);
         if !services.is_empty() {
@@ -3093,6 +3167,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             // enabled, so the `collect` costs nothing without a subscriber.
             tracing::debug!(
                 target: "matter_controller::actor",
+                browse = source,
                 count = services.len(),
                 instances = ?services
                     .iter()
@@ -3105,6 +3180,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             let Some(addr) = matter_commissioning::driver::preferred_address(&svc.addresses) else {
                 tracing::debug!(
                     target: "matter_controller::actor",
+                    browse = source,
                     instance = %svc.instance_name,
                     addresses = ?svc.addresses,
                     "operational record ignored: no routable address",
@@ -3123,12 +3199,21 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.seen_records.remove(&k);
                 }
             }
+            // Keep the browse that FIRST surfaced this instance (while the entry
+            // is alive): a record both browses carry would otherwise always be
+            // credited to whichever was polled last, which is the opposite of
+            // what the diagnostic is for.
+            let source = self
+                .seen_records
+                .get(&key)
+                .map_or(source, |existing| existing.source);
             self.seen_records.insert(
                 key,
                 SeenRecord {
                     peer: SocketAddr::new(addr, svc.port),
                     peer_mrp: svc.peer_mrp_config(),
                     seen: now,
+                    source,
                 },
             );
         }
@@ -3146,11 +3231,21 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.release_resolve_query_if_idle();
     }
 
-    /// Drop the shared operational browse once no resolve still needs it, so an
-    /// idle controller holds no mDNS query open.
+    /// Drop the shared operational browses (base type **and** fabric subtype)
+    /// once no resolve still needs them, so an idle controller holds no mDNS
+    /// query open.
     fn release_resolve_query_if_idle(&mut self) {
         if self.pending_resolves.is_empty() {
-            if let Some(handle) = self.resolve_query.take() {
+            let base = self.resolve_query.take();
+            let subtype = self.resolve_query_fabric.take();
+            if let Some(handle) = base {
+                self.discovery.stop_query(handle);
+            }
+            // Skip a duplicate stop when the injected `Discovery` handed the
+            // same handle back for both (the trait default for
+            // `query_operational_fabric` is a base-type browse). `stop_query` is
+            // documented idempotent, so this is tidiness, not a requirement.
+            if let Some(handle) = subtype.filter(|h| Some(*h) != base) {
                 self.discovery.stop_query(handle);
             }
         }
@@ -3186,9 +3281,21 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // means no path can leave a due-in-the-past anchor behind that would
         // spin the fairness guard.
         self.next_resolve_poll = Instant::now() + RESOLVE_POLL_INTERVAL;
-        let Some(handle) = self.resolve_query else {
+        // Poll BOTH browses (fabric subtype first — it is the one expected to
+        // answer), deduplicating equal handles for a `Discovery` that does not
+        // override `query_operational_fabric`.
+        let mut browses: Vec<(&'static str, QueryHandle)> = Vec::new();
+        if let Some(h) = self.resolve_query_fabric {
+            browses.push((BROWSE_SUBTYPE, h));
+        }
+        if let Some(h) = self.resolve_query {
+            if !browses.iter().any(|(_, existing)| *existing == h) {
+                browses.push((BROWSE_BASE, h));
+            }
+        }
+        if browses.is_empty() {
             return;
-        };
+        }
         if self.pending_resolves.is_empty() {
             return;
         }
@@ -3202,18 +3309,26 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             cached = self.seen_records.len(),
             "settling parked operational resolves",
         );
-        let services = self.discovery.poll_results(handle);
         let now = Instant::now();
-        self.record_seen(&services, now);
+        for (source, handle) in &browses {
+            let services = self.discovery.poll_results(*handle);
+            self.record_seen(&services, now, source);
+        }
 
         // Classify first, act after: the effects below need `&mut self`, which
         // the parked list cannot be borrowed across.
-        let mut resolved: Vec<(u64, u64, SocketAddr, matter_transport::MrpConfig)> = Vec::new();
+        let mut resolved: Vec<(
+            u64,
+            u64,
+            SocketAddr,
+            matter_transport::MrpConfig,
+            &'static str,
+        )> = Vec::new();
         let mut expired: Vec<(u64, String)> = Vec::new();
         let mut still_parked = Vec::with_capacity(self.pending_resolves.len());
         for pr in std::mem::take(&mut self.pending_resolves) {
             if let Some(rec) = self.seen_records.get(&Self::record_key(&pr.target)) {
-                resolved.push((pr.fabric_id, pr.node_id, rec.peer, rec.peer_mrp));
+                resolved.push((pr.fabric_id, pr.node_id, rec.peer, rec.peer_mrp, rec.source));
             } else if now >= pr.deadline {
                 expired.push((pr.node_id, pr.target));
             } else {
@@ -3242,11 +3357,14 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             ));
             self.fail_connect_waiters(node_id, &err);
         }
-        for (fabric_id, node_id, peer, peer_mrp) in resolved {
+        for (fabric_id, node_id, peer, peer_mrp, browse) in resolved {
             tracing::debug!(
                 target: "matter_controller::actor",
                 node_id,
                 peer = %peer,
+                // Which browse produced the record that settled this resolve —
+                // the field a #113 field report is read for.
+                browse,
                 "resolve matched a cached operational record",
             );
             self.finish_spawn_connect(fabric_id, node_id, peer, peer_mrp);
@@ -8446,6 +8564,135 @@ mod tests {
             .expect("fetch resumption record")
             .expect("connect must persist a resumption record");
         assert_eq!(record.peer.node_id, device_node_id);
+
+        device.await.unwrap();
+    }
+
+    /// A [`Discovery`] that answers **only** on the compressed-fabric subtype
+    /// browse, and never on the base `_matter._tcp` one — issue #113's network,
+    /// where the base-type browse finds 18 instances but resolves none of ours
+    /// inside the budget while the subtype resolves them in ~266 ms.
+    ///
+    /// `fabric_queries` is shared (the controller takes ownership of the
+    /// discovery) so the test can prove which fabric was browsed.
+    struct SubtypeOnlyDiscovery {
+        addr: std::net::SocketAddr,
+        instance_name: String,
+        subtype_handle: QueryHandle,
+        fabric_queries: Arc<std::sync::Mutex<Vec<[u8; 8]>>>,
+    }
+    impl Discovery for SubtypeOnlyDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            Ok(QueryHandle(1))
+        }
+        fn query_operational_fabric(
+            &mut self,
+            compressed_fabric_id: [u8; 8],
+        ) -> matter_transport::Result<QueryHandle> {
+            if let Ok(mut q) = self.fabric_queries.lock() {
+                q.push(compressed_fabric_id);
+            }
+            Ok(self.subtype_handle)
+        }
+        fn stop_query(&mut self, _h: QueryHandle) {}
+        fn poll_results(&mut self, h: QueryHandle) -> Vec<MatterService> {
+            if h == self.subtype_handle {
+                vec![MatterService::new(
+                    self.instance_name.clone(),
+                    ServiceKind::Operational,
+                    vec![self.addr.ip()],
+                    self.addr.port(),
+                    std::collections::HashMap::new(),
+                )]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    /// The actor must resolve (and connect) off a record that arrives **only**
+    /// on the fabric-subtype browse. Before the #113 fix the actor opened the
+    /// base-type browse alone, so this connect would have parked until its
+    /// deadline and failed with "not found via mDNS".
+    ///
+    /// The base-type fallback is covered by every other loopback test here:
+    /// `FixedDiscovery` does not override `query_operational_fabric`, so it
+    /// serves both browses from the base type exactly as an out-of-tree
+    /// implementation would.
+    #[tokio::test]
+    async fn connects_off_a_record_seen_only_on_the_fabric_subtype_browse() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let fabric_queries = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subtype_discovery = SubtypeOnlyDiscovery {
+            addr: discovery.addr,
+            instance_name: discovery.instance_name.clone(),
+            subtype_handle: QueryHandle(77),
+            fabric_queries: Arc::clone(&fabric_queries),
+        };
+
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            b"pong".to_vec(),
+            false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            subtype_discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let resp = controller
+            .node(device_node_id)
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("connect must succeed off the subtype browse alone");
+        assert_eq!(resp, b"pong");
+
+        // The subtype browsed must be OUR fabric's, and it must have been the
+        // browse that produced the record (the base browse returns nothing).
+        let queried = fabric_queries.lock().unwrap().clone();
+        assert!(
+            !queried.is_empty(),
+            "the actor must open a compressed-fabric subtype browse",
+        );
+        let expected_prefix = discovery
+            .instance_name
+            .split('-')
+            .next()
+            .unwrap()
+            .to_string();
+        for cfid in queried {
+            assert_eq!(
+                matter_transport::operational_fabric_subtype(cfid),
+                format!("_I{expected_prefix}._sub._matter._tcp.local."),
+            );
+        }
 
         device.await.unwrap();
     }

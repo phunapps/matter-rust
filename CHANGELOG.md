@@ -22,6 +22,65 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### Added — operational discovery browses the compressed-fabric subtype ([#113])
+
+Operational resolves now browse the fabric's DNS-SD **compressed-fabric
+subtype**, `_I<compressed-fabric-id>._sub._matter._tcp.local.` (the id as
+fixed-width uppercase hex), instead of relying solely on the base
+`_matter._tcp` browse. Matter Core Spec §4.3.1 defines that subtype for exactly
+this purpose: it narrows discovery to the nodes of *our own* fabric.
+
+**Why.** Following up on [#113], the reporter instrumented his own network: the
+base-type browse finds 18 operational instances, and `mdns-sd` resolves roughly
+one per query cycle with an exponential backoff, so his three nodes were
+*found* at 317 ms and still had no address, port or TXT record when our 30 s
+budget expired — invisible to us, and the resolve failed with
+`not found via mDNS`. Running the compressed-fabric subtype browse in the same
+environment resolved all three nodes at **~266 ms**, with addresses and TXT
+properties. We reproduced the narrowing on our own rig (a 16-instance browse
+collapses to the single node on our fabric, resolved immediately).
+
+**This is not yet confirmed to fix the reporter's failure** — his environment
+confirms only that the subtype resolves where the base type stalls, and the fix
+is pending his verification against this branch.
+
+- **`matter-transport`**
+  - New `Discovery::query_operational_fabric(compressed_fabric_id)` with a
+    **default implementation that delegates to
+    `query(ServiceKind::Operational)`** — additive and non-breaking, so an
+    out-of-tree `Discovery` keeps compiling and keeps today's behaviour.
+  - New `operational_fabric_subtype(compressed_fabric_id) -> String` builds the
+    browse string (`_IF52AC107C954E38E._sub._matter._tcp.local.`), matching the
+    hex convention of `matter_commissioning::driver::operational_instance_name`.
+  - `MdnsSdDiscovery` overrides it to browse the subtype. Browses are now keyed
+    by service-type *string* rather than `ServiceKind`, so a subtype browse is a
+    distinct key from its base type: the two coexist under the refcounting added
+    in `ca6e093d`, with independent fan-out, replay and `stop_browse`.
+  - Records surfaced through a subtype arrive with the subtype as their
+    `ty_domain`; it is stripped during translation, so they surface as ordinary
+    `ServiceKind::Operational` records instead of being dropped as an
+    unrecognised type.
+
+- **`matter-commissioning` / `matter-controller`** — both operational resolve
+  paths (`resolve_operational*` and the controller actor's parked resolve) open
+  **both** browses and settle on whichever delivers first. The base type is
+  deliberately kept: a subtype browse *narrows*, and a responder that publishes
+  no subtype PTR must not become invisible — regressing from "slow" to "finds
+  nothing" would be worse than the bug. Failing to open one browse is not fatal
+  as long as the other opens; equal handles (what the trait default hands back)
+  are polled once.
+
+- **Diagnostics** — the trace added in `9b001743` now says which browse did the
+  work: `matter_transport::mdns` logs `browse` and `subtype_browse` on every
+  surfaced record, and `matter_controller::actor` logs `browse = subtype|base`
+  on each drain and on the record that settles a resolve. Same filter as before:
+
+  ```text
+  RUST_LOG=matter_transport::mdns=trace,matter_controller::actor=debug
+  ```
+
 ## 0.7.1
 
 A discovery-reliability release, prompted by [#113]. It fixes a real aliasing
