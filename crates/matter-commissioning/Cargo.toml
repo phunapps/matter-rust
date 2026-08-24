@@ -69,7 +69,7 @@ serde_json = { workspace = true, optional = true }
 # Example-only: the `control_onoff` example exercises the generated cluster
 # codecs over an operational session. Kept out of the main dependency graph so
 # matter-clusters' own crate independence is preserved.
-matter-clusters = { path = "../matter-clusters", version = "0.4.0" }
+matter-clusters = { path = "../matter-clusters", version = "0.5.0" }
 # Test-only: the `pase_over_btp` floor test drives PASE through two real
 # `BtpSession`s to prove reassembly + MRP-off end to end. Dev-dep ONLY —
 # matter-ble must never enter the runtime graph (and a dep on matter-controller

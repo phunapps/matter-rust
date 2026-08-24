@@ -57,6 +57,14 @@ pub mod attribute_id {
     pub const POINTS: u32 = 0x000A;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `Tripped` (critical priority).
+    pub const TRIPPED: u32 = 0x00;
+    /// `LevelChanged` (info priority).
+    pub const LEVEL_CHANGED: u32 = 0x01;
+}
+
 bitflags::bitflags! {
     /// `GoldenFixture` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -563,4 +571,72 @@ pub fn encode_set_point(point: PointStruct) -> Vec<u8> {
     w.end_container().expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
+}
+
+/// Decoded `LevelChangedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LevelChangedEvent {
+    /// Field Previous (tag 0).
+    pub previous: u16,
+    /// Field Count (tag 1).
+    pub count: Option<u8>,
+}
+
+impl LevelChangedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_previous: Option<u16> = None;
+        let mut f_count: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_previous = Some(
+                        u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Previous"))?,
+                    )
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_count =
+                        Some(u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Count"))?)
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            previous: f_previous.ok_or(ClusterError::MissingField("Previous"))?,
+            count: f_count,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "LevelChangedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
 }

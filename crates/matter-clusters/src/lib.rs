@@ -2,7 +2,9 @@
 //!
 //! Per-cluster attribute / command / struct **codecs** (encode/decode to Matter
 //! TLV), feature bitflags, enums (with an `Unknown(n)` variant for
-//! forward-compatibility), and bitmaps. The cluster modules live under
+//! forward-compatibility), bitmaps, and — for clusters whose events are
+//! dumped (`Switch` today) — `event_id` consts plus decode-only
+//! `<Name>Event` payload structs. The cluster modules live under
 //! [`gen`]; the hand-written foundation is [`Nullable<T>`](types::Nullable)
 //! (distinct from `Option`), [`ClusterError`](error::ClusterError), and
 //! [`datatypes::SemanticTagStruct`].
@@ -22,11 +24,12 @@
 //!
 //! # Clusters
 //!
-//! 47 clusters are generated today. The full list is [`gen`]; by area:
+//! 48 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
-//!   `GeneralDiagnostics`.
+//!   `GeneralDiagnostics`, `BridgedDeviceBasicInformation` (per-bridged-
+//!   endpoint identity behind a bridge/aggregator).
 //! - **Lighting and actuators:** `OnOff`, `LevelControl`, `ColorControl`,
 //!   `DoorLock` (Aliro features excluded), `WindowCovering`, `Thermostat`,
 //!   `ThermostatUserInterfaceConfiguration`, `FanControl`,

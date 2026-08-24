@@ -32,6 +32,24 @@ pub mod attribute_id {
     pub const MULTI_PRESS_MAX: u32 = 0x0002;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `SwitchLatched` (info priority).
+    pub const SWITCH_LATCHED: u32 = 0x00;
+    /// `InitialPress` (info priority).
+    pub const INITIAL_PRESS: u32 = 0x01;
+    /// `LongPress` (info priority).
+    pub const LONG_PRESS: u32 = 0x02;
+    /// `ShortRelease` (info priority).
+    pub const SHORT_RELEASE: u32 = 0x03;
+    /// `LongRelease` (info priority).
+    pub const LONG_RELEASE: u32 = 0x04;
+    /// `MultiPressOngoing` (info priority).
+    pub const MULTI_PRESS_ONGOING: u32 = 0x05;
+    /// `MultiPressComplete` (info priority).
+    pub const MULTI_PRESS_COMPLETE: u32 = 0x06;
+}
+
 bitflags::bitflags! {
     /// `Switch` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -99,5 +117,437 @@ pub fn decode_multi_press_max(tlv: &[u8]) -> Result<u8, ClusterError> {
         _ => Err(ClusterError::UnexpectedType {
             context: "MultiPressMax",
         }),
+    }
+}
+
+/// Decoded `SwitchLatchedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct SwitchLatchedEvent {
+    /// Field NewPosition (tag 0).
+    pub new_position: u8,
+}
+
+impl SwitchLatchedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_new_position: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_new_position = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("NewPosition"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            new_position: f_new_position.ok_or(ClusterError::MissingField("NewPosition"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "SwitchLatchedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `InitialPressEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct InitialPressEvent {
+    /// Field NewPosition (tag 0).
+    pub new_position: u8,
+}
+
+impl InitialPressEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_new_position: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_new_position = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("NewPosition"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            new_position: f_new_position.ok_or(ClusterError::MissingField("NewPosition"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "InitialPressEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `LongPressEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LongPressEvent {
+    /// Field NewPosition (tag 0).
+    pub new_position: u8,
+}
+
+impl LongPressEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_new_position: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_new_position = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("NewPosition"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            new_position: f_new_position.ok_or(ClusterError::MissingField("NewPosition"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "LongPressEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `ShortReleaseEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ShortReleaseEvent {
+    /// Field PreviousPosition (tag 0).
+    pub previous_position: u8,
+}
+
+impl ShortReleaseEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_previous_position: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_previous_position = Some(
+                        u8::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("PreviousPosition"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            previous_position: f_previous_position
+                .ok_or(ClusterError::MissingField("PreviousPosition"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "ShortReleaseEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `LongReleaseEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LongReleaseEvent {
+    /// Field PreviousPosition (tag 0).
+    pub previous_position: u8,
+}
+
+impl LongReleaseEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_previous_position: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_previous_position = Some(
+                        u8::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("PreviousPosition"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            previous_position: f_previous_position
+                .ok_or(ClusterError::MissingField("PreviousPosition"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "LongReleaseEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `MultiPressOngoingEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MultiPressOngoingEvent {
+    /// Field NewPosition (tag 0).
+    pub new_position: u8,
+    /// Field CurrentNumberOfPressesCounted (tag 1).
+    pub current_number_of_presses_counted: u8,
+}
+
+impl MultiPressOngoingEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_new_position: Option<u8> = None;
+        let mut f_current_number_of_presses_counted: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_new_position = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("NewPosition"))?,
+                    )
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_current_number_of_presses_counted = Some(u8::try_from(v).map_err(|_| {
+                        ClusterError::InvalidLength("CurrentNumberOfPressesCounted")
+                    })?)
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            new_position: f_new_position.ok_or(ClusterError::MissingField("NewPosition"))?,
+            current_number_of_presses_counted: f_current_number_of_presses_counted
+                .ok_or(ClusterError::MissingField("CurrentNumberOfPressesCounted"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "MultiPressOngoingEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `MultiPressCompleteEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MultiPressCompleteEvent {
+    /// Field PreviousPosition (tag 0).
+    pub previous_position: u8,
+    /// Field TotalNumberOfPressesCounted (tag 1).
+    pub total_number_of_presses_counted: u8,
+}
+
+impl MultiPressCompleteEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_previous_position: Option<u8> = None;
+        let mut f_total_number_of_presses_counted: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_previous_position = Some(
+                        u8::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("PreviousPosition"))?,
+                    )
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_total_number_of_presses_counted =
+                        Some(u8::try_from(v).map_err(|_| {
+                            ClusterError::InvalidLength("TotalNumberOfPressesCounted")
+                        })?)
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            previous_position: f_previous_position
+                .ok_or(ClusterError::MissingField("PreviousPosition"))?,
+            total_number_of_presses_counted: f_total_number_of_presses_counted
+                .ok_or(ClusterError::MissingField("TotalNumberOfPressesCounted"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "MultiPressCompleteEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
     }
 }

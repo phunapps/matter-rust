@@ -126,6 +126,23 @@ fn emit_ids(s: &mut String, c: &Cluster) {
         );
     }
     line!(s, "}}\n");
+
+    // Emitted only when the cluster has dumped events, so clusters without
+    // them keep their exact previous output (no empty `event_id` churn).
+    if !c.events.is_empty() {
+        line!(s, "/// Event IDs.");
+        line!(s, "pub mod event_id {{");
+        for ev in &c.events {
+            line!(s, "    /// `{}` ({} priority).", ev.name, ev.priority);
+            line!(
+                s,
+                "    pub const {}: u32 = 0x{:02X};",
+                screaming(&ev.name),
+                ev.id
+            );
+        }
+        line!(s, "}}\n");
+    }
 }
 
 fn emit_feature_bitflags(s: &mut String, c: &Cluster) {

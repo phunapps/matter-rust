@@ -13,6 +13,7 @@
 //       features:   [{ bit, code, name, description }],
 //       attributes: [{ id, name, type, metatype, entryType?, nullable, optional, writable, description }],
 //       commands:   [{ id, name, direction, responseId, fields: [field] }],
+//       events:     [{ id, name, priority, fields: [field] }]   (EVENT_ALLOWLIST clusters only),
 //       datatypes:  [{ name, base, kind: "enum"|"bitmap"|"struct"|"scalar",
 //                      values?: [{value,name,description}],
 //                      bits?:   [{bit,name,description}],
@@ -37,7 +38,8 @@ const REPO_ROOT = join(__dirname, '..', '..', '..'); // dump-model -> scripts ->
 const OUT_PATH = join(REPO_ROOT, 'xtask', 'model', 'clusters.json');
 
 // Bump when the JSON shape changes (recorded in the header for audit).
-const DUMP_SCRIPT_VERSION = 1;
+// v2: per-cluster `events` array (dumped for EVENT_ALLOWLIST clusters).
+const DUMP_SCRIPT_VERSION = 2;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -111,7 +113,17 @@ const ALLOWLIST = [
   { id: 0x042d, name: 'Pm10ConcentrationMeasurement' },
   { id: 0x042e, name: 'TotalVolatileOrganicCompoundsConcentrationMeasurement' },
   { id: 0x042f, name: 'RadonConcentrationMeasurement' },
+  // Matter bridge support (Phase 0): the per-bridged-endpoint identity
+  // cluster (NodeLabel / Reachable / UniqueId). Shares BasicInformation's
+  // attribute-id space per the spec.
+  { id: 0x0039, name: 'BridgedDeviceBasicInformation' },
 ];
+
+// Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
+// per cluster (like the cluster ALLOWLIST itself) so each batch's generated
+// surface stays reviewable; every other cluster's events remain recorded as
+// an auditable exclusion.
+const EVENT_ALLOWLIST = new Set(['Switch']);
 
 const excluded = [];
 function recordExclusion(cluster, element, kind, reason) {
@@ -227,6 +239,17 @@ function dumpAttribute(a, where) {
   };
 }
 
+// A derived cluster (e.g. BridgedDeviceBasicInformation, whose base is
+// BasicInformation) models "same type as the base cluster's attribute" as an
+// attribute with no own `type` — `effectiveType` then falls back to the
+// attribute's NAME, which is not a resolvable type token. Return the base
+// cluster's same-named attribute (the real type carrier) for exactly that
+// shape, else null.
+function baseAliasedAttr(cluster, a) {
+  if (a.type !== undefined || a.effectiveType !== a.name || !cluster.base) return null;
+  return [...cluster.base.attributes].find((b) => b.name === a.name) || null;
+}
+
 function dumpCommand(cmd, clusterName) {
   const where = `${clusterName}.cmd`;
   if (cmd.id === undefined || cmd.id === null) fail(`${where}: command missing id`);
@@ -248,6 +271,22 @@ function dumpCommand(cmd, clusterName) {
     responseId: cmd.responseModel ? cmd.responseModel.id : null,
     fields,
   };
+}
+
+function dumpEvent(ev, clusterName) {
+  const where = `${clusterName}.event`;
+  if (ev.id === undefined || ev.id === null) fail(`${where}: event missing id`);
+  if (!ev.name) fail(`${where} (id ${ev.id}): event missing name`);
+  // Drop `disallowed` (conformance X) fields, mirroring dumpCommand.
+  const fields = [];
+  [...ev.children].forEach((c, i) => {
+    if (c.isDisallowed) {
+      recordExclusion(clusterName, `${ev.name}.${c.name}`, 'event-field', 'disallowed');
+      return;
+    }
+    fields.push(dumpField(c, `${where}.${ev.name}.field[${i}]`));
+  });
+  return { id: ev.id, name: ev.name, priority: ev.priority, fields };
 }
 
 function dumpDatatype(dt, where, nameOverride) {
@@ -404,7 +443,18 @@ function dumpCluster(entry) {
       recordExclusion(cluster.name, a.name, 'attribute', reason);
       continue;
     }
-    attributes.push(dumpAttribute(a, `${cluster.name}.attr`));
+    const dumped = dumpAttribute(a, `${cluster.name}.attr`);
+    // Base-aliased attribute (derived cluster): take the type from the base
+    // cluster's same-named attribute; id/conformance/quality stay the
+    // derived cluster's own.
+    const baseAttr = baseAliasedAttr(cluster, a);
+    if (baseAttr) {
+      dumped.type = baseAttr.effectiveType;
+      dumped.metatype = baseAttr.effectiveMetatype;
+      const et = entryTypeOf(baseAttr);
+      if (et !== undefined) dumped.entryType = et;
+    }
+    attributes.push(dumped);
   }
 
   // Commands: both request and response directions; apply exclusions.
@@ -418,11 +468,24 @@ function dumpCluster(entry) {
     commands.push(dumpCommand(cmd, cluster.name));
   }
 
-  // Events: not dumped at all (no IM event support until M8). Record a
-  // single auditable summary entry per cluster that has any.
-  const eventCount = [...cluster.events].length;
-  if (eventCount > 0) {
-    recordExclusion(cluster.name, `${eventCount} event(s)`, 'events', 'no IM event support until M8');
+  // Events: dumped only for EVENT_ALLOWLIST clusters (event codegen is
+  // rolled out per cluster). Every other cluster keeps a single auditable
+  // summary exclusion, as before event codegen existed.
+  const events = [];
+  if (EVENT_ALLOWLIST.has(cluster.name)) {
+    for (const ev of cluster.events) {
+      const reason = exclusionReason(ev, aliroCodes, featureNames);
+      if (reason) {
+        recordExclusion(cluster.name, ev.name, 'event', reason);
+        continue;
+      }
+      events.push(dumpEvent(ev, cluster.name));
+    }
+  } else {
+    const eventCount = [...cluster.events].length;
+    if (eventCount > 0) {
+      recordExclusion(cluster.name, `${eventCount} event(s)`, 'events', 'event dump not enabled for this cluster');
+    }
   }
 
   const datatypes = [...cluster.datatypes].map((dt) => dumpDatatype(dt, `${cluster.name}.datatype`));
@@ -452,19 +515,27 @@ function dumpCluster(entry) {
   const deAlias = (t) => deAliasGlobal(scalarAlias.has(t) ? scalarAlias.get(t) : t);
   for (const a of attributes) { a.type = deAlias(a.type); a.entryType = deAlias(a.entryType); }
   for (const cmd of commands) for (const f of cmd.fields) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }
+  for (const ev of events) for (const f of ev.fields) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }
   for (const dt of datatypes) for (const f of dt.fields || []) { f.type = deAlias(f.type); f.entryType = deAlias(f.entryType); }
 
   // Inline referenced model-global composite datatypes (transitive) so each
-  // cluster module is self-contained for the Rust emitter.
-  inlineGlobalDatatypes(cluster.name, attributes, commands, datatypes);
+  // cluster module is self-contained for the Rust emitter. Event fields ride
+  // the same pass via a field-only carrier (events have no direction).
+  inlineGlobalDatatypes(
+    cluster.name,
+    attributes,
+    [...commands, ...events.map((ev) => ({ fields: ev.fields }))],
+    datatypes,
+  );
 
   // Deterministic ordering for a stable committed artifact.
   attributes.sort((x, y) => x.id - y.id);
   commands.sort((x, y) => x.id - y.id || x.direction.localeCompare(y.direction));
+  events.sort((x, y) => x.id - y.id);
   datatypes.sort((x, y) => x.name.localeCompare(y.name));
   features.sort((x, y) => (x.bit ?? 0) - (y.bit ?? 0));
 
-  return { id: cluster.id, name: cluster.name, revision: cluster.revision, features, attributes, commands, datatypes };
+  return { id: cluster.id, name: cluster.name, revision: cluster.revision, features, attributes, commands, events, datatypes };
 }
 
 // --- main -----------------------------------------------------------------

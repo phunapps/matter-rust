@@ -12,6 +12,6 @@ workspace = true
 [dependencies]
 matter-controller = { path = "../matter-controller", version = "0.7.1", features = ["ota"] }
 matter-codec = { path = "../matter-codec", version = "0.3.0" }
-matter-clusters = { path = "../matter-clusters", version = "0.4.0" }
+matter-clusters = { path = "../matter-clusters", version = "0.5.0" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
 anyhow = { workspace = true }
