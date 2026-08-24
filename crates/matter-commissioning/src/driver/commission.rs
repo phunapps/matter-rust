@@ -207,18 +207,36 @@ pub(crate) fn extract_read_payload(
     match expect {
         Expectation::NetworkCommissioningInfo => {
             // Scan for FeatureMap (cluster 0x0031, attribute 0xFFFC).
-            let feat_val = report
+            let Some(feat_val) = report
                 .attributes()
                 .find(|(p, _)| {
                     p.cluster == crate::clusters::network_commissioning::CLUSTER_ID
                         && p.attribute == attr_id::FEATURE_MAP
                 })
                 .map(|(_, v)| v)
-                .ok_or_else(|| {
-                    DriverError::Im(ImError::MissingField(
-                        "FeatureMap attribute absent from NetworkCommissioning ReportData",
-                    ))
-                })?;
+            else {
+                // No FeatureMap DATA. If the device instead answered the read
+                // with a per-path `AttributeStatusIB` saying the path does not
+                // exist, the cluster is genuinely absent — a legitimate shape
+                // for an already-on-network device (observed on a real device:
+                // eufy E31 lock over IP, UNSUPPORTED_CLUSTER 0xC3 for both
+                // requested attributes). Surface that as the EMPTY payload;
+                // the state machine routes it by the supplied credentials
+                // (skip provisioning for `AlreadyOnNetwork`, typed error
+                // otherwise). Any other omission stays a framing error.
+                // Unsupported-path statuses: UNSUPPORTED_ENDPOINT (0x7F),
+                // UNSUPPORTED_ATTRIBUTE (0x86), UNSUPPORTED_CLUSTER (0xC3).
+                let cluster_absent = report.statuses.iter().any(|(p, s)| {
+                    p.cluster == crate::clusters::network_commissioning::CLUSTER_ID
+                        && matches!(s.to_u8(), 0x7F | 0x86 | 0xC3)
+                });
+                if cluster_absent {
+                    return Ok(Vec::new());
+                }
+                return Err(DriverError::Im(ImError::MissingField(
+                    "FeatureMap attribute absent from NetworkCommissioning ReportData",
+                )));
+            };
             // Re-encode as anonymous-tagged unsigned int (what decode_feature_map parses).
             let raw = match feat_val {
                 Value::Uint(n) => *n,
@@ -1745,6 +1763,55 @@ mod tests {
             ),
             "WIFI bit must be set after round-trip",
         );
+    }
+
+    /// A device that omits the `NetworkCommissioning` cluster answers the
+    /// `FeatureMap` read with per-path `AttributeStatusIB`s instead of data
+    /// (observed on a real device: eufy E31 lock over IP, both requested
+    /// attributes → `UNSUPPORTED_CLUSTER` 0xC3). That is NOT a framing error:
+    /// the extractor returns the EMPTY payload, which the sans-IO state
+    /// machine reads as "cluster absent" (skip provisioning when the caller
+    /// supplied no network credentials).
+    #[test]
+    fn extract_read_payload_network_commissioning_absent_cluster_yields_empty() {
+        use crate::im::{AttributePath, ImStatus};
+        use crate::Expectation;
+
+        let path = |attribute| AttributePath {
+            endpoint: 0,
+            cluster: crate::clusters::network_commissioning::CLUSTER_ID,
+            attribute,
+        };
+        let mut report = crate::im::ReportData::new(vec![], None, false, true);
+        report.statuses = vec![
+            (
+                path(crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS),
+                ImStatus::from_u8(0xC3), // UNSUPPORTED_CLUSTER
+            ),
+            (
+                path(crate::clusters::network_commissioning::attribute_id::FEATURE_MAP),
+                ImStatus::from_u8(0xC3),
+            ),
+        ];
+
+        let payload = extract_read_payload(Expectation::NetworkCommissioningInfo, &report)
+            .expect("an unsupported-cluster status reply is not a framing error");
+        assert!(
+            payload.is_empty(),
+            "absent cluster must extract to the empty sentinel, got {payload:02x?}",
+        );
+    }
+
+    /// A report with NEITHER data NOR a status for the `FeatureMap` path is
+    /// still a framing error — the empty sentinel is reserved for an explicit
+    /// unsupported-path status reply.
+    #[test]
+    fn extract_read_payload_network_commissioning_truly_missing_still_errors() {
+        use crate::Expectation;
+
+        let report = crate::im::ReportData::new(vec![], None, false, true);
+        let err = extract_read_payload(Expectation::NetworkCommissioningInfo, &report);
+        assert!(err.is_err(), "silent omission must stay MissingField");
     }
 
     /// Replay of a real device's `GeneralCommissioning` report (Tapo P110M,
