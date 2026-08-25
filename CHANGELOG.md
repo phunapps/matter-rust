@@ -22,9 +22,13 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## matter-controller 0.9.0 + matter-cert / matter-crypto / matter-commissioning patches
 
-### `matter-controller`
+The headline is a real hang fixed: an operational request a device accepted but
+never answered used to wait forever. The rest is build-noise cleanup across the
+lower crates.
+
+### `matter-controller` (0.9.0)
 
 #### Fixed
 
@@ -62,7 +66,7 @@ APIs have had no outside users yet and are expected to move.
 
 [#119]: https://github.com/phunapps/matter-rust/issues/119
 
-### `matter-cert`, `matter-crypto`, `matter-commissioning`
+### `matter-cert` (0.3.2), `matter-crypto` (0.3.2), `matter-commissioning` (0.5.5)
 
 #### Fixed
 

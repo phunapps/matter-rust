@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "matter-cert"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bitflags",
  "der 0.7.10",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "matter-commissioning"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "matter-controller"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "matter-crypto"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "aes",
  "ccm",
