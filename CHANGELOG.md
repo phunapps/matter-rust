@@ -22,6 +22,125 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## matter-transport 0.4.0 + matter-commissioning 0.6.0 + matter-controller 0.10.0
+
+The fix for [#113], confirmed working by the reporter on his own network: "it connects to
+the devices quickly." The upstream `mdns-sd` patch did **not** resolve it, so this is
+the fix rather than a workaround.
+
+### Added — operational discovery browses the compressed-fabric subtype ([#113])
+
+Operational resolves now browse the fabric's DNS-SD **compressed-fabric
+subtype**, `_I<compressed-fabric-id>._sub._matter._tcp.local.` (the id as
+fixed-width uppercase hex), instead of relying solely on the base
+`_matter._tcp` browse. Matter Core Spec §4.3.1 defines that subtype for exactly
+this purpose: it narrows discovery to the nodes of *our own* fabric.
+
+**Why.** Following up on [#113], the reporter instrumented his own network: the
+base-type browse finds 18 operational instances, and `mdns-sd` resolves roughly
+one per query cycle with an exponential backoff, so his three nodes were
+*found* at 317 ms and still had no address, port or TXT record when our 30 s
+budget expired — invisible to us, and the resolve failed with
+`not found via mDNS`. Running the compressed-fabric subtype browse in the same
+environment resolved all three nodes at **~266 ms**, with addresses and TXT
+properties. We reproduced the narrowing on our own rig (a 16-instance browse
+collapses to the single node on our fabric, resolved immediately).
+
+**The subtype browse runs alone first.** This matters more than it looks, and
+the first version of this change got it wrong — see *A correction* below.
+
+**This is not yet confirmed to fix the reporter's failure** — his environment
+confirms only that the subtype resolves where the base type stalls, and the fix
+is pending his verification against this branch.
+
+#### A correction: the base-type browse must NOT run concurrently
+
+The first attempt at this fix opened the subtype browse **and** the base
+`_matter._tcp` browse at the same time and matched on whichever delivered first,
+reasoning that an extra browse could only add records and never remove them.
+
+**The reporter tested that build, and it did not help.** His debug log — from
+our own instrumentation — shows why: both browses open, every single surfaced
+record carries `browse="_matter._tcp.local." subtype_browse=false`, the subtype
+browse surfaces **nothing at all** in 30 s (with zero records dropped, so they
+never arrived rather than being filtered out), and all three resolves expire.
+Meanwhile a manual run against the subtype **alone**, on a fresh daemon,
+resolved all three nodes in ~266 ms.
+
+**The mechanism.** The underlying defect is that `mdns-sd` completes
+per-instance SRV/address resolution slowly — roughly one instance per query
+cycle on his network ([keepsimple1/mdns-sd#493]) — from a queue shared by every
+open browse. The subtype helps *only* because it limits how many instances enter
+that queue: 3 instead of 18. Opening the base-type browse re-discovers all 18
+and puts his three nodes back at the end of the same slow queue. A subtype
+browse cannot deliver a resolved record for an instance the resolver has not
+resolved yet, so the concurrent fallback reintroduced exactly the bug the
+subtype was meant to sidestep. (It looked fine on our rig — but our network
+resolves everything promptly, so our rig could not tell the two designs apart.
+That is how it got through.)
+
+**The corrected design.** The subtype browse is the *sole* browse at resolve
+start. The base-type browse is opened only as a **delayed fallback**, after
+`SUBTYPE_ONLY_WINDOW` = **2 s** with no match, for the case it exists to
+serve: a responder that genuinely publishes no subtype PTR. Two seconds is long
+enough that a healthy subtype responder always answers first (~266 ms on the
+reporter's network, ~250 ms on ours — roughly 8x headroom, and enough to absorb
+a query that has to be retransmitted once), and short enough to be noise against
+the ~30 s resolve budget, leaving ~28 s for a subtype-less responder, which is
+discovered on the base browse from that browse's first query cycle. Once open,
+both browses are polled and whichever delivers the record first still settles
+the resolve. If the subtype browse cannot be opened at all, the base type is
+opened immediately — there is nothing to wait for.
+
+The delayed open is driven from each site's **existing poll loop**, not a new
+timer or task: `matter-commissioning`'s resolve counts poll iterations, and the
+controller actor holds a deadline that its 250 ms resolve-poll arm checks, so the
+fallback opens within one tick of becoming due and the actor gains no new timer
+source. When it does open, it is logged at debug with the reason
+(`no subtype match after 2s; opening the base-type _matter._tcp browse as a
+fallback`), so a log says plainly whether the fallback was needed.
+
+- **`matter-transport`**
+  - New `Discovery::query_operational_fabric(compressed_fabric_id)` with a
+    **default implementation that delegates to
+    `query(ServiceKind::Operational)`** — additive and non-breaking, so an
+    out-of-tree `Discovery` keeps compiling and keeps today's behaviour.
+  - New `operational_fabric_subtype(compressed_fabric_id) -> String` builds the
+    browse string (`_IF52AC107C954E38E._sub._matter._tcp.local.`), matching the
+    hex convention of `matter_commissioning::driver::operational_instance_name`.
+  - `MdnsSdDiscovery` overrides it to browse the subtype. Browses are now keyed
+    by service-type *string* rather than `ServiceKind`, so a subtype browse is a
+    distinct key from its base type: the two coexist under the refcounting added
+    in `ca6e093d`, with independent fan-out, replay and `stop_browse`.
+  - Records surfaced through a subtype arrive with the subtype as their
+    `ty_domain`; it is stripped during translation, so they surface as ordinary
+    `ServiceKind::Operational` records instead of being dropped as an
+    unrecognised type.
+
+- **`matter-commissioning` / `matter-controller`** — both operational resolve
+  paths (`resolve_operational*` and the controller actor's parked resolve) open
+  the subtype browse **alone**, and open the base type only as the delayed
+  fallback described above. The base type is deliberately kept, because a
+  subtype browse *narrows*: a responder that publishes no subtype PTR must not
+  become invisible — regressing from "slow" to "finds nothing" would be worse
+  than the bug. But it must not run *concurrently*, or the narrowing it exists
+  to preserve is undone. Failing to open one browse is not fatal as long as the
+  other opens; equal handles (what the trait default hands back) are polled once.
+
+- **Diagnostics** — the trace added in `9b001743` now says which browse did the
+  work: `matter_transport::mdns` logs `browse` and `subtype_browse` on every
+  surfaced record, and `matter_controller::actor` logs `browse = subtype|base`
+  on each drain and on the record that settles a resolve. Same filter as before:
+
+  ```text
+  RUST_LOG=matter_transport::mdns=trace,matter_controller::actor=debug
+  ```
+
+  The `browse` / `subtype_browse` fields are deliberately kept, so the next
+  field report says which browse actually won.
+
+[keepsimple1/mdns-sd#493]: https://github.com/keepsimple1/mdns-sd/issues/493
+
 ## matter-controller 0.9.0 + matter-cert / matter-crypto / matter-commissioning patches
 
 The headline is a real hang fixed: an operational request a device accepted but

@@ -5,7 +5,7 @@ attestation, NOC issuance, and network commissioning.
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
-> Status: **0.5.5**, published on crates.io. The commissioning flow here has
+> Status: **0.6.0**, published on crates.io. The commissioning flow here has
 > been driven against real Matter hardware — over IP and over BLE, onto Wi-Fi
 > and onto Thread — not only against tests.
 >

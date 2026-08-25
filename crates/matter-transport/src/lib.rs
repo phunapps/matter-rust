@@ -87,7 +87,9 @@ pub use session::{
     SessionRole,
 };
 
-pub use discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
+pub use discovery::{
+    operational_fabric_subtype, Discovery, MatterService, QueryHandle, ServiceKind,
+};
 pub use local_addr::local_advertise_addrs;
 pub use transport::{PeerAddress, Transport};
 

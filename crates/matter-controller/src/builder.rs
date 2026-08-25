@@ -364,10 +364,17 @@ mod tests {
             err.to_string().contains(SENTINEL),
             "error must originate in the injected discovery, got: {err}"
         );
+        // Two browses, not one: operational resolution asks for the
+        // compressed-fabric subtype first (#113), and because this discovery
+        // refuses to open that browse at all, the base-type fallback is opened
+        // up front rather than after the usual delay — there is no running
+        // subtype browse whose resolutions the fallback could starve. Both
+        // browses go to the injected discovery, which is the point of the test.
         assert_eq!(
             queries.load(Ordering::SeqCst),
-            1,
-            "the injected discovery must have been asked to browse exactly once"
+            2,
+            "the injected discovery must serve both the subtype browse and the \
+             base-type fallback"
         );
     }
 

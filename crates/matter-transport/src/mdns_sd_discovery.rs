@@ -31,6 +31,31 @@
 //! record surfaced per instance name and seeds each newly attached handle from
 //! it, so attaching late is equivalent to having been attached all along.
 //!
+//! # Compressed-fabric subtype browses
+//!
+//! [`Discovery::query_operational_fabric`] browses
+//! `_I<compressed-fabric-id>._sub._matter._tcp.local.` instead of the base
+//! `_matter._tcp.local.`, so a controller sees only the operational nodes of
+//! its own fabric. mdns-sd keys its querier, its PTR cache and `stop_browse` by
+//! the browsed string, so a subtype browse is a **different key** from the base
+//! type: the two coexist under the same refcounting, with independent record
+//! streams and independent teardown. Records that arrive that way carry the
+//! subtype as their `ty_domain`; it is stripped during translation, so they
+//! surface as ordinary [`ServiceKind::Operational`] records.
+//!
+//! This matters because mdns-sd resolves the instances it discovers one at a
+//! time with an exponential backoff: on a link with many operational nodes, a
+//! base-type browse can consume a caller's whole resolve budget without ever
+//! reaching the wanted node (issue #113).
+//!
+//! One caveat if you hold the two browses on different lifetimes:
+//! `stop_browse(<subtype>)` drops the daemon's PTR entries for that subtype
+//! *and* the SRV/TXT records of the instances they named — records a surviving
+//! base-type browse would otherwise still have cached, and would have to
+//! re-query for. Callers in this workspace open and release both together, so
+//! they never pay that; this adapter's own `surfaced` replay cache is per
+//! browse and is unaffected either way.
+//!
 //! # Diagnostics
 //!
 //! Discovery is the one part of the stack whose failures are invisible from the
@@ -63,7 +88,9 @@ use std::net::IpAddr;
 
 use mdns_sd::{Receiver, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo, TxtProperty};
 
-use crate::discovery::{Discovery, MatterService, QueryHandle, ServiceKind};
+use crate::discovery::{
+    operational_fabric_subtype, Discovery, MatterService, QueryHandle, ServiceKind,
+};
 use crate::error::{Error, Result};
 
 /// `tracing` target for this adapter's diagnostics, so discovery can be turned
@@ -130,18 +157,23 @@ struct BrowseState {
 pub struct MdnsSdDiscovery {
     daemon: ServiceDaemon,
     owns_daemon: bool,
-    /// One entry per *service type* with at least one live handle.
-    browses: HashMap<&'static str, BrowseState>,
+    /// One entry per *service type* with at least one live handle. Keyed by the
+    /// browse string rather than [`ServiceKind`] because a Matter
+    /// compressed-fabric subtype
+    /// (`_I<id>._sub._matter._tcp.local.`, [`Discovery::query_operational_fabric`])
+    /// is a distinct browse key from its base type — which is exactly what lets
+    /// the two coexist under the refcount.
+    browses: HashMap<String, BrowseState>,
     /// Which browse each live handle belongs to. Absent ⇒ stopped/unknown.
-    handle_types: HashMap<QueryHandle, &'static str>,
+    handle_types: HashMap<QueryHandle, String>,
     next_handle: u64,
     /// Test-only observation of the daemon calls this adapter makes, so a test
     /// can assert "browsed once per type" and "stopped only on the last
     /// release" without a public API or a live network.
     #[cfg(test)]
-    browse_calls: HashMap<&'static str, u32>,
+    browse_calls: HashMap<String, u32>,
     #[cfg(test)]
-    stop_browse_calls: HashMap<&'static str, u32>,
+    stop_browse_calls: HashMap<String, u32>,
 }
 
 impl MdnsSdDiscovery {
@@ -207,6 +239,85 @@ impl MdnsSdDiscovery {
         format!("{}.{}", instance_name, kind.service_type())
     }
 
+    /// Attach a handle to `service_type`'s browse, opening the browse only if
+    /// this is the first handle for that exact string. Shared by
+    /// [`Discovery::query`] (base types) and
+    /// [`Discovery::query_operational_fabric`] (compressed-fabric subtypes) —
+    /// the two differ only in the string, so refcounting, fan-out and replay are
+    /// identical for both.
+    ///
+    /// A second `daemon.browse` of a string we are already browsing would
+    /// *replace* the daemon's querier for it and orphan the receiver every
+    /// existing handle of that string reads from (module docs, issue #113), so
+    /// the reuse here is a correctness requirement, not an optimisation. Note
+    /// that mdns-sd keys its querier by the browsed string too, so a subtype and
+    /// its base type are separate queriers and neither disturbs the other.
+    ///
+    /// Reusing the browse costs the new handle mdns-sd's cache replay — that
+    /// only happens on a real `browse` call — and the daemon will not re-emit a
+    /// record that has not changed, so a handle attaching to a stable,
+    /// already-resolved service would otherwise wait out its whole budget and
+    /// see nothing. It is therefore seeded from this adapter's own record of
+    /// the last service surfaced per instance name (`BrowseState::surfaced`),
+    /// which restores the replay without a second browse.
+    fn query_service_type(&mut self, service_type: String) -> Result<QueryHandle> {
+        // Open the browse BEFORE allocating a handle so a daemon failure
+        // leaves no state behind.
+        let receiver = if self.browses.contains_key(&service_type) {
+            None
+        } else {
+            let receiver = self.daemon.browse(&service_type)?;
+            #[cfg(test)]
+            self.browse_calls
+                .entry(service_type.clone())
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+            tracing::debug!(
+                target: LOG_TARGET,
+                service_type = %service_type,
+                "mDNS browse started",
+            );
+            Some(receiver)
+        };
+        if let Some(receiver) = receiver {
+            self.browses.insert(
+                service_type.clone(),
+                BrowseState {
+                    receiver,
+                    pending: HashMap::new(),
+                    surfaced: HashMap::new(),
+                },
+            );
+        }
+        let handle = self.allocate_handle();
+        let Some(browse) = self.browses.get_mut(&service_type) else {
+            // Unreachable: the entry was either already present or inserted
+            // just above. Reported as an error rather than asserted, because a
+            // handle with no browse behind it could only ever return nothing.
+            return Err(Error::Mdns(format!(
+                "internal: no browse state for {service_type} after opening it"
+            )));
+        };
+        // Seed with what this browse has already surfaced. Empty for a browse
+        // opened just above; for a reused one this is the replay mdns-sd will
+        // not give us (see the method docs). Each record is handed to this
+        // handle exactly once, as if it had been attached all along.
+        let replayed: Vec<MatterService> = browse.surfaced.values().cloned().collect();
+        let replayed_count = replayed.len();
+        browse.pending.insert(handle, replayed);
+        let handles = browse.pending.len();
+        tracing::debug!(
+            target: LOG_TARGET,
+            service_type = %service_type,
+            handle = handle.0,
+            handles,
+            replayed = replayed_count,
+            "mDNS browse handle attached",
+        );
+        self.handle_types.insert(handle, service_type);
+        Ok(handle)
+    }
+
     /// Test seam: hand a browse event to the `kind` browse exactly as a
     /// [`Discovery::poll_results`] drain would.
     ///
@@ -221,8 +332,21 @@ impl MdnsSdDiscovery {
     /// some tests make.
     #[cfg(test)]
     fn deliver_for_test(&mut self, kind: ServiceKind, event: ServiceEvent) {
-        if let Some(browse) = self.browses.get_mut(kind.service_type()) {
-            fan_out_event(&mut browse.pending, &mut browse.surfaced, event);
+        self.deliver_for_type_for_test(kind.service_type(), event);
+    }
+
+    /// As [`Self::deliver_for_test`], but naming the browse by its exact string
+    /// so a test can deliver to a compressed-fabric subtype browse (which has no
+    /// [`ServiceKind`] of its own).
+    #[cfg(test)]
+    fn deliver_for_type_for_test(&mut self, service_type: &str, event: ServiceEvent) {
+        if let Some(browse) = self.browses.get_mut(service_type) {
+            fan_out_event(
+                service_type,
+                &mut browse.pending,
+                &mut browse.surfaced,
+                event,
+            );
         }
     }
 }
@@ -271,77 +395,39 @@ impl Discovery for MdnsSdDiscovery {
     }
 
     /// Attach a handle to this service type's browse, opening the browse only
-    /// if this is the first handle for the type.
-    ///
-    /// A second `daemon.browse` of a type we are already browsing would
-    /// *replace* the daemon's querier for it and orphan the receiver every
-    /// existing handle of that type reads from (module docs, issue #113), so
-    /// the reuse here is a correctness requirement, not an optimisation.
-    ///
-    /// Reusing the browse costs the new handle mdns-sd's cache replay — that
-    /// only happens on a real `browse` call — and the daemon will not re-emit a
-    /// record that has not changed, so a handle attaching to a stable,
-    /// already-resolved service would otherwise wait out its whole budget and
-    /// see nothing. It is therefore seeded from this adapter's own record of
-    /// the last service surfaced per instance name (`BrowseState::surfaced`),
-    /// which restores the replay without a second browse.
+    /// if this is the first handle for the type. The refcount/replay rules
+    /// (one browse per service-type *string*, fan-out to every attached handle,
+    /// replay for a late-attaching one) live in the private
+    /// `query_service_type` and are shared with the subtype browse.
     fn query(&mut self, kind: ServiceKind) -> Result<QueryHandle> {
-        let service_type = kind.service_type();
-        // Open the browse BEFORE allocating a handle so a daemon failure
-        // leaves no state behind.
-        let receiver = if self.browses.contains_key(service_type) {
-            None
-        } else {
-            let receiver = self.daemon.browse(service_type)?;
-            #[cfg(test)]
-            self.browse_calls
-                .entry(service_type)
-                .and_modify(|n| *n += 1)
-                .or_insert(1);
-            tracing::debug!(
-                target: LOG_TARGET,
-                service_type,
-                "mDNS browse started",
-            );
-            Some(receiver)
-        };
-        if let Some(receiver) = receiver {
-            self.browses.insert(
-                service_type,
-                BrowseState {
-                    receiver,
-                    pending: HashMap::new(),
-                    surfaced: HashMap::new(),
-                },
-            );
-        }
-        let handle = self.allocate_handle();
-        let Some(browse) = self.browses.get_mut(service_type) else {
-            // Unreachable: the entry was either already present or inserted
-            // just above. Reported as an error rather than asserted, because a
-            // handle with no browse behind it could only ever return nothing.
-            return Err(Error::Mdns(format!(
-                "internal: no browse state for {service_type} after opening it"
-            )));
-        };
-        // Seed with what this browse has already surfaced. Empty for a browse
-        // opened just above; for a reused one this is the replay mdns-sd will
-        // not give us (see the method docs). Each record is handed to this
-        // handle exactly once, as if it had been attached all along.
-        let replayed: Vec<MatterService> = browse.surfaced.values().cloned().collect();
-        let replayed_count = replayed.len();
-        browse.pending.insert(handle, replayed);
-        let handles = browse.pending.len();
-        self.handle_types.insert(handle, service_type);
-        tracing::debug!(
-            target: LOG_TARGET,
-            service_type,
-            handle = handle.0,
-            handles,
-            replayed = replayed_count,
-            "mDNS browse handle attached",
-        );
-        Ok(handle)
+        self.query_service_type(kind.service_type().to_string())
+    }
+
+    /// Browse the fabric's DNS-SD compressed-fabric subtype
+    /// (`_I<compressed-fabric-id>._sub._matter._tcp.local.`) instead of every
+    /// operational node on the link.
+    ///
+    /// mdns-sd accepts a subtype string in `browse` (it validates only the
+    /// `._tcp.local.` suffix) and keys its querier, PTR cache and `stop_browse`
+    /// by that exact string, so this browse is fully independent of a
+    /// concurrent base-type browse: both can be open at once, each gets its own
+    /// records, and stopping one leaves the other alone. Records arrive with
+    /// `ty_domain` set to the *subtype*; translation strips the
+    /// `._sub.` prefix so they surface as ordinary
+    /// [`ServiceKind::Operational`] records, indistinguishable to the caller
+    /// from base-type ones.
+    ///
+    /// Why prefer it: mdns-sd resolves discovered instances one at a time with
+    /// an exponential backoff, so on a link with many operational nodes a
+    /// base-type browse can spend a caller's entire budget without ever
+    /// resolving the wanted node (issue #113). The subtype narrows the browse to
+    /// the controller's own fabric.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::Mdns`] on daemon failure.
+    fn query_operational_fabric(&mut self, compressed_fabric_id: [u8; 8]) -> Result<QueryHandle> {
+        self.query_service_type(operational_fabric_subtype(compressed_fabric_id))
     }
 
     /// Release one handle. The underlying browse is stopped only when its
@@ -358,7 +444,7 @@ impl Discovery for MdnsSdDiscovery {
         let Some(service_type) = self.handle_types.remove(&handle) else {
             return;
         };
-        let remaining = match self.browses.get_mut(service_type) {
+        let remaining = match self.browses.get_mut(&service_type) {
             Some(browse) => {
                 browse.pending.remove(&handle);
                 browse.pending.len()
@@ -367,22 +453,24 @@ impl Discovery for MdnsSdDiscovery {
         };
         tracing::debug!(
             target: LOG_TARGET,
-            service_type,
+            service_type = %service_type,
             handle = handle.0,
             remaining,
             "mDNS browse handle released",
         );
         if remaining == 0 {
-            self.browses.remove(service_type);
-            let _ = self.daemon.stop_browse(service_type);
+            self.browses.remove(&service_type);
+            // Per-string, so releasing a fabric-subtype browse never touches a
+            // base-type browse (or another fabric's subtype) still in use.
+            let _ = self.daemon.stop_browse(&service_type);
             #[cfg(test)]
             self.stop_browse_calls
-                .entry(service_type)
+                .entry(service_type.clone())
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
             tracing::debug!(
                 target: LOG_TARGET,
-                service_type,
+                service_type = %service_type,
                 "mDNS browse stopped (last handle released; mdns-sd also drops its cached records for this type)",
             );
         }
@@ -396,10 +484,10 @@ impl Discovery for MdnsSdDiscovery {
     /// returned to a given handle exactly once — while a second handle on the
     /// same type no longer steals records the first is waiting for.
     fn poll_results(&mut self, handle: QueryHandle) -> Vec<MatterService> {
-        let Some(service_type) = self.handle_types.get(&handle).copied() else {
+        let Some(service_type) = self.handle_types.get(&handle).cloned() else {
             return Vec::new();
         };
-        let Some(browse) = self.browses.get_mut(service_type) else {
+        let Some(browse) = self.browses.get_mut(&service_type) else {
             return Vec::new();
         };
         // Destructure so the receiver and the per-handle buffers are borrowed
@@ -413,7 +501,7 @@ impl Discovery for MdnsSdDiscovery {
         // handle attached to this browse — including handles that are not the
         // one polling, which is the whole point (issue #113).
         while let Ok(event) = receiver.try_recv() {
-            fan_out_event(pending, surfaced, event);
+            fan_out_event(&service_type, pending, surfaced, event);
         }
         match pending.get_mut(&handle) {
             Some(buffer) => std::mem::take(buffer),
@@ -432,7 +520,12 @@ impl Discovery for MdnsSdDiscovery {
 /// implementation, shared with the test seam that delivers synthetic events
 /// (mdns-sd's browse `Sender` lives inside the daemon, so an event cannot
 /// otherwise be injected without a live multicast network).
+///
+/// `browse` is the exact string this browse was opened with, logged with every
+/// surfaced record so a trace shows **which** browse produced it — base type or
+/// compressed-fabric subtype (issue #113).
 fn fan_out_event(
+    browse: &str,
     pending: &mut HashMap<QueryHandle, Vec<MatterService>>,
     surfaced: &mut HashMap<String, MatterService>,
     event: ServiceEvent,
@@ -444,6 +537,8 @@ fn fan_out_event(
             if let Some(svc) = service_info_to_matter(&info) {
                 tracing::debug!(
                     target: LOG_TARGET,
+                    browse,
+                    subtype_browse = is_subtype(browse),
                     instance = %svc.instance_name,
                     kind = ?svc.kind,
                     addresses = ?svc.addresses,
@@ -545,11 +640,11 @@ fn service_info_to_matter(info: &ResolvedService) -> Option<MatterService> {
         return None;
     }
     let Some(kind) = kind_from_service_type(&info.ty_domain) else {
-        // The compare is exact, so ANY unexpected `ty_domain` — including a
-        // record surfaced under a Matter subtype such as
-        // `_I<compressed-fabric>._sub._matter._tcp.local.` — dies here. Logging
-        // the actual value is what makes that distinguishable from "no record
-        // arrived at all".
+        // A record surfaced under a Matter subtype (`_I<compressed-fabric>.
+        // _sub._matter._tcp.local.`) is accepted — the subtype is stripped
+        // first — so what dies here is a genuinely foreign service type.
+        // Logging the actual value is what makes that distinguishable from
+        // "no record arrived at all".
         tracing::debug!(
             target: LOG_TARGET,
             fullname = %info.fullname,
@@ -610,8 +705,33 @@ fn txt_properties_to_records(props: &mdns_sd::TxtProperties) -> HashMap<String, 
     txt
 }
 
+/// Whether a browse string is a DNS-SD subtype (`<sub>._sub.<base>`).
+///
+/// Used for diagnostics only — the records a subtype browse yields are ordinary
+/// records of the base type.
+fn is_subtype(service_type: &str) -> bool {
+    service_type.contains("._sub.")
+}
+
+/// Map a browse/record service type onto a [`ServiceKind`], **stripping a
+/// DNS-SD subtype prefix first**.
+///
+/// mdns-sd reports the string the querier was opened with as a resolved
+/// record's `ty_domain`, so a record found through the Matter compressed-fabric
+/// subtype arrives as `_I<id>._sub._matter._tcp.local.` rather than
+/// `_matter._tcp.local.`. RFC 6763 §7.1 defines that form as a *subtype of* the
+/// base service, and Matter uses it for exactly that (§4.3.1), so such a record
+/// is an operational record and must map to [`ServiceKind::Operational`] — not
+/// be dropped as unrecognised, which is what would silently defeat the subtype
+/// browse (issue #113).
 fn kind_from_service_type(service_type: &str) -> Option<ServiceKind> {
-    match service_type {
+    // `rsplit_once` so the BASE type is what remains, whatever the subtype
+    // label contains.
+    let base = match service_type.rsplit_once("._sub.") {
+        Some((_subtype_label, base)) => base,
+        None => service_type,
+    };
+    match base {
         "_matterc._udp.local." => Some(ServiceKind::Commissionable),
         "_matterd._udp.local." => Some(ServiceKind::Commissioner),
         "_matter._tcp.local." => Some(ServiceKind::Operational),
@@ -759,6 +879,164 @@ mod tests {
     /// network, and they land in these browses too.
     fn contains(results: &[MatterService], instance: &str) -> bool {
         results.iter().any(|s| s.instance_name == instance)
+    }
+
+    /// A compressed fabric id and its subtype string, used by the subtype tests.
+    const TEST_CFID: [u8; 8] = [0xF5, 0x2A, 0xC1, 0x07, 0xC9, 0x54, 0xE3, 0x8E];
+    const TEST_SUBTYPE: &str = "_IF52AC107C954E38E._sub._matter._tcp.local.";
+
+    /// A `ServiceResolved` event exactly as the daemon emits it for a **subtype**
+    /// browse: `ty_domain` is the string the querier was opened with (mdns-sd
+    /// keys its PTR cache and queriers by that string and passes it straight
+    /// into `resolve_service_from_cache`), i.e. the subtype, NOT the base type.
+    /// `ResolvedService` is `#[non_exhaustive]`, so it is built through
+    /// `ServiceInfo` and then re-pointed at the subtype.
+    fn resolved_event_under_subtype(instance: &str, subtype: &str) -> ServiceEvent {
+        let info = ServiceInfo::new(
+            ServiceKind::Operational.service_type(),
+            instance,
+            &format!("{instance}.local."),
+            &[std::net::IpAddr::V6(Ipv6Addr::LOCALHOST)][..],
+            5540,
+            Vec::<TxtProperty>::new(),
+        )
+        .unwrap();
+        let mut resolved = info.as_resolved_service();
+        resolved.ty_domain = subtype.to_string();
+        resolved.sub_ty_domain = Some(subtype.to_string());
+        ServiceEvent::ServiceResolved(Box::new(resolved))
+    }
+
+    #[test]
+    fn subtype_service_type_maps_to_operational_kind() {
+        // A record arriving under the fabric subtype IS an operational record;
+        // dropping it as an unrecognised type is what would defeat the whole
+        // subtype browse (issue #113).
+        assert_eq!(
+            kind_from_service_type(TEST_SUBTYPE),
+            Some(ServiceKind::Operational),
+        );
+        assert_eq!(
+            kind_from_service_type("_S15._sub._matterc._udp.local."),
+            Some(ServiceKind::Commissionable),
+        );
+        // The base types are unaffected...
+        assert_eq!(
+            kind_from_service_type("_matter._tcp.local."),
+            Some(ServiceKind::Operational),
+        );
+        // ... and a genuinely foreign type is still rejected, subtype or not.
+        assert_eq!(kind_from_service_type("_http._tcp.local."), None);
+        assert_eq!(kind_from_service_type("_x._sub._http._tcp.local."), None);
+        assert!(is_subtype(TEST_SUBTYPE));
+        assert!(!is_subtype("_matter._tcp.local."));
+    }
+
+    #[test]
+    fn subtype_browse_is_a_distinct_key_from_the_base_type() {
+        // THE #113 FIX: the fabric subtype and the base type are two separate
+        // browses (mdns-sd keys its querier by the browsed string), so a
+        // controller can run both at once — narrow-and-fast plus never-worse
+        // fallback — and neither steals the other's records or tears the other
+        // down.
+        let base = ServiceKind::Operational.service_type();
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let sub_handle = d.query_operational_fabric(TEST_CFID).unwrap();
+        let base_handle = d.query(ServiceKind::Operational).unwrap();
+        assert_ne!(sub_handle, base_handle);
+        assert_eq!(
+            d.browse_calls.get(TEST_SUBTYPE),
+            Some(&1),
+            "the subtype must be browsed in its own right",
+        );
+        assert_eq!(
+            d.browse_calls.get(base),
+            Some(&1),
+            "and the base type separately",
+        );
+
+        // A record delivered on the SUBTYPE browse reaches only that browse's
+        // handle, and arrives as a normal operational record.
+        d.deliver_for_type_for_test(
+            TEST_SUBTYPE,
+            resolved_event_under_subtype("113-subtype-only", TEST_SUBTYPE),
+        );
+        let from_sub = d.poll_results(sub_handle);
+        assert!(contains(&from_sub, "113-subtype-only"));
+        assert_eq!(
+            from_sub
+                .iter()
+                .find(|s| s.instance_name == "113-subtype-only")
+                .map(|s| s.kind),
+            Some(ServiceKind::Operational),
+            "a subtype record must surface as an operational record",
+        );
+        assert!(!contains(&d.poll_results(base_handle), "113-subtype-only"));
+
+        // ... and vice versa: the base browse still works on its own.
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-base-only", ServiceKind::Operational),
+        );
+        assert!(contains(&d.poll_results(base_handle), "113-base-only"));
+        assert!(!contains(&d.poll_results(sub_handle), "113-base-only"));
+
+        // Releasing the subtype browse must not stop the base-type browse.
+        d.stop_query(sub_handle);
+        assert_eq!(d.stop_browse_calls.get(TEST_SUBTYPE), Some(&1));
+        assert_eq!(d.stop_browse_calls.get(base), None);
+        d.deliver_for_test(
+            ServiceKind::Operational,
+            resolved_event("113-base-survives", ServiceKind::Operational),
+        );
+        assert!(contains(&d.poll_results(base_handle), "113-base-survives"));
+        d.stop_query(base_handle);
+        assert_eq!(d.stop_browse_calls.get(base), Some(&1));
+    }
+
+    #[test]
+    fn subtype_browse_refcounts_and_replays_like_any_other() {
+        // Everything the base-type browse gained in `ca6e093d`/`a1670eeb` —
+        // one browse per string, fan-out to every handle, replay for a
+        // late-attaching handle — must hold for a subtype browse too, since the
+        // controller and the commissioning driver can both be resolving on the
+        // same fabric at once.
+        let mut d = MdnsSdDiscovery::new().unwrap();
+        let a = d.query_operational_fabric(TEST_CFID).unwrap();
+        let b = d.query_operational_fabric(TEST_CFID).unwrap();
+        assert_eq!(
+            d.browse_calls.get(TEST_SUBTYPE),
+            Some(&1),
+            "two handles on one fabric share a single subtype browse",
+        );
+
+        d.deliver_for_type_for_test(
+            TEST_SUBTYPE,
+            resolved_event_under_subtype("113-fanout", TEST_SUBTYPE),
+        );
+        assert!(contains(&d.poll_results(a), "113-fanout"));
+        assert!(contains(&d.poll_results(b), "113-fanout"), "fan-out");
+
+        // A handle attaching after the record was surfaced is seeded from the
+        // replay cache (no further event will ever arrive for a stable record).
+        let late = d.query_operational_fabric(TEST_CFID).unwrap();
+        assert!(contains(&d.poll_results(late), "113-fanout"), "replay");
+
+        // Refcount: only the last release stops the browse.
+        d.stop_query(a);
+        d.stop_query(b);
+        assert_eq!(d.stop_browse_calls.get(TEST_SUBTYPE), None);
+        d.stop_query(late);
+        assert_eq!(d.stop_browse_calls.get(TEST_SUBTYPE), Some(&1));
+
+        // A different fabric is a different browse string entirely.
+        let other = d.query_operational_fabric([0; 8]).unwrap();
+        assert_eq!(
+            d.browse_calls
+                .get("_I0000000000000000._sub._matter._tcp.local."),
+            Some(&1),
+        );
+        d.stop_query(other);
     }
 
     #[test]

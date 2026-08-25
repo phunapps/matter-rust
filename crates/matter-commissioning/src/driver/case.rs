@@ -147,8 +147,93 @@ pub async fn resolve_operational_with_mrp<D: Discovery>(
     .await
 }
 
+/// Label for the browse a record came from, used in the resolve's diagnostics.
+/// `subtype` is the fabric-scoped `_I<id>._sub._matter._tcp` browse, `base` the
+/// unfiltered `_matter._tcp` one.
+const BROWSE_SUBTYPE: &str = "subtype";
+const BROWSE_BASE: &str = "base";
+
+/// How long the compressed-fabric subtype browse runs **alone** before the
+/// base-type `_matter._tcp` browse is opened behind it as a fallback.
+///
+/// The two browses must not run concurrently from the start. The underlying
+/// defect (keepsimple1/mdns-sd#493) is that the resolver completes per-instance
+/// SRV/address resolution roughly one instance per query cycle, from a queue
+/// shared by every open browse. The subtype helps *only* because it limits how
+/// many instances enter that queue — 3 instead of 18 on the reporter's network.
+/// Opening the base type alongside it re-discovers all 18 and puts our nodes
+/// back at the end of the same slow queue, which is exactly what the first
+/// attempt at this fix did: the reporter's log shows the subtype browse
+/// surfacing *nothing* in 30 s, with every record credited to the base browse.
+///
+/// Two seconds is chosen from both ends:
+/// - **Long enough** that a healthy subtype responder always answers first. The
+///   reporter's three nodes resolved through the subtype in ~266 ms, ours in
+///   ~250 ms; 2 s is roughly 8x that, and covers an initial query that has to be
+///   retransmitted once.
+/// - **Short enough** to be noise against the resolve budget. It costs 2 s of a
+///   ~30 s window ([`RESOLVE_POLL_ATTEMPTS`]), leaving ~28 s for a responder
+///   that genuinely publishes no subtype PTR — far more than such a responder
+///   needs, since it is discovered on the base browse from that browse's first
+///   query cycle.
+const SUBTYPE_ONLY_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// [`SUBTYPE_ONLY_WINDOW`] expressed in poll iterations of the resolve loop,
+/// which is how the delay is actually applied: the fallback is opened from the
+/// existing loop rather than from a timer or a second task, so the resolve stays
+/// a single flat sequence with no concurrency of its own.
+///
+/// `u128` only because that is what `Duration::as_millis` returns; the loop
+/// counter is widened to compare against it, rather than this being narrowed
+/// with a lossy cast.
+const SUBTYPE_ONLY_POLLS: u128 =
+    SUBTYPE_ONLY_WINDOW.as_millis() / RESOLVE_POLL_INTERVAL.as_millis();
+
 /// Shared resolve loop returning both the preferred address and the peer's
 /// parsed MRP config. Both public resolvers delegate here.
+///
+/// # The subtype first, the base type only as a delayed fallback
+///
+/// This opens the fabric's compressed-fabric subtype browse
+/// ([`Discovery::query_operational_fabric`],
+/// `_I<compressed-fabric-id>._sub._matter._tcp.local.`) and, for the first
+/// [`SUBTYPE_ONLY_WINDOW`], **nothing else**. Only if no record has matched by
+/// then is the plain `_matter._tcp` browse opened behind it; from that point
+/// both are polled and whichever delivers the record first settles the resolve.
+///
+/// The subtype is what makes this fast and reliable on a busy link: it narrows
+/// the browse to the nodes of *our* fabric, so a resolver that works through
+/// discovered instances one at a time with exponential backoff (mdns-sd does)
+/// reaches our node immediately instead of possibly never. Issue #113 is that
+/// failure — 18 base-type instances, one resolved per query cycle, and the
+/// wanted nodes still unresolved when the ~30 s budget expired; the same three
+/// nodes resolved in ~266 ms through the subtype.
+///
+/// The delay is the whole point, and it is what the first attempt at this fix
+/// got wrong. That attempt opened both browses at once, reasoning that an extra
+/// browse "cannot lose". It can: the narrowing *is* the fix, and the base-type
+/// browse un-narrows it. Re-discovering all 18 instances feeds them back into
+/// the resolver's shared, one-per-cycle resolution queue, so our nodes are
+/// starved exactly as before — the reporter's log of that build shows the
+/// subtype browse surfacing nothing at all in 30 s, with every surfaced record
+/// carrying `subtype_browse=false`.
+///
+/// The base type is nevertheless kept as a *fallback*, because a subtype browse
+/// narrows: a responder that (wrongly, per Matter Core Spec §4.3.1, but
+/// observably) publishes no subtype PTR would be invisible to it, and regressing
+/// from "slow" to "finds nothing" would be far worse than the bug being fixed.
+/// Deferring it buys the healthy case its narrow browse while still resolving
+/// the subtype-less responder inside the budget.
+///
+/// A [`Discovery`] implementation that does not override
+/// `query_operational_fabric` gets the trait default (a base-type browse), which
+/// may hand back the *same* handle twice; equal handles are deduplicated here so
+/// such an implementation is polled exactly as often as before.
+///
+/// Opening a browse can fail (daemon down). If the *subtype* browse cannot be
+/// opened the base type is opened immediately instead of after the window —
+/// there is nothing to wait for. The resolve continues on whichever browse did
+/// open, and fails outright only if both fail.
 async fn resolve_operational_service<D: Discovery>(
     discovery: &mut D,
     compressed_fabric_id: [u8; 8],
@@ -156,9 +241,38 @@ async fn resolve_operational_service<D: Discovery>(
     attempts: u32,
 ) -> Result<(SocketAddr, MrpConfig), DriverError> {
     let target = operational_instance_name(compressed_fabric_id, node_id);
-    let handle = discovery
-        .query(ServiceKind::Operational)
-        .map_err(DriverError::Transport)?;
+
+    // (label, handle) for every browse to poll. Order matters only for which
+    // label a simultaneous hit is credited to; the subtype is polled first
+    // because it is the one expected to answer.
+    let mut browses: Vec<(&'static str, matter_transport::QueryHandle)> = Vec::new();
+    let mut open_error: Option<DriverError> = None;
+    match discovery.query_operational_fabric(compressed_fabric_id) {
+        Ok(h) => browses.push((BROWSE_SUBTYPE, h)),
+        Err(e) => open_error = Some(DriverError::Transport(e)),
+    }
+    // Whether the base-type browse still has to be opened. It is deliberately
+    // NOT opened here when the subtype browse is up: see `SUBTYPE_ONLY_WINDOW`
+    // — a concurrent base browse re-floods the resolver's shared resolution
+    // queue and starves the very nodes the subtype narrowed down to. It is
+    // opened from the poll loop below, once the window has passed with no match.
+    //
+    // With no subtype browse there is nothing to wait for, so open it at once.
+    let mut base_pending = true;
+    if browses.is_empty() {
+        base_pending = false;
+        match discovery.query(ServiceKind::Operational) {
+            Ok(h) => browses.push((BROWSE_BASE, h)),
+            Err(e) => open_error = Some(DriverError::Transport(e)),
+        }
+        if browses.is_empty() {
+            // Both browses failed to open — surface the daemon error rather
+            // than spinning out the budget against nothing.
+            return Err(open_error.unwrap_or_else(|| {
+                DriverError::Discovery("no mDNS browse could be opened".to_string())
+            }));
+        }
+    }
 
     // Every operational instance name this search observed, so a failure can
     // say whether the browse produced anything at all (see
@@ -167,21 +281,87 @@ async fn resolve_operational_service<D: Discovery>(
     // bound. Purely diagnostic — nothing below reads it to decide anything.
     let mut seen: BTreeSet<String> = BTreeSet::new();
 
-    for _ in 0..attempts {
-        for svc in discovery.poll_results(handle) {
-            if svc.instance_name.eq_ignore_ascii_case(&target) {
-                if let Some(addr) = preferred_address(&svc.addresses) {
-                    discovery.stop_query(handle);
-                    return Ok((SocketAddr::new(addr, svc.port), svc.peer_mrp_config()));
+    let mut found: Option<(SocketAddr, MrpConfig, &'static str)> = None;
+    'search: for attempt in 0..attempts {
+        // The delayed fallback, driven from this loop rather than a timer or a
+        // second task: the subtype has had `SUBTYPE_ONLY_WINDOW` to itself and
+        // produced no match, so this responder may be one that publishes no
+        // subtype PTR. Open the base type behind it and poll both from here on.
+        //
+        // Attempted exactly once (`base_pending` is cleared regardless of
+        // outcome): a daemon that refuses the browse must not be re-asked on
+        // every one of the remaining poll iterations.
+        if base_pending && u128::from(attempt) >= SUBTYPE_ONLY_POLLS {
+            base_pending = false;
+            match discovery.query(ServiceKind::Operational) {
+                // Deduplicate: the trait default for `query_operational_fabric`
+                // IS a base-type browse, and an implementation may return the
+                // same handle for both. Polling one handle twice would consume
+                // records twice over.
+                Ok(h) if !browses.iter().any(|(_, existing)| *existing == h) => {
+                    browses.push((BROWSE_BASE, h));
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!(
+                        instance = %target,
+                        after_secs = SUBTYPE_ONLY_WINDOW.as_secs(),
+                        "no subtype match after {}s; opening the base-type \
+                         _matter._tcp browse as a fallback",
+                        SUBTYPE_ONLY_WINDOW.as_secs(),
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    // Not fatal: the subtype browse is still running, and it is
+                    // the one expected to answer.
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!(
+                        instance = %target,
+                        error = %e,
+                        "base-type fallback browse could not be opened; \
+                         continuing on the subtype browse alone",
+                    );
+                    // Consumed only by the (feature-gated) trace above.
+                    let _ = &e;
                 }
             }
-            if seen.len() < SEEN_TRACK_CAP {
-                seen.insert(svc.instance_name);
+        }
+        for (label, handle) in &browses {
+            for svc in discovery.poll_results(*handle) {
+                if svc.instance_name.eq_ignore_ascii_case(&target) {
+                    if let Some(addr) = preferred_address(&svc.addresses) {
+                        found = Some((
+                            SocketAddr::new(addr, svc.port),
+                            svc.peer_mrp_config(),
+                            *label,
+                        ));
+                        break 'search;
+                    }
+                }
+                if seen.len() < SEEN_TRACK_CAP {
+                    seen.insert(svc.instance_name);
+                }
             }
         }
         tokio::time::sleep(RESOLVE_POLL_INTERVAL).await;
     }
-    discovery.stop_query(handle);
+
+    for (_, handle) in &browses {
+        discovery.stop_query(*handle);
+    }
+
+    if let Some((addr, mrp, browse)) = found {
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            instance = %target,
+            peer = %addr,
+            browse,
+            "operational record resolved",
+        );
+        // Consumed only by the (feature-gated) trace above.
+        let _ = browse;
+        return Ok((addr, mrp));
+    }
+
     let names: Vec<&str> = seen.iter().map(String::as_str).collect();
     Err(DriverError::Discovery(discovery_failure_message(
         &target, &names,
@@ -587,6 +767,284 @@ mod tests {
         };
         let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
         assert_eq!(addr, std::net::SocketAddr::new(ula, 5540));
+    }
+
+    /// The fabric-subtype browse string and the operational instance name must
+    /// name the same fabric the same way: `_I` + the instance name's first
+    /// field. This pins `matter_transport::operational_fabric_subtype` against
+    /// this crate's `operational_instance_name` so the two cannot drift apart
+    /// (different casing or width would make the subtype browse silently match
+    /// nothing).
+    #[test]
+    fn fabric_subtype_prefix_matches_the_instance_name_fabric_field() {
+        let cfid = [0xF5, 0x2A, 0xC1, 0x07, 0xC9, 0x54, 0xE3, 0x8E];
+        let subtype = matter_transport::operational_fabric_subtype(cfid);
+        assert_eq!(subtype, "_IF52AC107C954E38E._sub._matter._tcp.local.");
+
+        let instance = operational_instance_name(cfid, 3);
+        assert_eq!(instance, "F52AC107C954E38E-0000000000000003");
+        let fabric_field = instance.split('-').next().unwrap();
+        assert_eq!(
+            subtype,
+            format!("_I{fabric_field}._sub._matter._tcp.local."),
+            "subtype label and instance-name fabric field must agree",
+        );
+    }
+
+    /// A [`Discovery`] double that answers **only** on the compressed-fabric
+    /// subtype browse — the reporter's network in issue #113, where the
+    /// base-type browse finds instances but never resolves them inside the
+    /// budget while the subtype resolves in ~266 ms.
+    ///
+    /// Records the compressed fabric id the resolver asked for, so the test can
+    /// assert the right fabric was browsed.
+    struct SubtypeOnlyDiscovery {
+        service: MatterService,
+        /// Handle handed out for the subtype browse.
+        subtype_handle: QueryHandle,
+        /// Compressed fabric ids passed to `query_operational_fabric`.
+        fabric_queries: Vec<[u8; 8]>,
+        /// Handles that were stopped, so the test can prove the browses it
+        /// opened are released.
+        stopped: Vec<QueryHandle>,
+        /// How many times the BASE-type browse was opened. The delayed-fallback
+        /// design turns this into the assertion that matters: a subtype browse
+        /// that answers promptly must never cause a base browse to open, or the
+        /// starvation issue #113 is about comes straight back.
+        base_opens: usize,
+    }
+
+    impl Discovery for SubtypeOnlyDiscovery {
+        fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+            Ok(())
+        }
+        fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+            self.base_opens += 1;
+            Ok(QueryHandle(1))
+        }
+        fn query_operational_fabric(
+            &mut self,
+            compressed_fabric_id: [u8; 8],
+        ) -> matter_transport::Result<QueryHandle> {
+            self.fabric_queries.push(compressed_fabric_id);
+            Ok(self.subtype_handle)
+        }
+        fn stop_query(&mut self, h: QueryHandle) {
+            self.stopped.push(h);
+        }
+        fn poll_results(&mut self, h: QueryHandle) -> Vec<MatterService> {
+            if h == self.subtype_handle {
+                vec![self.service.clone()]
+            } else {
+                // The base browse sees the record's PTR but never resolves it.
+                Vec::new()
+            }
+        }
+    }
+
+    /// A record that only ever arrives on the subtype browse still satisfies the
+    /// resolve — the whole point of the #113 fix — **and the base-type browse is
+    /// never opened at all**.
+    ///
+    /// That second half is the correction to the first attempt at this fix. The
+    /// base browse re-discovers every operational instance on the link and feeds
+    /// them into the resolver's shared one-per-cycle resolution queue, so opening
+    /// it concurrently starves the nodes the subtype had narrowed down to. Here
+    /// the subtype answers on the first poll, long inside `SUBTYPE_ONLY_WINDOW`,
+    /// so the fallback must never fire.
+    #[tokio::test(start_paused = true)]
+    async fn subtype_match_never_opens_the_base_browse() {
+        let cfid = [0xF5, 0x2A, 0xC1, 0x07, 0xC9, 0x54, 0xE3, 0x8E];
+        let node_id: u64 = 3;
+        let mut disc = SubtypeOnlyDiscovery {
+            service: MatterService::new(
+                operational_instance_name(cfid, node_id),
+                ServiceKind::Operational,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11))],
+                5540,
+                HashMap::new(),
+            ),
+            subtype_handle: QueryHandle(42),
+            fabric_queries: Vec::new(),
+            stopped: Vec::new(),
+            base_opens: 0,
+        };
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 11)), 5540)
+        );
+        assert_eq!(
+            disc.fabric_queries,
+            vec![cfid],
+            "the resolve must browse OUR fabric's subtype",
+        );
+        assert_eq!(
+            disc.base_opens, 0,
+            "a promptly-answering subtype browse must NOT open the base-type \
+             browse — that is what reintroduces the #113 starvation",
+        );
+        // The browse that WAS opened is released; the base one was never opened.
+        assert_eq!(disc.stopped, vec![QueryHandle(42)]);
+    }
+
+    /// The delayed fallback: a responder that publishes no subtype PTR must
+    /// still resolve. The subtype browse yields nothing, so after
+    /// `SUBTYPE_ONLY_WINDOW` the base-type browse is opened behind it and the
+    /// record that arrives there settles the resolve.
+    ///
+    /// Also pins that the fallback is *delayed* rather than immediate: the base
+    /// browse must not have been opened while the window was still running.
+    /// Time is the tokio paused clock (`start_paused`), so the 2 s window costs
+    /// the test nothing in wall time.
+    #[tokio::test(start_paused = true)]
+    async fn base_browse_opens_only_after_the_subtype_window() {
+        /// Yields the record on the base browse only, and records the poll
+        /// iteration at which the base browse was opened.
+        struct LateBaseDiscovery {
+            service: MatterService,
+            /// Poll iterations elapsed, counted on the SUBTYPE browse (polled
+            /// every iteration from the first).
+            polls: u32,
+            /// `polls` at the moment the base browse was opened.
+            base_opened_at: Option<u32>,
+        }
+        impl Discovery for LateBaseDiscovery {
+            fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+                Ok(())
+            }
+            fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+                Ok(())
+            }
+            fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+                self.base_opened_at = Some(self.polls);
+                Ok(QueryHandle(1))
+            }
+            fn query_operational_fabric(
+                &mut self,
+                _c: [u8; 8],
+            ) -> matter_transport::Result<QueryHandle> {
+                Ok(QueryHandle(2))
+            }
+            fn stop_query(&mut self, _h: QueryHandle) {}
+            fn poll_results(&mut self, h: QueryHandle) -> Vec<MatterService> {
+                if h == QueryHandle(2) {
+                    self.polls += 1;
+                    Vec::new() // no subtype PTR published by this responder
+                } else {
+                    vec![self.service.clone()]
+                }
+            }
+        }
+
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let mut disc = LateBaseDiscovery {
+            service: MatterService::new(
+                operational_instance_name(cfid, node_id),
+                ServiceKind::Operational,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 14))],
+                5540,
+                HashMap::new(),
+            ),
+            polls: 0,
+            base_opened_at: None,
+        };
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 14)), 5540),
+            "a record arriving on the delayed base browse must settle the resolve",
+        );
+        let opened_at = disc
+            .base_opened_at
+            .expect("the base browse must be opened once the subtype yields nothing");
+        assert_eq!(
+            u128::from(opened_at),
+            SUBTYPE_ONLY_POLLS,
+            "the base browse must open exactly at the end of the subtype window \
+             ({SUBTYPE_ONLY_POLLS} polls), not before",
+        );
+    }
+
+    /// The base-type fallback: a [`Discovery`] that does not override
+    /// `query_operational_fabric` (out-of-tree implementations, and any
+    /// responder whose subtype never answers) must still resolve exactly as
+    /// before — `FakeDiscovery` below uses the trait default and hands the same
+    /// handle back for both browses, which the resolver deduplicates.
+    #[tokio::test(start_paused = true)]
+    async fn resolve_falls_back_to_the_base_type_browse() {
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let mut disc = FakeDiscovery {
+            service: MatterService::new(
+                operational_instance_name(cfid, node_id),
+                ServiceKind::Operational,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 12))],
+                5540,
+                HashMap::new(),
+            ),
+        };
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 12)), 5540)
+        );
+    }
+
+    /// A subtype browse that yields nothing must not mask a record that only the
+    /// base browse produces — the "responder publishes no subtype" case, which
+    /// must behave exactly as it did before this change.
+    #[tokio::test(start_paused = true)]
+    async fn base_browse_still_resolves_when_the_subtype_yields_nothing() {
+        struct BaseOnlyDiscovery {
+            service: MatterService,
+        }
+        impl Discovery for BaseOnlyDiscovery {
+            fn publish(&mut self, _s: &MatterService) -> matter_transport::Result<()> {
+                Ok(())
+            }
+            fn unpublish(&mut self, _n: &str, _k: ServiceKind) -> matter_transport::Result<()> {
+                Ok(())
+            }
+            fn query(&mut self, _k: ServiceKind) -> matter_transport::Result<QueryHandle> {
+                Ok(QueryHandle(1))
+            }
+            fn query_operational_fabric(
+                &mut self,
+                _c: [u8; 8],
+            ) -> matter_transport::Result<QueryHandle> {
+                Ok(QueryHandle(2))
+            }
+            fn stop_query(&mut self, _h: QueryHandle) {}
+            fn poll_results(&mut self, h: QueryHandle) -> Vec<MatterService> {
+                if h == QueryHandle(1) {
+                    vec![self.service.clone()]
+                } else {
+                    Vec::new() // no subtype PTR published by this responder
+                }
+            }
+        }
+
+        let cfid = [0x87, 0xe1, 0xb0, 0x04, 0xe2, 0x35, 0xa1, 0x30];
+        let node_id: u64 = 1;
+        let mut disc = BaseOnlyDiscovery {
+            service: MatterService::new(
+                operational_instance_name(cfid, node_id),
+                ServiceKind::Operational,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 0, 2, 13))],
+                5540,
+                HashMap::new(),
+            ),
+        };
+        let addr = resolve_operational(&mut disc, cfid, node_id).await.unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 13)), 5540)
+        );
     }
 
     /// A [`Discovery`] stub that returns no results for the first
