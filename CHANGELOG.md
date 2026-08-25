@@ -22,6 +22,28 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### `matter-cert`, `matter-crypto`, `matter-commissioning`
+
+#### Fixed
+
+- **Dead-code warnings in default-feature builds.** Twelve `pub(crate)` items
+  were compiled by every consumer even though their only callers live behind
+  an optional module — `test_support` (gated on `test-support`) for
+  `matter-cert`'s allocating DER wrappers and `matter-crypto`'s
+  deterministic-input PASE/CASE constructors, and `driver` for
+  `matter-commissioning`'s `ConnectMaxTimeSeconds` accessors. Each is now
+  gated to match its callers, so a default-feature build compiles neither the
+  items nor the warnings. No public API changes, and no behaviour change with
+  the features enabled.
+
+  These were invisible to CI because `just lint` runs `--all-features`, where
+  the items *are* used; they surfaced only in the packaged build during
+  `cargo publish`. A new `just lint-default` recipe now lints each published
+  crate on its own with default features, and runs in both the local gate and
+  the CI clippy job.
+
 ## matter-commissioning 0.5.4 + matter-controller 0.8.0
 
 An additive release: the discovery-injection seam requested on [#113], plus

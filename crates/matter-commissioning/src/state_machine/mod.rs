@@ -21,7 +21,10 @@ pub use commissioner::{Commissioner, CommissionerConfig, NetworkCredentials, WiF
 // Re-exported so the driver (crate::driver::commission) can floor the
 // BLE-path ConnectNetwork response deadline at the same value the
 // state-machine failsafe extension uses (spec D7). `commissioner` itself
-// stays a private module.
+// stays a private module. The driver is the only consumer of the re-export,
+// hence the feature gate — the constant itself stays ungated for
+// `Commissioner::network_enable_failsafe_seconds`.
+#[cfg(feature = "driver")]
 pub(crate) use commissioner::DEFAULT_CONNECT_MAX_TIME_SECONDS;
 pub use error::{CommissioningError, NetworkKind, RemediationHint};
 // Used by Commissioner::advance.

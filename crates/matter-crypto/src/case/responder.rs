@@ -357,6 +357,10 @@ impl CaseResponder {
         })
     }
 
+    // Deterministic-input constructors below are used only by
+    // `crate::test_support`, which is itself behind the `test-support`
+    // feature. Gated to match, so a default-feature build does not compile
+    // them as dead code.
     /// Deterministic constructor for byte-parity testing — injects a
     /// pre-computed ephemeral private key and responder random, bypassing
     /// the RNG entirely.
@@ -369,6 +373,7 @@ impl CaseResponder {
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
     /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_eph_and_random(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
@@ -405,6 +410,7 @@ impl CaseResponder {
     /// `SystemRandom`, so the emitted message is deterministic.
     /// The only valid caller is
     /// `test_support::case_responder_with_eph_key_and_resumption_id`.
+    #[cfg(feature = "test-support")]
     pub(crate) fn set_new_resumption_id_override(&mut self, id: [u8; 16]) {
         self.new_resumption_id_override = Some(id);
     }

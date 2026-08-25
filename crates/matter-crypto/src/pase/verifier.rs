@@ -327,6 +327,10 @@ impl PaseVerifier {
         Self::new_using_rng(w0_arr, l, params, responder_session_id, rng)
     }
 
+    // Deterministic-input constructors below are used only by
+    // `crate::test_support`, which is itself behind the `test-support`
+    // feature. Gated to match, so a default-feature build does not compile
+    // them as dead code.
     /// Deterministic constructor for testing — injects a fixed `y` scalar
     /// directly, bypassing the RNG. Accepts pre-computed `w0` and `L`.
     ///
@@ -342,6 +346,7 @@ impl PaseVerifier {
     ///   if `params` are out of spec.
     /// - [`Error::InvalidScalar`] if `w0_bytes` or `y_scalar_bytes` is zero or
     ///   not a valid P-256 scalar.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_scalar(
         w0_bytes: [u8; 32],
         l: [u8; 65],
@@ -364,6 +369,7 @@ impl PaseVerifier {
     ///   if `params` are out of spec.
     /// - [`Error::InvalidScalar`] if `w0_bytes` or `y_scalar_bytes` is zero or
     ///   not a valid P-256 scalar.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_scalar_and_random(
         w0_bytes: [u8; 32],
         l: [u8; 65],
@@ -416,6 +422,7 @@ impl PaseVerifier {
     /// - [`Error::PinDerivationFailed`] if PBKDF2 fails.
     /// - [`Error::InvalidScalar`] if `y_scalar_bytes` is zero or not a valid
     ///   P-256 scalar.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_from_pin_with_scalar(
         pin: u32,
         params: PasePbkdfParams,

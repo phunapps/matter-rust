@@ -229,6 +229,10 @@ impl PaseProver {
         })
     }
 
+    // Deterministic-input constructors below are used only by
+    // `crate::test_support`, which is itself behind the `test-support`
+    // feature. Gated to match, so a default-feature build does not compile
+    // them as dead code.
     /// Deterministic constructor for testing — injects fixed `x` scalar and
     /// `initiator_random` bytes directly, bypassing the RNG.
     ///
@@ -242,6 +246,7 @@ impl PaseProver {
     ///
     /// - [`Error::InvalidScalar`] if `x_scalar_bytes` is zero or not a valid
     ///   P-256 scalar (i.e., ≥ curve order).
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_negotiation_with_scalar(
         pin: u32,
         x_scalar_bytes: [u8; 32],
@@ -266,6 +271,7 @@ impl PaseProver {
     ///
     /// - [`Error::InvalidScalar`] if `x_scalar_bytes` is zero or not a valid
     ///   P-256 scalar (i.e., ≥ curve order).
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_negotiation_with_scalar_and_session_id(
         pin: u32,
         x_scalar_bytes: [u8; 32],
@@ -358,6 +364,7 @@ impl PaseProver {
     /// - [`Error::PbkdfSaltLengthInvalid`] if `params.salt.len()` ∉ \[16, 32\].
     /// - [`Error::InvalidScalar`] if `x_scalar_bytes` is zero or not a valid
     ///   P-256 scalar.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_known_params_with_scalar(
         pin: u32,
         params: PasePbkdfParams,

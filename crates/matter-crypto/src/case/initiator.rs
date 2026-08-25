@@ -436,6 +436,10 @@ impl CaseInitiator {
         )
     }
 
+    // Deterministic-input constructors below are used only by
+    // `crate::test_support`, which is itself behind the `test-support`
+    // feature. Gated to match, so a default-feature build does not compile
+    // them as dead code.
     /// Deterministic new-session constructor for byte-parity testing — injects
     /// a pre-computed ephemeral private key and initiator random, bypassing
     /// the RNG entirely.
@@ -448,6 +452,7 @@ impl CaseInitiator {
     ///
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
     /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_eph_and_random(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,
@@ -495,6 +500,7 @@ impl CaseInitiator {
     /// Returns [`Error::EphemeralKeyGenerationFailed`] if `eph_private_key`
     /// is zero, >= the P-256 curve order, or otherwise not a valid scalar.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(feature = "test-support")]
     pub(crate) fn new_with_resumption_eph_and_random(
         credentials: CaseCredentials,
         trusted_roots: TrustedRoots,

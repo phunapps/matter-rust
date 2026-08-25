@@ -418,6 +418,12 @@ impl Commissioner {
     /// `FailsafeBeforeNetworkEnable` extension. Called by the driver's
     /// read-dispatch after the `FeatureMap` response is applied; a `0`
     /// value (unread/absent) leaves the default in force.
+    ///
+    /// The driver is the only caller, so this is gated on its feature; without
+    /// it the field simply keeps its default and
+    /// [`Self::network_enable_failsafe_seconds`] falls back to
+    /// [`DEFAULT_CONNECT_MAX_TIME_SECONDS`].
+    #[cfg(feature = "driver")]
     pub(crate) fn set_connect_max_time_seconds(&mut self, seconds: u16) {
         self.connect_max_time_seconds = seconds;
     }
@@ -431,6 +437,9 @@ impl Commissioner {
     /// BLE-path `ConnectNetwork` response deadline from the same value that
     /// [`Self::network_enable_failsafe_seconds`] uses for the failsafe
     /// extension (spec D7: both must be sized from `ConnectMaxTimeSeconds`).
+    ///
+    /// Driver-only, like its setter.
+    #[cfg(feature = "driver")]
     #[must_use]
     pub(crate) fn connect_max_time_seconds(&self) -> u16 {
         self.connect_max_time_seconds
