@@ -24,6 +24,37 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased
 
+### `matter-clusters` (0.5.0)
+
+#### Added
+
+- **`BridgedDeviceBasicInformation` (0x0039) generated module** — the
+  per-bridged-endpoint identity cluster behind a bridge/aggregator (e.g. a
+  Tapo H100's children). Attribute-id constants and decoders for its whole
+  dumped surface, including the three a bridge controller keys on:
+  `NodeLabel` (0x0005, string), `Reachable` (0x0011, bool), and `UniqueId`
+  (0x0012, string — the spec-blessed stable identity for a bridged endpoint,
+  since endpoint numbers may renumber across bridge reboots). In
+  `@matter/model` the cluster derives from `BasicInformation` with
+  type-less, name-aliased attributes; the dump script now resolves such
+  base-aliased attributes against the base cluster's same-named attribute,
+  so the generated decoders carry the real types.
+- **Cluster events, first batch: the `Switch` (0x003B) cluster's seven
+  events.** The codegen model/emitter grew an `events` concept: an
+  `event_id` const module (`SWITCH_LATCHED` 0x00 … `MULTI_PRESS_COMPLETE`
+  0x06) plus decode-only `<Name>Event` payload structs
+  (`MultiPressCompleteEvent { previous_position, total_number_of_presses_counted }`,
+  …) reusing the response-payload struct shape — an event report's data is
+  the same anonymous structure of context-tagged fields on the wire. Events
+  are received, never sent, so no encoders are emitted. Event dumping is
+  allowlisted per cluster (`EVENT_ALLOWLIST` in the dump script, `Switch`
+  only today); every other cluster's events remain recorded exclusions, now
+  with reason `event dump not enabled for this cluster`.
+- Purely additive regeneration: no existing cluster's generated code changed
+  except `switch.rs` gaining its events section. Adding a cluster is a
+  routine minor bump for this `0.x` crate (see the crate README), hence
+  0.4.1 → 0.5.0.
+
 ### `matter-controller`
 
 #### Added

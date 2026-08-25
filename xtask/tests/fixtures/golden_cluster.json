@@ -55,6 +55,16 @@
               "nullable": false, "optional": false }
           ] }
       ],
+      "events": [
+        { "id": 0, "name": "Tripped", "priority": "critical", "fields": [] },
+        { "id": 1, "name": "LevelChanged", "priority": "info",
+          "fields": [
+            { "id": 0, "name": "Previous", "type": "uint16", "metatype": "integer",
+              "nullable": false, "optional": false },
+            { "id": 1, "name": "Count", "type": "uint8", "metatype": "integer",
+              "nullable": false, "optional": true }
+          ] }
+      ],
       "datatypes": [
         { "name": "ModeEnum", "base": "enum8", "kind": "enum", "description": null,
           "values": [

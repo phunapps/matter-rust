@@ -776,3 +776,93 @@ fn every_concentration_cluster_decodes_its_measured_value() {
     );
     assert_family_member!(radon_concentration_measurement, 0x042F);
 }
+
+// ---- Bridge support: BDBI (0x0039) + Switch events (Phase 0) ---------------
+// BridgedDeviceBasicInformation reuses string/bool wire shapes already
+// byte-parity-proven via BasicInformation (the two clusters share attribute
+// ids per the Matter spec), so synthetic decode is the gate, per the A2.x
+// convention above. Switch event payloads are hand-built TLV structures —
+// the wire shape of EventDataIB's Data field.
+
+/// Encode a single anonymous-tagged UTF-8 string (the wire shape of a
+/// string attribute value).
+fn str_attr(v: &str) -> Vec<u8> {
+    let mut buf = Vec::new();
+    TlvWriter::new(&mut buf)
+        .put_utf8(Tag::Anonymous, v)
+        .unwrap();
+    buf
+}
+
+#[test]
+fn bridged_device_basic_information_ids_pinned() {
+    use gen::bridged_device_basic_information as bdbi;
+    assert_eq!(bdbi::CLUSTER_ID, 0x0039);
+    // Same attribute ids as BasicInformation (0x0028), per the Matter spec.
+    assert_eq!(bdbi::attribute_id::NODE_LABEL, 0x0005);
+    assert_eq!(bdbi::attribute_id::REACHABLE, 0x0011);
+    assert_eq!(bdbi::attribute_id::UNIQUE_ID, 0x0012);
+}
+
+#[test]
+fn bridged_device_basic_information_decodes() {
+    use gen::bridged_device_basic_information as bdbi;
+    // NodeLabel / UniqueId: strings.
+    assert_eq!(
+        bdbi::decode_node_label(&str_attr("Kitchen sensor")).unwrap(),
+        "Kitchen sensor"
+    );
+    assert_eq!(
+        bdbi::decode_unique_id(&str_attr("00112233AABB")).unwrap(),
+        "00112233AABB"
+    );
+    // Reachable: bool.
+    assert!(bdbi::decode_reachable(&bool_attr(true)).unwrap());
+    assert!(!bdbi::decode_reachable(&bool_attr(false)).unwrap());
+    // A type mismatch is an error, never a default.
+    assert!(bdbi::decode_node_label(&bool_attr(true)).is_err());
+    assert!(bdbi::decode_reachable(&str_attr("x")).is_err());
+}
+
+#[test]
+fn switch_event_ids_pinned() {
+    use gen::switch::event_id as ev;
+    assert_eq!(ev::SWITCH_LATCHED, 0x00);
+    assert_eq!(ev::INITIAL_PRESS, 0x01);
+    assert_eq!(ev::LONG_PRESS, 0x02);
+    assert_eq!(ev::SHORT_RELEASE, 0x03);
+    assert_eq!(ev::LONG_RELEASE, 0x04);
+    assert_eq!(ev::MULTI_PRESS_ONGOING, 0x05);
+    assert_eq!(ev::MULTI_PRESS_COMPLETE, 0x06);
+}
+
+#[test]
+fn switch_multi_press_complete_event_round_trips() {
+    // Hand-built MultiPressComplete payload: an anonymous structure with
+    // PreviousPosition (ctx tag 0) and TotalNumberOfPressesCounted (ctx tag 1).
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 2).unwrap();
+        w.end_container().unwrap();
+    }
+    let ev = gen::switch::MultiPressCompleteEvent::decode(&buf).unwrap();
+    assert_eq!(ev.previous_position, 1);
+    assert_eq!(ev.total_number_of_presses_counted, 2);
+}
+
+#[test]
+fn switch_multi_press_complete_event_missing_field_errors() {
+    // TotalNumberOfPressesCounted (ctx tag 1) is mandatory — a payload
+    // without it must be a decode error, not a silent zero.
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.end_container().unwrap();
+    }
+    assert!(gen::switch::MultiPressCompleteEvent::decode(&buf).is_err());
+}

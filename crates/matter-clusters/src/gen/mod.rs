@@ -6,6 +6,7 @@ pub mod air_quality;
 pub mod basic_information;
 pub mod binding;
 pub mod boolean_state;
+pub mod bridged_device_basic_information;
 pub mod carbon_dioxide_concentration_measurement;
 pub mod carbon_monoxide_concentration_measurement;
 pub mod color_control;

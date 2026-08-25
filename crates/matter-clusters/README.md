@@ -1,7 +1,9 @@
 # matter-clusters
 
 Typed Matter cluster definitions: per-cluster attribute/command/struct codecs,
-feature flags, enums (with `Unknown(n)` forward-compat) and bitmaps. The modules
+feature flags, enums (with `Unknown(n)` forward-compat), bitmaps, and — for
+clusters whose events are dumped (Switch today) — event-id constants plus
+decode-only event payload structs. The modules
 under `gen/` are generated from a pinned `@matter/model` dump by the `xtask`
 codegen tool.
 
@@ -9,13 +11,13 @@ Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
 ```toml
 [dependencies]
-matter-clusters = "0.4"
+matter-clusters = "0.5"
 ```
 
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  47 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  48 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -23,7 +25,7 @@ matter-clusters = "0.4"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 47 listed below. More
+- It is **not** the full Matter cluster set — only the 48 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -37,23 +39,27 @@ matter-clusters = "0.4"
 
 ## Status
 
-**0.4.1**, published on crates.io. Stability: a `0.x` crate, so a **minor** bump
+**0.5.0**. Stability: a `0.x` crate, so a **minor** bump
 may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-47 clusters are generated today, covering their **mandatory and optional**
+48 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
-  FixedLabel, UserLabel, PowerSource, GeneralDiagnostics.
+  FixedLabel, UserLabel, PowerSource, GeneralDiagnostics,
+  BridgedDeviceBasicInformation (per-bridged-endpoint identity behind a
+  bridge/aggregator).
 - **Lighting and actuators** — OnOff, LevelControl, ColorControl, DoorLock
   (Aliro features excluded), WindowCovering, Thermostat,
   ThermostatUserInterfaceConfiguration, FanControl,
   PumpConfigurationAndControl.
 - **Sensing** — OccupancySensing, TemperatureMeasurement,
   RelativeHumidityMeasurement, IlluminanceMeasurement, PressureMeasurement,
-  FlowMeasurement, BooleanState, Switch, AirQuality, and the ten
+  FlowMeasurement, BooleanState, Switch (attributes and, uniquely today, its
+  seven events — `event_id` consts plus decode-only `<Name>Event` payload
+  structs), AirQuality, and the ten
   ConcentrationMeasurement clusters (CarbonMonoxide 0x040C, CarbonDioxide
   0x040D, NitrogenDioxide 0x0413, Ozone 0x0415, Pm25 0x042A, Formaldehyde
   0x042B, Pm1 0x042C, Pm10 0x042D, TotalVolatileOrganicCompounds 0x042E, Radon

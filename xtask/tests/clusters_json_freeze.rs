@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 47] = [
+const TARGET_CLUSTERS: [&str; 48] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -73,6 +73,8 @@ const TARGET_CLUSTERS: [&str; 47] = [
     "Pm10ConcentrationMeasurement",
     "TotalVolatileOrganicCompoundsConcentrationMeasurement",
     "RadonConcentrationMeasurement",
+    // Matter bridge support (Phase 0):
+    "BridgedDeviceBasicInformation",
 ];
 
 fn load() -> Value {

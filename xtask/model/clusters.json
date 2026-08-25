@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 1,
+    "dumpScriptVersion": 2,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -17,6 +17,7 @@
       "PowerSource",
       "GeneralDiagnostics",
       "TimeSynchronization",
+      "BridgedDeviceBasicInformation",
       "Switch",
       "AdministratorCommissioning",
       "OperationalCredentials",
@@ -57,19 +58,61 @@
         "cluster": "AccessControl",
         "element": "3 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "BasicInformation",
         "element": "4 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "BooleanState",
         "element": "1 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "CapabilityMinima",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "DataModelRevision",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "LocalConfigDisabled",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "Location",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "MaxPathsPerInvoke",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "SpecificationVersion",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
+        "element": "5 event(s)",
+        "kind": "events",
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "DoorLock",
@@ -153,19 +196,19 @@
         "cluster": "DoorLock",
         "element": "5 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "ElectricalEnergyMeasurement",
         "element": "2 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "ElectricalPowerMeasurement",
         "element": "1 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "GeneralDiagnostics",
@@ -177,7 +220,7 @@
         "cluster": "GeneralDiagnostics",
         "element": "4 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "GroupKeyManagement",
@@ -195,19 +238,19 @@
         "cluster": "OccupancySensing",
         "element": "1 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "OtaSoftwareUpdateRequestor",
         "element": "3 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "PowerSource",
         "element": "3 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "PumpConfigurationAndControl",
@@ -219,13 +262,7 @@
         "cluster": "PumpConfigurationAndControl",
         "element": "17 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
-      },
-      {
-        "cluster": "Switch",
-        "element": "7 event(s)",
-        "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "Thermostat",
@@ -291,7 +328,7 @@
         "cluster": "TimeSynchronization",
         "element": "5 event(s)",
         "kind": "events",
-        "reason": "no IM event support until M8"
+        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "WindowCovering",
@@ -380,6 +417,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "EffectIdentifierEnum",
@@ -723,6 +761,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "NameSupportBitmap",
@@ -906,6 +945,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "DelayedAllOffEffectVariantEnum",
@@ -1379,6 +1419,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "MoveModeEnum",
@@ -1516,6 +1557,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "DeviceTypeStruct",
@@ -1564,6 +1606,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "TargetStruct",
@@ -1751,6 +1794,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "AccessControlEntryAuthModeEnum",
@@ -2332,6 +2376,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "CapabilityMinimaStruct",
@@ -2785,6 +2830,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "ApplyUpdateActionEnum",
@@ -2970,6 +3016,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "AnnouncementReasonEnum",
@@ -3474,6 +3521,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "BatApprovedChemistryEnum",
@@ -4518,6 +4566,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "BootReasonEnum",
@@ -5101,6 +5150,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "DSTOffsetStruct",
@@ -5398,6 +5448,435 @@
       ]
     },
     {
+      "id": 57,
+      "name": "BridgedDeviceBasicInformation",
+      "revision": 5,
+      "features": [
+        {
+          "bit": 20,
+          "code": "BIS",
+          "name": "BridgedIcdSupport",
+          "description": "Support bridged ICDs."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 1,
+          "name": "VendorName",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 2,
+          "name": "VendorId",
+          "type": "vendor-id",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 3,
+          "name": "ProductName",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 4,
+          "name": "ProductId",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 5,
+          "name": "NodeLabel",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": null
+        },
+        {
+          "id": 7,
+          "name": "HardwareVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 8,
+          "name": "HardwareVersionString",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 9,
+          "name": "SoftwareVersion",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 10,
+          "name": "SoftwareVersionString",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 11,
+          "name": "ManufacturingDate",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 12,
+          "name": "PartNumber",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 13,
+          "name": "ProductUrl",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 14,
+          "name": "ProductLabel",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 15,
+          "name": "SerialNumber",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 17,
+          "name": "Reachable",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall be used to indicate whether the bridged device is reachable by the bridge, so a Matter Node which wants to communicate with a bridged device can get an indication that this might fail (when the attribute is False). Determination of reachability might not be perfect (e.g. depending on technology employed), so the Matter Node SHOULD be aware of the risk of false positives and negatives on reachability determination. For example, a bridged device may be marked as unreachable while it could actually be reached, and vice-versa. Also, detection (and indication) that a bridged device is not longer reachable may be delayed due to the technique employed (e.g. detecting that a number of expected messages from the bridged device did not arrive). Also see event ReachableChanged below."
+        },
+        {
+          "id": 18,
+          "name": "UniqueId",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall, for a Bridged Device, be updated when the Bridge is factory reset. If the bridged device does not provide some unique id (e.g. in the case of bridging from non-Matter devices, or in case of bridging Matter devices from an earlier revision which were not required to provide a UniqueID attribute), the bridge shall generate a unique id on behalf of the bridged device.\n> [!NOTE]\n> NOTE: The UniqueID attribute was optional in cluster revisions prior to revision 4."
+        },
+        {
+          "id": 20,
+          "name": "ProductAppearance",
+          "type": "ProductAppearanceStruct",
+          "metatype": "object",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 24,
+          "name": "ConfigurationVersion",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain the current version number for the configuration of the bridged device. A larger value of ConfigurationVersion shall indicate a newer configuration than a lower value.\nIf the bridge detects a change on a bridged device, which it deems as a change in the configuration of the bridged device, it shall increase this attribute (and the corresponding attribute on the bridge itself) as described in Section 9.2.11, \"Node Configuration Changes\".\nThe ability and the method used to detect such a change on a bridged device is manufacturer specific."
+        }
+      ],
+      "commands": [
+        {
+          "id": 128,
+          "name": "KeepActive",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "StayActiveDuration",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the duration, in milliseconds, that the device is requested to remain active, once the device becomes active again.\nThe value of this field may be longer than the value supported by the bridged device and would, typically, be used by the client to request the server of the bridged device to stay active and responsive for this period to allow a sequence of message exchanges during that period.\nThe client may slightly overestimate the duration it wants the bridged device to be active for, in order to account for network delays."
+            },
+            {
+              "id": 1,
+              "name": "TimeoutMs",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the period, in milliseconds, that the server will wait before the \"pending active\" state expires. See the KeepActive Command description for details.\n> [!NOTE]\n> NOTE: TimeoutMs is a timeout for the request, NOT the time the device will be awake for. The server will wait for up to TimeoutMs for the device. If after TimeoutMs the ICD device does NOT check-in, the server will not perform any actions."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "CapabilityMinimaStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure provides constant values related to overall global capabilities of this Node, that are not cluster-specific.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "CaseSessionsPerFabric",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the actual minimum number of concurrent CASE sessions that are supported per fabric.\nThis value shall NOT be smaller than the required minimum indicated in Section 4.14.2.8, \"Minimal Number of CASE Sessions\"."
+            },
+            {
+              "id": 1,
+              "name": "SubscriptionsPerFabric",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the actual minimum number of concurrent subscriptions supported per fabric.\nThis value shall NOT be smaller than the required minimum indicated in Section 8.5.1, \"Subscribe Transaction\"."
+            }
+          ]
+        },
+        {
+          "name": "ColorEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "The data type of ColorEnum is derived from enum8.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Black",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Navy",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Green",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Teal",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Maroon",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Purple",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Olive",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Gray",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Blue",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Lime",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Aqua",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Red",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "Fuchsia",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "Yellow",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "White",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "Nickel",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "Chrome",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "Brass",
+              "description": null
+            },
+            {
+              "value": 18,
+              "name": "Copper",
+              "description": null
+            },
+            {
+              "value": 19,
+              "name": "Silver",
+              "description": null
+            },
+            {
+              "value": 20,
+              "name": "Gold",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ProductAppearanceStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure provides a description of the product's appearance.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Finish",
+              "type": "ProductFinishEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the visible finish of the product."
+            },
+            {
+              "id": 1,
+              "name": "PrimaryColor",
+              "type": "ColorEnum",
+              "metatype": "enum",
+              "nullable": true,
+              "optional": false,
+              "description": "This field indicates the representative color of the visible parts of the product. If the product has no representative color, the field shall be null."
+            }
+          ]
+        },
+        {
+          "name": "ProductFinishEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "The data type of ProductFinishEnum is derived from enum8.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Other",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Matte",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Satin",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Polished",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Rugged",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Fabric",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 59,
       "name": "Switch",
       "revision": 2,
@@ -5472,6 +5951,138 @@
         }
       ],
       "commands": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "SwitchLatched",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "NewPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new value of the CurrentPosition attribute, i.e. after the move."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "InitialPress",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "NewPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new value of the CurrentPosition attribute, i.e. while pressed."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "LongPress",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "NewPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new value of the CurrentPosition attribute, i.e. while pressed."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "ShortRelease",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PreviousPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the previous value of the CurrentPosition attribute, i.e. just prior to release."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "LongRelease",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PreviousPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the previous value of the CurrentPosition attribute, i.e. just prior to release."
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "MultiPressOngoing",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "NewPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new value of the CurrentPosition attribute, i.e. while pressed."
+            },
+            {
+              "id": 1,
+              "name": "CurrentNumberOfPressesCounted",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain:\n  - a value of 2 when the second press of a multi-press sequence has been detected,\n  - a value of 3 when the third press of a multi-press sequence has been detected,\n  - a value of N when the N^th press of a multi-press sequence has been detected."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "MultiPressComplete",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PreviousPosition",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "TotalNumberOfPressesCounted",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
       "datatypes": []
     },
     {
@@ -5597,6 +6208,7 @@
           "fields": []
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "CommissioningWindowStatusEnum",
@@ -6108,6 +6720,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "CertificateChainTypeEnum",
@@ -6453,6 +7066,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "GroupInfoMapStruct",
@@ -6689,6 +7303,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LabelStruct",
@@ -6737,6 +7352,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LabelStruct",
@@ -6784,6 +7400,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": []
     },
     {
@@ -7051,6 +7668,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "ClientTypeEnum",
@@ -7270,6 +7888,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "AirQualityEnum",
@@ -7549,6 +8168,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "HarmonicMeasurementStruct",
@@ -8040,6 +8660,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "CumulativeEnergyResetStruct",
@@ -9790,6 +10411,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "AlarmCodeEnum",
@@ -10949,6 +11571,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "ConfigStatusBitmap",
@@ -11611,6 +12234,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "ControlModeEnum",
@@ -12397,6 +13021,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "ACCapacityFormatEnum",
@@ -13560,6 +14185,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "AirflowDirectionEnum",
@@ -13759,6 +14385,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "KeypadLockoutEnum",
@@ -15367,6 +15994,7 @@
           ]
         }
       ],
+      "events": [],
       "datatypes": [
         {
           "name": "ColorCapabilitiesBitmap",
@@ -15696,6 +16324,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LightSensorTypeEnum",
@@ -15765,6 +16394,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": []
     },
     {
@@ -15872,6 +16502,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": []
     },
     {
@@ -15922,6 +16553,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": []
     },
     {
@@ -15972,6 +16604,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": []
     },
     {
@@ -16171,6 +16804,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "HoldTimeLimitsStruct",
@@ -16428,6 +17062,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -16690,6 +17325,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -16952,6 +17588,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -17214,6 +17851,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -17476,6 +18114,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -17738,6 +18377,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -18000,6 +18640,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -18262,6 +18903,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -18524,6 +19166,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",
@@ -18786,6 +19429,7 @@
         }
       ],
       "commands": [],
+      "events": [],
       "datatypes": [
         {
           "name": "LevelValueEnum",

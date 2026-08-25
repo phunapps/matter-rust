@@ -38,6 +38,10 @@ pub struct Cluster {
     pub attributes: Vec<Attribute>,
     /// Request and response commands.
     pub commands: Vec<CommandDef>,
+    /// Cluster events. Empty for clusters whose events the dump script has
+    /// not (yet) allowlisted — event codegen is rolled out per cluster.
+    #[serde(default)]
+    pub events: Vec<EventDef>,
     /// Cluster-local datatypes (enums, bitmaps, structs).
     pub datatypes: Vec<Datatype>,
 }
@@ -90,6 +94,20 @@ pub struct CommandDef {
     #[serde(rename = "responseId")]
     pub response_id: Option<u32>,
     /// Command fields.
+    pub fields: Vec<FieldDef>,
+}
+
+/// A cluster event.
+#[derive(Debug, Deserialize)]
+pub struct EventDef {
+    /// Event ID.
+    pub id: u32,
+    /// `PascalCase` event name.
+    pub name: String,
+    /// Spec priority (`debug`, `info`, `critical`). Carried for rustdoc.
+    pub priority: String,
+    /// Event payload fields (an anonymous structure of context-tagged
+    /// fields on the wire — the same shape as a response command payload).
     pub fields: Vec<FieldDef>,
 }
 
@@ -207,6 +225,23 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 ));
             }
             for f in &cmd.fields {
+                check_type(
+                    &c.name,
+                    &f.name,
+                    &f.ty,
+                    f.entry_type.as_deref(),
+                    &datatype_names,
+                )?;
+            }
+        }
+
+        // Duplicate event IDs.
+        let mut event_ids = HashSet::new();
+        for ev in &c.events {
+            if !event_ids.insert(ev.id) {
+                return Err(format!("{}: duplicate event id {}", c.name, ev.id));
+            }
+            for f in &ev.fields {
                 check_type(
                     &c.name,
                     &f.name,
@@ -337,6 +372,54 @@ mod tests {
             }))],
         };
         assert!(validate(&m).unwrap_err().contains("dangling responseId 99"));
+    }
+
+    #[test]
+    fn accepts_a_cluster_with_events() {
+        let m = Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x3b, "name": "Switch", "revision": 2, "features": [], "datatypes": [],
+                "attributes": [], "commands": [],
+                "events": [{ "id": 6, "name": "MultiPressComplete", "priority": "info",
+                    "fields": [{ "id": 1, "name": "TotalNumberOfPressesCounted", "type": "uint8",
+                        "metatype": "integer", "nullable": false, "optional": false }] }]
+            }))],
+        };
+        assert!(validate(&m).is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_event_id() {
+        let m = Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x3b, "name": "Switch", "revision": 2, "features": [], "datatypes": [],
+                "attributes": [], "commands": [],
+                "events": [
+                    { "id": 1, "name": "InitialPress", "priority": "info", "fields": [] },
+                    { "id": 1, "name": "LongPress", "priority": "info", "fields": [] }
+                ]
+            }))],
+        };
+        assert!(validate(&m).unwrap_err().contains("duplicate event id 1"));
+    }
+
+    #[test]
+    fn rejects_unknown_event_field_type() {
+        let m = Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x3b, "name": "Switch", "revision": 2, "features": [], "datatypes": [],
+                "attributes": [], "commands": [],
+                "events": [{ "id": 0, "name": "SwitchLatched", "priority": "info",
+                    "fields": [{ "id": 0, "name": "NewPosition", "type": "frobnicator",
+                        "metatype": "integer", "nullable": false, "optional": false }] }]
+            }))],
+        };
+        assert!(validate(&m)
+            .unwrap_err()
+            .contains("unknown type `frobnicator`"));
     }
 
     #[test]

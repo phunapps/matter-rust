@@ -18,7 +18,7 @@ workspace = true
 [dependencies]
 matter-codec = { path = "../matter-codec", version = "0.3.0" }
 matter-interaction = { path = "../matter-interaction", version = "0.4.0" }
-matter-clusters = { path = "../matter-clusters", version = "0.4.0" }
+matter-clusters = { path = "../matter-clusters", version = "0.5.0" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

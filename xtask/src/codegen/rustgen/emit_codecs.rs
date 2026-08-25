@@ -1,6 +1,6 @@
 //! Codec emission: struct, attribute, and command encode/decode.
 
-use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, FieldDef};
+use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, EventDef, FieldDef};
 use crate::codegen::rustgen::emit::line;
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, snake, Position};
 use std::collections::{HashMap, HashSet};
@@ -81,6 +81,9 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
         } else {
             emit_response_decoder(s, cmd, &dts);
         }
+    }
+    for ev in &c.events {
+        emit_event_decoder(s, ev, &dts);
     }
 }
 
@@ -792,6 +795,27 @@ fn emit_response_decoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>
     emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new());
 }
 
+fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
+    // An event report's data is an anonymous structure of context-tagged
+    // fields — the same wire shape as a response command payload — so the
+    // same decode-only struct treatment is reused, named `<Name>Event`
+    // (suffixed to keep clear of cluster datatypes; events are received,
+    // never sent, so no encoder is emitted). Fieldless events carry no
+    // payload to decode and get only their `event_id` const.
+    if ev.fields.is_empty() {
+        return;
+    }
+    let st = Datatype {
+        name: format!("{}Event", ev.name),
+        base: "struct".into(),
+        kind: "struct".into(),
+        values: vec![],
+        bits: vec![],
+        fields: ev.fields.iter().map(clone_field).collect(),
+    };
+    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new());
+}
+
 fn clone_field(f: &FieldDef) -> FieldDef {
     FieldDef {
         id: f.id,
@@ -1339,8 +1363,46 @@ mod tests {
             features: vec![],
             attributes: vec![],
             commands,
+            events: vec![],
             datatypes,
         }
+    }
+
+    #[test]
+    fn event_decoder_is_decode_only_with_event_suffix() {
+        let ev = EventDef {
+            id: 6,
+            name: "MultiPressComplete".to_string(),
+            priority: "info".to_string(),
+            fields: vec![
+                field(0, "PreviousPosition", "uint8", "integer", None),
+                field(1, "TotalNumberOfPressesCounted", "uint8", "integer", None),
+            ],
+        };
+        let mut s = String::new();
+        emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
+        assert!(
+            s.contains("pub struct MultiPressCompleteEvent {"),
+            "payload struct missing:\n{s}"
+        );
+        assert!(s.contains("pub fn decode(tlv: &[u8])"), "{s}");
+        assert!(
+            !s.contains("pub fn encode") && !s.contains("pub fn write_fields"),
+            "events are received, never sent — decode-only:\n{s}"
+        );
+    }
+
+    #[test]
+    fn fieldless_event_emits_no_payload_struct() {
+        let ev = EventDef {
+            id: 3,
+            name: "ReachableChanged".to_string(),
+            priority: "critical".to_string(),
+            fields: vec![],
+        };
+        let mut s = String::new();
+        emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
+        assert!(s.is_empty(), "fieldless event emitted code:\n{s}");
     }
 
     #[test]
