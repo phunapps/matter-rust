@@ -1020,6 +1020,34 @@ impl Commissioner {
             Expectation::NetworkCommissioningInfo => {
                 use crate::clusters::network_commissioning as nc;
                 use crate::state_machine::NetworkKind;
+                // EMPTY payload = the driver's absent-cluster sentinel: the
+                // device answered the read with unsupported-path statuses
+                // instead of data (it exposes no NetworkCommissioning cluster
+                // — observed on a real device: eufy E31 lock commissioned
+                // over IP). With no credentials to provision that is fine —
+                // the device is already reachable on its operational network
+                // — so skip provisioning exactly like the AlreadyOnNetwork
+                // feature-map path below. With Wi-Fi/Thread credentials the
+                // device CANNOT be provisioned: surface the typed error, not
+                // a framing error.
+                if payload.is_empty() {
+                    match &self.network {
+                        NetworkCredentials::AlreadyOnNetwork => {
+                            self.advance(Stage::EvictPreviousCaseSessions);
+                            return Ok(());
+                        }
+                        NetworkCredentials::WiFi(_) => {
+                            return Err(CommissioningError::NetworkFeatureUnsupported {
+                                needed: NetworkKind::WiFi,
+                            });
+                        }
+                        NetworkCredentials::Thread(_) => {
+                            return Err(CommissioningError::NetworkFeatureUnsupported {
+                                needed: NetworkKind::Thread,
+                            });
+                        }
+                    }
+                }
                 let features = nc::decode_feature_map(payload)?;
                 // A FeatureMap with no recognised interface bit is
                 // malformed regardless of the supplied credentials — a
@@ -2495,6 +2523,62 @@ mod tests {
         let mut config = sample_valid_config();
         config.network = NetworkCredentials::AlreadyOnNetwork;
         Commissioner::new(config).expect("AlreadyOnNetwork should pass validation");
+    }
+
+    /// A device that omits the `NetworkCommissioning` cluster (observed: eufy
+    /// E31 lock over IP — `UNSUPPORTED_CLUSTER` for both read paths) reaches
+    /// the state machine as an EMPTY `NetworkCommissioningInfo` payload (the
+    /// driver's absent-cluster sentinel). With `AlreadyOnNetwork` there is
+    /// nothing to provision, so the absent cluster is acceptable: skip
+    /// straight to `EvictPreviousCaseSessions`, exactly like the
+    /// feature-map-present path.
+    #[test]
+    fn network_commissioning_cluster_absent_skips_provisioning_when_already_on_network() {
+        let mut config = sample_valid_config();
+        config.network = NetworkCredentials::AlreadyOnNetwork;
+        let mut sm = Commissioner::new(config).expect("valid config");
+        sm.stage = Stage::ReadNetworkCommissioningInfo;
+        match sm.poll().expect("poll emits the read") {
+            Action::ReadAttribute { expect, .. } => {
+                assert_eq!(expect, Expectation::NetworkCommissioningInfo);
+            }
+            other => panic!("expected ReadAttribute, got {other:?}"),
+        }
+
+        sm.on_response(Expectation::NetworkCommissioningInfo, &[])
+            .expect("absent cluster is acceptable when already on network");
+        assert_eq!(sm.stage(), Stage::EvictPreviousCaseSessions);
+    }
+
+    /// The empty sentinel with Wi-Fi credentials supplied is a REAL error —
+    /// the device cannot be provisioned onto a network it exposes no
+    /// `NetworkCommissioning` cluster for. Surface the typed
+    /// `NetworkFeatureUnsupported`, not a framing error.
+    #[test]
+    fn network_commissioning_cluster_absent_rejects_wifi_provisioning() {
+        use crate::state_machine::NetworkKind;
+
+        let mut config = sample_valid_config();
+        config.network = NetworkCredentials::WiFi(WiFiCredentials {
+            ssid: b"matter".to_vec(),
+            credentials: b"hunter22".to_vec(),
+        });
+        let mut sm = Commissioner::new(config).expect("valid config");
+        sm.stage = Stage::ReadNetworkCommissioningInfo;
+        let _ = sm.poll().expect("poll emits the read");
+
+        let Err(err) = sm.on_response(Expectation::NetworkCommissioningInfo, &[]) else {
+            panic!("absent cluster with Wi-Fi credentials must fail");
+        };
+        assert!(
+            matches!(
+                err,
+                CommissioningError::NetworkFeatureUnsupported {
+                    needed: NetworkKind::WiFi,
+                }
+            ),
+            "got {err:?}",
+        );
     }
 
     #[test]
