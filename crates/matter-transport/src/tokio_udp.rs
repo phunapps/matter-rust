@@ -110,7 +110,14 @@ impl TokioUdpTransport {
     /// # Errors
     ///
     /// Returns [`Error::Io`] on bind failure or an invalid interface index.
+    // `unused_async_trait_impl` is new in Rust 1.98 (pedantic) and is not
+    // covered by the `unused_async` allow above. Both are deliberate: the
+    // `async` is part of this published constructor's signature, so dropping it
+    // (or switching to `-> impl Future`) would be a breaking change, and it
+    // leaves room for the future migration to `tokio::net::UdpSocket::bind`
+    // described on `bind_addr`.
     #[allow(clippy::unused_async)] // symmetry with `bind`; see `bind_addr`.
+    #[allow(clippy::unused_async_trait_impl)]
     pub async fn bind_addr_with_multicast_if(
         addr: SocketAddr,
         multicast_if: Option<u32>,

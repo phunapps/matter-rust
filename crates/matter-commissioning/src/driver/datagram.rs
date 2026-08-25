@@ -169,6 +169,11 @@ impl AsyncDatagram for InMemoryDatagram {
     /// delivery failure. A test whose peer endpoint is dropped early will see
     /// `Ok(())` here and then block in `recv_from`; keep both endpoints alive
     /// for the test's duration.
+    // The `async` is dictated by the `AsyncDatagram` trait signature, not by
+    // this body: sending on an unbounded channel never blocks, so there is
+    // nothing to await. Rust 1.98's `unused_async_trait_impl` cannot see that
+    // constraint.
+    #[allow(clippy::unused_async_trait_impl)]
     async fn send_to(&self, buf: &[u8], _peer: SocketAddr) -> io::Result<()> {
         // Atomic decrement-if-nonzero: consumes exactly one drop credit even
         // under concurrent sends.

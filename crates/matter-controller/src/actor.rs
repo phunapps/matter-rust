@@ -8704,6 +8704,9 @@ mod tests {
     async fn transient_transport_errors_neither_stop_nor_spin_the_loop() {
         /// Always-failing datagram transport that counts its receive attempts.
         struct AlwaysWouldBlock(Arc<std::sync::atomic::AtomicUsize>);
+        // Both methods are `async` because `AsyncDatagram` declares them so;
+        // this stub answers immediately and has nothing to await.
+        #[allow(clippy::unused_async_trait_impl)]
         impl AsyncDatagram for AlwaysWouldBlock {
             async fn send_to(&self, _buf: &[u8], _peer: SocketAddr) -> std::io::Result<()> {
                 Ok(())
