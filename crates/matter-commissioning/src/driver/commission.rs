@@ -1785,7 +1785,9 @@ mod tests {
         let mut report = crate::im::ReportData::new(vec![], None, false, true);
         report.statuses = vec![
             (
-                path(crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS),
+                path(
+                    crate::clusters::network_commissioning::attribute_id::CONNECT_MAX_TIME_SECONDS,
+                ),
                 ImStatus::from_u8(0xC3), // UNSUPPORTED_CLUSTER
             ),
             (
