@@ -22,40 +22,12 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## matter-commissioning 0.5.4 + matter-controller 0.8.0
 
-### `matter-clusters` (0.5.0)
+An additive release: the discovery-injection seam requested on [#113], plus
+routine dependency maintenance. No behaviour changes for existing callers.
 
-#### Added
-
-- **`BridgedDeviceBasicInformation` (0x0039) generated module** — the
-  per-bridged-endpoint identity cluster behind a bridge/aggregator (e.g. a
-  Tapo H100's children). Attribute-id constants and decoders for its whole
-  dumped surface, including the three a bridge controller keys on:
-  `NodeLabel` (0x0005, string), `Reachable` (0x0011, bool), and `UniqueId`
-  (0x0012, string — the spec-blessed stable identity for a bridged endpoint,
-  since endpoint numbers may renumber across bridge reboots). In
-  `@matter/model` the cluster derives from `BasicInformation` with
-  type-less, name-aliased attributes; the dump script now resolves such
-  base-aliased attributes against the base cluster's same-named attribute,
-  so the generated decoders carry the real types.
-- **Cluster events, first batch: the `Switch` (0x003B) cluster's seven
-  events.** The codegen model/emitter grew an `events` concept: an
-  `event_id` const module (`SWITCH_LATCHED` 0x00 … `MULTI_PRESS_COMPLETE`
-  0x06) plus decode-only `<Name>Event` payload structs
-  (`MultiPressCompleteEvent { previous_position, total_number_of_presses_counted }`,
-  …) reusing the response-payload struct shape — an event report's data is
-  the same anonymous structure of context-tagged fields on the wire. Events
-  are received, never sent, so no encoders are emitted. Event dumping is
-  allowlisted per cluster (`EVENT_ALLOWLIST` in the dump script, `Switch`
-  only today); every other cluster's events remain recorded exclusions, now
-  with reason `event dump not enabled for this cluster`.
-- Purely additive regeneration: no existing cluster's generated code changed
-  except `switch.rs` gaining its events section. Adding a cluster is a
-  routine minor bump for this `0.x` crate (see the crate README), hence
-  0.4.1 → 0.5.0.
-
-### `matter-controller`
+### `matter-controller` (0.8.0)
 
 #### Added
 
@@ -88,6 +60,77 @@ APIs have had no outside users yet and are expected to move.
   rustdoc says so explicitly. Closing that gap means accepting a discovery
   *factory* rather than a value — worth doing on demand, so say so on [#113] if
   it affects you.
+
+#### Changed
+
+- **`base64` 0.22 → 0.23** transitively, via `matter-commissioning` 0.5.4. No
+  API impact — see that crate's note.
+
+### `matter-commissioning` (0.5.4)
+
+#### Changed
+
+- **`base64` 0.22 → 0.23.** An internal dependency bump with no API impact:
+  `base64` appears in no public signature. The one library call site,
+  `parse_pem_public_key` (used to ingest PEM Certification Declaration signing
+  roots), maps `base64::DecodeError` to
+  `AttestationError::CertificationDeclarationMalformed`, so no `base64` type
+  crosses the crate boundary. Consumers pinning `base64` 0.22 elsewhere will
+  simply resolve two versions.
+
+## matter-clusters 0.5.0 + matter-commissioning 0.5.3
+
+Released earlier; recorded here retroactively. `matter-clusters` gained bridge
+and switch support; `matter-commissioning` fixed a commissioning abort against
+devices that expose no NetworkCommissioning cluster (also backported to the
+0.4.x line as 0.4.1).
+
+### `matter-clusters` (0.5.0)
+
+#### Added
+
+- **`BridgedDeviceBasicInformation` (0x0039) generated module** — the
+  per-bridged-endpoint identity cluster behind a bridge/aggregator (e.g. a
+  Tapo H100's children). Attribute-id constants and decoders for its whole
+  dumped surface, including the three a bridge controller keys on:
+  `NodeLabel` (0x0005, string), `Reachable` (0x0011, bool), and `UniqueId`
+  (0x0012, string — the spec-blessed stable identity for a bridged endpoint,
+  since endpoint numbers may renumber across bridge reboots). In
+  `@matter/model` the cluster derives from `BasicInformation` with
+  type-less, name-aliased attributes; the dump script now resolves such
+  base-aliased attributes against the base cluster's same-named attribute,
+  so the generated decoders carry the real types.
+- **Cluster events, first batch: the `Switch` (0x003B) cluster's seven
+  events.** The codegen model/emitter grew an `events` concept: an
+  `event_id` const module (`SWITCH_LATCHED` 0x00 … `MULTI_PRESS_COMPLETE`
+  0x06) plus decode-only `<Name>Event` payload structs
+  (`MultiPressCompleteEvent { previous_position, total_number_of_presses_counted }`,
+  …) reusing the response-payload struct shape — an event report's data is
+  the same anonymous structure of context-tagged fields on the wire. Events
+  are received, never sent, so no encoders are emitted. Event dumping is
+  allowlisted per cluster (`EVENT_ALLOWLIST` in the dump script, `Switch`
+  only today); every other cluster's events remain recorded exclusions, now
+  with reason `event dump not enabled for this cluster`.
+- Purely additive regeneration: no existing cluster's generated code changed
+  except `switch.rs` gaining its events section. Adding a cluster is a
+  routine minor bump for this `0.x` crate (see the crate README), hence
+  0.4.1 → 0.5.0.
+
+### `matter-commissioning` (0.5.3, backported as 0.4.1)
+
+#### Fixed
+
+- **Commissioning aborted against a device with no NetworkCommissioning
+  cluster.** A device commissioned over IP that exposes no
+  NetworkCommissioning cluster answers the FeatureMap /
+  ConnectMaxTimeSeconds read with per-path `AttributeStatusIB`s rather than
+  data — observed live against a eufy E31 lock, which returns
+  `UNSUPPORTED_CLUSTER` (0xC3). The no-credentials path treated the missing
+  data as a failure and gave up. It now reads an absent cluster as "no network
+  configuration required" and proceeds.
+
+  Backported to the 0.4.x line as `matter-commissioning` 0.4.1 for callers not
+  yet on 0.5.x.
 
 ## 0.7.1
 
