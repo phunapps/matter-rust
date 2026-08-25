@@ -59,6 +59,30 @@ pub enum Error {
     #[error("operational error: {0}")]
     Operational(String),
 
+    /// A device acknowledged an operational request at the transport layer but
+    /// never sent the Interaction Model response, and the response deadline
+    /// elapsed.
+    ///
+    /// Distinct from [`Self::Operational`] because the cause is specific and
+    /// actionable: MRP confirmed delivery, so this is not packet loss — the
+    /// device accepted the request and did not answer it. Observed on bridges
+    /// that silently drop a read after several rapid consecutive reads on one
+    /// session.
+    ///
+    /// The request is **not** retried before this is returned: delivery was
+    /// confirmed, so re-sending could execute a non-idempotent command twice.
+    /// Deciding whether a retry is safe is the caller's.
+    ///
+    /// Tune the deadline with
+    /// [`MatterControllerBuilder::response_deadline`][crate::MatterControllerBuilder::response_deadline].
+    #[error("node {node_id:016X} acknowledged the request but sent no response within {after:?}")]
+    ResponseTimeout {
+        /// The node that failed to answer.
+        node_id: u64,
+        /// The deadline that elapsed.
+        after: std::time::Duration,
+    },
+
     /// Attestation trust material could not be loaded.
     #[error("attestation trust error: {0}")]
     Trust(String),

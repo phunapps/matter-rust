@@ -21,6 +21,7 @@ struct SpawnParts {
     trust: Option<AttestationTrust>,
     admin_vendor_id: u16,
     multicast_if: Option<u32>,
+    response_deadline: std::time::Duration,
 }
 
 /// The deferred actor spawn installed by [`MatterControllerBuilder::discovery`].
@@ -45,6 +46,7 @@ pub struct MatterControllerBuilder {
     trust: Option<AttestationTrust>,
     admin_vendor_id: u16,
     multicast_if: Option<u32>,
+    response_deadline: std::time::Duration,
     /// `None` — the default — means no discovery was supplied, and
     /// [`Self::build`] takes the untouched default path through
     /// `MatterController::spawn_default`.
@@ -58,6 +60,7 @@ impl MatterControllerBuilder {
             trust: None,
             admin_vendor_id: DEFAULT_ADMIN_VENDOR_ID,
             multicast_if: None,
+            response_deadline: crate::actor::DEFAULT_RESPONSE_DEADLINE,
             spawn_with_discovery: None,
         }
     }
@@ -85,6 +88,33 @@ impl MatterControllerBuilder {
     #[must_use]
     pub fn multicast_interface(mut self, if_index: u32) -> Self {
         self.multicast_if = Some(if_index);
+        self
+    }
+
+    /// Bound how long an operational read/write/invoke waits for its
+    /// Interaction Model response (default 30 s).
+    ///
+    /// Matter's MRP bounds *delivery*, not *response*: once a device
+    /// acknowledges a request, the retransmit timer for that exchange is
+    /// discarded. A device that accepts a request and then never answers it
+    /// therefore has nothing left to expire, and without this deadline the
+    /// call waits forever. Real devices do this — a Tapo H100 bridge silently
+    /// drops the 9th consecutive read on a session — so every operational verb
+    /// is bounded by this value and fails with
+    /// [`Error::ResponseTimeout`] when it elapses.
+    ///
+    /// The request is **not** retried first. Delivery was confirmed, so the
+    /// device may already have executed a non-idempotent command; deciding
+    /// whether a retry is safe belongs to you, not the library. This is
+    /// deliberately unlike a lost-packet timeout, which the controller does
+    /// retry once on a fresh session.
+    ///
+    /// Lower it if you front the controller with your own per-operation
+    /// timeout and would rather see the library's error than your own; raise
+    /// it for devices that are legitimately slow to answer.
+    #[must_use]
+    pub fn response_deadline(mut self, deadline: std::time::Duration) -> Self {
+        self.response_deadline = deadline;
         self
     }
 
@@ -188,6 +218,7 @@ impl MatterControllerBuilder {
                 parts.trust,
                 parts.admin_vendor_id,
                 parts.multicast_if,
+                parts.response_deadline,
             )
         }));
         self
@@ -208,13 +239,20 @@ impl MatterControllerBuilder {
             trust,
             admin_vendor_id,
             multicast_if,
+            response_deadline,
             spawn_with_discovery,
         } = self;
 
         let Some(spawn) = spawn_with_discovery else {
             // Untouched default path: bind the socket AND start `mdns-sd`.
-            return MatterController::spawn_default(store, trust, admin_vendor_id, multicast_if)
-                .await;
+            return MatterController::spawn_default(
+                store,
+                trust,
+                admin_vendor_id,
+                multicast_if,
+                response_deadline,
+            )
+            .await;
         };
 
         // Same bind as `spawn_default` — only the discovery differs.
@@ -228,6 +266,7 @@ impl MatterControllerBuilder {
             trust,
             admin_vendor_id,
             multicast_if,
+            response_deadline,
         })
     }
 }

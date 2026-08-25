@@ -5,7 +5,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use matter_commissioning::driver::AsyncDatagram;
 use matter_commissioning::NocRng;
@@ -92,6 +92,21 @@ fn response_needs_timed(opcode: u8, payload: &[u8]) -> bool {
 ///
 /// [`Discovery::poll_results`]: matter_transport::Discovery::poll_results
 const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Default bound on how long an operational request waits for its Interaction
+/// Model response before failing with [`Error::ResponseTimeout`].
+///
+/// MRP bounds delivery, not response: the moment a peer ACKs a request its
+/// retransmit entry is dropped, so a device that accepts a request and never
+/// answers leaves nothing at the exchange layer to expire. This is the
+/// independent application-level bound that makes such an op fail instead of
+/// hang.
+///
+/// 30 s matches the commissioning driver's `RESPONSE_DEADLINE`, which guards
+/// the same shape of hang on the BLE/PASE path. Override per controller with
+/// [`MatterControllerBuilder::response_deadline`][crate::MatterControllerBuilder::response_deadline].
+pub(crate) const DEFAULT_RESPONSE_DEADLINE: std::time::Duration =
+    std::time::Duration::from_secs(30);
 
 /// How many consecutive `recv_from` errors the loop absorbs at full speed
 /// before it starts backing off.
@@ -510,6 +525,15 @@ struct Pending {
     node_id: u64,
     /// Peer the request was sent to.
     peer: SocketAddr,
+    /// When to give up waiting for the Interaction Model response.
+    ///
+    /// MRP bounds *delivery*, not *response*: once the peer ACKs the request
+    /// the retransmit entry is dropped, so a device that accepts a request and
+    /// never answers it leaves `MrpEvent::Expired` unable to fire and this op
+    /// waiting forever (issue #113's sibling, #119 — reproduced on a Tapo H100
+    /// bridge, which silently drops the 9th consecutive read on a session).
+    /// This deadline is the independent application-level bound.
+    response_deadline: Instant,
     /// The request bytes, retained to re-send once after a transparent
     /// reconnect when the cached session was stale.
     request: PendingRequest,
@@ -1076,8 +1100,13 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     /// scanning every subscription per report.
     sub_index: HashMap<(SessionId, u32), SubId>,
     /// In-flight round-trips/reads/subscribe-handshakes, keyed by
-    /// `(session, exchange)`. Resolved by [`Self::handle_inbound`].
+    /// `(session, exchange)`. Resolved by [`Self::handle_inbound`], or failed
+    /// by [`Self::drive_response_deadlines`] if the device never answers.
     pending: HashMap<(SessionId, u16), Pending>,
+    /// How long an operational request may wait for its response before
+    /// [`Self::drive_response_deadlines`] fails it. See
+    /// [`DEFAULT_RESPONSE_DEADLINE`].
+    response_deadline: std::time::Duration,
     /// Monotonic source of stable [`SubId`]s.
     next_sub_id: u64,
     /// Monotonic snapshot sequence, bumped on every serialize. Stamped onto the
@@ -1618,6 +1647,14 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self
     }
 
+    /// Bound how long an operational request waits for its Interaction Model
+    /// response. See `MatterControllerBuilder::response_deadline` and
+    /// [`DEFAULT_RESPONSE_DEADLINE`].
+    pub(crate) fn with_response_deadline(mut self, response_deadline: Duration) -> Self {
+        self.response_deadline = response_deadline;
+        self
+    }
+
     #[allow(clippy::too_many_arguments)] // mirrors `new`.
     fn new_inner(
         transport: T,
@@ -1644,6 +1681,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             subscriptions: HashMap::new(),
             sub_index: HashMap::new(),
             pending: HashMap::new(),
+            response_deadline: DEFAULT_RESPONSE_DEADLINE,
             next_sub_id: 1,
             snapshot_seq: 0,
             save_gate: Arc::new(std::sync::Mutex::new(0)),
@@ -1819,6 +1857,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             // ever be seen here as due.
             if next_deadline.is_some_and(|d| d <= now) {
                 self.drive_mrp().await;
+                self.drive_response_deadlines().await;
                 self.check_liveness();
                 self.drive_resubscribes().await;
                 self.drive_pending_resolves();
@@ -1889,6 +1928,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 () = tokio::time::sleep(sleep_for) => {
                     tracing::trace!(target: "matter_controller::actor", "timer wake");
                     self.drive_mrp().await;
+                    self.drive_response_deadlines().await;
                     self.check_liveness();
                     self.drive_resubscribes().await;
                     self.drive_pending_resolves();
@@ -1977,10 +2017,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         } else {
             Some(self.next_resolve_poll)
         };
-        [mrp, liveness, resub, resolve, self.recv_backoff_until]
-            .into_iter()
-            .flatten()
-            .min()
+        // Application-level response deadlines. Independent of `mrp` above:
+        // once a request is ACKed its MRP entry is gone, so this is the only
+        // remaining source that can bound a device which accepts a request and
+        // never answers it.
+        let response = self.pending.values().map(|p| p.response_deadline).min();
+        [
+            mrp,
+            liveness,
+            resub,
+            resolve,
+            response,
+            self.recv_backoff_until,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Process one command, parking device verbs behind an off-loop connect.
@@ -3538,6 +3590,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
+                        response_deadline: Instant::now() + self.response_deadline,
                         node_id: pr.node_id,
                         peer,
                         request: PendingRequest {
@@ -3810,6 +3863,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
+                        response_deadline: Instant::now() + self.response_deadline,
                         node_id,
                         peer,
                         request: PendingRequest {
@@ -3859,6 +3913,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
+                        response_deadline: Instant::now() + self.response_deadline,
                         node_id,
                         peer,
                         request: PendingRequest {
@@ -3960,6 +4015,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
+                        response_deadline: Instant::now() + self.response_deadline,
                         node_id,
                         peer,
                         request: PendingRequest {
@@ -4052,6 +4108,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
+                        response_deadline: Instant::now() + self.response_deadline,
                         node_id,
                         peer,
                         request: PendingRequest {
@@ -4154,6 +4211,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.pending.insert(
             (sid, exchange),
             Pending {
+                response_deadline: Instant::now() + self.response_deadline,
                 node_id,
                 peer,
                 request: PendingRequest {
@@ -4375,6 +4433,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.pending.insert(
             (sid, exchange),
             Pending {
+                response_deadline: Instant::now() + self.response_deadline,
                 node_id: p.node_id,
                 peer: p.peer,
                 request: PendingRequest {
@@ -4478,6 +4537,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.pending.insert(
             (sid, exchange),
             Pending {
+                response_deadline: Instant::now() + self.response_deadline,
                 node_id: p.node_id,
                 peer: p.peer,
                 request: PendingRequest {
@@ -4665,6 +4725,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.pending.insert(
                     (sid, exchange),
                     Pending {
+                        response_deadline: Instant::now() + self.response_deadline,
                         node_id,
                         peer,
                         request: PendingRequest {
@@ -4865,6 +4926,66 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // events in the controller's MRP pump.
                 _ => {}
             }
+        }
+    }
+
+    /// Fail every pending op whose response deadline has elapsed.
+    ///
+    /// This is the counterpart to [`Self::drive_mrp`], and it exists because
+    /// MRP cannot cover this case: MRP bounds *delivery*, and the moment a peer
+    /// ACKs a request its retransmit entry is dropped. A device that accepts a
+    /// request and then never sends the Interaction Model response therefore
+    /// leaves nothing at the exchange layer to expire, and the caller's oneshot
+    /// waits forever (#119, reproduced on a Tapo H100 bridge that silently
+    /// drops the 9th consecutive read on a session).
+    ///
+    /// Unlike [`Self::on_pending_timeout`], a fired deadline here does **not**
+    /// reconnect and re-send. That path exists for MRP expiry, where the
+    /// absence of an ACK means the request most likely never arrived, so
+    /// re-sending is safe. Here delivery was confirmed — the device may well
+    /// have executed a non-idempotent command already — so the op is failed
+    /// with [`Error::ResponseTimeout`] and whether to retry is the caller's
+    /// decision.
+    ///
+    /// A resubscribe attempt (a `Subscribe` pending with no reply channel) is
+    /// the one exception: it is routed through [`Self::on_pending_timeout`] so
+    /// it keeps its existing reschedule-on-backoff behaviour rather than being
+    /// silently dropped.
+    async fn drive_response_deadlines(&mut self) {
+        let now = Instant::now();
+        let expired: Vec<(SessionId, u16)> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| p.response_deadline <= now)
+            .map(|(k, _)| *k)
+            .collect();
+        for key in expired {
+            // Re-check: an earlier iteration may have resolved or replaced this
+            // entry (a resubscribe reschedule re-inserts under the same key).
+            let Some(p) = self.pending.get(&key) else {
+                continue;
+            };
+            if p.response_deadline > now {
+                continue;
+            }
+            if matches!(&p.reply, PendingReply::Subscribe { reply: None, .. }) {
+                self.on_pending_timeout(key.0, key.1).await;
+                continue;
+            }
+            // `get` above only borrowed; remove for real now.
+            let Some(p) = self.pending.remove(&key) else {
+                continue;
+            };
+            let node_id = p.node_id;
+            let after = self.response_deadline;
+            tracing::debug!(
+                node_id = format_args!("{node_id:016X}"),
+                exchange_id = key.1,
+                after_secs = after.as_secs(),
+                "operational response deadline elapsed; failing the request \
+                 (delivery was ACKed, so it is not retried)"
+            );
+            Self::fail_pending(p, Error::ResponseTimeout { node_id, after });
         }
     }
 
@@ -10147,6 +10268,7 @@ mod tests {
         actor.pending.insert(
             (session, exchange),
             Pending {
+                response_deadline: Instant::now() + actor.response_deadline,
                 node_id,
                 peer: "127.0.0.1:5540".parse().unwrap(),
                 request: PendingRequest {
@@ -10158,6 +10280,135 @@ mod tests {
                 reply: PendingReply::RoundTrip(reply_tx),
             },
         );
+    }
+
+    /// Seed a round-trip pending whose response deadline is already in the
+    /// past, returning the caller's receiver so the test can observe how the op
+    /// resolves.
+    fn seed_expired_pending(
+        actor: &mut Actor<InMemoryDatagram, NullDiscovery>,
+        session: SessionId,
+        exchange: u16,
+        node_id: u64,
+    ) -> oneshot::Receiver<Result<Vec<u8>, Error>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        actor.pending.insert(
+            (session, exchange),
+            Pending {
+                response_deadline: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("process uptime exceeds one second"),
+                node_id,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+                request: PendingRequest {
+                    opcode: 0x02,
+                    protocol_id: ProtocolId::INTERACTION_MODEL,
+                    payload: vec![],
+                },
+                retried: false,
+                reply: PendingReply::RoundTrip(reply_tx),
+            },
+        );
+        reply_rx
+    }
+
+    /// #119. MRP bounds *delivery*, not *response*: once the peer ACKs the
+    /// request its retransmit entry is dropped, so `MrpEvent::Expired` can
+    /// never fire for an op the device accepted and then ignored. Before the
+    /// response deadline existed, this pending waited forever and the caller
+    /// wedged (observed on a Tapo H100 bridge, which silently drops the 9th
+    /// consecutive read on a session).
+    #[tokio::test]
+    async fn response_deadline_fails_a_request_the_device_never_answers() {
+        let mut actor = actor_with_one_fabric();
+        let node_id = 0x77u64;
+        let reply_rx = seed_expired_pending(&mut actor, SessionId(3), 0x11, node_id);
+
+        actor.drive_response_deadlines().await;
+
+        assert!(
+            actor.pending.is_empty(),
+            "the timed-out op must be removed from `pending`"
+        );
+        match reply_rx.await {
+            Ok(Err(Error::ResponseTimeout {
+                node_id: got,
+                after,
+            })) => {
+                assert_eq!(got, node_id);
+                assert_eq!(after, DEFAULT_RESPONSE_DEADLINE);
+            }
+            other => panic!("expected Err(ResponseTimeout), got {other:?}"),
+        }
+    }
+
+    /// Delivery was acknowledged, so the device may already have executed a
+    /// non-idempotent command. Unlike the MRP-expiry path — where the missing
+    /// ACK means the request most likely never landed and a resend is safe —
+    /// this must fail the op outright: no session eviction, no queued
+    /// reconnect, no resend.
+    #[tokio::test]
+    async fn response_deadline_does_not_reconnect_or_resend() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let node_id = 0x77u64;
+        let session = SessionId(3);
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: session,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+        let _reply_rx = seed_expired_pending(&mut actor, session, 0x11, node_id);
+
+        actor.drive_response_deadlines().await;
+
+        assert!(
+            actor.cache.contains_key(&(fabric_id, node_id)),
+            "an ACKed-but-unanswered request must not evict the session"
+        );
+        assert!(
+            actor.pending_connects.is_empty(),
+            "no reconnect may be queued: the request was delivered, so a \
+             resend could execute a non-idempotent command twice"
+        );
+    }
+
+    /// A pending whose deadline has not arrived is left strictly alone.
+    #[tokio::test]
+    async fn response_deadline_leaves_live_requests_pending() {
+        let mut actor = actor_with_one_fabric();
+        let session = SessionId(3);
+        seed_pending_round_trip(&mut actor, session, 0x11, 0x77);
+
+        actor.drive_response_deadlines().await;
+
+        assert_eq!(
+            actor.pending.len(),
+            1,
+            "a request still inside its deadline must stay pending"
+        );
+    }
+
+    /// The deadline is only enforceable if the actor actually wakes for it, so
+    /// it must be one of the sources `next_timer_deadline` minimises over.
+    #[tokio::test]
+    async fn next_timer_deadline_accounts_for_response_deadlines() {
+        let mut actor = actor_with_one_fabric();
+        assert_eq!(
+            actor.next_timer_deadline(),
+            None,
+            "no timers are armed on a fresh actor"
+        );
+
+        let session = SessionId(3);
+        seed_pending_round_trip(&mut actor, session, 0x11, 0x77);
+        let deadline = actor
+            .next_timer_deadline()
+            .expect("a pending request must arm the timer");
+        let expected = actor.pending[&(session, 0x11)].response_deadline;
+        assert_eq!(deadline, expected);
     }
 
     /// The bug: two ops are pending on session S (`Node` is `Clone`, so every

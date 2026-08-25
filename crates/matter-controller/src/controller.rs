@@ -76,7 +76,14 @@ impl MatterController {
     ///
     /// As [`MatterControllerBuilder::build`].
     pub async fn open(store: Arc<dyn ControllerStore>) -> Result<Self, Error> {
-        Self::spawn_default(store, None, crate::builder::DEFAULT_ADMIN_VENDOR_ID, None).await
+        Self::spawn_default(
+            store,
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+            None,
+            crate::actor::DEFAULT_RESPONSE_DEADLINE,
+        )
+        .await
     }
 
     pub(crate) async fn spawn_default(
@@ -84,6 +91,7 @@ impl MatterController {
         trust: Option<AttestationTrust>,
         admin_vendor_id: u16,
         multicast_if: Option<u32>,
+        response_deadline: std::time::Duration,
     ) -> Result<Self, Error> {
         let transport =
             matter_transport::TokioUdpTransport::bind_with_multicast_if(0, multicast_if)
@@ -99,6 +107,7 @@ impl MatterController {
             trust,
             admin_vendor_id,
             multicast_if,
+            response_deadline,
         )
     }
 
@@ -130,6 +139,7 @@ impl MatterController {
             trust,
             admin_vendor_id,
             None,
+            crate::actor::DEFAULT_RESPONSE_DEADLINE,
         )
     }
 
@@ -142,6 +152,7 @@ impl MatterController {
         trust: Option<AttestationTrust>,
         admin_vendor_id: u16,
         multicast_if: Option<u32>,
+        response_deadline: std::time::Duration,
     ) -> Result<Self, Error>
     where
         // `Sync` because the spawned actor future holds `&self.transport`
@@ -164,7 +175,8 @@ impl MatterController {
             trust,
             admin_vendor_id,
         )
-        .with_multicast_if(multicast_if);
+        .with_multicast_if(multicast_if)
+        .with_response_deadline(response_deadline);
         tokio::spawn(actor.run(rx));
         Ok(Self { tx, store })
     }

@@ -24,6 +24,44 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased
 
+### `matter-controller`
+
+#### Fixed
+
+- **Operational reads, writes and invokes could wait forever ([#119]).** Matter's
+  MRP bounds *delivery*, not *response*: the moment a device acknowledges a
+  request, the retransmit entry for that exchange is discarded. A device that
+  accepts a request and then never sends the Interaction Model response
+  therefore left nothing at the exchange layer to expire — `MrpEvent::Expired`
+  could not fire, the actor's pending op was never resolved, and the caller's
+  `await` hung indefinitely. Reproduced live on a Tapo H100 bridge, which
+  silently drops the 9th consecutive read on a session after eight sub-100 ms
+  reads succeed.
+
+  Every pending operational op now carries an independent application-level
+  response deadline (default 30 s, matching the commissioning driver's
+  `RESPONSE_DEADLINE` for the same hang shape on the PASE path). It
+  participates in the actor's timer so the loop actually wakes for it, and a
+  fired deadline fails the op with the new
+  [`Error::ResponseTimeout`](https://docs.rs/matter-controller/latest/matter_controller/enum.Error.html)
+  carrying the node id and the elapsed deadline.
+
+  **The request is deliberately not retried.** The existing
+  reconnect-and-resend-once path stays as it was for MRP expiry, where the
+  absent ACK means the request most likely never arrived. Here delivery was
+  confirmed, so the device may already have executed a non-idempotent command;
+  re-sending could apply it twice. Whether a retry is safe is the caller's
+  decision. Resubscribe attempts are unaffected — they keep rescheduling on
+  their backoff rather than failing.
+
+#### Added
+
+- **`MatterControllerBuilder::response_deadline(Duration)`** — tune or extend
+  the bound above. Useful if you already wrap the controller in your own
+  per-operation timeout and would rather surface the library's typed error.
+
+[#119]: https://github.com/phunapps/matter-rust/issues/119
+
 ### `matter-cert`, `matter-crypto`, `matter-commissioning`
 
 #### Fixed
