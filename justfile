@@ -86,6 +86,23 @@ controller-no-ota:
     RUSTDOCFLAGS="-D warnings" cargo doc -p matter-controller --no-default-features --no-deps
     RUSTDOCFLAGS="-D warnings" cargo doc -p matter-controller --no-default-features --features unstable-provider --no-deps
 
+# ------------------------------------------------- default-feature lint ---
+
+# Lint every published crate as a consumer gets it: on its own, default
+# features only. `lint` runs --all-features, so an item used solely by an
+# optional module (a `test-support` helper, a `driver`-only accessor) compiles
+# as dead code there and is never flagged — it only surfaces in the packaged
+# build during `cargo publish`, too late. One crate at a time, because
+# workspace feature unification would enable the very features being excluded.
+lint-default:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for c in matter-codec matter-cert matter-crypto matter-transport \
+             matter-interaction matter-clusters matter-bdx matter-ota \
+             matter-ble matter-commissioning matter-controller; do
+        cargo clippy -p "$c" -- -D warnings
+    done
+
 # -------------------------------------------------------- build / msrv ---
 
 # Build the whole workspace (CI: msrv job runs this under the 1.88 toolchain).
@@ -107,7 +124,7 @@ audit:
 # Stops at the first failing recipe.
 
 # Full pre-push gate, mirroring CI end-to-end (run before every push).
-gate: fmt-check lint test doctest codegen-check docs embedded controller-no-ota deny audit
+gate: fmt-check lint lint-default test doctest codegen-check docs embedded controller-no-ota deny audit
     @echo "gate: all green ✓"
 
 # ------------------------------------------------------------ benchmarks ---

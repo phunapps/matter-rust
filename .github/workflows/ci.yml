@@ -45,6 +45,9 @@ jobs:
         with:
           tool: just
       - run: just lint
+      # Each published crate on its own, default features only — catches dead
+      # code that `just lint` (--all-features) cannot see.
+      - run: just lint-default
 
   test:
     name: test (${{ matrix.os }})
