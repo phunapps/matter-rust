@@ -1,6 +1,6 @@
 [package]
 name = "matter-controller"
-version = "0.7.1"
+version = "0.7.2"
 description = "High-level Matter controller API: commission, read, write, invoke, subscribe."
 edition.workspace = true
 rust-version.workspace = true
