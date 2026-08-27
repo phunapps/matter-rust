@@ -422,6 +422,27 @@ fn resubscribe_backoff(rng: &dyn NocRng, retry_count: u32) -> std::time::Duratio
     std::time::Duration::from_millis(min_wait_ms + jitter)
 }
 
+/// Ensure a resubscribe's event filters exclude everything already handed to
+/// the consumer: with a delivery watermark `w`, no filter may request events
+/// below `w + 1`. Empty caller filters (the only in-tree case — `Node::subscribe`
+/// sends none) become a single minimal filter. Spec: matter-hardening D6.
+fn bump_event_filters(
+    mut filters: Vec<matter_interaction::EventFilter>,
+    watermark: Option<u64>,
+) -> Vec<matter_interaction::EventFilter> {
+    let Some(w) = watermark else {
+        return filters;
+    };
+    let min = w.saturating_add(1);
+    if filters.is_empty() {
+        return vec![matter_interaction::EventFilter::from_event_min(min)];
+    }
+    for f in &mut filters {
+        f.event_min = f.event_min.max(min);
+    }
+    filters
+}
+
 /// Controller-assigned stable subscription handle id. Survives auto-resubscribes
 /// (the device's wire `subscription_id` changes on each re-establish, this does
 /// not), so the consumer's [`Subscription`] stays valid across a resubscribe.
@@ -445,6 +466,10 @@ struct ReportSink {
     ctrl_tx: mpsc::UnboundedSender<SubscriptionEvent>,
     /// Reports dropped (buffer full) since the last delivered `Lagged`.
     dropped: usize,
+    /// Highest event number handed toward the consumer (delivered OR dropped
+    /// on a full buffer — a dropped event must not be replayed late either,
+    /// so "attempted" is the right semantics for the resubscribe filter).
+    max_event_delivered: Option<u64>,
 }
 
 impl ReportSink {
@@ -484,6 +509,15 @@ impl ReportSink {
     /// bounded the same way). Returns `false` only if the consumer's report
     /// receiver is gone (closed), signalling the subscription should be reaped.
     fn try_send_event(&mut self, event: matter_interaction::EventReport) -> bool {
+        // Watermark tracks *attempted* delivery, including a drop below on a
+        // full buffer — see the field doc on `max_event_delivered`. Update
+        // this before the send attempt so every code path below sees it.
+        if let matter_interaction::EventReport::Data(item) = &event {
+            self.max_event_delivered = Some(
+                self.max_event_delivered
+                    .map_or(item.event_number, |m| m.max(item.event_number)),
+            );
+        }
         // Flush a pending Lagged first (mirrors try_send_report).
         if self.dropped > 0 {
             match self.report_tx.try_send(SubscriptionEvent::Lagged {
@@ -4955,6 +4989,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     report_tx,
                     ctrl_tx,
                     dropped: 0,
+                    max_event_delivered: None,
                 };
                 let report_rx = SubReceivers { report_rx, ctrl_rx };
                 self.pending.insert(
@@ -5452,13 +5487,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             return;
         }
         let wait = resubscribe_backoff(self.rng.as_ref(), 0);
+        // Read the watermark before `entry.tx` is moved into the pending record
+        // below — see `bump_event_filters`: a device-buffered event must not be
+        // replayed late by the fresh subscription's priming dump.
+        let watermark = entry.tx.max_event_delivered;
         self.resubscribes.push(PendingResubscribe {
             sub_id,
             attempt_at: Instant::now() + wait,
             node_id: entry.node_id,
             paths: entry.paths,
             event_paths: entry.event_paths,
-            event_filters: entry.event_filters,
+            event_filters: bump_event_filters(entry.event_filters, watermark),
             min_interval: entry.min_interval,
             max_interval: entry.max_interval,
             retry_count: 0,
@@ -7664,6 +7703,7 @@ mod tests {
                 report_tx,
                 ctrl_tx,
                 dropped: 0,
+                max_event_delivered: None,
             },
             report_rx,
             ctrl_rx,
@@ -10197,6 +10237,129 @@ mod tests {
                 "n=99 wait {d} out of cap band"
             );
         }
+    }
+
+    /// Pure helper contract (matter-hardening D6): with no watermark the
+    /// caller's filters pass through unchanged; with a watermark, empty
+    /// caller filters (the only in-tree case — `Node::subscribe` sends none)
+    /// become a single minimal filter, and any existing filter's `event_min`
+    /// is bumped up to (never down from) `watermark + 1`.
+    #[test]
+    fn bump_event_filters_injects_and_bumps() {
+        use matter_interaction::EventFilter;
+        // No watermark: unchanged.
+        assert_eq!(bump_event_filters(vec![], None), vec![]);
+        // Watermark, no caller filters: inject.
+        assert_eq!(
+            bump_event_filters(vec![], Some(7)),
+            vec![EventFilter::from_event_min(8)]
+        );
+        // Caller filter below the watermark: bumped. Above: kept.
+        let mut below = EventFilter::from_event_min(3);
+        below.node = Some(9);
+        let above = EventFilter::from_event_min(100);
+        let mut below_bumped = EventFilter::from_event_min(8);
+        below_bumped.node = Some(9);
+        assert_eq!(
+            bump_event_filters(vec![below, above], Some(7)),
+            vec![below_bumped, above]
+        );
+        // u64::MAX watermark must not overflow.
+        assert_eq!(
+            bump_event_filters(vec![], Some(u64::MAX)),
+            vec![EventFilter::from_event_min(u64::MAX)]
+        );
+    }
+
+    /// `ReportSink::try_send_event` must update `max_event_delivered` on every
+    /// attempted delivery — including a drop on a full buffer, per D1: a
+    /// dropped event must not be replayed late by a resubscribe either. A
+    /// lower event number than already seen must never regress the watermark.
+    #[test]
+    fn report_sink_tracks_max_event_delivered() {
+        // Cap-1 report channel, mirroring the real construction site, so the
+        // buffer can be forced full (the receiver is never drained).
+        let (report_tx, _report_rx) = mpsc::channel::<SubscriptionEvent>(1);
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<SubscriptionEvent>();
+        let mut sink = ReportSink {
+            report_tx,
+            ctrl_tx,
+            dropped: 0,
+            max_event_delivered: None,
+        };
+        // Build a real `EventReport::Data` for a given event number via the
+        // same TLV round trip production code uses (`EventReportItem` is
+        // `#[non_exhaustive]` in `matter-interaction`, so it cannot be
+        // struct-literal-constructed from this crate).
+        let ev = |n: u64| -> matter_interaction::EventReport {
+            let blob = build_report_data_event(1, 0x3B, 1, n, &matter_codec::Value::Null);
+            matter_interaction::parse_report_data(&blob)
+                .expect("parse")
+                .events
+                .remove(0)
+        };
+        assert!(sink.try_send_event(ev(5)));
+        assert_eq!(sink.max_event_delivered, Some(5));
+        // Buffer now full (cap 1, first event never drained): the drop still
+        // advances the watermark.
+        assert!(sink.try_send_event(ev(9)));
+        assert_eq!(sink.max_event_delivered, Some(9));
+        // Lower number never regresses it.
+        assert!(sink.try_send_event(ev(2)));
+        assert_eq!(sink.max_event_delivered, Some(9));
+    }
+
+    /// End-to-end wiring: `begin_resubscribe` must inject the delivery
+    /// watermark into the resubscribed entry's `event_filters`, so the
+    /// re-primed subscription cannot replay an event already handed to the
+    /// consumer (matter-hardening C1/D6).
+    #[test]
+    fn begin_resubscribe_bumps_event_filters_from_watermark() {
+        let (io, _peer) = InMemoryDatagram::pair();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(matter_commissioning::SystemNocRng),
+            ControllerState { fabrics: vec![] },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+
+        let (report_tx, _report_rx) = mpsc::channel::<SubscriptionEvent>(SUBSCRIPTION_CHANNEL_CAP);
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<SubscriptionEvent>();
+        let sink = ReportSink {
+            report_tx,
+            ctrl_tx,
+            dropped: 0,
+            max_event_delivered: Some(7),
+        };
+        let peer: SocketAddr = "127.0.0.1:5540".parse().unwrap();
+        actor.insert_subscription(
+            SubId(1),
+            SubEntry {
+                tx: sink,
+                peer,
+                reassembler: ReportReassembler::default(),
+                session_id: SessionId(7),
+                wire_sub_id: 0x1234,
+                node_id: 2,
+                paths: vec![matter_interaction::ReadPath::all()],
+                event_paths: vec![],
+                event_filters: vec![],
+                min_interval: 1,
+                max_interval: 30,
+                liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
+            },
+        );
+
+        actor.begin_resubscribe(SubId(1), Error::Operational("test".into()));
+
+        assert_eq!(actor.resubscribes.len(), 1);
+        assert_eq!(
+            actor.resubscribes[0].event_filters,
+            vec![matter_interaction::EventFilter::from_event_min(8)]
+        );
     }
 
     #[tokio::test]
