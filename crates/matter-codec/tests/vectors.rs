@@ -242,7 +242,9 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);
-    for chunk in s.as_bytes().chunks_exact(2) {
+    // Length is verified even above, so `as_chunks` leaves no remainder.
+    let (pairs, _) = s.as_bytes().as_chunks::<2>();
+    for chunk in pairs {
         let hi = hex_nibble(chunk[0])?;
         let lo = hex_nibble(chunk[1])?;
         out.push((hi << 4) | lo);
