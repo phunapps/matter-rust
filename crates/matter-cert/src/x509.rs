@@ -311,6 +311,12 @@ fn encode_serial_number(serial_bytes: &[u8]) -> Result<Vec<u8>> {
 ///
 /// Per RFC 5758 §3.2, this OID has no parameters — the SEQUENCE
 /// contains only the OID itself.
+///
+/// Production encoding paths use the in-place
+/// [`encode_algorithm_identifier_ecdsa_sha256_into`] instead; this allocating
+/// wrapper exists for the unit tests and `crate::test_support`, so it is gated
+/// to those builds rather than compiled as dead code by default.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn encode_algorithm_identifier_ecdsa_sha256() -> Vec<u8> {
     let mut out = Vec::new();
     encode_algorithm_identifier_ecdsa_sha256_into(&mut out);
@@ -613,6 +619,11 @@ where
 }
 
 /// Wrap content bytes in a DER SEQUENCE.
+///
+/// Production encoding paths use the in-place [`wrap_sequence_into`] instead;
+/// this allocating wrapper is only used by `crate::test_support`, so it is
+/// gated to that feature rather than compiled as dead code by default.
+#[cfg(feature = "test-support")]
 pub(crate) fn wrap_sequence(content: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(content.len() + 4);
     out.push(0x30);
