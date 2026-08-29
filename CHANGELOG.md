@@ -156,9 +156,10 @@ discovery. The reasoning is now recorded at the masking site.
 
 `resolve_commissionable`'s rustdoc claimed a manual-code discriminator "never
 matches a device's full `D` exactly" — untrue when the device's own
-discriminator has zero low bits. Three runbook entries claimed the opposite
-error, that mDNS discovery "cannot match" a manual code and that this was a
-known limitation, which stopped being true when the short match landed. All
+discriminator has zero low bits. Three runbook entries leaned the opposite way
+— `m6.6-first-commission.md` said mDNS discovery "cannot match" a manual code
+and listed it as an existing limitation, and `m8.3-commission.md` said it "may
+not match" — which stopped being true when the short match landed. All
 corrected to describe the provenance-gated behaviour above.
 
 ### Fixed — auto-resubscribe replayed events the consumer had already seen

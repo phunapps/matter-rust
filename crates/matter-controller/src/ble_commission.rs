@@ -153,8 +153,8 @@ pub(crate) async fn run_commission_ble_task(
     // full-length long scan before the short one: it goes straight to the scan
     // that can actually succeed.
     //
-    // The short pass takes the *extracted* 4-bit value (`short()`), not the raw
-    // u16: `advert_matches(short=true)` reads the requested short from the
+    // The short branch takes the *extracted* 4-bit value (`short()`), not the
+    // raw u16: `advert_matches(short=true)` reads the requested short from the
     // request's low nibble.
     let device = if setup_payload.discriminator.is_short() {
         let short_disc = u16::from(setup_payload.discriminator.short());

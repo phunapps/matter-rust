@@ -83,7 +83,7 @@ Under a plain `cargo test` (no DUT env) every integration test **skips**
 
 ## Troubleshooting
 
-- **`commissionable device with discriminator 3840 not found via mDNS`** — a
+- **`commissionable device with long discriminator 3840 not found via mDNS`** — a
   transient macOS mDNS discovery miss (the app log shows it WAS advertising
   `discriminator=3840/15 cm=1`). Re-run `just integration`; it is not
   deterministic. The fixture commissions on whichever test binary sorts first
