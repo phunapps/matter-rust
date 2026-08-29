@@ -89,11 +89,23 @@ pub struct SetupPayload {
     pub passcode: Passcode,
 }
 
-/// Twelve-bit long discriminator identifying a Matter device while it
-/// is commissionable (Matter Core Spec §5.1.2.2).
+/// Discriminator identifying a Matter device while it is commissionable
+/// (Matter Core Spec §5.1.2.2).
 ///
-/// Constructors enforce the 12-bit range. The short discriminator (the
-/// upper 4 bits) is what manual pairing codes carry.
+/// A value of this type is one of two kinds, and they are **not**
+/// interchangeable:
+///
+/// - **long** — all 12 bits are known, as carried by a QR code and
+///   advertised by the device in its mDNS `D` TXT record. Built with
+///   [`Self::new`].
+/// - **short** — only the upper 4 bits are known, as carried by a manual
+///   pairing code. Built with [`Self::from_short`].
+///
+/// They compare unequal even when the bits line up, because a short
+/// discriminator identifies a device less precisely and treating the two
+/// as the same is what lets a long discriminator match a device it does
+/// not belong to. Use [`Self::matches_advertised`] to test either kind
+/// against a device's advertised value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Discriminator {
     /// Always stored zero-extended to 12 bits: a short discriminator is
@@ -550,12 +562,13 @@ pub fn encode_manual_code(payload: &SetupPayload) -> String {
 /// record. `encode_manual_code` → `parse_manual_code` is therefore lossy by
 /// construction, for every implementation, not just this one.
 ///
-/// When matching such a payload against mDNS, compare
-/// [`Discriminator::short`] against `(advertised >> 8) & 0x0F`; comparing
-/// the full values will not match any device whose long discriminator has
-/// non-zero low bits. `driver::resolve_commissionable` (feature `driver`)
-/// already does this — within each poll round it prefers an exact long
-/// match and falls back to the upper-4-bit match.
+/// To match such a payload against mDNS or BLE, use
+/// [`Discriminator::matches_advertised`] rather than comparing values
+/// yourself: it requires an exact match for a long discriminator and
+/// degrades to the upper-4-bit comparison only for a short one. Comparing
+/// the full values directly will not match any device whose long
+/// discriminator has non-zero low bits.
+/// `driver::resolve_commissionable` (feature `driver`) uses it.
 ///
 /// `discovery_capabilities` is not carried by a manual code either, and
 /// decodes to the empty set. `commissioning_flow` always decodes to

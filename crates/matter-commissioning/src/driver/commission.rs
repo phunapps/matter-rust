@@ -435,12 +435,11 @@ pub struct DriverConfig<'a> {
 /// in the `D` TXT key (Matter Core Spec §5.4.7.4). `discriminator` may be either:
 ///
 /// - a **long** discriminator (from a QR code), matched exactly; or
-/// - a **short** (4-bit) discriminator from a manual pairing code, which Matter
-///   packs into the upper 4 bits and zero-extends — i.e. `short << 8`. A manual
-///   code does not carry the lower 8 bits, so it cannot match the advertised `D`
-///   exactly; per the Matter discovery model (and connectedhomeip's
-///   `kShortDiscriminator` filter) it is matched against the **upper 4 bits** of
-///   the advertised long discriminator (`advertised >> 8 == short`).
+/// - a **short** (4-bit) discriminator from a manual pairing code, which does
+///   not carry the lower 8 bits at all. Per the Matter discovery model (and
+///   connectedhomeip's `kShortDiscriminator` filter) it is matched against the
+///   **upper 4 bits** of the advertised long discriminator
+///   (`advertised >> 8 == short`).
 ///
 /// Which comparison is used is decided by the discriminator's own provenance,
 /// via [`Discriminator::matches_advertised`]: a long one must match the
@@ -497,14 +496,16 @@ pub async fn resolve_commissionable<D: Discovery>(
         tokio::time::sleep(RESOLVE_POLL_INTERVAL).await;
     }
     discovery.stop_query(handle);
-    let kind = if discriminator.is_short() {
-        "short"
+    // Print the short discriminator as the 4-bit value it is. Rendering its
+    // zero-extended form (`short << 8`) as though it were the device's 12-bit
+    // discriminator is precisely the confusion behind #120.
+    let what = if discriminator.is_short() {
+        format!("short discriminator {:#x}", discriminator.short())
     } else {
-        "long"
+        format!("long discriminator {}", discriminator.as_u16())
     };
     Err(DriverError::Discovery(format!(
-        "commissionable device with {kind} discriminator {} not found via mDNS",
-        discriminator.as_u16()
+        "commissionable device with {what} not found via mDNS"
     )))
 }
 
@@ -1526,9 +1527,9 @@ mod tests {
     async fn resolve_commissionable_matches_short_discriminator_from_manual_code() {
         // A device advertises its full long discriminator (0x4B4 = 1204 — the
         // real Tapo P110M value), but a manual pairing code only carries the
-        // short discriminator 0x4, packed as `short << 8` = 0x400 = 1024. The
-        // exact long match fails; the upper-4-bit short match (0x4B4 >> 8 == 0x4)
-        // succeeds — the connectedhomeip `kShortDiscriminator` behaviour.
+        // short discriminator 0x4. Being short, it is compared on the upper 4
+        // bits (0x4B4 >> 8 == 0x4) and matches — the connectedhomeip
+        // `kShortDiscriminator` behaviour.
         const DEVICE_LONG: u16 = 0x4B4;
         let mut txt = HashMap::new();
         txt.insert("D".to_string(), DEVICE_LONG.to_string().into_bytes());

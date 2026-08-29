@@ -51,26 +51,68 @@ The short comparison is still ambiguous between devices sharing a nibble — onl
 16 values exist — which is inherent to manual pairing codes. Use a QR code when
 several devices are commissionable at once.
 
-**BLE commissioning also got faster.** Exactly one scan now runs, chosen by
-provenance, instead of a long pass that a manual code could never satisfy
-followed by a short fallback. A manual-code BLE commission no longer burns a
-full 60 s `SCAN_TIMEOUT` before attempting the scan that can actually succeed.
+**BLE commissioning also got faster for manual codes.** Exactly one scan now
+runs, chosen by provenance, instead of a long pass that a manual code could
+never satisfy followed by a short fallback. A manual-code BLE commission no
+longer burns a full 60 s `SCAN_TIMEOUT` before attempting the scan that can
+actually succeed.
+
+Note the flip side for **QR-code** BLE commissioning: 0.10.0 effectively retried
+the scan, because the doomed short fallback ran after the long pass timed out,
+so the total discovery budget was 2 × `SCAN_TIMEOUT`. It is now a single 60 s
+scan. That retry was never intentional — and on a long discriminator the second
+pass was the wrong-device match this release removes — but if you commission
+over BLE in a marginal RF environment, retry at the `commission_ble` call site.
 
 #### Breaking
 
 - `Discriminator` is no longer a thin wrapper over `u16`. `Discriminator::new`
-  still takes a 12-bit value and still means **long**, so existing call sites
-  keep compiling and keep their meaning.
-- Build one from a manual pairing code with the new
-  `Discriminator::from_short(u8)`. New: `is_short()` and
+  still takes a 12-bit value and now means **long** explicitly, so every call
+  site keeps compiling. Build the other kind with the new
+  `Discriminator::from_short(u8)`. Also new: `is_short()` and
   `matches_advertised(u16)`; `as_u16()` and `short()` are unchanged.
-- **Equality is now provenance-sensitive**: `Discriminator::from_short(0xA)` is
-  *not* equal to `Discriminator::new(0xA00)`. This is the point — it is what
-  makes the wrong-device match unrepresentable — but it will change the result
-  of comparisons that previously passed by accident.
 - `driver::resolve_commissionable` takes a `Discriminator` instead of a `u16`.
+  **This is the only compile break in the release** — which is why the two
+  silent changes below deserve a careful look.
 - New error variant `Error::ShortDiscriminatorOutOfRange` (the enum is
   `#[non_exhaustive]`).
+
+#### Migration: two changes that compile cleanly but behave differently
+
+**If you modelled a manual pairing code as `Discriminator::new(short << 8)`,
+switch it to `Discriminator::from_short(short)`.** Our own docs and tests used
+to recommend exactly that zero-extended form — the pre-0.7.0 rustdoc said a
+manual-code value "deterministically takes the short path" — so this is likely
+if you build a `SetupPayload` by hand instead of calling `parse_manual_code`.
+Under 0.6.0 the unconditional fallback meant `new(0xA00)` still found a device
+advertising `0xABC`. Under 0.7.0 it is a *long* discriminator, matches exactly,
+and finds nothing:
+
+```text
+commissionable device with long discriminator 2560 not found via mDNS
+```
+
+Grep for `Discriminator::new(` with a `<< 8` or a `0x?00`-shaped literal.
+Callers who get their payload from `parse_manual_code` or from
+`matter-controller`'s `commission()` need no change — provenance is set for
+them.
+
+**If you persist a discriminator, persist `is_short()` alongside it.**
+`as_u16()` on a short discriminator returns the zero-extended form, so
+`Discriminator::new(saved)` reconstructs it as long and it will no longer match
+the device — a failure that appears only after a restart. `Discriminator` is not
+`serde`-serializable, so this affects hand-rolled persistence only.
+
+Equality is provenance-sensitive for the same reason: `from_short(0xA)` is *not*
+equal to `new(0xA00)`. `Debug` output changed shape too
+(`Discriminator { value: 2560, is_short: true }`).
+
+**If you depend on `matter-commissioning` directly alongside
+`matter-controller`, bump both in lockstep** (`0.7` / `0.11`).
+`matter-controller` re-exports `NetworkCredentials`, `NetworkKind`,
+`WiFiCredentials` and `ThreadDataset` from `matter-commissioning`; leaving a
+stale `matter-commissioning = "0.6"` resolves a second copy of the crate and
+produces the confusing `expected NetworkCredentials, found NetworkCredentials`.
 
 ### Fixed — documentation: the manual-code roundtrip was documented as lossless ([#120])
 
@@ -110,23 +152,14 @@ the *advertised* discriminator to 16 values, making collisions between nearby
 commissionable devices 256× more likely — fixing the symptom by damaging
 discovery. The reasoning is now recorded at the masking site.
 
-### Fixed — documentation: stale and incorrect claims about short-discriminator matching
+### Fixed — documentation: stale claims about short-discriminator matching
 
 `resolve_commissionable`'s rustdoc claimed a manual-code discriminator "never
 matches a device's full `D` exactly" — untrue when the device's own
-discriminator has zero low bits — and did not mention that the short fallback is
-applied **unconditionally**. A long discriminator from a QR code can therefore
-short-match too, and will pick the wrong device if the intended one is missing
-from a poll round and another commissionable device shares its upper nibble
-(PASE then fails against that device). Behaviour is unchanged here; the docs now
-describe it accurately and note how connectedhomeip avoids it, via an explicit
-`mIsShortDiscriminator` flag on `SetupDiscriminator` that gates the degraded
-comparison.
-
-Two runbooks (`m6.6-first-commission.md`, `m8.3-commission.md`) claimed the
-opposite — that mDNS discovery "cannot match" a manual code and that this was a
-known limitation. That has not been true since the short fallback landed; both
-corrected.
+discriminator has zero low bits. Three runbook entries claimed the opposite
+error, that mDNS discovery "cannot match" a manual code and that this was a
+known limitation, which stopped being true when the short match landed. All
+corrected to describe the provenance-gated behaviour above.
 
 ### Fixed — auto-resubscribe replayed events the consumer had already seen
 
