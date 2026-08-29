@@ -60,6 +60,24 @@ the *advertised* discriminator to 16 values, making collisions between nearby
 commissionable devices 256× more likely — fixing the symptom by damaging
 discovery. The reasoning is now recorded at the masking site.
 
+### Fixed — documentation: stale and incorrect claims about short-discriminator matching
+
+`resolve_commissionable`'s rustdoc claimed a manual-code discriminator "never
+matches a device's full `D` exactly" — untrue when the device's own
+discriminator has zero low bits — and did not mention that the short fallback is
+applied **unconditionally**. A long discriminator from a QR code can therefore
+short-match too, and will pick the wrong device if the intended one is missing
+from a poll round and another commissionable device shares its upper nibble
+(PASE then fails against that device). Behaviour is unchanged here; the docs now
+describe it accurately and note how connectedhomeip avoids it, via an explicit
+`mIsShortDiscriminator` flag on `SetupDiscriminator` that gates the degraded
+comparison.
+
+Two runbooks (`m6.6-first-commission.md`, `m8.3-commission.md`) claimed the
+opposite — that mDNS discovery "cannot match" a manual code and that this was a
+known limitation. That has not been true since the short fallback landed; both
+corrected.
+
 [#120]: https://github.com/phunapps/matter-rust/issues/120
 
 ## matter-transport 0.4.0 + matter-commissioning 0.6.0 + matter-controller 0.10.0

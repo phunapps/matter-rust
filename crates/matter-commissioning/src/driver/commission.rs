@@ -442,12 +442,20 @@ pub struct DriverConfig<'a> {
 ///   the advertised long discriminator (`advertised >> 8 == short`).
 ///
 /// To handle both without a separate flag, each poll round prefers an **exact**
-/// long match and only falls back to the short (upper-4-bit) match — a value
-/// that came from a manual code never matches a device's full `D` exactly, so it
-/// deterministically takes the short path, while a QR's long discriminator
-/// exact-matches its device. Short discriminators are only 4 bits, so the
-/// fallback is inherently ambiguous if multiple devices are commissionable with
-/// the same upper nibble (the same limitation chip carries).
+/// long match and only then falls back to the short (upper-4-bit) match. A
+/// manual-code value usually takes the short path, because `short << 8` rarely
+/// equals a device's full `D` — though it does when the device's own
+/// discriminator happens to have zero low bits.
+///
+/// Because the provenance of `discriminator` is not tracked, the fallback is
+/// **unconditional**: a long discriminator from a QR code can also short-match,
+/// which will pick the wrong device if the intended one is absent from a poll
+/// round and another commissionable device shares its upper nibble (PASE then
+/// fails against that device). connectedhomeip avoids this by carrying an
+/// explicit `mIsShortDiscriminator` flag on `SetupDiscriminator` and gating the
+/// degraded comparison on it. Short discriminators are only 4 bits, so the
+/// short path is inherently ambiguous between devices sharing an upper nibble
+/// regardless — the same limitation chip carries.
 ///
 /// FLAGGED: takes the first advertised address from `addresses[0]`. Link-local
 /// `fe80::` addresses need an interface scope-id that [`matter_transport::MatterService`]
