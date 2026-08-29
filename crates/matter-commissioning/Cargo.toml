@@ -1,6 +1,6 @@
 [package]
 name = "matter-commissioning"
-version = "0.6.0"
+version = "0.7.0"
 description = "Matter commissioning state machine: setup payload, attestation, NOC issuance, network commissioning."
 edition.workspace = true
 rust-version.workspace = true

@@ -84,6 +84,31 @@ fn input_to_payload(input: &InputJson) -> SetupPayload {
     }
 }
 
+/// Like [`input_to_payload`], but for `manual-*` fixtures, whose payloads
+/// carry a **short** discriminator.
+///
+/// A manual pairing code only ever conveys the upper 4 bits, so a payload
+/// decoded from one is short by construction and compares unequal to the same
+/// bits built as a long discriminator (#120). Every current manual fixture
+/// stores a short-aligned value, which this asserts: a fixture with non-zero
+/// low bits could not round-trip at all, and would need the expected *decoded*
+/// discriminator recorded separately rather than reusing `input`.
+fn manual_input_to_payload(input: &InputJson) -> SetupPayload {
+    assert_eq!(
+        input.discriminator & 0x00FF,
+        0,
+        "manual fixture discriminator {:#05x} has non-zero low bits; a manual \
+         code cannot carry them, so `input` cannot double as the expected \
+         decode — record the decoded value separately",
+        input.discriminator
+    );
+    let mut payload = input_to_payload(input);
+    #[allow(clippy::cast_possible_truncation)] // Asserted short-aligned above.
+    let short = ((input.discriminator >> 8) & 0x0F) as u8;
+    payload.discriminator = Discriminator::from_short(short).unwrap();
+    payload
+}
+
 fn load_fixtures(prefix: &str) -> Vec<(String, Fixture)> {
     let dir = fixtures_dir();
     let mut out = Vec::new();
@@ -133,7 +158,7 @@ fn qr_decode_matches_matterjs() {
 #[test]
 fn manual_encode_matches_matterjs() {
     for (name, fixture) in load_fixtures("manual-") {
-        let payload = input_to_payload(&fixture.input);
+        let payload = manual_input_to_payload(&fixture.input);
         let expected_manual = fixture
             .expected
             .manual
@@ -154,7 +179,7 @@ fn manual_decode_matches_matterjs() {
         let expected_manual = fixture.expected.manual.as_ref().unwrap();
         let payload = parse_manual_code(expected_manual)
             .unwrap_or_else(|e| panic!("parse_manual_code failed for {name}: {e}"));
-        let expected = input_to_payload(&fixture.input);
+        let expected = manual_input_to_payload(&fixture.input);
         assert_eq!(
             payload, expected,
             "parse_manual_code value mismatch for {name}"

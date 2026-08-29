@@ -95,10 +95,19 @@ pub struct SetupPayload {
 /// Constructors enforce the 12-bit range. The short discriminator (the
 /// upper 4 bits) is what manual pairing codes carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Discriminator(u16);
+pub struct Discriminator {
+    /// Always stored zero-extended to 12 bits: a short discriminator is
+    /// held as `short << 8`.
+    value: u16,
+    /// Provenance. `true` when only the upper 4 bits are known, i.e. the
+    /// value came from a manual pairing code.
+    is_short: bool,
+}
 
 impl Discriminator {
-    /// Construct from a 12-bit value.
+    /// Construct from a full 12-bit **long** discriminator — the value a
+    /// device advertises in its mDNS `D` TXT record, and the one a QR code
+    /// carries.
     ///
     /// # Errors
     /// Returns [`Error::DiscriminatorOutOfRange`] if `value > 0x0FFF`.
@@ -106,19 +115,71 @@ impl Discriminator {
         if value > 0x0FFF {
             Err(Error::DiscriminatorOutOfRange(value))
         } else {
-            Ok(Self(value))
+            Ok(Self {
+                value,
+                is_short: false,
+            })
+        }
+    }
+
+    /// Construct from a 4-bit **short** discriminator, as carried by a
+    /// manual pairing code.
+    ///
+    /// The result compares unequal to [`Self::new`] of the same
+    /// zero-extended bits, deliberately: a short discriminator identifies
+    /// a device less precisely, and treating the two as interchangeable is
+    /// what lets a long discriminator wrongly match a device it does not
+    /// belong to. Use [`Self::matches_advertised`] to compare either kind
+    /// against an advertised value.
+    ///
+    /// # Errors
+    /// Returns [`Error::ShortDiscriminatorOutOfRange`] if `short > 0x0F`.
+    pub const fn from_short(short: u8) -> Result<Self> {
+        if short > 0x0F {
+            Err(Error::ShortDiscriminatorOutOfRange(short))
+        } else {
+            Ok(Self {
+                value: (short as u16) << 8,
+                is_short: true,
+            })
         }
     }
 
     /// The discriminator as a raw `u16` in the range `0..=0x0FFF`.
+    ///
+    /// For a short discriminator this is the zero-extended form
+    /// (`short << 8`), which is **not** the value the device advertises.
+    /// Check [`Self::is_short`] before using this to identify a device.
     pub const fn as_u16(self) -> u16 {
-        self.0
+        self.value
     }
 
     /// Upper 4 bits — the *short* discriminator carried by manual
-    /// pairing codes.
+    /// pairing codes. Defined for both kinds.
     pub const fn short(self) -> u8 {
-        ((self.0 >> 8) & 0x0F) as u8
+        ((self.value >> 8) & 0x0F) as u8
+    }
+
+    /// Whether only the upper 4 bits are known (i.e. this came from a
+    /// manual pairing code).
+    pub const fn is_short(self) -> bool {
+        self.is_short
+    }
+
+    /// Whether `advertised` — a device's full 12-bit `D` TXT value —
+    /// identifies this discriminator.
+    ///
+    /// A long discriminator must match exactly. A short one can only
+    /// constrain the upper 4 bits, so it matches any device sharing that
+    /// nibble; that ambiguity is inherent to manual pairing codes
+    /// (16 possible values) and is why a QR code identifies a device more
+    /// precisely.
+    pub const fn matches_advertised(self, advertised: u16) -> bool {
+        if self.is_short {
+            (advertised >> 8) & 0x0F == self.short() as u16
+        } else {
+            advertised == self.value
+        }
     }
 }
 
@@ -323,6 +384,10 @@ pub enum Error {
     /// The 12-bit Long Discriminator field is out of range.
     #[error("discriminator {0} exceeds the 12-bit field width")]
     DiscriminatorOutOfRange(u16),
+
+    /// The 4-bit Short Discriminator field is out of range.
+    #[error("short discriminator {0} exceeds the 4-bit field width")]
+    ShortDiscriminatorOutOfRange(u8),
 
     /// The 27-bit Passcode field is out of range.
     #[error("passcode {0} exceeds the 27-bit field width")]
@@ -863,6 +928,11 @@ mod qr_api_tests {
 mod manual_api_tests {
     use super::*;
 
+    /// Note the `from_short`: a payload that can round-trip through a manual
+    /// code is one whose discriminator is *short* to begin with. Building this
+    /// with `Discriminator::new(0x0F00)` — a long discriminator that merely
+    /// looks short — is what made these tests assert a false identity before
+    /// provenance was tracked (#120).
     fn payload_11() -> SetupPayload {
         SetupPayload {
             version: 0,
@@ -870,7 +940,7 @@ mod manual_api_tests {
             product_id: None,
             commissioning_flow: CommissioningFlow::Standard,
             discovery_capabilities: DiscoveryCapabilities::empty(),
-            discriminator: Discriminator::new(0x0F00).unwrap(),
+            discriminator: Discriminator::from_short(0x0F).unwrap(),
             passcode: Passcode::new(20_202_021).unwrap(),
         }
     }

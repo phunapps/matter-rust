@@ -22,7 +22,55 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## Unreleased
+## matter-commissioning 0.7.0 + matter-controller 0.11.0
+
+Prompted by [#120]. What was reported as a documentation bug turned out to sit
+on top of a real one: because a short discriminator was indistinguishable from a
+long one, commissioning could select the **wrong device**. Both are fixed here.
+
+### Fixed — a long discriminator could match the wrong device ([#120])
+
+`resolve_commissionable` preferred an exact 12-bit match and then fell back to
+comparing only the upper 4 bits. The fallback ran **unconditionally**, because
+nothing recorded whether the discriminator was a full 12-bit value from a QR
+code or a 4-bit one from a manual pairing code.
+
+So a QR-sourced discriminator such as `0x4B4` would match a device advertising
+`0x4A9` whenever the intended device was missing from a poll round and another
+commissionable device shared the upper nibble. Discovery "succeeded" against the
+wrong device and the mistake surfaced later as an opaque PASE failure. The BLE
+path in `matter-controller` had the same fallback, with the same consequence.
+
+**Discriminators now carry their provenance.** `Discriminator` records whether
+it is short or long, and the degraded comparison is gated on it — mirroring
+connectedhomeip, which gates the same comparison on
+`SetupDiscriminator::mIsShortDiscriminator`. A long discriminator must match
+exactly; only a short one compares on the upper nibble.
+
+The short comparison is still ambiguous between devices sharing a nibble — only
+16 values exist — which is inherent to manual pairing codes. Use a QR code when
+several devices are commissionable at once.
+
+**BLE commissioning also got faster.** Exactly one scan now runs, chosen by
+provenance, instead of a long pass that a manual code could never satisfy
+followed by a short fallback. A manual-code BLE commission no longer burns a
+full 60 s `SCAN_TIMEOUT` before attempting the scan that can actually succeed.
+
+#### Breaking
+
+- `Discriminator` is no longer a thin wrapper over `u16`. `Discriminator::new`
+  still takes a 12-bit value and still means **long**, so existing call sites
+  keep compiling and keep their meaning.
+- Build one from a manual pairing code with the new
+  `Discriminator::from_short(u8)`. New: `is_short()` and
+  `matches_advertised(u16)`; `as_u16()` and `short()` are unchanged.
+- **Equality is now provenance-sensitive**: `Discriminator::from_short(0xA)` is
+  *not* equal to `Discriminator::new(0xA00)`. This is the point — it is what
+  makes the wrong-device match unrepresentable — but it will change the result
+  of comparisons that previously passed by accident.
+- `driver::resolve_commissionable` takes a `Discriminator` instead of a `u16`.
+- New error variant `Error::ShortDiscriminatorOutOfRange` (the enum is
+  `#[non_exhaustive]`).
 
 ### Fixed — documentation: the manual-code roundtrip was documented as lossless ([#120])
 
@@ -40,7 +88,9 @@ Our tests had the same blind spot: every manual-code test built its payload as
 `short << 8`, so nothing in the suite ever pushed a long discriminator through a
 manual code.
 
-**No behaviour change — the encoder and decoder were always correct.**
+The encoder and decoder were always correct on the wire; what was wrong was
+what we said about them, and (see above) what the rest of the stack then did
+with the result.
 
 - The `encode_manual_code` doctest uses `0xABC` and asserts what actually
   happens (`0xABC` → `0xA00`; passcode and `short()` preserved).
@@ -77,6 +127,22 @@ Two runbooks (`m6.6-first-commission.md`, `m8.3-commission.md`) claimed the
 opposite — that mDNS discovery "cannot match" a manual code and that this was a
 known limitation. That has not been true since the short fallback landed; both
 corrected.
+
+### Fixed — auto-resubscribe replayed events the consumer had already seen
+
+A device stores events while a subscription is down. On auto-resubscribe, the
+new subscription's priming report replayed them, so a consumer could be handed
+a button press it had already processed — and publish it late, because priming
+guards keyed off the control-channel `Established` marker can be overtaken by
+buffered replays.
+
+The controller now tracks the highest event number handed to the consumer per
+subscription and sets `event_min = watermark + 1` on the resubscribe request, so
+the device never sends them a second time.
+
+This shipped to the 0.7.x maintenance line as **matter-controller 0.7.2** on
+2026-08-29 and is only now reaching the current line; 0.10.0 users did not have
+it. No API change.
 
 [#120]: https://github.com/phunapps/matter-rust/issues/120
 

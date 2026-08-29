@@ -14,6 +14,7 @@ use crate::driver::error::DriverError;
 use crate::driver::exchange::secured_round_trip;
 use crate::driver::TransportReliability;
 use crate::im::{CommandPath, ImStatus};
+use crate::setup::Discriminator;
 use crate::CommissionedFabric;
 use crate::CommissionerConfig;
 
@@ -441,21 +442,17 @@ pub struct DriverConfig<'a> {
 ///   `kShortDiscriminator` filter) it is matched against the **upper 4 bits** of
 ///   the advertised long discriminator (`advertised >> 8 == short`).
 ///
-/// To handle both without a separate flag, each poll round prefers an **exact**
-/// long match and only then falls back to the short (upper-4-bit) match. A
-/// manual-code value usually takes the short path, because `short << 8` rarely
-/// equals a device's full `D` — though it does when the device's own
-/// discriminator happens to have zero low bits.
+/// Which comparison is used is decided by the discriminator's own provenance,
+/// via [`Discriminator::matches_advertised`]: a long one must match the
+/// advertised `D` exactly, and only a short one degrades to the upper-4-bit
+/// comparison. A long discriminator therefore never selects a device that
+/// merely shares its upper nibble. This mirrors connectedhomeip, which gates
+/// the degraded comparison on `SetupDiscriminator::mIsShortDiscriminator`.
 ///
-/// Because the provenance of `discriminator` is not tracked, the fallback is
-/// **unconditional**: a long discriminator from a QR code can also short-match,
-/// which will pick the wrong device if the intended one is absent from a poll
-/// round and another commissionable device shares its upper nibble (PASE then
-/// fails against that device). connectedhomeip avoids this by carrying an
-/// explicit `mIsShortDiscriminator` flag on `SetupDiscriminator` and gating the
-/// degraded comparison on it. Short discriminators are only 4 bits, so the
-/// short path is inherently ambiguous between devices sharing an upper nibble
-/// regardless — the same limitation chip carries.
+/// The short path remains inherently ambiguous between devices sharing an
+/// upper nibble — only 16 values exist — which is a property of manual pairing
+/// codes rather than of this function, and the same limitation chip carries.
+/// Prefer a QR code when several commissionable devices are present.
 ///
 /// FLAGGED: takes the first advertised address from `addresses[0]`. Link-local
 /// `fe80::` addresses need an interface scope-id that [`matter_transport::MatterService`]
@@ -468,9 +465,8 @@ pub struct DriverConfig<'a> {
 ///   within the poll budget.
 pub async fn resolve_commissionable<D: Discovery>(
     discovery: &mut D,
-    discriminator: u16,
+    discriminator: Discriminator,
 ) -> Result<SocketAddr, DriverError> {
-    let short = ((discriminator >> 8) & 0x0F) as u8;
     let handle = discovery
         .query(ServiceKind::Commissionable)
         .map_err(DriverError::Transport)?;
@@ -484,21 +480,12 @@ pub async fn resolve_commissionable<D: Discovery>(
     for _ in 0..RESOLVE_POLL_ATTEMPTS {
         let results = discovery.poll_results(handle);
 
-        // Prefer an exact long-discriminator match (QR codes).
-        for svc in results.iter().filter(|s| window_open(s)) {
-            if svc.txt_str("D").and_then(|d| d.parse::<u16>().ok()) == Some(discriminator) {
-                if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
-                    discovery.stop_query(handle);
-                    return Ok(SocketAddr::new(addr, svc.port));
-                }
-            }
-        }
-
-        // Fall back to the upper-4-bit short discriminator (manual codes).
+        // The comparison degrades to the upper 4 bits only when the
+        // discriminator itself is short; a long one must match exactly.
         for svc in results.iter().filter(|s| window_open(s)) {
             let advertised = svc.txt_str("D").and_then(|d| d.parse::<u16>().ok());
             if let Some(adv) = advertised {
-                if ((adv >> 8) & 0x0F) as u8 == short {
+                if discriminator.matches_advertised(adv) {
                     if let Some(addr) = crate::driver::case::preferred_address(&svc.addresses) {
                         discovery.stop_query(handle);
                         return Ok(SocketAddr::new(addr, svc.port));
@@ -510,8 +497,14 @@ pub async fn resolve_commissionable<D: Discovery>(
         tokio::time::sleep(RESOLVE_POLL_INTERVAL).await;
     }
     discovery.stop_query(handle);
+    let kind = if discriminator.is_short() {
+        "short"
+    } else {
+        "long"
+    };
     Err(DriverError::Discovery(format!(
-        "commissionable device with discriminator {discriminator} (short {short:#x}) not found via mDNS"
+        "commissionable device with {kind} discriminator {} not found via mDNS",
+        discriminator.as_u16()
     )))
 }
 
@@ -686,7 +679,7 @@ where
     let peer = if let Some(addr) = config.commissionable_addr {
         addr
     } else {
-        let disc = config.commissioner.setup_payload.discriminator.as_u16();
+        let disc = config.commissioner.setup_payload.discriminator;
         resolve_commissionable(discovery, disc).await?
     };
 
@@ -1520,7 +1513,7 @@ mod tests {
                 txt,
             ),
         };
-        let addr = resolve_commissionable(&mut disc, DISCRIMINATOR)
+        let addr = resolve_commissionable(&mut disc, Discriminator::new(DISCRIMINATOR).unwrap())
             .await
             .unwrap();
         assert_eq!(
@@ -1537,7 +1530,6 @@ mod tests {
         // exact long match fails; the upper-4-bit short match (0x4B4 >> 8 == 0x4)
         // succeeds — the connectedhomeip `kShortDiscriminator` behaviour.
         const DEVICE_LONG: u16 = 0x4B4;
-        const MANUAL_SHORT_PACKED: u16 = 0x0400;
         let mut txt = HashMap::new();
         txt.insert("D".to_string(), DEVICE_LONG.to_string().into_bytes());
         let mut disc = FakeDiscovery {
@@ -1549,7 +1541,51 @@ mod tests {
                 txt,
             ),
         };
-        let addr = resolve_commissionable(&mut disc, MANUAL_SHORT_PACKED)
+        let addr = resolve_commissionable(&mut disc, Discriminator::from_short(0x4).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            addr,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248)), 5540)
+        );
+    }
+
+    /// A **long** discriminator must not settle for a device that merely
+    /// shares its upper nibble.
+    ///
+    /// Before provenance was tracked, the short fallback ran unconditionally,
+    /// so a QR-sourced `0x4B4` would match a device advertising `0x4A9` — the
+    /// wrong device, discovered "successfully", with the failure surfacing
+    /// later as an opaque PASE error. Now only a short discriminator degrades
+    /// to the nibble comparison, so this resolve must time out instead.
+    ///
+    /// `start_paused` auto-advances the clock past the 50 x 100 ms poll
+    /// budget, so the negative case costs no wall-clock time.
+    #[tokio::test(start_paused = true)]
+    async fn resolve_commissionable_long_does_not_match_nibble_neighbour() {
+        const WANTED: u16 = 0x4B4;
+        const OTHER_DEVICE: u16 = 0x4A9; // same upper nibble, different device
+        let mut txt = HashMap::new();
+        txt.insert("D".to_string(), OTHER_DEVICE.to_string().into_bytes());
+        let mut disc = FakeDiscovery {
+            service: MatterService::new(
+                "3C64CF0B1D42".to_string(),
+                ServiceKind::Commissionable,
+                vec![IpAddr::V4(Ipv4Addr::new(192, 168, 1, 248))],
+                5540,
+                txt,
+            ),
+        };
+        let err = resolve_commissionable(&mut disc, Discriminator::new(WANTED).unwrap())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, DriverError::Discovery(m) if m.contains("long discriminator")),
+            "expected a discovery timeout, got {err:?}"
+        );
+
+        // The same device IS the right answer for a manual code carrying 0x4.
+        let addr = resolve_commissionable(&mut disc, Discriminator::from_short(0x4).unwrap())
             .await
             .unwrap();
         assert_eq!(

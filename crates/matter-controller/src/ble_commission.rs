@@ -29,11 +29,10 @@ use matter_commissioning::NetworkCredentials;
 use crate::error::Error;
 
 /// How long a single BLE scan waits for a matching advertisement before giving
-/// up. Applied once for the long-discriminator pass and once more for the
-/// short-discriminator fallback (60 s scan). A device advertising
-/// its full 12-bit discriminator (QR / the Pi DUT's `3840` = `0xF00`) matches
-/// on the first pass immediately; only a manual-pairing-code commission of a
-/// device whose long discriminator has non-zero low bits pays the fallback.
+/// up. Exactly one scan runs per commission — either the exact 12-bit match
+/// (QR / full setup code, e.g. the Pi DUT's `3840` = `0xF00`) or the upper-4-bit
+/// match (manual pairing code) — chosen by the discriminator's provenance, so
+/// this bounds the whole discovery phase rather than half of it.
 const SCAN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Map a [`CentralError`] to the controller error type. BLE-layer failures are
@@ -142,26 +141,32 @@ pub(crate) async fn run_commission_ble_task(
     // 1. Acquire the adapter (TCC trigger) and locate the device by discriminator.
     let central = BleCentral::new().await.map_err(|e| ble_err(&e))?;
 
-    let disc = setup_payload.discriminator.as_u16();
-    // Prefer an exact long-discriminator match; fall back to the upper-4-bit
-    // short match — mirroring `resolve_commissionable`'s long-then-short
-    // preference on the IP path. A QR / full setup code exact-matches long
-    // immediately; a manual pairing code (which only carries the short
-    // discriminator) fails the long pass and takes the short fallback.
+    // Which scan we run is decided by the discriminator's provenance, matching
+    // `resolve_commissionable` on the IP path. A QR / full setup code knows all
+    // 12 bits and must match exactly; a manual pairing code knows only the
+    // upper 4 and can do no better than the short match.
     //
-    // The short pass must pass the *extracted* 4-bit value (`short()`), not the
-    // raw u16: `advert_matches(short=true)` reads the requested short from the
-    // request's low nibble, exactly as `resolve_commissionable` does with
-    // `(discriminator >> 8) & 0x0F`. Passing `disc` here would compare the
-    // wrong nibble and never match a real device.
-    let short_disc = u16::from(setup_payload.discriminator.short());
-    let device = match central.find_device(disc, false, SCAN_TIMEOUT).await {
-        Ok(dev) => dev,
-        Err(CentralError::ScanTimeout) => central
+    // Gating on provenance rather than falling back on timeout matters twice
+    // over. A long discriminator must never settle for a device that merely
+    // shares its upper nibble — that is the wrong device, and it surfaces as a
+    // confusing PASE failure. And a manual code no longer pays a doomed
+    // full-length long scan before the short one: it goes straight to the scan
+    // that can actually succeed.
+    //
+    // The short pass takes the *extracted* 4-bit value (`short()`), not the raw
+    // u16: `advert_matches(short=true)` reads the requested short from the
+    // request's low nibble.
+    let device = if setup_payload.discriminator.is_short() {
+        let short_disc = u16::from(setup_payload.discriminator.short());
+        central
             .find_device(short_disc, true, SCAN_TIMEOUT)
             .await
-            .map_err(|e| ble_err(&e))?,
-        Err(e) => return Err(ble_err(&e)),
+            .map_err(|e| ble_err(&e))?
+    } else {
+        central
+            .find_device(setup_payload.discriminator.as_u16(), false, SCAN_TIMEOUT)
+            .await
+            .map_err(|e| ble_err(&e))?
     };
 
     // 2. Open the BTP session (connect + GATT + BTP handshake) and adapt it to

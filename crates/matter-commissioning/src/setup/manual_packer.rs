@@ -90,8 +90,8 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
     let has_vid_pid = ((chunk0 >> 2) & 0b1) == 1;
     let short_upper = chunk0 & 0b11;
     let short_lower = (chunk1 >> 14) & 0b11;
-    #[allow(clippy::cast_possible_truncation)] // 4-bit value, fits u16 trivially.
-    let short = ((short_upper << 2) | short_lower) as u16; // 4-bit short discriminator
+    #[allow(clippy::cast_possible_truncation)] // 4-bit value, fits u8 trivially.
+    let short = ((short_upper << 2) | short_lower) as u8; // 4-bit short discriminator
 
     let passcode_lo = chunk1 & 0x3FFF; // bits 0..=13
     let passcode_hi = chunk2 & 0x1FFF; // bits 14..=26
@@ -127,17 +127,16 @@ pub(super) fn unpack(s: &str) -> Result<SetupPayload> {
         (None, None)
     };
 
-    // Manual code zero-extends to a 12-bit Discriminator with the short
-    // value placed in the upper 4 bits.
-    let long_discriminator = short << 8;
-
+    // A manual code carries only the 4-bit short discriminator. Construct it
+    // as such, so the value is marked short and cannot later be compared as
+    // though all 12 bits were known.
     Ok(SetupPayload {
         version: 0,
         vendor_id,
         product_id,
         commissioning_flow: CommissioningFlow::Standard,
         discovery_capabilities: DiscoveryCapabilities::empty(),
-        discriminator: Discriminator::new(long_discriminator)?,
+        discriminator: Discriminator::from_short(short)?,
         passcode: Passcode::new(passcode)?,
     })
 }
@@ -155,7 +154,7 @@ mod tests {
             product_id: None,
             commissioning_flow: CommissioningFlow::Standard,
             discovery_capabilities: DiscoveryCapabilities::empty(),
-            discriminator: Discriminator::new(u16::from(short_disc) << 8).unwrap(),
+            discriminator: Discriminator::from_short(short_disc).unwrap(),
             passcode: Passcode::new(passcode).unwrap(),
         }
     }
@@ -167,7 +166,7 @@ mod tests {
             product_id: Some(pid),
             commissioning_flow: CommissioningFlow::Standard,
             discovery_capabilities: DiscoveryCapabilities::empty(),
-            discriminator: Discriminator::new(u16::from(short_disc) << 8).unwrap(),
+            discriminator: Discriminator::from_short(short_disc).unwrap(),
             passcode: Passcode::new(passcode).unwrap(),
         }
     }

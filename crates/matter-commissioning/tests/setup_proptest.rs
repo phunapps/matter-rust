@@ -62,15 +62,17 @@ fn arb_payload_qr() -> impl Strategy<Value = SetupPayload> {
 }
 
 fn arb_payload_manual_11() -> impl Strategy<Value = SetupPayload> {
-    // Manual code zero-extends to 12-bit discriminator, so generate the
-    // short form directly (upper 4 bits only).
-    ((0u16..=0x0F), arb_passcode()).prop_map(|(short, passcode)| SetupPayload {
+    // A manual code carries only the short discriminator, so a payload that
+    // can round-trip through one has a short discriminator to begin with.
+    // Building this with a *long* value that merely looks short is what made
+    // this suite assert a false identity before provenance was tracked (#120).
+    ((0u8..=0x0F), arb_passcode()).prop_map(|(short, passcode)| SetupPayload {
         version: 0,
         vendor_id: None,
         product_id: None,
         commissioning_flow: CommissioningFlow::Standard,
         discovery_capabilities: DiscoveryCapabilities::empty(),
-        discriminator: Discriminator::new(short << 8).expect("4-bit"),
+        discriminator: Discriminator::from_short(short).expect("4-bit"),
         passcode,
     })
 }
@@ -91,14 +93,14 @@ fn arb_payload_manual_11_long_disc() -> impl Strategy<Value = SetupPayload> {
 }
 
 fn arb_payload_manual_21() -> impl Strategy<Value = SetupPayload> {
-    ((0u16..=0x0F), any::<u16>(), any::<u16>(), arb_passcode()).prop_map(
+    ((0u8..=0x0F), any::<u16>(), any::<u16>(), arb_passcode()).prop_map(
         |(short, vid, pid, passcode)| SetupPayload {
             version: 0,
             vendor_id: Some(vid),
             product_id: Some(pid),
             commissioning_flow: CommissioningFlow::Standard,
             discovery_capabilities: DiscoveryCapabilities::empty(),
-            discriminator: Discriminator::new(short << 8).expect("4-bit"),
+            discriminator: Discriminator::from_short(short).expect("4-bit"),
             passcode,
         },
     )
@@ -124,8 +126,8 @@ proptest! {
     /// survives only down to its short form (Matter Core Spec §5.1.4).
     ///
     /// `manual_11_roundtrip` above asserts full equality, which holds only
-    /// because its strategy generates short-aligned discriminators. This
-    /// states what is true for the rest of the range. See issue #120.
+    /// because its payloads carry a *short* discriminator to begin with. This
+    /// states what is true when a long one is fed in. See issue #120.
     #[test]
     fn manual_11_preserves_passcode_and_short_discriminator(
         payload in arb_payload_manual_11_long_disc()

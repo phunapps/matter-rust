@@ -326,7 +326,14 @@ async fn main() -> anyhow::Result<()> {
         "setup payload: vid={:?} pid={:?} discriminator={} passcode=<redacted>",
         payload.vendor_id,
         payload.product_id,
-        payload.discriminator.as_u16(),
+        // A manual code carries only the short discriminator; printing its
+        // zero-extended form as though it were the device's 12-bit value is
+        // how #120 started.
+        if payload.discriminator.is_short() {
+            format!("{:#x} (short)", payload.discriminator.short())
+        } else {
+            format!("{}", payload.discriminator.as_u16())
+        },
     );
     let roots = build_trust_roots(&cli)?;
     if roots.using_test_roots {
