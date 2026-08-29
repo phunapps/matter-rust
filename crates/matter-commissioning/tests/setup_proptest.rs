@@ -75,6 +75,21 @@ fn arb_payload_manual_11() -> impl Strategy<Value = SetupPayload> {
     })
 }
 
+/// Like `arb_payload_manual_11`, but over the *full* 12-bit discriminator
+/// range rather than the short-aligned subset. Used for the lossy-roundtrip
+/// property below.
+fn arb_payload_manual_11_long_disc() -> impl Strategy<Value = SetupPayload> {
+    (arb_discriminator(), arb_passcode()).prop_map(|(discriminator, passcode)| SetupPayload {
+        version: 0,
+        vendor_id: None,
+        product_id: None,
+        commissioning_flow: CommissioningFlow::Standard,
+        discovery_capabilities: DiscoveryCapabilities::empty(),
+        discriminator,
+        passcode,
+    })
+}
+
 fn arb_payload_manual_21() -> impl Strategy<Value = SetupPayload> {
     ((0u16..=0x0F), any::<u16>(), any::<u16>(), arb_passcode()).prop_map(
         |(short, vid, pid, passcode)| SetupPayload {
@@ -102,6 +117,26 @@ proptest! {
         let s = encode_manual_code(&payload);
         let back = parse_manual_code(&s).expect("parse the encoded code");
         prop_assert_eq!(payload, back);
+    }
+
+    /// The honest manual-code property for an *arbitrary* 12-bit
+    /// discriminator: the passcode survives exactly, the discriminator
+    /// survives only down to its short form (Matter Core Spec §5.1.4).
+    ///
+    /// `manual_11_roundtrip` above asserts full equality, which holds only
+    /// because its strategy generates short-aligned discriminators. This
+    /// states what is true for the rest of the range. See issue #120.
+    #[test]
+    fn manual_11_preserves_passcode_and_short_discriminator(
+        payload in arb_payload_manual_11_long_disc()
+    ) {
+        let s = encode_manual_code(&payload);
+        let back = parse_manual_code(&s).expect("parse the encoded code");
+
+        prop_assert_eq!(back.passcode, payload.passcode);
+        prop_assert_eq!(back.discriminator.short(), payload.discriminator.short());
+        // Zero-extended: the low 8 bits are dropped, never invented.
+        prop_assert_eq!(back.discriminator.as_u16(), payload.discriminator.as_u16() & 0x0F00);
     }
 
     #[test]

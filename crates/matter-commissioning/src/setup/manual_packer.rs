@@ -212,6 +212,42 @@ mod tests {
         assert_eq!(back, p);
     }
 
+    /// A long discriminator is truncated to its short form by the manual
+    /// code, and the truncation is the *only* thing lost.
+    ///
+    /// Every other test here builds its payload as `short << 8`, which makes
+    /// the roundtrip look lossless. It is not, and reading the roundtrip
+    /// tests as though it were is what [#120] reports. Matter Core Spec
+    /// §5.1.4 gives the manual code 4 discriminator bits; the other 8 have
+    /// nowhere to go.
+    ///
+    /// [#120]: https://github.com/phunapps/matter-rust/issues/120
+    #[test]
+    fn pack_truncates_long_discriminator_to_short() {
+        let mut long = payload_11(0, 20_202_021);
+        long.discriminator = Discriminator::new(0xABC).unwrap();
+
+        let back = unpack(&pack(&long)).unwrap();
+
+        // The low 8 bits are gone; the short discriminator survives.
+        assert_eq!(back.discriminator.as_u16(), 0xA00);
+        assert_eq!(back.discriminator.short(), long.discriminator.short());
+        assert_ne!(back.discriminator, long.discriminator);
+        // Nothing else is disturbed.
+        assert_eq!(back.passcode, long.passcode);
+
+        // Every discriminator sharing a short form packs identically — which
+        // is why a manual code cannot distinguish them.
+        assert_eq!(pack(&long), pack(&payload_11(0xA, 20_202_021)));
+
+        // Known-answer, so this pins the *wire* form and not merely our own
+        // pack/unpack self-consistency: a symmetric mis-packing would satisfy
+        // every assertion above and still be wrong on the wire. Derived
+        // independently of this module, by a script that reproduces the
+        // canonical vector above and both `manual-11-*.json` fixtures.
+        assert_eq!(pack(&long), "23331712339");
+    }
+
     #[test]
     fn unpack_rejects_wrong_length() {
         assert!(matches!(

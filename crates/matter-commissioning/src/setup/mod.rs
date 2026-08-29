@@ -24,19 +24,41 @@ mod verhoeff;
 ///
 /// Roundtrip identities:
 ///
-/// ```ignore
-/// // For every valid `p` produced by M6.1:
+/// ```
+/// # use matter_commissioning::setup::{
+/// #     encode_manual_code, encode_qr, parse_manual_code, parse_qr,
+/// #     CommissioningFlow, Discriminator, DiscoveryCapabilities, Passcode,
+/// #     SetupPayload,
+/// # };
+/// # fn main() -> Result<(), matter_commissioning::setup::Error> {
+/// # let p = SetupPayload {
+/// #     version: 0,
+/// #     vendor_id: Some(0xFFF1),
+/// #     product_id: Some(0x8000),
+/// #     commissioning_flow: CommissioningFlow::Standard,
+/// #     discovery_capabilities: DiscoveryCapabilities::ON_NETWORK,
+/// #     discriminator: Discriminator::new(0xABC)?,
+/// #     passcode: Passcode::new(20_202_021)?,
+/// # };
+/// // QR codes roundtrip exactly, for every valid `p`:
 /// assert_eq!(parse_qr(&encode_qr(&p)?)?, p);
-/// assert_eq!(parse_manual_code(&encode_manual_code(&p)), p);  // see caveat below
+///
+/// // Manual codes DO NOT. They carry only the short discriminator, so the
+/// // most you get back is:
+/// let back = parse_manual_code(&encode_manual_code(&p))?;
+/// assert_eq!(back.passcode, p.passcode);
+/// assert_eq!(back.discriminator.short(), p.discriminator.short());
+/// assert_ne!(back.discriminator, p.discriminator);
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// The manual-code roundtrip preserves the *upper four bits* of the
 /// discriminator (the short discriminator) and zero-extends the rest.
 /// A `SetupPayload` decoded from a manual code therefore has a
 /// discriminator whose lower 8 bits are zero, regardless of what the
-/// physical device's long discriminator actually is. Callers matching
-/// against mDNS records should compare on the short discriminator in
-/// that case.
+/// physical device's long discriminator actually is — see
+/// [`parse_manual_code`] for how to match one against mDNS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupPayload {
     /// Onboarding payload version. Currently always `0` (Matter Core
@@ -431,18 +453,49 @@ pub fn parse_qr(s: &str) -> Result<SetupPayload> {
 ///     product_id: None,
 ///     commissioning_flow: CommissioningFlow::Standard,
 ///     discovery_capabilities: DiscoveryCapabilities::empty(),
-///     discriminator: Discriminator::new(0xF00).unwrap(),
+///     discriminator: Discriminator::new(0xABC).unwrap(),
 ///     passcode: Passcode::new(20_202_021).unwrap(),
 /// };
 /// let code = encode_manual_code(&payload);
 /// assert_eq!(code.len(), 11);
-/// assert_eq!(parse_manual_code(&code).unwrap(), payload);
+///
+/// // A manual code carries only the SHORT (upper-4-bit) discriminator, so
+/// // this is NOT a lossless roundtrip: 0xABC comes back as 0xA00. Compare
+/// // on `short()`, never on the whole `Discriminator`, for a payload that
+/// // came from a manual code.
+/// let back = parse_manual_code(&code).unwrap();
+/// assert_eq!(back.passcode, payload.passcode);
+/// assert_ne!(back.discriminator, payload.discriminator);
+/// assert_eq!(back.discriminator.as_u16(), 0xA00);
+/// assert_eq!(back.discriminator.short(), payload.discriminator.short());
 /// ```
 pub fn encode_manual_code(payload: &SetupPayload) -> String {
     manual_packer::pack(payload)
 }
 
 /// Parse a Matter manual pairing code (11 or 21 digits).
+///
+/// # The discriminator is short, and this is not reversible
+///
+/// A manual pairing code has room for only the **short** discriminator —
+/// the upper 4 bits of the device's 12-bit long discriminator (Matter Core
+/// Spec §5.1.4). The returned [`SetupPayload`] zero-extends it back to 12
+/// bits, so `discriminator` always has zero low 8 bits and generally does
+/// **not** equal the discriminator the device advertises in its `D` TXT
+/// record. `encode_manual_code` → `parse_manual_code` is therefore lossy by
+/// construction, for every implementation, not just this one.
+///
+/// When matching such a payload against mDNS, compare
+/// [`Discriminator::short`] against `(advertised >> 8) & 0x0F`; comparing
+/// the full values will not match any device whose long discriminator has
+/// non-zero low bits. `driver::resolve_commissionable` (feature `driver`)
+/// already does this — within each poll round it prefers an exact long
+/// match and falls back to the upper-4-bit match.
+///
+/// `discovery_capabilities` is not carried by a manual code either, and
+/// decodes to the empty set. `commissioning_flow` always decodes to
+/// [`CommissioningFlow::Standard`]; this crate does not infer a flow from
+/// the 21-digit form's VID/PID-present bit.
 ///
 /// # Errors
 /// Returns [`Error::ManualCodeWrongLength`], [`Error::ManualCodeNonDigit`],

@@ -1179,6 +1179,15 @@ impl Node {
     /// payload (manual pairing code, plus QR when `opts.vendor_id`/`product_id`
     /// are set). The `AdminComm` command is sent as a timed invoke.
     ///
+    /// The returned [`CommissioningWindow::manual_code`] identifies the device
+    /// less precisely than its QR code does: a manual pairing code carries
+    /// only the upper 4 bits of the discriminator, so parsing it back does not
+    /// recover [`CommissioningWindow::discriminator`]. See
+    /// [`CommissioningWindow::manual_code`] for the details.
+    ///
+    /// [`CommissioningWindow::manual_code`]: crate::CommissioningWindow::manual_code
+    /// [`CommissioningWindow::discriminator`]: crate::CommissioningWindow::discriminator
+    ///
     /// # Errors
     /// Returns [`Error::CommissioningWindowRejected`] if the device rejects it,
     /// or a crypto/RNG/interaction error.

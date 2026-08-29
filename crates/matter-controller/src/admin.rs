@@ -58,13 +58,24 @@ impl Default for OpenWindowOpts {
 pub struct CommissioningWindow {
     /// The freshly generated 27-bit setup passcode.
     pub passcode: u32,
-    /// The 12-bit discriminator advertised while the window is open.
+    /// The full 12-bit discriminator advertised while the window is open.
+    ///
+    /// This is the value the device puts in its mDNS `D` TXT record. Note
+    /// that [`Self::manual_code`] carries only its upper 4 bits — see there.
     pub discriminator: u16,
     /// PBKDF2 iterations used.
     pub iterations: u32,
     /// PBKDF2 salt used.
     pub salt: Vec<u8>,
     /// 11-digit manual pairing code (always present).
+    ///
+    /// A manual pairing code has room for only the **short** discriminator —
+    /// the upper 4 bits of [`Self::discriminator`] — so it identifies the
+    /// device less precisely than [`Self::qr_code`] does. A commissioner
+    /// given this code must match on the short discriminator; feeding it
+    /// back through `matter_commissioning::setup::parse_manual_code` does
+    /// **not** return [`Self::discriminator`]. That is inherent to the
+    /// format (Matter Core Spec §5.1.4), not a limitation of this crate.
     pub manual_code: String,
     /// `MT:` QR string — `Some` only when `vendor_id`/`product_id` were supplied.
     pub qr_code: Option<String>,
@@ -133,6 +144,13 @@ pub(crate) fn open_window_fields(
 
 /// Build the manual code (always) and QR (`Some` iff vid+pid given) for a window.
 ///
+/// The two codes do not carry the same discriminator precision: the QR carries
+/// all 12 bits, the manual code only the upper 4 (Matter Core Spec §5.1.4). A
+/// commissioner given the manual code therefore matches on the short
+/// discriminator, which is expected and is what `driver::commission` does. The
+/// window's own `discriminator` field stays the full 12-bit value, because that
+/// is what the device advertises.
+///
 /// # Errors
 ///
 /// Returns [`Error::SetupCode`] if `passcode` or `discriminator` are out of
@@ -190,6 +208,13 @@ pub(crate) fn random_window_secrets() -> Result<(u32, [u8; 32], u16), Error> {
     rng(&mut salt)?;
     let mut db = [0u8; 2];
     rng(&mut db)?;
+    // All 12 bits, deliberately: this is what the device advertises in its
+    // mDNS `D` record and what a QR code carries. Do NOT narrow this to
+    // `0x0F00` to make the manual-code roundtrip look lossless (proposed in
+    // #120) — a manual code only ever carries the upper 4 bits, so that
+    // would collapse the *advertised* discriminator from 4096 values to 16
+    // and make collisions between nearby commissionable devices 256x more
+    // likely, to fix nothing.
     let discriminator = u16::from_le_bytes(db) & 0x0FFF;
     // Passcode: draw 27-bit values until one is spec-valid (Passcode::new rejects
     // out-of-range and the disallowed-trivial set).

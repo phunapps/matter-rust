@@ -22,6 +22,46 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased
+
+### Fixed — documentation: the manual-code roundtrip was documented as lossless ([#120])
+
+`encode_manual_code` → `parse_manual_code` does not return the discriminator you
+put in, and never could: a Matter manual pairing code carries only the **short**
+(upper-4-bit) discriminator. Our own rustdoc taught the opposite. The
+`encode_manual_code` doctest used discriminator `0xF00`, whose low 8 bits are
+already zero, then asserted full `SetupPayload` equality — so the example passed
+while publicly stating an invariant that holds for only 16 of 4096
+discriminators. The caveat did exist, but on the `SetupPayload` type doc rather
+than on `parse_manual_code` itself, and in an uncompiled ```ignore``` block that
+asserted the false identity before walking it back in prose.
+
+Our tests had the same blind spot: every manual-code test built its payload as
+`short << 8`, so nothing in the suite ever pushed a long discriminator through a
+manual code.
+
+**No behaviour change — the encoder and decoder were always correct.**
+
+- The `encode_manual_code` doctest uses `0xABC` and asserts what actually
+  happens (`0xABC` → `0xA00`; passcode and `short()` preserved).
+- `parse_manual_code` documents the truncation on its own page, including how to
+  match such a payload against mDNS.
+- The `SetupPayload` roundtrip block is now a **compiled** doctest instead of
+  ```ignore```, so it cannot rot the way the one above did.
+- A unit test pins the truncation against a known-answer wire value, and a new
+  proptest asserts the honest property over the *full* 12-bit range.
+- `matter-controller` documents the precision difference on
+  `CommissioningWindow::manual_code` / `::discriminator` and
+  `Node::open_commissioning_window` — the surfaces a user of that crate reads.
+
+`random_window_secrets` deliberately keeps all 12 bits. Narrowing it to `0x0F00`
+(as [#120] suggested) would make the roundtrip lossless at the cost of reducing
+the *advertised* discriminator to 16 values, making collisions between nearby
+commissionable devices 256× more likely — fixing the symptom by damaging
+discovery. The reasoning is now recorded at the masking site.
+
+[#120]: https://github.com/phunapps/matter-rust/issues/120
+
 ## matter-transport 0.4.0 + matter-commissioning 0.6.0 + matter-controller 0.10.0
 
 The fix for [#113], confirmed working by the reporter on his own network: "it connects to
