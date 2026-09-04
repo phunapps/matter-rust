@@ -324,6 +324,32 @@ pub struct UnsecuredExchange {
     reliability: TransportReliability,
 }
 
+/// Draw a CSPRNG exchange id for one session-establishment handshake.
+///
+/// Both PASE and CASE used a compile-time `1`, so every handshake this
+/// controller ever ran shared an exchange id. A late reply from a previous
+/// attempt to the same peer therefore matched the current attempt's filter —
+/// see the destination-node-id guard in [`UnsecuredExchange::send_and_recv`],
+/// which closes the same window from the other side. Randomising here is
+/// defence in depth: unlike the guard it depends on nothing the peer does, and
+/// unlike the guard it is probabilistic (1 in 65536 per retry).
+///
+/// Any `u16` is legal. Matter Core Spec §4.10.2 makes the first exchange id of
+/// an initiator a random integer and reserves no value; chip seeds its
+/// allocator the same way (`ExchangeMgr.cpp:67`).
+///
+/// # Errors
+///
+/// - [`DriverError::Handshake`] if the system CSPRNG fails (ring reports no
+///   detail; effectively unreachable on supported platforms).
+pub fn random_exchange_id() -> Result<u16, DriverError> {
+    let rng = ring::rand::SystemRandom::new();
+    let mut bytes = [0u8; 2];
+    ring::rand::SecureRandom::fill(&rng, &mut bytes)
+        .map_err(|_| DriverError::Handshake("system CSPRNG failure drawing exchange id"))?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
 impl UnsecuredExchange {
     /// Create an exchange with the given initial message counter, exchange id,
     /// and ephemeral source node id. Deterministic — intended for tests and
@@ -1053,6 +1079,57 @@ mod tests {
 
         let (got, ()) = tokio::join!(controller, device);
         assert_eq!(got.unwrap().payload, b"our-sigma2");
+    }
+
+    /// Exchange ids must actually vary. A constant here is what let a late
+    /// reply from a previous handshake match the current one's filter.
+    #[test]
+    fn random_exchange_id_draws_vary() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            seen.insert(random_exchange_id().unwrap());
+        }
+        // 1000 draws from 65536 values collide often (birthday), but landing on
+        // fewer than 100 distinct values would mean the source is not random.
+        assert!(
+            seen.len() > 100,
+            "expected a wide spread of exchange ids, got {} distinct",
+            seen.len()
+        );
+        assert!(
+            seen.len() > 1,
+            "a constant exchange id is the defect this replaces"
+        );
+    }
+
+    /// A handshake must work on an exchange id that is not the old constant `1`
+    /// -- nothing in the framing or the receive filter may assume it.
+    #[tokio::test]
+    async fn send_and_recv_works_on_a_non_one_exchange_id() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 0xBEEF, 0xE0E0);
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = decode_unsecured(&pkt).unwrap();
+            assert_eq!(msg.exchange_id, 0xBEEF, "exchange id must survive framing");
+            let reply = encode_unsecured_reply(
+                100,
+                msg.exchange_id,
+                0x31,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                Some(msg.message_counter),
+                Some(0xE0E0),
+                b"sigma2",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"sigma2");
     }
 
     /// A reply carrying NO destination node id must still be accepted.

@@ -14,7 +14,9 @@ use matter_transport::{PeerHint, SessionId, SessionManager, SessionRole};
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
-use crate::driver::unsecured::{parse_status_report, require_handshake_opcode, UnsecuredExchange};
+use crate::driver::unsecured::{
+    parse_status_report, random_exchange_id, require_handshake_opcode, UnsecuredExchange,
+};
 use crate::driver::TransportReliability;
 
 // SecureChannel opcodes for the PASE handshake (Matter Core Spec §4.14.1).
@@ -26,8 +28,6 @@ const OP_PASE_PAKE3: u8 = 0x24;
 /// `SecureChannel` `StatusReport` opcode (spec §4.10.1.1) — the frame the
 /// device sends to close the handshake after the terminal `Pake3`.
 const OP_STATUS_REPORT: u8 = 0x40;
-
-const PASE_EXCHANGE_ID: u16 = 1;
 
 /// Drive a full PASE handshake against `peer` and register the resulting
 /// secured session in `sessions`, returning its local [`SessionId`].
@@ -89,7 +89,7 @@ pub async fn run_pase_with<T: AsyncDatagram>(
     let mut prover = PaseProver::new_with_negotiation(passcode, local.0)?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — devices drop session-establishment frames without them.
-    let mut exch = UnsecuredExchange::new_ephemeral_with(PASE_EXCHANGE_ID, reliability)?;
+    let mut exch = UnsecuredExchange::new_ephemeral_with(random_exchange_id()?, reliability)?;
 
     let request = prover.start()?;
     let resp = exch

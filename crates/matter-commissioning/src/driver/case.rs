@@ -14,7 +14,9 @@ use matter_transport::{Discovery, MrpConfig, ServiceKind, SessionId, SessionMana
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
-use crate::driver::unsecured::{parse_status_report, require_handshake_opcode, UnsecuredExchange};
+use crate::driver::unsecured::{
+    parse_status_report, random_exchange_id, require_handshake_opcode, UnsecuredExchange,
+};
 
 /// Build the operational mDNS instance name `<compressed-fabric-id>-<node-id>`,
 /// each as fixed-width uppercase hex (16 + 1 + 16 chars), per the Matter
@@ -455,8 +457,6 @@ const OP_SIGMA3: u8 = 0x32;
 /// device sends to close the handshake after the terminal `Sigma3`.
 const OP_STATUS_REPORT: u8 = 0x40;
 
-const CASE_EXCHANGE_ID: u16 = 1;
-
 /// Drive a fresh CASE (SIGMA-I) handshake against an already-resolved
 /// operational `peer` and register the resulting operational session, returning
 /// its local [`SessionId`]. `credentials` is this controller's operational
@@ -556,7 +556,7 @@ pub async fn run_case_establish<T: AsyncDatagram>(
     )?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — same unsecured-header requirements as PASE apply to SIGMA.
-    let mut exch = UnsecuredExchange::new_ephemeral(CASE_EXCHANGE_ID)?;
+    let mut exch = UnsecuredExchange::new_ephemeral(random_exchange_id()?)?;
 
     let sigma1 = initiator.start()?;
     let sigma2 = exch

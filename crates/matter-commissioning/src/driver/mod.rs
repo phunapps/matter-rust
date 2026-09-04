@@ -38,7 +38,8 @@ pub use exchange::{
 pub use pase::{run_pase, run_pase_with};
 pub use unsecured::{
     decode_unsecured, encode_unsecured, encode_unsecured_reply, parse_status_report,
-    require_handshake_opcode, SecureChannelStatus, UnsecuredExchange, UnsecuredMessage,
+    random_exchange_id, require_handshake_opcode, SecureChannelStatus, UnsecuredExchange,
+    UnsecuredMessage,
 };
 
 /// How reliability is provided under an unsecured (PASE handshake) exchange.
