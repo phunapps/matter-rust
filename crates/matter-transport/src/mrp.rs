@@ -317,7 +317,6 @@ pub struct MrpState {
     recent_reliable: [Option<RecentInbound>; 32],
     recent_next_slot: usize,
     exchanges: HashMap<u16, ExchangeState>,
-    next_exchange_id: u16,
     last_outbound: Option<Instant>,
     /// Wall-clock of the most recent message RECEIVED from the peer, used to
     /// classify the peer as "active" (within `config.idle_threshold` = the
@@ -340,7 +339,6 @@ impl MrpState {
             recent_reliable: std::array::from_fn(|_| None),
             recent_next_slot: 0,
             exchanges: HashMap::new(),
-            next_exchange_id: 1,
             last_outbound: None,
             last_peer_activity: None,
             config,
@@ -361,19 +359,34 @@ impl MrpState {
         }
     }
 
+    /// Record `id` as an exchange **we** initiated, so the next
+    /// [`Self::prepare_outbound`] on it sets the `I` flag.
+    ///
+    /// The id itself comes from [`SessionManager`](crate::SessionManager), which
+    /// owns one counter per initiator *node* — Matter Core Spec §4.10.2 requires
+    /// exactly that, and a per-session counter (which this type used to keep)
+    /// does not satisfy it.
+    pub fn note_local_exchange(&mut self, id: u16) {
+        self.exchanges.insert(
+            id,
+            ExchangeState {
+                is_local_initiator: true,
+            },
+        );
+    }
+
     /// Build an outbound wire payload (encoded protocol header concatenated
-    /// with `app_payload`). Allocates a new exchange ID if `exchange_id` is
-    /// `None` (we initiate) and inserts a fresh `ExchangeState` with
-    /// `is_local_initiator = true`. For `Some(id)`, looks up the exchange
-    /// table to determine `is_local_initiator`; if the exchange is not yet
-    /// recorded (caller is using an arbitrary peer-assigned ID without a
-    /// prior inbound), inserts a default record with `is_local_initiator =
-    /// false` (we assume responding).
+    /// with `app_payload`) on `exchange_id`.
+    ///
+    /// `is_local_initiator` comes from the exchange table: an id announced via
+    /// [`Self::note_local_exchange`] is ours and sets the `I` flag; any other id
+    /// (a peer-assigned one, or one used without a prior inbound) is recorded as
+    /// a response with `is_local_initiator = false`.
     ///
     /// When this exchange's buffered piggyback ack is drained, the outgoing
-    /// header carries `A=1` and `ack_counter = pending.ack_counter`. The drain path's
-    /// `is_local_initiator` is guaranteed to agree with the exchange-table
-    /// lookup because both were populated from the same
+    /// header carries `A=1` and `ack_counter = pending.ack_counter`. The drain
+    /// path's `is_local_initiator` is guaranteed to agree with the
+    /// exchange-table lookup because both were populated from the same
     /// `!peer_is_initiator` computation during `process_inbound`.
     ///
     /// # Errors
@@ -384,39 +397,24 @@ impl MrpState {
         &mut self,
         opcode: u8,
         protocol_id: ProtocolId,
-        exchange_id: Option<u16>,
+        exchange_id: u16,
         app_payload: &[u8],
         mrp_flags: MrpFlags,
         _now: Instant,
     ) -> Result<PreparedOutbound> {
-        // Resolve exchange_id + is_local_initiator via the exchange table.
-        let (exchange_id, is_local_initiator) = match exchange_id {
-            None => {
-                let id = self.allocate_exchange_id();
-                self.exchanges.insert(
-                    id,
-                    ExchangeState {
-                        is_local_initiator: true,
-                    },
-                );
-                (id, true)
-            }
-            Some(id) => {
-                if let Some(state) = self.exchanges.get(&id) {
-                    (id, state.is_local_initiator)
-                } else {
-                    // No record yet for this caller-provided id. Assume we
-                    // are responding (safe default: I=0).
-                    self.exchanges.insert(
-                        id,
-                        ExchangeState {
-                            is_local_initiator: false,
-                        },
-                    );
-                    (id, false)
-                }
-            }
-        };
+        // Resolve is_local_initiator via the exchange table. An id we have not
+        // seen means we are responding (safe default: I=0); a locally-initiated
+        // exchange is announced up front via `note_local_exchange`, because the
+        // id itself is allocated one level up -- see
+        // [`SessionManager::allocate_exchange_id`], which owns the per-node
+        // counter the spec requires.
+        let is_local_initiator = self
+            .exchanges
+            .entry(exchange_id)
+            .or_insert(ExchangeState {
+                is_local_initiator: false,
+            })
+            .is_local_initiator;
 
         // Drain the buffered piggyback for THIS exchange, if any. Other
         // exchanges' buffered acks are untouched.
@@ -451,15 +449,6 @@ impl MrpState {
             is_local_initiator,
             piggyback_acked,
         })
-    }
-
-    fn allocate_exchange_id(&mut self) -> u16 {
-        let id = self.next_exchange_id;
-        self.next_exchange_id = self.next_exchange_id.wrapping_add(1);
-        if self.next_exchange_id == 0 {
-            self.next_exchange_id = 1;
-        }
-        id
     }
 
     /// Register the encrypted wire bytes of a just-sent message. Caller
@@ -833,6 +822,36 @@ impl MrpState {
 mod tests {
     use super::*;
     use crate::error::Error;
+
+    /// Exchange id used by tests that would previously have passed `None` and
+    /// let `MrpState` allocate. Allocation now lives on `SessionManager` — one
+    /// counter per initiator *node*, as Matter Core Spec §4.10.2 requires — so
+    /// these tests name the id explicitly. Value 1 preserves the ids the
+    /// pre-existing assertions were written against.
+    const TEST_LOCAL_EXCHANGE: u16 = 1;
+
+    impl MrpState {
+        /// Test shim reproducing the old `prepare_outbound(.., None, ..)`
+        /// behaviour: mark a locally-initiated exchange, then prepare on it.
+        fn prepare_outbound_local(
+            &mut self,
+            opcode: u8,
+            protocol_id: ProtocolId,
+            app_payload: &[u8],
+            mrp_flags: MrpFlags,
+            now: Instant,
+        ) -> Result<PreparedOutbound> {
+            self.note_local_exchange(TEST_LOCAL_EXCHANGE);
+            self.prepare_outbound(
+                opcode,
+                protocol_id,
+                TEST_LOCAL_EXCHANGE,
+                app_payload,
+                mrp_flags,
+                now,
+            )
+        }
+    }
     use crate::protocol_header::{decode_protocol_header, ExchangeFlags};
     use std::time::Duration;
 
@@ -847,10 +866,9 @@ mod tests {
         let now = t0();
 
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x20,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
                 b"hello",
                 MrpFlags { reliable: false },
                 now,
@@ -879,10 +897,9 @@ mod tests {
         mrp.last_peer_activity = Some(now);
 
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
                 b"read attr",
                 MrpFlags { reliable: true },
                 now,
@@ -907,10 +924,9 @@ mod tests {
         // Peer active → active base (300 ms) for the first retransmit.
         mrp.last_peer_activity = Some(now);
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
                 b"read",
                 MrpFlags { reliable: true },
                 now,
@@ -956,10 +972,9 @@ mod tests {
         let mut mrp = MrpState::new(MrpConfig::default());
         let now = t0();
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
                 b"x",
                 MrpFlags { reliable: true },
                 now,
@@ -1003,10 +1018,9 @@ mod tests {
     /// retransmit deadline.
     fn schedule_reliable(mrp: &mut MrpState, counter: u32, now: Instant) -> Instant {
         let p = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
                 b"x",
                 MrpFlags { reliable: true },
                 now,
@@ -1097,42 +1111,13 @@ mod tests {
     }
 
     #[test]
-    fn exchange_id_allocation_increments() {
-        let mut mrp = MrpState::new(MrpConfig::default());
-        let now = t0();
-        let p1 = mrp
-            .prepare_outbound(
-                0x02,
-                crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
-                b"a",
-                MrpFlags::default(),
-                now,
-            )
-            .unwrap();
-        let p2 = mrp
-            .prepare_outbound(
-                0x02,
-                crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
-                b"b",
-                MrpFlags::default(),
-                now,
-            )
-            .unwrap();
-        assert_eq!(p1.exchange_id, 1);
-        assert_eq!(p2.exchange_id, 2);
-    }
-
-    #[test]
     fn prepared_payload_contains_encoded_header() {
         let mut mrp = MrpState::new(MrpConfig::default());
         let now = t0();
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 crate::protocol_header::ProtocolId::INTERACTION_MODEL,
-                None,
                 b"data",
                 MrpFlags { reliable: true },
                 now,
@@ -1271,10 +1256,9 @@ mod tests {
 
         // Send a reliable outbound first.
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 ProtocolId::INTERACTION_MODEL,
-                None,
                 b"x",
                 MrpFlags { reliable: true },
                 now,
@@ -1357,7 +1341,7 @@ mod tests {
             .prepare_outbound(
                 0x10,
                 ProtocolId::SECURE_CHANNEL,
-                Some(0x4242),
+                0x4242,
                 b"",
                 MrpFlags::default(),
                 now + Duration::from_millis(50),
@@ -1435,7 +1419,7 @@ mod tests {
             .prepare_outbound(
                 0x03,
                 ProtocolId::INTERACTION_MODEL,
-                Some(0x99),
+                0x99,
                 b"response",
                 MrpFlags { reliable: true },
                 now + Duration::from_millis(10),
@@ -1464,10 +1448,9 @@ mod tests {
         let now = t0();
 
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 ProtocolId::INTERACTION_MODEL,
-                None,
                 b"x",
                 MrpFlags { reliable: true },
                 now,
@@ -1548,7 +1531,7 @@ mod tests {
             .prepare_outbound(
                 0x03,
                 ProtocolId::INTERACTION_MODEL,
-                Some(0xAAAA),
+                0xAAAA,
                 b"resp-a",
                 MrpFlags::default(),
                 now + Duration::from_millis(10),
@@ -1565,7 +1548,7 @@ mod tests {
             .prepare_outbound(
                 0x03,
                 ProtocolId::INTERACTION_MODEL,
-                Some(0xBBBB),
+                0xBBBB,
                 b"resp-b",
                 MrpFlags::default(),
                 now + Duration::from_millis(10),
@@ -1735,10 +1718,9 @@ mod tests {
 
         // We initiate a reliable outbound.
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 ProtocolId::INTERACTION_MODEL,
-                None,
                 b"read",
                 MrpFlags { reliable: true },
                 now,
@@ -1781,10 +1763,9 @@ mod tests {
         let now = t0();
 
         let prepared = mrp
-            .prepare_outbound(
+            .prepare_outbound_local(
                 0x02,
                 ProtocolId::INTERACTION_MODEL,
-                None,
                 b"read",
                 MrpFlags { reliable: true },
                 now,

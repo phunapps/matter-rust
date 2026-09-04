@@ -350,6 +350,38 @@ pub struct SessionManager {
     next_seq: u64,
     /// Cap on `sessions.len()`; inserting into a full table evicts the oldest.
     max_sessions: usize,
+    /// The next exchange id this node will hand out, across ALL its sessions.
+    ///
+    /// Matter Core Spec §4.10.2: *"The first Exchange ID for a given Initiator
+    /// Node SHALL be a random integer. All subsequent Exchange IDs created by
+    /// that Initiator SHALL be the last Exchange ID it created incremented by
+    /// one. An Exchange ID is an unsigned integer that rolls over to zero when
+    /// its maximum value is exceeded."* One counter per **node**, not per
+    /// session — chip keeps a single `mNextExchangeId` on its `ExchangeManager`
+    /// for the same reason (`ExchangeMgr.cpp:67`, `:118`).
+    next_exchange_id: u16,
+}
+
+/// Draw the node's first exchange id (Matter Core Spec §4.10.2: it "SHALL be a
+/// random integer").
+///
+/// Falls back to a fixed non-zero value if the system CSPRNG is unavailable
+/// rather than panicking: [`SessionManager::new`] is infallible by design and
+/// CLAUDE.md forbids `unwrap`/`expect` in library code. The fallback costs
+/// unpredictability, not correctness — uniqueness is scoped to
+/// `{session, exchange id, role}`, which the monotonic increment preserves
+/// either way.
+fn seed_exchange_id() -> u16 {
+    let mut bytes = [0u8; 2];
+    if matter_crypto::random_bytes(&mut bytes).is_err() {
+        tracing::warn!(
+            target: "matter_transport::session",
+            "system CSPRNG unavailable seeding the exchange-id counter; \
+             falling back to a fixed seed (exchange ids become predictable)"
+        );
+        return 1;
+    }
+    u16::from_le_bytes(bytes)
 }
 
 impl Default for SessionManager {
@@ -368,7 +400,20 @@ impl SessionManager {
             next_local_id: 1,
             next_seq: 0,
             max_sessions: DEFAULT_MAX_SESSIONS,
+            next_exchange_id: seed_exchange_id(),
         }
+    }
+
+    /// Hand out the next exchange id for a locally-initiated exchange, from the
+    /// node-wide counter (spec §4.10.2).
+    ///
+    /// Wraps **through** zero: the spec says the id "rolls over to zero when its
+    /// maximum value is exceeded", so 0 is a legal id and skipping it would be a
+    /// gratuitous deviation.
+    fn allocate_exchange_id(&mut self) -> u16 {
+        let id = self.next_exchange_id;
+        self.next_exchange_id = self.next_exchange_id.wrapping_add(1);
+        id
     }
 
     /// Override the maximum number of concurrently-registered sessions. Values
@@ -651,6 +696,14 @@ impl SessionManager {
         mrp_flags: MrpFlags,
         now: Instant,
     ) -> Result<EncodeOutboundOutput> {
+        // Allocate BEFORE borrowing the session: the exchange-id counter lives
+        // on the manager (one per node, spec §4.10.2), not on the session.
+        let is_new_local_exchange = exchange_id.is_none();
+        let exchange_id = match exchange_id {
+            Some(id) => id,
+            None => self.allocate_exchange_id(),
+        };
+
         let session = self
             .sessions
             .get_mut(&session_id)
@@ -658,6 +711,12 @@ impl SessionManager {
 
         if session.outbound_counter == u32::MAX {
             return Err(Error::CounterOverflow);
+        }
+
+        // A caller-supplied id continues an existing exchange; a freshly
+        // allocated one is ours, so record it as locally-initiated (sets `I`).
+        if is_new_local_exchange {
+            session.mrp.note_local_exchange(exchange_id);
         }
 
         // A transport_reliable session (BTP) forces MRP off regardless of
@@ -1023,6 +1082,52 @@ mod tests {
     use super::*;
     use crate::mrp::MrpFlags;
     use crate::protocol_header::ProtocolId;
+
+    /// The exchange-id counter belongs to the NODE, not the session.
+    ///
+    /// Matter Core Spec §4.10.2: one counter per initiator node, incrementing.
+    /// It used to live on `MrpState`, i.e. one per session, which meant two
+    /// sessions handed out the same ids.
+    #[test]
+    fn exchange_ids_come_from_one_counter_across_sessions() {
+        let mut mgr = SessionManager::new();
+        let first = mgr.allocate_exchange_id();
+        let second = mgr.allocate_exchange_id();
+        assert_eq!(
+            second,
+            first.wrapping_add(1),
+            "ids must increment from a single node-wide counter"
+        );
+    }
+
+    /// The first exchange id "SHALL be a random integer" (§4.10.2). Two managers
+    /// in one process must therefore not start from the same place.
+    ///
+    /// Probabilistic by nature: with a 16-bit seed a genuine collision happens
+    /// once in 65536 runs, so this samples several managers and requires only
+    /// that they are not ALL identical — enough to catch a hard-coded seed,
+    /// which is the regression that matters, without flaking.
+    #[test]
+    fn the_first_exchange_id_is_seeded_randomly() {
+        let seeds: std::collections::HashSet<u16> = (0..16)
+            .map(|_| SessionManager::new().allocate_exchange_id())
+            .collect();
+        assert!(
+            seeds.len() > 1,
+            "every SessionManager started from the same exchange id -- the seed is not random"
+        );
+    }
+
+    /// The spec says the id "rolls over to zero when its maximum value is
+    /// exceeded", so 0 is legal. The old per-session allocator skipped it.
+    #[test]
+    fn exchange_id_wraps_through_zero() {
+        let mut mgr = SessionManager::new();
+        mgr.next_exchange_id = u16::MAX;
+        assert_eq!(mgr.allocate_exchange_id(), u16::MAX);
+        assert_eq!(mgr.allocate_exchange_id(), 0, "0 is a legal exchange id");
+        assert_eq!(mgr.allocate_exchange_id(), 1);
+    }
 
     /// Two `SessionManager`s sharing one symmetric key set, cross-registered as
     /// Initiator/Responder. Both allocate local id 1 (allocator starts at 1),
