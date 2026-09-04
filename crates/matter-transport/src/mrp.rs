@@ -103,6 +103,40 @@ impl MrpConfig {
             ..base
         }
     }
+
+    /// Un-jittered wait AFTER a transmission, given how many sends have already
+    /// gone out on this message.
+    ///
+    /// `sends_done` counts transmissions already made: 0 is the wait following
+    /// the original send, 1 the wait after the first retransmit, and so on. It
+    /// is **not** an index of the transmission about to happen — reading it that
+    /// way would delay the first send by a whole base interval.
+    ///
+    /// `base × backoff_factor^sends_done`, truncated to whole milliseconds:
+    /// fractional milliseconds are not part of the spec's deadline grid. The
+    /// base is the peer's idle or active interval per `peer_active`.
+    ///
+    /// Extracted verbatim from `handle_timeout` so the handshake layer can size
+    /// its own retransmits from the same formula; this reproduces the previous
+    /// inline arithmetic exactly, including its f32 truncation.
+    #[must_use]
+    pub fn retransmit_delay(&self, sends_done: u8, peer_active: bool) -> Duration {
+        let base = if peer_active {
+            self.initial_active
+        } else {
+            self.initial_idle
+        };
+        // Inputs are bounded (base ≤ 1 h, factor ≈ 1.6, sends ≤ max_attempts),
+        // so the f32 product stays well below 2^31 and is non-negative.
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let scaled_ms =
+            (base.as_secs_f32() * 1000.0 * self.backoff_factor.powi(i32::from(sends_done))) as u64;
+        Duration::from_millis(scaled_ms)
+    }
 }
 
 /// Caller-facing MRP control bits for an outbound message.
@@ -558,27 +592,8 @@ impl MrpState {
                 packet: pending.packet_bytes.clone(),
             });
             pending.attempts_remaining -= 1;
-            let base = if peer_active {
-                self.config.initial_active
-            } else {
-                self.config.initial_idle
-            };
-            let attempts_done = self.config.max_attempts - pending.attempts_remaining;
-            // Backoff math: base_ms × factor^attempts_done. The truncation to
-            // u64 is intentional — fractional milliseconds are not part of
-            // the spec's deadline grid (Matter Core Spec §4.11.8). Inputs are
-            // bounded (base ≤ 4200 ms, factor ≈ 1.6, attempts ≤ 5) so the
-            // f32 product stays well below 2^31 and is non-negative.
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss
-            )]
-            let scaled_ms = (base.as_secs_f32()
-                * 1000.0
-                * self.config.backoff_factor.powi(i32::from(attempts_done)))
-                as u64;
-            pending.next_attempt = now + Duration::from_millis(scaled_ms);
+            let sends_done = self.config.max_attempts - pending.attempts_remaining;
+            pending.next_attempt = now + self.config.retransmit_delay(sends_done, peer_active);
         }
         for c in to_remove {
             self.pending_acks.remove(&c);
@@ -822,6 +837,33 @@ impl MrpState {
 mod tests {
     use super::*;
     use crate::error::Error;
+
+    /// `retransmit_delay` must reproduce the arithmetic that was inline in
+    /// `handle_timeout`, exactly — including its f32 truncation.
+    ///
+    /// This is the guard on the extraction itself. It is written against
+    /// hand-computed values rather than by re-deriving from the config, so a
+    /// later change to the formula has to update it deliberately.
+    #[test]
+    fn retransmit_delay_reproduces_the_previous_inline_arithmetic() {
+        let cfg = MrpConfig::default();
+        // Idle base 4200 ms, factor 1.6, truncated per step.
+        for (sends_done, want_ms) in [(0, 4200), (1, 6720), (2, 10752), (3, 17203), (4, 27525)] {
+            assert_eq!(
+                cfg.retransmit_delay(sends_done, false),
+                Duration::from_millis(want_ms),
+                "idle base, {sends_done} sends done"
+            );
+        }
+        // Active base 300 ms.
+        for (sends_done, want_ms) in [(0, 300), (1, 480), (2, 768), (3, 1228), (4, 1966)] {
+            assert_eq!(
+                cfg.retransmit_delay(sends_done, true),
+                Duration::from_millis(want_ms),
+                "active base, {sends_done} sends done"
+            );
+        }
+    }
 
     /// Exchange id used by tests that would previously have passed `None` and
     /// let `MrpState` allocate. Allocation now lives on `SessionManager` — one
