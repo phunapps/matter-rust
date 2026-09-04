@@ -1231,7 +1231,7 @@ name = "matter-cert"
 version = "0.3.2"
 dependencies = [
  "bitflags",
- "der 0.7.10",
+ "der 0.8.1",
  "matter-cert",
  "matter-codec",
  "proptest",
@@ -1274,7 +1274,7 @@ dependencies = [
  "clap",
  "cms",
  "const-oid 0.9.6",
- "der 0.7.10",
+ "der 0.8.1",
  "hex",
  "matter-ble",
  "matter-cert",
@@ -2947,7 +2947,7 @@ dependencies = [
  "base64",
  "cms",
  "const-oid 0.9.6",
- "der 0.7.10",
+ "der 0.8.1",
  "hex",
  "matter-cert",
  "matter-codec",
