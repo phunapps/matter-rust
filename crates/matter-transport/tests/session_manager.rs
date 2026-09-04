@@ -278,12 +278,21 @@ fn poll_timeout_min_across_sessions() {
 
     let deadline = mgr.poll_timeout().unwrap();
     // Both sessions are fresh with no recorded peer activity, so they classify
-    // as idle (MRP-1) and use the idle base (4200 ms). s1 was sent first, so
-    // its deadline is the earliest across sessions.
-    assert_eq!(
-        deadline,
-        now + Duration::from_millis(4200),
-        "earliest is s1's idle-base deadline",
+    // as idle (MRP-1) and use the idle base plus the spec's 1.1 margin. s1 was
+    // sent first, so its deadline is the earliest across sessions.
+    //
+    // A RANGE, not an equality: retransmits carry MRP_BACKOFF_JITTER, and a
+    // `SessionManager` builds its `MrpState` internally so there is no seed to
+    // inject. The bound is the jitter bound itself, which makes this a stricter
+    // check than the equality it replaces — it would catch a jitter draw that
+    // shortened a delay or exceeded its spec limit.
+    let base = Duration::from_millis(4622);
+    let max = base.mul_f32(1.0 + 0.25);
+    assert!(
+        deadline >= now + base && deadline < now + max,
+        "earliest is s1's idle-base deadline, jittered within [base, base * 1.25): \
+         got {:?} past `now`, expected within [{base:?}, {max:?})",
+        deadline.saturating_duration_since(now),
     );
 }
 
@@ -357,11 +366,11 @@ fn handle_timeout_drains_expired_sessions() {
         )
         .unwrap();
 
-    // Advance well past all 5 retransmits. The session is idle (no peer
-    // activity recorded), so retransmits use the idle base (4200 ms) with
-    // exponential backoff — the last attempt reschedules to ~134 s out, so the
-    // budget must comfortably exceed that (chip's idle spacing is deliberately
-    // long for sleepy devices).
+    // Advance well past every retransmit. The session is idle (no peer activity
+    // recorded), so retransmits use the idle base (4200 ms + margin) with
+    // exponential backoff past MRP_BACKOFF_THRESHOLD — the budget below
+    // comfortably exceeds the resulting schedule (chip's idle spacing is
+    // deliberately long for sleepy devices).
     let mut t = now;
     let mut saw_expired = false;
     for _ in 0..30 {

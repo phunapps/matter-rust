@@ -30,9 +30,34 @@ use crate::protocol_header::{encode_protocol_header, ExchangeFlags, ProtocolHead
 /// (`connectedhomeip`) likewise services exchanges from a small fixed pool.
 pub const MAX_EXCHANGES_PER_SESSION: usize = 256;
 
-/// Configuration knobs for MRP retransmit + ack timing. Defaults match
-/// Matter Core Spec §4.11.8 (jitter omitted; see the M5.2 design's
-/// "Non-goals" section).
+/// Spec §4.12.8. Growth factor applied per retransmit beyond the threshold.
+pub const MRP_BACKOFF_BASE: f32 = 1.6;
+/// Spec §4.12.8 `MRP_BACKOFF_MARGIN` = 1.1, applied to the peer's advertised
+/// interval to cover its own processing and radio scheduling slack.
+///
+/// Held as chip's exact integer ratio (`ReliableMessageMgr.cpp:275-276`) rather
+/// than a float `1.1`: the two agree at a 500 ms base but diverge above it — at
+/// `SII` = 2000 ms a float gives 2200 ms where chip gives 2201 — and this
+/// library cross-verifies against chip.
+const MRP_BACKOFF_MARGIN_NUMERATOR: u64 = 1127;
+const MRP_BACKOFF_MARGIN_DENOMINATOR: u64 = 1024;
+/// Spec §4.12.8. Transmissions before backoff growth starts, so the first
+/// **two** transmissions share the base interval.
+pub const MRP_BACKOFF_THRESHOLD: u8 = 1;
+/// Spec §4.12.8. Maximum proportional jitter added to a retransmit delay.
+/// Only ever lengthens a wait; it exists so that N controllers retransmitting
+/// to the same peer do not do so in lockstep.
+pub const MRP_BACKOFF_JITTER: f32 = 0.25;
+/// Spec §4.12.8. Total transmissions of a reliable message, the original
+/// included — so five means one send and four retransmits.
+pub const MRP_MAX_TRANSMISSIONS: u8 = 5;
+/// chip clamps the backoff exponent at 4 (`ReliableMessageMgr.cpp:298-299`).
+/// Inert at five transmissions; present so raising [`MRP_MAX_TRANSMISSIONS`]
+/// cannot silently diverge from the reference implementation.
+const MRP_BACKOFF_MAX_EXPONENT: u8 = 4;
+
+/// Configuration knobs for MRP retransmit + ack timing. Defaults are the
+/// Matter 1.4 §4.12.8 MRP parameters and §4.13.1 session intervals.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct MrpConfig {
@@ -42,13 +67,23 @@ pub struct MrpConfig {
     /// Base retransmit delay used when the session has been idle longer
     /// than `idle_threshold`.
     pub initial_idle: Duration,
-    /// Multiplicative growth factor applied per retransmit attempt.
+    /// Multiplicative growth factor applied per retransmit beyond
+    /// [`MRP_BACKOFF_THRESHOLD`] ([`MRP_BACKOFF_BASE`]).
     pub backoff_factor: f32,
-    /// Maximum number of retransmit attempts before the message is
-    /// declared expired.
-    pub max_attempts: u8,
+    /// Total transmissions of a reliable message before it is declared
+    /// expired, **the original send included** ([`MRP_MAX_TRANSMISSIONS`]).
+    ///
+    /// Renamed from `max_attempts`, which read as "retransmits" and was used as
+    /// such: the message was sent once and then retransmitted `max_attempts`
+    /// times, i.e. six transmissions where the spec allows five.
+    pub max_transmissions: u8,
+    /// Proportional jitter added to each retransmit delay
+    /// ([`MRP_BACKOFF_JITTER`]). Set to `0.0` for deterministic timing in
+    /// tests.
+    pub backoff_jitter: f32,
     /// Maximum time a piggyback opportunity is buffered before a
-    /// standalone-ack must be emitted (Matter Core Spec §4.11.5).
+    /// standalone-ack must be emitted (Matter Core Spec §4.12.8
+    /// `MRP_STANDALONE_ACK_TIMEOUT`).
     pub standalone_ack_deadline: Duration,
     /// Gap-since-`last_outbound` above which the next outbound uses the
     /// idle base instead of the active base.
@@ -60,8 +95,9 @@ impl Default for MrpConfig {
         Self {
             initial_active: Duration::from_millis(300),
             initial_idle: Duration::from_millis(4200),
-            backoff_factor: 1.6,
-            max_attempts: 5,
+            backoff_factor: MRP_BACKOFF_BASE,
+            max_transmissions: MRP_MAX_TRANSMISSIONS,
+            backoff_jitter: MRP_BACKOFF_JITTER,
             standalone_ack_deadline: Duration::from_millis(200),
             idle_threshold: Duration::from_secs(5),
         }
@@ -85,7 +121,7 @@ impl MrpConfig {
     /// (mDNS TXT `SII`/`SAI`/`SAT`, Matter Core Spec §4.3.1.8). Any field the
     /// peer omits falls back to the spec default; each supplied value is clamped
     /// to its spec upper bound. Retransmit shape (`backoff_factor`,
-    /// `max_attempts`) and the local `standalone_ack_deadline` are NOT
+    /// `max_transmissions`) and the local `standalone_ack_deadline` are NOT
     /// peer-controlled and keep their [`Default`] values.
     ///
     /// - `sii` → `initial_idle` (Session Idle Interval)
@@ -112,13 +148,15 @@ impl MrpConfig {
     /// is **not** an index of the transmission about to happen — reading it that
     /// way would delay the first send by a whole base interval.
     ///
-    /// `base × backoff_factor^sends_done`, truncated to whole milliseconds:
-    /// fractional milliseconds are not part of the spec's deadline grid. The
-    /// base is the peer's idle or active interval per `peer_active`.
+    /// `base × MRP_BACKOFF_MARGIN × backoff_factor^min(4, max(0, sends_done -
+    /// MRP_BACKOFF_THRESHOLD))`, truncated to whole milliseconds: fractional
+    /// milliseconds are not part of the spec's deadline grid. The base is the
+    /// peer's idle or active interval per `peer_active`.
     ///
-    /// Extracted verbatim from `handle_timeout` so the handshake layer can size
-    /// its own retransmits from the same formula; this reproduces the previous
-    /// inline arithmetic exactly, including its f32 truncation.
+    /// The threshold is why the first two transmissions share an interval, and
+    /// the margin is applied in chip's exact integer form. Jitter is **not**
+    /// applied here — it is drawn per scheduling decision, and keeping this
+    /// function pure is what makes the schedule table-testable.
     #[must_use]
     pub fn retransmit_delay(&self, sends_done: u8, peer_active: bool) -> Duration {
         let base = if peer_active {
@@ -126,15 +164,24 @@ impl MrpConfig {
         } else {
             self.initial_idle
         };
-        // Inputs are bounded (base ≤ 1 h, factor ≈ 1.6, sends ≤ max_attempts),
-        // so the f32 product stays well below 2^31 and is non-negative.
+        // Margin first, in integer milliseconds, matching chip bit for bit.
+        // `saturating_mul` guards a pathological advertised interval; the spec
+        // ceiling (1 h) is nowhere near it.
+        let base_ms = u64::try_from(base.as_millis()).unwrap_or(u64::MAX);
+        let with_margin_ms =
+            base_ms.saturating_mul(MRP_BACKOFF_MARGIN_NUMERATOR) / MRP_BACKOFF_MARGIN_DENOMINATOR;
+        let exponent = sends_done
+            .saturating_sub(MRP_BACKOFF_THRESHOLD)
+            .min(MRP_BACKOFF_MAX_EXPONENT);
+        // Inputs are bounded (base ≤ 1 h, factor ≈ 1.6, exponent ≤ 4), so the
+        // f32 product stays well below 2^63 and is non-negative.
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
             clippy::cast_precision_loss
         )]
         let scaled_ms =
-            (base.as_secs_f32() * 1000.0 * self.backoff_factor.powi(i32::from(sends_done))) as u64;
+            (with_margin_ms as f32 * self.backoff_factor.powi(i32::from(exponent))) as u64;
         Duration::from_millis(scaled_ms)
     }
 }
@@ -361,12 +408,87 @@ pub struct MrpState {
     /// so we never hammer a sleepy device with active-interval spacing.
     last_peer_activity: Option<Instant>,
     config: MrpConfig,
+    /// State for the retransmit jitter draw. Not a security parameter — jitter
+    /// only de-synchronises controllers retransmitting to the same peer — so a
+    /// small non-cryptographic PRNG is the right tool, and it keeps this crate
+    /// free of an RNG dependency in its sans-IO core.
+    jitter: u64,
+}
+
+/// Apply [`MrpConfig::backoff_jitter`] to `delay`, advancing `state`.
+///
+/// Free function rather than a method so `handle_timeout` can call it while
+/// holding a `&mut` borrow of `pending_acks`. Jitter only ever LENGTHENS: the
+/// multiplier lies in `[1.0, 1.0 + backoff_jitter)`, matching chip's
+/// `(1024 + rand_u8) / 1024` (`ReliableMessageMgr.cpp:314-315`). A
+/// `backoff_jitter` of `0.0` returns `delay` unchanged, which is how tests pin
+/// exact deadlines.
+fn jitter_with(state: &mut u64, config: &MrpConfig, delay: Duration) -> Duration {
+    if config.backoff_jitter <= 0.0 {
+        return delay;
+    }
+    // xorshift64*: adequate for de-synchronisation, deterministic from a seed.
+    *state ^= *state >> 12;
+    *state ^= *state << 25;
+    *state ^= *state >> 27;
+    let draw = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+    // Top 8 bits → [0, 1), mirroring chip's rand_u8 granularity.
+    #[allow(clippy::cast_precision_loss)]
+    let unit = f32::from(u8::try_from(draw >> 56).unwrap_or(0)) / 256.0;
+    let ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
+    let jittered = (ms as f32 * (1.0 + config.backoff_jitter * unit)) as u64;
+    Duration::from_millis(jittered)
 }
 
 impl MrpState {
-    /// Create a fresh state with the given config.
+    /// Apply this state's jitter to `delay`. See [`jitter_with`].
+    fn jittered(&mut self, delay: Duration) -> Duration {
+        jitter_with(&mut self.jitter, &self.config, delay)
+    }
+
+    /// Create a fresh state with the given config, seeding retransmit jitter
+    /// from the system CSPRNG.
+    ///
+    /// A CSPRNG failure falls back to a per-instance counter rather than
+    /// panicking or returning `Result`: this constructor is infallible by design
+    /// and CLAUDE.md forbids `unwrap`/`expect` here. The fallback still varies
+    /// between sessions — a single fixed seed would make every session on the
+    /// node jitter identically, defeating the one thing jitter is for.
     #[must_use]
     pub fn new(config: MrpConfig) -> Self {
+        let mut bytes = [0u8; 8];
+        let seed = if matter_crypto::random_bytes(&mut bytes).is_ok() {
+            u64::from_le_bytes(bytes)
+        } else {
+            static FALLBACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            tracing::warn!(
+                target: "matter_transport::mrp",
+                "system CSPRNG unavailable seeding MRP jitter; falling back to a counter"
+            );
+            FALLBACK.fetch_add(0x9E37_79B9_7F4A_7C15, std::sync::atomic::Ordering::Relaxed)
+        };
+        Self::with_jitter_seed(config, seed)
+    }
+
+    /// [`Self::new`] with an explicit jitter seed, for deterministic tests and
+    /// trace reproduction.
+    #[must_use]
+    pub fn with_jitter_seed(config: MrpConfig, seed: u64) -> Self {
+        Self {
+            // xorshift64* degenerates at zero.
+            jitter: if seed == 0 { 1 } else { seed },
+            ..Self::bare(config)
+        }
+    }
+
+    /// Every field except the jitter seed, which the two public constructors
+    /// supply.
+    fn bare(config: MrpConfig) -> Self {
         Self {
             pending_acks: HashMap::new(),
             pending_outbound_acks: HashMap::new(),
@@ -375,6 +497,7 @@ impl MrpState {
             exchanges: HashMap::new(),
             last_outbound: None,
             last_peer_activity: None,
+            jitter: 1,
             config,
         }
     }
@@ -511,18 +634,22 @@ impl MrpState {
             return;
         }
 
-        let initial = if self.is_peer_active(now) {
-            self.config.initial_active
-        } else {
-            self.config.initial_idle
-        };
+        // The caller has ALREADY sent once, so this schedules the wait after
+        // transmission 0 and budgets the remaining retransmits. Seeding
+        // `attempts_remaining` with the full `max_transmissions` here is what
+        // produced six transmissions where the spec allows five: one send plus
+        // five retransmits. `saturating_sub` so a pathological config of 0
+        // cannot underflow.
+        let peer_active = self.is_peer_active(now);
+        let initial = self.config.retransmit_delay(0, peer_active);
+        let next_attempt = now + self.jittered(initial);
         self.pending_acks.insert(
             counter,
             PendingAck {
                 packet_bytes,
                 exchange_id,
-                next_attempt: now + initial,
-                attempts_remaining: self.config.max_attempts,
+                next_attempt,
+                attempts_remaining: self.config.max_transmissions.saturating_sub(1),
             },
         );
     }
@@ -592,8 +719,20 @@ impl MrpState {
                 packet: pending.packet_bytes.clone(),
             });
             pending.attempts_remaining -= 1;
-            let sends_done = self.config.max_attempts - pending.attempts_remaining;
-            pending.next_attempt = now + self.config.retransmit_delay(sends_done, peer_active);
+            // Transmissions made so far: the original send plus the retransmits
+            // already emitted, which is what `retransmit_delay` indexes on.
+            // `attempts_remaining` was seeded at `max_transmissions - 1` (the
+            // original send is not one of the remaining attempts), so that is
+            // what we count down from — subtracting from `max_transmissions`
+            // would skip `retransmit_delay(1)` and with it the second base
+            // interval that MRP_BACKOFF_THRESHOLD exists to produce.
+            let sends_done = self
+                .config
+                .max_transmissions
+                .saturating_sub(1)
+                .saturating_sub(pending.attempts_remaining);
+            let delay = self.config.retransmit_delay(sends_done, peer_active);
+            pending.next_attempt = now + jitter_with(&mut self.jitter, &self.config, delay);
         }
         for c in to_remove {
             self.pending_acks.remove(&c);
@@ -838,31 +977,148 @@ mod tests {
     use super::*;
     use crate::error::Error;
 
-    /// `retransmit_delay` must reproduce the arithmetic that was inline in
-    /// `handle_timeout`, exactly — including its f32 truncation.
+    /// The spec backoff shape: margin, threshold, growth, truncation.
     ///
-    /// This is the guard on the extraction itself. It is written against
-    /// hand-computed values rather than by re-deriving from the config, so a
-    /// later change to the formula has to update it deliberately.
+    /// Written against hand-computed values rather than re-derived from the
+    /// config, so a later change to the formula has to update it deliberately.
+    /// Note the first TWO entries are equal — that is `MRP_BACKOFF_THRESHOLD`,
+    /// and it is the easiest part of the formula to drop by accident.
     #[test]
-    fn retransmit_delay_reproduces_the_previous_inline_arithmetic() {
+    fn retransmit_delay_follows_the_spec_backoff_shape() {
         let cfg = MrpConfig::default();
-        // Idle base 4200 ms, factor 1.6, truncated per step.
-        for (sends_done, want_ms) in [(0, 4200), (1, 6720), (2, 10752), (3, 17203), (4, 27525)] {
+        // Idle base 4200 ms → 4200 × 1127/1024 = 4622 ms after margin, then
+        // × 1.6^{0,0,1,2,3}, truncated per step.
+        for (sends_done, want_ms) in [(0, 4622), (1, 4622), (2, 7395), (3, 11832), (4, 18931)] {
             assert_eq!(
                 cfg.retransmit_delay(sends_done, false),
                 Duration::from_millis(want_ms),
                 "idle base, {sends_done} sends done"
             );
         }
-        // Active base 300 ms.
-        for (sends_done, want_ms) in [(0, 300), (1, 480), (2, 768), (3, 1228), (4, 1966)] {
+        // Active base 300 ms → 330 ms after margin.
+        for (sends_done, want_ms) in [(0, 330), (1, 330), (2, 528), (3, 844), (4, 1351)] {
             assert_eq!(
                 cfg.retransmit_delay(sends_done, true),
                 Duration::from_millis(want_ms),
                 "active base, {sends_done} sends done"
             );
         }
+    }
+
+    /// `MrpConfig::default()` with jitter switched off, for the many tests that
+    /// pin exact retransmit deadlines. Jitter only ever lengthens a delay, and
+    /// its magnitude is a spec parameter rather than hidden state, so zeroing it
+    /// is an honest way to make timing deterministic — the jitter behaviour
+    /// itself is covered by its own tests below.
+    fn cfg() -> MrpConfig {
+        MrpConfig {
+            backoff_jitter: 0.0,
+            ..MrpConfig::default()
+        }
+    }
+
+    /// Jitter only ever LENGTHENS, and never past the spec's bound.
+    ///
+    /// chip's form is `(1024 + rand_u8) / 1024`, i.e. a multiplier in
+    /// `[1.0, 1.2490]`. A jitter that could shorten a delay would let us
+    /// retransmit at a sleepy device sooner than its advertised interval allows
+    /// -- the exact thing the peer-sized config exists to prevent.
+    #[test]
+    fn jitter_only_lengthens_and_stays_within_the_spec_bound() {
+        let config = MrpConfig::default();
+        let base = Duration::from_millis(1000);
+        let mut state = 0x1234_5678_9ABC_DEF0;
+        for _ in 0..1000 {
+            let got = jitter_with(&mut state, &config, base);
+            assert!(got >= base, "jitter must never shorten: {got:?} < {base:?}");
+            assert!(
+                got < base.mul_f32(1.0 + MRP_BACKOFF_JITTER),
+                "jitter must stay under the spec bound: {got:?}"
+            );
+        }
+    }
+
+    /// A zero `backoff_jitter` must be exactly inert -- this is what lets the
+    /// timing tests above pin exact deadlines.
+    #[test]
+    fn zero_jitter_is_inert() {
+        let config = MrpConfig {
+            backoff_jitter: 0.0,
+            ..MrpConfig::default()
+        };
+        let base = Duration::from_millis(4622);
+        let mut state = 1;
+        for _ in 0..100 {
+            assert_eq!(jitter_with(&mut state, &config, base), base);
+        }
+    }
+
+    /// Jitter must actually vary, or it is not de-synchronising anything.
+    #[test]
+    fn jitter_varies_across_draws() {
+        let config = MrpConfig::default();
+        let base = Duration::from_millis(1000);
+        let mut state = 42;
+        let seen: std::collections::HashSet<Duration> = (0..100)
+            .map(|_| jitter_with(&mut state, &config, base))
+            .collect();
+        assert!(
+            seen.len() > 10,
+            "jitter barely varies: {} distinct",
+            seen.len()
+        );
+    }
+
+    /// A reliable message is transmitted exactly `MRP_MAX_TRANSMISSIONS` times.
+    ///
+    /// Spec §4.12.8 puts that at 5 -- one original send plus four retransmits.
+    /// We used to send six: `mark_packet_sent` seeded `attempts_remaining` with
+    /// the full budget even though the caller had already sent once, so the
+    /// original transmission was never counted against it.
+    #[test]
+    fn a_reliable_message_is_sent_exactly_max_transmissions_times() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        let prepared = mrp
+            .prepare_outbound_local(
+                0x02,
+                crate::protocol_header::ProtocolId::INTERACTION_MODEL,
+                b"x",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        // Transmission 1: the caller's own send.
+        mrp.mark_packet_sent(
+            MessageCounter(1),
+            prepared.exchange_id,
+            vec![1u8; 8],
+            true,
+            now,
+        );
+
+        let mut transmissions = 1;
+        let mut expired = false;
+        for _ in 0..20 {
+            let Some(sim) = mrp.poll_timeout() else { break };
+            for e in &mrp.handle_timeout(sim) {
+                match e {
+                    MrpTimerEvent::Retransmit { .. } => transmissions += 1,
+                    MrpTimerEvent::Expired { .. } => expired = true,
+                    MrpTimerEvent::StandaloneAckDeadlineFired { .. } => {}
+                }
+            }
+            if expired {
+                break;
+            }
+        }
+
+        assert!(expired, "the message must eventually expire");
+        assert_eq!(
+            transmissions,
+            u32::from(MRP_MAX_TRANSMISSIONS),
+            "spec §4.12.8 allows exactly MRP_MAX_TRANSMISSIONS sends, original included"
+        );
     }
 
     /// Exchange id used by tests that would previously have passed `None` and
@@ -904,7 +1160,7 @@ mod tests {
 
     #[test]
     fn unreliable_send_no_pending_entry() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         let prepared = mrp
@@ -933,7 +1189,7 @@ mod tests {
 
     #[test]
     fn reliable_send_schedules_retransmit() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         // Peer is active (it sent us something just now) → active base (300 ms).
         mrp.last_peer_activity = Some(now);
@@ -956,12 +1212,13 @@ mod tests {
         );
 
         let deadline = mrp.poll_timeout().expect("retransmit deadline scheduled");
-        assert_eq!(deadline, now + Duration::from_millis(300));
+        // Active base 300 ms carries the spec's 1.1 margin: 300 × 1127/1024.
+        assert_eq!(deadline, now + Duration::from_millis(330));
     }
 
     #[test]
     fn handle_timeout_emits_retransmit_at_deadline() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         // Peer active → active base (300 ms) for the first retransmit.
         mrp.last_peer_activity = Some(now);
@@ -988,8 +1245,8 @@ mod tests {
             .handle_timeout(now + Duration::from_millis(200))
             .is_empty());
 
-        // At the deadline — retransmit.
-        let events = mrp.handle_timeout(now + Duration::from_millis(300));
+        // At the deadline (active base 300 ms + margin) — retransmit.
+        let events = mrp.handle_timeout(now + Duration::from_millis(330));
         assert_eq!(events.len(), 1);
         match &events[0] {
             MrpTimerEvent::Retransmit {
@@ -1004,14 +1261,15 @@ mod tests {
             other => panic!("expected Retransmit, got {other:?}"),
         }
 
-        // Next deadline at 300ms × 1.6 = 480ms from the previous attempt.
+        // Second transmission shares the base interval (MRP_BACKOFF_THRESHOLD),
+        // so the next deadline is another 330 ms on, not 330 × 1.6.
         let next = mrp.poll_timeout().unwrap();
-        assert_eq!(next, now + Duration::from_millis(300 + 480));
+        assert_eq!(next, now + Duration::from_millis(330 + 330));
     }
 
     #[test]
     fn exhausted_retransmit_emits_expired() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         let prepared = mrp
             .prepare_outbound_local(
@@ -1030,11 +1288,12 @@ mod tests {
             now,
         );
 
-        // 5 attempts: 300, 300+480=780, 780+768=1548, 1548+1228=2776, 2776+1965=4741 ms.
-        // After the 5th retransmit, attempts_remaining = 0; the NEXT timer
-        // fires Expired.
+        // MRP_MAX_TRANSMISSIONS is 5 and the caller already sent once, so there
+        // are FOUR retransmits, at 330, 330, 528, 844 ms after the previous
+        // attempt. This used to be five -- one send plus five retransmits, i.e.
+        // six transmissions where the spec allows five.
         let mut total_retransmits = 0;
-        for _ in 0..5 {
+        for _ in 0..4 {
             let sim = mrp.poll_timeout().expect("timer scheduled");
             let events = mrp.handle_timeout(sim);
             for e in &events {
@@ -1043,9 +1302,13 @@ mod tests {
                 }
             }
         }
-        assert_eq!(total_retransmits, 5);
+        assert_eq!(
+            total_retransmits,
+            i32::from(MRP_MAX_TRANSMISSIONS) - 1,
+            "one original send plus max_transmissions-1 retransmits"
+        );
 
-        // Sixth firing: Expired.
+        // Fifth firing: Expired.
         let sim = mrp.poll_timeout().expect("expiry timer scheduled");
         let events = mrp.handle_timeout(sim);
         assert!(matches!(
@@ -1086,30 +1349,30 @@ mod tests {
     fn classification_follows_peer_activity_not_our_tx() {
         let now = t0();
 
-        // Fresh session, no peer inbound → idle base (4200 ms).
-        let mut fresh = MrpState::new(MrpConfig::default());
+        // Fresh session, no peer inbound → idle base (4200 ms + 1.1 margin).
+        let mut fresh = MrpState::new(cfg());
         assert_eq!(
             schedule_reliable(&mut fresh, 1, now),
-            now + Duration::from_millis(4200),
+            now + Duration::from_millis(4622),
             "a peer we have never heard from is idle (SII), regardless of our tx timing",
         );
 
-        // Peer sent us something within SAT → active base (300 ms).
-        let mut active = MrpState::new(MrpConfig::default());
+        // Peer sent us something within SAT → active base (300 ms + margin).
+        let mut active = MrpState::new(cfg());
         active.last_peer_activity = Some(now);
         assert_eq!(
             schedule_reliable(&mut active, 1, now),
-            now + Duration::from_millis(300),
+            now + Duration::from_millis(330),
             "a peer active within SAT uses the active base (SAI)",
         );
 
         // Peer last spoke longer ago than SAT (idle_threshold, 5 s) → idle base.
-        let mut aged = MrpState::new(MrpConfig::default());
+        let mut aged = MrpState::new(cfg());
         aged.last_peer_activity = Some(now);
         let later = now + Duration::from_secs(6);
         assert_eq!(
             schedule_reliable(&mut aged, 1, later),
-            later + Duration::from_millis(4200),
+            later + Duration::from_millis(4622),
             "a peer silent past SAT is idle (SII) again",
         );
     }
@@ -1120,22 +1383,24 @@ mod tests {
     /// goes silent past SAT — the CASE-Sigma3-to-a-sleepy-device failure mode.
     #[test]
     fn retransmit_reevaluates_peer_active_state() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
-        // Peer active at send → first retransmit at the active base (300 ms).
+        // Peer active at send → first retransmit at the active base
+        // (300 ms + 1.1 margin).
         mrp.last_peer_activity = Some(now);
         let d0 = schedule_reliable(&mut mrp, 1, now);
-        assert_eq!(d0, now + Duration::from_millis(300));
+        assert_eq!(d0, now + Duration::from_millis(330));
 
-        // Fire the first retransmit while the peer is STILL active (t+300ms,
-        // within SAT). Next attempt uses the active base × backoff.
+        // Fire the first retransmit while the peer is STILL active (t+330ms,
+        // within SAT). The second transmission shares the base interval
+        // (MRP_BACKOFF_THRESHOLD), so backoff has not started growing yet.
         let ev = mrp.handle_timeout(d0);
         assert_eq!(ev.len(), 1);
         let d1 = mrp.poll_timeout().unwrap();
         assert_eq!(
             d1,
-            d0 + Duration::from_millis(480), // 300 * 1.6^1
-            "still-active peer: active base with backoff",
+            d0 + Duration::from_millis(330), // 330 * 1.6^0, threshold not passed
+            "still-active peer: active base, growth not yet started",
         );
 
         // Now the peer has gone silent well past SAT (5 s). The NEXT retransmit
@@ -1144,17 +1409,17 @@ mod tests {
         let much_later = d1.max(now + Duration::from_secs(7));
         mrp.handle_timeout(much_later);
         let d2 = mrp.poll_timeout().unwrap();
-        // attempts_done is now 2 → idle base 4200 * 1.6^2 = 10752 ms.
+        // sends_done is now 2 → idle base with margin (4622) × 1.6^(2-1).
         assert_eq!(
             d2,
-            much_later + Duration::from_millis(10752),
+            much_later + Duration::from_millis(7395),
             "peer silent past SAT: retransmit re-evaluates to the idle base (SII)",
         );
     }
 
     #[test]
     fn prepared_payload_contains_encoded_header() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         let prepared = mrp
             .prepare_outbound_local(
@@ -1201,13 +1466,13 @@ mod tests {
     /// classification (it is the real hook, not the test-only field poke).
     #[test]
     fn process_inbound_marks_peer_active() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         // Before any inbound: fresh session is idle.
-        let mut probe = MrpState::new(MrpConfig::default());
+        let mut probe = MrpState::new(cfg());
         assert_eq!(
             schedule_reliable(&mut probe, 1, now),
-            now + Duration::from_millis(4200),
+            now + Duration::from_millis(4622),
         );
         // After a real inbound: peer is active.
         let payload = build_inbound_payload(ExchangeFlags::INITIATOR, 0x02, 0x0001, None, b"hi");
@@ -1216,7 +1481,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             schedule_reliable(&mut mrp, 1, now),
-            now + Duration::from_millis(300),
+            now + Duration::from_millis(330),
             "a send right after a peer inbound uses the active base",
         );
     }
@@ -1236,7 +1501,7 @@ mod tests {
         assert_eq!(c.initial_active, Duration::from_secs(1));
         assert_eq!(c.idle_threshold, Duration::from_secs(30));
         // Retransmit shape stays at the local defaults (not peer-controlled).
-        assert_eq!(c.max_attempts, MrpConfig::default().max_attempts);
+        assert_eq!(c.max_transmissions, MrpConfig::default().max_transmissions);
         assert!(
             (c.backoff_factor - MrpConfig::default().backoff_factor).abs() < f32::EPSILON,
             "backoff factor stays at the local default",
@@ -1261,7 +1526,7 @@ mod tests {
 
     #[test]
     fn process_inbound_app_message_delivers_payload() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         let payload = build_inbound_payload(
             ExchangeFlags::INITIATOR, // peer initiated this exchange
@@ -1293,7 +1558,7 @@ mod tests {
 
     #[test]
     fn process_inbound_ack_clears_pending() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Send a reliable outbound first.
@@ -1341,7 +1606,7 @@ mod tests {
 
     #[test]
     fn reliable_inbound_queues_piggyback_ack() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         let payload = build_inbound_payload(
             ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
@@ -1363,7 +1628,7 @@ mod tests {
 
     #[test]
     fn piggyback_drained_by_next_outbound() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Inbound reliable to queue the piggyback.
@@ -1403,7 +1668,7 @@ mod tests {
 
     #[test]
     fn standalone_ack_deadline_fires_after_200ms() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
         let payload = build_inbound_payload(
             ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
@@ -1442,7 +1707,7 @@ mod tests {
 
     #[test]
     fn caller_provided_exchange_id_responder_side() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Peer initiates exchange 0x99 by sending us a reliable message.
@@ -1486,7 +1751,7 @@ mod tests {
 
     #[test]
     fn close_exchange_drops_pending() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         let prepared = mrp
@@ -1517,7 +1782,7 @@ mod tests {
 
     #[test]
     fn duplicate_reliable_returns_view() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Receive a reliable inbound.
@@ -1544,7 +1809,7 @@ mod tests {
         // H3 regression: a reliable inbound on exchange B must NOT clobber
         // the buffered piggyback ack for exchange A. Both exchanges must
         // drain their own ack on the next outbound in that exchange.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Reliable inbound on exchange A (peer counter 100).
@@ -1610,7 +1875,7 @@ mod tests {
     fn handle_timeout_flushes_all_due_standalone_acks() {
         // H3 regression: two buffered piggyback acks on different exchanges
         // must BOTH flush as standalone acks once their deadline passes.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         let in_a = build_inbound_payload(
@@ -1663,7 +1928,7 @@ mod tests {
     fn inbound_exchange_table_is_capped() {
         // Memory-DoS regression: a peer driving many distinct inbound
         // exchange_ids must not grow the exchange table without bound.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Drive far more distinct exchange_ids than the cap. Use
@@ -1695,7 +1960,7 @@ mod tests {
         // Once the table is full of LIVE exchanges (each holding a buffered
         // outbound ack so it is not idle), a brand-new exchange_id must be
         // rejected rather than inserted.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Fill the table with reliable inbounds: each leaves a buffered
@@ -1755,7 +2020,7 @@ mod tests {
         // Reclaim regression: an exchange whose round-trip finishes (its
         // last pending ack clears, no buffered outbound ack) must be
         // evicted from the exchange table automatically.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // We initiate a reliable outbound.
@@ -1801,7 +2066,7 @@ mod tests {
     fn active_exchange_is_not_reclaimed() {
         // An exchange with a pending retransmit (round-trip still in
         // flight) must NOT be evicted by the reclaim logic.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         let prepared = mrp
@@ -1844,7 +2109,7 @@ mod tests {
     fn buffered_outbound_ack_keeps_exchange_live() {
         // An exchange with a buffered outbound (piggyback) ack is NOT idle
         // and must not be reclaimed until the ack drains.
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Reliable inbound buffers a piggyback ack for exchange 0x4242.
@@ -1873,7 +2138,7 @@ mod tests {
 
     #[test]
     fn recent_reliable_cache_evicts_after_32_entries() {
-        let mut mrp = MrpState::new(MrpConfig::default());
+        let mut mrp = MrpState::new(cfg());
         let now = t0();
 
         // Record 33 distinct reliable inbounds; the first should be evicted.
