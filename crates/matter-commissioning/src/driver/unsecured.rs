@@ -142,6 +142,18 @@ pub struct UnsecuredMessage {
     /// Sender's source node id, if the `S` flag was set (for session
     /// establishment this is the peer's random ephemeral node id).
     pub source_node_id: Option<u64>,
+    /// Destination address from the secured-message header, if `DSIZ` was set.
+    ///
+    /// A responder conforming to Matter 1.3+ echoes the initiator's ephemeral
+    /// *source* node id here (§4.13.2.1; see [`encode_unsecured_reply`]), which
+    /// is what lets an initiator tell its own replies from another attempt's.
+    /// `None` is legitimate: Matter 1.0-1.2 required PASE/CASE messages to carry
+    /// neither node id (S=0, DSIZ=0), corrected only in 1.3.
+    ///
+    /// Kept as the full [`DestNodeId`] rather than a bare `u64` so a
+    /// group-addressed frame -- malformed on an unsecured session-establishment
+    /// exchange -- stays distinguishable from an absent destination.
+    pub destination_node_id: Option<DestNodeId>,
     /// Plaintext application payload (post-protocol-header bytes).
     pub payload: Vec<u8>,
 }
@@ -278,6 +290,7 @@ pub fn decode_unsecured(bytes: &[u8]) -> Result<UnsecuredMessage, DriverError> {
             .contains(ExchangeFlags::INITIATOR),
         ack_counter: protocol_header.ack_counter.map(|c| c.0),
         source_node_id: msg_header.source_node_id.map(|n| n.0),
+        destination_node_id: msg_header.destination_node_id,
         payload: app.to_vec(),
     })
 }
@@ -570,6 +583,30 @@ impl UnsecuredExchange {
                         // Stray frame from another exchange — not ours.
                         continue;
                     }
+                    // Cross-attempt guard. A responder conforming to Matter 1.3+
+                    // echoes our ephemeral source node id as the destination, so
+                    // a frame addressed to a DIFFERENT ephemeral id is a late
+                    // reply to an earlier handshake attempt from this socket to
+                    // this peer. Consuming it would decrypt attempt N-1's Sigma2
+                    // with attempt N's ephemeral secret — an AEAD failure,
+                    // deterministically, on every retry, for as long as the
+                    // device stays slow enough to lose the first race. A group
+                    // destination is malformed here and is rejected the same way.
+                    //
+                    // MUST precede the standalone-ack arm below: a stray *ack*
+                    // from the previous attempt would otherwise set `acked`,
+                    // stopping this attempt's retransmits and switching it to the
+                    // long response wait — the same bug, quieter.
+                    //
+                    // An ABSENT destination is ACCEPTED. Matter 1.0-1.2 required
+                    // PASE/CASE messages to carry neither node id (S=0, DSIZ=0);
+                    // that was corrected only in 1.3 (connectedhomeip#33518), so
+                    // a pre-1.3 device legitimately sends nothing to match on.
+                    if let Some(dest) = msg.destination_node_id {
+                        if dest != DestNodeId::Node(NodeId(self.source_node_id)) {
+                            continue;
+                        }
+                    }
                     if msg.protocol_id == ProtocolId::SECURE_CHANNEL
                         && msg.opcode == OPCODE_MRP_STANDALONE_ACK
                     {
@@ -762,6 +799,7 @@ mod tests {
             is_initiator: false,
             ack_counter: None,
             source_node_id: None,
+            destination_node_id: None,
             payload: {
                 let mut b = Vec::new();
                 b.extend_from_slice(&general.to_le_bytes());
@@ -886,6 +924,227 @@ mod tests {
         let got = got.unwrap();
         assert_eq!(got.opcode, 0x21, "standalone ack must be skipped");
         assert_eq!(got.payload, b"resp");
+    }
+
+    /// A late reply from a PREVIOUS handshake attempt must not be consumed by
+    /// the current one.
+    ///
+    /// Regression guard for the reported failure: two CASE attempts to the same
+    /// sleepy peer from the same socket share an exchange id (it was a
+    /// compile-time `1`), so attempt 1's Sigma2 -- retransmitted reliably under
+    /// MRP after attempt 1 had already timed out -- matched attempt 2's filter
+    /// on session id, exchange id, opcode, and the counter dedup (attempt 2's
+    /// `last_consumed_peer_counter` is `None`). It was then decrypted with
+    /// attempt 2's ephemeral secret, which cannot work: AEAD failure,
+    /// deterministically, on every retry. The destination node id is what
+    /// distinguishes them -- a conformant responder echoes the initiator's
+    /// ephemeral source node id, and attempt 1's carries attempt 1's.
+    #[tokio::test]
+    async fn send_and_recv_rejects_a_reply_addressed_to_another_attempt() {
+        const OUR_EPHEMERAL: u64 = 0xE0E0;
+        const PRIOR_ATTEMPT_EPHEMERAL: u64 = 0xB00B;
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7, OUR_EPHEMERAL);
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = decode_unsecured(&pkt).unwrap();
+            // The previous attempt's Sigma2, arriving late. Right opcode, right
+            // exchange, fresh counter -- only the destination betrays it.
+            let stale = encode_unsecured_reply(
+                100,
+                msg.exchange_id,
+                0x31,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                Some(msg.message_counter),
+                Some(PRIOR_ATTEMPT_EPHEMERAL),
+                b"stale-sigma2",
+            );
+            dev_io.send_to(&stale, ctrl_addr).await.unwrap();
+            // This attempt's real Sigma2.
+            let ours = encode_unsecured_reply(
+                101,
+                msg.exchange_id,
+                0x31,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                Some(msg.message_counter),
+                Some(OUR_EPHEMERAL),
+                b"our-sigma2",
+            );
+            dev_io.send_to(&ours, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        let got = got.unwrap();
+        assert_eq!(
+            got.payload, b"our-sigma2",
+            "a reply addressed to a prior attempt's ephemeral id must be dropped"
+        );
+    }
+
+    /// The guard must sit BEFORE the standalone-ack arm.
+    ///
+    /// A stray *ack* from the previous attempt is the same bug, quieter: it
+    /// would set `acked`, which stops this attempt retransmitting and switches
+    /// it to the long post-ack response wait. The device here refuses to answer
+    /// until it has seen a retransmit, so if the misaddressed ack were consumed
+    /// this test would hang rather than fail.
+    #[tokio::test]
+    async fn send_and_recv_rejects_a_standalone_ack_addressed_to_another_attempt() {
+        const OUR_EPHEMERAL: u64 = 0xE0E0;
+        const PRIOR_ATTEMPT_EPHEMERAL: u64 = 0xB00B;
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7, OUR_EPHEMERAL);
+        // Keep the retransmit the test waits on short.
+        exch.retransmit = Duration::from_millis(50);
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = decode_unsecured(&pkt).unwrap();
+            let stale_ack = encode_unsecured_reply(
+                100,
+                msg.exchange_id,
+                OPCODE_MRP_STANDALONE_ACK,
+                ProtocolId::SECURE_CHANNEL,
+                false,
+                Some(msg.message_counter),
+                Some(PRIOR_ATTEMPT_EPHEMERAL),
+                b"",
+            );
+            dev_io.send_to(&stale_ack, ctrl_addr).await.unwrap();
+            // Only answer once the controller has proved it is still
+            // retransmitting -- i.e. the misaddressed ack did not land.
+            //
+            // Bounded, and deliberately so: if the guard were missing the ack
+            // would set `acked`, no retransmit would ever come, and an unbounded
+            // wait here would hang the suite instead of failing it. The bound is
+            // ~20x the 50 ms retransmit interval, so it cannot flake on a loaded
+            // machine while still failing fast when the guard regresses.
+            let retx = tokio::time::timeout(Duration::from_secs(1), dev_io.recv_from())
+                .await
+                .expect("controller must keep retransmitting: a standalone ack addressed to another attempt must not be consumed")
+                .unwrap()
+                .0;
+            let retx = decode_unsecured(&retx).unwrap();
+            let ours = encode_unsecured_reply(
+                101,
+                retx.exchange_id,
+                0x31,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                Some(retx.message_counter),
+                Some(OUR_EPHEMERAL),
+                b"our-sigma2",
+            );
+            dev_io.send_to(&ours, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"our-sigma2");
+    }
+
+    /// A reply carrying NO destination node id must still be accepted.
+    ///
+    /// Matter 1.0-1.2 required PASE/CASE messages to set S=0 and DSIZ=0, i.e. to
+    /// carry neither node id; only 1.3 corrected this
+    /// (connectedhomeip#33518). A pre-1.3 device therefore has nothing to echo,
+    /// and a guard that demanded a match would make it permanently unreachable.
+    #[tokio::test]
+    async fn send_and_recv_accepts_a_reply_with_no_destination_node_id() {
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7, 0xE0E0);
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = decode_unsecured(&pkt).unwrap();
+            let reply = encode_unsecured_reply(
+                100,
+                msg.exchange_id,
+                0x31,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                Some(msg.message_counter),
+                None,
+                b"pre-1.3-sigma2",
+            );
+            dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"pre-1.3-sigma2");
+    }
+
+    /// A group-addressed frame is malformed on an unsecured session-establishment
+    /// exchange and must be dropped rather than parsed as our reply.
+    #[tokio::test]
+    async fn send_and_recv_rejects_a_group_addressed_reply() {
+        const OUR_EPHEMERAL: u64 = 0xE0E0;
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+        let mut exch = UnsecuredExchange::new(1, 7, OUR_EPHEMERAL);
+
+        let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
+
+        let device = async {
+            let (pkt, _) = dev_io.recv_from().await.unwrap();
+            let msg = decode_unsecured(&pkt).unwrap();
+            // Group destination, hand-framed: encode_unsecured_reply only emits
+            // unicast, so build the header directly.
+            let header = SecuredMessageHeader {
+                flags: SecuredMessageFlags::DEST_GROUP,
+                session_id: SessionId(0),
+                security_flags: SecurityFlags::empty(),
+                message_counter: MessageCounter(100),
+                source_node_id: None,
+                destination_node_id: Some(DestNodeId::Group(0xABCD)),
+            };
+            let mut group = encode_header(&header);
+            encode_protocol_header(
+                &ProtocolHeader {
+                    exchange_flags: ExchangeFlags::empty(),
+                    opcode: 0x31,
+                    exchange_id: msg.exchange_id,
+                    protocol_id: ProtocolId::SECURE_CHANNEL,
+                    ack_counter: None,
+                },
+                &mut group,
+            );
+            group.extend_from_slice(b"group-sigma2");
+            dev_io.send_to(&group, ctrl_addr).await.unwrap();
+
+            let ours = encode_unsecured_reply(
+                101,
+                msg.exchange_id,
+                0x31,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                Some(msg.message_counter),
+                Some(OUR_EPHEMERAL),
+                b"our-sigma2",
+            );
+            dev_io.send_to(&ours, ctrl_addr).await.unwrap();
+        };
+
+        let (got, ()) = tokio::join!(controller, device);
+        assert_eq!(got.unwrap().payload, b"our-sigma2");
     }
 
     #[tokio::test]
