@@ -22,6 +22,112 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## matter-transport 0.5.0 + matter-commissioning 0.8.0 + matter-controller 0.12.0 + matter-ble 0.3.4
+
+Prompted by two reports from the WeaveHome hub, a Matter controller running a
+live fleet of ~10 nodes. One was a BLE commissioning failure; the other was a
+sleepy Thread sensor that had become unreachable. Investigating the second
+turned up four deviations from the Matter specification that neither report
+mentioned, and those are fixed here too.
+
+### Changed — operational retransmit windows are shorter
+
+**Read this before upgrading.** Bringing MRP to spec shortens how long a
+reliable message is retried:
+
+| peer | before | after |
+|---|---|---|
+| advertising `SII=2000` (a Thread sleepy end device) | 52.6 s | **22.6 s** |
+| advertising `SII=500` | 13.1 s | **5.6 s** |
+| any path that took `MrpConfig::default()` | 110.4 s | **5.6 s** |
+
+The cause is that we transmitted a reliable message **six** times where
+`MRP_MAX_TRANSMISSIONS` is 5, and the sixth carried the longest wait. A sixth
+send is a 20% traffic overage on every unacked message whose cost falls on the
+battery device and the mesh, and a device that has missed five transmissions
+across 22 s will not answer a sixth. The intended mechanism for "I need longer"
+is the peer advertising a larger `SII`, which the handshake now honours — see
+below.
+
+### Fixed — a device slow to wake could become permanently unreachable
+
+Two CASE attempts to the same peer from the same socket shared an exchange id
+(a compile-time `1`), so attempt 1's Sigma2 — retransmitted reliably under MRP
+after attempt 1 had timed out — matched attempt 2's receive filter on every
+field it checked. It was then decrypted with attempt 2's ephemeral secret,
+producing `EncryptedBlobDecryptionFailed` deterministically on every retry.
+
+The distinguishing field was already on the wire and already decoded, and we
+discarded it: Matter 1.3+ has the responder echo the initiator's ephemeral
+source node id as the destination node id. `UnsecuredMessage` now carries it and
+the handshake rejects a reply addressed to another attempt. An absent
+destination is accepted — Matter 1.0–1.2 required PASE/CASE to carry neither
+node id, so a pre-1.3 device has nothing to echo.
+
+Handshake exchange ids are now drawn from the CSPRNG rather than being the
+constant `1`.
+
+### Fixed — the CASE handshake ignored the peer's advertised SII
+
+The operational session was carefully sized to the peer; the handshake that
+gates it gave every device a flat 1.5 s to wake. A Thread sleepy end device
+advertising `SII=2000` now gets 22.5 s. Bounded by a new 60 s
+`MAX_HANDSHAKE_RETRANSMIT_WINDOW`, shared across the whole handshake, so a peer
+advertising the spec ceiling of 1 h cannot wedge a connect.
+
+### Fixed — MRP backoff was missing three spec terms
+
+`MRP_BACKOFF_MARGIN` (1.1), `MRP_BACKOFF_THRESHOLD` (1, so the first two
+transmissions share a base interval) and `MRP_BACKOFF_JITTER` (0.25) were all
+absent. The margin was a systematic ~10% under-wait on every retransmit; the
+missing jitter meant multiple controllers retransmitted to a peer in lockstep.
+
+### Fixed — `MrpConfig::default()` used a value from no specification
+
+`initial_idle` was 4200 ms and `idle_threshold` 5 s, against a specified 500 ms
+and 4000 ms. `4200` appears in no version of the Matter specification, nowhere
+in connectedhomeip and nowhere in matter.js; it originated in this project's own
+M5 design notes as a derivation (`300 × 14`). `Default` is now pinned equal to
+`for_peer(None, None, None)` so the two cannot drift apart again.
+
+### Fixed — exchange ids violated §4.10.2 three ways
+
+The operational counter lived on `MrpState` (per session, so every session
+handed out the same sequence), started at a hard-coded `1` rather than a random
+integer, and skipped 0 on wraparound. It now lives on `SessionManager` — one
+counter per initiator node, CSPRNG-seeded — matching chip's single
+`mNextExchangeId`.
+
+### Fixed — a failed BLE attempt left the link subscribed (matter-ble)
+
+BLE commissioning failed at the BTP handshake on every attempt after the first
+to a given address, recoverable only by power-cycling the accessory. `BlueZ`
+remembers a `StartNotify` session per address and re-enables it during
+reconnect, ahead of service discovery, so the device saw a subscribe before the
+C1 handshake write — the ordering chip rejects. `open_btp` now clears any
+restored subscription before its handshake write, and every error path and pump
+exit tears the link down (`BtpChannel::drop` previously aborted the pump, so its
+teardown never ran).
+
+### Added — one diagnostic line per CASE session
+
+`info!` at session registration naming the effective MRP parameters, the
+resulting total window, and where the configuration came from
+(`MrpProvenance`). Two sessions to the same device could previously differ by
+8.4× with nothing in the logs to say which.
+
+### Breaking
+
+- `MrpConfig::max_attempts` → `max_transmissions`, and it now counts the
+  original send. New field `backoff_jitter`.
+- `MrpState::prepare_outbound` takes a concrete `u16` exchange id; locally
+  initiated exchanges are announced via `note_local_exchange`.
+- `SessionManager::register_case_with_mrp` takes an `MrpProvenance`.
+- `UnsecuredMessage` gains `destination_node_id`.
+- `UnsecuredExchange::new_ephemeral_with` and
+  `matter_commissioning::driver::run_case_establish` take the peer's
+  `MrpConfig`.
+
 ## matter-commissioning 0.7.0 + matter-controller 0.11.0
 
 Prompted by [#120]. What was reported as a documentation bug turned out to sit

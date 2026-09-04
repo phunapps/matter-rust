@@ -1216,7 +1216,7 @@ dependencies = [
 
 [[package]]
 name = "matter-ble"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "bitflags",
  "btleplug",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "matter-commissioning"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "matter-controller"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1371,7 +1371,7 @@ dependencies = [
 
 [[package]]
 name = "matter-transport"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bitflags",
  "criterion",
