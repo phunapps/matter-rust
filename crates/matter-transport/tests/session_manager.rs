@@ -286,7 +286,7 @@ fn poll_timeout_min_across_sessions() {
     // inject. The bound is the jitter bound itself, which makes this a stricter
     // check than the equality it replaces — it would catch a jitter draw that
     // shortened a delay or exceeded its spec limit.
-    let base = Duration::from_millis(4622);
+    let base = Duration::from_millis(550);
     let max = base.mul_f32(1.0 + 0.25);
     assert!(
         deadline >= now + base && deadline < now + max,
@@ -367,7 +367,7 @@ fn handle_timeout_drains_expired_sessions() {
         .unwrap();
 
     // Advance well past every retransmit. The session is idle (no peer activity
-    // recorded), so retransmits use the idle base (4200 ms + margin) with
+    // recorded), so retransmits use the idle base (500 ms + margin) with
     // exponential backoff past MRP_BACKOFF_THRESHOLD — the budget below
     // comfortably exceeds the resulting schedule (chip's idle spacing is
     // deliberately long for sleepy devices).

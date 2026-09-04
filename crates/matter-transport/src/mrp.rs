@@ -1,4 +1,5 @@
-//! Matter Message Reliability Protocol (MRP) — Matter Core Spec §4.11.
+//! Matter Message Reliability Protocol (MRP) — Matter Core Spec §4.12
+//! (Matter 1.3 renumbered chapter 4; this was §4.11 in 1.0-1.2).
 //!
 //! Per-session, sans-IO state machine that owns pending retransmits,
 //! piggyback ack queues, exchange tracking, and a recent-reliable
@@ -58,7 +59,7 @@ const MRP_BACKOFF_MAX_EXPONENT: u8 = 4;
 
 /// Configuration knobs for MRP retransmit + ack timing. Defaults are the
 /// Matter 1.4 §4.12.8 MRP parameters and §4.13.1 session intervals.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct MrpConfig {
     /// Base retransmit delay used when the session is "active" (recent
@@ -91,15 +92,31 @@ pub struct MrpConfig {
 }
 
 impl Default for MrpConfig {
+    /// The Matter 1.4 §4.13.1 session intervals and §4.12.8 MRP parameters —
+    /// what chip's `GetDefaultMRPConfig()` calls out as *"defined by spec, and
+    /// shall be same for all implementations"*.
+    ///
+    /// Identical by construction to `for_peer(None, None, None)`, which
+    /// `default_matches_spec_defaults` pins. Written as literals rather than
+    /// delegating, because `for_peer` starts from `Self::default()` and
+    /// delegating would recurse.
+    ///
+    /// `initial_idle` was 4200 ms and `idle_threshold` 5 s. Neither came from
+    /// the specification: `4200` appears in no version of it, in no part of
+    /// connectedhomeip, and in no part of matter.js. It originated in this
+    /// project's own M5 design notes as a derivation, `300 × 14`, and the
+    /// correct values arrived later with `for_peer` without anyone reconciling
+    /// the two — leaving the same file asserting 4200 ms twelve lines above
+    /// `SPEC_DEFAULT_IDLE: 500 ms`.
     fn default() -> Self {
         Self {
-            initial_active: Duration::from_millis(300),
-            initial_idle: Duration::from_millis(4200),
+            initial_active: SPEC_DEFAULT_ACTIVE,
+            initial_idle: SPEC_DEFAULT_IDLE,
+            idle_threshold: SPEC_DEFAULT_ACTIVE_THRESHOLD,
             backoff_factor: MRP_BACKOFF_BASE,
             max_transmissions: MRP_MAX_TRANSMISSIONS,
             backoff_jitter: MRP_BACKOFF_JITTER,
             standalone_ack_deadline: Duration::from_millis(200),
-            idle_threshold: Duration::from_secs(5),
         }
     }
 }
@@ -372,7 +389,7 @@ struct PendingOutboundAck {
 }
 
 /// Cache entry for a recently-seen reliable inbound, kept in a 32-slot
-/// ring buffer for duplicate-reliable detection (Matter Core Spec §4.11.6
+/// ring buffer for duplicate-reliable detection (Matter Core Spec §4.12.6
 /// dedup-resend path; M5.2 design Q5).
 #[derive(Debug)]
 struct RecentInbound {
@@ -986,9 +1003,9 @@ mod tests {
     #[test]
     fn retransmit_delay_follows_the_spec_backoff_shape() {
         let cfg = MrpConfig::default();
-        // Idle base 4200 ms → 4200 × 1127/1024 = 4622 ms after margin, then
-        // × 1.6^{0,0,1,2,3}, truncated per step.
-        for (sends_done, want_ms) in [(0, 4622), (1, 4622), (2, 7395), (3, 11832), (4, 18931)] {
+        // Idle base 500 ms → 500 × 1127/1024 = 550 ms after margin, then
+        // × 1.6^{0,0,1,2,3}, truncated per step. Sums to 5.640 s.
+        for (sends_done, want_ms) in [(0, 550), (1, 550), (2, 880), (3, 1408), (4, 2252)] {
             assert_eq!(
                 cfg.retransmit_delay(sends_done, false),
                 Duration::from_millis(want_ms),
@@ -1015,6 +1032,34 @@ mod tests {
             backoff_jitter: 0.0,
             ..MrpConfig::default()
         }
+    }
+
+    /// `Default` and "the peer told us nothing" must be the same thing.
+    ///
+    /// They were not: `Default` carried a 4200 ms idle base that appears in no
+    /// version of the Matter specification, in no part of connectedhomeip and
+    /// in no part of matter.js, while `for_peer(None, None, None)` twelve lines
+    /// below correctly used the spec's 500 ms. Two sessions to the same device
+    /// could therefore have retransmit windows 8.4x apart with nothing in the
+    /// logs to say which. This test makes that class of drift impossible.
+    #[test]
+    fn default_matches_spec_defaults() {
+        assert_eq!(MrpConfig::default(), MrpConfig::for_peer(None, None, None));
+    }
+
+    /// State the resulting window somewhere a reader will find it.
+    ///
+    /// 550 + 550 + 880 + 1408 + 2252 = 5640 ms to `Expired` for a peer that
+    /// advertises nothing. It was 13.1 s before the transmission count and the
+    /// backoff terms were corrected, and 110.4 s on any path that took the old
+    /// `Default`.
+    #[test]
+    fn the_spec_default_total_window_is_5640ms() {
+        let cfg = MrpConfig::default();
+        let total: Duration = (0..cfg.max_transmissions)
+            .map(|n| cfg.retransmit_delay(n, false))
+            .sum();
+        assert_eq!(total, Duration::from_millis(5640));
     }
 
     /// Jitter only ever LENGTHENS, and never past the spec's bound.
@@ -1349,11 +1394,11 @@ mod tests {
     fn classification_follows_peer_activity_not_our_tx() {
         let now = t0();
 
-        // Fresh session, no peer inbound → idle base (4200 ms + 1.1 margin).
+        // Fresh session, no peer inbound → idle base (500 ms + 1.1 margin).
         let mut fresh = MrpState::new(cfg());
         assert_eq!(
             schedule_reliable(&mut fresh, 1, now),
-            now + Duration::from_millis(4622),
+            now + Duration::from_millis(550),
             "a peer we have never heard from is idle (SII), regardless of our tx timing",
         );
 
@@ -1366,13 +1411,13 @@ mod tests {
             "a peer active within SAT uses the active base (SAI)",
         );
 
-        // Peer last spoke longer ago than SAT (idle_threshold, 5 s) → idle base.
+        // Peer last spoke longer ago than SAT (idle_threshold, 4 s) → idle base.
         let mut aged = MrpState::new(cfg());
         aged.last_peer_activity = Some(now);
         let later = now + Duration::from_secs(6);
         assert_eq!(
             schedule_reliable(&mut aged, 1, later),
-            later + Duration::from_millis(4622),
+            later + Duration::from_millis(550),
             "a peer silent past SAT is idle (SII) again",
         );
     }
@@ -1403,16 +1448,16 @@ mod tests {
             "still-active peer: active base, growth not yet started",
         );
 
-        // Now the peer has gone silent well past SAT (5 s). The NEXT retransmit
-        // must switch to the idle base (4200 ms) × its backoff, not stay on the
+        // Now the peer has gone silent well past SAT (4 s). The NEXT retransmit
+        // must switch to the idle base (500 ms) × its backoff, not stay on the
         // active grid — this is the anti-hammer guarantee.
         let much_later = d1.max(now + Duration::from_secs(7));
         mrp.handle_timeout(much_later);
         let d2 = mrp.poll_timeout().unwrap();
-        // sends_done is now 2 → idle base with margin (4622) × 1.6^(2-1).
+        // sends_done is now 2 → idle base with margin (550) × 1.6^(2-1).
         assert_eq!(
             d2,
-            much_later + Duration::from_millis(7395),
+            much_later + Duration::from_millis(880),
             "peer silent past SAT: retransmit re-evaluates to the idle base (SII)",
         );
     }
@@ -1472,7 +1517,7 @@ mod tests {
         let mut probe = MrpState::new(cfg());
         assert_eq!(
             schedule_reliable(&mut probe, 1, now),
-            now + Duration::from_millis(4622),
+            now + Duration::from_millis(550),
         );
         // After a real inbound: peer is active.
         let payload = build_inbound_payload(ExchangeFlags::INITIATOR, 0x02, 0x0001, None, b"hi");
