@@ -117,6 +117,12 @@ const C1_WRITE_TIMEOUT: Duration = Duration::from_secs(12);
 /// peripheral `CoreBluetooth`'s `disconnect()` never returns, so this is short:
 /// if there is nothing to tear down we move on to `connect()` promptly.
 const PRE_CONNECT_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+/// Bound for each best-effort step of [`teardown_link`]. Both `unsubscribe` and
+/// `disconnect` can hang indefinitely on a link that is already gone (same
+/// `CoreBluetooth` shape as [`PRE_CONNECT_DISCONNECT_TIMEOUT`]), and teardown
+/// runs on paths that are already failing — it must never be what blocks the
+/// caller's error from surfacing.
+const TEARDOWN_STEP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Refcount for the one radio scan on the shared adapter.
 ///
@@ -546,11 +552,62 @@ impl BleCentral {
             .await
             .map_err(|e| CentralError::Connect(e.to_string()))?;
         pt("open_btp: connect DONE; discover_services START");
-        discover_services_with_retry(&peripheral).await?;
+
+        // The link is UP from here, so every failure below must tear it down
+        // before returning — otherwise the next attempt to this same BLE
+        // address inherits a half-configured GATT state and cannot complete the
+        // handshake (see [`teardown_link`] for the traced mechanism). `c2` is
+        // threaded back out because teardown needs that handle to unsubscribe
+        // and it only comes into existence partway through the body.
+        let mut c2: Option<Characteristic> = None;
+        match self.open_btp_connected(&peripheral, device, &mut c2).await {
+            Ok(channel) => Ok(channel),
+            Err(e) => {
+                pt(&format!("open_btp: failed ({e}); tearing down link"));
+                teardown_link(&peripheral, c2.as_ref()).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// The post-connect body of [`Self::open_btp`]: GATT discovery, the BTP
+    /// handshake, and the pump spawn, over an already-connected `peripheral`.
+    ///
+    /// Split out purely so [`Self::open_btp`] can apply [`teardown_link`] to
+    /// **every** failure with a single `match`, rather than eight hand-written
+    /// cleanup arms that a later edit could forget to extend. `c2_out` is an
+    /// out-parameter for the same reason: teardown must unsubscribe C2, and
+    /// that handle does not exist until service discovery has run.
+    async fn open_btp_connected(
+        &self,
+        peripheral: &Peripheral,
+        device: &FoundDevice,
+        c2_out: &mut Option<Characteristic>,
+    ) -> Result<BtpChannel, CentralError> {
+        discover_services_with_retry(peripheral).await?;
         pt("open_btp: discover_services DONE");
 
-        let c1 = find_char(&peripheral, C1_UUID).ok_or(CentralError::GattNotFound("C1"))?;
-        let c2 = find_char(&peripheral, C2_UUID).ok_or(CentralError::GattNotFound("C2"))?;
+        let c1 = find_char(peripheral, C1_UUID).ok_or(CentralError::GattNotFound("C1"))?;
+        let c2 = find_char(peripheral, C2_UUID).ok_or(CentralError::GattNotFound("C2"))?;
+        *c2_out = Some(c2.clone());
+
+        // Clear any C2 subscription `bluetoothd` restored during THIS reconnect,
+        // before the handshake write goes out.
+        //
+        // This is not redundant with [`teardown_link`]. A previous attempt whose
+        // link dropped before it could unsubscribe left the notify session
+        // recorded and had no live ATT channel over which to clear it, so no
+        // amount of teardown discipline on the losing side can help; the only
+        // place the restored CCCD can be cleared is here, on the connection that
+        // inherited it. On a genuinely fresh connection there is no notify
+        // session and `BlueZ` puts nothing on the wire, so this costs one D-Bus
+        // round trip and changes nothing the peripheral can observe.
+        //
+        // Ordering is the whole point: this must precede the C1 write so that
+        // the device never sees a subscribe ahead of the handshake request (see
+        // [`Self::open_btp`]'s doc comment for why chip rejects that).
+        let _ = tokio::time::timeout(TEARDOWN_STEP_TIMEOUT, peripheral.unsubscribe(&c2)).await;
+        pt("open_btp: cleared any restored C2 subscription");
 
         // Open the local notification stream before anything can be indicated,
         // so the response cannot be lost to btleplug's bounded buffer. This is
@@ -578,7 +635,7 @@ impl BleCentral {
         pt("open_btp: handshake C1 write DONE");
 
         // Subscribe AFTER the request: the CCCD write is what makes the
-        // peripheral emit the response (see this method's doc comment).
+        // peripheral emit the response (see [`Self::open_btp`]'s doc comment).
         peripheral
             .subscribe(&c2)
             .await
@@ -605,7 +662,7 @@ impl BleCentral {
             .map_err(|e| CentralError::Gatt(e.to_string()))?;
 
         Ok(spawn_pump(
-            peripheral,
+            peripheral.clone(),
             c1,
             c2,
             device.peripheral_id.clone(),
@@ -846,8 +903,13 @@ pub enum PumpCommand {
 
 /// A live BTP session over BLE: send and receive whole Matter messages.
 ///
-/// `recv` is single-consumer. Dropping the channel (or calling [`Self::close`])
-/// stops the pump; the peripheral stays connected until it is dropped.
+/// `recv` is single-consumer. Both [`Self::close`] and dropping the channel
+/// stop the pump and tear the GATT link down with it — dropping the C2
+/// subscription is not optional cleanup, it is what lets the *next* connection
+/// to this device succeed: `BlueZ` restores a leftover `StartNotify` session on
+/// reconnect, ahead of service discovery, which breaks the handshake ordering
+/// chip requires. `close` awaits that teardown; `Drop` can only set it in
+/// motion.
 pub struct BtpChannel {
     commands: mpsc::Sender<PumpCommand>,
     inbound: mpsc::Receiver<Result<Vec<u8>, CentralError>>,
@@ -907,7 +969,10 @@ impl BtpChannel {
         }
     }
 
-    /// Stop the pump. Idempotent; the peripheral is left connected.
+    /// Stop the pump, dropping the C2 subscription and the GATT link with it.
+    /// Idempotent, and awaits the pump so the teardown has actually run by the
+    /// time this returns — which [`Drop`] cannot promise. Prefer it wherever
+    /// there is an `async` context to call it from.
     pub async fn close(mut self) {
         let _ = self.commands.send(PumpCommand::Close).await;
         if let Some(handle) = self.pump.take() {
@@ -917,10 +982,23 @@ impl BtpChannel {
 }
 
 impl Drop for BtpChannel {
+    /// Ask the pump to close and **detach** it, rather than aborting it.
+    ///
+    /// `abort()` cancels the pump wherever it is parked in its `select!`, so
+    /// the teardown in its close arm never runs and the C2 subscription is left
+    /// recorded in `BlueZ` — which is precisely what breaks the next connection
+    /// to this address, because `BlueZ` restores that subscription on reconnect
+    /// ahead of service discovery. Sending `Close` instead lets the pump
+    /// unsubscribe and disconnect on its own.
+    ///
+    /// `try_send` because `Drop` cannot await: the command channel has capacity
+    /// 8 and the pump drains it, so a full queue here means a pump that is
+    /// already wedged and would not have honoured an abort-free close either.
+    /// Dropping the `JoinHandle` detaches the task; its own teardown steps are
+    /// individually timeout-bounded, so it cannot linger indefinitely.
     fn drop(&mut self) {
-        if let Some(handle) = self.pump.take() {
-            handle.abort();
-        }
+        let _ = self.commands.try_send(PumpCommand::Close);
+        drop(self.pump.take());
     }
 }
 
@@ -954,6 +1032,38 @@ fn spawn_pump(
         inbound: sdu_rx,
         pump: Some(pump),
     }
+}
+
+/// Drop the C2 subscription and the GATT link, best effort.
+///
+/// **The `unsubscribe` is the load-bearing half, and it must happen while the
+/// link is still up.** `BlueZ` remembers a characteristic's `StartNotify`
+/// session per bonded/known address and *re-enables it during reconnect*, ahead
+/// of service discovery — so a subscription left behind by one attempt is
+/// restored on the next connection to the same BLE address, and `btleplug`'s
+/// later explicit `subscribe` becomes a no-op (no second CCCD write). That
+/// produces exactly the subscribe-before-write ordering
+/// [`BleCentral::open_btp`]'s doc comment explains chip rejects, and the
+/// handshake then times out with both sides waiting on the other. Traced on
+/// hardware with `btmon` (Pi 5 → ESP32-C6, 2026-09-04): on the second
+/// connection the CCCD write landed at 17.014 s, *before* service discovery at
+/// 17.209 s, and the device logged `CHIPoBLE subscribe received` ahead of
+/// `Write request received for CHIPoBLE RX`.
+///
+/// `disconnect` afterwards is hygiene: it stops a failed attempt from holding a
+/// system-level connection that keeps the peripheral from re-advertising.
+///
+/// Both steps are bounded by [`TEARDOWN_STEP_TIMEOUT`] and their results
+/// discarded — this runs on paths that are already failing, and a peripheral
+/// whose link has *already* dropped cannot be cleaned up at all (there is no
+/// live ATT channel to write the CCCD over). That residual case is why
+/// [`BleCentral::open_btp`] also clears the CCCD defensively before its
+/// handshake write rather than trusting teardown to have run.
+async fn teardown_link(peripheral: &Peripheral, c2: Option<&Characteristic>) {
+    if let Some(c2) = c2 {
+        let _ = tokio::time::timeout(TEARDOWN_STEP_TIMEOUT, peripheral.unsubscribe(c2)).await;
+    }
+    let _ = tokio::time::timeout(TEARDOWN_STEP_TIMEOUT, peripheral.disconnect()).await;
 }
 
 /// Discover the peripheral's GATT services, bounding the macOS
@@ -1076,6 +1186,7 @@ async fn pump_loop(
             Ok(wake) => wake,
             Err(e) => {
                 let _ = sdu_tx.send(Err(e)).await;
+                teardown_link(&peripheral, Some(&c2)).await;
                 return;
             }
         };
@@ -1096,8 +1207,7 @@ async fn pump_loop(
                 Some(PumpCommand::Close) | None => {
                     // Graceful close: drop the C2 subscription and the link
                     // (best-effort — the caller is done regardless).
-                    let _ = peripheral.unsubscribe(&c2).await;
-                    let _ = peripheral.disconnect().await;
+                    teardown_link(&peripheral, Some(&c2)).await;
                     return;
                 }
             },
@@ -1108,12 +1218,14 @@ async fn pump_loop(
                         Ok(Some(sdu)) => {
                             pt(&format!("SDU surfaced ({} bytes)", sdu.len()));
                             if sdu_tx.send(Ok(sdu)).await.is_err() {
+                                teardown_link(&peripheral, Some(&c2)).await;
                                 return;
                             }
                         }
                         Ok(None) => {}
                         Err(e) => {
                             let _ = sdu_tx.send(Err(CentralError::from(e))).await;
+                            teardown_link(&peripheral, Some(&c2)).await;
                             return;
                         }
                     }
@@ -1121,12 +1233,14 @@ async fn pump_loop(
                 Some(_) => {}
                 None => {
                     let _ = sdu_tx.send(Err(CentralError::Disconnected)).await;
+                    teardown_link(&peripheral, Some(&c2)).await;
                     return;
                 }
             },
             event = events.next() => match event {
                 Some(CentralEvent::DeviceDisconnected(id)) if id == peripheral_id => {
                     let _ = sdu_tx.send(Err(CentralError::Disconnected)).await;
+                    teardown_link(&peripheral, Some(&c2)).await;
                     return;
                 }
                 // Other events (and other peripherals) are irrelevant here; a
@@ -1193,6 +1307,30 @@ mod tests {
         assert!(!rc.acquire(), "1->2 must not restart");
         assert!(!rc.release(), "2->1 must not stop");
         assert!(rc.release(), "1->0 must stop the radio scan");
+    }
+
+    /// Dropping a `BtpChannel` must ASK the pump to close rather than abort it.
+    ///
+    /// Regression guard: `Drop` used to call `JoinHandle::abort()`, which
+    /// cancels the pump wherever it is parked and so skips the `unsubscribe` +
+    /// `disconnect` in its close arm. That left the C2 subscription recorded in
+    /// `BlueZ`, which restores it on the next connection to the same address —
+    /// ahead of service discovery — producing the subscribe-before-write
+    /// ordering chip rejects, and every retry then fails at the BTP handshake.
+    #[tokio::test]
+    async fn dropping_the_channel_asks_the_pump_to_close() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<PumpCommand>(8);
+        let (_sdu_tx, sdu_rx) = mpsc::channel::<Result<Vec<u8>, CentralError>>(8);
+
+        drop(BtpChannel::from_channels(cmd_tx, sdu_rx));
+
+        match cmd_rx.try_recv() {
+            Ok(PumpCommand::Close) => {}
+            other => panic!(
+                "drop must enqueue PumpCommand::Close, got {:?}",
+                other.is_ok()
+            ),
+        }
     }
 
     #[test]
