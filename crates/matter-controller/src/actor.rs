@@ -3715,10 +3715,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .and_then(|r| crate::resumption::serialize_record(r).ok());
         // Apply the peer's advertised MRP config captured at spawn time (MRP-2);
         // default if the connect predates the capture (e.g. a recovery path).
-        let peer_mrp = self.connect_mrp.remove(&node_id).unwrap_or_default();
-        let sid = self
-            .sessions
-            .register_case_with_mrp(&output, SessionRole::Initiator, peer_mrp);
+        // The provenance is recorded rather than inferred so the diagnostic
+        // emitted at registration cannot claim a peer-sized window we did not
+        // actually get.
+        let (peer_mrp, provenance) = match self.connect_mrp.remove(&node_id) {
+            Some(cfg) => (cfg, matter_transport::MrpProvenance::PeerAdvertised),
+            None => (
+                matter_transport::MrpConfig::default(),
+                matter_transport::MrpProvenance::Unknown,
+            ),
+        };
+        let sid = self.sessions.register_case_with_mrp(
+            &output,
+            SessionRole::Initiator,
+            peer_mrp,
+            provenance,
+        );
         if let Some(s) = self.sessions.get_mut(sid) {
             s.peer_addr = Some(peer);
         }

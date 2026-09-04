@@ -157,6 +157,20 @@ impl MrpConfig {
         }
     }
 
+    /// Un-jittered total time a reliable message is given before it expires:
+    /// the sum of the full idle-base retransmit schedule.
+    ///
+    /// Exists so the diagnostic emitted at session registration can state the
+    /// number an operator is actually asking about ("why did this time out
+    /// after N seconds") rather than making them derive it from four
+    /// parameters.
+    #[must_use]
+    pub fn total_idle_window(&self) -> Duration {
+        (0..self.max_transmissions)
+            .map(|n| self.retransmit_delay(n, false))
+            .sum()
+    }
+
     /// Un-jittered wait AFTER a transmission, given how many sends have already
     /// gone out on this message.
     ///
@@ -201,6 +215,25 @@ impl MrpConfig {
             (with_margin_ms as f32 * self.backoff_factor.powi(i32::from(exponent))) as u64;
         Duration::from_millis(scaled_ms)
     }
+}
+
+/// Where a session's MRP configuration came from.
+///
+/// Carried purely so the one diagnostic line emitted at session registration
+/// can say it. When an operator asks "why did this session time out after N
+/// seconds", the answer is almost always which of these three applied, and
+/// without it there is nothing in the logs to distinguish them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MrpProvenance {
+    /// Parsed from the peer's operational mDNS TXT `SII`/`SAI`/`SAT`.
+    PeerAdvertised,
+    /// The peer advertised nothing for one or more keys, so spec defaults
+    /// filled in.
+    SpecDefault,
+    /// No peer record was available at all — the responder role, or a recovery
+    /// path that had no discovery result to hand.
+    Unknown,
 }
 
 /// Caller-facing MRP control bits for an outbound message.

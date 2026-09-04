@@ -27,7 +27,9 @@ use crate::framing::{
     decode_secured_with_header, encode_secured_with_cipher, MessageCounter, NodeId, ReplayWindow,
     SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
-use crate::mrp::{InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent};
+use crate::mrp::{
+    InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpProvenance, MrpState, MrpTimerEvent,
+};
 use crate::protocol_header::{build_standalone_ack_header, encode_protocol_header, ProtocolId};
 
 /// Which side of a session this end occupies. Decides which key in
@@ -441,8 +443,16 @@ impl SessionManager {
     /// node advertised in Sigma1 — so inbound secured packets from the peer
     /// demux correctly. The peer's Node ID, Fabric ID, and session ID are
     /// pulled from `output` automatically.
+    /// Convenience for callers with no peer discovery result to hand: the peer's
+    /// MRP parameters are **unknown**, so the session gets the spec defaults.
+    /// That is now genuinely the spec's "we were told nothing" configuration —
+    /// it used to be a local 4200 ms idle base found in no specification, which
+    /// silently gave these sessions an 8.4x longer window than peer-sized ones.
+    ///
+    /// Prefer [`Self::register_case_with_mrp`] wherever the peer's advertised
+    /// `SII`/`SAI`/`SAT` are available.
     pub fn register_case(&mut self, output: &CaseSessionOutput, role: SessionRole) -> SessionId {
-        self.register_case_with_mrp(output, role, MrpConfig::default())
+        self.register_case_with_mrp(output, role, MrpConfig::default(), MrpProvenance::Unknown)
     }
 
     /// [`Self::register_case`] but with the peer's advertised MRP retransmit
@@ -458,6 +468,7 @@ impl SessionManager {
         output: &CaseSessionOutput,
         role: SessionRole,
         mrp_config: MrpConfig,
+        provenance: MrpProvenance,
     ) -> SessionId {
         let local_id = SessionId(output.local.session_id);
         let peer = PeerHint {
@@ -479,6 +490,27 @@ impl SessionManager {
             session.peer_nonce_node_id = output.peer.node_id;
             session.mrp = MrpState::new(mrp_config);
         }
+        // The one line that answers "why did this session time out after N
+        // seconds". Emitted once per session establishment, at `info` because
+        // an operator debugging a timeout will not have `debug` on, and until
+        // now there was nothing in the logs distinguishing a peer-sized window
+        // from a defaulted one.
+        tracing::info!(
+            target: "matter_transport::session",
+            session_id = local_id.0,
+            peer_node_id = output.peer.node_id,
+            role = ?role,
+            provenance = ?provenance,
+            initial_idle_ms = u64::try_from(mrp_config.initial_idle.as_millis()).unwrap_or(u64::MAX),
+            initial_active_ms =
+                u64::try_from(mrp_config.initial_active.as_millis()).unwrap_or(u64::MAX),
+            idle_threshold_ms =
+                u64::try_from(mrp_config.idle_threshold.as_millis()).unwrap_or(u64::MAX),
+            max_transmissions = mrp_config.max_transmissions,
+            total_window_ms =
+                u64::try_from(mrp_config.total_idle_window().as_millis()).unwrap_or(u64::MAX),
+            "CASE session registered",
+        );
         local_id
     }
 

@@ -75,8 +75,8 @@ pub use framing::{
     SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 pub use mrp::{
-    InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpState, MrpTimerEvent, PreparedOutbound,
-    RecentInboundView,
+    InboundOutcome, MrpConfig, MrpEvent, MrpFlags, MrpProvenance, MrpState, MrpTimerEvent,
+    PreparedOutbound, RecentInboundView,
 };
 pub use protocol_header::{
     build_standalone_ack_header, decode_protocol_header, encode_protocol_header, ExchangeFlags,
