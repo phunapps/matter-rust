@@ -386,6 +386,18 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                     true
                 } else {
                     // Unknown id — decline and fall back to a full handshake.
+                    //
+                    // This is the self-healing path for a stale resumption
+                    // record: the cost is one wasted round trip, not
+                    // unreachability, which is why records are not invalidated
+                    // on CASE failure. Logged so that "it fires occasionally"
+                    // and "it fires every time for this device" are
+                    // distinguishable in the field -- the latter would mean the
+                    // record really is stuck and worth revisiting.
+                    tracing::debug!(
+                        target: "matter_controller::provider_server",
+                        "unknown CASE resumption id offered; declining and falling back to a full handshake"
+                    );
                     responder
                         .reject_resumption()
                         .map_err(|e| Error::Operational(format!("reject_resumption: {e}")))?;
