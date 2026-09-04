@@ -17,6 +17,7 @@ use crate::driver::error::DriverError;
 use crate::driver::unsecured::{
     parse_status_report, random_exchange_id, require_handshake_opcode, UnsecuredExchange,
 };
+use crate::driver::TransportReliability;
 
 /// Build the operational mDNS instance name `<compressed-fabric-id>-<node-id>`,
 /// each as fixed-width uppercase hex (16 + 1 + 16 chars), per the Matter
@@ -509,6 +510,8 @@ pub async fn run_case<T: AsyncDatagram>(
         peer_node_id,
         peer_fabric_id,
         now,
+        // No discovery result in hand on this path, so the spec defaults.
+        MrpConfig::for_peer(None, None, None),
     ))
     .await?;
     let sid = sessions.register_case(&output, SessionRole::Initiator);
@@ -533,7 +536,7 @@ pub async fn run_case<T: AsyncDatagram>(
 ///   on datagram, framing, or reply-timeout failure.
 /// - [`DriverError::SessionEstablishmentFailed`] if the device closes the
 ///   handshake with a non-success `StatusReport`.
-// Same 8-input CASE setup as `run_case`, with an explicit `local_session_id`
+// Same CASE setup as `run_case`, plus an explicit `local_session_id`
 // in place of the `SessionManager` this variant does not touch.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_case_establish<T: AsyncDatagram>(
@@ -545,6 +548,7 @@ pub async fn run_case_establish<T: AsyncDatagram>(
     peer_node_id: u64,
     peer_fabric_id: u64,
     now: MatterTime,
+    peer_mrp: MrpConfig,
 ) -> Result<matter_crypto::CaseSessionOutput, DriverError> {
     let mut initiator = CaseInitiator::new(
         credentials,
@@ -556,7 +560,14 @@ pub async fn run_case_establish<T: AsyncDatagram>(
     )?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — same unsecured-header requirements as PASE apply to SIGMA.
-    let mut exch = UnsecuredExchange::new_ephemeral(random_exchange_id()?)?;
+    // Retransmits are sized to the peer's advertised SII: the operational layer
+    // has always honoured it, but the handshake that gates the operational
+    // layer did not, so a sleepy device was given a fixed 1.5 s to wake.
+    let mut exch = UnsecuredExchange::new_ephemeral_with(
+        random_exchange_id()?,
+        TransportReliability::Mrp,
+        peer_mrp,
+    )?;
 
     let sigma1 = initiator.start()?;
     let sigma2 = exch
@@ -1491,6 +1502,7 @@ mod tests {
             T_RESPONDER_NODE,
             T_FABRIC_ID,
             MatterTime::from_unix_secs(2_000_000_000),
+            MrpConfig::for_peer(None, None, None),
         );
 
         let (ctrl_result, dev_out) = tokio::join!(controller, device);

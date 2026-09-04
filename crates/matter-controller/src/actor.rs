@@ -1414,6 +1414,13 @@ struct GroupKeyCacheEntry {
 struct ConnectCompletion {
     node_id: u64,
     result: Result<(matter_crypto::CaseSessionOutput, SocketAddr), Error>,
+    /// The peer's advertised MRP config this handshake was sized to, carried
+    /// back rather than re-read from `connect_mrp`: the map entry can be
+    /// cleared mid-flight by a resolve expiry or a forget, and re-reading it
+    /// silently substituted a default.
+    peer_mrp: matter_transport::MrpConfig,
+    /// Whether `peer_mrp` came from the device's own TXT record.
+    provenance: matter_transport::MrpProvenance,
 }
 
 /// A connect whose device has not been seen on mDNS yet, parked on the actor's
@@ -1637,6 +1644,8 @@ async fn run_connect_task(
     roots: matter_cert::TrustedRoots,
     now: matter_cert::MatterTime,
     peer: SocketAddr,
+    peer_mrp: matter_transport::MrpConfig,
+    provenance: matter_transport::MrpProvenance,
     inbound_rx: mpsc::Receiver<(Vec<u8>, SocketAddr)>,
     outbound_tx: mpsc::Sender<crate::handshake_socket::HandshakeOutbound>,
     done_tx: mpsc::Sender<ConnectCompletion>,
@@ -1651,11 +1660,19 @@ async fn run_connect_task(
         node_id,
         fabric_id,
         now,
+        peer_mrp,
     )
     .await
     .map(|output| (output, peer))
     .map_err(Error::from);
-    let _ = done_tx.send(ConnectCompletion { node_id, result }).await;
+    let _ = done_tx
+        .send(ConnectCompletion {
+            node_id,
+            result,
+            peer_mrp,
+            provenance,
+        })
+        .await;
 }
 
 /// A completed spawned commission, delivered back to the actor loop
@@ -3630,8 +3647,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return;
             }
         };
-        // Capture the peer's advertised MRP config; applied to the session when
-        // the handshake completes (MRP-2, see `handle_connect_done`).
+        // The peer's advertised MRP config now sizes the HANDSHAKE's retransmits
+        // as well as the resulting session's (MRP-2). It is still stashed for
+        // the failure paths that clear it, but the value the handshake and the
+        // session use travels with the task.
         self.connect_mrp.insert(node_id, peer_mrp);
         // Reserve the local session id the handshake advertises in Sigma1; the
         // actor registers the finished session under it on completion.
@@ -3648,6 +3667,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             roots,
             now,
             peer,
+            peer_mrp,
+            matter_transport::MrpProvenance::PeerAdvertised,
             inbound_rx,
             outbound_tx,
             done_tx,
@@ -3677,7 +3698,12 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// verbs (their `session_for` now cache-hits), or on failure resolve each
     /// parked verb's caller with the error.
     async fn handle_connect_done(&mut self, done: ConnectCompletion) {
-        let ConnectCompletion { node_id, result } = done;
+        let ConnectCompletion {
+            node_id,
+            result,
+            peer_mrp,
+            provenance,
+        } = done;
         // The handshake is over: stop routing the peer's datagrams to the task.
         self.connect_inbound.remove(&node_id);
         self.connect_routes.retain(|_, n| *n != node_id);
@@ -3713,18 +3739,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .resumption_record
             .as_ref()
             .and_then(|r| crate::resumption::serialize_record(r).ok());
-        // Apply the peer's advertised MRP config captured at spawn time (MRP-2);
-        // default if the connect predates the capture (e.g. a recovery path).
-        // The provenance is recorded rather than inferred so the diagnostic
-        // emitted at registration cannot claim a peer-sized window we did not
-        // actually get.
-        let (peer_mrp, provenance) = match self.connect_mrp.remove(&node_id) {
-            Some(cfg) => (cfg, matter_transport::MrpProvenance::PeerAdvertised),
-            None => (
-                matter_transport::MrpConfig::default(),
-                matter_transport::MrpProvenance::Unknown,
-            ),
-        };
+        // The config the handshake was actually sized to travels back on the
+        // completion, so this no longer re-reads `connect_mrp` and cannot
+        // silently substitute a default when a resolve expiry or a forget
+        // cleared the entry mid-flight. Drop the stashed copy.
+        self.connect_mrp.remove(&node_id);
         let sid = self.sessions.register_case_with_mrp(
             &output,
             SessionRole::Initiator,

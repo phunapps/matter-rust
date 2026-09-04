@@ -10,7 +10,7 @@
 use std::net::SocketAddr;
 
 use matter_crypto::pase::PaseProver;
-use matter_transport::{PeerHint, SessionId, SessionManager, SessionRole};
+use matter_transport::{MrpConfig, PeerHint, SessionId, SessionManager, SessionRole};
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
@@ -89,7 +89,15 @@ pub async fn run_pase_with<T: AsyncDatagram>(
     let mut prover = PaseProver::new_with_negotiation(passcode, local.0)?;
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — devices drop session-establishment frames without them.
-    let mut exch = UnsecuredExchange::new_ephemeral_with(random_exchange_id()?, reliability)?;
+    // PASE talks to a device in an open commissioning window, which is actively
+    // advertising and therefore awake, so the spec defaults are the right size.
+    // (The BLE path runs TransportReliability::TransportProvides and does not
+    // retransmit at all -- MRP is off over BTP, spec §4.12.)
+    let mut exch = UnsecuredExchange::new_ephemeral_with(
+        random_exchange_id()?,
+        reliability,
+        MrpConfig::for_peer(None, None, None),
+    )?;
 
     let request = prover.start()?;
     let resp = exch

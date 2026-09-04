@@ -23,8 +23,8 @@ use std::time::Duration;
 
 use matter_transport::{
     decode_header, decode_protocol_header, encode_header, encode_protocol_header, DestNodeId,
-    ExchangeFlags, MessageCounter, NodeId, ProtocolHeader, ProtocolId, SecuredMessageFlags,
-    SecuredMessageHeader, SecurityFlags, SessionId,
+    ExchangeFlags, MessageCounter, MrpConfig, NodeId, ProtocolHeader, ProtocolId,
+    SecuredMessageFlags, SecuredMessageHeader, SecurityFlags, SessionId,
 };
 
 use crate::driver::datagram::AsyncDatagram;
@@ -38,6 +38,65 @@ use crate::driver::TransportReliability;
 /// path, where it is the shorter post-ack response window). 30 s matches the
 /// MRP path's post-ack response timeout.
 const UNSECURED_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Cap on the total pre-ack retransmit waiting one handshake may do, across
+/// **all** of its steps.
+///
+/// A peer may advertise `SII` up to the spec ceiling of one hour. Sizing the
+/// handshake to the peer without a bound would let one such advertisement turn
+/// a connect into a multi-hour operation holding a `pending_connects` slot and
+/// every caller parked behind it.
+///
+/// This is a budget for the whole handshake, shared across every
+/// [`UnsecuredExchange::send_and_recv`] call, not a per-step allowance. Per
+/// step it would permit two full windows of pre-ack waiting plus two 30 s
+/// post-ack response deadlines -- roughly three minutes for a single connect.
+/// The controller puts no outer deadline on a spawned connect task
+/// (`RESOLVE_DEADLINE` bounds resolution only), so this constant is the only
+/// thing bounding total connect latency.
+///
+/// 60 s is the largest value an operator still reads as slow rather than hung.
+/// Neither chip nor matter.js imposes such a cap; we do, because a hub must
+/// fail in bounded time and let the caller retry.
+///
+/// Known limitation: this is wrong for a LIT ICD whose advertised `SII` is
+/// minutes long. Those are reached through the check-in protocol, not a plain
+/// CASE connect; if plain connects to one are ever wanted, this is what blocks
+/// them.
+pub const MAX_HANDSHAKE_RETRANSMIT_WINDOW: Duration = Duration::from_secs(60);
+
+/// The pre-ack retransmit schedule for one handshake: the un-jittered wait
+/// after each transmission, in order.
+///
+/// Uses the **idle** base for every entry. A peer we are about to hand a Sigma1
+/// has by definition sent us nothing, so it is not in active mode -- Matter
+/// 1.4 §4.12.2.1, chip's `mLastPeerActivityTime(kZero)` "Start at zero to
+/// default to IDLE state", and matter.js's "when we are the initiator we assume
+/// the node is in idle mode". Growth, margin and threshold come from
+/// [`MrpConfig::retransmit_delay`], so the handshake and the operational layer
+/// cannot drift apart.
+///
+/// Cap rule, in this order:
+/// 1. each individual delay is clamped to `cap`, which bounds even the FIRST
+///    wait -- an `SII` at the spec ceiling would otherwise blow past it alone;
+/// 2. an entry is dropped, and iteration stops, if adding it would take the
+///    running total past `cap` -- unless it would be the only entry.
+///
+/// Invariants: never empty; at most `config.max_transmissions` entries; the sum
+/// never exceeds `cap`.
+fn handshake_schedule(config: &MrpConfig, cap: Duration) -> Vec<Duration> {
+    let mut out = Vec::new();
+    let mut total = Duration::ZERO;
+    for n in 0..config.max_transmissions {
+        let d = config.retransmit_delay(n, false).min(cap);
+        if !out.is_empty() && total + d > cap {
+            break;
+        }
+        total += d;
+        out.push(d);
+    }
+    out
+}
 
 /// `SecureChannel` `MRP Standalone Acknowledgement` opcode (spec §4.12.8).
 /// Devices send one when a reliable message's response is not immediately
@@ -307,9 +366,13 @@ pub struct UnsecuredExchange {
     counter: u32,
     exchange_id: u16,
     source_node_id: u64,
-    retransmit: Duration,
+    /// Un-jittered wait after each transmission, sized to the peer's advertised
+    /// `SII` (see [`handshake_schedule`]).
+    schedule: Vec<Duration>,
+    /// Pre-ack retransmit budget remaining for the WHOLE handshake, shared
+    /// across every `send_and_recv` call on this exchange.
+    budget: Duration,
     response_timeout: Duration,
-    max_attempts: u8,
     /// The peer's highest message counter we have already consumed as a real
     /// response on this exchange, if any. Used by `send_and_recv` to drop a
     /// retransmitted prior-step frame (stop-and-wait dedup): the unsecured path
@@ -355,17 +418,43 @@ impl UnsecuredExchange {
     /// and ephemeral source node id. Deterministic — intended for tests and
     /// trace reproduction; production callers use [`Self::new_ephemeral`].
     ///
-    /// Defaults: 300 ms retransmit, 5 attempts (matching MRP's
-    /// `initial_active` / `max_attempts`), 30 s post-ack response timeout.
+    /// Retransmits are sized to the Matter spec defaults (as if the peer
+    /// advertised nothing); 30 s post-ack response timeout. Use
+    /// [`Self::new_with_mrp`] to size them to a peer's advertised `SII`.
     #[must_use]
     pub fn new(initial_counter: u32, exchange_id: u16, source_node_id: u64) -> Self {
+        Self::new_with_mrp(
+            initial_counter,
+            exchange_id,
+            source_node_id,
+            MrpConfig::for_peer(None, None, None),
+        )
+    }
+
+    /// [`Self::new`] with the peer's advertised MRP configuration, sizing the
+    /// handshake's retransmits to the device.
+    ///
+    /// This is the whole point of the type's timing: a Thread sleepy end device
+    /// advertising `SII` in the seconds range needs a handshake window
+    /// proportional to it. The operational layer has always honoured `SII`; the
+    /// handshake that gates the operational layer did not, so the careful sizing
+    /// never got a chance to apply and a device that was merely slow to wake
+    /// looked unreachable.
+    #[must_use]
+    pub fn new_with_mrp(
+        initial_counter: u32,
+        exchange_id: u16,
+        source_node_id: u64,
+        peer_mrp: MrpConfig,
+    ) -> Self {
+        let schedule = handshake_schedule(&peer_mrp, MAX_HANDSHAKE_RETRANSMIT_WINDOW);
         Self {
             counter: initial_counter,
             exchange_id,
             source_node_id,
-            retransmit: Duration::from_millis(300),
+            budget: schedule.iter().copied().sum(),
+            schedule,
             response_timeout: UNSECURED_RESPONSE_TIMEOUT,
-            max_attempts: 5,
             last_consumed_peer_counter: None,
             // Default to the historical UDP/MRP behavior; the BTP path opts in
             // via `new_ephemeral_with` / `run_pase_with`.
@@ -387,7 +476,11 @@ impl UnsecuredExchange {
     /// - [`DriverError::Handshake`] if the system CSPRNG fails (ring reports
     ///   no detail; this is effectively unreachable on supported platforms).
     pub fn new_ephemeral(exchange_id: u16) -> Result<Self, DriverError> {
-        Self::new_ephemeral_with(exchange_id, TransportReliability::Mrp)
+        Self::new_ephemeral_with(
+            exchange_id,
+            TransportReliability::Mrp,
+            MrpConfig::for_peer(None, None, None),
+        )
     }
 
     /// Like [`Self::new_ephemeral`], but with an explicit
@@ -405,6 +498,7 @@ impl UnsecuredExchange {
     pub fn new_ephemeral_with(
         exchange_id: u16,
         reliability: TransportReliability,
+        peer_mrp: MrpConfig,
     ) -> Result<Self, DriverError> {
         let rng = ring::rand::SystemRandom::new();
         let mut bytes = [0u8; 12];
@@ -418,7 +512,7 @@ impl UnsecuredExchange {
         ];
         let counter = (u32::from_le_bytes(counter_seed) & 0x0FFF_FFFF) + 1;
         let source_node_id = (u64::from_le_bytes(node_seed) & 0x0FFF_FFFF_FFFF_FFFF).max(1);
-        let mut exch = Self::new(counter, exchange_id, source_node_id);
+        let mut exch = Self::new_with_mrp(counter, exchange_id, source_node_id, peer_mrp);
         exch.reliability = reliability;
         Ok(exch)
     }
@@ -585,7 +679,16 @@ impl UnsecuredExchange {
             let wait = if transport_provides || acked {
                 self.response_timeout
             } else {
-                self.retransmit
+                // Peer-sized: the wait after the transmissions made so far,
+                // clamped to whatever pre-ack budget this handshake has left.
+                match self.schedule.get(usize::from(attempts)) {
+                    Some(d) => (*d).min(self.budget),
+                    None => {
+                        return Err(DriverError::Timeout {
+                            exchange_id: self.exchange_id,
+                        })
+                    }
+                }
             };
             match tokio::time::timeout(wait, transport.recv_from()).await {
                 Ok(recv) => {
@@ -692,8 +795,12 @@ impl UnsecuredExchange {
                             exchange_id: self.exchange_id,
                         });
                     }
+                    // Spend the wait we just served from the handshake-wide
+                    // budget, so a peer advertising a huge SII cannot stretch
+                    // the connect step by step past the cap.
+                    self.budget = self.budget.saturating_sub(wait);
                     attempts += 1;
-                    if attempts >= self.max_attempts {
+                    if usize::from(attempts) >= self.schedule.len() || self.budget.is_zero() {
                         return Err(DriverError::Timeout {
                             exchange_id: self.exchange_id,
                         });
@@ -1032,7 +1139,8 @@ mod tests {
         let ctrl_addr = ctrl_io.local_addr();
         let mut exch = UnsecuredExchange::new(1, 7, OUR_EPHEMERAL);
         // Keep the retransmit the test waits on short.
-        exch.retransmit = Duration::from_millis(50);
+        exch.schedule = vec![Duration::from_millis(50); 5];
+        exch.budget = Duration::from_millis(250);
 
         let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
 
@@ -1079,6 +1187,160 @@ mod tests {
 
         let (got, ()) = tokio::join!(controller, device);
         assert_eq!(got.unwrap().payload, b"our-sigma2");
+    }
+
+    /// The handshake schedule, sized to what the peer advertises.
+    ///
+    /// A silent peer gets the spec defaults; a Thread sleepy end device
+    /// advertising `SII=2000` gets a window proportional to it; and a peer
+    /// advertising the spec ceiling (1 h) is bounded by the cap rather than
+    /// wedging the connect for hours. Hand-computed, so a change to the formula
+    /// has to update this deliberately.
+    #[test]
+    fn handshake_schedule_is_sized_to_the_peer() {
+        let cap = MAX_HANDSHAKE_RETRANSMIT_WINDOW;
+
+        // Peer advertises nothing → 500 ms idle base, margin 550.
+        let silent = handshake_schedule(&MrpConfig::for_peer(None, None, None), cap);
+        assert_eq!(
+            silent,
+            [550, 550, 880, 1408, 2252].map(Duration::from_millis),
+            "silent peer gets the spec-default schedule"
+        );
+        assert_eq!(silent.iter().sum::<Duration>(), Duration::from_millis(5640));
+
+        // Thread SED advertising SII=2000 → margin 2201.
+        let sleepy = handshake_schedule(
+            &MrpConfig::for_peer(Some(Duration::from_millis(2000)), None, None),
+            cap,
+        );
+        assert_eq!(
+            sleepy,
+            [2201, 2201, 3521, 5634, 9015].map(Duration::from_millis),
+            "a sleepy peer gets a window proportional to its advertised SII"
+        );
+        assert_eq!(
+            sleepy.iter().sum::<Duration>(),
+            Duration::from_millis(22572),
+            "22.6 s, versus the 1.5 s every device used to get"
+        );
+
+        // Spec ceiling: one entry, clamped, and the connect still ends.
+        let ceiling = handshake_schedule(
+            &MrpConfig::for_peer(Some(Duration::from_secs(3600)), None, None),
+            cap,
+        );
+        assert_eq!(ceiling, [cap], "a ceiling SII is clamped to a single wait");
+        assert_eq!(ceiling.iter().sum::<Duration>(), cap);
+    }
+
+    /// Invariants that must hold for ANY advertised `SII`, including the
+    /// degenerate ones: the schedule is never empty (a handshake always gets at
+    /// least one retry), never longer than the transmission budget, and never
+    /// sums past the cap.
+    #[test]
+    fn handshake_schedule_invariants_hold_for_any_sii() {
+        let cap = MAX_HANDSHAKE_RETRANSMIT_WINDOW;
+        // A coarse sweep across the whole legal range, plus the boundaries.
+        let mut sii_ms = vec![0u64, 1, 2, 499, 500, 501, 2000, 59_999, 60_000, 60_001];
+        sii_ms.extend((0..=3_600_000u64).step_by(97_297));
+        for ms in sii_ms {
+            let cfg = MrpConfig::for_peer(Some(Duration::from_millis(ms)), None, None);
+            let sched = handshake_schedule(&cfg, cap);
+            assert!(!sched.is_empty(), "SII={ms}: schedule must never be empty");
+            assert!(
+                sched.len() <= usize::from(cfg.max_transmissions),
+                "SII={ms}: {} entries exceeds max_transmissions",
+                sched.len()
+            );
+            let total: Duration = sched.iter().sum();
+            assert!(total <= cap, "SII={ms}: total {total:?} exceeds the cap");
+        }
+    }
+
+    /// The cap is a budget for the WHOLE handshake, not per step.
+    ///
+    /// Sigma1→Sigma2 and Sigma3→StatusReport each call `send_and_recv`, so a
+    /// per-step allowance would permit two full windows plus two 30 s response
+    /// deadlines -- around three minutes holding a connect slot.
+    #[test]
+    fn the_retransmit_budget_is_shared_across_the_whole_handshake() {
+        let exch = UnsecuredExchange::new_with_mrp(
+            1,
+            7,
+            0xE0E0,
+            MrpConfig::for_peer(Some(Duration::from_secs(30)), None, None),
+        );
+        assert!(
+            exch.budget <= MAX_HANDSHAKE_RETRANSMIT_WINDOW,
+            "the budget starts at the capped schedule total"
+        );
+        assert_eq!(
+            exch.budget,
+            exch.schedule.iter().copied().sum::<Duration>(),
+            "budget and schedule must agree at construction"
+        );
+    }
+
+    /// The point of the whole change: a device that takes 10 s to wake.
+    ///
+    /// With `SII=2000` the handshake window is 22.5 s, so the peer is still
+    /// being retransmitted to when it finally answers. Advertising nothing it
+    /// gets the 5.6 s spec-default window and times out -- which is the correct
+    /// outcome for a device that told us it was fast.
+    ///
+    /// Before this change EVERY peer got a flat 1.5 s regardless of what it
+    /// advertised, so both halves timed out.
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_to_wake_peer_is_reached_when_it_advertises_a_long_sii() {
+        async fn attempt(peer_mrp: MrpConfig) -> Result<UnsecuredMessage, DriverError> {
+            let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+            let dev_addr = dev_io.local_addr();
+            let ctrl_addr = ctrl_io.local_addr();
+            let mut exch = UnsecuredExchange::new_with_mrp(1, 7, 0xE0E0, peer_mrp);
+
+            let device = async {
+                // Asleep. The controller retransmits into the void meanwhile.
+                let (pkt, _) = dev_io.recv_from().await.unwrap();
+                let msg = decode_unsecured(&pkt).unwrap();
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                // Retransmits piled up in the device's inbox meanwhile; they go
+                // unread, exactly as a sleeping radio would leave them.
+                let reply = encode_unsecured_reply(
+                    100,
+                    msg.exchange_id,
+                    0x31,
+                    ProtocolId::SECURE_CHANNEL,
+                    true,
+                    Some(msg.message_counter),
+                    Some(0xE0E0),
+                    b"sigma2",
+                );
+                dev_io.send_to(&reply, ctrl_addr).await.unwrap();
+            };
+            let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x30, 0x31, b"sigma1", None);
+            let (got, ()) = tokio::join!(controller, device);
+            got
+        }
+
+        let sleepy = attempt(MrpConfig::for_peer(
+            Some(Duration::from_millis(2000)),
+            None,
+            None,
+        ))
+        .await;
+        assert_eq!(
+            sleepy
+                .expect("SII=2000 gives a 22.5 s window, well past the device's 10 s")
+                .payload,
+            b"sigma2"
+        );
+
+        let silent = attempt(MrpConfig::for_peer(None, None, None)).await;
+        assert!(
+            matches!(silent, Err(DriverError::Timeout { .. })),
+            "a peer that advertises nothing keeps the 5.6 s spec-default window"
+        );
     }
 
     /// Exchange ids must actually vary. A constant here is what let a late
@@ -1351,9 +1613,9 @@ mod tests {
         let ctrl_addr = ctrl_io.local_addr();
         let mut exch = UnsecuredExchange::new(1, 7, 0xE0E0);
         // Shorten the deadlines so the test is fast.
-        exch.retransmit = Duration::from_millis(30);
+        exch.schedule = vec![Duration::from_millis(30); 2];
+        exch.budget = Duration::from_millis(60);
         exch.response_timeout = Duration::from_millis(60);
-        exch.max_attempts = 2;
 
         let controller = exch.send_and_recv(
             &ctrl_io, dev_addr, 0x22, /* Pake1 */
@@ -1440,9 +1702,12 @@ mod tests {
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
         let dev_addr = dev_io.local_addr();
         let ctrl_addr = ctrl_io.local_addr();
-        let mut exch =
-            UnsecuredExchange::new_ephemeral_with(7, TransportReliability::TransportProvides)
-                .unwrap();
+        let mut exch = UnsecuredExchange::new_ephemeral_with(
+            7,
+            TransportReliability::TransportProvides,
+            MrpConfig::for_peer(None, None, None),
+        )
+        .unwrap();
 
         // Pass an ack the MRP path would normally attach, to prove it is stripped.
         let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", Some(5));
@@ -1486,7 +1751,12 @@ mod tests {
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
         let dev_addr = dev_io.local_addr();
         let ctrl_addr = ctrl_io.local_addr();
-        let mut exch = UnsecuredExchange::new_ephemeral_with(7, TransportReliability::Mrp).unwrap();
+        let mut exch = UnsecuredExchange::new_ephemeral_with(
+            7,
+            TransportReliability::Mrp,
+            MrpConfig::for_peer(None, None, None),
+        )
+        .unwrap();
 
         let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", Some(5));
 
@@ -1531,9 +1801,12 @@ mod tests {
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
         let dev_addr = dev_io.local_addr();
         let ctrl_addr = ctrl_io.local_addr();
-        let mut exch =
-            UnsecuredExchange::new_ephemeral_with(7, TransportReliability::TransportProvides)
-                .unwrap();
+        let mut exch = UnsecuredExchange::new_ephemeral_with(
+            7,
+            TransportReliability::TransportProvides,
+            MrpConfig::for_peer(None, None, None),
+        )
+        .unwrap();
 
         let controller = exch.send_and_recv(&ctrl_io, dev_addr, 0x20, 0x21, b"req", None);
 
@@ -1576,9 +1849,12 @@ mod tests {
         let (ctrl_io, dev_io) = InMemoryDatagram::pair();
         let dev_addr = ctrl_io.local_addr(); // peer arg is ignored by InMemoryDatagram
         let _keep_peer_alive = dev_io; // keep the channel open so recv stays pending
-        let mut exch =
-            UnsecuredExchange::new_ephemeral_with(7, TransportReliability::TransportProvides)
-                .unwrap();
+        let mut exch = UnsecuredExchange::new_ephemeral_with(
+            7,
+            TransportReliability::TransportProvides,
+            MrpConfig::for_peer(None, None, None),
+        )
+        .unwrap();
 
         let start = tokio::time::Instant::now();
         let res = exch
@@ -1602,9 +1878,12 @@ mod tests {
     async fn standalone_ack_noop_under_transport_provides() {
         let (a, b) = InMemoryDatagram::pair();
         let b_addr = b.local_addr();
-        let mut exch =
-            UnsecuredExchange::new_ephemeral_with(9, TransportReliability::TransportProvides)
-                .unwrap();
+        let mut exch = UnsecuredExchange::new_ephemeral_with(
+            9,
+            TransportReliability::TransportProvides,
+            MrpConfig::for_peer(None, None, None),
+        )
+        .unwrap();
         let counter_before = exch.counter;
 
         exch.send_standalone_ack(&a, b_addr, 7).await.unwrap();
