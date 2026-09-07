@@ -226,6 +226,47 @@ impl std::fmt::Debug for FabricEntry {
 }
 
 impl FabricEntry {
+    /// Drop every device's cached CASE resumption record on this fabric,
+    /// returning how many were cleared.
+    ///
+    /// This is chip's `ClearCASEResumptionStateOnFabricChange`
+    /// (`Server.h` / `CHIPDeviceControllerFactory.h`), which fires on fabric
+    /// **update** as well as removal — the shared helper's name says
+    /// `OnFabricChange`, not `OnFabricRemoval`, and that is the design intent.
+    ///
+    /// # When to call it
+    ///
+    /// Any event that changes this fabric's authorization snapshot: the
+    /// commissioner's node id, its CATs, or its operational key. Resumption
+    /// replays a cached snapshot without re-verifying a certificate, and the
+    /// ECDH secret it authenticates with is derived from *ephemeral* keys, so
+    /// it stays valid across a NOC change and cannot detect one. The
+    /// specification requires it for the peer's side, and chip quotes it at
+    /// its own wipe site: *"All internal data reflecting the prior operational
+    /// identifier of the Node within the Fabric SHALL be revoked and
+    /// removed."* A surviving record lets the prior identity be reconstituted
+    /// one round trip later.
+    ///
+    /// # This is defence in depth, not the only defence
+    ///
+    /// Each stored record also carries a fingerprint of the commissioner NOC
+    /// that minted it (see [`crate::resumption`]), and one that no longer
+    /// matches is refused at load. That binding is what makes correctness
+    /// independent of anyone remembering to call this — chip's model needs a
+    /// delegate wired to every mutating path, and matter.js's `SessionManager`
+    /// subscribes only to fabric *deletion*, so its update wipe rests entirely
+    /// on one imperative call site. This method exists so the stale secret
+    /// material is *removed promptly* rather than merely never used.
+    pub fn invalidate_resumption_records(&mut self) -> usize {
+        let mut cleared = 0usize;
+        for dev in &mut self.devices {
+            if dev.resumption_record.take().is_some() {
+                cleared += 1;
+            }
+        }
+        cleared
+    }
+
     /// Reconstruct the RCAC root signer from the stored PKCS#8 key.
     ///
     /// # Errors

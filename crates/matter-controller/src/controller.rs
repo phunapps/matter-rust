@@ -860,11 +860,51 @@ impl MatterController {
             .send(Command::ResumptionRecordFor { node_id, reply })
             .await
             .map_err(|_| Error::ControllerStopped)?;
-        let bytes = rx.await.map_err(|_| Error::ControllerStopped)??;
-        match bytes {
-            Some(b) => Ok(Some(crate::resumption::deserialize_record(&b)?)),
-            None => Ok(None),
-        }
+        rx.await.map_err(|_| Error::ControllerStopped)?
+    }
+
+    /// Drop every cached CASE resumption record on `fabric_id`, returning how
+    /// many were cleared. Saves durably before returning.
+    ///
+    /// # When you must call this
+    ///
+    /// After anything that changes this controller's operational identity on
+    /// the fabric — its node id, its CATs, or its operational key. Resumption
+    /// skips certificate verification and replays a cached authorization
+    /// snapshot instead; the ECDH secret that gates it is derived from
+    /// *ephemeral* keys, so it remains cryptographically valid across an
+    /// identity change and cannot detect one. A surviving record therefore
+    /// lets the retired identity be reconstituted one round trip later, with
+    /// its old node id and its old CATs. The specification requires the
+    /// equivalent for a device: *"All internal data reflecting the prior
+    /// operational identifier of the Node within the Fabric SHALL be revoked
+    /// and removed."*
+    ///
+    /// chip wires this to a `FabricTable` delegate that fires on fabric update
+    /// as well as removal (`ClearCASEResumptionStateOnFabricChange`). This
+    /// library has no fabric-update path yet, so the call is yours to make;
+    /// when one is added it should call this.
+    ///
+    /// # You are not relying on remembering
+    ///
+    /// Each stored record is also bound to a fingerprint of the commissioner
+    /// NOC that minted it, and one that no longer matches is refused at load
+    /// in both roles. Forgetting this call cannot cause a stale record to be
+    /// *used*; calling it is what gets the dead secret material off disk
+    /// promptly.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ControllerStopped`] if the owning task stopped,
+    /// [`Error::Operational`] if no such fabric exists, or a store error if
+    /// the durable save fails.
+    pub async fn invalidate_resumption_records(&self, fabric_id: u64) -> Result<usize, Error> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Command::InvalidateResumptionRecords { fabric_id, reply })
+            .await
+            .map_err(|_| Error::ControllerStopped)?;
+        rx.await.map_err(|_| Error::ControllerStopped)?
     }
 
     /// Store `record` as the CASE resumption record for `node_id` (replacing
@@ -881,12 +921,11 @@ impl MatterController {
         node_id: u64,
         record: &matter_crypto::ResumptionRecord,
     ) -> Result<(), Error> {
-        let record_bytes = crate::resumption::serialize_record(record)?;
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Command::StoreResumptionRecord {
                 node_id,
-                record_bytes,
+                record: Box::new(record.clone()),
                 reply,
             })
             .await

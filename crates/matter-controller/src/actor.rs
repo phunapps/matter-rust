@@ -999,17 +999,34 @@ pub(crate) enum Command {
     /// actor's live in-memory state — not the store — so a record written by a
     /// connect that JUST completed (e.g. the `serve_ota` announce) is visible
     /// without racing the offloaded persist.
+    ///
+    /// Returns the parsed record rather than the stored bytes: the
+    /// commissioner-identity check that decides whether it may be used at all
+    /// is only possible on the actor, which owns the fabric state.
     ResumptionRecordFor {
         node_id: u64,
-        reply: oneshot::Sender<Result<Option<Vec<u8>>, Error>>,
+        reply: oneshot::Sender<Result<Option<matter_crypto::ResumptionRecord>, Error>>,
     },
-    /// Store `record_bytes` as the sole fabric's CASE resumption record for
+    /// Store `record` as the sole fabric's CASE resumption record for
     /// `node_id` (best-effort persist). Invoked from `serve_ota` via the provider
     /// server's `record_sink`, once per completed CASE accept.
+    ///
+    /// Carries the record itself rather than pre-serialized bytes: the
+    /// commissioner-identity fingerprint stamped alongside it is only knowable
+    /// on the actor, which owns the fabric state.
     StoreResumptionRecord {
         node_id: u64,
-        record_bytes: Vec<u8>,
+        // Boxed: a `ResumptionRecord` embeds a full `MatterCertificate`, and an
+        // inline copy would make every `Command` that large.
+        record: Box<matter_crypto::ResumptionRecord>,
         reply: oneshot::Sender<Result<(), Error>>,
+    },
+    /// Drop every cached CASE resumption record on `fabric_id` and durably
+    /// save. See
+    /// [`MatterController::invalidate_resumption_records`](crate::MatterController::invalidate_resumption_records).
+    InvalidateResumptionRecords {
+        fabric_id: u64,
+        reply: oneshot::Sender<Result<usize, Error>>,
     },
     /// Persist an ICD client registration on the sole fabric (replacing any
     /// prior registration for the same node), then durably save. Used by
@@ -2477,20 +2494,27 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 );
             }
             Command::ResumptionRecordFor { node_id, reply } => {
-                let result = self.sole_fabric().map(|f| {
-                    f.devices
-                        .iter()
-                        .find(|d| d.node_id == node_id)
-                        .and_then(|d| d.resumption_record.clone())
-                });
+                // Same identity binding as the outbound path. Here we are the
+                // RESPONDER: the device will present this record's id to our
+                // provider server, and accepting it would revive an
+                // authorization snapshot taken under a commissioner identity
+                // that may no longer hold.
+                let result = self
+                    .sole_fabric()
+                    .map(|f| f.fabric_id)
+                    .map(|fabric_id| self.usable_resumption_record(fabric_id, node_id));
                 let _ = reply.send(result);
             }
             Command::StoreResumptionRecord {
                 node_id,
-                record_bytes,
+                record,
                 reply,
             } => {
-                let _ = reply.send(self.handle_store_resumption_record(node_id, record_bytes));
+                let _ = reply.send(self.handle_store_resumption_record(node_id, &record));
+            }
+            Command::InvalidateResumptionRecords { fabric_id, reply } => {
+                let result = self.handle_invalidate_resumption_records(fabric_id).await;
+                let _ = reply.send(result);
             }
             Command::PersistIcdRegistration {
                 registration,
@@ -3838,10 +3862,14 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // when it later initiates CASE to our provider server it will present
         // exactly this record's id. Serialization failure only costs the
         // fast-path (a later Sigma1-resume falls back to a full handshake).
+        // Stamp the commissioner identity in force right now. A record without
+        // it is unusable on the way back in, so a failure here costs the fast
+        // path and nothing else.
+        let fingerprint = self.commissioner_identity_fingerprint(fabric_id);
         let record_bytes = output
             .resumption_record
             .as_ref()
-            .and_then(|r| crate::resumption::serialize_record(r).ok());
+            .and_then(|r| crate::resumption::serialize_record(r, fingerprint.as_ref()).ok());
         // The config the handshake was actually sized to travels back on the
         // completion, so this no longer re-reads `connect_mrp` and cannot
         // silently substitute a default when a resolve expiry or a forget
@@ -4186,8 +4214,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    /// Replace the stored CASE resumption record for `node_id` on the sole
-    /// fabric (best-effort persist). See [`Command::StoreResumptionRecord`].
     /// A resumption attempt failed its `Sigma2_Resume` MIC: drop the stored
     /// record and immediately re-run the connect as a full handshake.
     ///
@@ -4253,6 +4279,21 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         self.spawn_connect(fabric_id, node_id);
     }
 
+    /// SHA-256 of the commissioner NOC currently in force on `fabric_id`, or
+    /// `None` if the fabric is unknown or its NOC will not re-serialize.
+    ///
+    /// `None` is always safe: on the write path the record is stored without a
+    /// fingerprint (and so is never reused), and on the read path the record is
+    /// rejected. Both outcomes cost only the resumption fast path.
+    fn commissioner_identity_fingerprint(&self, fabric_id: u64) -> Option<[u8; 32]> {
+        let fabric = self
+            .state
+            .fabrics
+            .iter()
+            .find(|f| f.fabric_id == fabric_id)?;
+        crate::resumption::identity_fingerprint(&fabric.commissioner.noc).ok()
+    }
+
     /// Load the stored CASE resumption record for `node_id` on `fabric_id`,
     /// ready to be offered in Sigma1.
     ///
@@ -4269,6 +4310,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         fabric_id: u64,
         node_id: u64,
     ) -> Option<matter_crypto::ResumptionRecord> {
+        self.usable_resumption_record(fabric_id, node_id)
+    }
+
+    /// The stored record for `node_id` on `fabric_id`, if it exists, parses,
+    /// has not expired, and was minted under the commissioner identity
+    /// currently in force. Used by both roles — offering one in Sigma1 and
+    /// seeding the provider server that accepts one.
+    fn usable_resumption_record(
+        &self,
+        fabric_id: u64,
+        node_id: u64,
+    ) -> Option<matter_crypto::ResumptionRecord> {
         let bytes = self
             .state
             .fabrics
@@ -4279,7 +4332,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .find(|d| d.node_id == node_id)?
             .resumption_record
             .as_ref()?;
-        let record = match crate::resumption::deserialize_record(bytes) {
+        let stored = match crate::resumption::deserialize_record(bytes) {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(
@@ -4291,6 +4344,22 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 return None;
             }
         };
+        // Refuse a record minted under a commissioner identity that no longer
+        // holds. Resumption replays a cached authorization snapshot without
+        // re-verifying a certificate, and the ECDH secret it authenticates with
+        // survives a NOC change unchanged — so nothing in the handshake itself
+        // can notice that the identity moved. See `crate::resumption`.
+        let current = self.commissioner_identity_fingerprint(fabric_id)?;
+        if !stored.is_usable_under(&current) {
+            tracing::debug!(
+                target: "matter_controller::actor",
+                node_id,
+                "stored CASE resumption record was minted under a different commissioner \
+                 identity; connecting with a full handshake"
+            );
+            return None;
+        }
+        let record = stored.record;
         // Nothing sets `expires_at` today, but honour it if it ever appears
         // rather than offering a record we already consider dead.
         if let Some(expiry) = record.expires_at {
@@ -4308,13 +4377,52 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         Some(record)
     }
 
+    /// Drop every cached CASE resumption record on `fabric_id`, then save
+    /// **durably** — unlike the best-effort persist used for record rotation.
+    ///
+    /// The asymmetry is deliberate. Losing a rotation costs a fast path;
+    /// losing an invalidation leaves stale authorization snapshots on disk
+    /// after the caller was told they were gone, which is the whole failure
+    /// this method exists to prevent.
+    async fn handle_invalidate_resumption_records(
+        &mut self,
+        fabric_id: u64,
+    ) -> Result<usize, Error> {
+        let Some(fabric) = self
+            .state
+            .fabrics
+            .iter_mut()
+            .find(|f| f.fabric_id == fabric_id)
+        else {
+            return Err(Error::Operational(format!(
+                "no fabric {fabric_id:#x} to invalidate resumption records on"
+            )));
+        };
+        let cleared = fabric.invalidate_resumption_records();
+        if cleared > 0 {
+            tracing::info!(
+                target: "matter_controller::actor",
+                fabric_id,
+                cleared,
+                "invalidated cached CASE resumption records"
+            );
+        }
+        let job = self.durable_save_inputs()?;
+        save_offloaded(job).await?;
+        Ok(cleared)
+    }
+
+    /// Replace the stored CASE resumption record for `node_id` on the sole
+    /// fabric (best-effort persist). See [`Command::StoreResumptionRecord`].
     fn handle_store_resumption_record(
         &mut self,
         node_id: u64,
-        record_bytes: Vec<u8>,
+        record: &matter_crypto::ResumptionRecord,
     ) -> Result<(), Error> {
         let fabric = self.sole_fabric()?;
         let fabric_id = fabric.fabric_id;
+        let fingerprint = self.commissioner_identity_fingerprint(fabric_id);
+        let record_bytes = crate::resumption::serialize_record(record, fingerprint.as_ref())?;
         let Some(dev) = self
             .state
             .fabrics
@@ -8542,6 +8650,7 @@ mod tests {
         let fabric = &mut state.fabrics[0];
         let fabric_id = fabric.fabric_id;
         let controller_noc = fabric.commissioner.noc.clone();
+        let controller_noc_for_fingerprint = controller_noc.clone();
         let controller_node_id = fabric.commissioner.node_id;
 
         let ctrl_record = ResumptionRecord {
@@ -8560,7 +8669,12 @@ mod tests {
             .iter_mut()
             .find(|d| d.node_id == device_node_id)
             .expect("device entry");
-        dev.resumption_record = Some(crate::resumption::serialize_record(&ctrl_record).unwrap());
+        // Stamp the identity currently in force, so the seeded record is one
+        // the controller will actually accept.
+        let fingerprint =
+            crate::resumption::identity_fingerprint(&controller_noc_for_fingerprint).unwrap();
+        dev.resumption_record =
+            Some(crate::resumption::serialize_record(&ctrl_record, Some(&fingerprint)).unwrap());
         store
             .save(&crate::snapshot::serialize(&state).unwrap())
             .unwrap();
@@ -8688,6 +8802,162 @@ mod tests {
             "the responder rotates the id on every accept"
         );
         device.await.unwrap();
+    }
+
+    /// A record minted under a commissioner identity that no longer holds must
+    /// NOT be offered — the connect falls back to a full handshake instead.
+    ///
+    /// This is the guarantee that does not depend on anyone remembering to
+    /// call the wipe. Resumption replays a cached authorization snapshot
+    /// without re-verifying a certificate, and the ECDH secret that gates it
+    /// is derived from ephemeral keys, so it stays valid across a NOC change
+    /// and the handshake itself can never notice the identity moved.
+    #[tokio::test]
+    async fn a_record_from_a_superseded_identity_is_not_offered() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device_noc = device_creds.noc.clone();
+        let _dev_record = seed_resumption_record(&store, device_node_id, &device_noc);
+
+        // Re-stamp the stored record with a fingerprint that is NOT the
+        // commissioner's — the on-disk shape left behind by an identity change.
+        let mut state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        {
+            let fabric = &mut state.fabrics[0];
+            let dev = fabric
+                .devices
+                .iter_mut()
+                .find(|d| d.node_id == device_node_id)
+                .unwrap();
+            let stored =
+                crate::resumption::deserialize_record(dev.resumption_record.as_ref().unwrap())
+                    .unwrap();
+            dev.resumption_record = Some(
+                crate::resumption::serialize_record(&stored.record, Some(&[0xEE; 32])).unwrap(),
+            );
+        }
+        store
+            .save(&crate::snapshot::serialize(&state).unwrap())
+            .unwrap();
+
+        // A device that would PANIC on a resumption Sigma1: the assertion is
+        // that it never sees one.
+        let device = tokio::spawn(run_loopback_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            1,
+            b"pong".to_vec(),
+            false,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let resp = controller
+            .node(device_node_id)
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("must connect with a full handshake");
+        assert_eq!(resp, b"pong");
+        // `run_loopback_device` asserts `Sigma1Outcome::NewSession`, so a
+        // resumption attempt would have panicked the device task.
+        device.await.unwrap();
+    }
+
+    /// The explicit wipe: every device's record on the fabric is cleared, the
+    /// count is reported, and the change is durable.
+    #[tokio::test]
+    async fn invalidate_resumption_records_clears_the_fabric() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io: _dev_io,
+            ctrl_addr: _,
+            discovery,
+            device_creds,
+            device_roots: _,
+            device_node_id,
+        } = loopback_harness();
+
+        let device_noc = device_creds.noc.clone();
+        let _dev_record = seed_resumption_record(&store, device_node_id, &device_noc);
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric_id = state.fabrics[0].fabric_id;
+
+        let controller = crate::controller::MatterController::with_components(
+            store.clone(),
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        assert!(
+            controller
+                .resumption_record_for(device_node_id)
+                .await
+                .unwrap()
+                .is_some(),
+            "precondition: the seeded record is usable"
+        );
+
+        let cleared = controller
+            .invalidate_resumption_records(fabric_id)
+            .await
+            .expect("invalidate");
+        assert_eq!(cleared, 1, "one device held a record");
+
+        assert!(
+            controller
+                .resumption_record_for(device_node_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the record must be gone from live state"
+        );
+        // And gone from disk: the wipe saves durably, unlike the best-effort
+        // persist used for record rotation.
+        let persisted = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        assert!(
+            persisted.fabrics[0].devices[0].resumption_record.is_none(),
+            "the wipe must reach disk, not just memory"
+        );
+
+        // Idempotent: a second wipe clears nothing and does not error.
+        assert_eq!(
+            controller
+                .invalidate_resumption_records(fabric_id)
+                .await
+                .expect("second invalidate"),
+            0
+        );
+        // An unknown fabric is an error, not a silent success.
+        assert!(controller
+            .invalidate_resumption_records(fabric_id ^ 0xFFFF)
+            .await
+            .is_err());
     }
 
     /// A `Sigma2_Resume` whose MIC does not verify must cost one wasted round
