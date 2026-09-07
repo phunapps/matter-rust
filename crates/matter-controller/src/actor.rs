@@ -14301,6 +14301,10 @@ mod tests {
     ///
     /// The values are the real Eve Door & Window figures (SII 3300 / SAI 1100 /
     /// SAT 4000), whose 37238 ms window reproduces by hand.
+    // `ProviderServer`'s OTA serve path is what actually exercises a
+    // responder-role session, and it needs the `ota` feature's dependencies —
+    // the same gate the neighbouring provider tests use.
+    #[cfg(feature = "ota")]
     #[tokio::test]
     async fn responder_role_session_is_sized_to_the_initiators_sigma1_params() {
         let Harness {
@@ -14328,7 +14332,7 @@ mod tests {
             .with_session_active_threshold_ms(4000);
 
         let server = tokio::spawn(async move {
-            let mut ps = crate::ProviderServer::new(
+            let mut ps = crate::provider_server::ProviderServer::new(
                 dev_io,
                 vec![provider_creds],
                 provider_roots,
@@ -14377,6 +14381,7 @@ mod tests {
     /// `params` advertised in Sigma1. Trimmed to what the sizing test needs:
     /// it runs the handshake to the provider's success `StatusReport` and acks
     /// it, so the provider's accept completes.
+    #[cfg(feature = "ota")]
     #[allow(clippy::too_many_arguments)] // Mirrors the CASE parameter list, as `full_case_handshake` does.
     async fn drive_sigma1_with_params(
         io: &matter_commissioning::driver::InMemoryDatagram,

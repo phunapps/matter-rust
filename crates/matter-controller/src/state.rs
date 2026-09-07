@@ -250,7 +250,7 @@ impl FabricEntry {
     /// # This is defence in depth, not the only defence
     ///
     /// Each stored record also carries a fingerprint of the commissioner NOC
-    /// that minted it (see [`crate::resumption`]), and one that no longer
+    /// that minted it (the private `crate::resumption` module), and one that no longer
     /// matches is refused at load. That binding is what makes correctness
     /// independent of anyone remembering to call this — chip's model needs a
     /// delegate wired to every mutating path, and matter.js's `SessionManager`
