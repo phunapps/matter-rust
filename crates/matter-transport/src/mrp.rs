@@ -157,6 +157,53 @@ impl MrpConfig {
         }
     }
 
+    /// Merge a peer's CASE/PASE-advertised
+    /// [`SessionParameters`](matter_crypto::SessionParameters) over this
+    /// config, overriding **only the fields the peer actually sent** and
+    /// clamping each to its spec bound.
+    ///
+    /// # Why merge rather than replace
+    ///
+    /// The two reference implementations disagree here, and the disagreement
+    /// is observable. chip decodes field by field into the config it already
+    /// holds (`PairingSession::DecodeSessionParametersIfPresent`), so a peer
+    /// that sends only `SII` leaves the existing `SAI`/`SAT` untouched.
+    /// matter.js's `set timingParameters` replaces the triple wholesale, so
+    /// the same message resets `SAI`/`SAT` to matter.js's own defaults.
+    ///
+    /// We follow chip. On the initiator side `self` is the config derived from
+    /// the peer's operational mDNS TXT record — real evidence about that
+    /// device — and discarding it because Sigma2 happened to omit one field
+    /// would be a strict loss of information.
+    ///
+    /// On the responder side there is no mDNS record to start from, so the
+    /// caller starts from [`MrpConfig::default`] (the spec defaults) and this
+    /// reduces to exactly [`for_peer`](Self::for_peer) over the same three
+    /// values.
+    ///
+    /// Retransmit *shape* (`backoff_factor`, `max_transmissions`,
+    /// `backoff_jitter`) and the local `standalone_ack_deadline` are never
+    /// peer-controlled and are carried through untouched — the same rule
+    /// [`for_peer`](Self::for_peer) applies.
+    #[must_use]
+    pub fn merge_session_params(self, params: &matter_crypto::SessionParameters) -> Self {
+        let ms = |v: u32| Duration::from_millis(u64::from(v));
+        Self {
+            initial_idle: params
+                .session_idle_interval_ms
+                .map_or(self.initial_idle, |v| ms(v).min(MAX_RETRANS_INTERVAL)),
+            initial_active: params
+                .session_active_interval_ms
+                .map_or(self.initial_active, |v| ms(v).min(MAX_RETRANS_INTERVAL)),
+            idle_threshold: params
+                .session_active_threshold_ms
+                .map_or(self.idle_threshold, |v| {
+                    Duration::from_millis(u64::from(v)).min(MAX_ACTIVE_THRESHOLD)
+                }),
+            ..self
+        }
+    }
+
     /// Un-jittered total time a reliable message is given before it expires:
     /// the sum of the full idle-base retransmit schedule.
     ///
@@ -1078,6 +1125,106 @@ mod tests {
     #[test]
     fn default_matches_spec_defaults() {
         assert_eq!(MrpConfig::default(), MrpConfig::for_peer(None, None, None));
+    }
+
+    /// Merging over `Default` must be indistinguishable from `for_peer` with
+    /// the same three values — the responder role's whole use of this method.
+    /// If these ever diverge, a responder-role session and an initiator-role
+    /// session to the same peer get different windows for no stated reason.
+    #[test]
+    fn merge_over_default_equals_for_peer() {
+        let params = matter_crypto::SessionParameters::new()
+            .with_session_idle_interval_ms(3300)
+            .with_session_active_interval_ms(1100)
+            .with_session_active_threshold_ms(4000);
+        assert_eq!(
+            MrpConfig::default().merge_session_params(&params),
+            MrpConfig::for_peer(
+                Some(Duration::from_millis(3300)),
+                Some(Duration::from_millis(1100)),
+                Some(Duration::from_secs(4)),
+            )
+        );
+    }
+
+    /// An empty advertisement must change nothing. "The peer sent no
+    /// parameters" and "the peer sent the spec defaults" are different facts;
+    /// only the second should overwrite a discovery-derived config.
+    #[test]
+    fn merging_an_empty_advertisement_is_a_no_op() {
+        let discovered = MrpConfig::for_peer(
+            Some(Duration::from_millis(3300)),
+            Some(Duration::from_millis(1100)),
+            Some(Duration::from_secs(4)),
+        );
+        assert_eq!(
+            discovered.merge_session_params(&matter_crypto::SessionParameters::new()),
+            discovered
+        );
+    }
+
+    /// This is the chip-vs-matter.js divergence, pinned. A peer sending only
+    /// `SII` must leave the mDNS-derived `SAI`/`SAT` intact (chip's field-by-
+    /// field decode), NOT reset them to the spec defaults (matter.js's
+    /// wholesale `set timingParameters`).
+    #[test]
+    fn a_partial_advertisement_leaves_unsent_fields_alone() {
+        let discovered = MrpConfig::for_peer(
+            Some(Duration::from_millis(3300)),
+            Some(Duration::from_millis(1100)),
+            Some(Duration::from_millis(300)),
+        );
+        let merged = discovered.merge_session_params(
+            &matter_crypto::SessionParameters::new().with_session_idle_interval_ms(1800),
+        );
+        assert_eq!(merged.initial_idle, Duration::from_millis(1800));
+        assert_eq!(
+            merged.initial_active,
+            Duration::from_millis(1100),
+            "SAI was not advertised in Sigma2; the mDNS value must survive"
+        );
+        assert_eq!(
+            merged.idle_threshold,
+            Duration::from_millis(300),
+            "SAT was not advertised in Sigma2; the mDNS value must survive"
+        );
+    }
+
+    /// Peer-supplied values are clamped to the same spec bounds `for_peer`
+    /// applies. Neither chip nor matter.js clamps these (matter.js documents
+    /// them as "accepted unbounded"), so this is a deliberate hardening: an
+    /// advertised interval is attacker-influencable input on a hostile LAN.
+    #[test]
+    fn merged_values_are_clamped_to_spec_bounds() {
+        let merged = MrpConfig::default().merge_session_params(
+            &matter_crypto::SessionParameters::new()
+                .with_session_idle_interval_ms(u32::MAX)
+                .with_session_active_threshold_ms(u16::MAX),
+        );
+        assert_eq!(merged.initial_idle, Duration::from_secs(3600));
+        assert_eq!(merged.idle_threshold, Duration::from_millis(65_535));
+    }
+
+    /// Retransmit shape is never peer-controlled.
+    #[test]
+    fn merge_never_touches_the_retransmit_shape() {
+        let base = MrpConfig::default();
+        let merged = base.merge_session_params(
+            &matter_crypto::SessionParameters::new().with_session_idle_interval_ms(1800),
+        );
+        assert_eq!(merged.max_transmissions, base.max_transmissions);
+        // Compare the float fields bitwise: they are carried through verbatim,
+        // never recomputed, so bit equality is the exact property under test
+        // and it keeps `clippy::float_cmp` satisfied.
+        assert_eq!(
+            merged.backoff_factor.to_bits(),
+            base.backoff_factor.to_bits()
+        );
+        assert_eq!(
+            merged.backoff_jitter.to_bits(),
+            base.backoff_jitter.to_bits()
+        );
+        assert_eq!(merged.standalone_ack_deadline, base.standalone_ack_deadline);
     }
 
     /// State the resulting window somewhere a reader will find it.
