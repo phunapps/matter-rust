@@ -1421,6 +1421,35 @@ struct ConnectCompletion {
     peer_mrp: matter_transport::MrpConfig,
     /// Whether `peer_mrp` came from the device's own TXT record.
     provenance: matter_transport::MrpProvenance,
+    /// True when this attempt's Sigma1 carried resumption fields. Read only on
+    /// the failure path, to tell "the stored record is unusable" apart from a
+    /// genuine connect failure.
+    attempted_resumption: bool,
+    /// The device's own `SessionParameters` if it sent any, refining
+    /// `peer_mrp` for the registered session. More trustworthy than the mDNS
+    /// TXT record, which can be stale, cached, or absent.
+    peer_session_params: Option<matter_crypto::SessionParameters>,
+}
+
+/// True when `err` is specifically "the responder proved a different shared
+/// secret for the resumption id we offered".
+///
+/// Matched structurally through the error chain rather than on a string: the
+/// variant travels `matter_crypto::Error` -> `DriverError::Crypto` ->
+/// `Error::Driver`, and both intermediate enums are `#[non_exhaustive]`, so a
+/// wildcard arm is required but the path itself is stable.
+///
+/// Deliberately narrow. `EphemeralKeyGenerationFailed` also covers HKDF
+/// failures inside the resume-key derivation and must NOT be treated as a bad
+/// record — discarding usable resumption state on an unrelated internal error
+/// would be a silent, self-inflicted performance regression.
+fn is_resumption_mac_mismatch(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Driver(matter_commissioning::driver::DriverError::Crypto(
+            matter_crypto::Error::ResumptionMacMismatch
+        ))
+    )
 }
 
 /// A connect whose device has not been seen on mDNS yet, parked on the actor's
@@ -1646,33 +1675,95 @@ async fn run_connect_task(
     peer: SocketAddr,
     peer_mrp: matter_transport::MrpConfig,
     provenance: matter_transport::MrpProvenance,
+    resumption_record: Option<matter_crypto::ResumptionRecord>,
     inbound_rx: mpsc::Receiver<(Vec<u8>, SocketAddr)>,
     outbound_tx: mpsc::Sender<crate::handshake_socket::HandshakeOutbound>,
     done_tx: mpsc::Sender<ConnectCompletion>,
 ) {
     let socket = crate::handshake_socket::HandshakeSocket::new(node_id, outbound_tx, inbound_rx);
-    let result = matter_commissioning::driver::run_case_establish(
-        &socket,
-        peer,
+    let attempted_resumption = resumption_record.is_some();
+    let mut opts = matter_commissioning::driver::CaseEstablishOptions::new(
         local_session_id,
         credentials,
         roots,
         node_id,
         fabric_id,
         now,
-        peer_mrp,
     )
-    .await
-    .map(|output| (output, peer))
-    .map_err(Error::from);
+    .with_peer_mrp(peer_mrp)
+    .with_session_params(local_session_params());
+    if let Some(record) = resumption_record {
+        opts = opts.with_resumption_record(record);
+    }
+    let established = matter_commissioning::driver::run_case_establish_with(&socket, peer, opts)
+        .await
+        .map_err(Error::from);
+
+    let (result, peer_session_params) = match established {
+        Ok(e) => {
+            if e.resumed {
+                tracing::debug!(
+                    target: "matter_controller::actor",
+                    node_id,
+                    "CASE resumed from a stored record (no Sigma3)"
+                );
+            }
+            let params = e.peer_session_params;
+            (Ok((e.output, peer)), params)
+        }
+        Err(e) => (Err(e), None),
+    };
     let _ = done_tx
         .send(ConnectCompletion {
             node_id,
             result,
             peer_mrp,
             provenance,
+            attempted_resumption,
+            peer_session_params,
         })
         .await;
+}
+
+/// What this controller advertises about itself in Sigma1's
+/// `initiatorSessionParams` (context tag 5).
+///
+/// Both reference implementations always send this; chip treats a missing
+/// local config as a hard error. Omitting it is conformant but costs us — the
+/// device then sizes its own Sigma2/Sigma3-ack retransmits to the spec
+/// defaults rather than to us, and there is no mDNS channel for a
+/// *commissioner's* MRP parameters.
+///
+/// Each claim is what we actually implement, not what would look best:
+///
+/// - **MRP intervals**: our own `MrpConfig::default()`, i.e. the spec's
+///   500/300/4000. chip likewise sends `GetLocalMRPConfig()` — its own
+///   timings, never the peer's.
+/// - **`interaction_model_revision`**: sourced from
+///   [`matter_interaction::IM_REVISION`] so it cannot drift from the value we
+///   put at IM context tag `0xFF`. Advertising one number while emitting
+///   another is a self-contradiction a peer may act on.
+/// - **`data_model_revision` 19**: matter.js pairs Data Model 19 with
+///   specification 1.4, and chip also reports 19.
+/// - **`specification_version` `0x0104_0000`** (Matter 1.4.0): what the
+///   protocol implementation here targets. Our cluster definitions are
+///   generated from a 1.5.1 model dump, but over-claiming invites a peer to
+///   enable behaviour we do not handle, whereas under-claiming only makes it
+///   down-shift — the safe direction.
+/// - **`max_paths_per_invoke` 1**: we do not batch invokes.
+fn local_session_params() -> matter_crypto::SessionParameters {
+    let mrp = matter_transport::MrpConfig::default();
+    let ms = |d: std::time::Duration| u32::try_from(d.as_millis()).unwrap_or(u32::MAX);
+    matter_crypto::SessionParameters::new()
+        .with_session_idle_interval_ms(ms(mrp.initial_idle))
+        .with_session_active_interval_ms(ms(mrp.initial_active))
+        .with_session_active_threshold_ms(
+            u16::try_from(mrp.idle_threshold.as_millis()).unwrap_or(u16::MAX),
+        )
+        .with_data_model_revision(19)
+        .with_interaction_model_revision(u16::from(matter_interaction::IM_REVISION))
+        .with_specification_version(0x0104_0000)
+        .with_max_paths_per_invoke(1)
 }
 
 /// A completed spawned commission, delivered back to the actor loop
@@ -3655,6 +3746,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // Reserve the local session id the handshake advertises in Sigma1; the
         // actor registers the finished session under it on completion.
         let local_session_id = self.sessions.allocate_session_id().0;
+        // Load the stored resumption record, if this node has one. Attempting
+        // whenever a record exists is what both references do — no capability
+        // probe, no age check. A record the device no longer holds costs one
+        // declined Sigma1 and the full handshake proceeds on the same exchange.
+        let resumption_record = self.resumption_record_for_connect(fabric_id, node_id);
         let (inbound_tx, inbound_rx) = mpsc::channel(16);
         self.connect_inbound.insert(node_id, inbound_tx);
         let outbound_tx = self.connect_outbound_tx.clone();
@@ -3669,6 +3765,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             peer,
             peer_mrp,
             matter_transport::MrpProvenance::PeerAdvertised,
+            resumption_record,
             inbound_rx,
             outbound_tx,
             done_tx,
@@ -3703,6 +3800,8 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             result,
             peer_mrp,
             provenance,
+            attempted_resumption,
+            peer_session_params,
         } = done;
         // The handshake is over: stop routing the peer's datagrams to the task.
         self.connect_inbound.remove(&node_id);
@@ -3711,6 +3810,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let (output, peer) = match result {
             Ok(ok) => ok,
             Err(e) => {
+                if attempted_resumption && is_resumption_mac_mismatch(&e) {
+                    self.recover_from_unusable_resumption_record(node_id);
+                    return;
+                }
                 self.fail_connect_waiters(node_id, &e);
                 return;
             }
@@ -3744,6 +3847,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // silently substitute a default when a resolve expiry or a forget
         // cleared the entry mid-flight. Drop the stashed copy.
         self.connect_mrp.remove(&node_id);
+        // The device's own `SessionParameters`, if it sent any, override the
+        // mDNS-derived values field by field: an advertisement can be stale,
+        // cached, or absent, whereas this is what the device said during this
+        // handshake. Fields it omitted keep the mDNS value (chip's merge, not
+        // matter.js's wholesale replace).
+        let (peer_mrp, provenance) = match peer_session_params {
+            Some(p) => (
+                peer_mrp.merge_session_params(&p),
+                matter_transport::MrpProvenance::PeerAdvertised,
+            ),
+            None => (peer_mrp, provenance),
+        };
         let sid = self.sessions.register_case_with_mrp(
             &output,
             SessionRole::Initiator,
@@ -4073,6 +4188,126 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Replace the stored CASE resumption record for `node_id` on the sole
     /// fabric (best-effort persist). See [`Command::StoreResumptionRecord`].
+    /// A resumption attempt failed its `Sigma2_Resume` MIC: drop the stored
+    /// record and immediately re-run the connect as a full handshake.
+    ///
+    /// The waiters are deliberately NOT failed — from the caller's point of
+    /// view this is one connect that took a little longer, not a failure. The
+    /// retry cannot recur: the record is gone, so the next Sigma1 carries no
+    /// resumption fields and cannot draw a `Sigma2_Resume` at all.
+    ///
+    /// # Why invalidate, when neither reference does
+    ///
+    /// chip fails the session establishment and keeps the record
+    /// (`CASESession::HandleSigma2Resume`); matter.js throws and keeps it
+    /// (`CaseClient`). Neither cites spec text, and the usual argument for
+    /// keeping it is that deleting opens a denial-of-service vector — an
+    /// attacker spoofing a bad-MIC `Sigma2_Resume` to wipe our state.
+    ///
+    /// That argument does not survive the threat model. Forging a
+    /// `Sigma2_Resume` requires the 64-bit ephemeral initiator node id and the
+    /// 16-bit exchange id of a handshake in flight; anyone who can supply
+    /// those can equally forge a garbage `Sigma2` and break ANY handshake,
+    /// resumption or not. Deleting opens no new surface. And the direction is
+    /// backwards: keeping the record lets the attacker replay the same forgery
+    /// on every retry, forever, whereas dropping it means the next Sigma1 is
+    /// plain and a forged `Sigma2_Resume` is then an unsolicited opcode the
+    /// exchange filters out. Invalidation terminates the wedge; retention
+    /// sustains it.
+    ///
+    /// The benign case — a peer holding our resumption id against a different
+    /// secret — is unreachable honestly (the responder validates the Sigma1
+    /// resume MIC first and declines to a full handshake) but wedges forever
+    /// if it ever occurs, and this is the only escape.
+    ///
+    /// This does not contradict the standing decision in `provider_server`
+    /// that "records are not invalidated on CASE failure". That covers the
+    /// RESPONDER declining an unknown id, which genuinely self-heals in one
+    /// round trip. An initiator holding a record the responder has already
+    /// rotated away is pure loss on every retry.
+    fn recover_from_unusable_resumption_record(&mut self, node_id: u64) {
+        tracing::warn!(
+            target: "matter_controller::actor",
+            node_id,
+            "Sigma2_Resume failed its MIC; dropping the stored resumption record \
+             and reconnecting with a full handshake"
+        );
+        let fabric_id = match self.sole_fabric() {
+            Ok(f) => f.fabric_id,
+            Err(e) => {
+                self.fail_connect_waiters(node_id, &e);
+                return;
+            }
+        };
+        if let Some(fabric) = self
+            .state
+            .fabrics
+            .iter_mut()
+            .find(|f| f.fabric_id == fabric_id)
+        {
+            if let Some(dev) = fabric.devices.iter_mut().find(|d| d.node_id == node_id) {
+                dev.resumption_record = None;
+            }
+        }
+        self.persist_best_effort();
+        self.spawn_connect(fabric_id, node_id);
+    }
+
+    /// Load the stored CASE resumption record for `node_id` on `fabric_id`,
+    /// ready to be offered in Sigma1.
+    ///
+    /// Returns `None` when the device has no record, when the stored bytes fail
+    /// to deserialize, or when the record has an expiry that has passed.
+    ///
+    /// **A load failure is never fatal.** Every outcome here costs at most the
+    /// fast path: the connect proceeds as a full handshake, which is what it did
+    /// before resumption was wired up at all. A corrupt record is therefore
+    /// logged and dropped rather than surfaced, so a bad byte in persisted state
+    /// cannot make a device unreachable.
+    fn resumption_record_for_connect(
+        &self,
+        fabric_id: u64,
+        node_id: u64,
+    ) -> Option<matter_crypto::ResumptionRecord> {
+        let bytes = self
+            .state
+            .fabrics
+            .iter()
+            .find(|f| f.fabric_id == fabric_id)?
+            .devices
+            .iter()
+            .find(|d| d.node_id == node_id)?
+            .resumption_record
+            .as_ref()?;
+        let record = match crate::resumption::deserialize_record(bytes) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(
+                    target: "matter_controller::actor",
+                    node_id,
+                    error = %e,
+                    "stored CASE resumption record is unreadable; connecting with a full handshake"
+                );
+                return None;
+            }
+        };
+        // Nothing sets `expires_at` today, but honour it if it ever appears
+        // rather than offering a record we already consider dead.
+        if let Some(expiry) = record.expires_at {
+            if let Ok(now) = current_matter_time() {
+                if now > expiry {
+                    tracing::debug!(
+                        target: "matter_controller::actor",
+                        node_id,
+                        "stored CASE resumption record has expired; connecting with a full handshake"
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(record)
+    }
+
     fn handle_store_resumption_record(
         &mut self,
         node_id: u64,
@@ -8147,6 +8382,373 @@ mod tests {
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
         }
         keep_endpoint_open(io);
+    }
+
+    /// Device side of a CASE **resumption**: expects a Sigma1 carrying
+    /// resumption fields, accepts with `record`, replies `Sigma2_Resume`,
+    /// absorbs the controller's closing success `StatusReport` (acking it),
+    /// then echoes `echoes` IM requests on the resumed session.
+    ///
+    /// When `corrupt_mic` is set, the emitted `Sigma2_Resume`'s MIC is flipped
+    /// so the controller's verify fails — the shape a corrupted or forged frame
+    /// produces on the wire.
+    // Mirrors the CASE/echo parameter list of `run_loopback_device`, and keeps
+    // the resumed handshake readable as one sequence of wire steps.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
+    async fn run_loopback_device_resuming(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        record: matter_crypto::ResumptionRecord,
+        echoes: usize,
+        reply_payload: Vec<u8>,
+        corrupt_mic: bool,
+        // A second credential set + responder session id. When `corrupt_mic`
+        // is set, the same socket then serves the controller's plain retry as
+        // a full handshake. `CaseCredentials` is not `Clone` (it owns a boxed
+        // signer), so the second life needs its own set.
+        retry: Option<(CaseCredentials, TrustedRoots, u16)>,
+    ) {
+        let mut responder = CaseResponder::new(
+            creds,
+            roots,
+            responder_session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert!(
+            matches!(
+                responder.handle_sigma1(&m.payload).unwrap(),
+                Sigma1Outcome::ResumptionRequested { .. }
+            ),
+            "the controller must offer its stored record in Sigma1"
+        );
+        responder.accept_resumption(record).unwrap();
+        let mut sigma2_resume = responder.next_message().unwrap();
+        if corrupt_mic {
+            // `resume_mic` is context tag 2, a 16-byte octet string, so its
+            // element header is 0x30 0x02 0x10. Located by that header rather
+            // than a fixed offset so the test cannot silently start corrupting
+            // some other field if the encoding changes.
+            let mic_at = sigma2_resume
+                .windows(3)
+                .position(|w| w == [0x30, 0x02, 0x10])
+                .expect("resume_mic element header")
+                + 3;
+            sigma2_resume[mic_at] ^= 0xFF;
+        }
+        let wire = encode_unsecured(
+            200,
+            m.exchange_id,
+            0x33, // Sigma2_Resume
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            true,
+            Some(m.message_counter),
+            None,
+            &sigma2_resume,
+        );
+        io.send_to(&wire, ctrl_addr).await.unwrap();
+        if corrupt_mic {
+            // The controller abandons this attempt and reconnects without a
+            // record. Serve that plain retry on the same socket if asked to.
+            match retry {
+                Some((creds, roots, sid)) => {
+                    run_loopback_device(
+                        io,
+                        ctrl_addr,
+                        creds,
+                        roots,
+                        sid,
+                        echoes,
+                        reply_payload,
+                        false,
+                    )
+                    .await;
+                }
+                None => keep_endpoint_open(io),
+            }
+            return;
+        }
+
+        // The resumed path has no Sigma3: the controller closes with a success
+        // StatusReport, which we ack.
+        let (p, _) = io.recv_from().await.unwrap();
+        let m = decode_unsecured(&p).unwrap();
+        assert_eq!(m.opcode, 0x40, "resumed path must end in a StatusReport");
+        assert_eq!(
+            u16::from_le_bytes([m.payload[0], m.payload[1]]),
+            0,
+            "the controller must report success"
+        );
+        let ack = encode_unsecured(
+            201,
+            m.exchange_id,
+            0x10,
+            ProtocolId::SECURE_CHANNEL,
+            false,
+            false,
+            Some(m.message_counter),
+            None,
+            &[],
+        );
+        io.send_to(&ack, ctrl_addr).await.unwrap();
+
+        let output = responder.finish().unwrap();
+        let mut sessions = SessionManager::new();
+        let sid = sessions.register_case(&output, SessionRole::Responder);
+        for _ in 0..echoes {
+            let (wire, _) = io.recv_from().await.unwrap();
+            let decoded = sessions.decode_inbound(&wire, Instant::now()).unwrap();
+            let DecodeInboundOutput::AppMessage { exchange_id, .. } = decoded else {
+                panic!("expected an IM request app message");
+            };
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    Some(exchange_id),
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &reply_payload,
+                    MrpFlags { reliable: false },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        }
+        keep_endpoint_open(io);
+    }
+
+    /// Seed the persisted device entry with a resumption record and return the
+    /// device-side mirror of it (same id and secret, caching the *controller's*
+    /// identity instead of the device's), as a real prior session would have
+    /// left on both sides.
+    fn seed_resumption_record(
+        store: &Arc<MemStore>,
+        device_node_id: u64,
+        device_noc: &matter_cert::MatterCertificate,
+    ) -> matter_crypto::ResumptionRecord {
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+        let id = ResumptionId([0x42; 16]);
+        let shared_secret = [0x77u8; 32];
+
+        let mut state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &mut state.fabrics[0];
+        let fabric_id = fabric.fabric_id;
+        let controller_noc = fabric.commissioner.noc.clone();
+        let controller_node_id = fabric.commissioner.node_id;
+
+        let ctrl_record = ResumptionRecord {
+            id,
+            shared_secret,
+            peer: PeerInfo {
+                node_id: device_node_id,
+                fabric_id,
+                noc: device_noc.clone(),
+                session_id: 0x00D2,
+            },
+            expires_at: None,
+        };
+        let dev = fabric
+            .devices
+            .iter_mut()
+            .find(|d| d.node_id == device_node_id)
+            .expect("device entry");
+        dev.resumption_record = Some(crate::resumption::serialize_record(&ctrl_record).unwrap());
+        store
+            .save(&crate::snapshot::serialize(&state).unwrap())
+            .unwrap();
+
+        ResumptionRecord {
+            id,
+            shared_secret,
+            peer: PeerInfo {
+                node_id: controller_node_id,
+                fabric_id,
+                noc: controller_noc,
+                session_id: 0,
+            },
+            expires_at: None,
+        }
+    }
+
+    /// Mint a second device credential set for `node_id` on `fabric`.
+    ///
+    /// `CaseCredentials` owns a boxed signer and is not `Clone`, so a test that
+    /// needs the device to answer two handshakes needs two sets. The key
+    /// differs from the first set's, which is fine: the controller validates
+    /// the NOC chain and the node id, not a pinned key.
+    fn mint_device_creds(state: &ControllerState, node_id: u64) -> (CaseCredentials, TrustedRoots) {
+        let fabric = &state.fabrics[0];
+        let record = fabric.to_fabric_record().unwrap();
+        let (signer, _pkcs8) = RingSigner::generate().unwrap();
+        let noc = issue_noc(
+            &record,
+            &VerifiedCsr {
+                public_key: signer.public_key().clone(),
+            },
+            node_id,
+            &[],
+            (
+                MatterTime::from_unix_secs(1_700_000_000),
+                MatterTime::NO_EXPIRY,
+            ),
+            &SystemNocRng,
+        )
+        .unwrap();
+        let compressed =
+            derive_compressed_fabric_id(fabric.rcac_cert.public_key().as_bytes(), fabric.fabric_id)
+                .unwrap();
+        let ipk = derive_operational_ipk(&fabric.ipk, &compressed).unwrap();
+        let mut roots = TrustedRoots::new();
+        roots.add(TrustAnchor::from_root_cert(&fabric.rcac_cert));
+        (
+            CaseCredentials {
+                noc,
+                icac: None,
+                signer: Box::new(signer),
+                fabric_id: fabric.fabric_id,
+                node_id,
+                ipk,
+                rcac_public_key: *fabric.rcac_cert.public_key().as_bytes(),
+            },
+            roots,
+        )
+    }
+
+    /// A connect must OFFER the stored resumption record and take the
+    /// `Sigma2_Resume` fast path — the whole point of persisting one.
+    ///
+    /// Initiator-side resumption was dormant: the crypto had been complete
+    /// since M4.2, but `run_case_establish` hard-coded the fresh-session
+    /// constructor, so every reconnect paid a full SIGMA-I (two P-256
+    /// operations plus NOC chain validation on both sides).
+    #[tokio::test]
+    async fn connect_offers_the_stored_record_and_resumes() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device_noc = device_creds.noc.clone();
+        let dev_record = seed_resumption_record(&store, device_node_id, &device_noc);
+
+        let device = tokio::spawn(run_loopback_device_resuming(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            dev_record,
+            1,
+            b"pong".to_vec(),
+            false,
+            None,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let resp = controller
+            .node(device_node_id)
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("resumed round-trip");
+        assert_eq!(resp, b"pong");
+
+        // Each accept rotates the id, so a resumed connect must have replaced
+        // the record rather than leaving the offered one in place.
+        let stored = controller
+            .resumption_record_for(device_node_id)
+            .await
+            .expect("fetch")
+            .expect("a resumed connect still persists a record");
+        assert_ne!(
+            stored.id,
+            matter_crypto::ResumptionId([0x42; 16]),
+            "the responder rotates the id on every accept"
+        );
+        device.await.unwrap();
+    }
+
+    /// A `Sigma2_Resume` whose MIC does not verify must cost one wasted round
+    /// trip, not the device: the record is dropped and the connect immediately
+    /// retried as a full handshake, invisibly to the caller.
+    ///
+    /// chip and matter.js both keep the record and fail the establishment here.
+    /// Keeping it lets an attacker who can forge one `Sigma2_Resume` replay the
+    /// same forgery on every retry forever; dropping it means the next Sigma1
+    /// is plain, and a forged `Sigma2_Resume` is then an unsolicited opcode the
+    /// exchange filters out. See `recover_from_unusable_resumption_record`.
+    #[tokio::test]
+    async fn a_bad_sigma2_resume_mic_drops_the_record_and_reconnects() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device_noc = device_creds.noc.clone();
+        let dev_record = seed_resumption_record(&store, device_node_id, &device_noc);
+
+        // Two device lives on one socket: the first answers the resumption
+        // attempt with a corrupted MIC, the second serves the plain retry.
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let (retry_creds, retry_roots) = mint_device_creds(&state, device_node_id);
+        let device = tokio::spawn(run_loopback_device_resuming(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D2,
+            dev_record,
+            1,
+            b"pong".to_vec(),
+            /* corrupt_mic */ true,
+            Some((retry_creds, retry_roots, 0x00D3)),
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+
+        let resp = controller
+            .node(device_node_id)
+            .round_trip(0x02, ProtocolId::INTERACTION_MODEL, b"ping".to_vec())
+            .await
+            .expect("the retry must succeed, invisibly to the caller");
+        assert_eq!(resp, b"pong");
+        device.await.unwrap();
     }
 
     /// Device side of one timed handshake: ack a `TimedRequest` (0x0a) with
