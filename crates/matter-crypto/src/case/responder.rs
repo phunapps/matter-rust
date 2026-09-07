@@ -97,7 +97,10 @@ use zeroize::Zeroizing;
 
 use matter_cert::{CertificateChain, MatterCertificate, MatterTime, Signature, TrustedRoots};
 
-use crate::case::messages::{Sigma1, Sigma2, Sigma2Resume, Sigma3};
+use crate::case::messages::{
+    SessionParams, Sigma1, Sigma2, Sigma2Resume, Sigma3, SIGMA2_RESUME_SESSION_PARAMS_TAG,
+    SIGMA2_SESSION_PARAMS_TAG,
+};
 use crate::case::sigma::{
     aead_decrypt, aead_encrypt, compute_dest_id, compute_sigma2_resume_mic, decode_tbedata3,
     derive_resume_session_keys, ecdh_shared_secret, encode_tbedata2, encode_tbs_data,
@@ -278,6 +281,23 @@ enum State {
 /// which message the machine is currently waiting to receive.
 pub struct CaseResponder {
     state: State,
+    /// The initiator's advertised [`SessionParameters`](crate::SessionParameters)
+    /// from Sigma1 (context tag 5), captured by
+    /// [`handle_sigma1`][Self::handle_sigma1] and readable afterwards via
+    /// [`peer_session_params`][Self::peer_session_params].
+    ///
+    /// Kept on the struct rather than in [`State`] because it must survive
+    /// every transition (the caller reads it *after* Sigma1 to size the
+    /// session it is about to register), and parking it in the enum would
+    /// mean threading it through all six variants.
+    peer_session_params: Option<crate::SessionParameters>,
+    /// What *we* advertise back to the initiator, in Sigma2's
+    /// `responderSessionParams` (context tag 5) or `Sigma2_Resume`'s (context
+    /// tag 4). `None` — the default — omits the element, preserving the bytes
+    /// this crate emitted before the builder existed.
+    ///
+    /// Set via [`with_session_params`][Self::with_session_params].
+    local_session_params: Option<crate::SessionParameters>,
     /// Wall-clock instant at which the inbound initiator certificate chain is
     /// checked for temporal validity (`not_before <= now <= not_after`).
     /// Injected at construction so this crate never reads the system clock
@@ -354,6 +374,8 @@ impl CaseResponder {
             },
             validation_time: now,
             new_resumption_id_override: None,
+            peer_session_params: None,
+            local_session_params: None,
         })
     }
 
@@ -401,6 +423,8 @@ impl CaseResponder {
             },
             validation_time: now,
             new_resumption_id_override: None,
+            peer_session_params: None,
+            local_session_params: None,
         })
     }
 
@@ -433,7 +457,48 @@ impl CaseResponder {
         Ok(id)
     }
 
+    /// Advertise `params` back to the initiator, in Sigma2's
+    /// `responderSessionParams` (context tag 5) or, on the resumption path,
+    /// `Sigma2_Resume`'s (context tag 4).
+    ///
+    /// Must be called before [`handle_sigma1`][Self::handle_sigma1], which is
+    /// where the Sigma2 bytes are built.
+    ///
+    /// An [empty](crate::SessionParameters::is_empty) `params` omits the
+    /// element rather than emitting `{}`.
+    #[must_use]
+    pub fn with_session_params(mut self, params: crate::SessionParameters) -> Self {
+        self.local_session_params = (!params.is_empty()).then_some(params);
+        self
+    }
+
     // ─── State inspection ─────────────────────────────────────────────────
+
+    /// The initiator's advertised [`SessionParameters`](crate::SessionParameters),
+    /// captured from Sigma1's optional `initiatorSessionParams` element
+    /// (context tag 5).
+    ///
+    /// `None` before [`handle_sigma1`][Self::handle_sigma1] has run, and also
+    /// when the initiator omitted the element — which the spec defines as
+    /// "assume the spec defaults", not "supports nothing".
+    ///
+    /// # Why the responder wants this
+    ///
+    /// The advertised `SESSION_IDLE_INTERVAL` / `SESSION_ACTIVE_INTERVAL` /
+    /// `SESSION_ACTIVE_THRESHOLD` are the *initiator's* MRP timings. As the
+    /// responder we have no mDNS record for the peer to size retransmits from
+    /// — this element is the only channel through which a sleepy initiator can
+    /// tell us "do not hammer me". Feed it to
+    /// `MrpConfig::merge_session_params` in `matter-transport` and register the
+    /// session with the result.
+    ///
+    /// chip applies it at exactly this point, before Sigma2 is even built
+    /// (`CASESession::HandleSigma1`), so the handshake's own retransmits are
+    /// already peer-sized.
+    #[must_use]
+    pub fn peer_session_params(&self) -> Option<crate::SessionParameters> {
+        self.peer_session_params
+    }
 
     /// Returns the CASE message kind the machine is currently waiting to
     /// receive, or `None` if the machine is in an outbound-only state,
@@ -529,6 +594,30 @@ impl CaseResponder {
                     return Err(Error::InvalidParameter);
                 }
 
+                // Capture the initiator's advertised session parameters, but
+                // only now that `dest_id` has proved this Sigma1 is genuinely
+                // for us — a rejected Sigma1 must leave nothing behind.
+                //
+                // A malformed element fails the handshake rather than being
+                // ignored, matching chip's `DecodeSessionParametersIfPresent`
+                // under `ReturnErrorOnFailure`. The decoder already tolerates
+                // unknown tags and out-of-range values, so reaching this arm
+                // means the TLV itself is broken.
+                self.peer_session_params = match sigma1.session_parameters() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.state = State::AwaitingSigma1 {
+                            credentials,
+                            trusted_roots,
+                            eph_secret,
+                            eph_pub,
+                            responder_random,
+                            responder_session_id,
+                        };
+                        return Err(e);
+                    }
+                };
+
                 let initiator_eph_pub = sigma1.initiator_eph_pub;
                 let initiator_random = sigma1.initiator_random;
                 let initiator_session_id = sigma1.initiator_session_id;
@@ -574,6 +663,7 @@ impl CaseResponder {
                             &responder_random,
                             responder_session_id,
                             &rid,
+                            self.local_session_params,
                         )
                         .map(|(bytes, secret)| (bytes, secret, rid))
                     }) {
@@ -744,11 +834,21 @@ impl CaseResponder {
                 };
 
                 // Step 6: Build the Sigma2_Resume wire message.
+                // `Sigma2_Resume` carries the element at context tag **4**,
+                // one lower than Sigma2's, because it has no eph-pub or
+                // encrypted field.
+                let responder_session_params = self
+                    .local_session_params
+                    .map(|p| {
+                        p.encode(SIGMA2_RESUME_SESSION_PARAMS_TAG)
+                            .map(SessionParams::from)
+                    })
+                    .transpose()?;
                 let sigma2_resume = Sigma2Resume {
                     resumption_id: new_resumption_id,
                     resume_mic: sigma2_mic,
                     responder_session_id,
-                    responder_session_params: None,
+                    responder_session_params,
                 };
                 let sigma2_resume_bytes = sigma2_resume.encode()?;
 
@@ -846,6 +946,7 @@ impl CaseResponder {
                     &responder_random,
                     responder_session_id,
                     &resumption_id,
+                    self.local_session_params,
                 )?;
                 // Wrap the raw ECDH secret in `Zeroizing` immediately so it is
                 // wiped on every drop path once parked in `State`.
@@ -1117,6 +1218,7 @@ fn build_sigma2(
     responder_random: &[u8; 32],
     responder_session_id: u16,
     resumption_id: &[u8; 16],
+    local_session_params: Option<crate::SessionParameters>,
 ) -> Result<(Vec<u8>, [u8; 32])> {
     // Step 1: ECDH shared secret from our eph secret + initiator's eph pub.
     let shared_secret = ecdh_shared_secret(eph_secret, &sigma1.initiator_eph_pub)?;
@@ -1172,13 +1274,17 @@ fn build_sigma2(
     )?;
     let encrypted2 = aead_encrypt(&s2k, NONCE_TBE_DATA2, b"", &tbedata2_plaintext)?;
 
-    // Step 5: Encode Sigma2 wire message.
+    // Step 5: Encode Sigma2 wire message. Sigma2 carries our advertisement at
+    // context tag 5.
+    let responder_session_params = local_session_params
+        .map(|p| p.encode(SIGMA2_SESSION_PARAMS_TAG).map(SessionParams::from))
+        .transpose()?;
     let sigma2 = Sigma2 {
         responder_random: *responder_random,
         responder_session_id,
         responder_eph_pub: *eph_pub,
         encrypted: encrypted2,
-        responder_session_params: None,
+        responder_session_params,
     };
     let sigma2_bytes = sigma2.encode()?;
 

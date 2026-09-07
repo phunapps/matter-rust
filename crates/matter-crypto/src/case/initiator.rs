@@ -138,7 +138,9 @@ use zeroize::Zeroizing;
 
 use matter_cert::{CertificateChain, MatterCertificate, MatterTime, Signature, TrustedRoots};
 
-use crate::case::messages::{Sigma1, Sigma2, Sigma2Resume, Sigma3};
+use crate::case::messages::{
+    SessionParams, Sigma1, Sigma2, Sigma2Resume, Sigma3, SIGMA1_SESSION_PARAMS_TAG,
+};
 use crate::case::sigma::{
     aead_decrypt, aead_encrypt, compute_dest_id, compute_sigma1_resume_mic, decode_tbedata2,
     derive_resume_session_keys, ecdh_shared_secret, encode_tbedata3, encode_tbs_data,
@@ -282,6 +284,24 @@ enum State {
 /// which message the machine is currently waiting to receive.
 pub struct CaseInitiator {
     state: State,
+    /// The responder's advertised [`SessionParameters`](crate::SessionParameters)
+    /// from Sigma2 (context tag 5) or `Sigma2_Resume` (context tag **4**),
+    /// readable via [`peer_session_params`][Self::peer_session_params].
+    ///
+    /// Kept on the struct rather than in [`State`] so it survives every
+    /// transition and does not have to be threaded through each variant.
+    peer_session_params: Option<crate::SessionParameters>,
+    /// What *we* advertise in Sigma1's `initiatorSessionParams` (context tag
+    /// 5). `None` — the default — omits the optional element entirely, which
+    /// is what this crate did before the builder existed and keeps every
+    /// existing byte-parity fixture valid.
+    ///
+    /// Set via [`with_session_params`][Self::with_session_params]. This crate
+    /// deliberately does not pick the values itself: the data-model and
+    /// interaction-model revisions are properties of the *caller's*
+    /// implementation, not of the crypto layer, and inventing them here would
+    /// let them drift from what the caller actually puts on the wire.
+    local_session_params: Option<crate::SessionParameters>,
     /// Wall-clock instant at which inbound peer certificate chains are checked
     /// for temporal validity (`not_before <= now <= not_after`). Injected at
     /// construction so this crate never reads the system clock itself — the
@@ -484,6 +504,8 @@ impl CaseInitiator {
                 resumption_record: None,
             },
             validation_time: now,
+            peer_session_params: None,
+            local_session_params: None,
         })
     }
 
@@ -533,6 +555,8 @@ impl CaseInitiator {
                 resumption_record: Some(record),
             },
             validation_time: now,
+            peer_session_params: None,
+            local_session_params: None,
         })
     }
 
@@ -568,10 +592,61 @@ impl CaseInitiator {
                 resumption_record,
             },
             validation_time: now,
+            peer_session_params: None,
+            local_session_params: None,
         })
     }
 
+    /// Advertise `params` to the responder in Sigma1's optional
+    /// `initiatorSessionParams` element (context tag 5).
+    ///
+    /// Must be called before [`start`][Self::start]; afterwards the Sigma1
+    /// bytes are already built and this has no effect.
+    ///
+    /// # Why advertise at all
+    ///
+    /// Both reference implementations always send this element — chip treats a
+    /// missing local config as a hard error (`CASESession::EncodeSigma1`).
+    /// Omitting it is still spec-conformant, but it costs you: the peer sizes
+    /// its own Sigma2/Sigma3-ack retransmits to the spec defaults instead of
+    /// to your timings, and assumes `maxPathsPerInvoke = 1` and pre-1.3
+    /// behaviour. There is no mDNS channel for a commissioner's MRP
+    /// parameters, so this element is the only way to say otherwise.
+    ///
+    /// An [empty](crate::SessionParameters::is_empty) `params` omits the
+    /// element rather than emitting `{}`.
+    #[must_use]
+    pub fn with_session_params(mut self, params: crate::SessionParameters) -> Self {
+        self.local_session_params = (!params.is_empty()).then_some(params);
+        self
+    }
+
     // ─── State inspection ─────────────────────────────────────────────────
+
+    /// The responder's advertised [`SessionParameters`](crate::SessionParameters),
+    /// captured from Sigma2's `responderSessionParams` (context tag 5) or from
+    /// `Sigma2_Resume`'s (context tag **4** — the numbering differs between the
+    /// two messages).
+    ///
+    /// `None` before the Sigma2 step has run, and also when the responder
+    /// omitted the element.
+    ///
+    /// # Why the initiator wants this
+    ///
+    /// It is the device's own statement of its MRP timings, and it is more
+    /// trustworthy than the mDNS TXT `SII`/`SAI`/`SAT` a connect starts from:
+    /// the advertisement can be stale, cached, or absent entirely. chip
+    /// re-sizes the exchange from this value after validating Sigma2 and
+    /// *before* sending Sigma3 (`CASESession::HandleSigma2`), so Sigma3's
+    /// retransmits are sized to what the device just said rather than to what
+    /// mDNS said earlier.
+    ///
+    /// Merge it over the discovery-derived config rather than replacing that
+    /// config wholesale — see `MrpConfig::merge_session_params`.
+    #[must_use]
+    pub fn peer_session_params(&self) -> Option<crate::SessionParameters> {
+        self.peer_session_params
+    }
 
     /// Returns the CASE message kind the machine is currently waiting to
     /// receive, or `None` if the machine is in an outbound-only state,
@@ -653,12 +728,19 @@ impl CaseInitiator {
                     None => (None, None),
                 };
 
+                // Encode our own advertisement, if the caller set one.
+                // Sigma1 carries it at context tag 5.
+                let initiator_session_params = self
+                    .local_session_params
+                    .map(|p| p.encode(SIGMA1_SESSION_PARAMS_TAG).map(SessionParams::from))
+                    .transpose()?;
+
                 let sigma1 = Sigma1 {
                     initiator_random,
                     initiator_session_id,
                     dest_id,
                     initiator_eph_pub: eph_pub,
-                    initiator_session_params: None,
+                    initiator_session_params,
                     resumption_id: resumption_id_field,
                     initiator_resume_mic: initiator_resume_mic_field,
                 };
@@ -741,7 +823,7 @@ impl CaseInitiator {
                 sigma1_bytes,
                 resumption_attempt: _, // Responder declined (or never attempted) — discard.
             } => {
-                let (sigma3_bytes, session_keys, peer, local, resumption_record) = process_sigma2(
+                let processed = process_sigma2(
                     bytes,
                     &credentials,
                     &trusted_roots,
@@ -753,12 +835,13 @@ impl CaseInitiator {
                     &sigma1_bytes,
                     now,
                 )?;
+                self.peer_session_params = processed.peer_session_params;
                 self.state = State::ReadyToSendSigma3 {
-                    sigma3_bytes,
-                    session_keys,
-                    peer,
-                    local,
-                    resumption_record: Some(resumption_record),
+                    sigma3_bytes: processed.sigma3_bytes,
+                    session_keys: processed.session_keys,
+                    peer: processed.peer,
+                    local: processed.local,
+                    resumption_record: Some(processed.resumption_record),
                 };
                 Ok(())
             }
@@ -824,6 +907,11 @@ impl CaseInitiator {
                 sigma1_bytes: _,
             } => {
                 let sigma2_resume = Sigma2Resume::decode(bytes)?;
+                // Note the container tag: `Sigma2_Resume` carries
+                // `responderSessionParams` at context tag **4**, where Sigma1
+                // and Sigma2 use 5. The decode is driven by the message type,
+                // so the number cannot be crossed here.
+                self.peer_session_params = sigma2_resume.session_parameters()?;
                 let new_resumption_id = sigma2_resume.resumption_id;
 
                 // Step 1: Verify sigma2_resume_mic.
@@ -990,15 +1078,36 @@ impl CaseInitiator {
 // Helper: Sigma2 processing inner logic
 // ---------------------------------------------------------------------------
 
+/// Everything [`process_sigma2`] produces.
+///
+/// A struct rather than a tuple: the function returns six related values and a
+/// six-tuple at the call site is unreadable (and trips `clippy::type_complexity`).
+struct Sigma2Processed {
+    /// Encoded Sigma3, ready for the caller to send.
+    sigma3_bytes: Vec<u8>,
+    /// Derived symmetric session keys.
+    session_keys: CaseSessionKeys,
+    /// Peer identity verified from the responder's NOC chain.
+    peer: PeerInfo,
+    /// Our own identity, mirrored for symmetry.
+    local: LocalInfo,
+    /// Resumption record to persist, pairing the responder-supplied resumption
+    /// id from `TBEData2` with this session's ECDH secret.
+    resumption_record: ResumptionRecord,
+    /// The responder's advertised session parameters (Sigma2 context tag 5),
+    /// `None` when it omitted the optional element.
+    peer_session_params: Option<crate::SessionParameters>,
+}
+
 /// Execute the full Sigma2 verification + Sigma3 construction logic.
 ///
 /// Extracted from `CaseInitiator::handle_sigma2` to keep that method's
 /// line count within the `clippy::too_many_lines` limit.
 ///
-/// Returns `(sigma3_bytes, session_keys, peer, local, resumption_record)` on
-/// success. The `resumption_record` pairs the responder's fresh
-/// `resumption_id` (from `TBEData2`) with this session's ECDH `SharedSecret`;
-/// the caller persists it for a future `Sigma1` resumption fast-path.
+/// Returns a [`Sigma2Processed`] on success. Its `resumption_record` pairs the
+/// responder's fresh `resumption_id` (from `TBEData2`) with this session's ECDH
+/// `SharedSecret`; the caller persists it for a future `Sigma1` resumption
+/// fast-path.
 ///
 /// # Errors
 ///
@@ -1019,14 +1128,9 @@ fn process_sigma2(
     initiator_session_id: u16,
     sigma1_bytes: &[u8],
     now: MatterTime,
-) -> Result<(
-    Vec<u8>,
-    CaseSessionKeys,
-    PeerInfo,
-    LocalInfo,
-    ResumptionRecord,
-)> {
+) -> Result<Sigma2Processed> {
     let sigma2 = Sigma2::decode(sigma2_bytes)?;
+    let peer_session_params = sigma2.session_parameters()?;
 
     // Step 1: ECDH shared secret from our eph secret + peer's eph pub.
     // Wrap in `Zeroizing` so the raw ECDH output is wiped when this function
@@ -1210,7 +1314,14 @@ fn process_sigma2(
         expires_at: None,
     };
 
-    Ok((sigma3_bytes, session_keys, peer, local, resumption_record))
+    Ok(Sigma2Processed {
+        sigma3_bytes,
+        session_keys,
+        peer,
+        local,
+        resumption_record,
+        peer_session_params,
+    })
 }
 
 // ---------------------------------------------------------------------------

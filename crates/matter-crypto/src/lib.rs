@@ -43,6 +43,7 @@ pub mod checkin;
 pub mod error;
 pub mod operational;
 pub mod pase;
+pub mod session_params;
 
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -70,6 +71,7 @@ pub use pase::{
     pake_passcode_verifier, PaseMessageKind, PasePbkdfParams, PaseProver, PaseSessionKeys,
     PaseVerifier,
 };
+pub use session_params::SessionParameters;
 
 /// Fill `buf` with cryptographically secure random bytes (ring `SystemRandom`).
 ///

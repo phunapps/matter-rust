@@ -1540,3 +1540,199 @@ proptest! {
         let _ = initiator.handle_sigma2(&sigma2);
     }
 }
+
+// ---------------------------------------------------------------------------
+// SessionParameters (Matter Core Spec §4.12.8) advertised across the handshake
+// ---------------------------------------------------------------------------
+
+/// The initiator's advertisement in Sigma1 (context tag 5) must arrive intact
+/// at the responder, and the responder's in Sigma2 (also context tag 5) must
+/// arrive intact at the initiator.
+///
+/// This is the whole point of the element: as the responder we have no mDNS
+/// record for the peer, so Sigma1 is the only channel through which a sleepy
+/// initiator can tell us its retransmit timings.
+#[test]
+fn session_parameters_cross_the_wire_in_both_directions() {
+    let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+    let (initiator_noc, initiator_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (responder_noc, responder_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+
+    // Deliberately asymmetric, and deliberately not the spec defaults, so a
+    // dropped field cannot pass by coinciding with a default.
+    let initiator_params = matter_crypto::SessionParameters::new()
+        .with_session_idle_interval_ms(3300)
+        .with_session_active_interval_ms(1100)
+        .with_session_active_threshold_ms(4000)
+        .with_data_model_revision(19)
+        .with_interaction_model_revision(11)
+        .with_specification_version(0x0104_0000)
+        .with_max_paths_per_invoke(1);
+    let responder_params = matter_crypto::SessionParameters::new()
+        .with_session_idle_interval_ms(1800)
+        .with_session_active_interval_ms(1000)
+        // The eufy E31 advertises an SAT *below* its own SAI. Honour it
+        // verbatim rather than "correcting" it — the shape occurs in the wild.
+        .with_session_active_threshold_ms(300);
+
+    let mut initiator = CaseInitiator::new(
+        build_credentials(
+            initiator_noc,
+            initiator_signer,
+            TEST_FABRIC_ID,
+            INITIATOR_NODE_ID,
+            IPK,
+            rcac_pub,
+        ),
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("initiator")
+    .with_session_params(initiator_params);
+
+    let mut responder = CaseResponder::new(
+        build_credentials(
+            responder_noc,
+            responder_signer,
+            TEST_FABRIC_ID,
+            RESPONDER_NODE_ID,
+            IPK,
+            rcac_pub,
+        ),
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder")
+    .with_session_params(responder_params);
+
+    assert_eq!(
+        responder.peer_session_params(),
+        None,
+        "nothing is known before Sigma1 is processed"
+    );
+
+    let sigma1 = initiator.start().expect("sigma1");
+    responder.handle_sigma1(&sigma1).expect("handle sigma1");
+
+    assert_eq!(
+        responder.peer_session_params(),
+        Some(initiator_params),
+        "Sigma1 tag 5 must round-trip every field"
+    );
+
+    let sigma2 = responder.next_message().expect("sigma2");
+    initiator.handle_sigma2(&sigma2).expect("handle sigma2");
+
+    assert_eq!(
+        initiator.peer_session_params(),
+        Some(responder_params),
+        "Sigma2 tag 5 must round-trip every field"
+    );
+    // The responder advertised only three of seven fields; the rest must stay
+    // absent rather than being filled in with defaults. "Not sent" and "sent as
+    // the default value" are different facts, and the MRP merge depends on it.
+    let got = initiator.peer_session_params().expect("params");
+    assert_eq!(got.data_model_revision, None);
+    assert_eq!(got.max_paths_per_invoke, None);
+}
+
+/// `Sigma2_Resume` carries the element at context tag **4**, not 5. A crossed
+/// tag number would encode an element the peer silently ignores, so this
+/// asserts the resumption path specifically.
+#[test]
+fn session_parameters_cross_the_wire_on_the_resumption_path() {
+    let (_rcac, rcac_signer, trusted_roots, rcac_pub) = build_test_rcac();
+    let (initiator_noc, initiator_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, INITIATOR_NODE_ID);
+    let (responder_noc, responder_signer) =
+        build_test_noc(&rcac_signer, TEST_FABRIC_ID, RESPONDER_NODE_ID);
+
+    let responder_params = matter_crypto::SessionParameters::new()
+        .with_session_idle_interval_ms(3300)
+        .with_session_active_interval_ms(1100)
+        .with_session_active_threshold_ms(4000);
+
+    // A matched pair of records: same id, same secret, as a real prior session
+    // would have left on both sides.
+    let shared_secret = [0x77u8; 32];
+    let id = matter_crypto::ResumptionId([0x42u8; 16]);
+    let initiator_record = matter_crypto::ResumptionRecord {
+        id,
+        shared_secret,
+        peer: matter_crypto::PeerInfo {
+            node_id: RESPONDER_NODE_ID,
+            fabric_id: TEST_FABRIC_ID,
+            noc: responder_noc.clone(),
+            session_id: 0x0002,
+        },
+        expires_at: None,
+    };
+    let responder_record = matter_crypto::ResumptionRecord {
+        id,
+        shared_secret,
+        peer: matter_crypto::PeerInfo {
+            node_id: INITIATOR_NODE_ID,
+            fabric_id: TEST_FABRIC_ID,
+            noc: initiator_noc.clone(),
+            session_id: 0x0001,
+        },
+        expires_at: None,
+    };
+
+    let mut initiator = CaseInitiator::new_with_resumption(
+        build_credentials(
+            initiator_noc,
+            initiator_signer,
+            TEST_FABRIC_ID,
+            INITIATOR_NODE_ID,
+            IPK,
+            rcac_pub,
+        ),
+        trusted_roots.clone(),
+        RESPONDER_NODE_ID,
+        TEST_FABRIC_ID,
+        initiator_record,
+        0x0001,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("initiator");
+
+    let mut responder = CaseResponder::new(
+        build_credentials(
+            responder_noc,
+            responder_signer,
+            TEST_FABRIC_ID,
+            RESPONDER_NODE_ID,
+            IPK,
+            rcac_pub,
+        ),
+        trusted_roots,
+        0x0002,
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .expect("responder")
+    .with_session_params(responder_params);
+
+    let sigma1 = initiator.start().expect("sigma1");
+    let outcome = responder.handle_sigma1(&sigma1).expect("handle sigma1");
+    assert!(matches!(outcome, Sigma1Outcome::ResumptionRequested { .. }));
+    responder
+        .accept_resumption(responder_record)
+        .expect("accept resumption");
+    let sigma2_resume = responder.next_message().expect("sigma2_resume");
+    initiator
+        .handle_sigma2_resume(&sigma2_resume)
+        .expect("handle sigma2_resume");
+
+    assert_eq!(
+        initiator.peer_session_params(),
+        Some(responder_params),
+        "Sigma2_Resume carries the element at context tag 4, not 5"
+    );
+}

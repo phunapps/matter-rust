@@ -308,11 +308,47 @@ fn skip_and_capture_substructure(
 /// The bytes cover the entire sub-element: the container-start control byte
 /// through the matching end-of-container byte (`0x18`) inclusive, including
 /// the context tag byte that identifies this field within the parent structure.
+/// Context tag of the `SessionParameters` element inside `Sigma1`.
+pub(crate) const SIGMA1_SESSION_PARAMS_TAG: u8 = 5;
+/// Context tag of the `SessionParameters` element inside `Sigma2`.
+pub(crate) const SIGMA2_SESSION_PARAMS_TAG: u8 = 5;
+/// Context tag of the `SessionParameters` element inside `Sigma2_Resume`.
+///
+/// **Four, not five.** `Sigma2_Resume` has no `responderEphPubKey` or
+/// `encrypted` field, so its tag numbering is one short of `Sigma2`'s. Getting
+/// this wrong emits an element the peer silently ignores.
+pub(crate) const SIGMA2_RESUME_SESSION_PARAMS_TAG: u8 = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct SessionParams {
     /// Raw TLV bytes of the `SessionParameters` sub-element, context-tag
     /// through end-container, as captured from the wire or built by the encoder.
     pub raw_tlv: Vec<u8>,
+}
+
+/// Decode a captured [`SessionParams`] blob into the typed
+/// [`SessionParameters`](crate::SessionParameters).
+///
+/// Returns `Ok(None)` when the peer omitted the optional element entirely,
+/// which the spec defines as "assume the defaults" rather than "supports
+/// nothing".
+///
+/// # Errors
+///
+/// Propagates [`Error::InvalidParameter`] / [`Error::Codec`] if the captured
+/// bytes are not a well-formed structure.
+fn decode_session_params(raw: Option<&SessionParams>) -> Result<Option<crate::SessionParameters>> {
+    raw.map(|sp| crate::SessionParameters::decode(&sp.raw_tlv))
+        .transpose()
+}
+
+impl From<Vec<u8>> for SessionParams {
+    /// Wrap already-encoded sub-element bytes (context-tag control byte through
+    /// the matching `0x18`), as produced by
+    /// [`SessionParameters::encode`](crate::SessionParameters::encode).
+    fn from(raw_tlv: Vec<u8>) -> Self {
+        Self { raw_tlv }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +390,17 @@ pub(crate) struct Sigma1 {
 }
 
 impl Sigma1 {
+    /// The peer's typed [`SessionParameters`](crate::SessionParameters) from
+    /// the optional `initiator_session_params` element (context tag 5), or `None` if
+    /// the initiator did not carry one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidParameter`] / [`Error::Codec`] if the element is
+    /// present but malformed.
+    pub(crate) fn session_parameters(&self) -> Result<Option<crate::SessionParameters>> {
+        decode_session_params(self.initiator_session_params.as_ref())
+    }
     /// Encode this message as wire TLV bytes.
     ///
     /// # Errors
@@ -529,6 +576,17 @@ pub(crate) struct Sigma2 {
 }
 
 impl Sigma2 {
+    /// The peer's typed [`SessionParameters`](crate::SessionParameters) from
+    /// the optional `responder_session_params` element (context tag 5), or `None` if
+    /// the responder did not carry one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidParameter`] / [`Error::Codec`] if the element is
+    /// present but malformed.
+    pub(crate) fn session_parameters(&self) -> Result<Option<crate::SessionParameters>> {
+        decode_session_params(self.responder_session_params.as_ref())
+    }
     /// Encode this message as wire TLV bytes.
     ///
     /// # Errors
@@ -685,6 +743,17 @@ pub(crate) struct Sigma2Resume {
 }
 
 impl Sigma2Resume {
+    /// The peer's typed [`SessionParameters`](crate::SessionParameters) from
+    /// the optional `responder_session_params` element (context tag 4), or `None` if
+    /// the responder did not carry one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidParameter`] / [`Error::Codec`] if the element is
+    /// present but malformed.
+    pub(crate) fn session_parameters(&self) -> Result<Option<crate::SessionParameters>> {
+        decode_session_params(self.responder_session_params.as_ref())
+    }
     /// Encode this message as wire TLV bytes.
     ///
     /// # Errors
