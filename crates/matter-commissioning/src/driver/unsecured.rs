@@ -48,16 +48,34 @@ const UNSECURED_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 /// every caller parked behind it.
 ///
 /// This is a budget for the whole handshake, shared across every
-/// [`UnsecuredExchange::send_and_recv`] call, not a per-step allowance. Per
-/// step it would permit two full windows of pre-ack waiting plus two 30 s
-/// post-ack response deadlines -- roughly three minutes for a single connect.
-/// The controller puts no outer deadline on a spawned connect task
-/// (`RESOLVE_DEADLINE` bounds resolution only), so this constant is the only
-/// thing bounding total connect latency.
+/// [`UnsecuredExchange::send_and_recv`] call, rather than a per-step allowance.
+///
+/// # This is NOT a bound on connect latency
+///
+/// It bounds **pre-ack retransmit waiting only**. Do not size a caller-side
+/// timeout against it, and do not read "we hit our own bound" as "the peer has
+/// had its whole window" — a connect legitimately spends, in addition:
+///
+/// - the mDNS operational resolve, up to the controller's `RESOLVE_DEADLINE`
+///   (30 s in `matter-controller`);
+/// - up to the 30 s post-ack response deadline (`UNSECURED_RESPONSE_TIMEOUT`)
+///   *per round trip* once the peer acknowledges, and [`run_case_establish`]
+///   has two round trips
+///   (Sigma1 → Sigma2, Sigma3 → `StatusReport`).
+///
+/// A peer that acks Sigma1 promptly and then sleeps, or a slow resolve, burns a
+/// caller's deadline with this budget barely touched. Worst case is therefore
+/// around 2.5x this constant, not equal to it. Reported by a downstream
+/// consumer (`WeaveHome`, 2026-09-08) who reached for this constant when sizing
+/// its own bound, which is the natural and wrong thing to do — an earlier
+/// version of this comment invited it by claiming this was "the only thing
+/// bounding total connect latency". It is not.
 ///
 /// 60 s is the largest value an operator still reads as slow rather than hung.
 /// Neither chip nor matter.js imposes such a cap; we do, because a hub must
 /// fail in bounded time and let the caller retry.
+///
+/// [`run_case_establish`]: crate::driver::run_case_establish
 ///
 /// Known limitation: this is wrong for a LIT ICD whose advertised `SII` is
 /// minutes long. Those are reached through the check-in protocol, not a plain
@@ -84,6 +102,23 @@ pub const MAX_HANDSHAKE_RETRANSMIT_WINDOW: Duration = Duration::from_secs(60);
 ///
 /// Invariants: never empty; at most `config.max_transmissions` entries; the sum
 /// never exceeds `cap`.
+///
+/// # The window can be much LONGER than it used to be
+///
+/// Before this was peer-sized, every handshake got a flat 300 ms x 5 = 1.5 s
+/// regardless of what the device advertised. For a genuinely sleepy peer the
+/// window now *grows*, substantially — and the direction is the opposite of the
+/// operational MRP change that shipped alongside it, which shortened windows.
+///
+/// Measured in the field (`WeaveHome`, 2026-09-08): an Eve Door & Window Thread
+/// SED advertising `SII=3300` gets **37.2 s** — roughly 25x the old flat value.
+/// A eufy E31 lock advertising `SII=1800` gets 20.3 s. Mains Wi-Fi peers
+/// advertising nothing keep 5.6 s.
+///
+/// **A caller whose timeout was chosen against the old 1.5 s will now cut a
+/// sleepy device off mid-handshake.** That is exactly what happened downstream:
+/// a 15 s consumer bound had always sat comfortably above 1.5 s and silently
+/// became 40% of the window the device had just earned.
 fn handshake_schedule(config: &MrpConfig, cap: Duration) -> Vec<Duration> {
     let mut out = Vec::new();
     let mut total = Duration::ZERO;

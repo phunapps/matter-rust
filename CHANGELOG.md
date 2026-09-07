@@ -22,6 +22,55 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## matter-commissioning 0.8.1
+
+Documentation only, prompted by a downstream field report (WeaveHome,
+2026-09-08) after the 0.12 train went out. No behaviour change.
+
+### Fixed — two documentation errors that misled a consumer
+
+**The 0.5.0/0.8.0 release notes led with "operational retransmit windows are
+shorter" and never said that the *handshake* window can get much LONGER.** Both
+are true, they move in opposite directions, and only one was written down.
+
+Before the handshake was peer-sized, every device got a flat 300 ms × 5 = 1.5 s
+to wake. A genuinely sleepy peer now gets far more. Measured in the field:
+
+| node | advertised `SII` | handshake window |
+|---|---|---|
+| Eve Door & Window (Thread SED) | 3300 ms | **37.2 s** (~25× the old 1.5 s) |
+| eufy E31 lock (Thread) | 1800 ms | 20.3 s |
+| Wi-Fi peers advertising nothing | — | 5.6 s |
+
+**If you set a timeout against the old 1.5 s, re-check it.** Downstream, a 15 s
+bound that had always sat comfortably above 1.5 s silently became 40% of the
+window the device had just been given, and cut it off mid-handshake.
+
+**`MAX_HANDSHAKE_RETRANSMIT_WINDOW` is not a bound on connect latency**, and its
+doc comment wrongly said it was "the only thing bounding total connect latency".
+It bounds *pre-ack retransmit waiting only*. A connect also spends the mDNS
+resolve (up to `RESOLVE_DEADLINE`, 30 s) and up to `UNSECURED_RESPONSE_TIMEOUT`
+(30 s) per round trip once the peer acks — and `run_case_establish` has two
+round trips. Worst case is about **2.5×** the constant.
+
+The practical trap, which is why this is worth a release: it is the natural
+constant for a consumer to reach for when sizing its own bound, and the natural
+wrong conclusion is that reaching your own bound means the peer had its whole
+window. It does not — a peer that acks Sigma1 and then sleeps, or a slow
+resolve, burns a caller's deadline with the retransmit budget barely touched.
+
+### Field data confirming the 0.8.0 arithmetic
+
+The peer-sized schedule had never been exercised against a long-`SII` device;
+the rig used for release validation advertises 500 ms. The Eve's 37238 ms
+reproduces by hand from `MrpConfig::retransmit_delay` exactly — margin
+3300 × 1127/1024 = 3631, then 3631 / 3631 / 5809 / 9295 / 14872 — confirming the
+margin, threshold and 1.6-growth arithmetic at a base 6.6× the rig's.
+
+Also observed in the wild: a device advertising `SAT` (300 ms) *below* its own
+`SAI` (1000 ms). Honoured verbatim, causes no problem, recorded because it is a
+shape that occurs.
+
 ## matter-transport 0.5.0 + matter-commissioning 0.8.0 + matter-controller 0.12.0 + matter-ble 0.3.4
 
 Prompted by two reports from the WeaveHome hub, a Matter controller running a
