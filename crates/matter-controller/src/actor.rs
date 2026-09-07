@@ -4066,8 +4066,17 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     }
 
     /// Establish a fresh CASE session to `node_id`, cache it, and record an
-    /// address hint in persisted state. Resumption is dormant: this
-    /// always performs a full SIGMA handshake.
+    /// address hint in persisted state.
+    ///
+    /// **This path never resumes**, and that is now a property of this
+    /// fallback alone rather than of the controller: the spawned path
+    /// ([`Self::finish_spawn_connect`]) offers the stored resumption record and
+    /// takes the `Sigma2_Resume` fast path when the device accepts it. This one
+    /// calls `run_case`, which has no resumption entry point, so it always
+    /// pays a full SIGMA-I. It also cannot persist a record (`run_case`
+    /// registers the session internally and never surfaces the handshake
+    /// output), which is why it is a defensive fallback and not a route any
+    /// real caller takes.
     ///
     /// This INLINE handshake is now a defensive fallback only. Every
     /// real caller connects OFF the actor loop instead — verbs park behind
