@@ -77,6 +77,44 @@ struct FixtureInputs {
     /// output is byte-comparable.
     #[serde(default)]
     new_resumption_id: Option<String>,
+    /// The `SessionParameters` the capture script advertised in Sigma1's
+    /// `initiatorSessionParams` (context tag 5). Present only in the
+    /// session-params scenario.
+    #[serde(default)]
+    session_params: Option<FixtureSessionParams>,
+}
+
+/// Mirrors matter.js's `TlvSessionParameters` field names so the fixture is
+/// readable next to `CaseMessages.ts`.
+#[derive(Debug, Deserialize)]
+struct FixtureSessionParams {
+    #[serde(rename = "idleInterval")]
+    idle_interval: u32,
+    #[serde(rename = "activeInterval")]
+    active_interval: u32,
+    #[serde(rename = "activeThreshold")]
+    active_threshold: u16,
+    #[serde(rename = "dataModelRevision")]
+    data_model_revision: u16,
+    #[serde(rename = "interactionModelRevision")]
+    interaction_model_revision: u16,
+    #[serde(rename = "specificationVersion")]
+    specification_version: u32,
+    #[serde(rename = "maxPathsPerInvoke")]
+    max_paths_per_invoke: u16,
+}
+
+impl FixtureSessionParams {
+    fn to_params(&self) -> matter_crypto::SessionParameters {
+        matter_crypto::SessionParameters::new()
+            .with_session_idle_interval_ms(self.idle_interval)
+            .with_session_active_interval_ms(self.active_interval)
+            .with_session_active_threshold_ms(self.active_threshold)
+            .with_data_model_revision(self.data_model_revision)
+            .with_interaction_model_revision(self.interaction_model_revision)
+            .with_specification_version(self.specification_version)
+            .with_max_paths_per_invoke(self.max_paths_per_invoke)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -737,5 +775,70 @@ fn matter_js_byte_parity_resumption_declined() {
     assert_eq!(
         init_out.keys.r2i_key, resp_out.keys.r2i_key,
         "r2i session keys must agree on declined-resumption path"
+    );
+}
+
+/// Byte parity for the `SessionParameters` element we advertise in Sigma1
+/// (context tag 5), against matter.js's own `TlvSessionParameters` encoder.
+///
+/// This is the check that matters for the wire change: the element is encoded
+/// by matter.js in the fixture and by us in the assertion, from the same seven
+/// values, so a wrong tag number, a wrong integer width, or a wrong field order
+/// shows up as a byte difference rather than as a silently-ignored element on a
+/// real device.
+///
+/// It also covers the whole Sigma1 around it — a correct sub-element spliced in
+/// at the wrong place in the parent structure would still fail here.
+#[test]
+fn matter_js_byte_parity_sigma1_session_params() {
+    let fx = load_fixture("handshake-with-session-params");
+    let ipk = hex_to_array::<16>(&fx.inputs.ipk);
+    let rcac_pub = hex_to_array::<65>(&fx.inputs.rcac_public_key);
+    let roots = build_trusted_roots(&fx.inputs.rcac_noc);
+    let params = fx
+        .inputs
+        .session_params
+        .as_ref()
+        .expect("fixture advertises session params")
+        .to_params();
+
+    let initiator_creds = build_credentials_from_fixture(
+        &fx.inputs.initiator_noc,
+        &fx.inputs.initiator_pkcs8,
+        fx.inputs.icac_noc.as_deref(),
+        fx.inputs.fabric_id,
+        fx.inputs.initiator_node_id,
+        ipk,
+        rcac_pub,
+    );
+
+    let mut initiator = case_initiator_with_eph_key(
+        initiator_creds,
+        roots,
+        fx.inputs.responder_node_id,
+        fx.inputs.fabric_id,
+        hex_to_array::<32>(&fx.inputs.initiator_eph_priv),
+        hex_to_array::<32>(&fx.inputs.initiator_random),
+        MatterTime::from_unix_secs(2_000_000_000),
+    )
+    .unwrap()
+    .with_session_params(params);
+
+    let our_sigma1 = initiator.start().unwrap();
+    assert_eq!(
+        hex::encode(&our_sigma1),
+        fx.messages.sigma1,
+        "Sigma1 with initiatorSessionParams must match matter.js byte for byte"
+    );
+
+    // And the standalone element encoder produces exactly the sub-element
+    // matter.js embedded, so callers that build the struct themselves get the
+    // same bytes.
+    let element = params.encode(5).unwrap();
+    assert!(
+        our_sigma1
+            .windows(element.len())
+            .any(|w| w == element.as_slice()),
+        "the encoded element must appear verbatim inside Sigma1"
     );
 }

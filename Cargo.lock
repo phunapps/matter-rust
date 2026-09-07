@@ -1316,6 +1316,7 @@ dependencies = [
  "matter-ota",
  "matter-transport",
  "proptest",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

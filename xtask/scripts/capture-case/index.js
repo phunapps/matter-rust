@@ -350,13 +350,20 @@ function computeDestId(ipk, rcacPublicKey, fabricId, nodeId, initiatorRandom) {
  * Build and encode Sigma1.
  * Returns a Buffer of the TLV-encoded Sigma1 struct.
  */
-function buildSigma1(initiatorRandom, initiatorSessionId, destId, ephPub, resumptionFields) {
+function buildSigma1(initiatorRandom, initiatorSessionId, destId, ephPub, resumptionFields, sessionParams) {
     const struct = {
         initiatorRandom: new Uint8Array(initiatorRandom),
         initiatorSessionId,
         destinationId: new Uint8Array(destId),
         initiatorEcdhPublicKey: new Uint8Array(ephPub),
     };
+    // Optional `initiatorSessionParams` (context tag 5). matter.js encodes it
+    // with its own TlvSessionParameters schema, which is exactly the point:
+    // the Rust encoder is checked against matter.js, not against a reading of
+    // the spec.
+    if (sessionParams) {
+        struct.initiatorSessionParams = sessionParams;
+    }
     if (resumptionFields) {
         struct.resumptionId = new Uint8Array(resumptionFields.resumptionId);
         struct.initiatorResumeMic = new Uint8Array(resumptionFields.initiatorResumeMic);
@@ -530,6 +537,7 @@ async function captureHandshake(scenario) {
         responderRandomHex,
         newResumptionIdHex,
         resumptionRecord, // optional, for resumption scenarios
+        sessionParams, // optional: initiatorSessionParams (context tag 5)
     } = scenario;
 
     const ipk = Buffer.from(ipkHex, 'hex');
@@ -576,7 +584,8 @@ async function captureHandshake(scenario) {
         };
     }
 
-    const sigma1Bytes = buildSigma1(initiatorRandom, 0, destId, initEph.publicKey, resumptionFields);
+    const sigma1Bytes = buildSigma1(
+        initiatorRandom, 0, destId, initEph.publicKey, resumptionFields, sessionParams);
 
     // Step 4: Build Sigma2.
     const newResumptionId = Buffer.from(newResumptionIdHex, 'hex');
@@ -627,6 +636,9 @@ async function captureHandshake(scenario) {
         inputs.resumption_shared_secret = resumptionRecord.sharedSecret;
     }
     inputs.new_resumption_id = newResumptionIdHex;
+    if (sessionParams) {
+        inputs.session_params = sessionParams;
+    }
 
     return {
         inputs,
@@ -831,6 +843,33 @@ const scenarios = [
             resumptionRecord: {
                 resumptionId: PRIOR_RESUMPTION_ID_HEX,
                 sharedSecret: PRIOR_SHARED_SECRET_HEX,
+            },
+        },
+    },
+    {
+        // Byte parity for the SessionParameters element we advertise in
+        // Sigma1 (context tag 5). The values are exactly what
+        // `matter-controller`'s `local_session_params()` claims.
+        id: 'handshake-with-session-params',
+        runner: captureHandshake,
+        params: {
+            fabricId: FABRIC_ID,
+            initiatorNodeId: INITIATOR_NODE_ID,
+            responderNodeId: RESPONDER_NODE_ID,
+            ipkHex: FIXED_IPK_HEX,
+            initiatorEphPrivHex: INIT_EPH_PRIV_HEX,
+            initiatorRandomHex: INIT_RANDOM_HEX,
+            responderEphPrivHex: RESP_EPH_PRIV_HEX,
+            responderRandomHex: RESP_RANDOM_HEX,
+            newResumptionIdHex: NEW_RESUMPTION_ID_HEX,
+            sessionParams: {
+                idleInterval: 500,
+                activeInterval: 300,
+                activeThreshold: 4000,
+                dataModelRevision: 19,
+                interactionModelRevision: 11,
+                specificationVersion: 0x01040000,
+                maxPathsPerInvoke: 1,
             },
         },
     },
