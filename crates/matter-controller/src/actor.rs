@@ -8813,6 +8813,138 @@ mod tests {
         device.await.unwrap();
     }
 
+    /// A real initiator standalone-acks our Sigma2 before sending Sigma3, and
+    /// the provider server must absorb that ack rather than treat it as a
+    /// protocol error.
+    ///
+    /// Found on hardware, not in review: an esp-matter ESP32-C6 acting as OTA
+    /// requestor failed every inbound CASE with
+    /// `expected Sigma3 (0x32), got 0x10`. Sigma3 costs the initiator an ECDSA
+    /// signature plus an AEAD seal — far longer than MRP's 200 ms ack deadline
+    /// — so it acknowledges delivery first and sends the message when ready.
+    /// Every loopback test drove Sigma3 immediately and never produced the
+    /// frame order a real device produces.
+    #[cfg(feature = "ota")]
+    // Both sides of a CASE handshake in one body, so the exact frame ORDER the
+    // test exists to pin is readable in sequence.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test]
+    async fn provider_absorbs_a_standalone_ack_before_sigma3() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id: _,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+        let provider_addr = dev_io.local_addr();
+
+        let server = tokio::spawn(async move {
+            let mut ps = crate::provider_server::ProviderServer::new(
+                dev_io,
+                vec![provider_creds],
+                provider_roots,
+                /* base_session_id */ 0x81,
+                MatterTime::from_unix_secs(2_000_000_000),
+            );
+            ps.accept_case(None).await.map(|_| ())
+        });
+
+        let requestor = tokio::spawn(async move {
+            use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
+            const OP_SIGMA1: u8 = 0x30;
+            const OP_SIGMA3: u8 = 0x32;
+            const OP_MRP_STANDALONE_ACK: u8 = 0x10;
+
+            let mut initiator = matter_crypto::CaseInitiator::new(
+                device_creds,
+                device_roots,
+                provider_node_id,
+                fabric_id,
+                0x0051,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
+            let sigma1 = initiator.start().unwrap();
+            let mut counter = 1u32;
+            let mut frame = |opcode: u8, payload: &[u8], ack: Option<u32>, reliable: bool| {
+                let w = encode_unsecured(
+                    counter,
+                    0x0099,
+                    opcode,
+                    ProtocolId::SECURE_CHANNEL,
+                    true,
+                    reliable,
+                    ack,
+                    Some(0xFFFF_FFFF_FFFF_FF02),
+                    payload,
+                );
+                counter += 1;
+                w
+            };
+            ctrl_io
+                .send_to(&frame(OP_SIGMA1, &sigma1, None, true), provider_addr)
+                .await
+                .unwrap();
+
+            let (bytes, _) = ctrl_io.recv_from().await.unwrap();
+            let sigma2 = decode_unsecured(&bytes).unwrap();
+            initiator.handle_sigma2(&sigma2.payload).unwrap();
+
+            // THE POINT: ack Sigma2 first, as a real device does, and only
+            // then send Sigma3.
+            ctrl_io
+                .send_to(
+                    &frame(
+                        OP_MRP_STANDALONE_ACK,
+                        &[],
+                        Some(sigma2.message_counter),
+                        false,
+                    ),
+                    provider_addr,
+                )
+                .await
+                .unwrap();
+            let sigma3 = initiator.next_message().unwrap();
+            ctrl_io
+                .send_to(&frame(OP_SIGMA3, &sigma3, None, true), provider_addr)
+                .await
+                .unwrap();
+
+            // Absorb the provider's StatusReport and ack it so its accept ends.
+            let (bytes, _) = ctrl_io.recv_from().await.unwrap();
+            let report = decode_unsecured(&bytes).unwrap();
+            ctrl_io
+                .send_to(
+                    &frame(
+                        OP_MRP_STANDALONE_ACK,
+                        &[],
+                        Some(report.message_counter),
+                        false,
+                    ),
+                    provider_addr,
+                )
+                .await
+                .unwrap();
+        });
+
+        server
+            .await
+            .unwrap()
+            .expect("a standalone ack before Sigma3 must not fail the accept");
+        requestor.await.unwrap();
+    }
+
     /// A record minted under a commissioner identity that no longer holds must
     /// NOT be offered — the connect falls back to a full handshake instead.
     ///

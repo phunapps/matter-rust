@@ -55,6 +55,11 @@ const OP_INVOKE_REQUEST: u8 = 0x08;
 /// leftovers from a discarded session) must not consume pooled credentials —
 /// but a flooder should still hit a bound rather than spin the accept
 /// forever.
+/// Frames to absorb while waiting for Sigma3 before giving up. A real
+/// initiator sends at most a standalone ack plus a Sigma1 retransmit or two
+/// ahead of it; this bounds a peer that never completes the handshake.
+const MAX_AWAIT_SIGMA3_FRAMES: usize = 8;
+
 const MAX_AWAIT_SIGMA1_DISCARDS: usize = 64;
 const OP_INVOKE_RESPONSE: u8 = 0x09;
 
@@ -589,14 +594,57 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         self.send(&wire, peer).await?;
 
         // Sigma3 → success StatusReport.
-        let (s3, _) = self.recv().await?;
-        let m3 = decode_unsecured(&s3).map_err(|e| Error::Operational(format!("sigma3: {e}")))?;
-        if m3.opcode != OP_SIGMA3 {
-            return Err(Error::Operational(format!(
-                "expected Sigma3 (0x32), got {:#04x}",
-                m3.opcode
-            )));
+        //
+        // A real chip initiator standalone-acks our Sigma2 BEFORE sending
+        // Sigma3: Sigma3 costs it an ECDSA signature plus an AEAD seal, which
+        // is far longer than MRP's ack deadline, so it acknowledges delivery
+        // first and sends the message when it is ready. A single blocking
+        // `recv` that demands 0x32 therefore fails against every real device
+        // with `expected Sigma3 (0x32), got 0x10` — observed against an
+        // esp-matter ESP32-C6 acting as OTA requestor. The resumed path
+        // already tolerated this; the full path did not.
+        //
+        // Also re-send Sigma2 on a Sigma1 retransmit (our Sigma2, or its ack,
+        // was lost), mirroring `complete_resumed`.
+        let mut m3 = None;
+        for _ in 0..MAX_AWAIT_SIGMA3_FRAMES {
+            let (bytes, _) = self.recv().await?;
+            let m =
+                decode_unsecured(&bytes).map_err(|e| Error::Operational(format!("sigma3: {e}")))?;
+            match m.opcode {
+                OP_SIGMA3 => {
+                    m3 = Some(m);
+                    break;
+                }
+                // Delivery acknowledged; the initiator is computing Sigma3.
+                OP_MRP_STANDALONE_ACK => {}
+                // Our Sigma2 (or its ack) was lost — re-send on the same exchange.
+                OP_SIGMA1 => {
+                    let c = self.next_handshake_counter();
+                    let again = encode_unsecured_reply(
+                        c,
+                        m.exchange_id,
+                        OP_SIGMA2,
+                        ProtocolId::SECURE_CHANNEL,
+                        true,
+                        Some(m.message_counter),
+                        m.source_node_id.or(m1.source_node_id),
+                        &sigma2,
+                    );
+                    self.send(&again, peer).await?;
+                }
+                other => {
+                    return Err(Error::Operational(format!(
+                        "expected Sigma3 (0x32), got {other:#04x}"
+                    )))
+                }
+            }
         }
+        let Some(m3) = m3 else {
+            return Err(Error::Operational(
+                "no Sigma3 within frame budget".to_string(),
+            ));
+        };
         responder
             .handle_sigma3(&m3.payload)
             .map_err(|e| Error::Operational(format!("handle_sigma3: {e}")))?;
