@@ -34,8 +34,8 @@ use matter_interaction::{
 #[cfg(any(feature = "unstable-provider", test))]
 use matter_interaction::ParsedInvokeRequest;
 use matter_transport::{
-    DecodeInboundOutput, MatterService, MrpFlags, ProtocolId, ServiceKind, SessionId,
-    SessionManager, SessionRole,
+    DecodeInboundOutput, MatterService, MrpConfig, MrpFlags, MrpProvenance, ProtocolId,
+    ServiceKind, SessionId, SessionManager, SessionRole,
 };
 
 use crate::error::Error;
@@ -324,7 +324,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// saw a NEW Sigma1 in place of the initiator's standalone ack (see
     /// [`Self::complete_full`]); the caller must feed it into its next accept
     /// or the handshake attempt it opens is lost.
-    async fn accept_case(
+    pub(crate) async fn accept_case(
         &mut self,
         first_frame: Option<CarriedFrame>,
     ) -> Result<(SessionManager, SessionId, SocketAddr, Option<CarriedFrame>), Error> {
@@ -374,6 +374,13 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         let outcome = responder
             .handle_sigma1(&m1.payload)
             .map_err(|e| Error::Operational(format!("handle_sigma1: {e}")))?;
+
+        // Capture the initiator's advertised MRP timings now, before `finish`
+        // consumes the responder. As the responder we have no operational mDNS
+        // record for this peer, so Sigma1's `SessionParameters` element is the
+        // ONLY thing that can tell us it is sleepy — and this session is the
+        // one we then push BDX blocks down.
+        let peer_session_params = responder.peer_session_params();
 
         let resumed = match outcome {
             Sigma1Outcome::NewSession => false,
@@ -434,8 +441,24 @@ impl<D: AsyncDatagram> ProviderServer<D> {
                 sink(record);
             }
         }
+        // Size the operational session to whatever the initiator advertised.
+        // Until this existed the responder role always got `MrpConfig::default()`
+        // + `MrpProvenance::Unknown`, so a sleepy requestor was retransmitted at
+        // on the spec's 500 ms idle base no matter what it asked for.
+        //
+        // Provenance is binary here on purpose: the element was present, or it
+        // was not. A peer that sends the element but omits an interval gets the
+        // spec default for that field via the merge, exactly as the mDNS path
+        // treats a missing TXT key.
+        let (mrp, provenance) = match peer_session_params {
+            Some(p) => (
+                MrpConfig::default().merge_session_params(&p),
+                MrpProvenance::PeerAdvertised,
+            ),
+            None => (MrpConfig::default(), MrpProvenance::Unknown),
+        };
         let mut sessions = SessionManager::new();
-        let sid = sessions.register_case(&output, SessionRole::Responder);
+        let sid = sessions.register_case_with_mrp(&output, SessionRole::Responder, mrp, provenance);
         Ok((sessions, sid, peer, carry))
     }
 

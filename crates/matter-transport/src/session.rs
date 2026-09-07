@@ -514,6 +514,19 @@ impl SessionManager {
         local_id
     }
 
+    /// The MRP retransmit configuration a registered session is using.
+    ///
+    /// Exists so the sizing a session ended up with is *observable* rather than
+    /// only loggable. Until this existed the only record of it was the
+    /// `"CASE session registered"` tracing line, which a test cannot assert on
+    /// and an embedded build does not emit at all.
+    ///
+    /// Returns `None` for an unknown [`SessionId`].
+    #[must_use]
+    pub fn mrp_config(&self, id: SessionId) -> Option<MrpConfig> {
+        self.sessions.get(&id).map(|s| s.mrp.config())
+    }
+
     /// Reserve and return the next free local session id WITHOUT creating a
     /// session. The commissioning driver allocates this first, advertises it
     /// in the handshake, then registers the finished session under the same

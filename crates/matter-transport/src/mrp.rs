@@ -273,13 +273,21 @@ impl MrpConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MrpProvenance {
-    /// Parsed from the peer's operational mDNS TXT `SII`/`SAI`/`SAT`.
+    /// Parsed from something the peer itself said: the operational mDNS TXT
+    /// `SII`/`SAI`/`SAT`, or the `SessionParameters` element it sent during
+    /// session establishment (see
+    /// [`MrpConfig::merge_session_params`]). The responder role reaches this
+    /// through the second route — it has no mDNS record for the initiator, so
+    /// Sigma1's element is its only source.
     PeerAdvertised,
     /// The peer advertised nothing for one or more keys, so spec defaults
     /// filled in.
     SpecDefault,
-    /// No peer record was available at all — the responder role, or a recovery
-    /// path that had no discovery result to hand.
+    /// No peer record was available at all — a recovery path with no discovery
+    /// result to hand, or a peer that sent no `SessionParameters`.
+    ///
+    /// This used to name the responder role as a cause. It no longer is: a
+    /// responder now sizes itself from the initiator's Sigma1 element.
     Unknown,
 }
 
@@ -543,6 +551,16 @@ fn jitter_with(state: &mut u64, config: &MrpConfig, delay: Duration) -> Duration
 }
 
 impl MrpState {
+    /// The retransmit configuration this state was created with.
+    ///
+    /// `MrpConfig` is `Copy`, and the config is fixed for a session's lifetime
+    /// (it is chosen once, at registration, before any traffic), so handing out
+    /// a copy cannot desynchronise anything.
+    #[must_use]
+    pub fn config(&self) -> MrpConfig {
+        self.config
+    }
+
     /// Apply this state's jitter to `delay`. See [`jitter_with`].
     fn jittered(&mut self, delay: Duration) -> Duration {
         jitter_with(&mut self.jitter, &self.config, delay)

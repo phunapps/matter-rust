@@ -13415,6 +13415,179 @@ mod tests {
         );
     }
 
+    /// A responder-role session must be sized to the timings the initiator
+    /// advertised in Sigma1's `SessionParameters` element.
+    ///
+    /// Before this, `ProviderServer` registered every accepted session with
+    /// `MrpConfig::default()` and `MrpProvenance::Unknown`: as the responder we
+    /// have no operational mDNS record for the peer, so there was nothing to
+    /// size from and a sleepy requestor got the spec's 500 ms idle base no
+    /// matter what it asked for — on the very session we then push BDX blocks
+    /// down. Sigma1's element is the only channel that carries the initiator's
+    /// own timings, and chip applies it at exactly this point
+    /// (`CASESession::HandleSigma1`).
+    ///
+    /// The values are the real Eve Door & Window figures (SII 3300 / SAI 1100 /
+    /// SAT 4000), whose 37238 ms window reproduces by hand.
+    #[tokio::test]
+    async fn responder_role_session_is_sized_to_the_initiators_sigma1_params() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id: _,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+        let provider_addr = dev_io.local_addr();
+
+        let advertised = matter_crypto::SessionParameters::new()
+            .with_session_idle_interval_ms(3300)
+            .with_session_active_interval_ms(1100)
+            .with_session_active_threshold_ms(4000);
+
+        let server = tokio::spawn(async move {
+            let mut ps = crate::ProviderServer::new(
+                dev_io,
+                vec![provider_creds],
+                provider_roots,
+                /* base_session_id */ 0x71,
+                MatterTime::from_unix_secs(2_000_000_000),
+            );
+            let (sessions, sid, _peer, _carry) = ps.accept_case(None).await.expect("accept");
+            sessions.mrp_config(sid).expect("registered session")
+        });
+
+        let requestor = tokio::spawn(async move {
+            drive_sigma1_with_params(
+                &ctrl_io,
+                provider_addr,
+                device_creds,
+                device_roots,
+                provider_node_id,
+                fabric_id,
+                /* session_id */ 0x0041,
+                advertised,
+            )
+            .await;
+        });
+
+        let cfg = server.await.unwrap();
+        requestor.await.unwrap();
+
+        assert_eq!(
+            cfg,
+            matter_transport::MrpConfig::default().merge_session_params(&advertised),
+            "the accepted session must be sized to Sigma1's advertisement"
+        );
+        assert_eq!(
+            cfg.initial_idle,
+            std::time::Duration::from_millis(3300),
+            "a sleepy initiator's SII must reach the session it will be retransmitted on"
+        );
+        assert_ne!(
+            cfg,
+            matter_transport::MrpConfig::default(),
+            "negative guard: the spec-default config must be distinguishable here"
+        );
+    }
+
+    /// Drive a full CASE handshake into the provider as the initiator, with
+    /// `params` advertised in Sigma1. Trimmed to what the sizing test needs:
+    /// it runs the handshake to the provider's success `StatusReport` and acks
+    /// it, so the provider's accept completes.
+    #[allow(clippy::too_many_arguments)] // Mirrors the CASE parameter list, as `full_case_handshake` does.
+    async fn drive_sigma1_with_params(
+        io: &matter_commissioning::driver::InMemoryDatagram,
+        provider_addr: std::net::SocketAddr,
+        creds: matter_crypto::CaseCredentials,
+        roots: matter_cert::TrustedRoots,
+        provider_node_id: u64,
+        fabric_id: u64,
+        session_id: u16,
+        params: matter_crypto::SessionParameters,
+    ) {
+        use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
+        use matter_transport::ProtocolId;
+
+        const OP_SIGMA1: u8 = 0x30;
+        const OP_SIGMA3: u8 = 0x32;
+        const OP_MRP_STANDALONE_ACK: u8 = 0x10;
+
+        let mut initiator = matter_crypto::CaseInitiator::new(
+            creds,
+            roots,
+            provider_node_id,
+            fabric_id,
+            session_id,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .expect("initiator")
+        .with_session_params(params);
+
+        let sigma1 = initiator.start().expect("sigma1");
+        let mut counter = 1u32;
+        let mut send = |opcode: u8, payload: &[u8], ack: Option<u32>| {
+            let wire = encode_unsecured(
+                counter,
+                /* exchange_id */ 0x0077,
+                opcode,
+                ProtocolId::SECURE_CHANNEL,
+                true,
+                true,
+                ack,
+                Some(0xFFFF_FFFF_FFFF_FF01),
+                payload,
+            );
+            counter += 1;
+            wire
+        };
+        io.send_to(&send(OP_SIGMA1, &sigma1, None), provider_addr)
+            .await
+            .unwrap();
+
+        // Absorb frames until Sigma2 arrives (stray acks are skipped).
+        let sigma2 = loop {
+            let (bytes, _) = io.recv_from().await.unwrap();
+            let m = decode_unsecured(&bytes).unwrap();
+            if m.opcode != OP_MRP_STANDALONE_ACK {
+                break m;
+            }
+        };
+        initiator.handle_sigma2(&sigma2.payload).expect("sigma2");
+        let sigma3 = initiator.next_message().expect("sigma3");
+        io.send_to(
+            &send(OP_SIGMA3, &sigma3, Some(sigma2.message_counter)),
+            provider_addr,
+        )
+        .await
+        .unwrap();
+
+        // Ack the provider's closing StatusReport so its accept returns.
+        let report = loop {
+            let (bytes, _) = io.recv_from().await.unwrap();
+            let m = decode_unsecured(&bytes).unwrap();
+            if m.opcode != OP_MRP_STANDALONE_ACK {
+                break m;
+            }
+        };
+        io.send_to(
+            &send(OP_MRP_STANDALONE_ACK, &[], Some(report.message_counter)),
+            provider_addr,
+        )
+        .await
+        .unwrap();
+    }
+
     /// Full (non-resumed) CASE handshake driver: Sigma1 → Sigma2 → Sigma3 →
     /// success `StatusReport`. The `resume_case_handshake` counterpart for the
     /// full path. When `send_final_ack` is false the closing standalone ack of
