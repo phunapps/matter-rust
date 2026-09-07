@@ -9,13 +9,13 @@ use std::collections::BTreeSet;
 use std::net::SocketAddr;
 
 use matter_cert::{MatterTime, TrustedRoots};
-use matter_crypto::{CaseCredentials, CaseInitiator};
+use matter_crypto::{CaseCredentials, CaseInitiator, ResumptionRecord, SessionParameters};
 use matter_transport::{Discovery, MrpConfig, ServiceKind, SessionId, SessionManager, SessionRole};
 
 use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
 use crate::driver::unsecured::{
-    parse_status_report, random_exchange_id, require_handshake_opcode, UnsecuredExchange,
+    parse_status_report, random_exchange_id, require_handshake_opcode_any, UnsecuredExchange,
 };
 use crate::driver::TransportReliability;
 
@@ -454,6 +454,9 @@ fn discovery_failure_message(target: &str, seen: &[&str]) -> String {
 const OP_SIGMA1: u8 = 0x30;
 const OP_SIGMA2: u8 = 0x31;
 const OP_SIGMA3: u8 = 0x32;
+/// `Sigma2_Resume` — the responder's reply when it accepts resumption. Sent in
+/// place of `Sigma2`, never in addition to it.
+const OP_SIGMA2_RESUME: u8 = 0x33;
 /// `SecureChannel` `StatusReport` opcode (spec §4.10.1.1) — the frame the
 /// device sends to close the handshake after the terminal `Sigma3`.
 const OP_STATUS_REPORT: u8 = 0x40;
@@ -518,6 +521,115 @@ pub async fn run_case<T: AsyncDatagram>(
     Ok(sid)
 }
 
+/// Everything a CASE connect needs beyond the transport and the peer address.
+///
+/// Exists because `run_case_establish` had already grown to nine positional
+/// arguments under `#[allow(clippy::too_many_arguments)]`, and resumption plus
+/// our own session-parameter advertisement would have made it eleven. Future
+/// knobs land here instead of extending that list again.
+///
+/// `#[non_exhaustive]`: build with [`new`](Self::new) and the `with_*` setters.
+#[non_exhaustive]
+pub struct CaseEstablishOptions {
+    /// Local session id to advertise in Sigma1. The caller allocates it so it
+    /// can register the finished session under the same id.
+    pub local_session_id: u16,
+    /// This controller's operational identity on the fabric.
+    pub credentials: CaseCredentials,
+    /// Roots the device's operational chain is validated against.
+    pub trusted_roots: TrustedRoots,
+    /// The device's node id.
+    pub peer_node_id: u64,
+    /// The fabric both sides are on.
+    pub peer_fabric_id: u64,
+    /// Wall clock the device's certificate chain is checked against. This crate
+    /// never reads the system clock.
+    pub now: MatterTime,
+    /// Retransmit sizing to start from — normally the peer's operational mDNS
+    /// TXT `SII`/`SAI`/`SAT`. Refined mid-handshake from the device's own
+    /// `SessionParameters` if it sends any.
+    pub peer_mrp: MrpConfig,
+    /// A stored record from a previous session with this peer. When present,
+    /// Sigma1 carries resumption fields and the responder may answer with
+    /// `Sigma2_Resume` — or decline, in which case the full handshake proceeds
+    /// with no extra round trip.
+    pub resumption_record: Option<ResumptionRecord>,
+    /// What we advertise about ourselves in Sigma1 (context tag 5).
+    pub local_session_params: Option<SessionParameters>,
+}
+
+impl CaseEstablishOptions {
+    /// The required inputs. Optional behaviour is opted into with the `with_*`
+    /// setters; the defaults reproduce a plain, non-resumed handshake that
+    /// advertises nothing, sized to the spec defaults.
+    #[must_use]
+    pub fn new(
+        local_session_id: u16,
+        credentials: CaseCredentials,
+        trusted_roots: TrustedRoots,
+        peer_node_id: u64,
+        peer_fabric_id: u64,
+        now: MatterTime,
+    ) -> Self {
+        Self {
+            local_session_id,
+            credentials,
+            trusted_roots,
+            peer_node_id,
+            peer_fabric_id,
+            now,
+            peer_mrp: MrpConfig::for_peer(None, None, None),
+            resumption_record: None,
+            local_session_params: None,
+        }
+    }
+
+    /// Size the handshake's retransmits to the peer's advertised MRP config.
+    #[must_use]
+    pub fn with_peer_mrp(mut self, peer_mrp: MrpConfig) -> Self {
+        self.peer_mrp = peer_mrp;
+        self
+    }
+
+    /// Attempt resumption using `record`, falling back to a full handshake if
+    /// the responder declines.
+    #[must_use]
+    pub fn with_resumption_record(mut self, record: ResumptionRecord) -> Self {
+        self.resumption_record = Some(record);
+        self
+    }
+
+    /// Advertise `params` about ourselves in Sigma1.
+    #[must_use]
+    pub fn with_session_params(mut self, params: SessionParameters) -> Self {
+        self.local_session_params = Some(params);
+        self
+    }
+}
+
+/// The result of a completed CASE connect.
+///
+/// `#[non_exhaustive]`: more may be reported as the handshake learns more about
+/// the peer.
+///
+/// `Debug` comes from `CaseSessionOutput`, whose own impl redacts the session
+/// keys — nothing here can print key material.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct CaseEstablished {
+    /// Session keys and both identities.
+    pub output: matter_crypto::CaseSessionOutput,
+    /// Whether the fast path was taken (`Sigma2_Resume`) rather than the full
+    /// three-message handshake. False when no record was supplied *and* when
+    /// one was supplied but the responder declined it.
+    pub resumed: bool,
+    /// The device's own `SessionParameters`, if it sent any. More trustworthy
+    /// than the mDNS TXT record: an advertisement can be stale, cached, or
+    /// absent. Feed it to `MrpConfig::merge_session_params` when registering
+    /// the operational session.
+    pub peer_session_params: Option<SessionParameters>,
+}
+
 /// Drive a fresh CASE (SIGMA-I) handshake to completion over `transport` and
 /// return the established [`CaseSessionOutput`](matter_crypto::CaseSessionOutput)
 /// **without registering it** — so the caller can register it into its own
@@ -538,6 +650,8 @@ pub async fn run_case<T: AsyncDatagram>(
 ///   handshake with a non-success `StatusReport`.
 // Same CASE setup as `run_case`, plus an explicit `local_session_id`
 // in place of the `SessionManager` this variant does not touch.
+// Same CASE setup as `run_case`, plus an explicit `local_session_id`
+// in place of the `SessionManager` this variant does not touch.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_case_establish<T: AsyncDatagram>(
     transport: &T,
@@ -550,14 +664,111 @@ pub async fn run_case_establish<T: AsyncDatagram>(
     now: MatterTime,
     peer_mrp: MrpConfig,
 ) -> Result<matter_crypto::CaseSessionOutput, DriverError> {
-    let mut initiator = CaseInitiator::new(
+    let opts = CaseEstablishOptions::new(
+        local_session_id,
         credentials,
         trusted_roots,
         peer_node_id,
         peer_fabric_id,
-        local_session_id,
         now,
-    )?;
+    )
+    .with_peer_mrp(peer_mrp);
+    Ok(run_case_establish_with(transport, peer, opts).await?.output)
+}
+
+/// Drive a CASE handshake to completion over `transport`, with resumption and
+/// our own session-parameter advertisement available via
+/// [`CaseEstablishOptions`], and **without registering** the result.
+///
+/// [`run_case_establish`] is this function with the options left at their
+/// defaults; the two share this body so their behaviour cannot diverge.
+///
+/// # The two paths, and why the fallback is free
+///
+/// When `opts.resumption_record` is set, Sigma1 carries `resumptionId` +
+/// `initiatorResumeMIC` and the responder may reply with either:
+///
+/// - `Sigma2_Resume` (0x33) — resumption accepted. There is no Sigma3 on this
+///   path; the handshake ends with a success `StatusReport` from us.
+/// - `Sigma2` (0x31) — declined. The full three-message handshake proceeds
+///   exactly as if resumption had never been attempted.
+///
+/// The decline costs nothing extra because Sigma1 already carried a real
+/// ephemeral public key and `destinationId` — resumption only *adds* two
+/// optional fields — and because the transcript hashes the Sigma1 bytes as
+/// actually emitted, resumption fields included. Both reference
+/// implementations rely on the same property (chip hashes at
+/// `CASESession.cpp:800` before the responder's decision is known).
+///
+/// Routing is on the **received** opcode, never on the state machine's
+/// `expected_inbound()` hint: calling `handle_sigma2_resume` when no resumption
+/// was attempted poisons the machine unrecoverably.
+///
+/// # When resumption is attempted
+///
+/// Whenever a record is supplied — no capability probe, no age check, no
+/// backoff. That is what both references do (`CASESession::SendSigma1`,
+/// matter.js `CaseClient.#doPair`); the policy of *whether* to keep and supply
+/// a record belongs to the caller that owns the store.
+///
+/// # Errors
+///
+/// - [`DriverError::Crypto`] if a SIGMA step fails. In particular
+///   [`matter_crypto::Error::ResumptionMacMismatch`] means the responder
+///   accepted our resumption id but proved a different shared secret: the
+///   stored record is unusable and the caller should drop it and reconnect.
+/// - [`DriverError::Io`] / [`DriverError::Transport`] / [`DriverError::Timeout`]
+///   on datagram, framing, or reply-timeout failure.
+/// - [`DriverError::SessionEstablishmentFailed`] if the device closes the
+///   handshake with a non-success `StatusReport`.
+// Both SIGMA paths are kept in one function on purpose: the resumed and full
+// branches share the exchange, the Sigma1 that opened it, and the re-sizing
+// step, and a reviewer must be able to see that the decline path reuses the
+// SAME ephemeral key and the SAME emitted Sigma1 bytes without chasing a
+// helper. Splitting on that boundary would hide exactly what makes the
+// fallback correct.
+#[allow(clippy::too_many_lines)]
+pub async fn run_case_establish_with<T: AsyncDatagram>(
+    transport: &T,
+    peer: SocketAddr,
+    opts: CaseEstablishOptions,
+) -> Result<CaseEstablished, DriverError> {
+    let CaseEstablishOptions {
+        local_session_id,
+        credentials,
+        trusted_roots,
+        peer_node_id,
+        peer_fabric_id,
+        now,
+        peer_mrp,
+        resumption_record,
+        local_session_params,
+    } = opts;
+
+    let resuming = resumption_record.is_some();
+    let mut initiator = match resumption_record {
+        Some(record) => CaseInitiator::new_with_resumption(
+            credentials,
+            trusted_roots,
+            peer_node_id,
+            peer_fabric_id,
+            record,
+            local_session_id,
+            now,
+        )?,
+        None => CaseInitiator::new(
+            credentials,
+            trusted_roots,
+            peer_node_id,
+            peer_fabric_id,
+            local_session_id,
+            now,
+        )?,
+    };
+    if let Some(params) = local_session_params {
+        initiator = initiator.with_session_params(params);
+    }
+
     // CSPRNG-seeded counter + ephemeral source node id (spec §4.5.1.1,
     // §4.13.2.1) — same unsecured-header requirements as PASE apply to SIGMA.
     // Retransmits are sized to the peer's advertised SII: the operational layer
@@ -569,11 +780,21 @@ pub async fn run_case_establish<T: AsyncDatagram>(
         peer_mrp,
     )?;
 
+    // A resumption Sigma1 admits either reply. Widening the gate is not
+    // cosmetic: the exchange DROPS frames whose opcode is unexpected, so an
+    // inbound Sigma2_Resume would otherwise never surface and the connect would
+    // end in a timeout that looks nothing like "the peer accepted resumption".
+    let expected: &[u8] = if resuming {
+        &[OP_SIGMA2, OP_SIGMA2_RESUME]
+    } else {
+        &[OP_SIGMA2]
+    };
+
     let sigma1 = initiator.start()?;
     let sigma2 = exch
-        .send_and_recv(transport, peer, OP_SIGMA1, OP_SIGMA2, &sigma1, None)
+        .send_and_recv_any(transport, peer, OP_SIGMA1, expected, &sigma1, None)
         .await?;
-    if let Err(e) = require_handshake_opcode(&sigma2, OP_SIGMA2) {
+    if let Err(e) = require_handshake_opcode_any(&sigma2, expected) {
         // Best-effort ack so a rejecting device stops retransmitting its
         // (reliable) StatusReport before we abort.
         let _ = exch
@@ -581,12 +802,58 @@ pub async fn run_case_establish<T: AsyncDatagram>(
             .await;
         return Err(e);
     }
+
+    if sigma2.opcode == OP_SIGMA2_RESUME {
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            sigma2_resume = %crate::hexdump::hex(&sigma2.payload),
+            "received Sigma2_Resume (resumption accepted)"
+        );
+        // A MIC mismatch here surfaces to the caller as
+        // `Error::ResumptionMacMismatch`; the record it supplied is unusable.
+        initiator.handle_sigma2_resume(&sigma2.payload)?;
+        if let Some(params) = initiator.peer_session_params() {
+            exch.resize_peer_mrp(peer_mrp.merge_session_params(&params));
+        }
+
+        // No Sigma3 exists on this path. The handshake closes with a success
+        // StatusReport from us, which the responder acks. A lost ack does not
+        // invalidate the session — see `send_and_await_ack`.
+        let _acked = exch
+            .send_and_await_ack(
+                transport,
+                peer,
+                OP_STATUS_REPORT,
+                &session_establishment_success_report(),
+                Some(sigma2.message_counter),
+            )
+            .await?;
+
+        let peer_session_params = initiator.peer_session_params();
+        return Ok(CaseEstablished {
+            output: initiator.finish()?,
+            resumed: true,
+            peer_session_params,
+        });
+    }
+
+    #[cfg(feature = "tracing")]
+    if resuming {
+        tracing::debug!("peer declined resumption; falling back to a full handshake");
+    }
     #[cfg(feature = "tracing")]
     tracing::debug!(
         sigma2 = %crate::hexdump::hex(&sigma2.payload),
         "received Sigma2"
     );
     initiator.handle_sigma2(&sigma2.payload)?;
+
+    // Re-size from what the device just said about itself, before Sigma3 goes
+    // out. chip does this at the same point (`CASESession::HandleSigma2`); the
+    // mDNS record the exchange started from can be stale, cached, or absent.
+    if let Some(params) = initiator.peer_session_params() {
+        exch.resize_peer_mrp(peer_mrp.merge_session_params(&params));
+    }
 
     // Sigma3 is sent reliably and the device closes the handshake with a
     // SecureChannel StatusReport (success or failure) — consumed and acked
@@ -612,8 +879,23 @@ pub async fn run_case_establish<T: AsyncDatagram>(
         });
     }
 
-    let output = initiator.finish()?;
-    Ok(output)
+    let peer_session_params = initiator.peer_session_params();
+    Ok(CaseEstablished {
+        output: initiator.finish()?,
+        resumed: false,
+        peer_session_params,
+    })
+}
+
+/// The `SecureChannel` `StatusReport` body meaning
+/// `SessionEstablishmentSuccess`: `GeneralCode=0`, `ProtocolId=0`
+/// (`SecureChannel`), `ProtocolCode=0`, all little-endian (spec §4.10.1.1).
+fn session_establishment_success_report() -> [u8; 8] {
+    let mut body = [0u8; 8];
+    body[0..2].copy_from_slice(&0u16.to_le_bytes());
+    body[2..6].copy_from_slice(&0u32.to_le_bytes());
+    body[6..8].copy_from_slice(&0u16.to_le_bytes());
+    body
 }
 
 #[cfg(test)]
@@ -1412,6 +1694,381 @@ mod tests {
         let registered = sessions.get(sid).unwrap();
         assert_eq!(registered.keys, SessionKeys::from_case_output(&dev_out));
         assert_eq!(registered.peer_id, matter_transport::SessionId(0x00D2));
+    }
+
+    // ---------------------------------------------------------------
+    // Initiator-side CASE resumption
+    // ---------------------------------------------------------------
+
+    /// A matched pair of resumption records, as a real prior session would
+    /// have left on both sides: same id, same secret, each side caching the
+    /// other's identity.
+    fn matched_resumption_pair(
+        init_noc: &MatterCertificate,
+        resp_noc: &MatterCertificate,
+    ) -> (
+        matter_crypto::ResumptionRecord,
+        matter_crypto::ResumptionRecord,
+    ) {
+        use matter_crypto::{PeerInfo, ResumptionId, ResumptionRecord};
+        let id = ResumptionId([0x42; 16]);
+        let shared_secret = [0x77u8; 32];
+        (
+            // What the controller stored: the device's identity.
+            ResumptionRecord {
+                id,
+                shared_secret,
+                peer: PeerInfo {
+                    node_id: T_RESPONDER_NODE,
+                    fabric_id: T_FABRIC_ID,
+                    noc: resp_noc.clone(),
+                    session_id: 0x00D2,
+                },
+                expires_at: None,
+            },
+            // What the device stored: the controller's identity.
+            ResumptionRecord {
+                id,
+                shared_secret,
+                peer: PeerInfo {
+                    node_id: T_INITIATOR_NODE,
+                    fabric_id: T_FABRIC_ID,
+                    noc: init_noc.clone(),
+                    session_id: 0x0001,
+                },
+                expires_at: None,
+            },
+        )
+    }
+
+    /// The fast path end to end: Sigma1-with-resumption → `Sigma2_Resume` →
+    /// success `StatusReport` → ack. No Sigma3 exists on this path.
+    #[tokio::test]
+    async fn resumption_takes_the_sigma2_resume_fast_path() {
+        let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
+        let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
+        let (resp_noc, resp_signer) = build_test_noc(&rcac_signer, T_RESPONDER_NODE);
+        let (ctrl_record, dev_record) = matched_resumption_pair(&init_noc, &resp_noc);
+        let init_creds = creds(init_noc, init_signer, T_INITIATOR_NODE, rcac_pub);
+        let resp_creds = creds(resp_noc, resp_signer, T_RESPONDER_NODE, rcac_pub);
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let device = async {
+            let mut responder = CaseResponder::new(
+                resp_creds,
+                roots_for(&rcac),
+                0x00D2,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            assert!(
+                matches!(
+                    responder.handle_sigma1(&m.payload).unwrap(),
+                    Sigma1Outcome::ResumptionRequested { .. }
+                ),
+                "Sigma1 must carry the resumption fields"
+            );
+            responder.accept_resumption(dev_record).unwrap();
+            let sigma2_resume = responder.next_message().unwrap();
+            let wire = encode_unsecured(
+                200,
+                m.exchange_id,
+                OP_SIGMA2_RESUME,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &sigma2_resume,
+            );
+            dev_io.send_to(&wire, ctrl_addr).await.unwrap();
+
+            // The controller closes with a success StatusReport; ack it.
+            let (p, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                    .await
+                    .expect("controller must send the closing StatusReport")
+                    .unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            assert_eq!(m.opcode, OP_STATUS_REPORT, "resumed path ends in a report");
+            assert_eq!(
+                u16::from_le_bytes([m.payload[0], m.payload[1]]),
+                0,
+                "must report success"
+            );
+            let ack = encode_unsecured(
+                201,
+                m.exchange_id,
+                0x10,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                false,
+                Some(m.message_counter),
+                None,
+                &[],
+            );
+            dev_io.send_to(&ack, ctrl_addr).await.unwrap();
+            responder.finish().unwrap()
+        };
+
+        let controller = run_case_establish_with(
+            &ctrl_io,
+            dev_addr,
+            CaseEstablishOptions::new(
+                0x0001,
+                init_creds,
+                roots_for(&rcac),
+                T_RESPONDER_NODE,
+                T_FABRIC_ID,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_record(ctrl_record),
+        );
+
+        let (ctrl_result, dev_out) = tokio::join!(controller, device);
+        let established = ctrl_result.expect("resumed handshake");
+        assert!(
+            established.resumed,
+            "the fast path must be reported as such"
+        );
+        assert_eq!(
+            SessionKeys::from_case_output(&established.output),
+            SessionKeys::from_case_output(&dev_out),
+            "both sides must derive the same resumed session keys"
+        );
+        // Each accept rotates the id; the record handed back is the NEW one.
+        let next = established
+            .output
+            .resumption_record
+            .as_ref()
+            .expect("resumed handshake yields a record to persist");
+        assert_ne!(
+            next.id,
+            matter_crypto::ResumptionId([0x42; 16]),
+            "the responder must have rotated the resumption id"
+        );
+    }
+
+    /// The decline path: the responder does not know the id, answers with a
+    /// plain Sigma2, and the full handshake completes on the SAME exchange
+    /// with the SAME ephemeral key.
+    ///
+    /// This is the regression that matters most. `send_and_recv`'s opcode gate
+    /// silently DROPS a frame that is neither the awaited opcode nor a
+    /// `StatusReport`, so before `send_and_recv_any` existed a resumption Sigma1
+    /// could only ever time out — whichever way the responder replied.
+    #[tokio::test]
+    async fn declined_resumption_falls_back_to_a_full_handshake() {
+        let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
+        let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
+        let (resp_noc, resp_signer) = build_test_noc(&rcac_signer, T_RESPONDER_NODE);
+        let (ctrl_record, _unused) = matched_resumption_pair(&init_noc, &resp_noc);
+        let init_creds = creds(init_noc, init_signer, T_INITIATOR_NODE, rcac_pub);
+        let resp_creds = creds(resp_noc, resp_signer, T_RESPONDER_NODE, rcac_pub);
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let device = async {
+            let mut responder = CaseResponder::new(
+                resp_creds,
+                roots_for(&rcac),
+                0x00D2,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            assert!(matches!(
+                responder.handle_sigma1(&m.payload).unwrap(),
+                Sigma1Outcome::ResumptionRequested { .. }
+            ));
+            // "I have never heard of that resumption id."
+            responder.reject_resumption().unwrap();
+            let sigma2 = responder.next_message().unwrap();
+            let wire = encode_unsecured(
+                200,
+                m.exchange_id,
+                OP_SIGMA2,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &sigma2,
+            );
+            dev_io.send_to(&wire, ctrl_addr).await.unwrap();
+
+            let (p, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                    .await
+                    .expect("controller must fall back to Sigma3")
+                    .unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            assert_eq!(m.opcode, OP_SIGMA3, "the fallback must send a real Sigma3");
+            responder.handle_sigma3(&m.payload).unwrap();
+
+            let mut body = Vec::new();
+            body.extend_from_slice(&0u16.to_le_bytes());
+            body.extend_from_slice(&0u32.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+            let report = encode_unsecured(
+                201,
+                m.exchange_id,
+                OP_STATUS_REPORT,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &body,
+            );
+            dev_io.send_to(&report, ctrl_addr).await.unwrap();
+            let _ack = tokio::time::timeout(std::time::Duration::from_secs(2), dev_io.recv_from())
+                .await
+                .expect("controller must ack the StatusReport")
+                .unwrap();
+            responder.finish().unwrap()
+        };
+
+        let controller = run_case_establish_with(
+            &ctrl_io,
+            dev_addr,
+            CaseEstablishOptions::new(
+                0x0001,
+                init_creds,
+                roots_for(&rcac),
+                T_RESPONDER_NODE,
+                T_FABRIC_ID,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_record(ctrl_record),
+        );
+
+        let (ctrl_result, dev_out) = tokio::join!(controller, device);
+        let established = ctrl_result.expect("declined resumption must still connect");
+        assert!(
+            !established.resumed,
+            "a declined attempt is not a resumed session"
+        );
+        assert_eq!(
+            SessionKeys::from_case_output(&established.output),
+            SessionKeys::from_case_output(&dev_out),
+            "the fallback must agree on keys with the device"
+        );
+    }
+
+    /// A `Sigma2_Resume` whose MIC does not verify must surface as
+    /// `ResumptionMacMismatch`, so the caller can tell "this stored record is
+    /// unusable" apart from every other failure and drop it.
+    ///
+    /// # Why the frame is corrupted rather than the secret
+    ///
+    /// An honest same-id/different-secret split cannot reach the initiator's
+    /// check: the responder validates the *Sigma1* resume MIC first
+    /// (`accept_resumption`), fails, and declines to a full handshake. chip's
+    /// own unit test asserts exactly that outcome for the "peers both have
+    /// record of the same resumption ID, but a different shared secret"
+    /// vector. So a bad `Sigma2_Resume` MIC on the wire means a corrupted or
+    /// forged frame, and that is what this reproduces.
+    #[tokio::test]
+    async fn sigma2_resume_mic_mismatch_surfaces_as_resumption_mac_mismatch() {
+        let (rcac, rcac_signer, rcac_pub) = build_test_rcac();
+        let (init_noc, init_signer) = build_test_noc(&rcac_signer, T_INITIATOR_NODE);
+        let (resp_noc, resp_signer) = build_test_noc(&rcac_signer, T_RESPONDER_NODE);
+        let (ctrl_record, mut dev_record) = matched_resumption_pair(&init_noc, &resp_noc);
+        // Same id, different secret — chip's own test calls this out as the
+        // "mismatched session resumption information" case.
+        dev_record.shared_secret = [0x99u8; 32];
+        let init_creds = creds(init_noc, init_signer, T_INITIATOR_NODE, rcac_pub);
+        let resp_creds = creds(resp_noc, resp_signer, T_RESPONDER_NODE, rcac_pub);
+
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        let ctrl_addr = ctrl_io.local_addr();
+
+        let device = async {
+            let mut responder = CaseResponder::new(
+                resp_creds,
+                roots_for(&rcac),
+                0x00D2,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
+            let (p, _) = dev_io.recv_from().await.unwrap();
+            let m = decode_unsecured(&p).unwrap();
+            let _ = responder.handle_sigma1(&m.payload).unwrap();
+            // Accept with the matching secret (so a well-formed Sigma2_Resume
+            // is produced at all), then corrupt the MIC on the wire.
+            responder
+                .accept_resumption(matter_crypto::ResumptionRecord {
+                    id: matter_crypto::ResumptionId([0x42; 16]),
+                    shared_secret: [0x77u8; 32],
+                    peer: matter_crypto::PeerInfo {
+                        node_id: T_INITIATOR_NODE,
+                        fabric_id: T_FABRIC_ID,
+                        noc: dev_record.peer.noc.clone(),
+                        session_id: 0x0001,
+                    },
+                    expires_at: None,
+                })
+                .unwrap();
+            let mut sigma2_resume = responder.next_message().unwrap();
+            // Flip the first byte of `resume_mic` (context tag 2, a 16-byte
+            // octet string, so the element header is 0x30 0x02 0x10). Located
+            // by that header rather than by a fixed offset: a hard-coded index
+            // would silently start corrupting some other field if the encoding
+            // ever changed, and the test would keep passing for the wrong
+            // reason.
+            let mic_at = sigma2_resume
+                .windows(3)
+                .position(|w| w == [0x30, 0x02, 0x10])
+                .expect("resume_mic element header")
+                + 3;
+            sigma2_resume[mic_at] ^= 0xFF;
+            let wire = encode_unsecured(
+                200,
+                m.exchange_id,
+                OP_SIGMA2_RESUME,
+                matter_transport::ProtocolId::SECURE_CHANNEL,
+                false,
+                true,
+                Some(m.message_counter),
+                None,
+                &sigma2_resume,
+            );
+            dev_io.send_to(&wire, ctrl_addr).await.unwrap();
+        };
+
+        let controller = run_case_establish_with(
+            &ctrl_io,
+            dev_addr,
+            CaseEstablishOptions::new(
+                0x0001,
+                init_creds,
+                roots_for(&rcac),
+                T_RESPONDER_NODE,
+                T_FABRIC_ID,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .with_resumption_record(ctrl_record),
+        );
+
+        let (ctrl_result, ()) = tokio::join!(controller, device);
+        let err = ctrl_result.expect_err("a bad Sigma2_Resume MIC must fail the connect");
+        assert!(
+            matches!(
+                err,
+                DriverError::Crypto(matter_crypto::Error::ResumptionMacMismatch)
+            ),
+            "the caller must be able to single this out to drop the record; got: {err:?}"
+        );
     }
 
     /// M9-G-d Task 2: `run_case_establish` drives the same handshake but returns

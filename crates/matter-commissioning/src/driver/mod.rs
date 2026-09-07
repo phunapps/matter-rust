@@ -24,7 +24,7 @@ mod unsecured;
 pub use case::{
     operational_instance_name, preferred_address, resolve_operational,
     resolve_operational_with_attempts, resolve_operational_with_mrp, run_case, run_case_establish,
-    BLE_RESOLVE_POLL_ATTEMPTS,
+    run_case_establish_with, CaseEstablishOptions, CaseEstablished, BLE_RESOLVE_POLL_ATTEMPTS,
 };
 pub use commission::{
     commission, commission_ble, resolve_commissionable, BleDriverConfig, DriverConfig, STREAM_PEER,
@@ -38,8 +38,8 @@ pub use exchange::{
 pub use pase::{run_pase, run_pase_with};
 pub use unsecured::{
     decode_unsecured, encode_unsecured, encode_unsecured_reply, parse_status_report,
-    random_exchange_id, require_handshake_opcode, SecureChannelStatus, UnsecuredExchange,
-    UnsecuredMessage, MAX_HANDSHAKE_RETRANSMIT_WINDOW,
+    random_exchange_id, require_handshake_opcode, require_handshake_opcode_any,
+    SecureChannelStatus, UnsecuredExchange, UnsecuredMessage, MAX_HANDSHAKE_RETRANSMIT_WINDOW,
 };
 
 /// How reliability is provided under an unsecured (PASE handshake) exchange.

@@ -203,7 +203,26 @@ pub fn parse_status_report(msg: &UnsecuredMessage) -> Result<SecureChannelStatus
 /// - [`DriverError::Handshake`] for any other unexpected opcode or a
 ///   malformed `StatusReport` body.
 pub fn require_handshake_opcode(msg: &UnsecuredMessage, opcode: u8) -> Result<(), DriverError> {
-    if msg.protocol_id == ProtocolId::SECURE_CHANNEL && msg.opcode == opcode {
+    require_handshake_opcode_any(msg, &[opcode])
+}
+
+/// [`require_handshake_opcode`] for a step that admits more than one opcode.
+///
+/// The CASE resumption path needs it: after a Sigma1 carrying resumption
+/// fields the responder may answer with `Sigma2_Resume` (0x33) **or** decline
+/// and send a plain `Sigma2` (0x31), and both are legitimate. Which one arrived
+/// is what tells the caller which handler to route to.
+///
+/// # Errors
+///
+/// - [`DriverError::SessionEstablishmentFailed`] if the peer sent a terminal
+///   `StatusReport` instead (its codes are surfaced, not swallowed).
+/// - [`DriverError::Handshake`] for any other opcode.
+pub fn require_handshake_opcode_any(
+    msg: &UnsecuredMessage,
+    opcodes: &[u8],
+) -> Result<(), DriverError> {
+    if msg.protocol_id == ProtocolId::SECURE_CHANNEL && opcodes.contains(&msg.opcode) {
         return Ok(());
     }
     if msg.protocol_id == ProtocolId::SECURE_CHANNEL && msg.opcode == OPCODE_STATUS_REPORT {
@@ -407,6 +426,13 @@ pub struct UnsecuredExchange {
     /// Pre-ack retransmit budget remaining for the WHOLE handshake, shared
     /// across every `send_and_recv` call on this exchange.
     budget: Duration,
+    /// Pre-ack retransmit time already spent on this exchange.
+    ///
+    /// Tracked separately from `budget` so [`Self::resize_peer_mrp`] can
+    /// recompute the remaining budget against a NEW schedule without refunding
+    /// time already waited. Deriving it from the initial total instead would
+    /// mean re-deriving that total after every resize.
+    spent: Duration,
     response_timeout: Duration,
     /// The peer's highest message counter we have already consumed as a real
     /// response on this exchange, if any. Used by `send_and_recv` to drop a
@@ -488,6 +514,7 @@ impl UnsecuredExchange {
             exchange_id,
             source_node_id,
             budget: schedule.iter().copied().sum(),
+            spent: Duration::ZERO,
             schedule,
             response_timeout: UNSECURED_RESPONSE_TIMEOUT,
             last_consumed_peer_counter: None,
@@ -550,6 +577,135 @@ impl UnsecuredExchange {
         let mut exch = Self::new_with_mrp(counter, exchange_id, source_node_id, peer_mrp);
         exch.reliability = reliability;
         Ok(exch)
+    }
+
+    /// Send a **terminal** handshake message reliably and make a bounded effort
+    /// to see it acknowledged. Returns whether an ack was observed.
+    ///
+    /// This is the shape of the CASE resumption path's closing message: after
+    /// `Sigma2_Resume` the initiator has no further message to exchange, only a
+    /// success `StatusReport` to deliver. [`Self::send_and_recv`] cannot express
+    /// that — it waits for a *response*, and a standalone ack merely flips it to
+    /// the long response timeout, so the call would end in
+    /// [`DriverError::Timeout`] on a handshake that in fact succeeded.
+    ///
+    /// **A missing ack is not a failure.** By the time this is called both sides
+    /// have derived the session; the peer processed our `Sigma2_Resume` reply
+    /// and is waiting only for confirmation. Failing the connect because the
+    /// final ack was lost would discard a working session. chip does not wait
+    /// at all here — it calls `SendStatusReport` and immediately reports the
+    /// session established, leaving retransmission to the MRP layer. We
+    /// retransmit within the exchange's remaining budget, which is strictly
+    /// more robust, and then return `Ok(false)` rather than erroring.
+    ///
+    /// Under [`TransportReliability::TransportProvides`] the transport is
+    /// already reliable, so this sends exactly once and returns `Ok(false)`
+    /// without waiting.
+    ///
+    /// # Errors
+    ///
+    /// [`DriverError::Io`] if the datagram cannot be sent.
+    pub async fn send_and_await_ack<T: AsyncDatagram>(
+        &mut self,
+        transport: &T,
+        peer: SocketAddr,
+        opcode: u8,
+        app_payload: &[u8],
+        ack: Option<u32>,
+    ) -> Result<bool, DriverError> {
+        let counter = self.counter;
+        self.counter = self.counter.wrapping_add(1);
+        let transport_provides = self.reliability == TransportReliability::TransportProvides;
+        let wire = encode_unsecured(
+            counter,
+            self.exchange_id,
+            opcode,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            !transport_provides,
+            if transport_provides { None } else { ack },
+            Some(self.source_node_id),
+            app_payload,
+        );
+
+        transport.send_to(&wire, peer).await?;
+        if transport_provides {
+            return Ok(false);
+        }
+
+        let mut attempts: u8 = 0;
+        loop {
+            let wait = match self.schedule.get(usize::from(attempts)) {
+                Some(d) => (*d).min(self.budget),
+                None => return Ok(false),
+            };
+            match tokio::time::timeout(wait, transport.recv_from()).await {
+                Ok(recv) => {
+                    let (packet, _from) = recv?;
+                    // Same skip rules as `send_and_recv_any`: secured
+                    // stragglers, foreign exchanges, and frames addressed to a
+                    // previous attempt's ephemeral node id are not ours.
+                    if packet.len() >= 3 && (packet[1] != 0 || packet[2] != 0) {
+                        continue;
+                    }
+                    let Ok(msg) = decode_unsecured(&packet) else {
+                        continue;
+                    };
+                    if msg.exchange_id != self.exchange_id {
+                        continue;
+                    }
+                    if let Some(dest) = msg.destination_node_id {
+                        if dest != DestNodeId::Node(NodeId(self.source_node_id)) {
+                            continue;
+                        }
+                    }
+                    if msg.protocol_id == ProtocolId::SECURE_CHANNEL
+                        && msg.opcode == OPCODE_MRP_STANDALONE_ACK
+                    {
+                        return Ok(true);
+                    }
+                    // Anything else (a retransmit of the peer's last message,
+                    // because our report has not reached it) is ignored; the
+                    // retransmit below covers it.
+                }
+                Err(_elapsed) => {
+                    self.budget = self.budget.saturating_sub(wait);
+                    self.spent += wait;
+                    attempts += 1;
+                    if usize::from(attempts) >= self.schedule.len() || self.budget.is_zero() {
+                        return Ok(false);
+                    }
+                    transport.send_to(&wire, peer).await?;
+                }
+            }
+        }
+    }
+
+    /// Re-size this exchange's retransmit schedule to `peer_mrp`, mid-handshake.
+    ///
+    /// Used when the peer states its own MRP timings during the handshake — the
+    /// `SessionParameters` element in Sigma2 / `Sigma2_Resume` — which is more
+    /// trustworthy than the mDNS TXT record the exchange started from: the
+    /// advertisement can be stale, cached, or missing entirely.
+    ///
+    /// chip does exactly this, applying Sigma2's parameters after validating it
+    /// and before sending Sigma3 (`CASESession::HandleSigma2`), so Sigma3's
+    /// retransmits are sized to what the device just said rather than to what
+    /// mDNS said earlier. Without it a device with no operational mDNS record
+    /// gets spec-default timings for the rest of the handshake no matter what
+    /// it advertises in-band.
+    ///
+    /// **Time already waited is never refunded.** The new budget is the new
+    /// schedule's total minus what this exchange has already spent, so a peer
+    /// cannot extend a handshake indefinitely by advertising a large `SII`
+    /// after we have already burned most of the window. A resize that shrinks
+    /// the total below what is already spent leaves zero budget, ending the
+    /// handshake at the next timeout rather than retroactively failing it.
+    pub fn resize_peer_mrp(&mut self, peer_mrp: MrpConfig) {
+        let schedule = handshake_schedule(&peer_mrp, MAX_HANDSHAKE_RETRANSMIT_WINDOW);
+        let total: Duration = schedule.iter().copied().sum();
+        self.budget = total.saturating_sub(self.spent);
+        self.schedule = schedule;
     }
 
     /// Send an MRP standalone acknowledgement (`SecureChannel 0x10`) for the
@@ -637,18 +793,52 @@ impl UnsecuredExchange {
     /// - [`DriverError::Transport`] / [`DriverError::UnexpectedSecuredMessage`]
     ///   if the reply does not decode as an unsecured message.
     /// - [`DriverError::Timeout`] if no reply arrives within `max_attempts`.
-    // Cohesive single retransmit/recv loop: the length comes from the
-    // cfg-gated wire-tracing blocks and the documented per-frame skip cases
-    // (secured straggler, foreign exchange, standalone-ack, counter dedup,
-    // opcode gate). Splitting it would force threading the loop state
-    // (acked/attempts/counter) through a helper for no readability gain.
-    #[allow(clippy::too_many_lines)]
     pub async fn send_and_recv<T: AsyncDatagram>(
         &mut self,
         transport: &T,
         peer: SocketAddr,
         opcode: u8,
         expected_opcode: u8,
+        app_payload: &[u8],
+        ack: Option<u32>,
+    ) -> Result<UnsecuredMessage, DriverError> {
+        self.send_and_recv_any(
+            transport,
+            peer,
+            opcode,
+            &[expected_opcode],
+            app_payload,
+            ack,
+        )
+        .await
+    }
+
+    /// [`Self::send_and_recv`] for a step whose response may legitimately be
+    /// one of several opcodes.
+    ///
+    /// The single-opcode gate is not merely inconvenient for CASE resumption,
+    /// it is silently wrong: a frame that is neither the awaited opcode nor a
+    /// `StatusReport` is *dropped* by the loop below, so a `Sigma2_Resume`
+    /// arriving where only `Sigma2` was expected never reaches the caller and
+    /// the exchange ends in [`DriverError::Timeout`] — with nothing to say the
+    /// response had in fact arrived.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::send_and_recv`].
+    // Cohesive single retransmit/recv loop: the length comes from the
+    // cfg-gated wire-tracing blocks and the documented per-frame skip cases
+    // (secured straggler, foreign exchange, standalone-ack, counter dedup,
+    // opcode gate). Splitting it would force threading the loop state
+    // (acked/attempts/counter) through a helper for no readability gain.
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_and_recv_any<T: AsyncDatagram>(
+        &mut self,
+        transport: &T,
+        peer: SocketAddr,
+        opcode: u8,
+        expected_opcodes: &[u8],
         app_payload: &[u8],
         ack: Option<u32>,
     ) -> Result<UnsecuredMessage, DriverError> {
@@ -796,7 +986,7 @@ impl UnsecuredExchange {
                     // handshake (observed cause of intermittent commissioning
                     // failures on lossy/duplicating networks).
                     if msg.protocol_id == ProtocolId::SECURE_CHANNEL
-                        && msg.opcode != expected_opcode
+                        && !expected_opcodes.contains(&msg.opcode)
                         && msg.opcode != OPCODE_STATUS_REPORT
                     {
                         continue;
@@ -834,6 +1024,7 @@ impl UnsecuredExchange {
                     // budget, so a peer advertising a huge SII cannot stretch
                     // the connect step by step past the cap.
                     self.budget = self.budget.saturating_sub(wait);
+                    self.spent += wait;
                     attempts += 1;
                     if usize::from(attempts) >= self.schedule.len() || self.budget.is_zero() {
                         return Err(DriverError::Timeout {
