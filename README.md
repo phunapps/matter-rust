@@ -6,7 +6,7 @@
 A Rust implementation of the **Matter** protocol — controller side.
 
 > Status: **feature-complete against Matter 1.4 and published to crates.io**
-> (`matter-controller` `0.11.0`; the lower-level crates `0.3.x`–`0.5.x`). The controller
+> (`matter-controller` `0.13.0`; the lower-level crates `0.3.x`–`0.6.x`). The controller
 > commissions and controls real Matter devices over IP, and over BLE onto Wi-Fi
 > or Thread — all validated against hardware, not just tests.
 

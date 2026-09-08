@@ -22,7 +22,7 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## [Unreleased] — matter-crypto + matter-transport + matter-commissioning + matter-controller
+## matter-crypto 0.4.0 + matter-transport 0.6.0 + matter-commissioning 0.9.0 + matter-controller 0.13.0
 
 CASE session parameters and initiator-side session resumption. Validated
 against matter.js byte-for-byte and against an ESP32-C6 (esp-matter, Thread)
