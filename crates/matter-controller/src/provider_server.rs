@@ -106,6 +106,43 @@ fn is_unsecured_frame(frame: &[u8]) -> bool {
     frame.len() >= 3 && frame[1] == 0 && frame[2] == 0
 }
 
+/// What arrived on the socket after our closing success `StatusReport`.
+///
+/// The handshake is over at that point, but exactly one more frame is *ours*
+/// to consume — the initiator's standalone ack. Anything else belongs to
+/// whoever runs next, and must be handed on rather than dropped.
+enum PostHandshakeFrame {
+    /// The standalone ack we were waiting for (or nothing else of interest).
+    Consumed,
+    /// A Sigma1 opening a NEW handshake on a different exchange.
+    NewHandshake(CarriedFrame),
+    /// A **secured** application message on the session just established.
+    ///
+    /// A real requestor pipelines its first request ahead of the ack — the
+    /// observed order from an esp-matter OTA requestor is `StatusReport` →
+    /// `QueryImage` → ack. Discarding this loses the request outright.
+    Secured(CarriedFrame),
+}
+
+/// One accepted CASE session, plus any frame already taken off the socket that
+/// the caller must process before receiving anything more.
+pub(crate) struct AcceptedSession {
+    /// Session manager holding the established session.
+    pub sessions: SessionManager,
+    /// Local id of the established session.
+    pub session_id: SessionId,
+    /// The peer's address.
+    pub peer: SocketAddr,
+    /// A Sigma1 opening a new handshake, seen while closing this one out. Feed
+    /// it to the next `accept_case` as `first_frame` so no handshake bytes are
+    /// lost across the session boundary.
+    pub next_handshake: Option<CarriedFrame>,
+    /// A secured application message that arrived ahead of the initiator's
+    /// standalone ack. **Must be processed before receiving more**, or the
+    /// requestor's first request is silently lost.
+    pub pending_secured: Option<CarriedFrame>,
+}
+
 /// A raw datagram (frame bytes + sender) handed from one accept to the next,
 /// so no handshake bytes are lost across session boundaries.
 type CarriedFrame = (Vec<u8>, SocketAddr);
@@ -329,10 +366,15 @@ impl<D: AsyncDatagram> ProviderServer<D> {
     /// saw a NEW Sigma1 in place of the initiator's standalone ack (see
     /// [`Self::complete_full`]); the caller must feed it into its next accept
     /// or the handshake attempt it opens is lost.
+    // One accept from Sigma1 through session registration: the resumption
+    // decision, the two completion paths and the post-handshake classification
+    // read as one sequence, and splitting them would hide which frames each
+    // step is entitled to consume.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn accept_case(
         &mut self,
         first_frame: Option<CarriedFrame>,
-    ) -> Result<(SessionManager, SessionId, SocketAddr, Option<CarriedFrame>), Error> {
+    ) -> Result<AcceptedSession, Error> {
         // Fast-fail an exhausted pool before any IO. The check does NOT pop:
         // a credential is consumed only once a valid Sigma1 is in hand, so
         // stray datagrams to the advertised port cannot burn the pool.
@@ -418,11 +460,16 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             }
         };
 
-        let carry = if resumed {
+        let post = if resumed {
             self.complete_resumed(&mut responder, &m1, peer).await?;
-            None
+            PostHandshakeFrame::Consumed
         } else {
             self.complete_full(&mut responder, &m1, peer).await?
+        };
+        let (carry, pending_secured) = match post {
+            PostHandshakeFrame::Consumed => (None, None),
+            PostHandshakeFrame::NewHandshake(f) => (Some(f), None),
+            PostHandshakeFrame::Secured(f) => (None, Some(f)),
         };
 
         let output = responder
@@ -463,8 +510,15 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             None => (MrpConfig::default(), MrpProvenance::Unknown),
         };
         let mut sessions = SessionManager::new();
-        let sid = sessions.register_case_with_mrp(&output, SessionRole::Responder, mrp, provenance);
-        Ok((sessions, sid, peer, carry))
+        let session_id =
+            sessions.register_case_with_mrp(&output, SessionRole::Responder, mrp, provenance);
+        Ok(AcceptedSession {
+            sessions,
+            session_id,
+            peer,
+            next_handshake: carry,
+            pending_secured,
+        })
     }
 
     /// Resumed path: send `Sigma2_Resume` on Sigma1's exchange, then await the
@@ -576,7 +630,7 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         responder: &mut CaseResponder,
         m1: &matter_commissioning::driver::UnsecuredMessage,
         peer: SocketAddr,
-    ) -> Result<Option<CarriedFrame>, Error> {
+    ) -> Result<PostHandshakeFrame, Error> {
         let sigma2 = responder
             .next_message()
             .map_err(|e| Error::Operational(format!("sigma2: {e}")))?;
@@ -665,16 +719,23 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         );
         self.send(&report, peer).await?;
 
-        // Absorb the initiator's standalone ack of our StatusReport — but hand
-        // a fresh Sigma1 (new handshake, new exchange) back to the caller
-        // instead of eating it (see the method docs).
+        // Absorb the initiator's standalone ack of our StatusReport — and ONLY
+        // that. This used to consume one frame unconditionally and drop
+        // anything that was not a fresh Sigma1, which silently swallowed the
+        // requestor's first secured request whenever it was pipelined ahead of
+        // the ack. That is the ordering a real device produces (observed from
+        // an esp-matter ESP32-C6 OTA requestor: StatusReport → QueryImage →
+        // ack), so the first request was lost on every real serve.
         let (bytes, from) = self.recv().await?;
+        if !is_unsecured_frame(&bytes) {
+            return Ok(PostHandshakeFrame::Secured((bytes, from)));
+        }
         if let Ok(m) = decode_unsecured(&bytes) {
             if m.opcode == OP_SIGMA1 && m.exchange_id != m1.exchange_id {
-                return Ok(Some((bytes, from)));
+                return Ok(PostHandshakeFrame::NewHandshake((bytes, from)));
             }
         }
-        Ok(None)
+        Ok(PostHandshakeFrame::Consumed)
     }
 
     /// Accept ONE inbound CASE session, then dispatch up to `max_invokes`
@@ -706,11 +767,30 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         // Single-session API: there is no next accept to feed a carried
         // Sigma1 into, so it is dropped (the peer's MRP retransmit covers it)
         // — the pre-multi-session behavior.
-        let (mut sessions, sid, peer, _fast_sigma1) = self.accept_case(None).await?;
+        let AcceptedSession {
+            mut sessions,
+            session_id: sid,
+            peer,
+            next_handshake: _fast_sigma1,
+            mut pending_secured,
+        } = self.accept_case(None).await?;
 
         let mut dispatched = 0usize;
         while dispatched < max_invokes {
-            let (wire, _) = self.recv_secured(&mut sessions, peer).await?;
+            // Process a request the handshake close-out already pulled off the
+            // socket before receiving anything more; a real requestor pipelines
+            // its first request ahead of the standalone ack.
+            let (wire, _) = match pending_secured.take() {
+                Some(f) => f,
+                None => self.recv_secured(&mut sessions, peer).await?,
+            };
+            // Unsecured frames (session id 0) reaching here are handshake
+            // traffic, not application traffic — the initiator's standalone ack
+            // of our StatusReport is the common one. Skip them rather than
+            // feeding them to the secured decoder, which rejects session 0.
+            if is_unsecured_frame(&wire) {
+                continue;
+            }
             if let DecodeInboundOutput::AppMessage {
                 exchange_id,
                 opcode,
@@ -804,16 +884,21 @@ impl<D: AsyncDatagram> ProviderServer<D> {
         // next attempt; only pool exhaustion (or the caller's deadline) ends
         // the serve.
         loop {
-            let (mut sessions, sid, peer, fast_sigma1) =
-                match self.accept_case(carried.take()).await {
-                    Ok(accepted) => accepted,
-                    Err(e) => {
-                        if self.credentials.is_empty() {
-                            return Err(e); // exhausted (or the last credential's failure)
-                        }
-                        continue; // retry with the next pooled credential
+            let AcceptedSession {
+                mut sessions,
+                session_id: sid,
+                peer,
+                next_handshake: fast_sigma1,
+                mut pending_secured,
+            } = match self.accept_case(carried.take()).await {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    if self.credentials.is_empty() {
+                        return Err(e); // exhausted (or the last credential's failure)
                     }
-                };
+                    continue; // retry with the next pooled credential
+                }
+            };
             if let Some(frame) = fast_sigma1 {
                 // The peer opened a NEW handshake instead of acking this one's
                 // close (fast post-reboot Sigma1 in place of the standalone
@@ -841,7 +926,14 @@ impl<D: AsyncDatagram> ProviderServer<D> {
             // frame (roll into the next accept), or a bound.
             while progress < max_progress && iterations < max_iterations {
                 iterations += 1;
-                let (wire, from) = self.recv_secured(&mut sessions, peer).await?;
+                // A request the handshake close-out already took off the
+                // socket is processed first: a real requestor pipelines its
+                // QueryImage ahead of the standalone ack, and receiving before
+                // handling it would lose the request.
+                let (wire, from) = match pending_secured.take() {
+                    Some(f) => f,
+                    None => self.recv_secured(&mut sessions, peer).await?,
+                };
                 if is_unsecured_frame(&wire) {
                     carried = Some((wire, from));
                     break;

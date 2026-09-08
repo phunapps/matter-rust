@@ -8945,6 +8945,180 @@ mod tests {
         requestor.await.unwrap();
     }
 
+    /// The requestor's first SECURED request may arrive before its standalone
+    /// ack of our success `StatusReport`, and it must still be dispatched.
+    ///
+    /// Found on hardware. The real wire order from an esp-matter ESP32-C6 OTA
+    /// requestor is: our `StatusReport` → its `QueryImage` on the new secure
+    /// session → *then* the standalone ack. `complete_full`'s post-report
+    /// absorb consumed exactly one frame expecting the ack, got the secured
+    /// request, and **silently discarded it** (it only re-surfaced a Sigma1 on
+    /// a different exchange). The dispatch loop then received the ack — an
+    /// unsecured, session-id-0 frame — and failed the serve with
+    /// `unknown session ID 0`.
+    ///
+    /// The dropped request is the worse half: fixing only the visible error
+    /// would leave the loop waiting for a message already thrown away.
+    ///
+    /// Dispatches TWO requests with the ack between them, so both halves of the
+    /// fix are load-bearing here: the pipelined first request must survive the
+    /// handshake close-out, and the ack must be skipped rather than fed to the
+    /// secured decoder.
+    #[cfg(feature = "ota")]
+    #[allow(clippy::too_many_lines)] // Both sides of the exchange, in wire order.
+    #[tokio::test]
+    async fn provider_dispatches_a_request_that_precedes_the_status_report_ack() {
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr: _,
+            discovery: _,
+            device_creds,
+            device_roots,
+            device_node_id: _,
+        } = loopback_harness();
+
+        let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
+        let fabric = &state.fabrics[0];
+        let (provider_creds, provider_roots, _compressed) =
+            crate::credentials::operational_credentials(fabric).unwrap();
+        let provider_node_id = fabric.commissioner.node_id;
+        let fabric_id = fabric.fabric_id;
+        let provider_addr = dev_io.local_addr();
+
+        let server = tokio::spawn(async move {
+            let ps = crate::provider_server::ProviderServer::new(
+                dev_io,
+                vec![provider_creds],
+                provider_roots,
+                /* base_session_id */ 0x91,
+                MatterTime::from_unix_secs(2_000_000_000),
+            );
+            ps.accept_and_dispatch_once(
+                |req: &matter_interaction::ParsedInvokeRequest| {
+                    let path = req.commands[0].path;
+                    matter_interaction::build_invoke_response_status(
+                        path,
+                        matter_interaction::ImStatus::Success,
+                    )
+                },
+                2,
+            )
+            .await
+        });
+
+        let requestor = tokio::spawn(async move {
+            use matter_commissioning::driver::{decode_unsecured, encode_unsecured};
+            const OP_SIGMA1: u8 = 0x30;
+            const OP_SIGMA3: u8 = 0x32;
+            const OP_MRP_STANDALONE_ACK: u8 = 0x10;
+
+            let mut initiator = matter_crypto::CaseInitiator::new(
+                device_creds,
+                device_roots,
+                provider_node_id,
+                fabric_id,
+                0x0061,
+                MatterTime::from_unix_secs(2_000_000_000),
+            )
+            .unwrap();
+            let sigma1 = initiator.start().unwrap();
+            let mut counter = 1u32;
+            let mut frame = |opcode: u8, payload: &[u8], ack: Option<u32>| {
+                let w = encode_unsecured(
+                    counter,
+                    0x00AA,
+                    opcode,
+                    ProtocolId::SECURE_CHANNEL,
+                    true,
+                    true,
+                    ack,
+                    Some(0xFFFF_FFFF_FFFF_FF03),
+                    payload,
+                );
+                counter += 1;
+                w
+            };
+            ctrl_io
+                .send_to(&frame(OP_SIGMA1, &sigma1, None), provider_addr)
+                .await
+                .unwrap();
+            let (bytes, _) = ctrl_io.recv_from().await.unwrap();
+            let sigma2 = decode_unsecured(&bytes).unwrap();
+            initiator.handle_sigma2(&sigma2.payload).unwrap();
+            let sigma3 = initiator.next_message().unwrap();
+            ctrl_io
+                .send_to(&frame(OP_SIGMA3, &sigma3, None), provider_addr)
+                .await
+                .unwrap();
+
+            // Our success StatusReport.
+            let (bytes, _) = ctrl_io.recv_from().await.unwrap();
+            let report = decode_unsecured(&bytes).unwrap();
+
+            // THE POINT: send the secured request FIRST, ack SECOND — the
+            // order a real requestor produces.
+            let output = initiator.finish().unwrap();
+            let mut sessions = SessionManager::new();
+            let sid = sessions.register_case(&output, SessionRole::Initiator);
+            let invoke = matter_interaction::build_invoke_request(
+                matter_interaction::CommandPath {
+                    endpoint: 0,
+                    cluster: 0x0029,
+                    command: 0x00,
+                },
+                // Empty anonymous struct: TLV 0x15 (struct start) 0x18 (end).
+                &[0x15, 0x18],
+            );
+            let send_invoke = |sessions: &mut SessionManager| {
+                let out = sessions
+                    .encode_outbound(
+                        sid,
+                        None,
+                        0x08, // InvokeRequest
+                        ProtocolId::INTERACTION_MODEL,
+                        &invoke,
+                        MrpFlags { reliable: false },
+                        Instant::now(),
+                    )
+                    .unwrap();
+                out.wire_bytes
+            };
+
+            // 1. The pipelined request, ahead of the ack.
+            let first = send_invoke(&mut sessions);
+            ctrl_io.send_to(&first, provider_addr).await.unwrap();
+            let _ = ctrl_io.recv_from().await.unwrap(); // its response
+
+            // 2. The standalone ack of our StatusReport — an unsecured frame
+            //    arriving mid-serve, which must be skipped, not decoded.
+            ctrl_io
+                .send_to(
+                    &frame(OP_MRP_STANDALONE_ACK, &[], Some(report.message_counter)),
+                    provider_addr,
+                )
+                .await
+                .unwrap();
+
+            // 3. A second request, which only arrives if the ack was skipped.
+            let second = send_invoke(&mut sessions);
+            ctrl_io.send_to(&second, provider_addr).await.unwrap();
+            let _ = ctrl_io.recv_from().await.unwrap();
+        });
+
+        let dispatched = tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("the serve must not hang waiting for a request it discarded")
+            .unwrap()
+            .expect("a request preceding the ack must still be dispatched");
+        assert_eq!(
+            dispatched, 2,
+            "both the pipelined request and the one after the ack must dispatch"
+        );
+        requestor.await.unwrap();
+    }
+
     /// A record minted under a commissioner identity that no longer holds must
     /// NOT be offered — the connect falls back to a full handshake instead.
     ///
@@ -14480,8 +14654,11 @@ mod tests {
                 /* base_session_id */ 0x71,
                 MatterTime::from_unix_secs(2_000_000_000),
             );
-            let (sessions, sid, _peer, _carry) = ps.accept_case(None).await.expect("accept");
-            sessions.mrp_config(sid).expect("registered session")
+            let accepted = ps.accept_case(None).await.expect("accept");
+            accepted
+                .sessions
+                .mrp_config(accepted.session_id)
+                .expect("registered session")
         });
 
         let requestor = tokio::spawn(async move {
