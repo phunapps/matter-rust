@@ -11,7 +11,7 @@
 
 use aes::Aes128;
 use ccm::{
-    aead::{Aead, AeadInOut, KeyInit, Payload},
+    aead::{Aead, AeadInPlace, KeyInit, Payload},
     consts::{U13, U16},
     Ccm, Key, Nonce,
 };
