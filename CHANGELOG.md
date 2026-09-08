@@ -22,6 +22,29 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## [Unreleased] — workspace MSRV 1.88 → 1.89
+
+### Changed — minimum supported Rust is now 1.89
+
+Raised so AES-CCM could move onto the current RustCrypto generation.
+`ccm` 0.6 is built on `cipher` 0.5 / `aead` 0.6, and cannot be adopted
+without `aes` 0.9 — bumping it alone puts two `crypto_common` versions in
+the dependency graph and the trait bounds stop resolving. `aes` 0.9.3
+declares `rust-version = 1.89`.
+
+`AeadInPlace` is deprecated in favour of `AeadInOut`; the method names are
+unchanged.
+
+**The AEAD output is byte-identical.** This crate's AES-CCM wrapper is on
+the path of every secured Matter message, so the check that matters is not
+that it compiles: all seven matter.js byte-parity fixtures pass unchanged,
+covering the PASE Pake messages and the encrypted Sigma2/Sigma3 blobs.
+
+Not adopted in the same sweep: `der` 0.8, which needs `spki` 0.8 and
+`x509-cert` 0.3 — but `cms`, which verifies Certification Declarations and
+so sits in the device-attestation trust path, has no stable release on
+that generation yet (`0.3.0-pre.2`). It stays on `der` 0.7 until it does.
+
 ## matter-crypto 0.4.0 + matter-transport 0.6.0 + matter-commissioning 0.9.0 + matter-controller 0.13.0
 
 CASE session parameters and initiator-side session resumption. Validated

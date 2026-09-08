@@ -145,7 +145,7 @@ wildcard paths.
 
 ## MSRV
 
-Rust 1.88 (workspace MSRV). See the workspace `CHANGELOG.md`.
+Rust 1.89 (workspace MSRV). See the workspace `CHANGELOG.md`.
 
 ## License
 

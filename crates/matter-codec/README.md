@@ -91,10 +91,12 @@ treat it as a bug in `matter-codec` and investigate.
 
 ## MSRV
 
-Rust 1.88. The workspace MSRV was raised from 1.75 to 1.88 on
-2026-05-24 to land patched `time >= 0.3.47` (RUSTSEC-2026-0009)
-pulled in transitively by `x509-parser` / `asn1-rs` in the
-`matter-commissioning` crate. See the workspace `CHANGELOG.md`.
+Rust 1.89. The workspace MSRV was raised to 1.89 on 2026-09-08 so
+AES-CCM could move onto the current RustCrypto generation (`ccm` 0.6
+requires `aes` 0.9, which requires rustc 1.89). It had been raised from
+1.75 to 1.88 on 2026-05-24 to land patched `time >= 0.3.47`
+(RUSTSEC-2026-0009) pulled in transitively by `x509-parser` / `asn1-rs`
+in the `matter-commissioning` crate. See the workspace `CHANGELOG.md`.
 
 ## License
 
