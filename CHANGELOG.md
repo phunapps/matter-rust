@@ -22,7 +22,36 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## [Unreleased] — workspace MSRV 1.88 → 1.89
+## matter-crypto 0.5.0 + matter-transport 0.7.0 + matter-commissioning 0.10.0 + matter-controller 0.14.0
+
+Dependency hygiene, released rather than held because two of the fixes
+cannot reach a consumer any other way: the published manifests pin
+`mdns-sd ^0.20` and `aes ^0.8` / `ccm ^0.5`, so a republish is the only
+delivery path.
+
+### Fixed — mDNS packet-parser hardening (`mdns-sd` 0.20 → 0.21)
+
+`mdns-sd` 0.21.1 and 0.21.2 harden the parser that sees **every mDNS
+packet on the local network**:
+
+- an out-of-bounds **panic** parsing a truncated HINFO record —
+  `read_char_string` indexed past the end of the packet. Found by fuzzing.
+- `read_name` and name-compression handling now skip only the malformed
+  record instead of discarding the whole packet.
+
+A malformed packet from anything on the LAN could therefore panic the
+discovery daemon thread inside `matter-transport` 0.6.0. There is no
+RUSTSEC advisory, and nothing is broken in normal operation, but a
+remotely reachable parser panic in a discovery path is worth a release on
+its own.
+
+Note for anyone tracking upstream: 0.21 does **not** contain `mdns-sd`
+#494. The compressed-fabric-subtype path in operational discovery remains
+load-bearing rather than a workaround around a fixed upstream.
+
+0.21.0's breaking change — max outgoing packet size 8972 → 1452 bytes per
+RFC 6762 §17 — does not reach us; Matter's commissionable and operational
+TXT records are far below it.
 
 ### Changed — minimum supported Rust is now 1.89
 
