@@ -22,6 +22,182 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## [Unreleased] — matter-crypto + matter-transport + matter-commissioning + matter-controller
+
+CASE session parameters and initiator-side session resumption. Validated
+against matter.js byte-for-byte and against an ESP32-C6 (esp-matter, Thread)
+on real hardware.
+
+**There is a wire change**: every Sigma1 we send now carries an
+`initiatorSessionParams` element. See "What goes on the wire now" below.
+
+### Added — `SessionParameters` is decoded, not passed through
+
+`SessionParams` was an opaque byte blob: nothing read the peer's advertised
+`SII`/`SAI`/`SAT`, and we sent `None` on every message. Both reference
+implementations always send the element and always read the peer's.
+
+- `matter_crypto::SessionParameters` — the Matter Core §4.12.8 structure
+  (tags 1–7), with `decode`/`encode` and chainable `with_*` setters.
+  Deliberately plain millisecond integers rather than `Duration`/`MrpConfig`:
+  `matter-transport` depends on `matter-crypto`, so the reverse would be a
+  dependency cycle.
+- `CaseResponder::peer_session_params()` / `CaseInitiator::peer_session_params()`.
+  Surfaced as accessors rather than through `Sigma1Outcome`, which is not
+  `#[non_exhaustive]` — a new field there would have been a breaking change.
+- `CaseInitiator::with_session_params()` / `CaseResponder::with_session_params()`,
+  defaulting to "send nothing" so existing byte-parity fixtures stay valid.
+- `MrpConfig::merge_session_params()`, `SessionManager::mrp_config()`,
+  `MrpState::config()`.
+
+Decoding is order-independent (chip's stops interpreting at the first
+out-of-order tag), and out-of-range integers saturate to the field's spec width
+rather than failing the handshake — these are advisory timing hints, and
+`MrpConfig::for_peer` clamps the intervals again anyway. Unknown tags are
+skipped, matching chip's explicit forward-compatibility rule.
+
+Note the container tag differs per message: **5 in Sigma1 and Sigma2, but 4 in
+`Sigma2_Resume`**, which has no ephemeral-key or encrypted field.
+
+### Fixed — responder-role sessions were never sized to the peer
+
+`ProviderServer` registered every accepted CASE session with
+`MrpConfig::default()` and `MrpProvenance::Unknown`, so a sleepy requestor was
+retransmitted at on the spec's 500 ms idle base no matter what it asked for —
+on the very session we then push BDX blocks down.
+
+This is the same class of bug the 0.5.0 train fixed for the initiator role. It
+survived because that fix read the peer's mDNS TXT record, and **as the
+responder there is no mDNS record to read**: Sigma1's `SessionParameters` is the
+only channel carrying the initiator's timings. Measured on a Thread device
+advertising `SII` 2000 ms, the accepted session's window goes **5640 ms →
+22572 ms**.
+
+`MrpProvenance::Unknown`'s documentation named the responder role as a cause of
+"no peer record available". It no longer is.
+
+### Fixed — the handshake was not re-sized from Sigma2
+
+chip applies Sigma2's `responderSessionParams` after validating it and before
+sending Sigma3, so Sigma3's retransmits are sized to what the device just said.
+We built the exchange once from mDNS and never updated it, so a device with a
+stale, cached, or absent mDNS record got spec-default timings for the rest of
+the handshake. `UnsecuredExchange::resize_peer_mrp` closes that; time already
+waited is never refunded, so a peer cannot extend a handshake by advertising a
+large `SII` after most of the window is spent.
+
+### Added — initiator-side CASE resumption (previously dormant)
+
+The resumption crypto has been complete since M4.2 and was unreachable:
+`run_case_establish` hard-coded the fresh-session constructor. A reconnect that
+resumes skips two P-256 operations plus NOC chain validation on both sides.
+
+The blocker was not the state machine. `UnsecuredExchange::send_and_recv` gates
+on a single opcode and silently drops anything else that is not a
+`StatusReport`, so an inbound `Sigma2_Resume` could never surface: a resumption
+Sigma1 would have ended in `DriverError::Timeout` however the responder replied.
+
+- `CaseEstablishOptions` + `run_case_establish_with` (additive;
+  `run_case_establish` is unchanged and delegates).
+- `UnsecuredExchange::send_and_recv_any`, `require_handshake_opcode_any`,
+  `send_and_await_ack`.
+
+Resumption is attempted whenever a stored record exists — no capability probe,
+no age check — which is what both references do. A declined attempt costs
+nothing: Sigma1 already carries a real ephemeral key, so the full handshake
+proceeds on the same exchange.
+
+### Changed — a resumption record whose `Sigma2_Resume` MIC fails is dropped
+
+**This diverges from chip and matter.js deliberately.** Both keep the record and
+fail the session establishment. The usual argument for keeping it is that
+deleting invites a denial-of-service — but forging a `Sigma2_Resume` requires
+the in-flight ephemeral node id and exchange id, and anyone with those can forge
+a garbage `Sigma2` and break any handshake anyway, so deletion opens no new
+surface. The direction is backwards: keeping the record lets an attacker replay
+the same forgery on every retry forever, whereas dropping it makes the next
+Sigma1 plain, so a forged `Sigma2_Resume` becomes an unsolicited opcode the
+exchange filters out.
+
+The connect is retried immediately as a full handshake, so a caller sees one
+slightly slower connect rather than a failure.
+
+### Added — resumption records are bound to the identity that minted them
+
+Resumption trades certificate verification for a cached authorization snapshot:
+the resumed session carries the node id and CATs captured when the record was
+written, and the ECDH secret that gates it comes from *ephemeral* keys, so it
+stays cryptographically valid across a NOC change and cannot detect one. A
+surviving record therefore lets a retired identity be reconstituted one round
+trip later.
+
+- `MatterController::invalidate_resumption_records(fabric_id)` and
+  `FabricEntry::invalidate_resumption_records()` — chip's
+  `ClearCASEResumptionStateOnFabricChange`, which fires on fabric **update** as
+  well as removal. Saves durably.
+- Every stored record now carries a SHA-256 of the commissioner NOC that minted
+  it, and one that no longer matches is refused at load **in both roles**.
+
+The binding is the part that matters: it needs no delegate and no call-site
+discipline. chip's correctness depends on every future identity-mutating path
+remembering the wipe, and matter.js's `SessionManager` subscribes only to fabric
+*deletion* — its update wipe rests on a single imperative call site. Binding
+also covers a case neither handles: restoring a snapshot taken under a different
+commissioner identity.
+
+**On upgrade, every existing record is dropped once.** A record with no
+fingerprint cannot be verified, and an unverifiable record is not a usable one.
+The cost is one full handshake per device, once.
+
+### Fixed — two provider-server defects found on real hardware
+
+Both were pre-existing, and both are the same shape: the full/generic path
+lacked a tolerance the resumed/OTA path already had. Neither could be reproduced
+by the loopback tests, which drove an idealised frame order.
+
+**The ack that precedes Sigma3.** `complete_full` did one blocking receive and
+demanded Sigma3, so every inbound CASE from a real device failed with
+`expected Sigma3 (0x32), got 0x10`. A real initiator standalone-acks our Sigma2
+first: Sigma3 costs it an ECDSA signature plus an AEAD seal, far longer than
+MRP's 200 ms ack deadline.
+
+**The dropped first request.** After our closing `StatusReport`, the requestor
+pipelines its `QueryImage` on the new secure session *ahead* of its standalone
+ack. The post-handshake absorb consumed one frame expecting the ack, got the
+secured request, and silently discarded it; the dispatch loop then received the
+ack — an unsecured, session-id-0 frame — and failed with `unknown session ID 0`.
+The visible error was the lesser half: fixing only that would have left the loop
+waiting for a message already thrown away.
+
+`accept_case` now returns `AcceptedSession`, carrying any frame the close-out
+was not entitled to consume so the serve loop processes it first.
+
+### What goes on the wire now
+
+Every Sigma1 carries `initiatorSessionParams` (context tag 5). The element is
+optional in the specification and both references treat absence as "assume the
+defaults", so this is additive — but it is a byte-level change to every
+handshake, verified byte-for-byte against matter.js's own
+`TlvSessionParameters` encoder.
+
+| field | value | why |
+|---|---|---|
+| `SII` / `SAI` / `SAT` | 500 / 300 / 4000 ms | our own `MrpConfig::default()`; chip likewise sends its own timings, never the peer's |
+| `dataModelRevision` | 19 | what matter.js pairs with specification 1.4; chip also reports 19 |
+| `interactionModelRevision` | 11 | sourced from `matter_interaction::IM_REVISION`, so it cannot drift from the value we emit at IM tag `0xFF` |
+| `specificationVersion` | `0x01040000` (1.4.0) | what this implementation targets. Over-claiming invites a peer to enable behaviour we do not handle; under-claiming only makes it down-shift |
+| `maxPathsPerInvoke` | 1 | we do not batch invokes |
+
+### Hardware validation
+
+ESP32-C6 running esp-matter over Thread, commissioned BLE→Thread by this
+library. From the device's own log: a connect with a stored record draws
+`CASE_Sigma2Resume` and **no Sigma3**; after
+`invalidate_resumption_records` the same connect draws `Sigma2` then `Sigma3`.
+A responder-role session registers as `provenance=PeerAdvertised` with the
+device's advertised 2000 ms interval. The previously-discarded `QueryImage`
+(cluster `0x0029`, command `0x00`) now dispatches.
+
 ## matter-commissioning 0.8.1
 
 Documentation only, prompted by a downstream field report (WeaveHome,
