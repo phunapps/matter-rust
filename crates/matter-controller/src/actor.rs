@@ -5625,6 +5625,41 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 self.on_pending_timeout(key.0, key.1).await;
                 continue;
             }
+            // A READ is idempotent, so a fired response deadline on one takes
+            // the same reconnect-and-resend-once path MRP expiry uses
+            // ([`Self::on_pending_timeout`]) instead of failing outright.
+            //
+            // #119 established that a fired response deadline must not trigger
+            // a re-send, because delivery was ACKed and a re-send could execute
+            // a non-idempotent command twice. That reasoning is right, but it
+            // was applied to every pending kind and only holds for some: a read
+            // cannot change device state, so re-sending one is free of that
+            // hazard. `Action`, `TimedAction`, `ChunkedWrite` and the raw
+            // `RoundTrip` (opaque payload — may well be an invoke) keep failing
+            // immediately, unchanged.
+            //
+            // Mechanism-agnostic on purpose (#126): a bridge that drops the
+            // Nth consecutive read may be rate-limiting or may have wedged the
+            // session, and we cannot tell which from here. The reconnect covers
+            // the wedged case and the deadline itself supplies the spacing for
+            // the rate-limited one. Healthy devices never reach the deadline,
+            // so this costs them nothing.
+            //
+            // `!p.retried` matters for more than avoiding a loop: it means a
+            // read that times out AGAIN after its retry falls through to the
+            // arm below and still fails with `Error::ResponseTimeout`, rather
+            // than the generic round-trip error `on_pending_timeout` uses when
+            // it gives up.
+            if !p.retried && matches!(&p.reply, PendingReply::Read { .. }) {
+                tracing::debug!(
+                    node_id = format_args!("{:016X}", p.node_id),
+                    exchange_id = key.1,
+                    "operational response deadline elapsed on a read; \
+                     reconnecting and re-sending once (reads are idempotent)"
+                );
+                self.on_pending_timeout(key.0, key.1).await;
+                continue;
+            }
             // `get` above only borrowed; remove for real now.
             let Some(p) = self.pending.remove(&key) else {
                 continue;
@@ -12262,6 +12297,143 @@ mod tests {
             actor.pending_connects.is_empty(),
             "no reconnect may be queued: the request was delivered, so a \
              resend could execute a non-idempotent command twice"
+        );
+    }
+
+    /// Seed a **read** pending whose response deadline is already in the past.
+    fn seed_expired_read(
+        actor: &mut Actor<InMemoryDatagram, NullDiscovery>,
+        session: SessionId,
+        exchange: u16,
+        node_id: u64,
+        retried: bool,
+    ) -> oneshot::Receiver<Result<Vec<matter_interaction::ReportData>, Error>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        actor.pending.insert(
+            (session, exchange),
+            Pending {
+                response_deadline: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("process uptime exceeds one second"),
+                node_id,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+                request: PendingRequest {
+                    opcode: 0x02,
+                    protocol_id: ProtocolId::INTERACTION_MODEL,
+                    payload: vec![],
+                },
+                retried,
+                reply: PendingReply::Read {
+                    reply: reply_tx,
+                    chunks: Vec::new(),
+                    total_bytes: 0,
+                },
+            },
+        );
+        reply_rx
+    }
+
+    /// #126. A read that hits the response deadline IS retried, unlike every
+    /// other pending kind.
+    ///
+    /// #119 established that a fired response deadline must not trigger a
+    /// re-send — delivery was acknowledged, so a re-send could execute a
+    /// non-idempotent command twice. That reasoning is correct but was applied
+    /// to every pending kind, and a read cannot change device state. Against a
+    /// bridge that drops the Nth consecutive read (observed on a Tapo H100,
+    /// deterministically, across 5+ boots) the caller lost a read that would
+    /// have succeeded on a fresh session.
+    #[tokio::test]
+    async fn response_deadline_retries_a_read_because_reads_are_idempotent() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let node_id = 0x77u64;
+        let session = SessionId(3);
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: session,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+        let _reply_rx = seed_expired_read(&mut actor, session, 0x11, node_id, false);
+
+        actor.drive_response_deadlines().await;
+
+        assert!(
+            !actor.cache.contains_key(&(fabric_id, node_id)),
+            "the possibly-wedged session must be evicted so the resend gets a fresh one"
+        );
+        assert!(
+            !actor.pending_connects.is_empty(),
+            "a reconnect must be queued to carry the re-sent read"
+        );
+    }
+
+    /// The retry is once, and the second failure keeps the specific error.
+    ///
+    /// `on_pending_timeout` resolves a give-up with a generic round-trip
+    /// error; routing a retried read through it would silently downgrade
+    /// `Error::ResponseTimeout` — the variant #119 added precisely so callers
+    /// could tell an ACKed-but-unanswered request apart from everything else.
+    #[tokio::test]
+    async fn a_read_already_retried_fails_with_response_timeout_not_a_generic_error() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let node_id = 0x77u64;
+        let session = SessionId(3);
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: session,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+        let reply_rx =
+            seed_expired_read(&mut actor, session, 0x11, node_id, /* retried */ true);
+
+        actor.drive_response_deadlines().await;
+
+        match reply_rx.await {
+            Ok(Err(Error::ResponseTimeout { node_id: n, .. })) => assert_eq!(n, node_id),
+            other => panic!("expected Err(ResponseTimeout), got {other:?}"),
+        }
+        assert!(
+            actor.pending_connects.is_empty(),
+            "an already-retried read must not queue a second reconnect"
+        );
+    }
+
+    /// The #119 constraint still holds for everything that is NOT a read.
+    ///
+    /// This is the guard on the change above: an invoke or a write whose
+    /// response deadline fires must still fail outright, because delivery was
+    /// acknowledged and re-sending could execute it twice.
+    #[tokio::test]
+    async fn response_deadline_still_does_not_retry_a_non_idempotent_op() {
+        let mut actor = actor_with_one_fabric();
+        let fabric_id = actor.sole_fabric().unwrap().fabric_id;
+        let node_id = 0x77u64;
+        let session = SessionId(3);
+        actor.cache.insert(
+            (fabric_id, node_id),
+            CachedSession {
+                session_id: session,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+            },
+        );
+        // A raw round-trip: opaque payload, may well be an invoke.
+        let _reply_rx = seed_expired_pending(&mut actor, session, 0x11, node_id);
+
+        actor.drive_response_deadlines().await;
+
+        assert!(
+            actor.cache.contains_key(&(fabric_id, node_id)),
+            "a non-idempotent op must not evict the session"
+        );
+        assert!(
+            actor.pending_connects.is_empty(),
+            "a non-idempotent op must not be re-sent: delivery was ACKed"
         );
     }
 

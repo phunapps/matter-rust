@@ -22,6 +22,39 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## [Unreleased] — matter-controller
+
+### Fixed — a read that hits the response deadline is now retried (#126)
+
+#119 gave operational reads and invokes a response deadline, replacing an
+unbounded hang with `Error::ResponseTimeout`. It deliberately did **not**
+re-send on that path: delivery had been acknowledged, so a re-send could
+execute a non-idempotent command twice.
+
+That reasoning is right, but it was applied to every pending kind and only
+holds for some of them. A read cannot change device state, so re-sending
+one carries none of that hazard — and against a bridge that drops the Nth
+consecutive read on a session (observed on a Tapo H100, deterministically,
+across 5+ boots) the caller lost a read that would have succeeded on a
+fresh session.
+
+A read whose deadline fires now takes the same evict-reconnect-resend-once
+path MRP expiry already used. `Action`, `TimedAction`, `ChunkedWrite` and
+the raw `RoundTrip` — whose payload is opaque and may be an invoke — keep
+failing immediately, unchanged.
+
+The retry happens once. A read that times out again resolves with
+`Error::ResponseTimeout`, not the generic round-trip error, so callers
+matching on that variant still see it.
+
+Deliberately **not** done: proactive inter-read spacing. Whether that
+bridge rate-limits or wedges the session is still unknown and not
+reproducible here, and spacing would slow every device on every read to
+work around one device's behaviour. The retry is mechanism-agnostic — the
+reconnect covers a wedged session, the deadline itself supplies the
+spacing — and costs healthy devices nothing, since they never reach the
+deadline.
+
 ## matter-crypto 0.5.0 + matter-transport 0.7.0 + matter-commissioning 0.10.0 + matter-controller 0.14.0
 
 Dependency hygiene, released rather than held because two of the fixes
