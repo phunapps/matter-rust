@@ -105,9 +105,32 @@ lint-default:
 
 # -------------------------------------------------------- build / msrv ---
 
-# Build the whole workspace (CI: msrv job runs this under the 1.88 toolchain).
+# Build the whole workspace (CI: msrv job runs this under the MSRV toolchain).
 build:
     cargo build --workspace --all-features
+
+# Build the workspace under the MSRV toolchain (mirrors the CI msrv job).
+#
+# In `gate` because nothing else in it can catch an MSRV violation: every
+# other recipe runs on whatever stable the developer has, so a dependency
+# raising its own `rust-version` is invisible locally and only fails in CI.
+# That is not hypothetical — `aes 0.9` (which requires 1.89) passed a full
+# green gate and turned main red.
+#
+# The version is read from Cargo.toml rather than repeated here, so it cannot
+# drift from the workspace `rust-version`. A separate CARGO_TARGET_DIR keeps
+# this from invalidating the main build cache on every run — the two
+# toolchains would otherwise recompile over each other.
+msrv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    MSRV=$(grep -m1 '^rust-version' Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
+    if ! rustup run "$MSRV" rustc --version >/dev/null 2>&1; then
+        echo "msrv: installing Rust $MSRV toolchain"
+        rustup toolchain install "$MSRV" --profile minimal
+    fi
+    echo "msrv: building under Rust $MSRV"
+    CARGO_TARGET_DIR=target/msrv cargo "+$MSRV" build --workspace --all-features
 
 # ---------------------------------------------------------- supply chain ---
 
@@ -124,7 +147,7 @@ audit:
 # Stops at the first failing recipe.
 
 # Full pre-push gate, mirroring CI end-to-end (run before every push).
-gate: fmt-check lint lint-default test doctest codegen-check docs embedded controller-no-ota deny audit
+gate: fmt-check lint lint-default test doctest codegen-check docs embedded controller-no-ota msrv deny audit
     @echo "gate: all green ✓"
 
 # ------------------------------------------------------------ benchmarks ---
