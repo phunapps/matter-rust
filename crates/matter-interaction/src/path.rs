@@ -62,7 +62,7 @@ impl ReadPath {
     /// wildcard). Prefer [`Self::concrete`] / [`Self::cluster`] / [`Self::all`]
     /// for the common shapes.
     #[must_use]
-    pub fn new(endpoint: Option<u16>, cluster: Option<u32>, attribute: Option<u32>) -> Self {
+    pub const fn new(endpoint: Option<u16>, cluster: Option<u32>, attribute: Option<u32>) -> Self {
         Self {
             endpoint,
             cluster,
@@ -72,7 +72,7 @@ impl ReadPath {
 
     /// A concrete `(endpoint, cluster, attribute)` path (no wildcards).
     #[must_use]
-    pub fn concrete(endpoint: u16, cluster: u32, attribute: u32) -> Self {
+    pub const fn concrete(endpoint: u16, cluster: u32, attribute: u32) -> Self {
         Self {
             endpoint: Some(endpoint),
             cluster: Some(cluster),
@@ -82,7 +82,7 @@ impl ReadPath {
 
     /// All attributes of `cluster` on `endpoint`.
     #[must_use]
-    pub fn cluster(endpoint: u16, cluster: u32) -> Self {
+    pub const fn cluster(endpoint: u16, cluster: u32) -> Self {
         Self {
             endpoint: Some(endpoint),
             cluster: Some(cluster),
@@ -92,7 +92,7 @@ impl ReadPath {
 
     /// Every attribute on every endpoint/cluster (full wildcard).
     #[must_use]
-    pub fn all() -> Self {
+    pub const fn all() -> Self {
         Self {
             endpoint: None,
             cluster: None,
