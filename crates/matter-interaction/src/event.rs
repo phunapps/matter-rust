@@ -39,7 +39,7 @@ pub struct EventPath {
 impl EventPath {
     /// A concrete `(endpoint, cluster, event)` path (no node, no urgent flag).
     #[must_use]
-    pub fn concrete(endpoint: u16, cluster: u32, event: u32) -> Self {
+    pub const fn concrete(endpoint: u16, cluster: u32, event: u32) -> Self {
         Self {
             node: None,
             endpoint: Some(endpoint),
@@ -51,7 +51,7 @@ impl EventPath {
 
     /// All events of `cluster` on `endpoint`.
     #[must_use]
-    pub fn cluster(endpoint: u16, cluster: u32) -> Self {
+    pub const fn cluster(endpoint: u16, cluster: u32) -> Self {
         Self {
             node: None,
             endpoint: Some(endpoint),
@@ -103,7 +103,7 @@ pub struct EventFilter {
 impl EventFilter {
     /// A filter reporting events with number `>= event_min`.
     #[must_use]
-    pub fn from_event_min(event_min: u64) -> Self {
+    pub const fn from_event_min(event_min: u64) -> Self {
         Self {
             node: None,
             event_min,
