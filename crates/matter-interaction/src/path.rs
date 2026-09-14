@@ -10,7 +10,7 @@ use matter_codec::{Element, Tag, TlvReader, Value};
 ///
 /// Encoded as a `CommandPathIB` TLV **list** (Matter Appendix A.6):
 /// context tag 0 = endpoint, 1 = cluster, 2 = command.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CommandPath {
     /// Matter endpoint (always 0 for commissioning).
     pub endpoint: u16,
@@ -26,7 +26,7 @@ pub struct CommandPath {
 /// context tag 2 = endpoint, 3 = cluster, 4 = attribute. Commissioning
 /// reads only concrete attributes, so no wildcard/list-index fields are
 /// emitted.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AttributePath {
     /// Matter endpoint.
     pub endpoint: u16,
@@ -46,7 +46,7 @@ pub struct AttributePath {
 /// (e.g. a data-version filter); marking it keeps such additions non-breaking.
 /// Build via [`ReadPath::concrete`] / [`ReadPath::cluster`] / [`ReadPath::all`]
 /// / [`ReadPath::new`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, Debug, Eq, Default, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct ReadPath {
     /// Endpoint, or `None` for all endpoints.
