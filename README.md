@@ -16,15 +16,17 @@ A Rust implementation of the **Matter** protocol — controller side.
 application act as a Matter **controller** — commissioning devices, establishing
 secure sessions, and reading, writing, invoking, and subscribing to clusters.
 
-The Rust ecosystem already has [`rs-matter`](https://github.com/project-chip/rs-matter)
-for the **device** side. The controller side is the gap we are filling.
+The Rust ecosystem also has [`rs-matter`](https://github.com/project-chip/rs-matter),
+which began on the **device** side and has been adding controller and
+commissioner support since early 2026. `matter-rust` covers the controller side
+only, as small crates you can adopt one at a time.
 
 ## What this is not
 
 - Not a Matter device implementation — see `rs-matter`.
 - Not a smart-home platform — this is a protocol library.
-- Not a fork of `rs-matter`. The two projects may converge later; for now we ship
-  separately because the design goals differ.
+- Not a fork of `rs-matter`. It is developed independently, with different design
+  choices.
 - Not a quick MVP. Matter is a security-sensitive protocol. Cutting corners here
   causes broken homes and leaked credentials. The v1.0 API took roughly eighteen
   months, as planned, and the pace has not been compressed since.
@@ -262,9 +264,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The short version:
 
 ## Relationship to `rs-matter`
 
-`rs-matter` is the CSA-affiliated Rust Matter project, device-focused. We
-collaborate where it helps (spec ambiguity reports, test vectors), and we may
-converge eventually. Until then, `matter-rust` is the controller-focused option.
+[`rs-matter`](https://github.com/project-chip/rs-matter) is the CSA-affiliated
+Rust Matter project. It started with devices and, since early 2026, has been
+building controller and commissioner support too. Like the C++ SDK, it aims to
+cover every role. `matter-rust` is a separate, independently developed project
+with a narrower scope: the controller side only, split into crates that can be
+used on their own. The two projects do not currently coordinate.
 
 ## License
 
