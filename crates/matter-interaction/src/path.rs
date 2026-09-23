@@ -10,7 +10,7 @@ use matter_codec::{Element, Tag, TlvReader, Value};
 ///
 /// Encoded as a `CommandPathIB` TLV **list** (Matter Appendix A.6):
 /// context tag 0 = endpoint, 1 = cluster, 2 = command.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CommandPath {
     /// Matter endpoint (always 0 for commissioning).
     pub endpoint: u16,
@@ -26,7 +26,7 @@ pub struct CommandPath {
 /// context tag 2 = endpoint, 3 = cluster, 4 = attribute. Commissioning
 /// reads only concrete attributes, so no wildcard/list-index fields are
 /// emitted.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AttributePath {
     /// Matter endpoint.
     pub endpoint: u16,
@@ -46,7 +46,7 @@ pub struct AttributePath {
 /// (e.g. a data-version filter); marking it keeps such additions non-breaking.
 /// Build via [`ReadPath::concrete`] / [`ReadPath::cluster`] / [`ReadPath::all`]
 /// / [`ReadPath::new`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, Debug, Eq, Default, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct ReadPath {
     /// Endpoint, or `None` for all endpoints.
@@ -62,7 +62,7 @@ impl ReadPath {
     /// wildcard). Prefer [`Self::concrete`] / [`Self::cluster`] / [`Self::all`]
     /// for the common shapes.
     #[must_use]
-    pub fn new(endpoint: Option<u16>, cluster: Option<u32>, attribute: Option<u32>) -> Self {
+    pub const fn new(endpoint: Option<u16>, cluster: Option<u32>, attribute: Option<u32>) -> Self {
         Self {
             endpoint,
             cluster,
@@ -72,7 +72,7 @@ impl ReadPath {
 
     /// A concrete `(endpoint, cluster, attribute)` path (no wildcards).
     #[must_use]
-    pub fn concrete(endpoint: u16, cluster: u32, attribute: u32) -> Self {
+    pub const fn concrete(endpoint: u16, cluster: u32, attribute: u32) -> Self {
         Self {
             endpoint: Some(endpoint),
             cluster: Some(cluster),
@@ -82,7 +82,7 @@ impl ReadPath {
 
     /// All attributes of `cluster` on `endpoint`.
     #[must_use]
-    pub fn cluster(endpoint: u16, cluster: u32) -> Self {
+    pub const fn cluster(endpoint: u16, cluster: u32) -> Self {
         Self {
             endpoint: Some(endpoint),
             cluster: Some(cluster),
@@ -92,7 +92,7 @@ impl ReadPath {
 
     /// Every attribute on every endpoint/cluster (full wildcard).
     #[must_use]
-    pub fn all() -> Self {
+    pub const fn all() -> Self {
         Self {
             endpoint: None,
             cluster: None,

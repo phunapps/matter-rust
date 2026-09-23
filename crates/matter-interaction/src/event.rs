@@ -21,7 +21,7 @@ use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 /// `#[non_exhaustive]`: an event path may gain optional spec components; marking
 /// it keeps such additions non-breaking. Build via [`EventPath::concrete`] /
 /// [`EventPath::cluster`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Copy, Clone, Debug, Eq, Default, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct EventPath {
     /// Node, or `None` (the connected node / wildcard).
@@ -39,7 +39,7 @@ pub struct EventPath {
 impl EventPath {
     /// A concrete `(endpoint, cluster, event)` path (no node, no urgent flag).
     #[must_use]
-    pub fn concrete(endpoint: u16, cluster: u32, event: u32) -> Self {
+    pub const fn concrete(endpoint: u16, cluster: u32, event: u32) -> Self {
         Self {
             node: None,
             endpoint: Some(endpoint),
@@ -51,7 +51,7 @@ impl EventPath {
 
     /// All events of `cluster` on `endpoint`.
     #[must_use]
-    pub fn cluster(endpoint: u16, cluster: u32) -> Self {
+    pub const fn cluster(endpoint: u16, cluster: u32) -> Self {
         Self {
             node: None,
             endpoint: Some(endpoint),
@@ -91,7 +91,7 @@ impl EventPath {
 ///
 /// `#[non_exhaustive]`: build via [`EventFilter::from_event_min`]; marking it
 /// keeps future optional fields non-breaking.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct EventFilter {
     /// Node scope, or `None`.
@@ -103,7 +103,7 @@ pub struct EventFilter {
 impl EventFilter {
     /// A filter reporting events with number `>= event_min`.
     #[must_use]
-    pub fn from_event_min(event_min: u64) -> Self {
+    pub const fn from_event_min(event_min: u64) -> Self {
         Self {
             node: None,
             event_min,
@@ -127,7 +127,7 @@ impl EventFilter {
 
 /// Event priority (Matter §14.3). Unknown values are preserved verbatim so a
 /// newer-revision device does not break decoding.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum EventPriority {
     /// Debug priority (0).
@@ -156,7 +156,7 @@ impl EventPriority {
 /// these (absolute epoch/system, or a delta against the prior event in a
 /// subscription stream); [`None`](EventTimestamp::None) if the device omitted all
 /// four (tolerated rather than rejected).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub enum EventTimestamp {
     /// Milliseconds since the Unix epoch (`EpochTimestamp`, tag 3).
