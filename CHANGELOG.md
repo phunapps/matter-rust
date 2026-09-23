@@ -22,9 +22,20 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
-## [Unreleased] — matter-transport
+## matter-transport 0.7.1 + matter-controller 0.15.0
 
-### Fixed — an exchange answered unreliably is now reclaimed
+This release fixes subscriptions going silent after 256 reports on a session.
+The cause was in `matter-transport` and the trigger was in `matter-controller`, so
+both crates are released. Each fix is enough on its own. `matter-controller`
+0.15.0 now requires `matter-transport` 0.7.1, so upgrading the controller
+brings in both fixes.
+
+`matter-controller` goes up a minor version because
+`SubscriptionEvent::Established` changed (see below). `matter-transport` is a
+patch release with no API change. `matter-commissioning`'s existing `0.7`
+requirement already accepts 0.7.1, so it is not re-released.
+
+### matter-transport: Fixed — an exchange answered unreliably is now reclaimed
 
 `MrpState` bounds each session's exchange table at `MAX_EXCHANGES_PER_SESSION`
 (256) and frees an exchange's slot at the point its last piece of live work
@@ -47,9 +58,7 @@ standalone-ack deadline has already flushed the ack. The latent leak dates
 from the exchange cap's introduction and is not a regression in any recent
 release.
 
-## [Unreleased] — matter-controller
-
-### Changed (breaking) — `SubscriptionEvent::Established` carries the negotiated max interval
+### matter-controller: Changed (breaking) — `SubscriptionEvent::Established` carries the negotiated max interval
 
 `Established` now has a `max_interval: u16` field. It holds the max interval, in
 seconds, that the device agreed to in its `SubscribeResponse`, which is the
@@ -64,7 +73,7 @@ The variant is now also `#[non_exhaustive]`, so later fields are additive.
 matched `Established { .. }` is unaffected. Consumers never construct this
 variant, so losing the ability to build it outside the crate costs nothing.
 
-### Fixed — subscription `StatusResponse` is sent reliably
+### matter-controller: Fixed — subscription `StatusResponse` is sent reliably
 
 The `StatusResponse` answering a subscription `ReportData` was sent without
 MRP. chip sends it reliably (`StatusResponse::Send` → `ExchangeContext::
@@ -75,7 +84,7 @@ report, and the duplicate gets only a standalone MRP ack, never a
 reliable and retransmitted until acked. On its own this also avoids the
 transport exchange leak above, but the two fixes are independent.
 
-### Fixed — a resubscribe re-requests the caller's `MaxIntervalCeiling`
+### matter-controller: Fixed — a resubscribe re-requests the caller's `MaxIntervalCeiling`
 
 A resubscribe re-requested the max interval the device had last *negotiated*
 as its new ceiling. If a device ever settled below the caller's ceiling, every
@@ -84,7 +93,7 @@ request was never sent again. chip re-sends the caller's original
 `ReadPrepareParams` on every resubscribe. We now do the same. The negotiated value
 still drives the liveness deadline.
 
-### Fixed — undecodable inbound datagrams are no longer dropped silently
+### matter-controller: Fixed — undecodable inbound datagrams are no longer dropped silently
 
 The actor discarded every `decode_inbound` error without a trace, which is why
 the exchange leak above looked like device sleep for weeks. `ExchangeTableFull`
@@ -92,7 +101,7 @@ now logs at `warn` with the peer address. Other decode failures (stale session
 ids, replayed counters, failed tags) are routine datagram noise and log at
 `debug`.
 
-### Fixed — a read that hits the response deadline is now retried (#126)
+### matter-controller: Fixed — a read that hits the response deadline is now retried (#126)
 
 #119 gave operational reads and invokes a response deadline, replacing an
 unbounded hang with `Error::ResponseTimeout`. It deliberately did **not**
