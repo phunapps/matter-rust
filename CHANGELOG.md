@@ -49,6 +49,17 @@ release.
 
 ## [Unreleased] — matter-controller
 
+### Fixed — subscription `StatusResponse` is sent reliably
+
+The `StatusResponse` answering a subscription `ReportData` was sent without
+MRP. chip sends it reliably (`StatusResponse::Send` → `ExchangeContext::
+SendMessage` requests an ack whenever the session allows MRP). If our
+unreliable answer is lost, which is common on Thread, the device retransmits its
+report, and the duplicate gets only a standalone MRP ack, never a
+`StatusResponse`, so the device tears the subscription down. It is now
+reliable and retransmitted until acked. On its own this also avoids the
+transport exchange leak above, but the two fixes are independent.
+
 ### Fixed — a read that hits the response deadline is now retried (#126)
 
 #119 gave operational reads and invokes a response deadline, replacing an

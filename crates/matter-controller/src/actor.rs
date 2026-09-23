@@ -5528,6 +5528,18 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
 
     /// Send an application `StatusResponse(Success)` on a subscription exchange
     /// (also piggybacks the MRP ack for the received report).
+    ///
+    /// Sent RELIABLY, as chip does (`StatusResponse::Send` →
+    /// `ExchangeContext::SendMessage` requests an ack whenever the session
+    /// allows MRP). If an unreliable answer is lost — common on Thread — the
+    /// device retransmits its `ReportData`, the duplicate earns only a
+    /// standalone MRP ack (the dedup path never re-delivers), no
+    /// `StatusResponse` ever arrives, and the device tears the subscription
+    /// down. Reliable, MRP retransmits the answer (piggyback ack included)
+    /// until the device acks it. A retransmit that expires on a steady-state
+    /// report matches no pending op and is dropped; during the subscribe
+    /// handshake it goes through [`Self::on_pending_timeout`] like any other
+    /// MRP expiry of the pending subscribe.
     async fn send_status_ack(
         &mut self,
         sid: SessionId,
@@ -5541,7 +5553,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             OP_STATUS_RESPONSE,
             ProtocolId::INTERACTION_MODEL,
             &status,
-            MrpFlags { reliable: false },
+            MrpFlags { reliable: true },
             Instant::now(),
         )?;
         self.transport
@@ -9545,14 +9557,18 @@ mod tests {
     /// `SubscribeRequest` with a `SubscribeResponse`, then sends `num_reports`
     /// steady-state `ReportData` frames (OnOff.OnOff(ep1)=true) on the
     /// subscription exchange.
-    async fn run_subscription_device(
-        io: InMemoryDatagram,
+    /// Device-side prelude shared by the subscription fakes: accept the
+    /// controller's CASE handshake, then answer its `SubscribeRequest` with a
+    /// `SubscribeResponse` (subscription id `0x1234_5678`, max interval 30 s).
+    /// Returns the device's session table, its session id, and the subscribe
+    /// exchange id.
+    async fn accept_case_and_subscribe(
+        io: &InMemoryDatagram,
         ctrl_addr: std::net::SocketAddr,
         creds: CaseCredentials,
         roots: TrustedRoots,
         responder_session_id: u16,
-        reports: Vec<Vec<u8>>,
-    ) {
+    ) -> (SessionManager, SessionId, u16) {
         let mut responder = CaseResponder::new(
             creds,
             roots,
@@ -9632,6 +9648,19 @@ mod tests {
             )
             .unwrap();
         io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+        (sessions, sid, exchange_id)
+    }
+
+    async fn run_subscription_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        reports: Vec<Vec<u8>>,
+    ) {
+        let (mut sessions, sid, exchange_id) =
+            accept_case_and_subscribe(&io, ctrl_addr, creds, roots, responder_session_id).await;
 
         // Stream the given `ReportData` payloads on the same exchange (chunked
         // notifications just pass multiple payloads, the non-final ones with
@@ -9652,6 +9681,76 @@ mod tests {
             io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
             let _ =
                 tokio::time::timeout(std::time::Duration::from_millis(100), io.recv_from()).await;
+        }
+        keep_endpoint_open(io);
+    }
+
+    /// Device that sends steady-state reports the way real devices do (chip's
+    /// `ReportingEngine`): each `ReportData` on a NEW device-initiated exchange
+    /// (I=1), reliably (R=1). For each report it waits for the controller's
+    /// `StatusResponse` on that exchange, asserts it was sent reliably, and acks
+    /// it — so the controller never retransmits and the run stays lock-step.
+    async fn run_device_initiated_reports_device(
+        io: InMemoryDatagram,
+        ctrl_addr: std::net::SocketAddr,
+        creds: CaseCredentials,
+        roots: TrustedRoots,
+        responder_session_id: u16,
+        report: Vec<u8>,
+        count: usize,
+    ) {
+        let (mut sessions, sid, _) =
+            accept_case_and_subscribe(&io, ctrl_addr, creds, roots, responder_session_id).await;
+
+        for n in 1..=count {
+            let out = sessions
+                .encode_outbound(
+                    sid,
+                    None, // a fresh device-initiated exchange per report
+                    0x05,
+                    ProtocolId::INTERACTION_MODEL,
+                    &report,
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            io.send_to(&out.wire_bytes, ctrl_addr).await.unwrap();
+
+            let (wire, _) = tokio::time::timeout(std::time::Duration::from_secs(2), io.recv_from())
+                .await
+                .unwrap_or_else(|_| panic!("report #{n}: controller sent no StatusResponse"))
+                .unwrap();
+            let DecodeInboundOutput::AppMessage {
+                exchange_id,
+                opcode,
+                ..
+            } = sessions.decode_inbound(&wire, Instant::now()).unwrap()
+            else {
+                panic!("report #{n}: expected a StatusResponse app message");
+            };
+            assert_eq!(exchange_id, out.exchange_id, "report #{n}: wrong exchange");
+            assert_eq!(opcode, 0x01, "report #{n}: expected StatusResponse opcode");
+
+            // R=1 on the StatusResponse is observable as the device's MRP arming
+            // a standalone ack for it; an unreliable one arms nothing.
+            let acks: Vec<Vec<u8>> = sessions
+                .handle_timeout(Instant::now() + std::time::Duration::from_secs(1))
+                .into_iter()
+                .filter_map(|e| match e {
+                    MrpEvent::SendStandaloneAck {
+                        exchange_id,
+                        packet,
+                        ..
+                    } if exchange_id == out.exchange_id => Some(packet),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                acks.len(),
+                1,
+                "report #{n}: the StatusResponse must be sent reliably (R=1)"
+            );
+            io.send_to(&acks[0], ctrl_addr).await.unwrap();
         }
         keep_endpoint_open(io);
     }
@@ -11675,6 +11774,73 @@ mod tests {
             assert_eq!(report.value, matter_codec::Value::Bool(true));
         }
 
+        device.await.unwrap();
+        sub.cancel().await.expect("cancel");
+    }
+
+    /// Regression (`WeaveHome`, subscriptions deaf after 256 reports): every
+    /// device-initiated steady-state report must keep reaching the consumer past
+    /// `MAX_EXCHANGES_PER_SESSION`, and each must be answered with a RELIABLE
+    /// `StatusResponse` (chip `StatusResponse::Send` → `ExchangeContext::
+    /// SendMessage` requests an ack whenever the session allows MRP). Before the
+    /// fix the unreliable answer leaked one MRP exchange slot per report, and
+    /// report #257 was rejected with `ExchangeTableFull` and dropped silently.
+    #[tokio::test]
+    async fn device_initiated_reports_survive_past_exchange_table_cap() {
+        const REPORTS: usize = matter_transport::mrp::MAX_EXCHANGES_PER_SESSION + 44;
+        let Harness {
+            store,
+            ctrl_io,
+            dev_io,
+            ctrl_addr,
+            discovery,
+            device_creds,
+            device_roots,
+            device_node_id,
+        } = loopback_harness();
+
+        let device = tokio::spawn(run_device_initiated_reports_device(
+            dev_io,
+            ctrl_addr,
+            device_creds,
+            device_roots,
+            0x00D5,
+            build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true)),
+            REPORTS,
+        ));
+
+        let controller = crate::controller::MatterController::with_components(
+            store,
+            ctrl_io,
+            discovery,
+            Arc::new(SystemNocRng),
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        )
+        .expect("open");
+        let mut sub = controller
+            .node(device_node_id)
+            .subscribe(
+                &[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)],
+                &[],
+                1,
+                30,
+            )
+            .await
+            .expect("subscribe");
+        assert!(matches!(
+            sub.next().await,
+            Some(SubscriptionEvent::Established { .. })
+        ));
+
+        for n in 1..=REPORTS {
+            match sub.next().await {
+                Some(SubscriptionEvent::Report(r)) => {
+                    assert_eq!(r.value, matter_codec::Value::Bool(true));
+                }
+                other => panic!("report #{n}: expected a Report, got {other:?}"),
+            }
+        }
         device.await.unwrap();
         sub.cancel().await.expect("cancel");
     }
