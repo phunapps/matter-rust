@@ -22,6 +22,31 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## [Unreleased] — matter-transport
+
+### Fixed — an exchange answered unreliably is now reclaimed
+
+`MrpState` bounds each session's exchange table at `MAX_EXCHANGES_PER_SESSION`
+(256) and frees an exchange's slot at the point its last piece of live work
+clears. One such point was missing: sending an **unreliable** message. Nothing
+ever acks an unreliable message, so no later event freed the slot either.
+Every peer-initiated exchange answered unreliably therefore leaked one slot for
+the life of the session, and once 256 had leaked the session rejected every
+new peer-initiated exchange with `ExchangeTableFull`.
+
+The controller answers every steady-state subscription report exactly that
+way, so this surfaced downstream as subscriptions that go deaf after 256
+reports on a session. The priming report still arrives, and every
+report after it is dropped until the next CASE session (hardware report from
+WeaveHome; the field onset matched `256 × MaxInterval` to the second).
+
+`mark_packet_sent` now reclaims the exchange on an unreliable send if nothing
+else keeps it live. It hangs off the send rather than off the piggyback-ack
+drain in `prepare_outbound`, so it also covers an answer sent after the
+standalone-ack deadline has already flushed the ack. The latent leak dates
+from the exchange cap's introduction and is not a regression in any recent
+release.
+
 ## [Unreleased] — matter-controller
 
 ### Fixed — a read that hits the response deadline is now retried (#126)

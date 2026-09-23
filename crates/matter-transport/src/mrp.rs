@@ -746,6 +746,16 @@ impl MrpState {
         self.last_outbound = Some(now);
 
         if !reliable {
+            // Nothing will ever ack an unreliable message, so this send is the
+            // last event the exchange will see from our side: reclaim it now if
+            // no other work keeps it live. Without this, every peer-initiated
+            // exchange we answer unreliably (a subscription ReportData's
+            // StatusResponse) leaked a slot until `MAX_EXCHANGES_PER_SESSION`
+            // was reached and the session rejected every new peer exchange.
+            // Hanging it off the send, not the ack drain in `prepare_outbound`,
+            // also covers an answer sent after the standalone-ack deadline
+            // already flushed the ack (nothing left to drain, entry re-created).
+            self.reclaim_if_idle(exchange_id);
             return;
         }
 
@@ -1076,7 +1086,8 @@ impl MrpState {
     /// Reclaim `exchange_id`'s [`ExchangeState`] if it is now idle (see
     /// [`Self::exchange_is_idle`]). Called at each point where an exchange's
     /// last piece of live work clears (an ack is received, a retransmit
-    /// expires, or a buffered outbound ack drains), so completed exchanges
+    /// expires, a buffered ack is flushed as a standalone ack, or an
+    /// unreliable message — which nothing will ack — is sent), so completed exchanges
     /// are evicted automatically rather than depending on a caller invoking
     /// [`Self::close_exchange`].
     fn reclaim_if_idle(&mut self, exchange_id: u16) {
@@ -2256,6 +2267,138 @@ mod tests {
             known.is_ok(),
             "inbound on a known exchange must still be accepted at the cap"
         );
+    }
+
+    /// Peer-initiated reliable message answered by one UNRELIABLE message on
+    /// the same exchange — what the controller does for every steady-state
+    /// subscription `ReportData`. The unreliable send drains the buffered ack
+    /// and nothing will ever ack it back, so the send itself is the exchange's
+    /// last event and must reclaim it. Before the fix the entry leaked, and
+    /// report #257 on the session was rejected with `ExchangeTableFull`
+    /// (`WeaveHome`: every subscription went deaf after 256 reports).
+    #[test]
+    fn unreliable_answer_to_peer_exchange_reclaims_it() {
+        let mut mrp = MrpState::new(cfg());
+        let mut now = t0();
+        let n = u32::try_from(MAX_EXCHANGES_PER_SESSION).unwrap() + 44;
+        for i in 0..n {
+            let exch = 40_000u16.wrapping_add(u16::try_from(i).unwrap());
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x05,
+                exch,
+                None,
+                b"report",
+            );
+            mrp.process_inbound(inbound, MessageCounter(1000 + i), now)
+                .unwrap_or_else(|e| panic!("report #{} rejected: {e:?}", i + 1));
+            let p = mrp
+                .prepare_outbound(
+                    0x01,
+                    ProtocolId::INTERACTION_MODEL,
+                    exch,
+                    b"status",
+                    MrpFlags { reliable: false },
+                    now,
+                )
+                .unwrap();
+            assert!(p.piggyback_acked, "the answer must carry the buffered ack");
+            mrp.mark_packet_sent(MessageCounter(i), exch, Vec::new(), false, now);
+            assert_eq!(
+                mrp.exchanges.len(),
+                0,
+                "report #{}: an unreliably-answered exchange must be reclaimed",
+                i + 1
+            );
+            now += Duration::from_secs(600);
+            let _ = mrp.handle_timeout(now);
+        }
+    }
+
+    /// The same leak via the late path: the 200 ms standalone-ack deadline
+    /// fires first (flushing the ack and reclaiming the exchange), and only
+    /// then does the application send its unreliable answer. `prepare_outbound`
+    /// re-creates the entry with nothing to drain, so reclaiming on the drain
+    /// alone would still leak — the reclaim has to hang off the unreliable send.
+    #[test]
+    fn late_unreliable_answer_after_standalone_ack_reclaims_exchange() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        mrp.process_inbound(
+            build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x05,
+                0x1234,
+                None,
+                b"report",
+            ),
+            MessageCounter(7),
+            now,
+        )
+        .unwrap();
+        let later = now + Duration::from_secs(1);
+        let _ = mrp.handle_timeout(later);
+        assert_eq!(mrp.exchanges.len(), 0, "standalone-ack flush reclaims");
+
+        let p = mrp
+            .prepare_outbound(
+                0x01,
+                ProtocolId::INTERACTION_MODEL,
+                0x1234,
+                b"status",
+                MrpFlags { reliable: false },
+                later,
+            )
+            .unwrap();
+        assert!(!p.piggyback_acked);
+        mrp.mark_packet_sent(MessageCounter(1), 0x1234, Vec::new(), false, later);
+        assert_eq!(
+            mrp.exchanges.len(),
+            0,
+            "late unreliable answer must not leak"
+        );
+    }
+
+    /// Control for the two tests above: a RELIABLE send must keep its exchange
+    /// until the peer acks it — reclaiming early would forget which side
+    /// initiated the exchange while a retransmit is still in flight.
+    #[test]
+    fn reliable_send_keeps_exchange_until_acked() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        mrp.process_inbound(
+            build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x05,
+                0x4321,
+                None,
+                b"report",
+            ),
+            MessageCounter(9),
+            now,
+        )
+        .unwrap();
+        mrp.prepare_outbound(
+            0x01,
+            ProtocolId::INTERACTION_MODEL,
+            0x4321,
+            b"status",
+            MrpFlags { reliable: true },
+            now,
+        )
+        .unwrap();
+        mrp.mark_packet_sent(MessageCounter(3), 0x4321, b"wire".to_vec(), true, now);
+        assert_eq!(mrp.exchanges.len(), 1, "live until acked");
+
+        let ack = build_inbound_payload(
+            ExchangeFlags::INITIATOR | ExchangeFlags::ACK,
+            crate::protocol_header::opcode::secure_channel::STANDALONE_ACK,
+            0x4321,
+            Some(MessageCounter(3)),
+            b"",
+        );
+        mrp.process_inbound(ack, MessageCounter(10), now).unwrap();
+        assert_eq!(mrp.exchanges.len(), 0, "reclaimed once acked");
     }
 
     #[test]
