@@ -94,7 +94,7 @@ tracing-subscriber = { workspace = true, features = ["registry"] }
 # makes them addressable from `#[cfg(test)]`.
 const-oid = "0.9"
 spki = "0.7"
-x509-cert = "0.2"
+x509-cert = "0.3"
 
 [[test]]
 name = "state_machine_network"
