@@ -564,7 +564,14 @@ struct SubEntry {
     event_paths: Vec<matter_interaction::EventPath>,
     event_filters: Vec<matter_interaction::EventFilter>,
     min_interval: u16,
+    /// The max interval the device NEGOTIATED in its `SubscribeResponse` — its
+    /// agreed reporting cadence, which drives the liveness deadline.
     max_interval: u16,
+    /// The caller's requested `MaxIntervalCeiling`, re-sent unchanged on every
+    /// resubscribe (chip's `ReadClient` re-sends its retained
+    /// `ReadPrepareParams`). Never the negotiated value: re-requesting that
+    /// would pin every later subscription to whatever the device once chose.
+    max_interval_ceiling: u16,
     /// Re-subscribe if no report arrives by this instant.
     liveness_deadline: Instant,
 }
@@ -578,6 +585,8 @@ struct PendingResubscribe {
     event_paths: Vec<matter_interaction::EventPath>,
     event_filters: Vec<matter_interaction::EventFilter>,
     min_interval: u16,
+    /// The caller's requested ceiling (`SubEntry::max_interval_ceiling`), not
+    /// the value last negotiated.
     max_interval: u16,
     retry_count: u32,
     tx: ReportSink,
@@ -717,6 +726,8 @@ enum PendingReply {
         event_paths: Vec<matter_interaction::EventPath>,
         event_filters: Vec<matter_interaction::EventFilter>,
         min_interval: u16,
+        /// The requested `MaxIntervalCeiling` — the caller's, on an initial
+        /// subscribe and on every resubscribe alike.
         max_interval: u16,
         retry_count: u32,
     },
@@ -5497,6 +5508,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 event_paths,
                 event_filters,
                 min_interval,
+                // What we asked for: the caller's ceiling, carried unchanged
+                // through every resubscribe.
+                max_interval: max_interval_ceiling,
                 ..
             } = p.reply
             else {
@@ -5504,8 +5518,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             };
             match matter_interaction::parse_subscribe_response(&payload) {
                 Ok(resp) => {
-                    // Liveness + the re-request ceiling both use the *negotiated*
-                    // max interval (the device's agreed reporting cadence).
+                    // Liveness uses the *negotiated* max interval (the device's
+                    // agreed reporting cadence); a resubscribe re-requests the
+                    // caller's `max_interval_ceiling` (see `SubEntry`).
                     let deadline = Instant::now()
                         + std::time::Duration::from_secs(u64::from(resp.max_interval))
                         + LIVENESS_GRACE;
@@ -5536,6 +5551,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                             event_filters,
                             min_interval,
                             max_interval: resp.max_interval,
+                            max_interval_ceiling,
                             liveness_deadline: deadline,
                         },
                     );
@@ -5957,7 +5973,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             event_paths: entry.event_paths,
             event_filters: bump_event_filters(entry.event_filters, watermark),
             min_interval: entry.min_interval,
-            max_interval: entry.max_interval,
+            max_interval: entry.max_interval_ceiling,
             retry_count: 0,
             tx: entry.tx,
         });
@@ -6928,6 +6944,7 @@ mod tests {
                 event_filters: vec![],
                 min_interval: 1,
                 max_interval: 30,
+                max_interval_ceiling: 30,
                 liveness_deadline: Instant::now(),
             },
         );
@@ -7021,6 +7038,7 @@ mod tests {
                 event_filters: vec![],
                 min_interval: 1,
                 max_interval: 30,
+                max_interval_ceiling: 30,
                 liveness_deadline: Instant::now(),
             }
         };
@@ -11729,6 +11747,7 @@ mod tests {
                 event_filters: vec![],
                 min_interval: 1,
                 max_interval: 30,
+                max_interval_ceiling: 30,
                 liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
             },
         );
@@ -11739,6 +11758,52 @@ mod tests {
         assert_eq!(
             actor.resubscribes[0].event_filters,
             vec![matter_interaction::EventFilter::from_event_min(8)]
+        );
+    }
+
+    /// A resubscribe re-requests the CALLER's `MaxIntervalCeiling`, not the
+    /// value the device last negotiated — as chip does (`ReadClient` re-sends
+    /// its retained `ReadPrepareParams`). Re-requesting the negotiated value
+    /// pinned every later subscription to whatever the device once chose,
+    /// however low.
+    #[test]
+    fn begin_resubscribe_rerequests_the_callers_ceiling() {
+        let (io, _peer) = InMemoryDatagram::pair();
+        let mut actor = Actor::new(
+            io,
+            NullDiscovery,
+            Arc::new(MemStore::default()),
+            Arc::new(matter_commissioning::SystemNocRng),
+            ControllerState { fabrics: vec![] },
+            None,
+            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+        );
+        let (sink, _report_rx, _ctrl_rx) = test_report_sink();
+        actor.insert_subscription(
+            SubId(1),
+            SubEntry {
+                tx: sink,
+                peer: "127.0.0.1:5540".parse().unwrap(),
+                reassembler: ReportReassembler::default(),
+                session_id: SessionId(7),
+                wire_sub_id: 0x1234,
+                node_id: 2,
+                paths: vec![matter_interaction::ReadPath::all()],
+                event_paths: vec![],
+                event_filters: vec![],
+                min_interval: 1,
+                max_interval: 120,
+                max_interval_ceiling: 600,
+                liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
+            },
+        );
+
+        actor.begin_resubscribe(SubId(1), Error::Operational("test".into()));
+
+        assert_eq!(actor.resubscribes.len(), 1);
+        assert_eq!(
+            actor.resubscribes[0].max_interval, 600,
+            "resubscribe must re-request the caller's ceiling, not the negotiated 120"
         );
     }
 
@@ -12223,6 +12288,7 @@ mod tests {
             event_filters: vec![],
             min_interval: 1,
             max_interval: 30,
+            max_interval_ceiling: 30,
             liveness_deadline: Instant::now() + std::time::Duration::from_secs(60),
         };
         // `Resubscribing` rides the reliable control channel, so the asserted
@@ -13199,6 +13265,7 @@ mod tests {
                 event_filters: vec![],
                 min_interval: 1,
                 max_interval: 30,
+                max_interval_ceiling: 30,
                 // Already overdue at spawn time.
                 liveness_deadline: Instant::now()
                     .checked_sub(std::time::Duration::from_secs(1))

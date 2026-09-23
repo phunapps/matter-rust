@@ -60,6 +60,15 @@ report, and the duplicate gets only a standalone MRP ack, never a
 reliable and retransmitted until acked. On its own this also avoids the
 transport exchange leak above, but the two fixes are independent.
 
+### Fixed — a resubscribe re-requests the caller's `MaxIntervalCeiling`
+
+A resubscribe re-requested the max interval the device had last *negotiated*
+as its new ceiling. If a device ever settled below the caller's ceiling, every
+later resubscribe was pinned at that value or lower, and the caller's
+request was never sent again. chip re-sends the caller's original
+`ReadPrepareParams` on every resubscribe. We now do the same. The negotiated value
+still drives the liveness deadline.
+
 ### Fixed — undecodable inbound datagrams are no longer dropped silently
 
 The actor discarded every `decode_inbound` error without a trace, which is why
