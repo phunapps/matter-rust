@@ -97,8 +97,14 @@ async fn main() -> Result<()> {
     println!("    toggled OnOff; printing up to 4 subscription events…");
     for _ in 0..4 {
         match sub.next().await {
-            Some(SubscriptionEvent::Established { subscription_id }) => {
-                println!("    established (id 0x{subscription_id:08X})");
+            Some(SubscriptionEvent::Established {
+                subscription_id,
+                max_interval,
+                ..
+            }) => {
+                println!(
+                    "    established (id 0x{subscription_id:08X}, max interval {max_interval}s)"
+                );
             }
             Some(SubscriptionEvent::Report(r)) => {
                 println!("    attr report: {:?} = {:?}", r.path, r.value);

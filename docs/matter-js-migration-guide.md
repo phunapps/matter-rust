@@ -201,7 +201,9 @@ while let Some(event) = sub.next().await {
     match event {
         SubscriptionEvent::Report(report) => println!("attr {:?} = {:?}", report.path, report.value),
         SubscriptionEvent::Event(ev) => println!("event {ev:?}"),
-        SubscriptionEvent::Established { subscription_id } => println!("established {subscription_id:#x}"),
+        SubscriptionEvent::Established { subscription_id, max_interval, .. } => {
+            println!("established {subscription_id:#x}, max interval {max_interval}s")
+        }
         SubscriptionEvent::Resubscribing { cause } => println!("resubscribing: {cause}"),
         _ => {} // SubscriptionEvent is non_exhaustive (e.g. Lagged)
     }

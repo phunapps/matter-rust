@@ -102,13 +102,20 @@ async fn main() -> Result<()> {
                 break;
             }
             Ok(Some(ev)) => match ev {
-                SubscriptionEvent::Established { subscription_id } => {
+                SubscriptionEvent::Established {
+                    subscription_id,
+                    max_interval,
+                    ..
+                } => {
                     let phase = if established_ids.is_empty() {
                         "initial"
                     } else {
                         "RE-ESTABLISHED (SH.2b auto-resubscribe)"
                     };
-                    println!("[{t:6.1}s] Established id=0x{subscription_id:08X}  <- {phase}");
+                    println!(
+                        "[{t:6.1}s] Established id=0x{subscription_id:08X} \
+                         max_interval={max_interval}s  <- {phase}"
+                    );
                     established_ids.push(subscription_id);
                 }
                 SubscriptionEvent::Resubscribing { cause } => {

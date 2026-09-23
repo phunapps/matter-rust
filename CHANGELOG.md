@@ -49,6 +49,21 @@ release.
 
 ## [Unreleased] — matter-controller
 
+### Changed (breaking) — `SubscriptionEvent::Established` carries the negotiated max interval
+
+`Established` now has a `max_interval: u16` field. It holds the max interval, in
+seconds, that the device agreed to in its `SubscribeResponse`, which is the
+cadence the controller's liveness check holds it to. Before, a consumer could
+only infer it from the spacing of resubscribes. The value is the device's
+choice. It may be below the requested ceiling, or above it: up to the larger
+of the ceiling and 60 minutes, or an ICD's idle-mode duration.
+
+The variant is now also `#[non_exhaustive]`, so later fields are additive.
+**Migration:** add `..` to any pattern on it, for example
+`SubscriptionEvent::Established { subscription_id, .. }`. Code that already
+matched `Established { .. }` is unaffected. Consumers never construct this
+variant, so losing the ability to build it outside the crate costs nothing.
+
 ### Fixed — subscription `StatusResponse` is sent reliably
 
 The `StatusResponse` answering a subscription `ReportData` was sent without

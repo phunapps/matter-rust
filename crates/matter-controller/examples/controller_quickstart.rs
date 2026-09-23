@@ -177,8 +177,15 @@ async fn main() -> Result<()> {
             Some(SubscriptionEvent::Report(change)) => {
                 println!("  report: {:?} = {:?}", change.path, change.value);
             }
-            Some(SubscriptionEvent::Established { subscription_id }) => {
-                println!("  subscription established (id 0x{subscription_id:08X})");
+            Some(SubscriptionEvent::Established {
+                subscription_id,
+                max_interval,
+                ..
+            }) => {
+                println!(
+                    "  subscription established (id 0x{subscription_id:08X}, \
+                     device reports at least every {max_interval}s)"
+                );
             }
             Some(SubscriptionEvent::Resubscribing { cause }) => {
                 println!("  resubscribing: {cause}");

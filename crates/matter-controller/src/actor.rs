@@ -5534,6 +5534,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     // SubEntry that resubscribes forever.
                     if !report_tx.send_control(SubscriptionEvent::Established {
                         subscription_id: resp.subscription_id,
+                        max_interval: resp.max_interval,
                     }) {
                         return;
                     }
@@ -11850,10 +11851,16 @@ mod tests {
             .await
             .expect("subscribe");
 
-        // First event: Established (from the SubscribeResponse).
+        // First event: Established (from the SubscribeResponse), carrying the
+        // device-assigned id and the max interval it negotiated (the fake
+        // device answers 30 s).
         match sub.next().await {
-            Some(SubscriptionEvent::Established { subscription_id }) => {
+            Some(SubscriptionEvent::Established {
+                subscription_id,
+                max_interval,
+            }) => {
                 assert_eq!(subscription_id, 0x1234_5678);
+                assert_eq!(max_interval, 30);
             }
             other => panic!("expected Established, got {other:?}"),
         }
@@ -12916,6 +12923,7 @@ mod tests {
         assert!(
             sink.send_control(SubscriptionEvent::Established {
                 subscription_id: 0xABCD,
+                max_interval: 30,
             }),
             "Established must be delivered under report backpressure"
         );
@@ -12938,7 +12946,9 @@ mod tests {
         };
 
         match sub.next().await {
-            Some(SubscriptionEvent::Established { subscription_id }) => {
+            Some(SubscriptionEvent::Established {
+                subscription_id, ..
+            }) => {
                 assert_eq!(subscription_id, 0xABCD);
             }
             other => panic!("expected Established first, got {other:?}"),

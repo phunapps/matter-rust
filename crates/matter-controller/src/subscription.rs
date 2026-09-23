@@ -36,15 +36,33 @@ pub enum SubscriptionEvent {
     /// arrive (they bypass the chunked-attribute reassembler).
     Event(EventReport),
     /// The subscription was (re-)established by the device; carries the
-    /// device-assigned subscription id. Fired after each successful
-    /// `SubscribeResponse`, including after an auto-resubscribe. Priming
-    /// [`Self::Report`]s, if any, precede it (they arrive before the
-    /// `SubscribeResponse` on the wire).
+    /// device-assigned subscription id and the negotiated max interval. Fired
+    /// after each successful `SubscribeResponse`, including after an
+    /// auto-resubscribe. Priming [`Self::Report`]s, if any, precede it (they
+    /// arrive before the `SubscribeResponse` on the wire).
     ///
     /// Delivered reliably even under report backpressure (see [`Subscription`]).
+    ///
+    /// The variant is `#[non_exhaustive]`, so a pattern must end in `..`
+    /// (`Established { subscription_id, .. }`); later fields can then be added
+    /// without a breaking change.
+    #[non_exhaustive]
     Established {
         /// The device-assigned subscription id.
         subscription_id: u32,
+        /// The max interval, in seconds, the device agreed to in its
+        /// `SubscribeResponse`: it will send a report, empty if nothing changed,
+        /// at least this often.
+        ///
+        /// The device chooses it, and it need not equal the ceiling the caller
+        /// requested. It may be lower, or higher: the spec lets a publisher go up
+        /// to the larger of the ceiling and 60 minutes, and an ICD may go up to
+        /// its idle-mode duration (chip `ReadHandler::GetPublisherSelectedIntervalLimit`).
+        /// The controller treats the subscription as stale, and resubscribes, if
+        /// nothing arrives within this plus a short grace, so this is also the
+        /// worst-case delay before a dead device is noticed. It can change
+        /// across resubscribes.
+        max_interval: u16,
     },
     /// The subscription went stale (liveness timeout or session loss) and is
     /// being transparently re-established; `cause` is why. Reports resume after
