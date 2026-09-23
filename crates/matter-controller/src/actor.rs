@@ -4911,8 +4911,36 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             }
             return;
         }
-        let Ok(decoded) = self.sessions.decode_inbound(packet, Instant::now()) else {
-            return;
+        let decoded = match self.sessions.decode_inbound(packet, Instant::now()) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                // Never swallow this silently: a dropped `ExchangeTableFull` hid
+                // an MRP exchange leak for weeks while every subscription on the
+                // session went deaf after its priming report. It means the
+                // session is refusing every new device-initiated exchange
+                // (reports, events), and the device gets no ack — so warn. It is
+                // not rate-limited: with completed exchanges reclaimed, reaching
+                // the cap takes 256 genuinely live exchanges from one peer.
+                // Everything else (a stale session id, a replayed or late
+                // duplicate counter, a failed tag) is routine datagram noise.
+                if matches!(e, matter_transport::Error::ExchangeTableFull) {
+                    tracing::warn!(
+                        target: "matter_controller::actor",
+                        peer = %from,
+                        error = %e,
+                        "dropping inbound message: the session's exchange table is full, \
+                         so new device-initiated exchanges (reports, events) are being lost"
+                    );
+                } else {
+                    tracing::debug!(
+                        target: "matter_controller::actor",
+                        peer = %from,
+                        error = %e,
+                        "dropping inbound message that failed to decode"
+                    );
+                }
+                return;
+            }
         };
         match decoded {
             DecodeInboundOutput::AppMessage {

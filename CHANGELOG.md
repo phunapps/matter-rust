@@ -60,6 +60,14 @@ report, and the duplicate gets only a standalone MRP ack, never a
 reliable and retransmitted until acked. On its own this also avoids the
 transport exchange leak above, but the two fixes are independent.
 
+### Fixed — undecodable inbound datagrams are no longer dropped silently
+
+The actor discarded every `decode_inbound` error without a trace, which is why
+the exchange leak above looked like device sleep for weeks. `ExchangeTableFull`
+now logs at `warn` with the peer address. Other decode failures (stale session
+ids, replayed counters, failed tags) are routine datagram noise and log at
+`debug`.
+
 ### Fixed — a read that hits the response deadline is now retried (#126)
 
 #119 gave operational reads and invokes a response deadline, replacing an
