@@ -21,7 +21,7 @@ jobs:
         with:
           workspaces: crates/matter-codec/fuzz
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked --version 0.12.0
+        run: cargo install cargo-fuzz --locked --version 0.13.2
       - name: Run fuzz_decode for 5 minutes
         working-directory: crates/matter-codec/fuzz
         run: cargo +nightly fuzz run fuzz_decode -- -max_total_time=300
@@ -43,7 +43,7 @@ jobs:
         with:
           workspaces: crates/matter-clusters/fuzz
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked --version 0.12.0
+        run: cargo install cargo-fuzz --locked --version 0.13.2
       - name: Run cluster_decoders for 5 minutes
         working-directory: crates/matter-clusters/fuzz
         run: cargo +nightly fuzz run cluster_decoders -- -max_total_time=300
