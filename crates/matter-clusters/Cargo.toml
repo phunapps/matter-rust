@@ -27,4 +27,4 @@ base64 = { workspace = true }
 proptest = { workspace = true }
 
 [features]
-serde = ["dep:serde"]
+serde = ["dep:serde", "bitflags/serde"]

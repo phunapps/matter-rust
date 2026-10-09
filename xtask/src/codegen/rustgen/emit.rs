@@ -511,8 +511,14 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "bitflags::bitflags! {{");
     line!(s, "    /// `{}` feature bits (FeatureMap).", c.name);
     line!(s, "    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]");
-    line!(s, "    #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]");
-    line!(s, "    #[cfg_attr(feature = \"serde\", serde(transparent))]");
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", serde(transparent))]"
+    );
     line!(s, "    pub struct Feature: u32 {{");
     for f in &c.features {
         line!(s, "        /// {} ({}).", f.name, f.code);
@@ -587,7 +593,10 @@ fn emit_enum(s: &mut String, d: &Datatype) {
         line!(s, "/// {}", copied_from_doc(owner, &d.name));
     }
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
-    line!(s, "#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]");
+    line!(
+        s,
+        "#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
     // Members like `4V5`/`523` (PowerSource BatCommonDesignationEnum) get an
     // `_`-prefixed variant name (see `variant_ident`), which is not
     // upper-camel-case.
@@ -659,8 +668,14 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
         line!(s, "    /// {}", copied_from_doc(owner, &d.name));
     }
     line!(s, "    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]");
-    line!(s, "    #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]");
-    line!(s, "    #[cfg_attr(feature = \"serde\", serde(transparent))]");
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", serde(transparent))]"
+    );
     line!(s, "    pub struct {}: {} {{", d.name, backing);
     for b in &d.bits {
         if let Some(bit) = b.bit {
@@ -704,7 +719,10 @@ fn emit_struct(
         line!(s, "/// {WRITABLE_ATTRIBUTE_ENCODER_DOC}");
     }
     line!(s, "{}", struct_derive(&d.fields));
-    line!(s, "#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]");
+    line!(
+        s,
+        "#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
     // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
     // struct-literal construction a caller needs to encode one; a struct that
     // gets an encoder (a request command or a writable attribute reaches it)
