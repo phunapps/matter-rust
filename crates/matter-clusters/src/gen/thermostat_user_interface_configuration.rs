@@ -34,6 +34,7 @@ pub mod attribute_id {
 
 /// `KeypadLockoutEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeypadLockoutEnum {
     /// NoLockout = 0.
     NoLockout,
@@ -82,6 +83,7 @@ impl KeypadLockoutEnum {
 
 /// `ScheduleProgrammingVisibilityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ScheduleProgrammingVisibilityEnum {
     /// ScheduleProgrammingPermitted = 0.
     ScheduleProgrammingPermitted,
@@ -114,6 +116,7 @@ impl ScheduleProgrammingVisibilityEnum {
 
 /// `TemperatureDisplayModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TemperatureDisplayModeEnum {
     /// Celsius = 0.
     Celsius,

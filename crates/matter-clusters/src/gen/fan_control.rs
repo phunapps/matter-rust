@@ -56,6 +56,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `FanControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// MultiSpeed (SPD).
         const SPD = 1 << 0;
@@ -74,6 +76,7 @@ bitflags::bitflags! {
 
 /// `AirflowDirectionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AirflowDirectionEnum {
     /// Forward = 0.
     Forward,
@@ -106,6 +109,7 @@ impl AirflowDirectionEnum {
 
 /// `FanModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FanModeEnum {
     /// Off = 0.
     Off,
@@ -158,6 +162,7 @@ impl FanModeEnum {
 
 /// `FanModeSequenceEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FanModeSequenceEnum {
     /// OffLowMedHigh = 0.
     OffLowMedHigh,
@@ -207,6 +212,8 @@ impl FanModeSequenceEnum {
 bitflags::bitflags! {
     /// `RockBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct RockBitmap: u8 {
         /// RockLeftRight.
         const ROCK_LEFT_RIGHT = 1 << 0;
@@ -219,6 +226,7 @@ bitflags::bitflags! {
 
 /// `StepDirectionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StepDirectionEnum {
     /// Increase = 0.
     Increase,
@@ -252,6 +260,8 @@ impl StepDirectionEnum {
 bitflags::bitflags! {
     /// `WindBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct WindBitmap: u8 {
         /// SleepWind.
         const SLEEP_WIND = 1 << 0;

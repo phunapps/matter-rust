@@ -48,6 +48,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `AccessControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Extension (EXTS).
         const EXTS = 1 << 0;
@@ -58,6 +60,7 @@ bitflags::bitflags! {
 
 /// `AccessControlEntryAuthModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AccessControlEntryAuthModeEnum {
     /// Pase = 1.
     Pase,
@@ -94,6 +97,7 @@ impl AccessControlEntryAuthModeEnum {
 
 /// `AccessControlEntryPrivilegeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AccessControlEntryPrivilegeEnum {
     /// View = 1.
     View,
@@ -138,6 +142,7 @@ impl AccessControlEntryPrivilegeEnum {
 
 /// `AccessControlEntryStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AccessControlEntryStruct {
     /// Field Privilege (tag 1).
@@ -154,6 +159,7 @@ pub struct AccessControlEntryStruct {
 
 /// `AccessControlExtensionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AccessControlExtensionStruct {
     /// Field Data (tag 1).
@@ -164,6 +170,7 @@ pub struct AccessControlExtensionStruct {
 
 /// `AccessControlTargetStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AccessControlTargetStruct {
     /// Field Cluster (tag 0).
@@ -176,6 +183,7 @@ pub struct AccessControlTargetStruct {
 
 /// `AccessRestrictionEntryStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AccessRestrictionEntryStruct {
     /// Field Endpoint (tag 0).
@@ -190,6 +198,7 @@ pub struct AccessRestrictionEntryStruct {
 
 /// `AccessRestrictionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AccessRestrictionStruct {
     /// Field Type (tag 0).
     pub r#type: AccessRestrictionTypeEnum,
@@ -199,6 +208,7 @@ pub struct AccessRestrictionStruct {
 
 /// `AccessRestrictionTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AccessRestrictionTypeEnum {
     /// AttributeAccessForbidden = 0.
     AttributeAccessForbidden,
@@ -239,6 +249,7 @@ impl AccessRestrictionTypeEnum {
 
 /// `ChangeTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ChangeTypeEnum {
     /// Changed = 0.
     Changed,
@@ -275,6 +286,7 @@ impl ChangeTypeEnum {
 
 /// `CommissioningAccessRestrictionEntryStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommissioningAccessRestrictionEntryStruct {
     /// Field Endpoint (tag 0).
     pub endpoint: u16,

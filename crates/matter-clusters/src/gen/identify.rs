@@ -37,6 +37,7 @@ pub mod attribute_id {
 
 /// `EffectIdentifierEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EffectIdentifierEnum {
     /// Blink = 0.
     Blink,
@@ -85,6 +86,7 @@ impl EffectIdentifierEnum {
 
 /// `EffectVariantEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum EffectVariantEnum {
     /// Default = 0.
     Default,
@@ -113,6 +115,7 @@ impl EffectVariantEnum {
 
 /// `IdentifyTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IdentifyTypeEnum {
     /// None = 0.
     None,

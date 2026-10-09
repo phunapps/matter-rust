@@ -42,6 +42,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `AdministratorCommissioning` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Basic (BC).
         const BC = 1 << 0;
@@ -50,6 +52,7 @@ bitflags::bitflags! {
 
 /// `CommissioningWindowStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CommissioningWindowStatusEnum {
     /// WindowNotOpen = 0.
     WindowNotOpen,
@@ -86,6 +89,7 @@ impl CommissioningWindowStatusEnum {
 
 /// `StatusCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusCodeEnum {
     /// Busy = 2.
     Busy,

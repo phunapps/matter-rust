@@ -152,6 +152,14 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "bitflags::bitflags! {{");
     line!(s, "    /// `{}` feature bits (FeatureMap).", c.name);
     line!(s, "    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]");
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", serde(transparent))]"
+    );
     line!(s, "    pub struct Feature: u32 {{");
     for f in &c.features {
         line!(s, "        /// {} ({}).", f.name, f.code);
@@ -204,6 +212,10 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     let catch_all = catch_all_variant(d);
     line!(s, "/// `{}` ({}).", d.name, d.base);
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
+    line!(
+        s,
+        "#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
     // Members like `4V5`/`523` (PowerSource BatCommonDesignationEnum) get an
     // `_`-prefixed variant name (see `ident`), which is not upper-camel-case.
     if d.values
@@ -257,6 +269,14 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
     line!(s, "bitflags::bitflags! {{");
     line!(s, "    /// `{}` ({}).", d.name, d.base);
     line!(s, "    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]");
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
+    line!(
+        s,
+        "    #[cfg_attr(feature = \"serde\", serde(transparent))]"
+    );
     line!(s, "    pub struct {}: {} {{", d.name, backing);
     for b in &d.bits {
         if let Some(bit) = b.bit {
@@ -271,6 +291,10 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
 fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
     line!(s, "/// `{}` struct.", d.name);
     line!(s, "#[derive(Clone, Debug, PartialEq)]");
+    line!(
+        s,
+        "#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]"
+    );
     // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
     // struct-literal construction that command-encode callers need; skip it for
     // structs reachable from a request command (they are built to be encoded).

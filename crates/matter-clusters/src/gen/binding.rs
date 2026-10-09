@@ -30,6 +30,7 @@ pub mod attribute_id {
 
 /// `TargetStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct TargetStruct {
     /// Field Node (tag 1).

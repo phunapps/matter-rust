@@ -75,6 +75,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `PumpConfigurationAndControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ConstantPressure (PRSCONST).
         const PRSCONST = 1 << 0;
@@ -95,6 +97,7 @@ bitflags::bitflags! {
 
 /// `ControlModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ControlModeEnum {
     /// ConstantSpeed = 0.
     ConstantSpeed,
@@ -143,6 +146,7 @@ impl ControlModeEnum {
 
 /// `OperationModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperationModeEnum {
     /// Normal = 0.
     Normal,
@@ -184,6 +188,8 @@ impl OperationModeEnum {
 bitflags::bitflags! {
     /// `PumpStatusBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct PumpStatusBitmap: u16 {
         /// DeviceFault.
         const DEVICE_FAULT = 1 << 0;

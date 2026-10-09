@@ -134,6 +134,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `Thermostat` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Heating (HEAT).
         const HEAT = 1 << 0;
@@ -156,6 +158,7 @@ bitflags::bitflags! {
 
 /// `ACCapacityFormatEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ACCapacityFormatEnum {
     /// BtUh = 0.
     BtUh,
@@ -184,6 +187,7 @@ impl ACCapacityFormatEnum {
 
 /// `ACCompressorTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ACCompressorTypeEnum {
     /// Unknown = 0.
     Unknown,
@@ -225,6 +229,8 @@ impl ACCompressorTypeEnum {
 bitflags::bitflags! {
     /// `ACErrorCodeBitmap` (map32).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ACErrorCodeBitmap: u32 {
         /// CompressorFail.
         const COMPRESSOR_FAIL = 1 << 0;
@@ -241,6 +247,7 @@ bitflags::bitflags! {
 
 /// `ACLouverPositionEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ACLouverPositionEnum {
     /// Closed = 1.
     Closed,
@@ -285,6 +292,7 @@ impl ACLouverPositionEnum {
 
 /// `ACRefrigerantTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ACRefrigerantTypeEnum {
     /// Unknown = 0.
     Unknown,
@@ -325,6 +333,7 @@ impl ACRefrigerantTypeEnum {
 
 /// `ACTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ACTypeEnum {
     /// Unknown = 0.
     Unknown,
@@ -369,6 +378,7 @@ impl ACTypeEnum {
 
 /// `ControlSequenceOfOperationEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ControlSequenceOfOperationEnum {
     /// CoolingOnly = 0.
     CoolingOnly,
@@ -418,6 +428,8 @@ impl ControlSequenceOfOperationEnum {
 bitflags::bitflags! {
     /// `OccupancyBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OccupancyBitmap: u8 {
         /// Occupied.
         const OCCUPIED = 1 << 0;
@@ -426,6 +438,7 @@ bitflags::bitflags! {
 
 /// `PresetScenarioEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PresetScenarioEnum {
     /// Occupied = 1.
     Occupied,
@@ -478,6 +491,7 @@ impl PresetScenarioEnum {
 
 /// `PresetStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PresetStruct {
     /// Field PresetHandle (tag 0).
@@ -497,6 +511,8 @@ pub struct PresetStruct {
 bitflags::bitflags! {
     /// `PresetTypeFeaturesBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct PresetTypeFeaturesBitmap: u16 {
         /// Automatic.
         const AUTOMATIC = 1 << 0;
@@ -507,6 +523,7 @@ bitflags::bitflags! {
 
 /// `PresetTypeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PresetTypeStruct {
     /// Field PresetScenario (tag 0).
@@ -520,6 +537,8 @@ pub struct PresetTypeStruct {
 bitflags::bitflags! {
     /// `RelayStateBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct RelayStateBitmap: u16 {
         /// Heat.
         const HEAT = 1 << 0;
@@ -541,6 +560,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `RemoteSensingBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct RemoteSensingBitmap: u8 {
         /// LocalTemperature.
         const LOCAL_TEMPERATURE = 1 << 0;
@@ -554,6 +575,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `ScheduleDayOfWeekBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ScheduleDayOfWeekBitmap: u8 {
         /// Sunday.
         const SUNDAY = 1 << 0;
@@ -577,6 +600,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `ScheduleModeBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ScheduleModeBitmap: u8 {
         /// HeatSetpointPresent.
         const HEAT_SETPOINT_PRESENT = 1 << 0;
@@ -587,6 +612,7 @@ bitflags::bitflags! {
 
 /// `ScheduleStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ScheduleStruct {
     /// Field ScheduleHandle (tag 0).
@@ -605,6 +631,7 @@ pub struct ScheduleStruct {
 
 /// `ScheduleTransitionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ScheduleTransitionStruct {
     /// Field DayOfWeek (tag 0).
@@ -624,6 +651,8 @@ pub struct ScheduleTransitionStruct {
 bitflags::bitflags! {
     /// `ScheduleTypeFeaturesBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct ScheduleTypeFeaturesBitmap: u16 {
         /// SupportsPresets.
         const SUPPORTS_PRESETS = 1 << 0;
@@ -638,6 +667,7 @@ bitflags::bitflags! {
 
 /// `ScheduleTypeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ScheduleTypeStruct {
     /// Field SystemMode (tag 0).
@@ -650,6 +680,7 @@ pub struct ScheduleTypeStruct {
 
 /// `SetpointChangeSourceEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SetpointChangeSourceEnum {
     /// Manual = 0.
     Manual,
@@ -686,6 +717,7 @@ impl SetpointChangeSourceEnum {
 
 /// `SetpointRaiseLowerModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SetpointRaiseLowerModeEnum {
     /// Heat = 0.
     Heat,
@@ -722,6 +754,7 @@ impl SetpointRaiseLowerModeEnum {
 
 /// `StartOfWeekEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StartOfWeekEnum {
     /// Sunday = 0.
     Sunday,
@@ -774,6 +807,7 @@ impl StartOfWeekEnum {
 
 /// `SystemModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SystemModeEnum {
     /// Off = 0.
     Off,
@@ -834,6 +868,7 @@ impl SystemModeEnum {
 
 /// `TemperatureSetpointHoldEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TemperatureSetpointHoldEnum {
     /// SetpointHoldOff = 0.
     SetpointHoldOff,
@@ -866,6 +901,7 @@ impl TemperatureSetpointHoldEnum {
 
 /// `ThermostatAttributeStatusEntryStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ThermostatAttributeStatusEntryStruct {
     /// Field AttributeId (tag 0).
@@ -876,6 +912,7 @@ pub struct ThermostatAttributeStatusEntryStruct {
 
 /// `ThermostatRunningModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ThermostatRunningModeEnum {
     /// Off = 0.
     Off,
@@ -912,6 +949,7 @@ impl ThermostatRunningModeEnum {
 
 /// `WeeklyScheduleTransitionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct WeeklyScheduleTransitionStruct {
     /// Field TransitionTime (tag 0).

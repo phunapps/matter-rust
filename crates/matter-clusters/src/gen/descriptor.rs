@@ -41,6 +41,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `Descriptor` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// TagList (TAGLIST).
         const TAGLIST = 1 << 0;
@@ -49,6 +51,7 @@ bitflags::bitflags! {
 
 /// `DeviceTypeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct DeviceTypeStruct {
     /// Field DeviceType (tag 0).

@@ -76,6 +76,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `LevelControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// OnOff (OO).
         const OO = 1 << 0;
@@ -88,6 +90,7 @@ bitflags::bitflags! {
 
 /// `MoveModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MoveModeEnum {
     /// Up = 0.
     Up,
@@ -121,6 +124,8 @@ impl MoveModeEnum {
 bitflags::bitflags! {
     /// `OptionsBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct OptionsBitmap: u8 {
         /// ExecuteIfOff.
         const EXECUTE_IF_OFF = 1 << 0;
@@ -131,6 +136,7 @@ bitflags::bitflags! {
 
 /// `StepModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StepModeEnum {
     /// Up = 0.
     Up,

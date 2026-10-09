@@ -58,6 +58,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `GeneralDiagnostics` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// DataModelTest (DMTEST).
         const DMTEST = 1 << 0;
@@ -66,6 +68,7 @@ bitflags::bitflags! {
 
 /// `BootReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BootReasonEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -118,6 +121,7 @@ impl BootReasonEnum {
 
 /// `HardwareFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HardwareFaultEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -186,6 +190,7 @@ impl HardwareFaultEnum {
 
 /// `InterfaceTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum InterfaceTypeEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -230,6 +235,7 @@ impl InterfaceTypeEnum {
 
 /// `NetworkFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NetworkFaultEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -270,6 +276,7 @@ impl NetworkFaultEnum {
 
 /// `NetworkInterface` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct NetworkInterface {
     /// Field Name (tag 0).
@@ -292,6 +299,7 @@ pub struct NetworkInterface {
 
 /// `RadioFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RadioFaultEnum {
     /// Unspecified = 0.
     Unspecified,

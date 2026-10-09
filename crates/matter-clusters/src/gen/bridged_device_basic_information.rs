@@ -68,6 +68,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `BridgedDeviceBasicInformation` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// BridgedIcdSupport (BIS).
         const BIS = 1 << 20;
@@ -76,6 +78,7 @@ bitflags::bitflags! {
 
 /// `CapabilityMinimaStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CapabilityMinimaStruct {
     /// Field CaseSessionsPerFabric (tag 0).
@@ -86,6 +89,7 @@ pub struct CapabilityMinimaStruct {
 
 /// `ColorEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorEnum {
     /// Black = 0.
     Black,
@@ -194,6 +198,7 @@ impl ColorEnum {
 
 /// `ProductAppearanceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProductAppearanceStruct {
     /// Field Finish (tag 0).
@@ -204,6 +209,7 @@ pub struct ProductAppearanceStruct {
 
 /// `ProductFinishEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ProductFinishEnum {
     /// Other = 0.
     Other,

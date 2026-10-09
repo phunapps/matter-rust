@@ -41,6 +41,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `ElectricalEnergyMeasurement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// ImportedEnergy (IMPE).
         const IMPE = 1 << 0;
@@ -59,6 +61,7 @@ bitflags::bitflags! {
 
 /// `CumulativeEnergyResetStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CumulativeEnergyResetStruct {
     /// Field ImportedResetTimestamp (tag 0).
@@ -73,6 +76,7 @@ pub struct CumulativeEnergyResetStruct {
 
 /// `EnergyMeasurementStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct EnergyMeasurementStruct {
     /// Field Energy (tag 0).
@@ -93,6 +97,7 @@ pub struct EnergyMeasurementStruct {
 
 /// `MeasurementAccuracyRangeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MeasurementAccuracyRangeStruct {
     /// Field RangeMin (tag 0).
@@ -115,6 +120,7 @@ pub struct MeasurementAccuracyRangeStruct {
 
 /// `MeasurementAccuracyStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MeasurementAccuracyStruct {
     /// Field MeasurementType (tag 0).
@@ -131,6 +137,7 @@ pub struct MeasurementAccuracyStruct {
 
 /// `MeasurementTypeEnum` (enum16).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MeasurementTypeEnum {
     /// Unspecified = 0.
     Unspecified,

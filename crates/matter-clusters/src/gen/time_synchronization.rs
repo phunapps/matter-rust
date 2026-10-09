@@ -68,6 +68,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `TimeSynchronization` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// TimeZone (TZ).
         const TZ = 1 << 0;
@@ -82,6 +84,7 @@ bitflags::bitflags! {
 
 /// `DSTOffsetStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DSTOffsetStruct {
     /// Field Offset (tag 0).
     pub offset: i32,
@@ -93,6 +96,7 @@ pub struct DSTOffsetStruct {
 
 /// `FabricScopedTrustedTimeSourceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FabricScopedTrustedTimeSourceStruct {
     /// Field NodeId (tag 0).
     pub node_id: u64,
@@ -102,6 +106,7 @@ pub struct FabricScopedTrustedTimeSourceStruct {
 
 /// `GranularityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GranularityEnum {
     /// NoTimeGranularity = 0.
     NoTimeGranularity,
@@ -146,6 +151,7 @@ impl GranularityEnum {
 
 /// `StatusCodeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StatusCodeEnum {
     /// TimeNotAccepted = 2.
     TimeNotAccepted,
@@ -174,6 +180,7 @@ impl StatusCodeEnum {
 
 /// `TimeSourceEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimeSourceEnum {
     /// None = 0.
     None,
@@ -266,6 +273,7 @@ impl TimeSourceEnum {
 
 /// `TimeZoneDatabaseEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TimeZoneDatabaseEnum {
     /// Full = 0.
     Full,
@@ -302,6 +310,7 @@ impl TimeZoneDatabaseEnum {
 
 /// `TimeZoneStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TimeZoneStruct {
     /// Field Offset (tag 0).
     pub offset: i32,
@@ -313,6 +322,7 @@ pub struct TimeZoneStruct {
 
 /// `TrustedTimeSourceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct TrustedTimeSourceStruct {
     /// Field FabricIndex (tag 0).

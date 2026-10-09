@@ -51,6 +51,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `CarbonMonoxideConcentrationMeasurement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// NumericMeasurement (MEA).
         const MEA = 1 << 0;
@@ -69,6 +71,7 @@ bitflags::bitflags! {
 
 /// `LevelValueEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LevelValueEnum {
     /// Unknown = 0.
     Unknown,
@@ -113,6 +116,7 @@ impl LevelValueEnum {
 
 /// `MeasurementMediumEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MeasurementMediumEnum {
     /// Air = 0.
     Air,
@@ -149,6 +153,7 @@ impl MeasurementMediumEnum {
 
 /// `MeasurementUnitEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MeasurementUnitEnum {
     /// Ppm = 0.
     Ppm,

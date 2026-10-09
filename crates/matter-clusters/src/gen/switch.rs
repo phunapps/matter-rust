@@ -53,6 +53,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `Switch` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// LatchingSwitch (LS).
         const LS = 1 << 0;

@@ -39,6 +39,7 @@ pub mod attribute_id {
 
 /// `AnnouncementReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AnnouncementReasonEnum {
     /// SimpleAnnouncement = 0.
     SimpleAnnouncement,
@@ -75,6 +76,7 @@ impl AnnouncementReasonEnum {
 
 /// `ChangeReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ChangeReasonEnum {
     /// Unknown = 0.
     Unknown,
@@ -119,6 +121,7 @@ impl ChangeReasonEnum {
 
 /// `ProviderLocation` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProviderLocation {
     /// Field ProviderNodeId (tag 1).
@@ -131,6 +134,7 @@ pub struct ProviderLocation {
 
 /// `UpdateStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UpdateStateEnum {
     /// Unknown = 0.
     Unknown,

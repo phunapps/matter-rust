@@ -52,6 +52,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `Groups` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// GroupNames (GN).
         const GN = 1 << 0;
@@ -61,6 +63,8 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// `NameSupportBitmap` (map8).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct NameSupportBitmap: u8 {
         /// GroupNames.
         const GROUP_NAMES = 1 << 7;

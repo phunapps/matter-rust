@@ -38,6 +38,7 @@ pub mod attribute_id {
 
 /// `LightSensorTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LightSensorTypeEnum {
     /// Photodiode = 0.
     Photodiode,

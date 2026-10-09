@@ -76,6 +76,7 @@ pub mod attribute_id {
 
 /// `CapabilityMinimaStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct CapabilityMinimaStruct {
     /// Field CaseSessionsPerFabric (tag 0).
@@ -86,6 +87,7 @@ pub struct CapabilityMinimaStruct {
 
 /// `ColorEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorEnum {
     /// Black = 0.
     Black,
@@ -194,6 +196,7 @@ impl ColorEnum {
 
 /// `ProductAppearanceStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ProductAppearanceStruct {
     /// Field Finish (tag 0).
@@ -204,6 +207,7 @@ pub struct ProductAppearanceStruct {
 
 /// `ProductFinishEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ProductFinishEnum {
     /// Other = 0.
     Other,

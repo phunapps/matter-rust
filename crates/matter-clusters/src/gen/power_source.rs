@@ -93,6 +93,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `PowerSource` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Wired (WIRED).
         const WIRED = 1 << 0;
@@ -107,6 +109,7 @@ bitflags::bitflags! {
 
 /// `BatApprovedChemistryEnum` (enum16).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BatApprovedChemistryEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -263,6 +266,7 @@ impl BatApprovedChemistryEnum {
 
 /// `BatChargeFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BatChargeFaultEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -331,6 +335,7 @@ impl BatChargeFaultEnum {
 
 /// `BatChargeLevelEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BatChargeLevelEnum {
     /// Ok = 0.
     Ok,
@@ -367,6 +372,7 @@ impl BatChargeLevelEnum {
 
 /// `BatChargeStateEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BatChargeStateEnum {
     /// Unknown = 0.
     Unknown,
@@ -407,6 +413,7 @@ impl BatChargeStateEnum {
 
 /// `BatCommonDesignationEnum` (enum16).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[allow(non_camel_case_types)]
 pub enum BatCommonDesignationEnum {
     /// Unspecified = 0.
@@ -756,6 +763,7 @@ impl BatCommonDesignationEnum {
 
 /// `BatFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BatFaultEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -792,6 +800,7 @@ impl BatFaultEnum {
 
 /// `BatReplaceabilityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BatReplaceabilityEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -832,6 +841,7 @@ impl BatReplaceabilityEnum {
 
 /// `PowerSourceStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PowerSourceStatusEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -872,6 +882,7 @@ impl PowerSourceStatusEnum {
 
 /// `WiredCurrentTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WiredCurrentTypeEnum {
     /// Ac = 0.
     Ac,
@@ -904,6 +915,7 @@ impl WiredCurrentTypeEnum {
 
 /// `WiredFaultEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WiredFaultEnum {
     /// Unspecified = 0.
     Unspecified,
