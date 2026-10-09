@@ -33,6 +33,7 @@ pub mod attribute_id {
 ///
 /// Encodable because a writable attribute carries it: build one and write it with `encode` (or `write_fields`, inside the list that carries it).
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TargetStruct {
     /// Field Node (tag 1).
     /// Required when `endpoint` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.

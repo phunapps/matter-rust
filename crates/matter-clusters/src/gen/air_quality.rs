@@ -32,6 +32,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `AirQuality` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// Fair (FAIR).
         const FAIR = 1 << 0;
@@ -46,6 +48,7 @@ bitflags::bitflags! {
 
 /// `AirQualityEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AirQualityEnum {
     /// Unknown = 0.
     Unknown,

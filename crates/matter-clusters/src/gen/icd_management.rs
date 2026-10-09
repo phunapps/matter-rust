@@ -62,6 +62,8 @@ pub mod attribute_id {
 bitflags::bitflags! {
     /// `IcdManagement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// CheckInProtocolSupport (CIP).
         const CIP = 1 << 0;
@@ -76,6 +78,7 @@ bitflags::bitflags! {
 
 /// `ClientTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ClientTypeEnum {
     /// Permanent = 0.
     Permanent,
@@ -108,6 +111,7 @@ impl ClientTypeEnum {
 
 /// `MonitoringRegistrationStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MonitoringRegistrationStruct {
     /// Field CheckInNodeId (tag 1).
@@ -128,6 +132,7 @@ pub struct MonitoringRegistrationStruct {
 
 /// `OperatingModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OperatingModeEnum {
     /// Sit = 0.
     Sit,
@@ -161,6 +166,8 @@ impl OperatingModeEnum {
 bitflags::bitflags! {
     /// `UserActiveModeTriggerBitmap` (map32).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct UserActiveModeTriggerBitmap: u32 {
         /// PowerCycle.
         const POWER_CYCLE = 1 << 0;

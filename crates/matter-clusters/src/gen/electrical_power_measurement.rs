@@ -74,6 +74,8 @@ pub mod event_id {
 bitflags::bitflags! {
     /// `ElectricalPowerMeasurement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(transparent))]
     pub struct Feature: u32 {
         /// DirectCurrent (DIRC).
         const DIRC = 1 << 0;
@@ -90,6 +92,7 @@ bitflags::bitflags! {
 
 /// `HarmonicMeasurementStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct HarmonicMeasurementStruct {
     /// Field Order (tag 0).
@@ -102,6 +105,7 @@ pub struct HarmonicMeasurementStruct {
 ///
 /// Choice group `a`: a sender includes at least one of `percent_max`, `fixed_max`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MeasurementAccuracyRangeStruct {
     /// Field RangeMin (tag 0).
@@ -124,6 +128,7 @@ pub struct MeasurementAccuracyRangeStruct {
 
 /// `MeasurementAccuracyStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MeasurementAccuracyStruct {
     /// Field MeasurementType (tag 0).
@@ -140,6 +145,7 @@ pub struct MeasurementAccuracyStruct {
 
 /// `MeasurementRangeStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct MeasurementRangeStruct {
     /// Field MeasurementType (tag 0).
@@ -174,6 +180,7 @@ pub struct MeasurementRangeStruct {
 
 /// `MeasurementTypeEnum` (enum16).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MeasurementTypeEnum {
     /// Unspecified = 0.
     Unspecified,
@@ -266,6 +273,7 @@ impl MeasurementTypeEnum {
 
 /// `PowerModeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PowerModeEnum {
     /// Unknown = 0.
     Unknown,

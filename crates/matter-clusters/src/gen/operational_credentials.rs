@@ -76,6 +76,7 @@ pub mod attribute_id {
 
 /// `CertificateChainTypeEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CertificateChainTypeEnum {
     /// DacCertificate = 1.
     DacCertificate,
@@ -108,6 +109,7 @@ impl CertificateChainTypeEnum {
 
 /// `FabricDescriptorStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct FabricDescriptorStruct {
     /// Field RootPublicKey (tag 1).
@@ -129,6 +131,7 @@ pub struct FabricDescriptorStruct {
 
 /// `NOCStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct NOCStruct {
     /// Field Noc (tag 1).
@@ -144,6 +147,7 @@ pub struct NOCStruct {
 
 /// `NodeOperationalCertStatusEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NodeOperationalCertStatusEnum {
     /// Ok = 0.
     Ok,
