@@ -3,6 +3,7 @@
 //! `xtask integration`), so the normal `cargo test` / gate compiles + skips them.
 use std::path::PathBuf;
 
+pub mod events;
 pub mod fixture;
 
 /// Device-under-test configuration and helpers.
@@ -26,6 +27,10 @@ pub mod dut {
         /// (`MATTER_INTEGRATION_DUT_APP`, default `all-clusters`). App-specific
         /// tests gate on this via [`DutConfig::is_app`].
         pub app: String,
+        /// The DUT's out-of-band command FIFO (`--app-pipe`), when the harness
+        /// launched it with one (`MATTER_INTEGRATION_APP_PIPE`): all-clusters
+        /// and lock-app. See [`crate::events::send_app_pipe`].
+        pub app_pipe: Option<PathBuf>,
     }
 
     impl DutConfig {
@@ -43,12 +48,14 @@ pub mod dut {
                 .map_or_else(|_| PathBuf::from("target/integration-dut"), PathBuf::from);
             let app = std::env::var("MATTER_INTEGRATION_DUT_APP")
                 .unwrap_or_else(|_| "all-clusters".to_string());
+            let app_pipe = std::env::var_os("MATTER_INTEGRATION_APP_PIPE").map(PathBuf::from);
             Some(DutConfig {
                 setup_code,
                 chip_root,
                 multicast_if,
                 dut_dir,
                 app,
+                app_pipe,
             })
         }
 

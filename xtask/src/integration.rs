@@ -23,6 +23,31 @@ use std::time::{Duration, Instant};
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// The `GeneralDiagnostics.TestEventTrigger` enable key the DUT is launched
+/// with (`--enable-key`) unless its [`EventStimulus`] is `None`. chip's
+/// default key is all zeros, which disables triggers. The tests send the same
+/// bytes: `TEST_EVENT_ENABLE_KEY` in `crates/integration-tests/src/events.rs`.
+const TEST_EVENT_ENABLE_KEY_HEX: &str = "00112233445566778899aabbccddeeff";
+
+/// File name of the app's out-of-band command FIFO under the DUT dir.
+const APP_PIPE_FILE: &str = "app-pipe";
+
+/// How the event tests (M9-A3 B1) may stimulate events on a DUT.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EventStimulus {
+    /// Neither: the app is launched exactly as before B1.
+    None,
+    /// `--enable-key` [`TEST_EVENT_ENABLE_KEY_HEX`], so
+    /// `GeneralDiagnostics.TestEventTrigger` works. Which triggers exist is
+    /// the app's build-time choice (evse-app: `EnergyEvse`, DEM and energy
+    /// reporting).
+    TestEventTriggers,
+    /// `--enable-key` plus `--app-pipe <dut_dir>/app-pipe` (exported to the
+    /// tests as `MATTER_INTEGRATION_APP_PIPE`): the JSON command FIFO that
+    /// all-clusters and lock-app read, for events with no trigger.
+    TriggersAndAppPipe,
+}
+
 /// A connectedhomeip example app the harness can drive as a DUT.
 struct AppSpec {
     /// Canonical app name (also exported as `MATTER_INTEGRATION_DUT_APP`).
@@ -50,6 +75,8 @@ struct AppSpec {
     /// resolver does not see mdns-sd records (macOS's system mDNSResponder
     /// mediates, so the plain target works there). No effect on macOS.
     linux_platform_mdns: bool,
+    /// What the event tests may use to stimulate events on this DUT.
+    events: EventStimulus,
 }
 
 /// Resolve the DUT app spec from the optional `xtask integration <app>` argument.
@@ -64,6 +91,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
+            events: EventStimulus::TriggersAndAppPipe,
         },
         "lock" => AppSpec {
             name: "lock",
@@ -74,6 +102,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
+            events: EventStimulus::TriggersAndAppPipe,
         },
         "evse" => AppSpec {
             name: "evse",
@@ -84,6 +113,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
+            events: EventStimulus::TestEventTriggers,
         },
         "icd" => AppSpec {
             name: "icd",
@@ -105,6 +135,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             // controller's operational advertisement — the direction that
             // needs avahi mediation on a headless Linux runner.
             linux_platform_mdns: true,
+            events: EventStimulus::None,
         },
         "ota" => AppSpec {
             name: "ota",
@@ -122,6 +153,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             // direction that needs avahi mediation on a headless Linux
             // runner (see the icd spec above).
             linux_platform_mdns: true,
+            events: EventStimulus::None,
         },
         other => {
             return Err(format!(
@@ -159,6 +191,7 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
         "controller-b-store.tmp",
         "test.ota",
         "ota-payload.bin",
+        APP_PIPE_FILE,
     ] {
         let _ = fs::remove_file(dut_dir.join(stale));
     }
@@ -168,7 +201,10 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
     eprintln!("integration: KVS  → {}", kvs_path.display());
     eprintln!("integration: log  → {}", log_path.display());
 
-    let child = spawn_dut(&binary, &kvs_path, spec.extra_args, &log_path)?;
+    let app_pipe =
+        (spec.events == EventStimulus::TriggersAndAppPipe).then(|| dut_dir.join(APP_PIPE_FILE));
+    let args = launch_args(&spec, app_pipe.as_deref());
+    let child = spawn_dut(&binary, &kvs_path, &args, &log_path)?;
 
     // The Drop guard ensures the child is killed no matter how run() exits.
     let mut guard = DutGuard(child);
@@ -203,6 +239,7 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
         &spec,
         &setup_qr,
         ota_image.as_deref(),
+        app_pipe.as_deref(),
     )?;
 
     // Explicit teardown before we inspect the exit status, so the process is
@@ -398,12 +435,28 @@ fn prepare_dut_dir() -> Result<PathBuf, String> {
 // Spawn DUT
 // ---------------------------------------------------------------------------
 
+/// The DUT's command-line arguments after `--KVS <path>`: the spec's
+/// `extra_args`, then `--enable-key` unless the spec's [`EventStimulus`] is
+/// `None`, then `--app-pipe` when a pipe path is given.
+fn launch_args(spec: &AppSpec, app_pipe: Option<&Path>) -> Vec<String> {
+    let mut args: Vec<String> = spec.extra_args.iter().map(|a| (*a).to_string()).collect();
+    if spec.events != EventStimulus::None {
+        args.push("--enable-key".to_string());
+        args.push(TEST_EVENT_ENABLE_KEY_HEX.to_string());
+    }
+    if let Some(pipe) = app_pipe {
+        args.push("--app-pipe".to_string());
+        args.push(pipe.to_string_lossy().into_owned());
+    }
+    args
+}
+
 /// Spawn the all-clusters-app with the given KVS path.  stdout+stderr are
 /// redirected to `log_path` so the main terminal stays readable.
 fn spawn_dut(
     binary: &Path,
     kvs_path: &Path,
-    extra_args: &[&str],
+    extra_args: &[String],
     log_path: &Path,
 ) -> Result<Child, String> {
     let log_file = fs::File::create(log_path)
@@ -615,6 +668,7 @@ fn run_tests(
     spec: &AppSpec,
     setup_qr: &str,
     ota_image: Option<&Path>,
+    app_pipe: Option<&Path>,
 ) -> Result<ExitStatus, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
 
@@ -636,6 +690,14 @@ fn run_tests(
     // cargo's per-package test cwd.
     cmd.env("MATTER_INTEGRATION_DUT_DIR", dut_dir);
 
+    if let Some(pipe) = app_pipe {
+        cmd.env("MATTER_INTEGRATION_APP_PIPE", pipe);
+        eprintln!(
+            "integration: MATTER_INTEGRATION_APP_PIPE={}",
+            pipe.display()
+        );
+    }
+
     if let Some(img) = ota_image {
         cmd.env("MATTER_INTEGRATION_OTA_IMAGE", img);
         eprintln!(
@@ -656,4 +718,50 @@ fn run_tests(
         .status()
         .map_err(|e| format!("failed to spawn cargo test: {e}"))?;
     Ok(status)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn event_hosts_launch_with_the_test_event_enable_key() {
+        for app in ["all-clusters", "lock", "evse"] {
+            let args = launch_args(&app_spec(Some(app)).unwrap(), None);
+            let at = args
+                .iter()
+                .position(|a| a == "--enable-key")
+                .unwrap_or_else(|| panic!("{app}: no --enable-key in {args:?}"));
+            assert_eq!(args[at + 1], "00112233445566778899aabbccddeeff", "{app}");
+        }
+    }
+
+    #[test]
+    fn app_pipe_is_passed_only_when_given() {
+        let spec = app_spec(Some("lock")).unwrap();
+        assert_eq!(spec.events, EventStimulus::TriggersAndAppPipe);
+        let args = launch_args(&spec, Some(Path::new("/x/app-pipe")));
+        assert_eq!(args[args.len() - 2..], ["--app-pipe", "/x/app-pipe"]);
+        assert!(!launch_args(&spec, None).contains(&"--app-pipe".to_string()));
+    }
+
+    #[test]
+    fn non_event_hosts_keep_their_exact_arguments() {
+        // icd and ota are unchanged by B1: their extra_args only.
+        let icd = launch_args(&app_spec(Some("icd")).unwrap(), None);
+        assert_eq!(
+            icd,
+            [
+                "--icdActiveModeDurationMs",
+                "1000",
+                "--icdIdleModeDuration",
+                "15"
+            ]
+        );
+        assert_eq!(
+            launch_args(&app_spec(Some("ota")).unwrap(), None),
+            ["--autoApplyImage"]
+        );
+    }
 }
