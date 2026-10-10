@@ -359,6 +359,13 @@ The codegen now generates only what a client can use:
 - **PowerTopology (0x009C)**: `AvailableEndpoints` and `ActiveEndpoints`.
   The model's `CircuitNodeStruct` is not generated: no attribute uses it,
   and chip's 1.4.2 data model has no such struct.
+- **WaterHeaterManagement (0x0094)**, with its `BoostStarted` and
+  `BoostEnded` events: every attribute, `encode_boost` and
+  `encode_cancel_boost`. `WaterHeaterBoostInfoStruct`'s rustdoc states its
+  two rules, which the encoder does not check: at most one of `one_shot`
+  and `target_reheat`, and `target_percentage` whenever `target_reheat` is
+  set. chip's server refuses a Boost that breaks either with
+  `InvalidCommand`.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

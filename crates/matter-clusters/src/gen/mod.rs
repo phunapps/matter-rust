@@ -78,6 +78,7 @@ pub mod time_synchronization;
 pub mod total_volatile_organic_compounds_concentration_measurement;
 pub mod user_label;
 pub mod valve_configuration_and_control;
+pub mod water_heater_management;
 pub mod water_heater_mode;
 pub mod water_tank_level_monitoring;
 pub mod window_covering;

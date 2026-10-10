@@ -3635,3 +3635,102 @@ fn power_topology_attributes_decode() {
         [1, 2]
     );
 }
+
+// ---- M9-A3 B5: WaterHeaterManagement ---------------------------------------
+//
+// 1.4.2 WaterHeaterManagement.xml. Boost takes a WaterHeaterBoostInfoStruct,
+// which BoostStarted carries back; BoostEnded has no fields. Values are
+// all-clusters v1.4.2.0's (WhmManufacturer::Init: ImmersionElement1;
+// features EM | TP); master's all-clusters no longer serves the cluster.
+
+#[test]
+fn water_heater_management_attributes_decode() {
+    use clusters::water_heater_management::{
+        decode_boost_state, decode_estimated_heat_required, decode_heat_demand,
+        decode_heater_types, decode_tank_percentage, decode_tank_volume, BoostStateEnum, Feature,
+        WaterHeaterHeatSourceBitmap,
+    };
+    assert_eq!(
+        (Feature::EM | Feature::TP).bits(),
+        3,
+        "all-clusters' features"
+    );
+    assert_eq!(
+        decode_heater_types(&uint_attr(1)).unwrap(),
+        WaterHeaterHeatSourceBitmap::IMMERSION_ELEMENT1
+    );
+    assert_eq!(
+        decode_heat_demand(&uint_attr(0)).unwrap(),
+        WaterHeaterHeatSourceBitmap::empty()
+    );
+    // A heat source a later revision adds survives the decode.
+    assert_eq!(decode_heat_demand(&uint_attr(0x41)).unwrap().bits(), 0x41);
+    assert_eq!(decode_tank_volume(&uint_attr(150)).unwrap(), 150);
+    // energy-mWh is a signed 64-bit integer.
+    assert_eq!(
+        decode_estimated_heat_required(&int_attr(4_000_000)).unwrap(),
+        4_000_000
+    );
+    assert_eq!(decode_tank_percentage(&uint_attr(80)).unwrap(), 80);
+    assert_eq!(
+        decode_boost_state(&uint_attr(1)).unwrap(),
+        BoostStateEnum::Active
+    );
+}
+
+#[test]
+fn water_heater_boost_encodes_and_boost_started_decodes() {
+    use clusters::water_heater_management::{
+        encode_boost, encode_cancel_boost, event_id, BoostStartedEvent, WaterHeaterBoostInfoStruct,
+    };
+    // Heat to 80 % of the tank, reheat when it falls to 20 %: OneShot is left
+    // out (at most one of OneShot and TargetReheat), TargetPercentage goes
+    // with TargetReheat. chip's server refuses either rule's breach with
+    // InvalidCommand before its delegate runs (both refs); the encoder does
+    // not check them.
+    let info = WaterHeaterBoostInfoStruct {
+        duration: 60,
+        one_shot: None,
+        emergency_boost: None,
+        temporary_setpoint: None,
+        target_percentage: Some(80),
+        target_reheat: Some(20),
+    };
+    let boost_info = |w: &mut TlvWriter<'_>| {
+        w.start_structure(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(0), 60).unwrap();
+        w.put_uint(Tag::Context(4), 80).unwrap();
+        w.put_uint(Tag::Context(5), 20).unwrap();
+        w.end_container().unwrap();
+    };
+    assert_eq!(encode_boost(info.clone()), struct_of(&boost_info));
+    assert_eq!(encode_cancel_boost(), [0x15, 0x18]);
+    // BoostStarted echoes the request's BoostInfo (chip's
+    // GenerateBoostStartedEvent copies every field it was given).
+    let e = BoostStartedEvent::decode(&struct_of(&boost_info)).unwrap();
+    assert_eq!(e.boost_info, info);
+    // A one-shot emergency boost to a temporary 65.00 °C setpoint.
+    let e = BoostStartedEvent::decode(&struct_of(&|w| {
+        w.start_structure(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(0), 3600).unwrap();
+        w.put_bool(Tag::Context(1), true).unwrap();
+        w.put_bool(Tag::Context(2), true).unwrap();
+        w.put_int(Tag::Context(3), 6500).unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            e.boost_info.one_shot,
+            e.boost_info.emergency_boost,
+            e.boost_info.temporary_setpoint,
+            e.boost_info.target_percentage
+        ),
+        (Some(true), Some(true), Some(6500), None)
+    );
+    // BoostEnded carries nothing: an id only.
+    assert_eq!(
+        [event_id::BOOST_STARTED, event_id::BOOST_ENDED],
+        [0x00, 0x01]
+    );
+}

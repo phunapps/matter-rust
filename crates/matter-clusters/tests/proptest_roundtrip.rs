@@ -358,4 +358,34 @@ proptest! {
         prop_assert!(present[usize::from(which)]);
         prop_assert_eq!(p.encode(), bytes);
     }
+
+    // ---- M9-A3 B5: WaterHeaterManagement -------------------------------------
+
+    #[test]
+    fn water_heater_boost_info_reencodes(
+        duration in 1u32..,
+        one_shot in proptest::option::of(any::<bool>()),
+        emergency_boost in proptest::option::of(any::<bool>()),
+        temporary_setpoint in proptest::option::of(any::<i16>()),
+        target_percentage in proptest::option::of(0u8..=100),
+        target_reheat in proptest::option::of(0u8..=100),
+    ) {
+        // WaterHeaterBoostInfoStruct: a mandatory duration and five optional
+        // fields (two bools, a signed temperature, two percentages). Boost sends
+        // it and BoostStarted carries it back: encode -> decode gives the same
+        // struct, whichever optional fields are present.
+        let info = clusters::water_heater_management::WaterHeaterBoostInfoStruct {
+            duration,
+            one_shot,
+            emergency_boost,
+            temporary_setpoint,
+            target_percentage,
+            target_reheat,
+        };
+        let bytes = info.encode();
+        let back =
+            clusters::water_heater_management::WaterHeaterBoostInfoStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(&back, &info);
+        prop_assert_eq!(back.encode(), bytes);
+    }
 }

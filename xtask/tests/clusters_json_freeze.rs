@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 78] = [
+const TARGET_CLUSTERS: [&str; 79] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -115,6 +115,8 @@ const TARGET_CLUSTERS: [&str; 78] = [
     // M9-A3 B5, energy management with attributes only:
     "EnergyPreference",
     "PowerTopology",
+    // M9-A3 B5, WaterHeaterManagement:
+    "WaterHeaterManagement",
 ];
 
 fn load() -> Value {
@@ -405,7 +407,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 22] = [
+const EVENT_CLUSTERS: [&str; 23] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -435,6 +437,8 @@ const EVENT_CLUSTERS: [&str; 22] = [
     "SmokeCoAlarm",
     "BooleanStateConfiguration",
     "ValveConfigurationAndControl",
+    // M9-A3 B5, WaterHeaterManagement:
+    "WaterHeaterManagement",
 ];
 
 #[test]
@@ -1126,7 +1130,7 @@ const PROVISIONAL: [(&str, &str, &str); 25] = [
 /// Fields in a choice-conformance group (`O.a`, `O.a+`, `[F].b+`): the
 /// encoders take each as an `Option` and do not enforce the group, so it is
 /// documented on the generated type or encoder.
-const CHOICE: [(&str, &str, &str); 19] = [
+const CHOICE: [(&str, &str, &str); 21] = [
     (
         "ElectricalEnergyMeasurement",
         "MeasurementAccuracyRangeStruct.FixedMax",
@@ -1222,6 +1226,18 @@ const CHOICE: [(&str, &str, &str); 19] = [
         "ScenesManagement",
         "AttributeValuePairStruct.ValueUnsigned8",
         "a/1",
+    ),
+    // M9-A3 B5, WaterHeaterManagement ([!TP], [TP].a- and [TP].a-: at most
+    // one):
+    (
+        "WaterHeaterManagement",
+        "WaterHeaterBoostInfoStruct.OneShot",
+        "a/1-",
+    ),
+    (
+        "WaterHeaterManagement",
+        "WaterHeaterBoostInfoStruct.TargetReheat",
+        "a/1-",
     ),
 ];
 
@@ -1687,7 +1703,7 @@ const PROVISIONAL_CLUSTERS: [&str; 1] = ["EnergyPreference"];
 /// mandatory when it holds and disallowed when it does not; an otherwise-form
 /// (`TargetReheat, [TP]`) is not exclusive. Each gets a generated "Required
 /// when ..." rustdoc line; nothing enforces it.
-const REQUIRED_WHEN: [(&str, &str, &str, bool, bool); 9] = [
+const REQUIRED_WHEN: [(&str, &str, &str, bool, bool); 10] = [
     ("Binding", "TargetStruct.Endpoint", "Group", false, true),
     ("Binding", "TargetStruct.Group", "Endpoint", false, true),
     ("Binding", "TargetStruct.Node", "Endpoint", true, true),
@@ -1732,6 +1748,14 @@ const REQUIRED_WHEN: [(&str, &str, &str, bool, bool); 9] = [
         "EndTimestamp",
         true,
         true,
+    ),
+    // M9-A3 B5 (`TargetReheat, [TP]`: an otherwise-form, so not exclusive):
+    (
+        "WaterHeaterManagement",
+        "WaterHeaterBoostInfoStruct.TargetPercentage",
+        "TargetReheat",
+        true,
+        false,
     ),
 ];
 
@@ -1836,4 +1860,38 @@ fn energy_preference_and_power_topology_are_attribute_only() {
         assert_eq!(element_names(c, "commands"), Vec::<&str>::new());
         assert_eq!(element_names(c, "events"), Vec::<&str>::new());
     }
+}
+
+#[test]
+fn water_heater_management_keeps_its_boost_shapes() {
+    // 1.4.2 WaterHeaterManagement.xml: Boost carries one mandatory
+    // WaterHeaterBoostInfoStruct; only Duration is mandatory in it.
+    // BoostStarted carries the same struct; BoostEnded carries nothing.
+    let v = load();
+    let c = cluster(&v, "WaterHeaterManagement");
+    assert_eq!(
+        field_optionality(&command(c, "Boost")["fields"]),
+        [("BoostInfo", false)]
+    );
+    assert_eq!(
+        command(c, "Boost")["fields"][0]["type"],
+        "WaterHeaterBoostInfoStruct"
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "WaterHeaterBoostInfoStruct")["fields"]),
+        [
+            ("Duration", false),
+            ("OneShot", true),
+            ("EmergencyBoost", true),
+            ("TemporarySetpoint", true),
+            ("TargetPercentage", true),
+            ("TargetReheat", true)
+        ]
+    );
+    assert_eq!(element_names(c, "events"), ["BoostStarted", "BoostEnded"]);
+    assert_eq!(
+        field_optionality(&c["events"][0]["fields"]),
+        [("BoostInfo", false)]
+    );
+    assert_eq!(field_optionality(&c["events"][1]["fields"]), []);
 }

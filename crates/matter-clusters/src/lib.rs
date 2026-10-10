@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 78 clusters are generated today. The full list is [`clusters`]; by area:
+//! 79 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -46,7 +46,7 @@
 //! - **Energy:** `ElectricalPowerMeasurement`, `ElectricalEnergyMeasurement`.
 //! - **Energy management:** `EnergyPreference` (provisional: the
 //!   specification marks the whole cluster provisional, so its shape may
-//!   change), `PowerTopology`.
+//!   change), `PowerTopology`, `WaterHeaterManagement` (with its events).
 //! - **Appliance modes:** `ModeSelect`, `OvenMode`, `LaundryWasherMode`,
 //!   `RefrigeratorAndTemperatureControlledCabinetMode`, `RvcRunMode`,
 //!   `RvcCleanMode`, `DishwasherMode`, `MicrowaveOvenMode`, `EnergyEvseMode`,

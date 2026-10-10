@@ -198,6 +198,10 @@ const ALLOWLIST = [
   // unreferenced, so it is pruned.
   { id: 0x009b, name: 'EnergyPreference' },
   { id: 0x009c, name: 'PowerTopology' },
+  // M9-A3 B5, WaterHeaterManagement (Boost takes a struct whose OneShot and
+  // TargetReheat form an at-most-one choice group and whose TargetPercentage
+  // is required with TargetReheat; BoostStarted carries the same struct):
+  { id: 0x0094, name: 'WaterHeaterManagement' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -238,6 +242,9 @@ const EVENT_ALLOWLIST = new Set([
   'BooleanStateConfiguration',
   // M9-A3 B4, ValveConfigurationAndControl (ValveStateChanged, ValveFault):
   'ValveConfigurationAndControl',
+  // M9-A3 B5, WaterHeaterManagement (BoostStarted: WaterHeaterBoostInfoStruct;
+  // BoostEnded: fieldless):
+  'WaterHeaterManagement',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's
