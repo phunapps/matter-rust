@@ -676,6 +676,44 @@ const RUST_HANDLED_TYPE_TOKENS = new Set([
 // dump (inlineGlobalDatatypes), so no such name can reach the emitter.
 const GLOBAL_DATATYPE_NAMES = new Map([['locationdesc', 'LocationDescriptorStruct']]);
 
+// Why a GLOBAL_DATATYPE_NAMES rename of global `name` (metatype `meta`) to
+// `rename` cannot be applied in `clusterName`, or null when it can. `taken`
+// holds the datatype names already in the cluster (its own, plus globals
+// inlined so far). Two ways a rename would go silently wrong:
+// - only a struct may be renamed: dumpDatatype records a renamed datatype's
+//   base as `struct` (the anonymous-struct convention), so a renamed enum or
+//   bitmap would lose its enum8 / enum16 / map8.. base, and the emitter, which
+//   derives the backing from the base (emit.rs enum_backing, emit_bitmap),
+//   would narrow an enum16, map16 or map32 to u8;
+// - the new name must be free in the cluster: a cluster-local datatype (or an
+//   earlier inlined global) of that name would leave the cluster with two
+//   datatypes under one name, and references to it ambiguous.
+function globalRenameError(clusterName, name, rename, meta, taken) {
+  if (meta !== 'object') {
+    return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global ${meta} \`${name}\` — only a struct may be renamed (a renamed ${meta} would get base \`struct\` and a u8 backing)`;
+  }
+  if (taken.has(rename)) {
+    return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global \`${name}\` to \`${rename}\`, which is already a datatype of the cluster`;
+  }
+  return null;
+}
+
+// Load-time self-check of globalRenameError (the only rename in the model
+// today is a struct with a free name, so neither refusal would otherwise run
+// on regeneration). Each row: metatype, names already taken, whether refused.
+for (const [meta, taken, refused] of [
+  ['object', [], false],
+  ['object', ['AreaStruct'], false],
+  ['object', ['LocationDescriptorStruct'], true],
+  ['enum', [], true],
+  ['bitmap', [], true],
+]) {
+  const err = globalRenameError('SelfCheck', 'locationdesc', 'LocationDescriptorStruct', meta, new Set(taken));
+  if ((err !== null) !== refused) {
+    fail(`globalRenameError self-check: renaming a global of metatype ${meta} with [${taken}] taken should ${refused ? '' : 'not '}be refused`);
+  }
+}
+
 // Resolve a datatype NAME to its @matter/model node at root (global) scope,
 // or null if no such named child exists (then it is a scalar/semantic/
 // primitive token the Rust scalar map handles, e.g. `voltage-mV`, `uint64`).
@@ -722,6 +760,10 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
     const rename = GLOBAL_DATATYPE_NAMES.get(name);
     if (!rename && !/^[A-Z]/.test(name)) {
       fail(`${clusterName}: global ${meta} \`${name}\` is lowercase — add it to GLOBAL_DATATYPE_NAMES (or RUST_HANDLED_TYPE_TOKENS)`);
+    }
+    if (rename) {
+      const err = globalRenameError(clusterName, name, rename, meta, present);
+      if (err) fail(err);
     }
     const dt = dumpDatatype(node, `${clusterName}.global`, rename);
     datatypes.push(dt);
