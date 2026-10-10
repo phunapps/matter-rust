@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 61 clusters are generated today. The full list is [`gen`]; by area:
+//! 64 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -49,6 +49,8 @@
 //!   `WaterHeaterMode`, `DeviceEnergyManagementMode`.
 //! - **Appliance alarms:** `DishwasherAlarm`, `RefrigeratorAlarm` (with their
 //!   `Notify` events).
+//! - **Resource monitoring:** `HepaFilterMonitoring`,
+//!   `ActivatedCarbonFilterMonitoring`, `WaterTankLevelMonitoring`.
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

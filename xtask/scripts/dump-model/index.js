@@ -139,6 +139,11 @@ const ALLOWLIST = [
   // Reset/ModifyEnabledAlarms, Notify event):
   { id: 0x0057, name: 'RefrigeratorAlarm' },
   { id: 0x005d, name: 'DishwasherAlarm' },
+  // M9-A3 B2, ResourceMonitoring-derived (Condition, ChangeIndication,
+  // ReplacementProductList, ResetCondition; no events):
+  { id: 0x0071, name: 'HepaFilterMonitoring' },
+  { id: 0x0072, name: 'ActivatedCarbonFilterMonitoring' },
+  { id: 0x0079, name: 'WaterTankLevelMonitoring' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -293,28 +298,40 @@ function requiredDisallowedFeatures(ast, disallowed) {
 
 // Load-time self-check of requiredDisallowedFeatures over hand-written
 // conformance forms (parsed by @matter/model itself), so a regression fails the
-// dump before it can reshape a cluster. Each row: conformance, then the
-// disallowed codes it requires ('' = keep the element). Only `F` is disallowed.
-for (const [text, want] of [
-  ['F', 'F'],
-  ['[F]', 'F'],
-  ['F.a', 'F'],
-  ['F & G', 'F'],
-  ['F, X', 'F'],
-  ['!F', ''],
-  ['!F, O', ''],
-  ['F, O', ''],
-  ['F, [G]', ''],
-  ['F | G', ''],
-  ['F | !F', ''],
-  ['G', ''],
-  ['M', ''],
-  ['O', ''],
+// dump before it can reshape a cluster. Each row: conformance, the disallowed
+// codes it requires ('' = keep the element), then the disallowed set it is
+// evaluated against. The F-only rows cannot tell whether the OR/XOR and
+// otherwise branches ever DROP (with G allowed they must keep); the F+G rows
+// are where both sides require a disallowed feature, so they must drop.
+const ONLY_F = new Set(['F']);
+const F_AND_G = new Set(['F', 'G']);
+for (const [text, want, disallowed] of [
+  ['F', 'F', ONLY_F],
+  ['[F]', 'F', ONLY_F],
+  ['F.a', 'F', ONLY_F],
+  ['F & G', 'F', ONLY_F],
+  ['F, X', 'F', ONLY_F],
+  ['!F', '', ONLY_F],
+  ['!F, O', '', ONLY_F],
+  ['F, O', '', ONLY_F],
+  ['F, [G]', '', ONLY_F],
+  ['F | G', '', ONLY_F],
+  ['F | !F', '', ONLY_F],
+  ['G', '', ONLY_F],
+  ['M', '', ONLY_F],
+  ['O', '', ONLY_F],
+  // Both F and G disallowed:
+  ['F | G', 'F,G', F_AND_G],
+  ['F ^ G', 'F,G', F_AND_G],
+  ['F | !G', '', F_AND_G],
+  ['F, G', 'F,G', F_AND_G],
 ]) {
-  const got = requiredDisallowedFeatures(new Conformance(text).ast, new Set(['F']));
+  const got = requiredDisallowedFeatures(new Conformance(text).ast, disallowed);
   const gotText = got ? [...got].join(',') : '';
   if (gotText !== want) {
-    fail(`requiredDisallowedFeatures self-check: \`${text}\` gave '${gotText}', want '${want}'`);
+    fail(
+      `requiredDisallowedFeatures self-check: \`${text}\` (disallowed ${[...disallowed].join(',')}) gave '${gotText}', want '${want}'`,
+    );
   }
 }
 

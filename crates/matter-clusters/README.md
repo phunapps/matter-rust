@@ -17,7 +17,7 @@ matter-clusters = "0.5"
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  61 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  64 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -25,7 +25,7 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 61 listed below. More
+- It is **not** the full Matter cluster set — only the 64 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -44,7 +44,7 @@ may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-61 clusters are generated today, covering their **mandatory and optional**
+64 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
@@ -69,6 +69,8 @@ attributes, by area:
   DeviceEnergyManagementMode.
 - **Appliance alarms** — DishwasherAlarm, RefrigeratorAlarm (with their
   `Notify` events).
+- **Resource monitoring** — HepaFilterMonitoring,
+  ActivatedCarbonFilterMonitoring, WaterTankLevelMonitoring.
 - **Administration** — AccessControl, GroupKeyManagement,
   AdministratorCommissioning, OperationalCredentials, IcdManagement,
   TimeSynchronization, OtaSoftwareUpdateRequestor, OtaSoftwareUpdateProvider.
@@ -85,7 +87,9 @@ actuator clusters additionally carry `decode(encode(x)) == x` roundtrips, and
 floats get both a binary32-edge roundtrip (signed zero, subnormals, infinities,
 NaN — compared by bits) and a `proptest` roundtrip drawn uniformly from the
 whole binary32 bit space. A `single` attribute accepts a FLOAT32 element only,
-matching chip's strict `TLVReader::Get(float&)`.
+matching chip's strict `TLVReader::Get(float&)`. No connectedhomeip example
+app serves WaterTankLevelMonitoring, so it is validated by decode tests and the
+chip 1.4.2 XML check (scripts/chip-xml-conformance.py) only.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`

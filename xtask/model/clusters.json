@@ -37,6 +37,9 @@
       "AirQuality",
       "DishwasherAlarm",
       "MicrowaveOvenMode",
+      "HepaFilterMonitoring",
+      "ActivatedCarbonFilterMonitoring",
+      "WaterTankLevelMonitoring",
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
       "EnergyEvseMode",
@@ -11135,6 +11138,606 @@
               "nullable": false,
               "optional": false,
               "description": "This field shall indicate the mode tag within a mode tag namespace which is either manufacturer specific or standard."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 113,
+      "name": "HepaFilterMonitoring",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CON",
+          "name": "Condition",
+          "description": "Supports monitoring the condition of the resource in percentage"
+        },
+        {
+          "bit": 1,
+          "code": "WRN",
+          "name": "Warning",
+          "description": "Supports warning indication"
+        },
+        {
+          "bit": 2,
+          "code": "REP",
+          "name": "ReplacementProductList",
+          "description": "Supports specifying the list of replacement products"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Condition",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current condition of the resource in percent."
+        },
+        {
+          "id": 1,
+          "name": "DegradationDirection",
+          "type": "DegradationDirectionEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the direction of change for the condition of the resource over time, which helps to determine whether a higher or lower condition value is considered optimal."
+        },
+        {
+          "id": 2,
+          "name": "ChangeIndication",
+          "type": "ChangeIndicationEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall be populated with a value from ChangeIndicationEnum that is indicative of the current requirement to change the resource."
+        },
+        {
+          "id": 3,
+          "name": "InPlaceIndicator",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether a resource is currently installed. A value of true shall indicate that a resource is installed. A value of false shall indicate that a resource is not installed."
+        },
+        {
+          "id": 4,
+          "name": "LastChangedTime",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute may indicates the time at which the resource has been changed, if supported by the server. The attribute shall be null if it was never set or is unknown."
+        },
+        {
+          "id": 5,
+          "name": "ReplacementProductList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ReplacementProductStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of supported products that may be used as replacements for the current resource. Each item in this list represents a unique ReplacementProductStruct."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetCondition",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "ChangeIndicationEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Ok",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Warning",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "DegradationDirectionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Indicates the direction in which the condition of the resource changes over time.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Up",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Down",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ProductIdentifierTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Indicate the type of identifier used to describe the product. Devices SHOULD use globally-recognized IDs over OEM specific ones.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Upc",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Gtin8",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ean",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Gtin14",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Oem",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ReplacementProductStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "Indicates the product identifier that can be used as a replacement for the resource.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ProductIdentifierType",
+              "type": "ProductIdentifierTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ProductIdentifierValue",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 114,
+      "name": "ActivatedCarbonFilterMonitoring",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CON",
+          "name": "Condition",
+          "description": "Supports monitoring the condition of the resource in percentage"
+        },
+        {
+          "bit": 1,
+          "code": "WRN",
+          "name": "Warning",
+          "description": "Supports warning indication"
+        },
+        {
+          "bit": 2,
+          "code": "REP",
+          "name": "ReplacementProductList",
+          "description": "Supports specifying the list of replacement products"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Condition",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current condition of the resource in percent."
+        },
+        {
+          "id": 1,
+          "name": "DegradationDirection",
+          "type": "DegradationDirectionEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the direction of change for the condition of the resource over time, which helps to determine whether a higher or lower condition value is considered optimal."
+        },
+        {
+          "id": 2,
+          "name": "ChangeIndication",
+          "type": "ChangeIndicationEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall be populated with a value from ChangeIndicationEnum that is indicative of the current requirement to change the resource."
+        },
+        {
+          "id": 3,
+          "name": "InPlaceIndicator",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether a resource is currently installed. A value of true shall indicate that a resource is installed. A value of false shall indicate that a resource is not installed."
+        },
+        {
+          "id": 4,
+          "name": "LastChangedTime",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute may indicates the time at which the resource has been changed, if supported by the server. The attribute shall be null if it was never set or is unknown."
+        },
+        {
+          "id": 5,
+          "name": "ReplacementProductList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ReplacementProductStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of supported products that may be used as replacements for the current resource. Each item in this list represents a unique ReplacementProductStruct."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetCondition",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "ChangeIndicationEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Ok",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Warning",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "DegradationDirectionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Indicates the direction in which the condition of the resource changes over time.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Up",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Down",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ProductIdentifierTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Indicate the type of identifier used to describe the product. Devices SHOULD use globally-recognized IDs over OEM specific ones.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Upc",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Gtin8",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ean",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Gtin14",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Oem",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ReplacementProductStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "Indicates the product identifier that can be used as a replacement for the resource.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ProductIdentifierType",
+              "type": "ProductIdentifierTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ProductIdentifierValue",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 121,
+      "name": "WaterTankLevelMonitoring",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CON",
+          "name": "Condition",
+          "description": "Supports monitoring the condition of the resource in percentage"
+        },
+        {
+          "bit": 1,
+          "code": "WRN",
+          "name": "Warning",
+          "description": "Supports warning indication"
+        },
+        {
+          "bit": 2,
+          "code": "REP",
+          "name": "ReplacementProductList",
+          "description": "Supports specifying the list of replacement products"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Condition",
+          "type": "percent",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current condition of the resource in percent."
+        },
+        {
+          "id": 1,
+          "name": "DegradationDirection",
+          "type": "DegradationDirectionEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the direction of change for the condition of the resource over time, which helps to determine whether a higher or lower condition value is considered optimal."
+        },
+        {
+          "id": 2,
+          "name": "ChangeIndication",
+          "type": "ChangeIndicationEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall be populated with a value from ChangeIndicationEnum that is indicative of the current requirement to change the resource."
+        },
+        {
+          "id": 3,
+          "name": "InPlaceIndicator",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether a resource is currently installed. A value of true shall indicate that a resource is installed. A value of false shall indicate that a resource is not installed."
+        },
+        {
+          "id": 4,
+          "name": "LastChangedTime",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "This attribute may indicates the time at which the resource has been changed, if supported by the server. The attribute shall be null if it was never set or is unknown."
+        },
+        {
+          "id": 5,
+          "name": "ReplacementProductList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ReplacementProductStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of supported products that may be used as replacements for the current resource. Each item in this list represents a unique ReplacementProductStruct."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetCondition",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "ChangeIndicationEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Ok",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Warning",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "DegradationDirectionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Indicates the direction in which the condition of the resource changes over time.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Up",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Down",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ProductIdentifierTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Indicate the type of identifier used to describe the product. Devices SHOULD use globally-recognized IDs over OEM specific ones.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Upc",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Gtin8",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Ean",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Gtin14",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Oem",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ReplacementProductStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "Indicates the product identifier that can be used as a replacement for the resource.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ProductIdentifierType",
+              "type": "ProductIdentifierTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ProductIdentifierValue",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
             }
           ]
         }

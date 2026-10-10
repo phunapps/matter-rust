@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 61] = [
+const TARGET_CLUSTERS: [&str; 64] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -91,6 +91,10 @@ const TARGET_CLUSTERS: [&str; 61] = [
     // M9-A3 B2, AlarmBase-derived:
     "RefrigeratorAlarm",
     "DishwasherAlarm",
+    // M9-A3 B2, ResourceMonitoring-derived:
+    "HepaFilterMonitoring",
+    "ActivatedCarbonFilterMonitoring",
+    "WaterTankLevelMonitoring",
 ];
 
 fn load() -> Value {

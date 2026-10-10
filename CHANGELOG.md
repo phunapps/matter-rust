@@ -127,6 +127,12 @@ payload struct (Switch already had its seven):
   `Notify` events (`event_id::NOTIFY`, decode-only `NotifyEvent`).
   RefrigeratorAlarm has no `Latch`, `Reset` or `Feature::RESET`: it disallows
   the RESET feature they depend on.
+- **HepaFilterMonitoring (0x0071), ActivatedCarbonFilterMonitoring (0x0072)
+  and WaterTankLevelMonitoring (0x0079)**: Condition, DegradationDirection,
+  ChangeIndication, InPlaceIndicator, LastChangedTime (writable),
+  ReplacementProductList and `encode_reset_condition`. No connectedhomeip
+  example app serves WaterTankLevelMonitoring; it is validated by decode
+  tests and the chip 1.4.2 XML check only.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

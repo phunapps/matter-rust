@@ -1996,3 +1996,95 @@ fn refrigerator_alarm_decodes_and_door_open_notify() {
         (AlarmBitmap::DOOR_OPEN, AlarmBitmap::DOOR_OPEN)
     );
 }
+
+// ---- M9-A3 B2: ResourceMonitoring-derived clusters ----------------------------
+//
+// HepaFilterMonitoring, ActivatedCarbonFilterMonitoring and
+// WaterTankLevelMonitoring share one shape (1.4.2 ResourceMonitoring.xml):
+// Condition percent, DegradationDirection / ChangeIndication enums,
+// InPlaceIndicator, a writable nullable LastChangedTime (epoch-s) and
+// ReplacementProductList (list<ReplacementProductStruct>). They have no events.
+
+/// chip all-clusters' first two replacement products
+/// (resource-monitoring-delegates.cpp `ImmutableReplacementProductListManager`).
+fn replacement_products() -> Vec<u8> {
+    list_of(&[
+        &|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap(); // Upc
+            w.put_utf8(Tag::Context(1), "111112222233").unwrap();
+        },
+        &|w| {
+            w.put_uint(Tag::Context(0), 1).unwrap(); // Gtin8
+            w.put_utf8(Tag::Context(1), "gtin8xxx").unwrap();
+        },
+    ])
+}
+
+macro_rules! resource_monitoring_cluster_decodes {
+    ($test:ident, $m:ident) => {
+        #[test]
+        fn $test() {
+            use gen::$m::{
+                decode_change_indication, decode_condition, decode_degradation_direction,
+                decode_in_place_indicator, decode_last_changed_time,
+                decode_replacement_product_list, encode_last_changed_time, encode_reset_condition,
+                ChangeIndicationEnum, DegradationDirectionEnum, ProductIdentifierTypeEnum,
+            };
+            let products = decode_replacement_product_list(&replacement_products()).unwrap();
+            let got: Vec<_> = products
+                .iter()
+                .map(|p| {
+                    (
+                        p.product_identifier_type,
+                        p.product_identifier_value.as_str(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                got,
+                [
+                    (ProductIdentifierTypeEnum::Upc, "111112222233"),
+                    (ProductIdentifierTypeEnum::Gtin8, "gtin8xxx"),
+                ]
+            );
+            assert_eq!(decode_condition(&uint_attr(100)).unwrap(), 100);
+            assert_eq!(
+                decode_degradation_direction(&uint_attr(1)).unwrap(),
+                DegradationDirectionEnum::Down
+            );
+            assert_eq!(
+                decode_change_indication(&uint_attr(2)).unwrap(),
+                ChangeIndicationEnum::Critical
+            );
+            assert!(decode_in_place_indicator(&bool_attr(true)).unwrap());
+            for v in [Nullable::Null, Nullable::Value(788_918_400)] {
+                assert_eq!(
+                    decode_last_changed_time(&encode_last_changed_time(v)).unwrap(),
+                    v
+                );
+            }
+            // ResetCondition has no fields: an empty structure.
+            assert_eq!(encode_reset_condition(), [0x15, 0x18]);
+        }
+    };
+}
+
+resource_monitoring_cluster_decodes!(hepa_filter_monitoring_decodes, hepa_filter_monitoring);
+resource_monitoring_cluster_decodes!(
+    activated_carbon_filter_monitoring_decodes,
+    activated_carbon_filter_monitoring
+);
+resource_monitoring_cluster_decodes!(
+    water_tank_level_monitoring_decodes,
+    water_tank_level_monitoring
+);
+
+#[test]
+fn replacement_product_missing_value_is_an_error() {
+    use matter_clusters::error::ClusterError;
+    let bytes = list_of(&[&|w| w.put_uint(Tag::Context(0), 4).unwrap()]);
+    assert!(matches!(
+        gen::water_tank_level_monitoring::decode_replacement_product_list(&bytes),
+        Err(ClusterError::MissingField("ProductIdentifierValue"))
+    ));
+}
