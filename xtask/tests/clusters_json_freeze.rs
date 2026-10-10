@@ -1675,17 +1675,20 @@ fn scenes_management_shape_follows_1_4() {
 const PROVISIONAL_CLUSTERS: [&str; 0] = [];
 
 /// Datatype struct fields whose presence depends on a sibling field
-/// (`requiredWhen`), as `(cluster, "<Struct>.<Field>", sibling, present)`.
-/// Each gets a generated "Required when ..." rustdoc line; nothing enforces
-/// it.
-const REQUIRED_WHEN: [(&str, &str, &str, bool); 9] = [
-    ("Binding", "TargetStruct.Endpoint", "Group", false),
-    ("Binding", "TargetStruct.Group", "Endpoint", false),
-    ("Binding", "TargetStruct.Node", "Endpoint", true),
+/// (`requiredWhen`), as `(cluster, "<Struct>.<Field>", sibling, present,
+/// exclusive)`. `exclusive` is a bare conformance (`Endpoint`, `!Group`):
+/// mandatory when it holds and disallowed when it does not; an otherwise-form
+/// (`TargetReheat, [TP]`) is not exclusive. Each gets a generated "Required
+/// when ..." rustdoc line; nothing enforces it.
+const REQUIRED_WHEN: [(&str, &str, &str, bool, bool); 9] = [
+    ("Binding", "TargetStruct.Endpoint", "Group", false, true),
+    ("Binding", "TargetStruct.Group", "Endpoint", false, true),
+    ("Binding", "TargetStruct.Node", "Endpoint", true, true),
     (
         "ElectricalPowerMeasurement",
         "MeasurementRangeStruct.MaxSystime",
         "EndSystime",
+        true,
         true,
     ),
     (
@@ -1693,11 +1696,13 @@ const REQUIRED_WHEN: [(&str, &str, &str, bool); 9] = [
         "MeasurementRangeStruct.MaxTimestamp",
         "EndTimestamp",
         true,
+        true,
     ),
     (
         "ElectricalPowerMeasurement",
         "MeasurementRangeStruct.MinSystime",
         "EndSystime",
+        true,
         true,
     ),
     (
@@ -1705,17 +1710,20 @@ const REQUIRED_WHEN: [(&str, &str, &str, bool); 9] = [
         "MeasurementRangeStruct.MinTimestamp",
         "EndTimestamp",
         true,
+        true,
     ),
     (
         "ElectricalPowerMeasurement",
         "MeasurementRangeStruct.StartSystime",
         "EndSystime",
         true,
+        true,
     ),
     (
         "ElectricalPowerMeasurement",
         "MeasurementRangeStruct.StartTimestamp",
         "EndTimestamp",
+        true,
         true,
     ),
 ];
@@ -1736,7 +1744,7 @@ fn provisional_clusters_are_exactly_these() {
 #[test]
 fn presence_dependencies_are_exactly_these() {
     let v = load();
-    let mut got: Vec<(String, String, String, bool)> = Vec::new();
+    let mut got: Vec<(String, String, String, bool, bool)> = Vec::new();
     for c in clusters(&v) {
         for d in c["datatypes"].as_array().unwrap() {
             for f in d["fields"].as_array().into_iter().flatten() {
@@ -1753,14 +1761,15 @@ fn presence_dependencies_are_exactly_these() {
                     ),
                     dep["field"].as_str().unwrap().to_string(),
                     dep["present"].as_bool().unwrap(),
+                    dep["exclusive"].as_bool().unwrap(),
                 ));
             }
         }
     }
     got.sort();
-    let got: Vec<(&str, &str, &str, bool)> = got
+    let got: Vec<(&str, &str, &str, bool, bool)> = got
         .iter()
-        .map(|(c, f, s, p)| (c.as_str(), f.as_str(), s.as_str(), *p))
+        .map(|(c, f, s, p, excl)| (c.as_str(), f.as_str(), s.as_str(), *p, *excl))
         .collect();
     let mut want = REQUIRED_WHEN.to_vec();
     want.sort_unstable();

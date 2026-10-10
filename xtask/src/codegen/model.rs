@@ -242,6 +242,13 @@ pub struct RequiredWhen {
     pub field: String,
     /// `true`: required when `field` is present; `false`: when it is absent.
     pub present: bool,
+    /// `true` when the conformance is the bare (possibly negated) term with
+    /// no otherwise branch (`Endpoint`, `!Group`): Matter Core spec 7.3 then
+    /// makes the field disallowed whenever the term does not hold, so it must
+    /// be omitted in the opposite case. `false` for an otherwise-form
+    /// (`TargetReheat, [TP]`), which constrains only the first case. Always
+    /// written by the dump (no default).
+    pub exclusive: bool,
 }
 
 /// A choice-conformance group (Matter Core spec 7.3: `O.a` = exactly one field
@@ -1065,7 +1072,7 @@ mod tests {
                     "fields": [
                         { "id": 4, "name": "TargetPercentage", "type": "percent", "metatype": "integer",
                           "nullable": false, "optional": true,
-                          "requiredWhen": { "field": dep, "present": true } },
+                          "requiredWhen": { "field": dep, "present": true, "exclusive": false } },
                         { "id": 5, "name": "TargetReheat", "type": "percent", "metatype": "integer",
                           "nullable": false, "optional": true }
                     ] }]
@@ -1080,6 +1087,29 @@ mod tests {
         );
         let err = validate(&with_dep("TargetPercentage")).unwrap_err();
         assert!(err.contains("not another field"), "got: {err}");
+    }
+
+    #[test]
+    fn required_when_must_say_whether_it_is_exclusive() {
+        let dep: RequiredWhen = serde_json::from_value(serde_json::json!({
+            "field": "Endpoint", "present": true, "exclusive": true
+        }))
+        .unwrap();
+        assert_eq!(
+            dep,
+            RequiredWhen {
+                field: "Endpoint".to_string(),
+                present: true,
+                exclusive: true,
+            }
+        );
+        // No default: a dump that omits `exclusive` is rejected, never read
+        // as the weaker (non-exclusive) note.
+        let err = serde_json::from_value::<RequiredWhen>(serde_json::json!({
+            "field": "Endpoint", "present": true
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("exclusive"), "got: {err}");
     }
 
     #[test]

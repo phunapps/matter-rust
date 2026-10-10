@@ -42,7 +42,8 @@ dump's PROVISIONAL_CLUSTERS):
   V  a generated cluster whose provisional marking (clusters.json
      `provisional`, from the dump's PROVISIONAL_CLUSTERS) differs from its 1.4.2
      `<clusterId>`: marked but no `<provisionalConform/>` there, or
-     `<provisionalConform/>` there but not marked
+     `<provisionalConform/>` there but not marked; or marked but its cluster
+     id not in 1.4.2 (cannot be verified)
 
 Reported without failing:
   MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
@@ -474,6 +475,10 @@ def load_chip_xml(chip):
             # EnergyPreference): checked against clusters.json (class V).
             t["provisional"] = cid.find("provisionalConform") is not None
             by_id[parse_int(cid.get("id"), f"{root.get('name')}: clusterId")] = t
+    if not by_id:
+        # Every cluster would land in UNCHECKABLE and the per-cluster
+        # checks (class V among them) would pass vacuously.
+        die(f"no <clusterId> in any XML under {pattern} (is {chip} a connectedhomeip checkout?)")
     return by_id
 
 
@@ -1005,6 +1010,10 @@ def main():
                 if s.get("cluster") == c["name"]:
                     rep.failing.append(f"S  {c['name']}.{s.get('element')}: cluster id "
                                        f"{c['id']:#06x} not in 1.4.2, so it cannot be verified")
+            # Likewise a provisional marking (class V): never passed unchecked.
+            if c.get("provisional") is True:
+                rep.failing.append(f"V  {c['name']}: marked provisional but cluster id "
+                                   f"{c['id']:#06x} not in 1.4.2, so it cannot be verified")
             continue
         marked = c.get("provisional", False) is True
         if marked != xt["provisional"]:

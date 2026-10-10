@@ -35,13 +35,13 @@ pub mod attribute_id {
 #[non_exhaustive]
 pub struct TargetStruct {
     /// Field Node (tag 1).
-    /// Required when `endpoint` is present. Neither encoding nor decoding checks it.
+    /// Required when `endpoint` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub node: Option<u64>,
     /// Field Group (tag 2).
-    /// Required when `endpoint` is absent. Neither encoding nor decoding checks it.
+    /// Required when `endpoint` is absent, and must be omitted when it is present. Neither encoding nor decoding checks it.
     pub group: Option<u16>,
     /// Field Endpoint (tag 3).
-    /// Required when `group` is absent. Neither encoding nor decoding checks it.
+    /// Required when `group` is absent, and must be omitted when it is present. Neither encoding nor decoding checks it.
     pub endpoint: Option<u16>,
     /// Field Cluster (tag 4).
     pub cluster: Option<u32>,

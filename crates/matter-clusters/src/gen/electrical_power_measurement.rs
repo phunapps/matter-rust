@@ -148,26 +148,26 @@ pub struct MeasurementRangeStruct {
     /// Field Max (tag 2).
     pub max: i64,
     /// Field StartTimestamp (tag 3).
-    /// Required when `end_timestamp` is present. Neither encoding nor decoding checks it.
+    /// Required when `end_timestamp` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub start_timestamp: Option<u32>,
     /// Field EndTimestamp (tag 4).
     pub end_timestamp: Option<u32>,
     /// Field MinTimestamp (tag 5).
-    /// Required when `end_timestamp` is present. Neither encoding nor decoding checks it.
+    /// Required when `end_timestamp` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub min_timestamp: Option<u32>,
     /// Field MaxTimestamp (tag 6).
-    /// Required when `end_timestamp` is present. Neither encoding nor decoding checks it.
+    /// Required when `end_timestamp` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub max_timestamp: Option<u32>,
     /// Field StartSystime (tag 7).
-    /// Required when `end_systime` is present. Neither encoding nor decoding checks it.
+    /// Required when `end_systime` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub start_systime: Option<u64>,
     /// Field EndSystime (tag 8).
     pub end_systime: Option<u64>,
     /// Field MinSystime (tag 9).
-    /// Required when `end_systime` is present. Neither encoding nor decoding checks it.
+    /// Required when `end_systime` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub min_systime: Option<u64>,
     /// Field MaxSystime (tag 10).
-    /// Required when `end_systime` is present. Neither encoding nor decoding checks it.
+    /// Required when `end_systime` is present, and must be omitted when it is absent. Neither encoding nor decoding checks it.
     pub max_systime: Option<u64>,
 }
 

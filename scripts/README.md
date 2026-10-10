@@ -53,7 +53,10 @@ allow-list line only when chip's own generated type is equally strict.
 A **V** finding always fails and is never allow-listed: a generated cluster's
 provisional marking (`provisional` in `clusters.json`, from the dump's
 `PROVISIONAL_CLUSTERS`) must match whether its 1.4.2 `<clusterId>` carries
-`<provisionalConform/>`. Fix the dump's list.
+`<provisionalConform/>`. A cluster marked provisional whose id is not in
+1.4.2 is a V finding too (it cannot be verified). Fix the dump's list. The
+script exits 2 if the checkout's 1.4.2 XML yields no `<clusterId>` at all, so
+the per-cluster checks never pass vacuously.
 
 Report-only sections (they never change the exit code):
 

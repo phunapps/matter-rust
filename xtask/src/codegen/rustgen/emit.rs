@@ -92,13 +92,24 @@ pub(crate) const PROVISIONAL_CLUSTER_DOC: [&str; 3] = [
 
 /// The rustdoc line on a struct field whose presence depends on a sibling
 /// field (`FieldDef::required_when`; M9-A3 B5). The sibling is named by its
-/// generated Rust identifier.
+/// generated Rust identifier. An exclusive dependency (a bare conformance
+/// such as `Endpoint` or `!Group`) also states the disallowed half: chip's
+/// Binding server refuses a target carrying Group with Endpoint or Node.
 pub(crate) fn required_when_doc(dep: &RequiredWhen) -> String {
-    format!(
-        "Required when `{}` is {}. Neither encoding nor decoding checks it.",
-        ident(&snake(&dep.field)),
-        if dep.present { "present" } else { "absent" }
-    )
+    let (when, otherwise) = if dep.present {
+        ("present", "absent")
+    } else {
+        ("absent", "present")
+    };
+    let field = ident(&snake(&dep.field));
+    if dep.exclusive {
+        format!(
+            "Required when `{field}` is {when}, and must be omitted when it is {otherwise}. \
+             Neither encoding nor decoding checks it."
+        )
+    } else {
+        format!("Required when `{field}` is {when}. Neither encoding nor decoding checks it.")
+    }
 }
 
 /// One rustdoc sentence per choice-conformance group among `fields`, in the
@@ -1016,11 +1027,11 @@ mod tests {
 
     #[test]
     fn presence_dependent_fields_name_their_sibling() {
-        use crate::codegen::model::RequiredWhen;
-        let dep = |name: &str, on: &str, present: bool| FieldDef {
+        let dep = |name: &str, on: &str, present: bool, exclusive: bool| FieldDef {
             required_when: Some(RequiredWhen {
                 field: on.to_string(),
                 present,
+                exclusive,
             }),
             ..note_field(name, false, None)
         };
@@ -1031,8 +1042,12 @@ mod tests {
             values: vec![],
             bits: vec![],
             fields: vec![
-                dep("Node", "Endpoint", true),
-                dep("Group", "Endpoint", false),
+                // A bare conformance (`Endpoint`, `!Endpoint`): mandatory when
+                // it holds, disallowed when it does not.
+                dep("Node", "Endpoint", true, true),
+                dep("Group", "Endpoint", false, true),
+                // An otherwise-form (`TargetReheat, [TP]`): only the first half.
+                dep("TargetPercentage", "TargetReheat", true, false),
                 note_field("Cluster", false, None),
             ],
             global_name: None,
@@ -1042,18 +1057,26 @@ mod tests {
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
         assert!(
             s.contains(
-                "/// Field Node (tag 0).\n    /// Required when `endpoint` is present. \
-                 Neither encoding nor decoding checks it.\n"
+                "/// Field Node (tag 0).\n    /// Required when `endpoint` is present, and must be \
+                 omitted when it is absent. Neither encoding nor decoding checks it.\n"
             ),
             "{s}"
         );
         assert!(
             s.contains(
-                "/// Field Group (tag 0).\n    /// Required when `endpoint` is absent. \
-                 Neither encoding nor decoding checks it.\n"
+                "/// Field Group (tag 0).\n    /// Required when `endpoint` is absent, and must be \
+                 omitted when it is present. Neither encoding nor decoding checks it.\n"
             ),
             "{s}"
         );
-        assert_eq!(s.matches("Required when").count(), 2, "{s}");
+        assert!(
+            s.contains(
+                "/// Field TargetPercentage (tag 0).\n    /// Required when `target_reheat` is \
+                 present. Neither encoding nor decoding checks it.\n"
+            ),
+            "{s}"
+        );
+        assert_eq!(s.matches("Required when").count(), 3, "{s}");
+        assert_eq!(s.matches("must be omitted").count(), 2, "{s}");
     }
 }

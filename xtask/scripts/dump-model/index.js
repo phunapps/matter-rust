@@ -31,7 +31,8 @@
 //     and deprecated? (true only) on a feature, attribute or command the
 //     Matter 1.4 supplement added (see the supplement section);
 //   globalName? on a datatype inlined from a lowercase model global;
-//   keptFor? on an enum KEEP_DATATYPES keeps (what raw integer it interprets).
+//   keptFor? on an enum KEEP_DATATYPES keeps (what raw integer it interprets);
+//   requiredWhen? { field, present, exclusive } (see presenceDependency).
 //
 // All exclusions are recorded in meta.excluded with a reason. Hard error
 // on: an allowlisted cluster the model doesn't expose, a missing
@@ -535,35 +536,41 @@ for (const [text, want] of [
 // whose TargetReheat comes without TargetPercentage (InvalidCommand, at
 // v1.4.2.0 and master). `[F]` (optional when F is present) and comparisons
 // (`Status == Success`) are not presence dependencies. `siblings` holds the
-// other fields' names.
+// other fields' names. `exclusive` is true when the term is the whole
+// conformance (no otherwise branch): Matter Core spec 7.3 then makes the field
+// disallowed whenever the term does not hold (chip's Binding server refuses a
+// target carrying Group with Endpoint or Node: ConstraintError, at v1.4.2.0
+// and master), so the emitter also says it must be omitted in the opposite
+// case. An otherwise-form (`TargetReheat, [TP]`) constrains the first case only.
 function presenceDependency(el, siblings) {
   const ast = el.effectiveConformance && el.effectiveConformance.ast;
   if (!ast) return null;
-  const first = ast.type === Conformance.Special.Otherwise ? ast.param[0] : ast;
+  const otherwise = ast.type === Conformance.Special.Otherwise;
+  const first = otherwise ? ast.param[0] : ast;
   if (!first) return null;
   if (first.type === Conformance.Special.Name && siblings.has(first.param)) {
-    return { field: first.param, present: true };
+    return { field: first.param, present: true, exclusive: !otherwise };
   }
   if (
     first.type === Conformance.Operator.NOT &&
     first.param.type === Conformance.Special.Name &&
     siblings.has(first.param.param)
   ) {
-    return { field: first.param.param, present: false };
+    return { field: first.param.param, present: false, exclusive: !otherwise };
   }
   return null;
 }
 
 // Load-time self-check of presenceDependency over hand-written conformance
 // forms (parsed by @matter/model itself), siblings A and B. Rows:
-// conformance, expected (`field/present`, '' = none).
+// conformance, expected (`field/present/exclusive`, '' = none).
 {
   const siblings = new Set(['A', 'B']);
   for (const [text, want] of [
-    ['A', 'A/true'],
-    ['!A', 'A/false'],
-    ['A, [TP]', 'A/true'],
-    ['!B, O', 'B/false'],
+    ['A', 'A/true/true'],
+    ['!A', 'A/false/true'],
+    ['A, [TP]', 'A/true/false'],
+    ['!B, O', 'B/false/false'],
     ['[A]', ''],
     ['TP', ''],
     ['A == 1', ''],
@@ -573,7 +580,7 @@ function presenceDependency(el, siblings) {
     ['TP, A', ''],
   ]) {
     const dep = presenceDependency({ effectiveConformance: new Conformance(text) }, siblings);
-    const got = dep ? `${dep.field}/${dep.present}` : '';
+    const got = dep ? `${dep.field}/${dep.present}/${dep.exclusive}` : '';
     if (got !== want) fail(`presenceDependency self-check: \`${text}\` gave '${got}', want '${want}'`);
   }
 }

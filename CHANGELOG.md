@@ -339,11 +339,15 @@ The codegen now generates only what a client can use:
   and a change is still a breaking release. EnergyPreference, added below,
   is the first.
 - A struct field whose presence depends on another field of the struct
-  says so: "Required when `endpoint` is present" (or "absent"). Nothing
-  checks it. Today: Binding `TargetStruct` (`node`, `group`, `endpoint`),
+  says so: "Required when `endpoint` is present" (or "absent"). When the
+  specification also disallows it in the opposite case (a bare conformance
+  such as `Endpoint` or `!Group`), the note adds "and must be omitted when
+  it is absent" (or "present"): chip's Binding server refuses a target
+  that carries `group` with `endpoint` or `node`. Nothing checks it on our
+  side. Today: Binding `TargetStruct` (`node`, `group`, `endpoint`) and
   ElectricalPowerMeasurement `MeasurementRangeStruct` (the start, min and
-  max timestamps and systimes) and, below, WaterHeaterManagement
-  `WaterHeaterBoostInfoStruct.target_percentage`.
+  max timestamps and systimes), both with the omitted half, and, below,
+  WaterHeaterManagement `WaterHeaterBoostInfoStruct.target_percentage`.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
