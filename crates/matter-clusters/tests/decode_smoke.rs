@@ -2929,3 +2929,76 @@ fn thermostat_weekly_schedule_response_missing_list_is_an_error() {
         Err(ClusterError::MissingField("Transitions"))
     ));
 }
+
+// ---- M9-A3 B4: WindowCovering absolute position (Matter 1.4 ABS, supplemented) ----
+//
+// Feature ABS (bit 3, provisional in 1.4.2): the physical and installed limits,
+// CurrentPositionLift/Tilt (nullable), GoToLiftValue / GoToTiltValue
+// (1.4.2 WindowCovering.xml). The 1.5.1 model removed them; the dump adds them
+// from supplement-1.4.json.
+
+#[test]
+fn window_covering_absolute_position_decodes_and_encodes() {
+    use clusters::window_covering::{
+        attribute_id as a, command_id, decode_current_position_lift, decode_current_position_tilt,
+        decode_installed_closed_limit_lift, decode_installed_closed_limit_tilt,
+        decode_installed_open_limit_lift, decode_installed_open_limit_tilt,
+        decode_physical_closed_limit_lift, decode_physical_closed_limit_tilt,
+        encode_go_to_lift_value, encode_go_to_tilt_value, Feature,
+    };
+    assert_eq!(Feature::ABS.bits(), 1 << 3);
+    assert_eq!(
+        [
+            a::PHYSICAL_CLOSED_LIMIT_LIFT,
+            a::PHYSICAL_CLOSED_LIMIT_TILT,
+            a::CURRENT_POSITION_LIFT,
+            a::CURRENT_POSITION_TILT,
+            a::INSTALLED_OPEN_LIMIT_LIFT,
+            a::INSTALLED_CLOSED_LIMIT_LIFT,
+            a::INSTALLED_OPEN_LIMIT_TILT,
+            a::INSTALLED_CLOSED_LIMIT_TILT
+        ],
+        [0x0001, 0x0002, 0x0003, 0x0004, 0x0010, 0x0011, 0x0012, 0x0013]
+    );
+    assert_eq!(
+        (command_id::GO_TO_LIFT_VALUE, command_id::GO_TO_TILT_VALUE),
+        (0x04, 0x07)
+    );
+    // chip all-clusters' defaults (all-clusters-app.matter, both refs).
+    assert_eq!(
+        decode_physical_closed_limit_lift(&uint_attr(0xFFFF)).unwrap(),
+        0xFFFF
+    );
+    assert_eq!(
+        decode_physical_closed_limit_tilt(&uint_attr(0xFFFF)).unwrap(),
+        0xFFFF
+    );
+    assert_eq!(decode_installed_open_limit_lift(&uint_attr(0)).unwrap(), 0);
+    assert_eq!(
+        decode_installed_closed_limit_lift(&uint_attr(0xFFFF)).unwrap(),
+        0xFFFF
+    );
+    assert_eq!(decode_installed_open_limit_tilt(&uint_attr(0)).unwrap(), 0);
+    assert_eq!(
+        decode_installed_closed_limit_tilt(&uint_attr(0xFFFF)).unwrap(),
+        0xFFFF
+    );
+    // The current positions are nullable (unknown position).
+    assert_eq!(
+        decode_current_position_lift(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        decode_current_position_tilt(&uint_attr(0x7FFF)).unwrap(),
+        Nullable::Value(0x7FFF)
+    );
+    assert!(decode_installed_open_limit_lift(&uint_attr(0x1_0000)).is_err());
+    assert_eq!(
+        encode_go_to_lift_value(250),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 250).unwrap())
+    );
+    assert_eq!(
+        encode_go_to_tilt_value(900),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 900).unwrap())
+    );
+}

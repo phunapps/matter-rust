@@ -1065,7 +1065,7 @@ fn choice_fields(v: &Value) -> Vec<(String, String, String)> {
 /// commands, events and fields whose conformance is `P` or starts with `P`
 /// (`P, WATTS`). Each gets a generated "Provisional" rustdoc line. A new entry
 /// (a widening, a model upgrade) is a doc change to review.
-const PROVISIONAL: [(&str, &str, &str); 14] = [
+const PROVISIONAL: [(&str, &str, &str); 25] = [
     ("BasicInformation", "attribute", "ConfigurationVersion"),
     (
         "BridgedDeviceBasicInformation",
@@ -1092,6 +1092,18 @@ const PROVISIONAL: [(&str, &str, &str); 14] = [
     ("MicrowaveOvenControl", "attribute", "SelectedWattIndex"),
     ("MicrowaveOvenControl", "attribute", "SupportedWatts"),
     ("MicrowaveOvenControl", "feature", "WATTS"),
+    // M9-A3 B4, WindowCovering ABS (supplemented; provisional in 1.4.2):
+    ("WindowCovering", "attribute", "CurrentPositionLift"),
+    ("WindowCovering", "attribute", "CurrentPositionTilt"),
+    ("WindowCovering", "attribute", "InstalledClosedLimitLift"),
+    ("WindowCovering", "attribute", "InstalledClosedLimitTilt"),
+    ("WindowCovering", "attribute", "InstalledOpenLimitLift"),
+    ("WindowCovering", "attribute", "InstalledOpenLimitTilt"),
+    ("WindowCovering", "attribute", "PhysicalClosedLimitLift"),
+    ("WindowCovering", "attribute", "PhysicalClosedLimitTilt"),
+    ("WindowCovering", "command", "GoToLiftValue"),
+    ("WindowCovering", "command", "GoToTiltValue"),
+    ("WindowCovering", "feature", "ABS"),
 ];
 
 /// Fields in a choice-conformance group (`O.a`, `O.a+`, `[F].b+`): the
@@ -1196,7 +1208,7 @@ fn service_area_location_struct_records_its_global_name() {
 /// `xtask/scripts/dump-model/supplement-1.4.json` (spec §2, rev 6), as
 /// `(cluster, "<Feature|Attribute|Command>.<name>")`. Each is checked against
 /// chip's 1.4.2 XML by `scripts/chip-xml-conformance.py` (class S).
-const SUPPLEMENTED: [(&str, &str); 8] = [
+const SUPPLEMENTED: [(&str, &str); 19] = [
     ("Thermostat", "Attribute.NumberOfDailyTransitions"),
     ("Thermostat", "Attribute.NumberOfWeeklyTransitions"),
     ("Thermostat", "Attribute.StartOfWeek"),
@@ -1205,6 +1217,17 @@ const SUPPLEMENTED: [(&str, &str); 8] = [
     ("Thermostat", "Command.GetWeeklyScheduleResponse"),
     ("Thermostat", "Command.SetWeeklySchedule"),
     ("Thermostat", "Feature.SCH"),
+    ("WindowCovering", "Attribute.CurrentPositionLift"),
+    ("WindowCovering", "Attribute.CurrentPositionTilt"),
+    ("WindowCovering", "Attribute.InstalledClosedLimitLift"),
+    ("WindowCovering", "Attribute.InstalledClosedLimitTilt"),
+    ("WindowCovering", "Attribute.InstalledOpenLimitLift"),
+    ("WindowCovering", "Attribute.InstalledOpenLimitTilt"),
+    ("WindowCovering", "Attribute.PhysicalClosedLimitLift"),
+    ("WindowCovering", "Attribute.PhysicalClosedLimitTilt"),
+    ("WindowCovering", "Command.GoToLiftValue"),
+    ("WindowCovering", "Command.GoToTiltValue"),
+    ("WindowCovering", "Feature.ABS"),
 ];
 
 #[test]

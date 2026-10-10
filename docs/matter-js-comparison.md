@@ -133,7 +133,6 @@ These are language-idiomatic differences. They do not affect interop.
   matter.js 0.16.11 calls it `TlvLocationdesc` (`globals`). The wire format is
   the same. Each cluster that uses it gets its own copy of the struct, as with
   `MeasurementAccuracyStruct`.
-
 - **Matter 1.4 elements the 1.5.1 model removed are generated** (M9-A3 B4).
   The dump reads `@matter/model` 0.17.1 (Matter 1.5.1), which dropped
   Thermostat's weekly schedule (feature SCH: StartOfWeek,

@@ -703,6 +703,61 @@
         "cluster": "Thermostat",
         "element": "Feature.SCH",
         "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH); removed in Thermostat revision 10 (1.5); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.CurrentPositionLift",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:348; controller-clusters.matter `provisional readonly attribute optional nullable int16u currentPositionLift = 3`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.CurrentPositionTilt",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:372; controller-clusters.matter `provisional readonly attribute optional nullable int16u currentPositionTilt = 4`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.InstalledClosedLimitLift",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:514; controller-clusters.matter `provisional readonly attribute optional int16u installedClosedLimitLift = 17`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.InstalledClosedLimitTilt",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:548; controller-clusters.matter `provisional readonly attribute optional int16u installedClosedLimitTilt = 19`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.InstalledOpenLimitLift",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:497; controller-clusters.matter `provisional readonly attribute optional int16u installedOpenLimitLift = 16`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.InstalledOpenLimitTilt",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:531; controller-clusters.matter `provisional readonly attribute optional int16u installedOpenLimitTilt = 18`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.PhysicalClosedLimitLift",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:320; controller-clusters.matter `provisional readonly attribute optional int16u physicalClosedLimitLift = 1`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Attribute.PhysicalClosedLimitTilt",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:334; controller-clusters.matter `provisional readonly attribute optional int16u physicalClosedLimitTilt = 2`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Command.GoToLiftValue",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:607; controller-clusters.matter `command GoToLiftValue(GoToLiftValueRequest): DefaultSuccess = 4`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Command.GoToTiltValue",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:645; controller-clusters.matter `command GoToTiltValue(GoToTiltValueRequest): DefaultSuccess = 7`"
+      },
+      {
+        "cluster": "WindowCovering",
+        "element": "Feature.ABS",
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:85 (feature bit 3 ABS, provisional in 1.4.2); removed in 1.5.1; controller-clusters.matter keeps kAbsolutePosition = 0x8"
       }
     ]
   },
@@ -17836,6 +17891,13 @@
           "description": "Position aware lift control is supported."
         },
         {
+          "bit": 3,
+          "code": "ABS",
+          "name": "AbsolutePosition",
+          "description": "Absolute positioning is supported.",
+          "provisional": true
+        },
+        {
           "bit": 4,
           "code": "PA_TL",
           "name": "PositionAwareTilt",
@@ -17852,6 +17914,50 @@
           "optional": false,
           "writable": false,
           "description": "This attribute shall identify the type of window covering.\nIf the window covering supports the LF feature and not the TL feature, the following types shall be used as the constraint for this attribute:\nIf the window covering supports the TL feature and not the LF feature, the following types shall be used as the constraint for this attribute:\nIf the window covering supports both the LF and TL features, the following types are allowed to be used:"
+        },
+        {
+          "id": 1,
+          "name": "PhysicalClosedLimitLift",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
+          "id": 2,
+          "name": "PhysicalClosedLimitTilt",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
+          "id": 3,
+          "name": "CurrentPositionLift",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
+          "id": 4,
+          "name": "CurrentPositionTilt",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
         },
         {
           "id": 5,
@@ -17964,6 +18070,50 @@
           "description": "Indicates the actual position as a percentage with a minimal step of 0.01%. E.g Max 10000 equals 100.00%."
         },
         {
+          "id": 16,
+          "name": "InstalledOpenLimitLift",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
+          "id": 17,
+          "name": "InstalledClosedLimitLift",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
+          "id": 18,
+          "name": "InstalledOpenLimitTilt",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
+          "id": 19,
+          "name": "InstalledClosedLimitTilt",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null,
+          "provisional": true
+        },
+        {
           "id": 23,
           "name": "Mode",
           "type": "ModeBitmap",
@@ -18007,6 +18157,24 @@
           "fields": []
         },
         {
+          "id": 4,
+          "name": "GoToLiftValue",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "LiftValue",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ],
+          "provisional": true
+        },
+        {
           "id": 5,
           "name": "GoToLiftPercentage",
           "direction": "request",
@@ -18022,6 +18190,24 @@
               "description": null
             }
           ]
+        },
+        {
+          "id": 7,
+          "name": "GoToTiltValue",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TiltValue",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ],
+          "provisional": true
         },
         {
           "id": 8,

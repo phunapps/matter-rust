@@ -14,19 +14,6 @@
 # a decision to leave the element out for good: the reason says why it is
 # absent today.
 
-# WindowCovering AbsolutePosition (ABS, bit 3) is provisional in 1.4.2.
-WindowCovering.Feature.ABS provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.PhysicalClosedLimitLift provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.PhysicalClosedLimitTilt provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.CurrentPositionLift provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.CurrentPositionTilt provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.InstalledOpenLimitLift provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.InstalledClosedLimitLift provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.InstalledOpenLimitTilt provisionalConform (ABS) in 1.4.2
-WindowCovering.Attribute.InstalledClosedLimitTilt provisionalConform (ABS) in 1.4.2
-WindowCovering.Command.GoToLiftValue provisionalConform (ABS) in 1.4.2
-WindowCovering.Command.GoToTiltValue provisionalConform (ABS) in 1.4.2
-
 # DoorLock legacy PIN/RFID/user-status/user-type commands (!USR).
 DoorLock.Command.SetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
 DoorLock.Command.GetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)

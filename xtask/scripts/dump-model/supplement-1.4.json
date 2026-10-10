@@ -58,6 +58,66 @@
           "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1347; controller-clusters.matter `command access(invoke: manage) ClearWeeklySchedule(): DefaultSuccess = 3`"
         }
       ]
+    },
+    "WindowCovering": {
+      "reviewedModelRevision": 8,
+      "features": [
+        {
+          "bit": 3, "code": "ABS", "title": "AbsolutePosition", "conformance": "P, O",
+          "details": "Absolute positioning is supported.",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:85 (feature bit 3 ABS, provisional in 1.4.2); removed in 1.5.1; controller-clusters.matter keeps kAbsolutePosition = 0x8"
+        }
+      ],
+      "attributes": [
+        {
+          "id": "0x0001", "name": "PhysicalClosedLimitLift", "type": "uint16", "conformance": "P, [LF & PA_LF & ABS]", "access": "R V", "quality": "F",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:320; controller-clusters.matter `provisional readonly attribute optional int16u physicalClosedLimitLift = 1`"
+        },
+        {
+          "id": "0x0002", "name": "PhysicalClosedLimitTilt", "type": "uint16", "conformance": "P, [TL & PA_TL & ABS]", "access": "R V", "quality": "F",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:334; controller-clusters.matter `provisional readonly attribute optional int16u physicalClosedLimitTilt = 2`"
+        },
+        {
+          "id": "0x0003", "name": "CurrentPositionLift", "type": "uint16", "conformance": "P, [LF & PA_LF & ABS]", "access": "R V", "quality": "X N",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:348; controller-clusters.matter `provisional readonly attribute optional nullable int16u currentPositionLift = 3`"
+        },
+        {
+          "id": "0x0004", "name": "CurrentPositionTilt", "type": "uint16", "conformance": "P, [TL & PA_TL & ABS]", "access": "R V", "quality": "X N",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:372; controller-clusters.matter `provisional readonly attribute optional nullable int16u currentPositionTilt = 4`"
+        },
+        {
+          "id": "0x0010", "name": "InstalledOpenLimitLift", "type": "uint16", "conformance": "P, LF & PA_LF & ABS", "access": "R V", "quality": "N",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:497; controller-clusters.matter `provisional readonly attribute optional int16u installedOpenLimitLift = 16`"
+        },
+        {
+          "id": "0x0011", "name": "InstalledClosedLimitLift", "type": "uint16", "conformance": "P, LF & PA_LF & ABS", "access": "R V", "quality": "N",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:514; controller-clusters.matter `provisional readonly attribute optional int16u installedClosedLimitLift = 17`"
+        },
+        {
+          "id": "0x0012", "name": "InstalledOpenLimitTilt", "type": "uint16", "conformance": "P, TL & PA_TL & ABS", "access": "R V", "quality": "N",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:531; controller-clusters.matter `provisional readonly attribute optional int16u installedOpenLimitTilt = 18`"
+        },
+        {
+          "id": "0x0013", "name": "InstalledClosedLimitTilt", "type": "uint16", "conformance": "P, TL & PA_TL & ABS", "access": "R V", "quality": "N",
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:548; controller-clusters.matter `provisional readonly attribute optional int16u installedClosedLimitTilt = 19`"
+        }
+      ],
+      "commands": [
+        {
+          "id": "0x04", "name": "GoToLiftValue", "direction": "request", "response": "status", "conformance": "P, [LF & ABS]", "access": "O",
+          "fields": [
+            { "id": 0, "name": "LiftValue", "type": "uint16", "conformance": "M" }
+          ],
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:607; controller-clusters.matter `command GoToLiftValue(GoToLiftValueRequest): DefaultSuccess = 4`"
+        },
+        {
+          "id": "0x07", "name": "GoToTiltValue", "direction": "request", "response": "status", "conformance": "P, [TL & ABS]", "access": "O",
+          "fields": [
+            { "id": 0, "name": "TiltValue", "type": "uint16", "conformance": "M" }
+          ],
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:645; controller-clusters.matter `command GoToTiltValue(GoToTiltValueRequest): DefaultSuccess = 7`"
+        }
+      ]
     }
   }
 }

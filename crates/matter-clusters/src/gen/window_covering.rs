@@ -27,8 +27,14 @@ pub mod command_id {
     pub const DOWN_OR_CLOSE: u32 = 0x01;
     /// `StopMotion` (request).
     pub const STOP_MOTION: u32 = 0x02;
+    /// `GoToLiftValue` (request).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const GO_TO_LIFT_VALUE: u32 = 0x04;
     /// `GoToLiftPercentage` (request).
     pub const GO_TO_LIFT_PERCENTAGE: u32 = 0x05;
+    /// `GoToTiltValue` (request).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const GO_TO_TILT_VALUE: u32 = 0x07;
     /// `GoToTiltPercentage` (request).
     pub const GO_TO_TILT_PERCENTAGE: u32 = 0x08;
 }
@@ -37,6 +43,18 @@ pub mod command_id {
 pub mod attribute_id {
     /// `Type`.
     pub const TYPE: u32 = 0x0000;
+    /// `PhysicalClosedLimitLift`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const PHYSICAL_CLOSED_LIMIT_LIFT: u32 = 0x0001;
+    /// `PhysicalClosedLimitTilt`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const PHYSICAL_CLOSED_LIMIT_TILT: u32 = 0x0002;
+    /// `CurrentPositionLift`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const CURRENT_POSITION_LIFT: u32 = 0x0003;
+    /// `CurrentPositionTilt`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const CURRENT_POSITION_TILT: u32 = 0x0004;
     /// `NumberOfActuationsLift`.
     pub const NUMBER_OF_ACTUATIONS_LIFT: u32 = 0x0005;
     /// `NumberOfActuationsTilt`.
@@ -59,6 +77,18 @@ pub mod attribute_id {
     pub const CURRENT_POSITION_LIFT_PERCENT100THS: u32 = 0x000E;
     /// `CurrentPositionTiltPercent100ths`.
     pub const CURRENT_POSITION_TILT_PERCENT100THS: u32 = 0x000F;
+    /// `InstalledOpenLimitLift`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const INSTALLED_OPEN_LIMIT_LIFT: u32 = 0x0010;
+    /// `InstalledClosedLimitLift`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const INSTALLED_CLOSED_LIMIT_LIFT: u32 = 0x0011;
+    /// `InstalledOpenLimitTilt`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const INSTALLED_OPEN_LIMIT_TILT: u32 = 0x0012;
+    /// `InstalledClosedLimitTilt`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const INSTALLED_CLOSED_LIMIT_TILT: u32 = 0x0013;
     /// `Mode`.
     pub const MODE: u32 = 0x0017;
     /// `SafetyStatus`.
@@ -75,6 +105,9 @@ bitflags::bitflags! {
         const TL = 1 << 1;
         /// PositionAwareLift (PA_LF).
         const PA_LF = 1 << 2;
+        /// AbsolutePosition (ABS).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
+        const ABS = 1 << 3;
         /// PositionAwareTilt (PA_TL).
         const PA_TL = 1 << 4;
     }
@@ -399,6 +432,98 @@ pub fn decode_type(tlv: &[u8]) -> Result<TypeEnum, ClusterError> {
     }
 }
 
+/// Decode the `PhysicalClosedLimitLift` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_physical_closed_limit_lift(tlv: &[u8]) -> Result<u16, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => {
+            Ok(u16::try_from(v)
+                .map_err(|_| ClusterError::InvalidLength("PhysicalClosedLimitLift"))?)
+        }
+        _ => Err(ClusterError::UnexpectedType {
+            context: "PhysicalClosedLimitLift",
+        }),
+    }
+}
+
+/// Decode the `PhysicalClosedLimitTilt` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_physical_closed_limit_tilt(tlv: &[u8]) -> Result<u16, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => {
+            Ok(u16::try_from(v)
+                .map_err(|_| ClusterError::InvalidLength("PhysicalClosedLimitTilt"))?)
+        }
+        _ => Err(ClusterError::UnexpectedType {
+            context: "PhysicalClosedLimitTilt",
+        }),
+    }
+}
+
+/// Decode the `CurrentPositionLift` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_current_position_lift(tlv: &[u8]) -> Result<Nullable<u16>, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Null, ..
+        }) => Ok(Nullable::Null),
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(Nullable::Value(u16::try_from(v).map_err(|_| {
+            ClusterError::InvalidLength("CurrentPositionLift")
+        })?)),
+        _ => Err(ClusterError::UnexpectedType {
+            context: "CurrentPositionLift",
+        }),
+    }
+}
+
+/// Decode the `CurrentPositionTilt` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_current_position_tilt(tlv: &[u8]) -> Result<Nullable<u16>, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Null, ..
+        }) => Ok(Nullable::Null),
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(Nullable::Value(u16::try_from(v).map_err(|_| {
+            ClusterError::InvalidLength("CurrentPositionTilt")
+        })?)),
+        _ => Err(ClusterError::UnexpectedType {
+            context: "CurrentPositionTilt",
+        }),
+    }
+}
+
 /// Decode the `NumberOfActuationsLift` attribute value.
 ///
 /// # Errors
@@ -636,6 +761,90 @@ pub fn decode_current_position_tilt_percent100ths(
     }
 }
 
+/// Decode the `InstalledOpenLimitLift` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_installed_open_limit_lift(tlv: &[u8]) -> Result<u16, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => {
+            Ok(u16::try_from(v)
+                .map_err(|_| ClusterError::InvalidLength("InstalledOpenLimitLift"))?)
+        }
+        _ => Err(ClusterError::UnexpectedType {
+            context: "InstalledOpenLimitLift",
+        }),
+    }
+}
+
+/// Decode the `InstalledClosedLimitLift` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_installed_closed_limit_lift(tlv: &[u8]) -> Result<u16, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(u16::try_from(v)
+            .map_err(|_| ClusterError::InvalidLength("InstalledClosedLimitLift"))?),
+        _ => Err(ClusterError::UnexpectedType {
+            context: "InstalledClosedLimitLift",
+        }),
+    }
+}
+
+/// Decode the `InstalledOpenLimitTilt` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_installed_open_limit_tilt(tlv: &[u8]) -> Result<u16, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => {
+            Ok(u16::try_from(v)
+                .map_err(|_| ClusterError::InvalidLength("InstalledOpenLimitTilt"))?)
+        }
+        _ => Err(ClusterError::UnexpectedType {
+            context: "InstalledOpenLimitTilt",
+        }),
+    }
+}
+
+/// Decode the `InstalledClosedLimitTilt` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_installed_closed_limit_tilt(tlv: &[u8]) -> Result<u16, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(u16::try_from(v)
+            .map_err(|_| ClusterError::InvalidLength("InstalledClosedLimitTilt"))?),
+        _ => Err(ClusterError::UnexpectedType {
+            context: "InstalledClosedLimitTilt",
+        }),
+    }
+}
+
 /// Decode the `Mode` attribute value.
 ///
 /// # Errors
@@ -719,6 +928,22 @@ pub fn encode_stop_motion() -> Vec<u8> {
     buf
 }
 
+/// Encode the `GoToLiftValue` command request payload.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_go_to_lift_value(lift_value: u16) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(lift_value))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
 /// Encode the `GoToLiftPercentage` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
@@ -728,6 +953,22 @@ pub fn encode_go_to_lift_percentage(lift_percent100ths_value: u16) -> Vec<u8> {
     w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     w.put_uint(Tag::Context(0), u64::from(lift_percent100ths_value))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode the `GoToTiltValue` command request payload.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_go_to_tilt_value(tilt_value: u16) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(tilt_value))
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf

@@ -224,6 +224,11 @@ and checked against it:
   and `WeeklyScheduleTransitionStruct`. `WeeklyScheduleTransitionStruct` is
   no longer `#[non_exhaustive]`, so a schedule can be built to send.
   `encode_set_weekly_schedule` is pinned against a matter.js byte vector.
+- **WindowCovering absolute position (feature `ABS`, bit 3):**
+  `PhysicalClosedLimitLift` / `Tilt`, `CurrentPositionLift` / `Tilt`
+  (nullable), `InstalledOpenLimitLift` / `Tilt`, `InstalledClosedLimitLift`
+  / `Tilt`, `encode_go_to_lift_value` and `encode_go_to_tilt_value`. Matter
+  1.4 marks all of them provisional, and their rustdoc says so.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
