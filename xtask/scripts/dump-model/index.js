@@ -415,8 +415,51 @@ function isUnconditionallyMandatory(el) {
   return !!c && c.type === Conformance.Flag.Mandatory;
 }
 
-function dumpField(f, where) {
+// True for a conformance the §3.1 rule relaxes: mandatory under
+// @matter/model's isMandatory (e.g. "[Status == Success], M"), but not an
+// unconditional M, so the field is dumped optional.
+function isConditionalRelaxation(c) {
+  return !!c && c.isMandatory && c.type !== Conformance.Flag.Mandatory;
+}
+
+// Load-time self-check of isConditionalRelaxation over hand-written
+// conformance forms (parsed by @matter/model itself), so a model upgrade that
+// changes isMandatory's meaning fails the dump instead of silently relaxing or
+// tightening fields. Each row: conformance, whether §3.1 relaxes it.
+for (const [text, want] of [
+  ['M', false],
+  ['O', false],
+  ['[Status == Success], M', true],
+  ['M, O', true],
+  ['LT', false],
+  ['[LT]', false],
+  ['LT, O', false],
+  ['P, M', false],
+  ['O.b+', false],
+  ['ErrorStateID >= 128 & ErrorStateID <= 191', false],
+]) {
+  if (isConditionalRelaxation(new Conformance(text)) !== want) {
+    fail(`isConditionalRelaxation self-check: \`${text}\` should ${want ? '' : 'not '}be relaxed by spec §3.1`);
+  }
+}
+
+// Every field the §3.1 rule relaxed in the cluster being dumped, checked and
+// recorded by checkConditionalRelaxations once the cluster's commands and
+// datatypes are known. `role` is where the field lives: `request` /
+// `response` (command fields), `event`, or `struct` (a datatype struct field,
+// `owner` naming the struct).
+let _conditional = [];
+
+function dumpField(f, where, ctx) {
   requireIdNameType(f, where);
+  if (isConditionalRelaxation(f.effectiveConformance)) {
+    _conditional.push({
+      element: `${ctx.element}.${f.name}`,
+      role: ctx.role,
+      owner: ctx.element,
+      conformance: `${f.effectiveConformance}`,
+    });
+  }
   return {
     id: f.id,
     name: f.name,
@@ -474,7 +517,12 @@ function dumpCommand(cmd, clusterName) {
       recordExclusion(clusterName, `${cmd.name}.${c.name}`, 'command-field', 'disallowed');
       return;
     }
-    fields.push(dumpField(c, `${where}.${cmd.name}.field[${i}]`));
+    fields.push(
+      dumpField(c, `${where}.${cmd.name}.field[${i}]`, {
+        element: cmd.name,
+        role: cmd.isResponse ? 'response' : 'request',
+      }),
+    );
   });
   return {
     id: cmd.id,
@@ -500,7 +548,7 @@ function dumpEvent(ev, clusterName) {
       recordExclusion(clusterName, `${ev.name}.${c.name}`, 'event-field', 'disallowed');
       return;
     }
-    fields.push(dumpField(c, `${where}.${ev.name}.field[${i}]`));
+    fields.push(dumpField(c, `${where}.${ev.name}.field[${i}]`, { element: ev.name, role: 'event' }));
   });
   return { id: ev.id, name: ev.name, priority: ev.priority, fields };
 }
@@ -552,7 +600,7 @@ function dumpDatatype(dt, where, nameOverride) {
         return true;
       })
       .map((c, i) => {
-        const field = dumpField(c, `${where}.${dt.name}.field[${i}]`);
+        const field = dumpField(c, `${where}.${dt.name}.field[${i}]`, { element: name, role: 'struct' });
         // Datatype struct fields only: event and command payload fields go
         // through dumpField directly and never get the marker (§5.4: chip
         // drops other fabrics' fabric-sensitive events outright and sends our
@@ -661,6 +709,7 @@ function dumpCluster(entry) {
 
   // Collect synthesized anonymous-struct datatypes for this cluster.
   _synthSink = [];
+  _conditional = [];
   _synthOwner = cluster.name;
 
   const featureNames = new Set(cluster.features.map((f) => f.name));
@@ -799,6 +848,8 @@ function dumpCluster(entry) {
     datatypes,
   );
 
+  checkConditionalRelaxations(cluster.name, commands, datatypes);
+
   // Deterministic ordering for a stable committed artifact.
   attributes.sort((x, y) => x.id - y.id);
   commands.sort((x, y) => x.id - y.id || x.direction.localeCompare(y.direction));
@@ -807,6 +858,63 @@ function dumpCluster(entry) {
   features.sort((x, y) => (x.bit ?? 0) - (y.bit ?? 0));
 
   return { id: cluster.id, name: cluster.name, revision: cluster.revision, features, attributes, commands, events, datatypes };
+}
+
+// Datatype struct names whose fields the Rust emitter ENCODES, mirroring
+// xtask/src/codegen/rustgen/emit_codecs.rs: a struct reachable from a request
+// command's fields (command_encode_reachable_structs), or one whose fields are
+// all scalars (struct_is_write_capable: it gets write_fields/encode).
+const SCALAR_METATYPES = new Set(['boolean', 'integer', 'float', 'string', 'bytes', 'enum', 'bitmap']);
+function encodedStructs(commands, datatypes) {
+  const structs = new Map(datatypes.filter((d) => d.kind === 'struct').map((d) => [d.name, d]));
+  const out = new Set();
+  for (const d of structs.values()) {
+    if (d.fields.every((f) => SCALAR_METATYPES.has(f.metatype))) out.add(d.name);
+  }
+  const queue = [];
+  const consider = (t) => {
+    if (t && structs.has(t)) queue.push(t);
+  };
+  for (const cmd of commands) {
+    if (cmd.direction !== 'request') continue;
+    for (const f of cmd.fields) {
+      consider(f.type);
+      consider(f.entryType);
+    }
+  }
+  const reached = new Set();
+  while (queue.length > 0) {
+    const name = queue.pop();
+    if (reached.has(name)) continue;
+    reached.add(name);
+    out.add(name);
+    for (const f of structs.get(name).fields) {
+      consider(f.type);
+      consider(f.entryType);
+    }
+  }
+  return out;
+}
+
+// M9-A3 (B2 review ruling, landed in B3): the §3.1 rule may relax only fields
+// we DECODE. A relaxed field we SEND — a command request field, or a field of
+// a struct the emitter encodes — would make its encoder take an Option and
+// silently omit a field the model says is mandatory, so the dump stops for a
+// review instead. Every relaxation that passes is recorded in meta.relaxed
+// with class C, so a later batch or a model upgrade that relaxes another
+// field shows up in the clusters.json diff.
+function checkConditionalRelaxations(clusterName, commands, datatypes) {
+  const encoded = encodedStructs(commands, datatypes);
+  for (const r of _conditional) {
+    const sent = r.role === 'request' || (r.role === 'struct' && encoded.has(r.owner));
+    if (sent) {
+      fail(
+        `${clusterName}.${r.element}: conformance "${r.conformance}" is conditional, so spec §3.1 would dump it ` +
+          `optional, but it is a field we send (${r.role === 'request' ? 'a command request field' : `${r.owner} is encoded`}) — review it before relaxing`,
+      );
+    }
+    recordRelaxation(clusterName, r.element, 'C', `conditional conformance "${r.conformance}" (spec §3.1: only an unconditional M is mandatory)`);
+  }
 }
 
 // --- main -----------------------------------------------------------------

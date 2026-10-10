@@ -553,6 +553,24 @@
         "reason": "fabric-sensitive (withheld for other fabrics)"
       },
       {
+        "cluster": "DeviceEnergyManagementMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "DishwasherMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "EnergyEvseMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
         "cluster": "IcdManagement",
         "element": "MonitoringRegistrationStruct.CheckInNodeId",
         "class": "P",
@@ -571,10 +589,46 @@
         "reason": "fabric-sensitive (withheld for other fabrics)"
       },
       {
+        "cluster": "LaundryWasherMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
         "cluster": "ModeSelect",
         "element": "Attribute.StandardNamespace",
         "class": "W",
         "reason": "model type `namespace` is enum8; 1.4.2 ModeSelect.xml and chip mode-select-cluster.xml declare enum16"
+      },
+      {
+        "cluster": "OvenMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "RefrigeratorAndTemperatureControlledCabinetMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "RvcCleanMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "RvcRunMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "WaterHeaterMode",
+        "element": "ChangeToModeResponse.StatusText",
+        "class": "C",
+        "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
       }
     ]
   },

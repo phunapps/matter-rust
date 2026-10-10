@@ -633,6 +633,7 @@ fn every_relaxation_is_fabric_sensitive_or_a_recorded_widening() {
     for r in relaxed {
         assert!(
             r["class"] == "W"
+                || r["class"] == "C"
                 || (r["class"] == "P"
                     && r["reason"] == "fabric-sensitive (withheld for other fabrics)"),
             "unexpected relaxation {r}"
@@ -700,4 +701,42 @@ fn refrigerator_alarm_drops_what_its_disallowed_reset_feature_gates() {
             "RefrigeratorAlarm {kind} {element} exclusion missing"
         );
     }
+}
+
+// ---- M9-A3 B3: §3.1 relaxations are recorded and never touch what we send ----
+
+#[test]
+fn conditional_conformance_relaxations_are_exactly_the_mode_base_status_texts() {
+    // Spec §3.1 relaxes a field whose conformance is mandatory but not an
+    // unconditional M. The dump records each one in meta.relaxed with class C
+    // and stops if one is a field we send (a request field, or a field of an
+    // encoded struct). Today: ChangeToModeResponse.StatusText ("[Status ==
+    // Success], M") in the nine generated ModeBase derivatives with
+    // ChangeToMode, and nothing else. A new entry here (a later batch, a
+    // model upgrade) is a decoder change to review.
+    let v = load();
+    let mut got: Vec<(&str, &str)> = v["meta"]["relaxed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["class"] == "C")
+        .map(|r| {
+            assert_eq!(
+                r["reason"],
+                "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)",
+                "{r}"
+            );
+            (
+                r["cluster"].as_str().unwrap(),
+                r["element"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    got.sort_unstable();
+    let mut want: Vec<(&str, &str)> = MODE_BASE_WITH_CHANGE_TO_MODE
+        .iter()
+        .map(|c| (*c, "ChangeToModeResponse.StatusText"))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(got, want);
 }
