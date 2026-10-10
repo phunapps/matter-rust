@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 74] = [
+const TARGET_CLUSTERS: [&str; 75] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -109,6 +109,7 @@ const TARGET_CLUSTERS: [&str; 74] = [
     // M9-A3 B4, safety sensors:
     "SmokeCoAlarm",
     "BooleanStateConfiguration",
+    "ValveConfigurationAndControl",
 ];
 
 fn load() -> Value {
@@ -395,7 +396,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 21] = [
+const EVENT_CLUSTERS: [&str; 22] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -424,6 +425,7 @@ const EVENT_CLUSTERS: [&str; 21] = [
     // M9-A3 B4, safety sensors:
     "SmokeCoAlarm",
     "BooleanStateConfiguration",
+    "ValveConfigurationAndControl",
 ];
 
 #[test]
@@ -1425,5 +1427,26 @@ fn safety_sensor_events_keep_their_payload_shapes() {
     assert_eq!(
         field_optionality(&bsc["events"][1]["fields"]),
         [("SensorFault", false)]
+    );
+}
+
+#[test]
+fn valve_open_fields_are_optional_and_open_duration_nullable() {
+    // OpenDuration and TargetLevel are both optional in 1.4.2 and the model;
+    // OpenDuration is also nullable (null = stay open until Close), so the
+    // encoder takes `Option<Nullable<u32>>`. The event's ValveLevel is
+    // LVL-gated, so optional.
+    let v = load();
+    let c = cluster(&v, "ValveConfigurationAndControl");
+    let open = command(c, "Open");
+    assert_eq!(
+        field_optionality(&open["fields"]),
+        [("OpenDuration", true), ("TargetLevel", true)]
+    );
+    assert_eq!(open["fields"][0]["nullable"], true);
+    assert_eq!(open["fields"][1]["nullable"], false);
+    assert_eq!(
+        field_optionality(&c["events"][0]["fields"]),
+        [("ValveState", false), ("ValveLevel", true)]
     );
 }

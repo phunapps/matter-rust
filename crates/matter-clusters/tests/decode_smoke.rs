@@ -3192,3 +3192,122 @@ fn boolean_state_configuration_decodes_and_commands_encode() {
     .unwrap();
     assert_eq!(f.sensor_fault, SensorFaultBitmap::GENERAL_FAULT);
 }
+
+// ---- M9-A3 B4: ValveConfigurationAndControl -------------------------------
+//
+// 1.4.2 ValveConfigurationControl.xml: nullable durations, states and levels,
+// writable DefaultOpenDuration (nullable) and DefaultOpenLevel, Open (two
+// optional fields, OpenDuration also nullable) and Close, events
+// ValveStateChanged { ValveState, ValveLevel? } and ValveFault.
+
+#[test]
+fn valve_attributes_decode_and_writes_encode() {
+    use clusters::valve_configuration_and_control::{
+        decode_auto_close_time, decode_current_level, decode_current_state,
+        decode_default_open_duration, decode_default_open_level, decode_level_step,
+        decode_open_duration, decode_remaining_duration, decode_target_level, decode_target_state,
+        decode_valve_fault, encode_default_open_duration, encode_default_open_level, Feature,
+        StatusCodeEnum, ValveFaultBitmap, ValveStateEnum,
+    };
+    assert_eq!(
+        (Feature::TS | Feature::LVL).bits(),
+        3,
+        "all-clusters' features"
+    );
+    // A closed valve with no countdown: chip nulls OpenDuration and
+    // RemainingDuration (and AutoCloseTime with TS) on Close.
+    assert_eq!(decode_open_duration(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_remaining_duration(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        decode_auto_close_time(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        decode_auto_close_time(&uint_attr(0x0006_1A2B_3C4D_5E6F)).unwrap(),
+        Nullable::Value(0x0006_1A2B_3C4D_5E6F)
+    );
+    assert_eq!(
+        decode_remaining_duration(&uint_attr(59)).unwrap(),
+        Nullable::Value(59)
+    );
+    assert_eq!(
+        decode_current_state(&uint_attr(2)).unwrap(),
+        Nullable::Value(ValveStateEnum::Transitioning)
+    );
+    assert_eq!(decode_target_state(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_current_level(&uint_attr(50)).unwrap(),
+        Nullable::Value(50)
+    );
+    assert_eq!(decode_target_level(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(decode_level_step(&uint_attr(2)).unwrap(), 2);
+    assert_eq!(decode_default_open_level(&uint_attr(100)).unwrap(), 100);
+    assert_eq!(
+        decode_valve_fault(&uint_attr(0b10_0001)).unwrap(),
+        ValveFaultBitmap::GENERAL_FAULT | ValveFaultBitmap::CURRENT_EXCEEDED
+    );
+    for v in [Nullable::Null, Nullable::Value(30)] {
+        assert_eq!(
+            decode_default_open_duration(&encode_default_open_duration(v)).unwrap(),
+            v
+        );
+    }
+    assert_eq!(encode_default_open_level(50), uint_attr(50));
+    // The cluster-specific status chip answers Open/Close with during a fault.
+    assert_eq!(
+        StatusCodeEnum::from_raw(2),
+        StatusCodeEnum::FailureDueToFault
+    );
+}
+
+#[test]
+fn valve_commands_encode_and_events_decode() {
+    use clusters::valve_configuration_and_control::{
+        encode_close, encode_open, ValveFaultBitmap, ValveFaultEvent, ValveStateChangedEvent,
+        ValveStateEnum,
+    };
+    // OpenDuration: absent (use DefaultOpenDuration), null (open until
+    // closed) and a value are three different requests.
+    assert_eq!(encode_open(None, None), [0x15, 0x18]);
+    assert_eq!(
+        encode_open(Some(Nullable::Value(60)), None),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 60).unwrap())
+    );
+    assert_eq!(
+        encode_open(Some(Nullable::Null), Some(50)),
+        struct_of(&|w| {
+            w.put_null(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(1), 50).unwrap();
+        })
+    );
+    assert_eq!(encode_close(), [0x15, 0x18]);
+    // v1.4.2.0's server sends ValveState only; master adds ValveLevel with LVL.
+    let e = ValveStateChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!((e.valve_state, e.valve_level), (ValveStateEnum::Open, None));
+    let e = ValveStateChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (e.valve_state, e.valve_level),
+        (ValveStateEnum::Closed, Some(0))
+    );
+    let f = ValveFaultEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(f.valve_fault, ValveFaultBitmap::GENERAL_FAULT);
+    assert!(matches!(
+        ValveStateChangedEvent::decode(&struct_of(&|_| {})),
+        Err(matter_clusters::error::ClusterError::MissingField(
+            "ValveState"
+        ))
+    ));
+}

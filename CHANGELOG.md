@@ -281,6 +281,13 @@ The codegen now generates only what a client can use:
   `encode_current_sensitivity_level`, `encode_suppress_alarm` and
   `encode_enable_disable_alarm`. `AlarmsStateChanged.alarms_suppressed` is
   an `Option`: devices send it only with the alarm-suppress feature.
+- **ValveConfigurationAndControl (0x0081)**, with its `ValveStateChanged`
+  and `ValveFault` events: every attribute, the writers for
+  `DefaultOpenDuration` and `DefaultOpenLevel`, `encode_open` and
+  `encode_close`. `encode_open`'s `open_duration` is an
+  `Option<Nullable<u32>>`: `None` uses the valve's DefaultOpenDuration,
+  `Some(Nullable::Null)` opens it until it is closed. Pinned against a
+  matter.js byte vector.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

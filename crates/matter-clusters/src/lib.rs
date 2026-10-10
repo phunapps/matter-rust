@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 74 clusters are generated today. The full list is [`clusters`]; by area:
+//! 75 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -61,6 +61,7 @@
 //!   generated as `service_area::LocationDescriptorStruct`).
 //! - **Safety sensors:** `SmokeCoAlarm`, `BooleanStateConfiguration` (with
 //!   their events).
+//! - **Valves:** `ValveConfigurationAndControl` (with its events).
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

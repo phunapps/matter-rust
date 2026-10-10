@@ -34,6 +34,10 @@ import { TemperatureControl } from '@matter/types/clusters/temperature-control';
 // supplement-1.4.json (M9-A3 B4): an oracle independent of the supplement.
 import { Thermostat } from '@matter/types/clusters/thermostat';
 
+// matter.js's own ValveConfigurationAndControl request schema (M9-A3 B4): the
+// first request field that is both optional and nullable.
+import { ValveConfigurationAndControl } from '@matter/types/clusters/valve-configuration-and-control';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -327,6 +331,24 @@ cmd('thermostat', 'cmd_set_weekly_schedule.json',
       { transitionTime: 1410, heatSetpoint: 1600, coolSetpoint: null },
     ],
   }));
+
+// ---------------------------------------------------------------------------
+// ValveConfigurationAndControl (0x0081) Open (0x00) — M9-A3 B4. The first
+// request field that is optional AND nullable (OpenDuration: absent = use
+// DefaultOpenDuration, null = stay open until closed, a value = seconds), here
+// sent as TLV null, next to an optional TargetLevel. Encoded with matter.js's
+// own TlvOpenRequest; @matter/types 0.16.11 and the 0.17.1 model agree on both
+// fields.
+// ---------------------------------------------------------------------------
+
+cmd('valve_configuration_and_control', 'cmd_open_null_duration.json',
+  { cluster: 'ValveConfigurationAndControl', cluster_id: 0x81, command: 'Open', command_id: 0x00,
+    fields: [
+      { name: 'OpenDuration', id: 0, value: null },
+      { name: 'TargetLevel', id: 1, value: 50 },
+    ],
+    note: 'an optional nullable request field sent as null (open until closed), TargetLevel 50 (encoded with matter.js TlvOpenRequest)' },
+  ValveConfigurationAndControl.TlvOpenRequest.encode({ openDuration: null, targetLevel: 50 }));
 
 // ---------------------------------------------------------------------------
 // GeneralDiagnostics (0x0033) NetworkInterfaces (0x00) — list<NetworkInterface>.

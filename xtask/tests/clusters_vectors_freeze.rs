@@ -39,13 +39,14 @@ const ATTR_VECTORS: [&str; 11] = [
 ];
 
 /// Every command vector this milestone must capture (relative path).
-const CMD_VECTORS: [&str; 8] = [
+const CMD_VECTORS: [&str; 9] = [
     "on_off/cmd_toggle.json",
     "on_off/cmd_on_with_timed_off.json",
     "level_control/cmd_move_to_level.json",
     "level_control/cmd_move_to_level_with_on_off.json",
     "temperature_control/cmd_set_temperature.json",
     "thermostat/cmd_set_weekly_schedule.json",
+    "valve_configuration_and_control/cmd_open_null_duration.json",
     "door_lock/cmd_lock_door_with_pin.json",
     "door_lock/cmd_lock_door_no_pin.json",
 ];

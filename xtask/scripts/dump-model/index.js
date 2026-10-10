@@ -173,6 +173,9 @@ const ALLOWLIST = [
   // alarm commands, events with scalar or no fields):
   { id: 0x005c, name: 'SmokeCoAlarm' },
   { id: 0x0080, name: 'BooleanStateConfiguration' },
+  // M9-A3 B4, ValveConfigurationAndControl (nullable attributes, an Open
+  // request with an optional nullable field, two events):
+  { id: 0x0081, name: 'ValveConfigurationAndControl' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -211,6 +214,8 @@ const EVENT_ALLOWLIST = new Set([
   // AlarmsStateChanged, SensorFault):
   'SmokeCoAlarm',
   'BooleanStateConfiguration',
+  // M9-A3 B4, ValveConfigurationAndControl (ValveStateChanged, ValveFault):
+  'ValveConfigurationAndControl',
 ]);
 
 const excluded = [];

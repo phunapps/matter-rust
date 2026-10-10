@@ -252,6 +252,19 @@ fn set_weekly_schedule_command() {
 }
 
 #[test]
+fn open_with_null_duration_command() {
+    // M9-A3 B4: the first request field that is optional and nullable
+    // (`Option<Nullable<u32>>`), sent as TLV null, against matter.js's own
+    // ValveConfigurationAndControl TlvOpenRequest.
+    let got =
+        clusters::valve_configuration_and_control::encode_open(Some(Nullable::Null), Some(50));
+    assert_eq!(
+        got,
+        cmd("valve_configuration_and_control/cmd_open_null_duration.json")
+    );
+}
+
+#[test]
 fn network_interface_struct_decodes() {
     // GeneralDiagnostics.NetworkInterfaces: a NetworkInterface with a hwadr
     // bytes field, a keyword `Type` field, and byte-string-element lists
