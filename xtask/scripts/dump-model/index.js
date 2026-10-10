@@ -299,8 +299,9 @@ function dumpCommand(cmd, clusterName) {
   // command's fields carries none of its own. LevelControl's four *WithOnOff
   // commands take MoveToLevel/Move/Step/Stop's fields this way, and a derived
   // cluster's inherited command (MicrowaveOvenMode, OvenCavityOperationalState,
-  // RvcOperationalState) takes its base's. For every other command the two
-  // are the same.
+  // RvcOperationalState) takes its base's. RefrigeratorAlarm's
+  // ModifyEnabledAlarms carries its Mask field only on `members` too. For
+  // every other command the two are the same.
   const fields = [];
   [...cmd.members].forEach((c, i) => {
     if (c.isDisallowed) {

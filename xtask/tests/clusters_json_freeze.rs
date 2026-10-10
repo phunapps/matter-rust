@@ -233,7 +233,9 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
         .iter()
         .find(|c| c["name"] == "LevelControl")
         .unwrap();
-    let fields = |name: &str| -> Vec<(String, String, bool, bool)> {
+    // (id, name, type, optional, nullable): the id is the field's context tag,
+    // so a renumbering regression is caught as well as a missing field.
+    let fields = |name: &str| -> Vec<(u64, String, String, bool, bool)> {
         lc["commands"]
             .as_array()
             .unwrap()
@@ -245,6 +247,7 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
             .iter()
             .map(|f| {
                 (
+                    f["id"].as_u64().unwrap(),
                     f["name"].as_str().unwrap().to_string(),
                     f["type"].as_str().unwrap().to_string(),
                     f["optional"].as_bool().unwrap(),

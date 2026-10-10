@@ -181,7 +181,9 @@ fn move_to_level_command() {
 fn move_to_level_with_on_off_command() {
     // M9-A3 B2: the four *WithOnOff commands inherit their fields from
     // MoveToLevel/Move/Step/Stop. The encoder used to take no arguments and
-    // send an empty structure, which a server rejects (Level is mandatory).
+    // send an empty structure. matter.js rejects that (Level is mandatory);
+    // chip decodes the missing fields as zero/null and executes it, so an
+    // empty MoveToLevelWithOnOff dims to the minimum level and switches off.
     // The vector is encoded with matter.js's own LevelControl requestSchema.
     let got = gen::level_control::encode_move_to_level_with_on_off(
         128,

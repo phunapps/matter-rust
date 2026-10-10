@@ -63,8 +63,13 @@ encodes byte-identically to before. `AccessControlEntryStruct` and
 
 `encode_move_to_level_with_on_off`, `encode_move_with_on_off`,
 `encode_step_with_on_off` and `encode_stop_with_on_off` took no arguments and
-encoded an empty structure, which a device rejects with `INVALID_COMMAND`.
-These commands declare no fields of their own and inherit MoveToLevel's,
+encoded an empty structure. A server that validates mandatory fields
+(matter.js) rejects it with `INVALID_ACTION`. A chip-based device does not: it
+decodes each missing field as zero or null and executes a different action
+from the one intended. An empty `MoveToLevelWithOnOff` is level 0, so the light
+dims to its minimum level and switches off, and the command still returns
+success. An empty `MoveWithOnOff` moves up at the default rate and switches
+on. These commands declare no fields of their own and inherit MoveToLevel's,
 Move's, Step's and Stop's, and the codegen read only a command's own fields.
 They now take the same arguments as their base command and encode
 byte-identically to matter.js.
