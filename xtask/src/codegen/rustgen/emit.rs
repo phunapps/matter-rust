@@ -20,6 +20,15 @@ use std::fmt::Write as _;
 pub const PROVISIONAL_DOC: &str =
     "Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.";
 
+/// The rustdoc paragraph on a struct that has an encoder only because a
+/// writable attribute carries it (in `encoded_struct_names` but not reachable
+/// from a request command): it stays `#[non_exhaustive]`, which follows
+/// command reachability, so a crate outside `matter-clusters` cannot build
+/// one, only re-encode a decoded one (M9-A3 B4 review finding 3; whether to
+/// drop `#[non_exhaustive]` here is an open decision in `TODO-1.0.md`).
+pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable attribute carries \
+     it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.";
+
 /// The one rustdoc note of a generated feature, attribute or command item, or
 /// `None` (M9-A3 B4). An element added from the Matter 1.4 supplement
 /// (`supplemented`) gets a line saying where it comes from, whether 1.4 itself
@@ -124,8 +133,9 @@ pub fn generate_cluster(c: &Cluster) -> String {
     // so their declaration must stay constructible (no `#[non_exhaustive]`).
     let dts = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
     let encode_reachable = super::emit_codecs::command_encode_reachable_structs(c, &dts);
+    let encoded = super::emit_codecs::encoded_struct_names(c);
     for d in &c.datatypes {
-        emit_datatype(&mut s, d, &encode_reachable);
+        emit_datatype(&mut s, d, &encode_reachable, &encoded);
     }
     super::emit_codecs::emit_codecs(&mut s, c);
     s
@@ -319,11 +329,16 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "}}\n");
 }
 
-fn emit_datatype(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
+fn emit_datatype(
+    s: &mut String,
+    d: &Datatype,
+    encode_reachable: &HashSet<&str>,
+    encoded: &HashSet<&str>,
+) {
     match d.kind.as_str() {
         "enum" => emit_enum(s, d),
         "bitmap" => emit_bitmap(s, d),
-        "struct" => emit_struct(s, d, encode_reachable),
+        "struct" => emit_struct(s, d, encode_reachable, encoded),
         _ => {} // "scalar": a named alias of a primitive — referenced inline, no decl needed.
     }
 }
@@ -426,7 +441,16 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
     line!(s, "}}\n");
 }
 
-fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
+/// `encode_reachable`: structs a request command reaches (constructible, no
+/// `#[non_exhaustive]`); `encoded`: structs that get an encoder
+/// (`encoded_struct_names`). One in `encoded` but not `encode_reachable` gets
+/// [`WRITABLE_ATTRIBUTE_ENCODER_DOC`].
+fn emit_struct(
+    s: &mut String,
+    d: &Datatype,
+    encode_reachable: &HashSet<&str>,
+    encoded: &HashSet<&str>,
+) {
     line!(s, "/// `{}` struct.", d.name);
     if let Some(global) = &d.global_name {
         line!(s, "///");
@@ -435,6 +459,11 @@ fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
     for doc in choice_docs(&d.fields) {
         line!(s, "///");
         line!(s, "/// {doc}");
+    }
+    let name = d.name.as_str();
+    if encoded.contains(name) && !encode_reachable.contains(name) {
+        line!(s, "///");
+        line!(s, "/// {WRITABLE_ATTRIBUTE_ENCODER_DOC}");
     }
     line!(s, "#[derive(Clone, Debug, PartialEq)]");
     // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
@@ -567,7 +596,7 @@ mod tests {
             global_name: None,
         };
         let mut s = String::new();
-        emit_struct(&mut s, &d, &HashSet::new());
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
         assert_eq!(s.matches("Fabric-sensitive: `None`").count(), 1, "{s}");
         assert!(s.contains("pub secret: Option<u16>,"), "{s}");
         assert!(s.contains("pub plain: u16,"), "{s}");
@@ -654,14 +683,27 @@ mod tests {
         };
         // A normal data struct keeps #[non_exhaustive].
         let mut normal = String::new();
-        emit_struct(&mut normal, &d, &HashSet::new());
+        emit_struct(&mut normal, &d, &HashSet::new(), &HashSet::new());
         assert!(normal.contains("#[non_exhaustive]"), "{normal}");
         // A command-encode-reachable struct must stay constructible by callers
         // (they build it to pass to encode_*) -> no #[non_exhaustive].
         let reachable: HashSet<&str> = std::iter::once("EncStruct").collect();
         let mut enc = String::new();
-        emit_struct(&mut enc, &d, &reachable);
+        emit_struct(&mut enc, &d, &reachable, &reachable);
         assert!(!enc.contains("#[non_exhaustive]"), "{enc}");
+        assert!(!enc.contains(WRITABLE_ATTRIBUTE_ENCODER_DOC), "{enc}");
+        // Encoded only because a writable attribute carries it: it stays
+        // #[non_exhaustive], and its rustdoc says what that leaves a caller.
+        let mut writable = String::new();
+        emit_struct(&mut writable, &d, &HashSet::new(), &reachable);
+        assert!(writable.contains("#[non_exhaustive]"), "{writable}");
+        assert!(
+            writable.starts_with(&format!(
+                "/// `EncStruct` struct.\n///\n/// {WRITABLE_ATTRIBUTE_ENCODER_DOC}\n"
+            )),
+            "{writable}"
+        );
+        assert!(!normal.contains(WRITABLE_ATTRIBUTE_ENCODER_DOC), "{normal}");
     }
     // ---- M9-A3 B4: provisional, choice-group and global-origin rustdoc ----
 
@@ -799,7 +841,7 @@ mod tests {
             global_name: Some("locationdesc".to_string()),
         };
         let mut s = String::new();
-        emit_struct(&mut s, &d, &HashSet::new());
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
         assert!(
             s.starts_with(
                 "/// `LocationDescriptorStruct` struct.\n///\n/// Generated from the Matter \

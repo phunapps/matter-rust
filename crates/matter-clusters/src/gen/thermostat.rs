@@ -501,6 +501,8 @@ impl PresetScenarioEnum {
 }
 
 /// `PresetStruct` struct.
+///
+/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PresetStruct {
@@ -628,6 +630,8 @@ pub struct ScheduleStruct {
 }
 
 /// `ScheduleTransitionStruct` struct.
+///
+/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ScheduleTransitionStruct {

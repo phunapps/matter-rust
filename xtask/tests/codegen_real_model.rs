@@ -99,3 +99,49 @@ fn the_provisional_doc_names_the_models_spec_revision() {
         "{revision}"
     );
 }
+
+/// The structs that have an encoder only because a writable attribute carries
+/// them, and so stay `#[non_exhaustive]` with
+/// `WRITABLE_ATTRIBUTE_ENCODER_DOC` on them (M9-A3 B4 review finding 3, which
+/// listed seven: `AccessControlTargetStruct`, the all-scalar entry of `Acl`'s
+/// `Targets` list, is the eighth; the `#[non_exhaustive]` decision is open in
+/// TODO-1.0.md).
+const WRITABLE_ATTRIBUTE_ONLY_ENCODED: [(&str, &str); 8] = [
+    ("AccessControl", "AccessControlExtensionStruct"),
+    ("AccessControl", "AccessControlTargetStruct"),
+    ("Binding", "TargetStruct"),
+    ("GroupKeyManagement", "GroupKeyMapStruct"),
+    ("OtaSoftwareUpdateRequestor", "ProviderLocation"),
+    ("Thermostat", "PresetStruct"),
+    ("Thermostat", "ScheduleTransitionStruct"),
+    ("UserLabel", "LabelStruct"),
+];
+
+#[test]
+fn writable_attribute_only_encoded_structs_say_they_are_not_constructible() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
+        .expect("real model loads + validates");
+    let doc = format!(
+        "/// {}\n#[derive(Clone, Debug, PartialEq)]\n#[non_exhaustive]\npub struct ",
+        xtask::codegen::rustgen::emit::WRITABLE_ATTRIBUTE_ENCODER_DOC
+    );
+    let mut got = Vec::new();
+    for c in &model.clusters {
+        let src = xtask::codegen::rustgen::emit::generate_cluster(c);
+        for (at, _) in src.match_indices(&doc) {
+            let rest = &src[at + doc.len()..];
+            let name = rest.split_whitespace().next().unwrap();
+            got.push((c.name.as_str(), name.to_string()));
+        }
+    }
+    got.sort_unstable();
+    let want: Vec<(&str, String)> = WRITABLE_ATTRIBUTE_ONLY_ENCODED
+        .iter()
+        .map(|(c, s)| (*c, (*s).to_string()))
+        .collect();
+    assert_eq!(got, want);
+}

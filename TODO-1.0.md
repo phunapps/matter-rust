@@ -464,6 +464,43 @@ against the fixture via the shared `tests/e2e_fixture` harness.
 
 ## matter-clusters
 
+### Encoders on structs a client cannot build — USER DECISION before 1.0
+
+**Status:** OPEN (M9-A3 B4 whole-batch review, finding 3; B4 took option (b)).
+
+Eight generated structs keep `write_fields` / `encode` only because a
+writable list attribute carries them (directly, or as the all-scalar entry of
+a list field of one), yet they are still `#[non_exhaustive]`
+(that attribute follows command-request reachability), with no constructor and
+no `Default`:
+
+- `binding::TargetStruct`
+- `user_label::LabelStruct`
+- `group_key_management::GroupKeyMapStruct`
+- `ota_software_update_requestor::ProviderLocation`
+- `thermostat::PresetStruct`
+- `thermostat::ScheduleTransitionStruct`
+- `access_control::AccessControlExtensionStruct`
+- `access_control::AccessControlTargetStruct` (the review listed seven; this
+  one, the entry of an `Acl` entry's `Targets`, has the same shape)
+
+Outside `matter-clusters` a value of these types can only come from a decode
+(struct-update syntax is refused on a foreign `#[non_exhaustive]` struct), so
+the encoder re-encodes a decoded entry and nothing else: a new entry, or a
+list built from scratch, cannot be written through the typed API.
+
+- **(a)** key `#[non_exhaustive]` on the encoder rule (`encoded_struct_names`)
+  instead of command reachability, so the eight become constructible. Removing
+  the attribute is additive (non-breaking) and carries the same future-field
+  cost the command-reachable structs already accept.
+- **(b)** (what B4 shipped) keep `#[non_exhaustive]` and say so: each struct's
+  rustdoc, the CHANGELOG and `docs/matter-js-comparison.md` state that the
+  encoder re-encodes a decoded entry only.
+
+Because (a) is additive, it can still land in any 0.x or 1.x minor; the
+decision is due at the M9-A3 final review. `codegen_real_model`
+(`WRITABLE_ATTRIBUTE_ONLY_ENCODED`) pins the set.
+
 ### Codegen scalar narrowing: `fabric-id` fields emitted as `u32` instead of `u64`
 
 **Status:** CLOSED 2026-07-12. The scalar table now maps `fabric-id` → `u64`

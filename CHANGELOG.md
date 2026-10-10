@@ -266,9 +266,19 @@ The codegen now generates only what a client can use:
   `SignedTemperature`, `UnsignedTemperature`, `TemperatureDifference`) are
   exempt: they never become a Rust item (every use is generated as its base
   integer), so there is nothing to prune.
-- **`write_fields` / `encode` exist only on structs a client sends**: those a
-  command request carries, and the all-scalar ones a writable attribute
-  carries. Every decoder stays. Removed from:
+- **`write_fields` / `encode` exist only on structs a command request
+  carries, or all-scalar structs a writable attribute carries.** Eight of
+  the latter keep an encoder because a writable list attribute carries them
+  (`binding::TargetStruct`, `user_label::LabelStruct`,
+  `group_key_management::GroupKeyMapStruct`,
+  `ota_software_update_requestor::ProviderLocation`,
+  `thermostat::{PresetStruct, ScheduleTransitionStruct}`,
+  `access_control::{AccessControlExtensionStruct,
+  AccessControlTargetStruct}`), but they are `#[non_exhaustive]` without a
+  constructor, so the encoder re-encodes a decoded entry only: building a
+  new entry from outside the crate is not yet possible (an open decision
+  before 1.0), and each of them says so in its rustdoc. Every decoder
+  stays. Removed from:
   `basic_information::{CapabilityMinimaStruct, ProductAppearanceStruct}`,
   `bridged_device_basic_information::ProductAppearanceStruct`,
   `descriptor::DeviceTypeStruct`, `fixed_label::LabelStruct`,

@@ -169,6 +169,8 @@ pub struct PointStruct {
 }
 
 /// `ScopedEntryStruct` struct.
+///
+/// Encodable because a writable attribute carries it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ScopedEntryStruct {

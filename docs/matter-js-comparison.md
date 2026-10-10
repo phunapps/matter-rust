@@ -160,9 +160,18 @@ These are language-idiomatic differences. They do not affect interop.
   typedefs (Thermostat's `SignedTemperature` and the like) are never
   pruned, since they produce no Rust item (every use is generated as its
   base integer). And a
-  struct has an encoder only when a client sends it (a command request
-  field, or an all-scalar struct a writable attribute carries); matter.js's
-  TLV schemas encode and decode everything.
+  struct has an encoder only when a command request carries it, or it is an
+  all-scalar struct a writable attribute carries; matter.js's TLV schemas
+  encode and decode everything. Eight structs keep an encoder only because a
+  writable list attribute carries them (Binding `TargetStruct`, UserLabel
+  `LabelStruct`, GroupKeyManagement `GroupKeyMapStruct`,
+  OtaSoftwareUpdateRequestor `ProviderLocation`, Thermostat `PresetStruct`
+  and `ScheduleTransitionStruct`, AccessControl
+  `AccessControlExtensionStruct` and `AccessControlTargetStruct`), but they
+  are `#[non_exhaustive]` without a constructor, so the encoder re-encodes a
+  decoded entry only; building a new entry from outside the crate is not yet
+  possible, where matter.js builds any of them from a plain object. Whether
+  to make them constructible is an open decision before 1.0.
 - **ScenesManagement has no `LogicalSceneTable` type** (M9-A3 B4). The
   specification describes the Logical Scene Table as data a device keeps,
   not a wire type; matter.js 0.16.11 generates `TlvLogicalSceneTable`,
