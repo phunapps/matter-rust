@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 58] = [
+const TARGET_CLUSTERS: [&str; 59] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -86,6 +86,8 @@ const TARGET_CLUSTERS: [&str; 58] = [
     "EnergyEvseMode",
     "WaterHeaterMode",
     "DeviceEnergyManagementMode",
+    // M9-A3 B2, ModeSelect:
+    "ModeSelect",
 ];
 
 fn load() -> Value {
@@ -327,7 +329,11 @@ fn relaxed_fabric_sensitive_fields_are_optional_mandatory_on_write_and_recorded(
     assert_eq!(marked, want);
 
     let relaxed = v["meta"]["relaxed"].as_array().expect("meta.relaxed array");
-    assert_eq!(relaxed.len(), FABRIC_SENSITIVE_RELAXED.len());
+    let fabric_sensitive = relaxed
+        .iter()
+        .filter(|r| r["reason"] == "fabric-sensitive (withheld for other fabrics)")
+        .count();
+    assert_eq!(fabric_sensitive, FABRIC_SENSITIVE_RELAXED.len());
     for (c, d, f) in FABRIC_SENSITIVE_RELAXED {
         let element = format!("{d}.{f}");
         assert!(
@@ -594,4 +600,52 @@ fn microwave_oven_mode_has_inherited_fields_and_no_commands() {
             "MicrowaveOvenMode.{cmd} exclusion missing"
         );
     }
+}
+
+#[test]
+fn every_relaxation_is_fabric_sensitive_or_a_recorded_widening() {
+    // meta.relaxed holds exactly the §5.4 presence relaxations (class P) and
+    // the §5.3 widenings (class W). The one W today is ModeSelect
+    // StandardNamespace: model `namespace` is enum8, 1.4.2 is enum16.
+    let v = load();
+    let relaxed = v["meta"]["relaxed"].as_array().unwrap();
+    let widened: Vec<(&str, &str)> = relaxed
+        .iter()
+        .filter(|r| r["class"] == "W")
+        .map(|r| {
+            (
+                r["cluster"].as_str().unwrap(),
+                r["element"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(widened, [("ModeSelect", "Attribute.StandardNamespace")]);
+    for r in relaxed {
+        assert!(
+            r["class"] == "W"
+                || (r["class"] == "P"
+                    && r["reason"] == "fabric-sensitive (withheld for other fabrics)"),
+            "unexpected relaxation {r}"
+        );
+    }
+    let ms = cluster(&v, "ModeSelect");
+    let ns = ms["attributes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "StandardNamespace")
+        .unwrap();
+    assert_eq!(
+        (ns["type"].as_str(), ns["nullable"].as_bool()),
+        (Some("enum16"), Some(true))
+    );
+    // The lowercase global `namespace` enum is never inlined as a datatype.
+    assert!(
+        !ms["datatypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["name"] == "namespace"),
+        "namespace inlined into ModeSelect"
+    );
 }

@@ -133,6 +133,8 @@ const ALLOWLIST = [
   { id: 0x009d, name: 'EnergyEvseMode' },
   { id: 0x009e, name: 'WaterHeaterMode' },
   { id: 0x009f, name: 'DeviceEnergyManagementMode' },
+  // M9-A3 B2, ModeSelect (not ModeBase-derived; its own SemanticTagStruct):
+  { id: 0x0050, name: 'ModeSelect' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -180,6 +182,24 @@ function recordRelaxation(cluster, element, findingClass, reason) {
 // when `includeSensitive`). @matter/model marks no struct as fabric-scoped, so
 // field 254 (FabricIndex) is the signal.
 const FABRIC_SENSITIVE_REASON = 'fabric-sensitive (withheld for other fabrics)';
+
+// M9-A3 spec §5.2/§5.3: an element whose model type is narrower than chip's
+// 1.4.2 XML (a W finding of scripts/chip-xml-conformance.py) is widened here to
+// the 1.4.2 type and recorded in meta.relaxed with class W. Keys use the
+// checker's element spelling, `<Cluster>.Attribute.<Name>`. A key that matches
+// no attribute of an allowlisted cluster fails the dump, so a model rename
+// cannot silently drop a widening.
+const TYPE_WIDENINGS = new Map([
+  [
+    'ModeSelect.Attribute.StandardNamespace',
+    {
+      type: 'enum16',
+      reason:
+        'model type `namespace` is enum8; 1.4.2 ModeSelect.xml and chip mode-select-cluster.xml declare enum16',
+    },
+  ],
+]);
+const appliedWidenings = new Set();
 
 function fail(msg) {
   throw new Error(`dump-model: ${msg}`);
@@ -582,6 +602,13 @@ function dumpCluster(entry) {
       const et = entryTypeOf(baseAttr);
       if (et !== undefined) dumped.entryType = et;
     }
+    const wideningKey = `${cluster.name}.Attribute.${a.name}`;
+    const widening = TYPE_WIDENINGS.get(wideningKey);
+    if (widening) {
+      dumped.type = widening.type;
+      appliedWidenings.add(wideningKey);
+      recordRelaxation(cluster.name, `Attribute.${a.name}`, 'W', widening.reason);
+    }
     attributes.push(dumped);
   }
 
@@ -676,6 +703,12 @@ function modelVersion() {
 
 const clusters = ALLOWLIST.map(dumpCluster);
 clusters.sort((x, y) => x.id - y.id);
+for (const key of TYPE_WIDENINGS.keys()) {
+  const owner = key.split('.')[0];
+  if (ALLOWLIST.some((e) => e.name === owner) && !appliedWidenings.has(key)) {
+    fail(`type widening ${key} matched no attribute — model drift; review TYPE_WIDENINGS`);
+  }
+}
 excluded.sort(
   (x, y) => x.cluster.localeCompare(y.cluster) || x.kind.localeCompare(y.kind) || x.element.localeCompare(y.element),
 );

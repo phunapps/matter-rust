@@ -1794,3 +1794,99 @@ fn microwave_oven_mode_decodes_without_commands() {
     assert_eq!(modes[1].mode_tags[0].value, ModeTag::Unknown(0x8001));
     assert_eq!(decode_current_mode(&uint_attr(0)).unwrap(), 0);
 }
+
+// ---- M9-A3 B2: ModeSelect ----------------------------------------------------
+//
+// ModeSelect is not a ModeBase derivative: its ModeOptionStruct carries
+// SemanticTags (a cluster-local SemanticTagStruct { MfgCode(0) vendor-id,
+// Value(1) enum16 }, distinct from the global `semtag`), and ChangeToMode has
+// no response command.
+
+#[test]
+fn mode_select_standard_namespace_is_enum16() {
+    // 1.4.2 ModeSelect.xml declares StandardNamespace enum16 (nullable); the
+    // model's `namespace` is enum8, so the dump widens it (meta.relaxed, W).
+    // A namespace id above 0xFF must decode, not fail as out of range.
+    use gen::mode_select::decode_standard_namespace;
+    assert_eq!(
+        decode_standard_namespace(&uint_attr(0x0101)).unwrap(),
+        Nullable::Value(0x0101_u16)
+    );
+    assert_eq!(
+        decode_standard_namespace(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+}
+
+#[test]
+fn mode_select_supported_modes_decode_cluster_local_semantic_tags() {
+    // The first entry is chip all-clusters' "Black" mode exactly
+    // (static-supported-modes-manager.cpp: mode 0, one tag { MfgCode 0,
+    // Value 0 }; chip always writes the non-optional MfgCode). The second is
+    // synthetic: a manufacturer tag whose Value needs the full enum16.
+    let tag = |w: &mut TlvWriter<'_>, mfg: u64, value: u64| {
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), mfg).unwrap();
+        w.put_uint(Tag::Context(1), value).unwrap();
+        w.end_container().unwrap();
+    };
+    let bytes = list_of(&[
+        &|w| {
+            w.put_utf8(Tag::Context(0), "Black").unwrap();
+            w.put_uint(Tag::Context(1), 0).unwrap();
+            w.start_array(Tag::Context(2)).unwrap();
+            tag(w, 0, 0);
+            w.end_container().unwrap();
+        },
+        &|w| {
+            w.put_utf8(Tag::Context(0), "Vendor").unwrap();
+            w.put_uint(Tag::Context(1), 9).unwrap();
+            w.start_array(Tag::Context(2)).unwrap();
+            tag(w, 0xFFF1, 0x0102);
+            w.end_container().unwrap();
+        },
+    ]);
+    let modes = gen::mode_select::decode_supported_modes(&bytes).unwrap();
+    assert_eq!((modes[0].label.as_str(), modes[0].mode), ("Black", 0));
+    let tags: Vec<(u16, u16)> = modes
+        .iter()
+        .flat_map(|m| m.semantic_tags.iter().map(|t| (t.mfg_code, t.value)))
+        .collect();
+    assert_eq!(tags, [(0, 0), (0xFFF1, 0x0102)]);
+}
+
+#[test]
+fn mode_select_semantic_tag_missing_mfg_code_is_an_error() {
+    // MfgCode is mandatory and non-nullable since ModeSelect revision 2.
+    use matter_clusters::error::ClusterError;
+    let bytes = list_of(&[&|w| {
+        w.put_utf8(Tag::Context(0), "x").unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }]);
+    assert!(matches!(
+        gen::mode_select::decode_supported_modes(&bytes),
+        Err(ClusterError::MissingField("MfgCode"))
+    ));
+}
+
+#[test]
+fn mode_select_writable_modes_and_change_to_mode_encode() {
+    use gen::mode_select::{
+        decode_description, decode_on_mode, decode_start_up_mode, encode_change_to_mode,
+        encode_on_mode, encode_start_up_mode,
+    };
+    assert_eq!(decode_description(&str_attr("Coffee")).unwrap(), "Coffee");
+    for v in [Nullable::Null, Nullable::Value(4)] {
+        assert_eq!(decode_start_up_mode(&encode_start_up_mode(v)).unwrap(), v);
+        assert_eq!(decode_on_mode(&encode_on_mode(v)).unwrap(), v);
+    }
+    assert_eq!(
+        encode_change_to_mode(4),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 4).unwrap())
+    );
+}

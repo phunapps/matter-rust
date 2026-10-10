@@ -119,6 +119,10 @@ payload struct (Switch already had its seven):
   `kOnOff` bit for EnergyEvseMode, WaterHeaterMode and
   DeviceEnergyManagementMode; a device that sets it loses nothing, since
   FeatureMap reads as a raw `u32` (`gen::globals::decode_u32`).
+- **ModeSelect (0x0050)**, with its own `SemanticTagStruct` (MfgCode,
+  Value), distinct from the global `datatypes::SemanticTagStruct`.
+  `StandardNamespace` decodes as `Nullable<u16>`: Matter 1.4 declares it
+  enum16, wider than the enum8 namespace type in the codegen's model.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

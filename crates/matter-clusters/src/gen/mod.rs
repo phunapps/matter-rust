@@ -31,6 +31,7 @@ pub mod illuminance_measurement;
 pub mod laundry_washer_mode;
 pub mod level_control;
 pub mod microwave_oven_mode;
+pub mod mode_select;
 pub mod nitrogen_dioxide_concentration_measurement;
 pub mod occupancy_sensing;
 pub mod on_off;

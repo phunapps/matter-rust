@@ -108,6 +108,17 @@ These are language-idiomatic differences. They do not affect interop.
   Nothing a device reports is lost: FeatureMap reads as a raw `u32`
   (`gen::globals::decode_u32`), so a set bit 0 is still visible.
 
+- **ModeSelect `StandardNamespace` is `Nullable<u16>`** (M9-A3 B2). The
+  matter.js model (`@matter/model` 0.16.11) types it as the global `namespace`
+  enum, which is enum8. chip's 1.4.2 XML
+  (`data_model/1.4.2/clusters/ModeSelect.xml`), its zap XML
+  (`mode-select-cluster.xml`) and its controller codegen
+  (`readonly attribute nullable enum16 standardNamespace`) all declare enum16,
+  so our dump widens the type (`TYPE_WIDENINGS`, recorded in `meta.relaxed` as
+  class W). On the wire, matter.js's codec is wider still
+  (`TlvNullable(TlvEnum())`, where `TlvEnum` is `TlvUInt32`), so a value above
+  `0xFFFF` decodes there and is an error here.
+
 ## CASE handshake performance (measured 2026-07-12)
 
 The load-bearing perf comparison for the "embedded-grade performance"
