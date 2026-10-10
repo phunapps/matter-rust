@@ -349,6 +349,17 @@ The codegen now generates only what a client can use:
   max timestamps and systimes), both with the omitted half, and, below,
   WaterHeaterManagement `WaterHeaterBoostInfoStruct.target_percentage`.
 
+### matter-clusters: Added — energy-management and messaging clusters
+
+- **EnergyPreference (0x009B)**, provisional: the specification marks the
+  whole cluster provisional (Matter 1.4.2, and still 1.5.1), and its module
+  rustdoc says so, so its shape may change in a later revision. Every
+  attribute, and the writers for `CurrentEnergyBalance` and
+  `CurrentLowPowerModeSensitivity`.
+- **PowerTopology (0x009C)**: `AvailableEndpoints` and `ActiveEndpoints`.
+  The model's `CircuitNodeStruct` is not generated: no attribute uses it,
+  and chip's 1.4.2 data model has no such struct.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

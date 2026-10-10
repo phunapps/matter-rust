@@ -53,6 +53,8 @@
       "ValveConfigurationAndControl",
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
+      "EnergyPreference",
+      "PowerTopology",
       "EnergyEvseMode",
       "WaterHeaterMode",
       "DeviceEnergyManagementMode",
@@ -375,6 +377,12 @@
         "element": "DEPONOFF",
         "kind": "feature",
         "reason": "disallowed"
+      },
+      {
+        "cluster": "PowerTopology",
+        "element": "CircuitNodeStruct",
+        "kind": "datatype",
+        "reason": "unreferenced (no generated attribute, command or event uses it)"
       },
       {
         "cluster": "PumpConfigurationAndControl",
@@ -16379,6 +16387,197 @@
           ]
         }
       ]
+    },
+    {
+      "id": 155,
+      "name": "EnergyPreference",
+      "revision": 1,
+      "provisional": true,
+      "features": [
+        {
+          "bit": 0,
+          "code": "BALA",
+          "name": "EnergyBalance",
+          "description": "This feature allows a user to select from a list of energy balances with associated descriptions of which strategies a device will use to target the specified balance."
+        },
+        {
+          "bit": 1,
+          "code": "LPMS",
+          "name": "LowPowerModeSensitivity",
+          "description": "This feature allows the user to select a condition or set of conditions which will cause the device to switch to a mode using less power. For example, a device might provide a scale of durations that must elapse without user interaction before it goes to sleep."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "EnergyBalances",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "BalanceStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a list of BalanceStructs, each representing a step along a linear scale of relative priorities. A Step field with a value of zero shall indicate that the device SHOULD entirely favor the priority specified by the first element in EnergyPriorities; whereas a Step field with a value of 100 shall indicate that the device SHOULD entirely favor the priority specified by the second element in EnergyPriorities. The midpoint value of 50 shall indicate an even split between the two priorities.\nThis shall contain at least two BalanceStructs.\nEach BalanceStruct shall have a Step field larger than the Step field on the previous BalanceStruct in the list.\nThe first BalanceStruct shall have a Step value of zero, and the last BalanceStruct shall have a Step value of 100."
+        },
+        {
+          "id": 1,
+          "name": "CurrentEnergyBalance",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the current preference of the user for balancing different priorities during device use. The value of this attribute is the index, 0-based, into the EnergyBalances attribute for the currently selected balance.\nIf an attempt is made to set this attribute to an index outside the maximum index for EnergyBalances, a response with the status code CONSTRAINT_ERROR shall be returned.\nIf the value of EnergyBalances changes after an update, the device shall migrate the value of the CurrentEnergyBalance attribute to the index which the manufacturer specifies most closely matches the previous value, while preserving extreme preferences as follows:\n  1. If the previous value of CurrentEnergyBalance was zero, indicating a total preference for the priority specified by the first element in EnergyPriorities, the new value of CurrentEnergyBalance shall also be zero.\n  2. If the previous value of CurrentEnergyBalance was the index of the last BalanceStruct in the previous value of EnergyBalances, indicating a total preference for the priority specified by the last element in EnergyPriorities, the new value of CurrentEnergyBalance shall be the index of the last element in the updated value of EnergyBalances."
+        },
+        {
+          "id": 2,
+          "name": "EnergyPriorities",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "EnergyPriorityEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates two extremes for interpreting the values in the EnergyBalances attribute. These two priorities shall be in opposition to each other; e.g. Comfort vs. Efficiency or Speed vs. WaterConsumption.\nIf the value of EnergyPriorities changes after an update to represent a new balance between priorities, the value of the CurrentEnergyBalance attribute shall be set to its default."
+        },
+        {
+          "id": 3,
+          "name": "LowPowerModeSensitivities",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "BalanceStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a list of BalanceStructs, each representing a condition or set of conditions for the device to enter a low power mode.\nThis shall contain at least two BalanceStructs.\nEach BalanceStruct shall have a Step field larger than the Step field on the previous BalanceStruct in the list."
+        },
+        {
+          "id": 4,
+          "name": "CurrentLowPowerModeSensitivity",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the current preference of the user for determining when the device should enter a low power mode. The value of this attribute is the index, 0-based, into the LowPowerModeSensitivities attribute for the currently selected preference.\nIf an attempt is made to set this attribute to an index outside the maximum index for LowPowerModeSensitivities, a response with the status code CONSTRAINT_ERROR shall be returned.\nIf the value of LowPowerModeSensitivities changes after an update, the device shall migrate the value of the LowPowerModeSensitivity attribute to the index which the manufacturer specifies most closely matches the previous value."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "BalanceStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This represents a step along a scale of preferences.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Step",
+              "type": "percent",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the relative value of this step."
+            },
+            {
+              "id": 1,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate an optional string explaining which actions a device might take at the given step value."
+            }
+          ]
+        },
+        {
+          "name": "EnergyPriorityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Comfort",
+              "description": "This value shall emphasize user comfort; e.g. local temperature for a thermostat."
+            },
+            {
+              "value": 1,
+              "name": "Speed",
+              "description": "This value shall emphasize how quickly a device accomplishes its targeted use; e.g. how quickly a robot vacuum completes a cleaning cycle."
+            },
+            {
+              "value": 2,
+              "name": "Efficiency",
+              "description": "This value shall emphasize how much energy a device uses; e.g. electricity usage for a Pump."
+            },
+            {
+              "value": 3,
+              "name": "WaterConsumption",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 156,
+      "name": "PowerTopology",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "NODE",
+          "name": "NodeTopology",
+          "description": "This endpoint provides or consumes power to/from the entire node"
+        },
+        {
+          "bit": 1,
+          "code": "TREE",
+          "name": "TreeTopology",
+          "description": "This endpoint provides or consumes power to/from itself and its child endpoints"
+        },
+        {
+          "bit": 2,
+          "code": "SET",
+          "name": "SetTopology",
+          "description": "This endpoint provides or consumes power to/from a specified set of endpoints"
+        },
+        {
+          "bit": 3,
+          "code": "DYPF",
+          "name": "DynamicPowerFlow",
+          "description": "The specified set of endpoints may change"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "AvailableEndpoints",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "endpoint-no",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of endpoints capable of providing power to and/or consuming power from the endpoint hosting this server."
+        },
+        {
+          "id": 1,
+          "name": "ActiveEndpoints",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "endpoint-no",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current list of endpoints currently providing or consuming power to or from the endpoint hosting this server. This list shall be a subset of the value of the AvailableEndpoints attribute."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": []
     },
     {
       "id": 157,

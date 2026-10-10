@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 76] = [
+const TARGET_CLUSTERS: [&str; 78] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -112,6 +112,9 @@ const TARGET_CLUSTERS: [&str; 76] = [
     "ValveConfigurationAndControl",
     // M9-A3 B4, ScenesManagement (no events):
     "ScenesManagement",
+    // M9-A3 B5, energy management with attributes only:
+    "EnergyPreference",
+    "PowerTopology",
 ];
 
 fn load() -> Value {
@@ -1446,11 +1449,15 @@ fn thermostat_weekly_schedule_uses_the_models_own_datatypes() {
 
 /// The datatypes the dump dropped because no generated attribute, command or
 /// event uses them (the user's pruning rule), as `(cluster, datatype)`.
-const PRUNED_DATATYPES: [(&str, &str); 5] = [
+const PRUNED_DATATYPES: [(&str, &str); 6] = [
     ("BridgedDeviceBasicInformation", "CapabilityMinimaStruct"),
     ("DoorLock", "AlarmMaskBitmap"),
     ("DoorLock", "EventTypeEnum"),
     ("MicrowaveOvenMode", "ModeChangeStatus"),
+    // M9-A3 B5: model-only (chip's 1.4.2 XML and v1.4.2.0 controller codegen
+    // have no such struct; it arrives in the 1.5 XML), and no PowerTopology
+    // attribute names it.
+    ("PowerTopology", "CircuitNodeStruct"),
     // M9-A3 B4: the specification's descriptive Logical Scene Table, not a
     // wire type (chip's controller codegen has no such struct).
     ("ScenesManagement", "LogicalSceneTable"),
@@ -1672,7 +1679,7 @@ fn scenes_management_shape_follows_1_4() {
 /// the dump's `PROVISIONAL_CLUSTERS`. Each gets a module rustdoc paragraph;
 /// `scripts/chip-xml-conformance.py` checks the marking against chip's 1.4.2
 /// XML both ways (class V).
-const PROVISIONAL_CLUSTERS: [&str; 0] = [];
+const PROVISIONAL_CLUSTERS: [&str; 1] = ["EnergyPreference"];
 
 /// Datatype struct fields whose presence depends on a sibling field
 /// (`requiredWhen`), as `(cluster, "<Struct>.<Field>", sibling, present,
@@ -1784,5 +1791,49 @@ fn presence_dependencies_are_exactly_these() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn energy_preference_and_power_topology_are_attribute_only() {
+    // 1.4.2 EnergyPreference.xml / PowerTopology.xml: attributes only. The two
+    // Current* levels are the only writable attributes; both lists of
+    // BalanceStruct are read-only, so BalanceStruct has no encoder.
+    let v = load();
+    let pref = cluster(&v, "EnergyPreference");
+    assert_eq!(
+        element_names(pref, "attributes"),
+        [
+            "EnergyBalances",
+            "CurrentEnergyBalance",
+            "EnergyPriorities",
+            "LowPowerModeSensitivities",
+            "CurrentLowPowerModeSensitivity"
+        ]
+    );
+    let writable: Vec<&str> = pref["attributes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["writable"] == true)
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        writable,
+        ["CurrentEnergyBalance", "CurrentLowPowerModeSensitivity"]
+    );
+    assert_eq!(
+        field_optionality(&datatype(pref, "BalanceStruct")["fields"]),
+        [("Step", false), ("Label", true)]
+    );
+    let topo = cluster(&v, "PowerTopology");
+    assert_eq!(
+        element_names(topo, "attributes"),
+        ["AvailableEndpoints", "ActiveEndpoints"]
+    );
+    assert_eq!(element_names(topo, "datatypes"), Vec::<&str>::new());
+    for c in [pref, topo] {
+        assert_eq!(element_names(c, "commands"), Vec::<&str>::new());
+        assert_eq!(element_names(c, "events"), Vec::<&str>::new());
     }
 }

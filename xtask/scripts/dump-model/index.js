@@ -192,6 +192,12 @@ const ALLOWLIST = [
   // AddScene's list of ExtensionFieldSetStruct of AttributeValuePairStruct;
   // no events):
   { id: 0x0062, name: 'ScenesManagement' },
+  // M9-A3 B5, energy management with attributes only (no commands, no
+  // events): EnergyPreference is provisional (PROVISIONAL_CLUSTERS);
+  // PowerTopology's only struct, CircuitNodeStruct, is model-only and
+  // unreferenced, so it is pruned.
+  { id: 0x009b, name: 'EnergyPreference' },
+  { id: 0x009c, name: 'PowerTopology' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -244,7 +250,9 @@ const EVENT_ALLOWLIST = new Set([
 // still a breaking matter-clusters release). scripts/chip-xml-conformance.py
 // checks the marking against the 1.4.2 XML both ways (class V). A key that is
 // not allowlisted fails the dump.
-const PROVISIONAL_CLUSTERS = new Map([]);
+const PROVISIONAL_CLUSTERS = new Map([
+  ['EnergyPreference', 'chip data_model/1.4.2/clusters/EnergyPreference.xml: <clusterId id="0x009B"> carries <provisionalConform/> (also 1.5, 1.5.1)'],
+]);
 
 const excluded = [];
 function recordExclusion(cluster, element, kind, reason) {

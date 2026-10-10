@@ -3543,3 +3543,95 @@ fn scenes_requests_encode() {
         })
     );
 }
+
+// ---- M9-A3 B5: EnergyPreference and PowerTopology --------------------------
+//
+// Attributes only (1.4.2 EnergyPreference.xml, PowerTopology.xml). Values are
+// all-clusters' (energy-preference-delegate.cpp, the same at v1.4.2.0 and
+// master; v1.4.2.0's power-topology-stub.cpp).
+
+#[test]
+fn energy_preference_attributes_decode() {
+    use clusters::energy_preference::{
+        decode_current_energy_balance, decode_current_low_power_mode_sensitivity,
+        decode_energy_balances, decode_energy_priorities, decode_low_power_mode_sensitivities,
+        encode_current_energy_balance, encode_current_low_power_mode_sensitivity,
+        EnergyPriorityEnum, Feature,
+    };
+    use matter_clusters::error::ClusterError;
+    assert_eq!(
+        (Feature::BALA | Feature::LPMS).bits(),
+        3,
+        "all-clusters' features"
+    );
+    // all-clusters' three EnergyBalances; the middle step has no label.
+    let balances = decode_energy_balances(&list_of(&[
+        &|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_utf8(Tag::Context(1), "Efficient").unwrap();
+        },
+        &|w| w.put_uint(Tag::Context(0), 50).unwrap(),
+        &|w| {
+            w.put_uint(Tag::Context(0), 100).unwrap();
+            w.put_utf8(Tag::Context(1), "Comfort").unwrap();
+        },
+    ]))
+    .unwrap();
+    let got: Vec<(u8, Option<&str>)> = balances
+        .iter()
+        .map(|b| (b.step, b.label.as_deref()))
+        .collect();
+    assert_eq!(
+        got,
+        [(0, Some("Efficient")), (50, None), (100, Some("Comfort"))]
+    );
+    assert_eq!(
+        decode_energy_priorities(&uint_array_attr(&[2, 0])).unwrap(),
+        [EnergyPriorityEnum::Efficiency, EnergyPriorityEnum::Comfort]
+    );
+    // A priority a later revision adds is kept, not an error.
+    assert_eq!(
+        decode_energy_priorities(&uint_array_attr(&[9])).unwrap(),
+        [EnergyPriorityEnum::Unknown(9)]
+    );
+    let sensitivities = decode_low_power_mode_sensitivities(&list_of(&[&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_utf8(Tag::Context(1), "1 Minute").unwrap();
+    }]))
+    .unwrap();
+    assert_eq!(sensitivities[0].label.as_deref(), Some("1 Minute"));
+    assert_eq!(
+        decode_current_energy_balance(&encode_current_energy_balance(1)).unwrap(),
+        1
+    );
+    assert_eq!(encode_current_low_power_mode_sensitivity(2), uint_attr(2));
+    assert_eq!(
+        decode_current_low_power_mode_sensitivity(&uint_attr(2)).unwrap(),
+        2
+    );
+    // Step is mandatory.
+    assert!(matches!(
+        decode_energy_balances(&list_of(&[&|w| w
+            .put_utf8(Tag::Context(1), "No step")
+            .unwrap()])),
+        Err(ClusterError::MissingField("Step"))
+    ));
+}
+
+#[test]
+fn power_topology_attributes_decode() {
+    use clusters::power_topology::{decode_active_endpoints, decode_available_endpoints, Feature};
+    // all-clusters v1.4.2.0 sets SET | DYPF and serves both lists empty (its
+    // stub delegate has no endpoints); evse-app sets NODE only and serves
+    // neither attribute.
+    assert_eq!((Feature::SET | Feature::DYPF).bits(), 0b1100);
+    assert_eq!(Feature::NODE.bits(), 1);
+    assert_eq!(
+        decode_available_endpoints(&uint_array_attr(&[])).unwrap(),
+        Vec::<u16>::new()
+    );
+    assert_eq!(
+        decode_active_endpoints(&uint_array_attr(&[1, 2])).unwrap(),
+        [1, 2]
+    );
+}
