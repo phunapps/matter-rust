@@ -188,3 +188,9 @@ integration-ota:
 # ZAP code generator ships only as an x86_64 binary for macOS.
 integration-rvc:
     cargo run -p xtask -- integration rvc
+
+# Local only, not in the nightly workflow; like integration-rvc, the build
+# needs Rosetta 2 on Apple Silicon (chip's ZAP ships x86_64-only for macOS).
+# Build + launch microwave-oven-app and run the MicrowaveOvenControl tests.
+integration-microwave-oven:
+    cargo run -p xtask -- integration microwave-oven

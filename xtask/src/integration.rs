@@ -133,6 +133,21 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             linux_platform_mdns: false,
             events: EventStimulus::TriggersAndAppPipe,
         },
+        // M9-A3 B3: MicrowaveOvenControl, which only microwave-oven-app
+        // serves. Nothing is stimulated: the tests use no events, and the app
+        // reads no pipe (microwave-oven-app/linux/main.cpp) and has no
+        // test-event triggers, so it gets neither --enable-key nor --app-pipe.
+        "microwave-oven" => AppSpec {
+            name: "microwave-oven",
+            target_suffix: "microwave-oven",
+            binary: "chip-microwave-oven-app",
+            fixed_qr: None,
+            test_filter: Some("clusters_microwave_oven"),
+            extra_args: &[],
+            needs_ota_image: false,
+            linux_platform_mdns: false,
+            events: EventStimulus::None,
+        },
         "icd" => AppSpec {
             name: "icd",
             target_suffix: "lit-icd",
@@ -176,7 +191,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
         other => {
             return Err(format!(
                 "unknown integration app '{other}' \
-                 (expected: all-clusters, lock, evse, icd, ota, rvc)"
+                 (expected: all-clusters, lock, evse, icd, ota, rvc, microwave-oven)"
             ))
         }
     })
@@ -809,9 +824,35 @@ mod tests {
     }
 
     #[test]
-    fn unknown_app_names_the_rvc_host_among_the_choices() {
+    fn microwave_oven_host_runs_only_its_own_suite_with_plain_arguments() {
+        // `build_examples.py --target darwin-arm64-microwave-oven`
+        // (linux-x64-microwave-oven on Linux) builds
+        // out/<target>-microwave-oven/chip-microwave-oven-app
+        // (examples/microwave-oven-app/linux/BUILD.gn). No events, no pipe:
+        // neither --enable-key nor --app-pipe.
+        let spec = app_spec(Some("microwave-oven")).unwrap();
+        assert_eq!(
+            (spec.name, spec.target_suffix, spec.binary),
+            (
+                "microwave-oven",
+                "microwave-oven",
+                "chip-microwave-oven-app"
+            )
+        );
+        assert_eq!(spec.test_filter, Some("clusters_microwave_oven"));
+        assert_eq!(spec.fixed_qr, None);
+        assert_eq!(spec.events, EventStimulus::None);
+        assert!(!spec.needs_ota_image && !spec.linux_platform_mdns);
+        assert_eq!(launch_args(&spec, None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn unknown_app_names_the_rvc_and_microwave_oven_hosts_among_the_choices() {
         let err = app_spec(Some("nope")).err().unwrap();
-        assert!(err.contains("rvc"), "{err}");
+        assert!(
+            err.contains("rvc") && err.contains("microwave-oven"),
+            "{err}"
+        );
     }
 
     #[test]
