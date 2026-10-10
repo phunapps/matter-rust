@@ -1557,3 +1557,53 @@ fn door_lock_events_decode() {
     assert_eq!(e.data_operation_type, DataOperationTypeEnum::from_raw(0));
     assert_eq!(e.data_index, Nullable::Value(2));
 }
+
+// ---- M9-A3 B1: events, derived cluster (BridgedDeviceBasicInformation) ------
+
+#[test]
+fn bridged_device_basic_information_event_ids_pinned() {
+    use gen::bridged_device_basic_information::event_id as ev;
+    assert_eq!(ev::START_UP, 0x00);
+    assert_eq!(ev::SHUT_DOWN, 0x01);
+    assert_eq!(ev::LEAVE, 0x02);
+    assert_eq!(ev::REACHABLE_CHANGED, 0x03);
+    assert_eq!(ev::ACTIVE_CHANGED, 0x80);
+}
+
+#[test]
+fn bridged_device_basic_information_events_decode() {
+    // StartUp and ReachableChanged inherit their fields from
+    // BasicInformation: the derived model elements have no children of their
+    // own, so the dump must read the resolved `members`.
+    use gen::bridged_device_basic_information::{
+        ActiveChangedEvent, ReachableChangedEvent, StartUpEvent,
+    };
+    let e = StartUpEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 9).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.software_version, 9);
+    let e = ReachableChangedEvent::decode(&struct_of(&|w| {
+        w.put_bool(Tag::Context(0), true).unwrap();
+    }))
+    .unwrap();
+    assert!(e.reachable_new_value);
+    // Mandatory in 1.4.2 (BridgedDeviceBasicInformationCluster.xml event 0x03).
+    assert!(matches!(
+        ReachableChangedEvent::decode(&struct_of(&|_| {})),
+        Err(matter_clusters::error::ClusterError::MissingField(
+            "ReachableNewValue"
+        ))
+    ));
+    assert!(matches!(
+        StartUpEvent::decode(&struct_of(&|_| {})),
+        Err(matter_clusters::error::ClusterError::MissingField(
+            "SoftwareVersion"
+        ))
+    ));
+    let e = ActiveChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 30_000).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.promised_active_duration, 30_000);
+}

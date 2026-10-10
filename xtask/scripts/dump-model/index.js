@@ -144,6 +144,8 @@ const EVENT_ALLOWLIST = new Set([
   'ElectricalEnergyMeasurement',
   'ElectricalPowerMeasurement',
   'DoorLock',
+  // M9-A3 B1, derived cluster (event fields inherited from BasicInformation):
+  'BridgedDeviceBasicInformation',
 ]);
 
 const excluded = [];
@@ -315,8 +317,12 @@ function dumpEvent(ev, clusterName) {
   if (ev.id === undefined || ev.id === null) fail(`${where}: event missing id`);
   if (!ev.name) fail(`${where} (id ${ev.id}): event missing name`);
   // Drop `disallowed` (conformance X) fields, mirroring dumpCommand.
+  // `members`, not `children`: in a derived cluster (BridgedDeviceBasicInformation)
+  // an inherited event is an override with no children of its own, and its
+  // fields (StartUp.SoftwareVersion, ReachableChanged.ReachableNewValue) live
+  // on the base event. For a non-derived event the two are the same.
   const fields = [];
-  [...ev.children].forEach((c, i) => {
+  [...ev.members].forEach((c, i) => {
     if (c.isDisallowed) {
       recordExclusion(clusterName, `${ev.name}.${c.name}`, 'event-field', 'disallowed');
       return;

@@ -92,9 +92,9 @@
       },
       {
         "cluster": "BridgedDeviceBasicInformation",
-        "element": "5 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
+        "element": "Leave.FabricIndex",
+        "kind": "event-field",
+        "reason": "disallowed"
       },
       {
         "cluster": "DoorLock",
@@ -6236,7 +6236,68 @@
           ]
         }
       ],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "StartUp",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "SoftwareVersion",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the same value as the one available in the SoftwareVersion attribute."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ShutDown",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "Leave",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 3,
+          "name": "ReachableChanged",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ReachableNewValue",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the value of the Reachable attribute after it was changed."
+            }
+          ]
+        },
+        {
+          "id": 128,
+          "name": "ActiveChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PromisedActiveDuration",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the minimum duration, in milliseconds, that the bridged device will remain active after receiving the initial request from the KeepActive processing steps.\nIf the bridged device is a Matter Intermittently Connected Device, PromisedActiveDuration shall be set to the PromisedActiveDuration value returned in the StayActiveResponse command.\nIf the bridged device is not a Matter Intermittently Connected Device, the implementation of this is best-effort since it may interact with non-native protocol."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "CapabilityMinimaStruct",

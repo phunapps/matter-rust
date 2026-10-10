@@ -313,7 +313,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 13] = [
+const EVENT_CLUSTERS: [&str; 14] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -330,6 +330,8 @@ const EVENT_CLUSTERS: [&str; 13] = [
     "ElectricalEnergyMeasurement",
     "ElectricalPowerMeasurement",
     "DoorLock",
+    // M9-A3 B1, derived cluster:
+    "BridgedDeviceBasicInformation",
 ];
 
 #[test]
