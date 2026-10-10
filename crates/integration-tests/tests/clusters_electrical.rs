@@ -333,3 +333,118 @@ async fn decode_every_energy_event(node: &Node) {
         epm.len()
     );
 }
+
+// ── Energy mode clusters (M9-A3 B2) ──────────────────────────────────────────
+
+/// EnergyEvseMode (0x009D) and DeviceEnergyManagementMode (0x009F) on evse-app
+/// ep1 (chip master's all-clusters no longer serves them): every attribute decodes,
+/// ChangeToMode(CurrentMode) answers Success with no StatusText, and the
+/// supported modes are evse-app's (evse-common/include/energy-evse-modes.h,
+/// energy-management/device-energy-management/include/
+/// device-energy-management-modes.h).
+///
+/// evse-app.matter serves exactly SupportedModes and CurrentMode (FeatureMap 0,
+/// so no OnMode/StartUpMode) on both clusters; the full id list is asserted so
+/// a newly served attribute is noticed rather than skipped.
+#[tokio::test]
+async fn energy_mode_clusters_decode_and_change_to_current_mode() {
+    use integration_tests::sweep::{attribute_ids, attribute_tlv, read_cluster_attributes};
+    use matter_clusters::gen::{device_energy_management_mode, energy_evse_mode};
+
+    let cfg = integration_tests::dut_or_skip!();
+    if !cfg.is_app("evse") {
+        eprintln!("skipped: energy mode test needs the evse-app DUT (`just integration-energy`)");
+        return;
+    }
+    let (controller, node_id) = integration_tests::fixture::connect(&cfg)
+        .await
+        .expect("connect/commission DUT");
+    let node = controller.node(node_id);
+    integration_tests::sweep_mode_base!(&node, 1, energy_evse_mode);
+    integration_tests::sweep_mode_base!(&node, 1, device_energy_management_mode);
+
+    let attrs = read_cluster_attributes(&node, 1, energy_evse_mode::CLUSTER_ID)
+        .await
+        .unwrap();
+    {
+        use energy_evse_mode::attribute_id::{CURRENT_MODE, SUPPORTED_MODES};
+        assert_eq!(attribute_ids(&attrs), [SUPPORTED_MODES, CURRENT_MODE]);
+    }
+    let evse = energy_evse_mode::decode_supported_modes(attribute_tlv(
+        &attrs,
+        energy_evse_mode::attribute_id::SUPPORTED_MODES,
+    ))
+    .unwrap();
+    let labels: Vec<(u8, &str)> = evse.iter().map(|m| (m.mode, m.label.as_str())).collect();
+    assert_eq!(
+        labels,
+        [
+            (0, "Manual"),
+            (1, "Auto-scheduled"),
+            (2, "Solar"),
+            (3, "Auto-scheduled with Solar charging"),
+        ]
+    );
+    use energy_evse_mode::ModeTag;
+    let tags: Vec<Vec<ModeTag>> = evse
+        .iter()
+        .map(|m| m.mode_tags.iter().map(|t| t.value).collect())
+        .collect();
+    assert_eq!(
+        tags,
+        [
+            vec![ModeTag::Manual],
+            vec![ModeTag::TimeOfUse],
+            vec![ModeTag::SolarCharging],
+            vec![ModeTag::TimeOfUse, ModeTag::SolarCharging],
+        ]
+    );
+
+    assert_dem_modes(&node).await;
+}
+
+/// DeviceEnergyManagementMode's served attributes and evse-app's five modes
+/// (device-energy-management-modes.h), split from the test to keep it short.
+async fn assert_dem_modes(node: &Node) {
+    use integration_tests::sweep::{attribute_ids, attribute_tlv, read_cluster_attributes};
+    use matter_clusters::gen::device_energy_management_mode::{
+        self as dem,
+        attribute_id::{CURRENT_MODE, SUPPORTED_MODES},
+        ModeTag,
+    };
+
+    let attrs = read_cluster_attributes(node, 1, dem::CLUSTER_ID)
+        .await
+        .unwrap();
+    assert_eq!(attribute_ids(&attrs), [SUPPORTED_MODES, CURRENT_MODE]);
+    let modes = dem::decode_supported_modes(attribute_tlv(&attrs, SUPPORTED_MODES)).unwrap();
+    let labels: Vec<(u8, &str)> = modes.iter().map(|m| (m.mode, m.label.as_str())).collect();
+    assert_eq!(
+        labels,
+        [
+            (0, "No energy management (forecast only)"),
+            (1, "Device optimizes (no local or grid control)"),
+            (2, "Optimized within building"),
+            (3, "Optimized for grid"),
+            (4, "Optimized for grid and building"),
+        ]
+    );
+    let tags: Vec<Vec<ModeTag>> = modes
+        .iter()
+        .map(|m| m.mode_tags.iter().map(|t| t.value).collect())
+        .collect();
+    assert_eq!(
+        tags,
+        [
+            vec![ModeTag::NoOptimization],
+            vec![ModeTag::DeviceOptimization],
+            vec![ModeTag::LocalOptimization, ModeTag::DeviceOptimization],
+            vec![ModeTag::DeviceOptimization, ModeTag::GridOptimization],
+            vec![
+                ModeTag::LocalOptimization,
+                ModeTag::DeviceOptimization,
+                ModeTag::GridOptimization,
+            ],
+        ]
+    );
+}

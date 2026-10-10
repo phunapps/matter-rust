@@ -126,6 +126,7 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | RefrigeratorAlarm (attributes + app-pipe door open → Notify event) | `clusters_modes_alarms::refrigerator_alarm_door_open_emits_notify` | ✓-live |
 | HepaFilterMonitoring, ActivatedCarbonFilterMonitoring (attributes + ResetCondition) | `clusters_modes_alarms::filter_monitoring_clusters_decode_and_reset_condition` | ✓-live |
 | WaterTankLevelMonitoring | — no connectedhomeip example app serves it (decode smoke + `chip-xml-conformance.py` only) | unit only |
+| EnergyEvseMode, DeviceEnergyManagementMode (attributes + ChangeToMode, on evse-app) | `clusters_electrical::energy_mode_clusters_decode_and_change_to_current_mode` | ✓-live, **local only** (`just integration-energy`) |
 
 ### Groups, ACL & access enforcement
 
