@@ -199,6 +199,16 @@ build on Apple silicon.
 - `service_area::LocationDescriptorStruct` says it is generated from the
   Matter global type `locationdesc`.
 
+### matter-clusters: Changed — the generated modules are `matter_clusters::clusters`
+
+The cluster modules moved from `matter_clusters::gen` to
+`matter_clusters::clusters` (`matter_clusters::clusters::on_off`, ...).
+`gen` is a reserved keyword from Rust edition 2024, so an edition-2024 crate
+could not write `use matter_clusters::gen::on_off;` (only `r#gen::on_off`).
+`matter_clusters::gen` remains as a hidden alias of `clusters`, so existing
+edition 2015–2021 code keeps compiling unchanged; new code should use
+`clusters`. The generated files did not move.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

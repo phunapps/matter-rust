@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::general_diagnostics;
+use matter_clusters::clusters::general_diagnostics;
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{Node, ReadPath, Value};
 

@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use matter_clusters::gen;
+use matter_clusters::clusters;
 use matter_clusters::types::Nullable;
 use matter_codec::{Tag, TlvWriter};
 use proptest::prelude::*;
@@ -11,8 +11,8 @@ use proptest::prelude::*;
 proptest! {
     #[test]
     fn on_time_roundtrip(v in any::<u16>()) {
-        let bytes = gen::on_off::encode_on_time(v);
-        prop_assert_eq!(gen::on_off::decode_on_time(&bytes).unwrap(), v);
+        let bytes = clusters::on_off::encode_on_time(v);
+        prop_assert_eq!(clusters::on_off::decode_on_time(&bytes).unwrap(), v);
     }
 
     #[test]
@@ -20,8 +20,8 @@ proptest! {
     // separator by design (CODEC-1), so a raw 0x1F is outside the round-trip
     // domain — mirrors matter-codec's own proptest regex.
     fn node_label_roundtrip(s in "[^\u{1F}]{0,32}") {
-        let bytes = gen::basic_information::encode_node_label(&s);
-        prop_assert_eq!(gen::basic_information::decode_node_label(&bytes).unwrap(), s);
+        let bytes = clusters::basic_information::encode_node_label(&s);
+        prop_assert_eq!(clusters::basic_information::decode_node_label(&bytes).unwrap(), s);
     }
 
     #[test]
@@ -30,81 +30,81 @@ proptest! {
         let val = if raw == 255 {
             Nullable::Null
         } else {
-            Nullable::Value(gen::on_off::StartUpOnOffEnum::from_raw(raw))
+            Nullable::Value(clusters::on_off::StartUpOnOffEnum::from_raw(raw))
         };
-        let bytes = gen::on_off::encode_start_up_on_off(val);
-        prop_assert_eq!(gen::on_off::decode_start_up_on_off(&bytes).unwrap(), val);
+        let bytes = clusters::on_off::encode_start_up_on_off(val);
+        prop_assert_eq!(clusters::on_off::decode_start_up_on_off(&bytes).unwrap(), val);
     }
 
     // ---- M9-A2.3 actuator batch ------------------------------------------
 
     #[test]
     fn thermostat_occupied_cooling_setpoint_roundtrip(v in any::<i16>()) {
-        let bytes = gen::thermostat::encode_occupied_cooling_setpoint(v);
-        prop_assert_eq!(gen::thermostat::decode_occupied_cooling_setpoint(&bytes).unwrap(), v);
+        let bytes = clusters::thermostat::encode_occupied_cooling_setpoint(v);
+        prop_assert_eq!(clusters::thermostat::decode_occupied_cooling_setpoint(&bytes).unwrap(), v);
     }
 
     #[test]
     fn thermostat_local_temperature_calibration_roundtrip(v in any::<i8>()) {
         // SignedTemperature (int8) — proves the gap-4 scalar-typedef de-aliasing.
-        let bytes = gen::thermostat::encode_local_temperature_calibration(v);
-        prop_assert_eq!(gen::thermostat::decode_local_temperature_calibration(&bytes).unwrap(), v);
+        let bytes = clusters::thermostat::encode_local_temperature_calibration(v);
+        prop_assert_eq!(clusters::thermostat::decode_local_temperature_calibration(&bytes).unwrap(), v);
     }
 
     #[test]
     fn thermostat_system_mode_roundtrip(raw in any::<u8>()) {
-        let v = gen::thermostat::SystemModeEnum::from_raw(raw);
-        let bytes = gen::thermostat::encode_system_mode(v);
-        prop_assert_eq!(gen::thermostat::decode_system_mode(&bytes).unwrap(), v);
+        let v = clusters::thermostat::SystemModeEnum::from_raw(raw);
+        let bytes = clusters::thermostat::encode_system_mode(v);
+        prop_assert_eq!(clusters::thermostat::decode_system_mode(&bytes).unwrap(), v);
     }
 
     #[test]
     fn thermostat_remote_sensing_roundtrip(raw in any::<u8>()) {
-        let v = gen::thermostat::RemoteSensingBitmap::from_bits_retain(raw);
-        let bytes = gen::thermostat::encode_remote_sensing(v);
-        prop_assert_eq!(gen::thermostat::decode_remote_sensing(&bytes).unwrap(), v);
+        let v = clusters::thermostat::RemoteSensingBitmap::from_bits_retain(raw);
+        let bytes = clusters::thermostat::encode_remote_sensing(v);
+        prop_assert_eq!(clusters::thermostat::decode_remote_sensing(&bytes).unwrap(), v);
     }
 
     #[test]
     fn fan_control_fan_mode_roundtrip(raw in any::<u8>()) {
-        let v = gen::fan_control::FanModeEnum::from_raw(raw);
-        let bytes = gen::fan_control::encode_fan_mode(v);
-        prop_assert_eq!(gen::fan_control::decode_fan_mode(&bytes).unwrap(), v);
+        let v = clusters::fan_control::FanModeEnum::from_raw(raw);
+        let bytes = clusters::fan_control::encode_fan_mode(v);
+        prop_assert_eq!(clusters::fan_control::decode_fan_mode(&bytes).unwrap(), v);
     }
 
     #[test]
     fn fan_control_percent_setting_roundtrip(raw in any::<u8>()) {
         // Nullable<u8>: null + every value.
         let v = if raw == 255 { Nullable::Null } else { Nullable::Value(raw) };
-        let bytes = gen::fan_control::encode_percent_setting(v);
-        prop_assert_eq!(gen::fan_control::decode_percent_setting(&bytes).unwrap(), v);
+        let bytes = clusters::fan_control::encode_percent_setting(v);
+        prop_assert_eq!(clusters::fan_control::decode_percent_setting(&bytes).unwrap(), v);
     }
 
     #[test]
     fn tuic_keypad_lockout_roundtrip(raw in any::<u8>()) {
-        let v = gen::thermostat_user_interface_configuration::KeypadLockoutEnum::from_raw(raw);
-        let bytes = gen::thermostat_user_interface_configuration::encode_keypad_lockout(v);
+        let v = clusters::thermostat_user_interface_configuration::KeypadLockoutEnum::from_raw(raw);
+        let bytes = clusters::thermostat_user_interface_configuration::encode_keypad_lockout(v);
         prop_assert_eq!(
-            gen::thermostat_user_interface_configuration::decode_keypad_lockout(&bytes).unwrap(),
+            clusters::thermostat_user_interface_configuration::decode_keypad_lockout(&bytes).unwrap(),
             v
         );
     }
 
     #[test]
     fn pump_operation_mode_roundtrip(raw in any::<u8>()) {
-        let v = gen::pump_configuration_and_control::OperationModeEnum::from_raw(raw);
-        let bytes = gen::pump_configuration_and_control::encode_operation_mode(v);
+        let v = clusters::pump_configuration_and_control::OperationModeEnum::from_raw(raw);
+        let bytes = clusters::pump_configuration_and_control::encode_operation_mode(v);
         prop_assert_eq!(
-            gen::pump_configuration_and_control::decode_operation_mode(&bytes).unwrap(),
+            clusters::pump_configuration_and_control::decode_operation_mode(&bytes).unwrap(),
             v
         );
     }
 
     #[test]
     fn window_covering_mode_roundtrip(raw in any::<u8>()) {
-        let v = gen::window_covering::ModeBitmap::from_bits_retain(raw);
-        let bytes = gen::window_covering::encode_mode(v);
-        prop_assert_eq!(gen::window_covering::decode_mode(&bytes).unwrap(), v);
+        let v = clusters::window_covering::ModeBitmap::from_bits_retain(raw);
+        let bytes = clusters::window_covering::encode_mode(v);
+        prop_assert_eq!(clusters::window_covering::decode_mode(&bytes).unwrap(), v);
     }
 
     // ---- concentration measurement (#112): the first float on the wire ----
@@ -128,7 +128,7 @@ proptest! {
         let v = f32::from_bits(bits);
         let mut buf = Vec::new();
         TlvWriter::new(&mut buf).put_float(Tag::Anonymous, v).unwrap();
-        match gen::carbon_dioxide_concentration_measurement::decode_measured_value(&buf).unwrap() {
+        match clusters::carbon_dioxide_concentration_measurement::decode_measured_value(&buf).unwrap() {
             Nullable::Value(d) => prop_assert_eq!(d.to_bits(), v.to_bits()),
             Nullable::Null => prop_assert!(false, "float decoded as null"),
         }
@@ -154,7 +154,7 @@ proptest! {
             w.put_uint(Tag::Context(1), u64::from(value)).unwrap();
             w.end_container().unwrap();
         }
-        let t = gen::rvc_run_mode::ModeTagStruct::decode(&bytes).unwrap();
+        let t = clusters::rvc_run_mode::ModeTagStruct::decode(&bytes).unwrap();
         prop_assert_eq!(t.mfg_code, mfg);
         prop_assert_eq!(t.value.to_raw(), value);
         prop_assert_eq!(t.encode(), bytes);
@@ -167,7 +167,7 @@ proptest! {
         // AlarmBitmap is map32: encoded by Reset/ModifyEnabledAlarms, decoded
         // from the four attributes and Notify. Every 32-bit pattern must
         // survive the wire both ways, unknown bits included (from_bits_retain).
-        use gen::dishwasher_alarm::{decode_state, encode_reset, AlarmBitmap};
+        use clusters::dishwasher_alarm::{decode_state, encode_reset, AlarmBitmap};
         let v = AlarmBitmap::from_bits_retain(bits);
         let mut attr = Vec::new();
         TlvWriter::new(&mut attr).put_uint(Tag::Anonymous, u64::from(bits)).unwrap();
@@ -209,7 +209,7 @@ proptest! {
             }
             w.end_container().unwrap();
         }
-        let e = gen::operational_state::ErrorStateStruct::decode(&bytes).unwrap();
+        let e = clusters::operational_state::ErrorStateStruct::decode(&bytes).unwrap();
         prop_assert_eq!(e.error_state_id.to_raw(), id);
         prop_assert_eq!(&e.error_state_label, &label);
         prop_assert_eq!(&e.error_state_details, &details);
@@ -242,7 +242,7 @@ proptest! {
             }
             w.end_container().unwrap();
         }
-        let l = gen::service_area::LocationDescriptorStruct::decode(&bytes).unwrap();
+        let l = clusters::service_area::LocationDescriptorStruct::decode(&bytes).unwrap();
         prop_assert_eq!(&l.location_name, &name);
         prop_assert_eq!(l.floor_number, floor.map_or(Nullable::Null, Nullable::Value));
         prop_assert_eq!(l.area_type, area_type.map_or(Nullable::Null, Nullable::Value));
@@ -274,7 +274,7 @@ proptest! {
             w.end_container().unwrap();
         }
         let as_nullable = |v: Option<Option<u32>>| v.map(|x| x.map_or(Nullable::Null, Nullable::Value));
-        let p = gen::service_area::ProgressStruct::decode(&bytes).unwrap();
+        let p = clusters::service_area::ProgressStruct::decode(&bytes).unwrap();
         prop_assert_eq!((p.area_id, p.status.to_raw()), (area, status));
         prop_assert_eq!(p.total_operational_time, as_nullable(total));
         prop_assert_eq!(p.estimated_time, as_nullable(estimated));

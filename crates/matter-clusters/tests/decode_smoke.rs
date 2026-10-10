@@ -8,7 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use matter_clusters::gen;
+use matter_clusters::clusters;
 use matter_clusters::types::Nullable;
 use matter_codec::{Tag, TlvWriter};
 
@@ -43,11 +43,11 @@ fn null_attr() -> Vec<u8> {
 fn illuminance_measured_value_decodes() {
     // MeasuredValue: nullable uint16.
     assert_eq!(
-        gen::illuminance_measurement::decode_measured_value(&uint_attr(12345)).unwrap(),
+        clusters::illuminance_measurement::decode_measured_value(&uint_attr(12345)).unwrap(),
         Nullable::Value(12345)
     );
     assert_eq!(
-        gen::illuminance_measurement::decode_measured_value(&null_attr()).unwrap(),
+        clusters::illuminance_measurement::decode_measured_value(&null_attr()).unwrap(),
         Nullable::Null
     );
 }
@@ -56,7 +56,7 @@ fn illuminance_measured_value_decodes() {
 fn pressure_measured_value_decodes() {
     // MeasuredValue: nullable int16.
     assert_eq!(
-        gen::pressure_measurement::decode_measured_value(&int_attr(-50)).unwrap(),
+        clusters::pressure_measurement::decode_measured_value(&int_attr(-50)).unwrap(),
         Nullable::Value(-50)
     );
 }
@@ -65,7 +65,7 @@ fn pressure_measured_value_decodes() {
 fn flow_measured_value_decodes() {
     // MeasuredValue: nullable uint16.
     assert_eq!(
-        gen::flow_measurement::decode_measured_value(&uint_attr(200)).unwrap(),
+        clusters::flow_measurement::decode_measured_value(&uint_attr(200)).unwrap(),
         Nullable::Value(200)
     );
 }
@@ -73,14 +73,14 @@ fn flow_measured_value_decodes() {
 #[test]
 fn boolean_state_state_value_decodes() {
     // StateValue: bool.
-    assert!(gen::boolean_state::decode_state_value(&bool_attr(true)).unwrap());
+    assert!(clusters::boolean_state::decode_state_value(&bool_attr(true)).unwrap());
 }
 
 #[test]
 fn switch_current_position_decodes() {
     // CurrentPosition: uint8 (not nullable).
     assert_eq!(
-        gen::switch::decode_current_position(&uint_attr(2)).unwrap(),
+        clusters::switch::decode_current_position(&uint_attr(2)).unwrap(),
         2
     );
 }
@@ -108,46 +108,46 @@ fn uint_array_attr(values: &[u64]) -> Vec<u8> {
 
 #[test]
 fn air_quality_decodes() {
-    use gen::air_quality::AirQualityEnum;
+    use clusters::air_quality::AirQualityEnum;
     assert_eq!(
-        gen::air_quality::decode_air_quality(&uint_attr(1)).unwrap(),
+        clusters::air_quality::decode_air_quality(&uint_attr(1)).unwrap(),
         AirQualityEnum::Good
     );
     // The model member named `Unknown` (value 0) is a fieldless variant…
     assert_eq!(
-        gen::air_quality::decode_air_quality(&uint_attr(0)).unwrap(),
+        clusters::air_quality::decode_air_quality(&uint_attr(0)).unwrap(),
         AirQualityEnum::Unknown
     );
     // …and an out-of-range discriminant lands in the renamed catch-all.
     assert_eq!(
-        gen::air_quality::decode_air_quality(&uint_attr(99)).unwrap(),
+        clusters::air_quality::decode_air_quality(&uint_attr(99)).unwrap(),
         AirQualityEnum::Unrecognized(99)
     );
 }
 
 #[test]
 fn power_source_status_and_lists_decode() {
-    use gen::power_source::{PowerSourceStatusEnum, WiredFaultEnum};
+    use clusters::power_source::{PowerSourceStatusEnum, WiredFaultEnum};
     // Status: mandatory enum8.
     assert_eq!(
-        gen::power_source::decode_status(&uint_attr(1)).unwrap(),
+        clusters::power_source::decode_status(&uint_attr(1)).unwrap(),
         PowerSourceStatusEnum::Active
     );
     // ActiveWiredFaults: list<WiredFaultEnum> -> Vec<WiredFaultEnum> (gap 6).
     assert_eq!(
-        gen::power_source::decode_active_wired_faults(&uint_array_attr(&[1])).unwrap(),
+        clusters::power_source::decode_active_wired_faults(&uint_array_attr(&[1])).unwrap(),
         vec![WiredFaultEnum::OverVoltage]
     );
     // EndpointList: list<endpoint-no> -> Vec<u16>.
     assert_eq!(
-        gen::power_source::decode_endpoint_list(&uint_array_attr(&[1, 2])).unwrap(),
+        clusters::power_source::decode_endpoint_list(&uint_array_attr(&[1, 2])).unwrap(),
         vec![1u16, 2u16]
     );
 }
 
 #[test]
 fn electrical_power_measurement_decodes() {
-    use gen::electrical_power_measurement as epm;
+    use clusters::electrical_power_measurement as epm;
     // PowerMode: mandatory enum8 (model has an `Unknown` member -> renamed catch-all).
     assert_eq!(
         epm::decode_power_mode(&uint_attr(2)).unwrap(),
@@ -175,7 +175,7 @@ fn electrical_energy_measurement_nullable_struct_attr_decodes() {
     // CumulativeEnergyImported: nullable EnergyMeasurementStruct -> Nullable<…>
     // (gap 7); a TLV null decodes to Nullable::Null.
     assert!(matches!(
-        gen::electrical_energy_measurement::decode_cumulative_energy_imported(&null_attr())
+        clusters::electrical_energy_measurement::decode_cumulative_energy_imported(&null_attr())
             .unwrap(),
         Nullable::Null
     ));
@@ -185,10 +185,10 @@ fn electrical_energy_measurement_nullable_struct_attr_decodes() {
 
 #[test]
 fn thermostat_system_mode_decodes() {
-    use gen::thermostat::SystemModeEnum;
+    use clusters::thermostat::SystemModeEnum;
     // SystemMode: enum8; raw 4 = Heat (spot-check a known member).
     assert_eq!(
-        gen::thermostat::decode_system_mode(&uint_attr(4)).unwrap(),
+        clusters::thermostat::decode_system_mode(&uint_attr(4)).unwrap(),
         SystemModeEnum::Heat
     );
 }
@@ -223,7 +223,7 @@ fn thermostat_atomic_response_decodes_synth_struct() {
             ..
         })
     ));
-    let resp = gen::thermostat::AtomicResponse::decode_from(&mut r).unwrap();
+    let resp = clusters::thermostat::AtomicResponse::decode_from(&mut r).unwrap();
     assert_eq!(resp.status_code, 0);
     assert_eq!(resp.attribute_status.len(), 1);
     assert_eq!(resp.attribute_status[0].attribute_id, 0x1234);
@@ -233,30 +233,31 @@ fn thermostat_atomic_response_decodes_synth_struct() {
 
 #[test]
 fn fan_control_fan_mode_decodes() {
-    use gen::fan_control::FanModeEnum;
+    use clusters::fan_control::FanModeEnum;
     // FanMode: enum8; raw 3 = High.
     assert_eq!(
-        gen::fan_control::decode_fan_mode(&uint_attr(3)).unwrap(),
+        clusters::fan_control::decode_fan_mode(&uint_attr(3)).unwrap(),
         FanModeEnum::High
     );
 }
 
 #[test]
 fn tuic_keypad_lockout_decodes() {
-    use gen::thermostat_user_interface_configuration::KeypadLockoutEnum;
+    use clusters::thermostat_user_interface_configuration::KeypadLockoutEnum;
     // KeypadLockout: enum8; raw 0 = NoLockout.
     assert_eq!(
-        gen::thermostat_user_interface_configuration::decode_keypad_lockout(&uint_attr(0)).unwrap(),
+        clusters::thermostat_user_interface_configuration::decode_keypad_lockout(&uint_attr(0))
+            .unwrap(),
         KeypadLockoutEnum::NoLockout
     );
 }
 
 #[test]
 fn pump_operation_mode_decodes() {
-    use gen::pump_configuration_and_control::OperationModeEnum;
+    use clusters::pump_configuration_and_control::OperationModeEnum;
     // OperationMode: enum8; raw 0 = Normal.
     assert_eq!(
-        gen::pump_configuration_and_control::decode_operation_mode(&uint_attr(0)).unwrap(),
+        clusters::pump_configuration_and_control::decode_operation_mode(&uint_attr(0)).unwrap(),
         OperationModeEnum::Normal
     );
 }
@@ -264,7 +265,7 @@ fn pump_operation_mode_decodes() {
 #[test]
 fn window_covering_mode_decodes() {
     // Mode: map8 bitmap; bit0 = MotorDirectionReversed (raw 1).
-    let m = gen::window_covering::decode_mode(&uint_attr(1)).unwrap();
+    let m = clusters::window_covering::decode_mode(&uint_attr(1)).unwrap();
     assert_eq!(m.bits(), 1);
 }
 
@@ -291,7 +292,7 @@ fn binding_target_struct_decodes_fabric_index() {
             ..
         })
     ));
-    let t = gen::binding::TargetStruct::decode_from(&mut r).unwrap();
+    let t = clusters::binding::TargetStruct::decode_from(&mut r).unwrap();
     assert_eq!(t.cluster, Some(0x0006));
     assert_eq!(t.fabric_index, 1u8);
 }
@@ -316,7 +317,7 @@ fn fixed_label_label_struct_decodes() {
             ..
         })
     ));
-    let l = gen::fixed_label::LabelStruct::decode_from(&mut r).unwrap();
+    let l = clusters::fixed_label::LabelStruct::decode_from(&mut r).unwrap();
     assert_eq!(l.label, "room");
     assert_eq!(l.value, "kitchen");
 }
@@ -325,7 +326,7 @@ fn fixed_label_label_struct_decodes() {
 fn groups_add_group_command_encodes_wellformed() {
     use matter_codec::{Element, TlvReader, Value};
     // encode_add_group(group_id, group_name) -> anon struct { ctx0=uint, ctx1=utf8 }.
-    let bytes = gen::groups::encode_add_group(0x0007, &"den".to_string());
+    let bytes = clusters::groups::encode_add_group(0x0007, &"den".to_string());
     let mut r = TlvReader::new(&bytes);
     assert!(matches!(
         r.next().unwrap(),
@@ -349,7 +350,7 @@ fn groups_get_group_membership_command_encodes_list() {
     use matter_codec::{ContainerKind, Element, TlvReader, Value};
     // encode_get_group_membership(list<group-id>) -> anon struct { ctx0=array[uint,uint] }
     // (reuses the A2.3 list-typed-command-field encode codepath).
-    let bytes = gen::groups::encode_get_group_membership(&vec![1u16, 2u16]);
+    let bytes = clusters::groups::encode_get_group_membership(&vec![1u16, 2u16]);
     let mut r = TlvReader::new(&bytes);
     assert!(matches!(
         r.next().unwrap(),
@@ -407,7 +408,7 @@ fn access_control_entry_decodes_subjects_u64() {
             ..
         })
     ));
-    let e = gen::access_control::AccessControlEntryStruct::decode_from(&mut r).unwrap();
+    let e = clusters::access_control::AccessControlEntryStruct::decode_from(&mut r).unwrap();
     // Subjects/Targets are fabric-sensitive, so `Option`-wrapped (M9-A3 §5.4);
     // our own fabric's entry carries them.
     assert_eq!(
@@ -424,11 +425,10 @@ fn group_key_set_write_encodes_wellformed() {
     // KeySetWrite wraps a GroupKeySetStruct at ctx0 (single struct command field,
     // a shape DoorLock's SetCredential already proves). Smoke: encode is a
     // well-formed anon struct holding a nested struct.
-    let gks = gen::group_key_management::GroupKeySetStruct {
+    let gks = clusters::group_key_management::GroupKeySetStruct {
         group_key_set_id: 0x0042,
-        group_key_security_policy: gen::group_key_management::GroupKeySecurityPolicyEnum::from_raw(
-            0,
-        ),
+        group_key_security_policy:
+            clusters::group_key_management::GroupKeySecurityPolicyEnum::from_raw(0),
         epoch_key0: Nullable::Value(vec![0xab; 16]),
         epoch_start_time0: Nullable::Value(1234),
         epoch_key1: Nullable::Null,
@@ -438,7 +438,7 @@ fn group_key_set_write_encodes_wellformed() {
         group_key_multicast_policy: None,
         fabric_index: None,
     };
-    let bytes = gen::group_key_management::encode_key_set_write(gks);
+    let bytes = clusters::group_key_management::encode_key_set_write(gks);
     let mut r = TlvReader::new(&bytes);
     assert!(matches!(
         r.next().unwrap(),
@@ -456,7 +456,7 @@ fn group_key_set_write_encodes_wellformed() {
 #[test]
 fn admin_open_basic_commissioning_window_encodes() {
     use matter_codec::{Element, TlvReader, Value};
-    let bytes = gen::administrator_commissioning::encode_open_basic_commissioning_window(180);
+    let bytes = clusters::administrator_commissioning::encode_open_basic_commissioning_window(180);
     let mut r = TlvReader::new(&bytes);
     assert!(matches!(
         r.next().unwrap(),
@@ -473,10 +473,10 @@ fn admin_open_basic_commissioning_window_encodes() {
 
 #[test]
 fn ota_announce_provider_encodes_scalars_and_enum() {
-    use gen::ota_software_update_requestor::AnnouncementReasonEnum;
+    use clusters::ota_software_update_requestor::AnnouncementReasonEnum;
     use matter_codec::{Element, TlvReader, Value};
     // metadata_for_node is optional -> None skips ctx3; ctx0 is the node id.
-    let bytes = gen::ota_software_update_requestor::encode_announce_ota_provider(
+    let bytes = clusters::ota_software_update_requestor::encode_announce_ota_provider(
         0x0000_0000_0000_1234,
         0xFFF1,
         AnnouncementReasonEnum::SimpleAnnouncement,
@@ -499,7 +499,7 @@ fn ota_announce_provider_encodes_scalars_and_enum() {
 
 #[test]
 fn ota_provider_query_image_encodes_scalars() {
-    use gen::ota_software_update_provider::{encode_query_image, DownloadProtocolEnum};
+    use clusters::ota_software_update_provider::{encode_query_image, DownloadProtocolEnum};
     use matter_codec::{Element, TlvReader, Value};
     let bytes = encode_query_image(
         0xFFF1,
@@ -527,7 +527,7 @@ fn ota_provider_query_image_encodes_scalars() {
 
 #[test]
 fn ota_provider_query_image_response_decodes() {
-    use gen::ota_software_update_provider::{QueryImageResponse, StatusEnum};
+    use clusters::ota_software_update_provider::{QueryImageResponse, StatusEnum};
     use matter_codec::{Element, Tag, TlvReader, TlvWriter};
     // Hand-build a minimal QueryImageResponse: ctx0 Status = UpdateAvailable(0).
     let mut buf = Vec::new();
@@ -546,7 +546,7 @@ fn ota_provider_query_image_response_decodes() {
 
 #[test]
 fn time_sync_utc_time_and_granularity_decode() {
-    use gen::time_synchronization::{decode_granularity, decode_utc_time, GranularityEnum};
+    use clusters::time_synchronization::{decode_granularity, decode_utc_time, GranularityEnum};
     // UTCTime is nullable epoch_us; a present value decodes to Nullable::Some.
     let decoded = decode_utc_time(&uint_attr(780_000_000_000_000)).unwrap();
     assert_eq!(decoded, Nullable::Value(780_000_000_000_000));
@@ -557,7 +557,9 @@ fn time_sync_utc_time_and_granularity_decode() {
 
 #[test]
 fn icd_register_client_response_and_operating_mode_decode() {
-    use gen::icd_management::{decode_operating_mode, OperatingModeEnum, RegisterClientResponse};
+    use clusters::icd_management::{
+        decode_operating_mode, OperatingModeEnum, RegisterClientResponse,
+    };
     use matter_codec::{Tag, TlvWriter};
     // RegisterClientResponse: ctx0 ICDCounter = 7.
     let mut buf = Vec::new();
@@ -574,7 +576,7 @@ fn icd_register_client_response_and_operating_mode_decode() {
 
 #[test]
 fn time_sync_set_time_zone_response_decodes() {
-    use gen::time_synchronization::SetTimeZoneResponse;
+    use clusters::time_synchronization::SetTimeZoneResponse;
     use matter_codec::{Tag, TlvWriter};
     // Hand-build SetTimeZoneResponse: ctx0 DSTOffsetRequired = true.
     let mut buf = Vec::new();
@@ -633,8 +635,8 @@ fn assert_f32_eq(actual: f32, expected: f32) {
 
 #[test]
 fn carbon_dioxide_concentration_full_attribute_set_decodes() {
+    use clusters::carbon_dioxide_concentration_measurement as co2;
     use co2::{LevelValueEnum, MeasurementMediumEnum, MeasurementUnitEnum};
-    use gen::carbon_dioxide_concentration_measurement as co2;
 
     // Nullable float32 measurements: a value, and TLV null.
     assert_eq!(
@@ -694,7 +696,7 @@ fn carbon_dioxide_concentration_full_attribute_set_decodes() {
 
 #[test]
 fn float_attribute_rejects_non_float_wire_types() {
-    use gen::carbon_dioxide_concentration_measurement as co2;
+    use clusters::carbon_dioxide_concentration_measurement as co2;
     // A float attribute encoded as an integer (or any other type) is a type
     // mismatch, not a silent coercion — the pre-#112 emitter fallthrough would
     // have decoded these as integers.
@@ -721,7 +723,7 @@ fn float_attribute_rejects_non_float_wire_types() {
 
 #[test]
 fn float_wire_roundtrip_including_edge_values() {
-    use gen::carbon_dioxide_concentration_measurement as co2;
+    use clusters::carbon_dioxide_concentration_measurement as co2;
     // encode (matter-codec) -> decode (generated) -> equal, across the edges of
     // the binary32 space. Compared by BITS: NaN != NaN and 0.0 == -0.0 under
     // value equality, either of which would make this test lie.
@@ -755,7 +757,7 @@ fn every_concentration_cluster_decodes_its_measured_value() {
     // (#112) precisely so no member is left out, and this is the guard.
     macro_rules! assert_family_member {
         ($m:ident, $id:expr) => {{
-            use gen::$m as m;
+            use clusters::$m as m;
             assert_eq!(m::CLUSTER_ID, $id, concat!(stringify!($m), " cluster id"));
             assert_eq!(
                 m::decode_measured_value(&float_attr(1.5)).unwrap(),
@@ -802,7 +804,7 @@ fn str_attr(v: &str) -> Vec<u8> {
 
 #[test]
 fn bridged_device_basic_information_ids_pinned() {
-    use gen::bridged_device_basic_information as bdbi;
+    use clusters::bridged_device_basic_information as bdbi;
     assert_eq!(bdbi::CLUSTER_ID, 0x0039);
     // Same attribute ids as BasicInformation (0x0028), per the Matter spec.
     assert_eq!(bdbi::attribute_id::NODE_LABEL, 0x0005);
@@ -812,7 +814,7 @@ fn bridged_device_basic_information_ids_pinned() {
 
 #[test]
 fn bridged_device_basic_information_decodes() {
-    use gen::bridged_device_basic_information as bdbi;
+    use clusters::bridged_device_basic_information as bdbi;
     // NodeLabel / UniqueId: strings.
     assert_eq!(
         bdbi::decode_node_label(&str_attr("Kitchen sensor")).unwrap(),
@@ -832,7 +834,7 @@ fn bridged_device_basic_information_decodes() {
 
 #[test]
 fn switch_event_ids_pinned() {
-    use gen::switch::event_id as ev;
+    use clusters::switch::event_id as ev;
     assert_eq!(ev::SWITCH_LATCHED, 0x00);
     assert_eq!(ev::INITIAL_PRESS, 0x01);
     assert_eq!(ev::LONG_PRESS, 0x02);
@@ -854,7 +856,7 @@ fn switch_multi_press_complete_event_round_trips() {
         w.put_uint(Tag::Context(1), 2).unwrap();
         w.end_container().unwrap();
     }
-    let ev = gen::switch::MultiPressCompleteEvent::decode(&buf).unwrap();
+    let ev = clusters::switch::MultiPressCompleteEvent::decode(&buf).unwrap();
     assert_eq!(ev.previous_position, 1);
     assert_eq!(ev.total_number_of_presses_counted, 2);
 }
@@ -870,7 +872,7 @@ fn switch_multi_press_complete_event_missing_field_errors() {
         w.put_uint(Tag::Context(0), 1).unwrap();
         w.end_container().unwrap();
     }
-    assert!(gen::switch::MultiPressCompleteEvent::decode(&buf).is_err());
+    assert!(clusters::switch::MultiPressCompleteEvent::decode(&buf).is_err());
 }
 
 // ---- M9-A3 B1: fabric-sensitive fields withheld for other fabrics -----------
@@ -932,16 +934,20 @@ fn own_acl_entry(w: &mut TlvWriter<'_>) {
 fn acl_list_with_another_fabrics_entry_decodes() {
     // The regression: before §5.4 one other-fabric entry failed the WHOLE
     // list with MissingField("Privilege").
-    let acl = gen::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry]))
-        .expect("an unfiltered ACL read with a second fabric must decode");
+    let acl =
+        clusters::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry]))
+            .expect("an unfiltered ACL read with a second fabric must decode");
     assert_eq!(acl.len(), 2);
 }
 
 #[test]
 fn acl_other_fabric_entry_has_every_sensitive_field_none() {
-    use gen::access_control::{AccessControlEntryAuthModeEnum, AccessControlEntryPrivilegeEnum};
+    use clusters::access_control::{
+        AccessControlEntryAuthModeEnum, AccessControlEntryPrivilegeEnum,
+    };
     let acl =
-        gen::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry])).unwrap();
+        clusters::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry]))
+            .unwrap();
     let (own, other) = (&acl[0], &acl[1]);
     assert_eq!(
         own.privilege,
@@ -970,10 +976,10 @@ fn acl_entry_with_some_sensitive_fields_withheld_decodes_field_by_field() {
         w.put_null(Tag::Context(4)).unwrap(); // Targets: null (present)
         w.put_uint(Tag::Context(254), 2).unwrap();
     };
-    let acl = gen::access_control::decode_acl(&list_of(&[&partial])).unwrap();
+    let acl = clusters::access_control::decode_acl(&list_of(&[&partial])).unwrap();
     assert_eq!(
         acl[0].privilege,
-        Some(gen::access_control::AccessControlEntryPrivilegeEnum::from_raw(3))
+        Some(clusters::access_control::AccessControlEntryPrivilegeEnum::from_raw(3))
     );
     assert_eq!(acl[0].auth_mode, None);
     assert_eq!(acl[0].subjects, None);
@@ -988,7 +994,7 @@ fn extension_other_fabric_entry_decodes_and_refuses_reencode() {
         w.put_uint(Tag::Context(254), 1).unwrap();
     };
     let ext =
-        gen::access_control::decode_extension(&list_of(&[&own, &other_fabric_entry])).unwrap();
+        clusters::access_control::decode_extension(&list_of(&[&own, &other_fabric_entry])).unwrap();
     assert_eq!(ext[0].data, Some(vec![0x17, 0x18]));
     assert_eq!(ext[1].data, None);
     assert_eq!(ext[1].fabric_index, 2);
@@ -1015,7 +1021,7 @@ fn arl_other_fabric_entry_has_every_sensitive_field_none() {
         w.end_container().unwrap();
         w.put_uint(Tag::Context(254), 1).unwrap();
     };
-    let arl = gen::access_control::decode_arl(&list_of(&[&own, &other_fabric_entry])).unwrap();
+    let arl = clusters::access_control::decode_arl(&list_of(&[&own, &other_fabric_entry])).unwrap();
     assert_eq!(arl[0].endpoint, Some(1));
     assert_eq!(arl[0].cluster, Some(0x0006));
     assert_eq!(arl[0].restrictions.as_ref().map(Vec::len), Some(1));
@@ -1036,7 +1042,7 @@ fn own_icd_entry(w: &mut TlvWriter<'_>) {
 
 #[test]
 fn icd_registered_clients_other_fabric_entry_has_every_sensitive_field_none() {
-    let clients = gen::icd_management::decode_registered_clients(&list_of(&[
+    let clients = clusters::icd_management::decode_registered_clients(&list_of(&[
         &own_icd_entry,
         &other_fabric_entry,
     ]))
@@ -1045,7 +1051,7 @@ fn icd_registered_clients_other_fabric_entry_has_every_sensitive_field_none() {
     assert_eq!(clients[0].monitored_subject, Some(0x3344));
     assert_eq!(
         clients[0].client_type,
-        Some(gen::icd_management::ClientTypeEnum::from_raw(1))
+        Some(clusters::icd_management::ClientTypeEnum::from_raw(1))
     );
     assert_eq!(clients[1].check_in_node_id, None);
     assert_eq!(clients[1].monitored_subject, None);
@@ -1055,7 +1061,7 @@ fn icd_registered_clients_other_fabric_entry_has_every_sensitive_field_none() {
 
 #[test]
 fn icd_monitoring_registration_refuses_each_missing_sensitive_field() {
-    use gen::icd_management::MonitoringRegistrationStruct;
+    use clusters::icd_management::MonitoringRegistrationStruct;
     use matter_clusters::error::ClusterError;
     let full = MonitoringRegistrationStruct::decode(&struct_of(&own_icd_entry)).unwrap();
     assert_eq!(full.encode().unwrap(), struct_of(&own_icd_entry));
@@ -1090,7 +1096,7 @@ fn icd_monitoring_registration_refuses_each_missing_sensitive_field() {
 
 #[test]
 fn basic_information_event_ids_pinned() {
-    use gen::basic_information::event_id as ev;
+    use clusters::basic_information::event_id as ev;
     assert_eq!(ev::START_UP, 0x00);
     assert_eq!(ev::SHUT_DOWN, 0x01);
     assert_eq!(ev::LEAVE, 0x02);
@@ -1099,7 +1105,7 @@ fn basic_information_event_ids_pinned() {
 
 #[test]
 fn basic_information_events_decode() {
-    use gen::basic_information::{LeaveEvent, ReachableChangedEvent, StartUpEvent};
+    use clusters::basic_information::{LeaveEvent, ReachableChangedEvent, StartUpEvent};
     let e = StartUpEvent::decode(&struct_of(&|w| {
         w.put_uint(Tag::Context(0), 0x0102_0304).unwrap();
     }))
@@ -1122,7 +1128,7 @@ fn basic_information_events_decode() {
 #[test]
 fn event_payload_with_an_unknown_future_field_still_decodes() {
     // A newer-revision device may add fields; the decoder skips unknown tags.
-    let e = gen::basic_information::StartUpEvent::decode(&struct_of(&|w| {
+    let e = clusters::basic_information::StartUpEvent::decode(&struct_of(&|w| {
         w.put_uint(Tag::Context(0), 5).unwrap();
         w.put_utf8(Tag::Context(9), "future").unwrap();
         w.start_structure(Tag::Context(10)).unwrap();
@@ -1135,7 +1141,7 @@ fn event_payload_with_an_unknown_future_field_still_decodes() {
 
 #[test]
 fn boolean_state_state_change_event_decodes() {
-    use gen::boolean_state::{event_id, StateChangeEvent};
+    use clusters::boolean_state::{event_id, StateChangeEvent};
     assert_eq!(event_id::STATE_CHANGE, 0x00);
     let e = StateChangeEvent::decode(&struct_of(&|w| {
         w.put_bool(Tag::Context(0), true).unwrap();
@@ -1146,7 +1152,7 @@ fn boolean_state_state_change_event_decodes() {
 
 #[test]
 fn occupancy_changed_event_decodes() {
-    use gen::occupancy_sensing::{event_id, OccupancyBitmap, OccupancyChangedEvent};
+    use clusters::occupancy_sensing::{event_id, OccupancyBitmap, OccupancyChangedEvent};
     assert_eq!(event_id::OCCUPANCY_CHANGED, 0x00);
     let e = OccupancyChangedEvent::decode(&struct_of(&|w| {
         w.put_uint(Tag::Context(0), 1).unwrap();
@@ -1158,7 +1164,7 @@ fn occupancy_changed_event_decodes() {
 #[test]
 fn pump_configuration_event_ids_pinned() {
     // All 17 pump events are fieldless: only their ids are generated.
-    use gen::pump_configuration_and_control::event_id as ev;
+    use clusters::pump_configuration_and_control::event_id as ev;
     assert_eq!(ev::SUPPLY_VOLTAGE_LOW, 0x00);
     assert_eq!(ev::DRY_RUNNING, 0x05);
     assert_eq!(ev::PUMP_BLOCKED, 0x09);
@@ -1167,7 +1173,7 @@ fn pump_configuration_event_ids_pinned() {
 
 #[test]
 fn time_synchronization_events_decode() {
-    use gen::time_synchronization::{event_id as ev, DstStatusEvent, TimeZoneStatusEvent};
+    use clusters::time_synchronization::{event_id as ev, DstStatusEvent, TimeZoneStatusEvent};
     assert_eq!(ev::DST_TABLE_EMPTY, 0x00);
     assert_eq!(ev::DST_STATUS, 0x01);
     assert_eq!(ev::TIME_ZONE_STATUS, 0x02);
@@ -1195,7 +1201,7 @@ fn time_synchronization_events_decode() {
 
 #[test]
 fn ota_requestor_events_decode() {
-    use gen::ota_software_update_requestor::{
+    use clusters::ota_software_update_requestor::{
         event_id as ev, ChangeReasonEnum, DownloadErrorEvent, StateTransitionEvent,
         UpdateStateEnum, VersionAppliedEvent,
     };
@@ -1235,7 +1241,7 @@ fn ota_requestor_events_decode() {
 
 #[test]
 fn general_diagnostics_events_decode() {
-    use gen::general_diagnostics::{
+    use clusters::general_diagnostics::{
         event_id as ev, BootReasonEnum, BootReasonEvent, HardwareFaultChangeEvent,
         HardwareFaultEnum, NetworkFaultChangeEvent, NetworkFaultEnum, RadioFaultChangeEvent,
         RadioFaultEnum,
@@ -1287,7 +1293,7 @@ fn general_diagnostics_events_decode() {
 
 #[test]
 fn power_source_fault_events_decode() {
-    use gen::power_source::{
+    use clusters::power_source::{
         event_id as ev, BatChargeFaultChangeEvent, BatChargeFaultEnum, BatFaultChangeEvent,
         BatFaultEnum, WiredFaultChangeEvent, WiredFaultEnum,
     };
@@ -1327,15 +1333,15 @@ fn list_of_enum_event_missing_list_is_an_error() {
         w.end_container().unwrap();
     });
     assert!(matches!(
-        gen::general_diagnostics::HardwareFaultChangeEvent::decode(&only_current),
+        clusters::general_diagnostics::HardwareFaultChangeEvent::decode(&only_current),
         Err(ClusterError::MissingField("Previous"))
     ));
     assert!(matches!(
-        gen::power_source::BatFaultChangeEvent::decode(&only_current),
+        clusters::power_source::BatFaultChangeEvent::decode(&only_current),
         Err(ClusterError::MissingField("Previous"))
     ));
     assert!(matches!(
-        gen::general_diagnostics::BootReasonEvent::decode(&struct_of(&|_| {})),
+        clusters::general_diagnostics::BootReasonEvent::decode(&struct_of(&|_| {})),
         Err(ClusterError::MissingField("BootReason"))
     ));
 }
@@ -1344,7 +1350,7 @@ fn list_of_enum_event_missing_list_is_an_error() {
 
 #[test]
 fn access_control_event_ids_pinned() {
-    use gen::access_control::event_id as ev;
+    use clusters::access_control::event_id as ev;
     assert_eq!(ev::ACCESS_CONTROL_ENTRY_CHANGED, 0x00);
     assert_eq!(ev::ACCESS_CONTROL_EXTENSION_CHANGED, 0x01);
     assert_eq!(ev::FABRIC_RESTRICTION_REVIEW_UPDATE, 0x02);
@@ -1352,7 +1358,7 @@ fn access_control_event_ids_pinned() {
 
 #[test]
 fn access_control_entry_changed_event_decodes_with_unwrapped_fields() {
-    use gen::access_control::{
+    use clusters::access_control::{
         AccessControlEntryChangedEvent, AccessControlEntryPrivilegeEnum, ChangeTypeEnum,
     };
     // chip (access-control-cluster.cpp OnEntryChanged): a CASE admin added an
@@ -1394,7 +1400,7 @@ fn access_control_entry_changed_event_decodes_with_unwrapped_fields() {
 
 #[test]
 fn access_control_extension_changed_and_review_events_decode() {
-    use gen::access_control::{
+    use clusters::access_control::{
         AccessControlExtensionChangedEvent, ChangeTypeEnum, FabricRestrictionReviewUpdateEvent,
     };
     let e = AccessControlExtensionChangedEvent::decode(&struct_of(&|w| {
@@ -1421,7 +1427,7 @@ fn access_control_extension_changed_and_review_events_decode() {
 
 #[test]
 fn electrical_energy_measured_events_decode() {
-    use gen::electrical_energy_measurement::{
+    use clusters::electrical_energy_measurement::{
         event_id as ev, CumulativeEnergyMeasuredEvent, PeriodicEnergyMeasuredEvent,
     };
     assert_eq!(ev::CUMULATIVE_ENERGY_MEASURED, 0x00);
@@ -1456,7 +1462,7 @@ fn electrical_energy_measured_events_decode() {
 
 #[test]
 fn electrical_power_measurement_period_ranges_event_decodes() {
-    use gen::electrical_power_measurement::{
+    use clusters::electrical_power_measurement::{
         event_id, MeasurementPeriodRangesEvent, MeasurementTypeEnum,
     };
     assert_eq!(event_id::MEASUREMENT_PERIOD_RANGES, 0x00);
@@ -1480,7 +1486,7 @@ fn electrical_power_measurement_period_ranges_event_decodes() {
 
 #[test]
 fn door_lock_event_ids_pinned() {
-    use gen::door_lock::event_id as ev;
+    use clusters::door_lock::event_id as ev;
     assert_eq!(ev::DOOR_LOCK_ALARM, 0x00);
     assert_eq!(ev::DOOR_STATE_CHANGE, 0x01);
     assert_eq!(ev::LOCK_OPERATION, 0x02);
@@ -1490,7 +1496,7 @@ fn door_lock_event_ids_pinned() {
 
 #[test]
 fn door_lock_events_decode() {
-    use gen::door_lock::{
+    use clusters::door_lock::{
         AlarmCodeEnum, DataOperationTypeEnum, DoorLockAlarmEvent, DoorStateChangeEvent,
         DoorStateEnum, LockDataTypeEnum, LockOperationErrorEvent, LockOperationEvent,
         LockOperationTypeEnum, LockUserChangeEvent, OperationErrorEnum, OperationSourceEnum,
@@ -1562,7 +1568,7 @@ fn door_lock_events_decode() {
 
 #[test]
 fn bridged_device_basic_information_event_ids_pinned() {
-    use gen::bridged_device_basic_information::event_id as ev;
+    use clusters::bridged_device_basic_information::event_id as ev;
     assert_eq!(ev::START_UP, 0x00);
     assert_eq!(ev::SHUT_DOWN, 0x01);
     assert_eq!(ev::LEAVE, 0x02);
@@ -1575,7 +1581,7 @@ fn bridged_device_basic_information_events_decode() {
     // StartUp and ReachableChanged inherit their fields from
     // BasicInformation: the derived model elements have no children of their
     // own, so the dump must read the resolved `members`.
-    use gen::bridged_device_basic_information::{
+    use clusters::bridged_device_basic_information::{
         ActiveChangedEvent, ReachableChangedEvent, StartUpEvent,
     };
     let e = StartUpEvent::decode(&struct_of(&|w| {
@@ -1660,10 +1666,10 @@ macro_rules! mode_base_cluster_decodes {
     ($test:ident, $m:ident, $first_derived_tag:literal, $derived_variant:ident) => {
         #[test]
         fn $test() {
-            use gen::$m::{ChangeToModeResponse, ModeChangeStatus, ModeTag};
+            use clusters::$m::{ChangeToModeResponse, ModeChangeStatus, ModeTag};
             use matter_clusters::error::ClusterError;
             let modes =
-                gen::$m::decode_supported_modes(&supported_modes($first_derived_tag)).unwrap();
+                clusters::$m::decode_supported_modes(&supported_modes($first_derived_tag)).unwrap();
             assert_eq!(modes.len(), 2);
             assert_eq!((modes[0].label.as_str(), modes[0].mode), ("Normal", 0));
             let tags: Vec<_> = modes[0]
@@ -1678,10 +1684,10 @@ macro_rules! mode_base_cluster_decodes {
             assert_eq!((modes[1].label.as_str(), modes[1].mode), ("Vendor", 7));
             assert_eq!(modes[1].mode_tags[0].mfg_code, Some(0xFFF1));
             assert_eq!(modes[1].mode_tags[0].value, ModeTag::Unknown(0x8001));
-            assert_eq!(gen::$m::decode_current_mode(&uint_attr(7)).unwrap(), 7);
+            assert_eq!(clusters::$m::decode_current_mode(&uint_attr(7)).unwrap(), 7);
 
             let new_mode_7 = struct_of(&|w| w.put_uint(Tag::Context(0), 7).unwrap());
-            assert_eq!(gen::$m::encode_change_to_mode(7), new_mode_7);
+            assert_eq!(clusters::$m::encode_change_to_mode(7), new_mode_7);
 
             // What chip sends for an unsupported mode: Status only.
             let r = ChangeToModeResponse::decode(&struct_of(&|w| {
@@ -1739,7 +1745,7 @@ fn rvc_mode_change_status_keeps_base_and_derived_values() {
     // The derived ModeChangeStatus adds values to the base's 0..=3; on
     // `.children` the base values were missing, so a plain `Success` decoded
     // as Unknown(0).
-    use gen::{rvc_clean_mode, rvc_run_mode};
+    use clusters::{rvc_clean_mode, rvc_run_mode};
     assert_eq!(
         rvc_run_mode::ModeChangeStatus::from_raw(0),
         rvc_run_mode::ModeChangeStatus::Success
@@ -1771,7 +1777,7 @@ fn mode_option_missing_mode_tags_is_an_error() {
         w.put_uint(Tag::Context(1), 0).unwrap();
     }]);
     assert!(matches!(
-        gen::dishwasher_mode::decode_supported_modes(&bytes),
+        clusters::dishwasher_mode::decode_supported_modes(&bytes),
         Err(ClusterError::MissingField("ModeTags"))
     ));
 }
@@ -1790,7 +1796,7 @@ fn microwave_oven_mode_decodes_without_commands() {
     // MicrowaveOvenMode disallows ChangeToMode (1.4.2 MicrowaveOvenMode.xml:
     // <disallowConform/>), so only its attributes are generated; there is no
     // encode_change_to_mode and command_id is empty.
-    use gen::microwave_oven_mode::{decode_current_mode, decode_supported_modes, ModeTag};
+    use clusters::microwave_oven_mode::{decode_current_mode, decode_supported_modes, ModeTag};
     let modes = decode_supported_modes(&supported_modes(0x4001)).unwrap();
     assert_eq!(modes[0].mode_tags[1].value, ModeTag::Defrost);
     assert_eq!(modes[1].mode_tags[0].value, ModeTag::Unknown(0x8001));
@@ -1809,7 +1815,7 @@ fn mode_select_standard_namespace_is_enum16() {
     // 1.4.2 ModeSelect.xml declares StandardNamespace enum16 (nullable); the
     // model's `namespace` is enum8, so the dump widens it (meta.relaxed, W).
     // A namespace id above 0xFF must decode, not fail as out of range.
-    use gen::mode_select::decode_standard_namespace;
+    use clusters::mode_select::decode_standard_namespace;
     assert_eq!(
         decode_standard_namespace(&uint_attr(0x0101)).unwrap(),
         Nullable::Value(0x0101_u16)
@@ -1848,7 +1854,7 @@ fn mode_select_supported_modes_decode_cluster_local_semantic_tags() {
             w.end_container().unwrap();
         },
     ]);
-    let modes = gen::mode_select::decode_supported_modes(&bytes).unwrap();
+    let modes = clusters::mode_select::decode_supported_modes(&bytes).unwrap();
     assert_eq!((modes[0].label.as_str(), modes[0].mode), ("Black", 0));
     let tags: Vec<(u16, u16)> = modes
         .iter()
@@ -1871,14 +1877,14 @@ fn mode_select_semantic_tag_missing_mfg_code_is_an_error() {
         w.end_container().unwrap();
     }]);
     assert!(matches!(
-        gen::mode_select::decode_supported_modes(&bytes),
+        clusters::mode_select::decode_supported_modes(&bytes),
         Err(ClusterError::MissingField("MfgCode"))
     ));
 }
 
 #[test]
 fn mode_select_writable_modes_and_change_to_mode_encode() {
-    use gen::mode_select::{
+    use clusters::mode_select::{
         decode_description, decode_on_mode, decode_start_up_mode, encode_change_to_mode,
         encode_on_mode, encode_start_up_mode,
     };
@@ -1902,13 +1908,13 @@ fn mode_select_writable_modes_and_change_to_mode_encode() {
 
 #[test]
 fn alarm_event_ids_pinned() {
-    assert_eq!(gen::dishwasher_alarm::event_id::NOTIFY, 0x00);
-    assert_eq!(gen::refrigerator_alarm::event_id::NOTIFY, 0x00);
+    assert_eq!(clusters::dishwasher_alarm::event_id::NOTIFY, 0x00);
+    assert_eq!(clusters::refrigerator_alarm::event_id::NOTIFY, 0x00);
 }
 
 #[test]
 fn dishwasher_alarm_attributes_commands_and_notify_decode() {
-    use gen::dishwasher_alarm::{
+    use clusters::dishwasher_alarm::{
         decode_latch, decode_mask, decode_state, decode_supported, encode_modify_enabled_alarms,
         encode_reset, AlarmBitmap, NotifyEvent,
     };
@@ -1959,18 +1965,18 @@ fn notify_missing_a_field_is_an_error() {
         w.put_uint(Tag::Context(2), 1).unwrap();
     });
     assert!(matches!(
-        gen::dishwasher_alarm::NotifyEvent::decode(&three_of_four),
+        clusters::dishwasher_alarm::NotifyEvent::decode(&three_of_four),
         Err(ClusterError::MissingField("Mask"))
     ));
     assert!(matches!(
-        gen::refrigerator_alarm::NotifyEvent::decode(&three_of_four),
+        clusters::refrigerator_alarm::NotifyEvent::decode(&three_of_four),
         Err(ClusterError::MissingField("Mask"))
     ));
 }
 
 #[test]
 fn refrigerator_alarm_decodes_and_door_open_notify() {
-    use gen::refrigerator_alarm::{
+    use clusters::refrigerator_alarm::{
         decode_mask, decode_state, decode_supported, AlarmBitmap, NotifyEvent,
     };
     // chip all-clusters' defaults (all-clusters-app.matter): Mask 1, State 0,
@@ -2026,7 +2032,7 @@ macro_rules! resource_monitoring_cluster_decodes {
     ($test:ident, $m:ident) => {
         #[test]
         fn $test() {
-            use gen::$m::{
+            use clusters::$m::{
                 decode_change_indication, decode_condition, decode_degradation_direction,
                 decode_in_place_indicator, decode_last_changed_time,
                 decode_replacement_product_list, encode_last_changed_time, encode_reset_condition,
@@ -2086,7 +2092,7 @@ fn replacement_product_missing_value_is_an_error() {
     use matter_clusters::error::ClusterError;
     let bytes = list_of(&[&|w| w.put_uint(Tag::Context(0), 4).unwrap()]);
     assert!(matches!(
-        gen::water_tank_level_monitoring::decode_replacement_product_list(&bytes),
+        clusters::water_tank_level_monitoring::decode_replacement_product_list(&bytes),
         Err(ClusterError::MissingField("ProductIdentifierValue"))
     ));
 }
@@ -2145,7 +2151,7 @@ macro_rules! operational_state_cluster_decodes {
     ($attributes_test:ident, $payloads_test:ident, $m:ident) => {
         #[test]
         fn $attributes_test() {
-            use gen::$m::{
+            use clusters::$m::{
                 decode_countdown_time, decode_current_phase, decode_operational_error,
                 decode_operational_state, decode_operational_state_list, decode_phase_list,
                 ErrorStateEnum, OperationalStateEnum,
@@ -2206,7 +2212,7 @@ macro_rules! operational_state_cluster_decodes {
 
         #[test]
         fn $payloads_test() {
-            use gen::$m::{
+            use clusters::$m::{
                 ErrorStateEnum, OperationCompletionEvent, OperationalCommandResponse,
                 OperationalErrorEvent,
             };
@@ -2285,16 +2291,16 @@ operational_state_cluster_decodes!(
 fn operational_state_event_ids_pinned() {
     for (error, completion) in [
         (
-            gen::operational_state::event_id::OPERATIONAL_ERROR,
-            gen::operational_state::event_id::OPERATION_COMPLETION,
+            clusters::operational_state::event_id::OPERATIONAL_ERROR,
+            clusters::operational_state::event_id::OPERATION_COMPLETION,
         ),
         (
-            gen::oven_cavity_operational_state::event_id::OPERATIONAL_ERROR,
-            gen::oven_cavity_operational_state::event_id::OPERATION_COMPLETION,
+            clusters::oven_cavity_operational_state::event_id::OPERATIONAL_ERROR,
+            clusters::oven_cavity_operational_state::event_id::OPERATION_COMPLETION,
         ),
         (
-            gen::rvc_operational_state::event_id::OPERATIONAL_ERROR,
-            gen::rvc_operational_state::event_id::OPERATION_COMPLETION,
+            clusters::rvc_operational_state::event_id::OPERATIONAL_ERROR,
+            clusters::rvc_operational_state::event_id::OPERATION_COMPLETION,
         ),
     ] {
         assert_eq!((error, completion), (0x00, 0x01));
@@ -2307,7 +2313,7 @@ fn operational_state_commands_are_empty_structures() {
     // OperationalState.xml, RvcOperationalState.xml GoHome). The disallowed
     // ones are not generated: OvenCavity Pause/Resume, Rvc Start/Stop.
     const EMPTY: [u8; 2] = [0x15, 0x18];
-    use gen::{
+    use clusters::{
         operational_state as os, oven_cavity_operational_state as oven,
         rvc_operational_state as rvc,
     };
@@ -2333,7 +2339,7 @@ fn operational_state_commands_are_empty_structures() {
 fn rvc_operational_state_keeps_base_and_derived_values() {
     // The derived enums add values to the base's 0..=3; read from `members`,
     // a plain Stopped / NoError decodes as itself, not Unknown.
-    use gen::rvc_operational_state::{ErrorStateEnum, OperationalStateEnum};
+    use clusters::rvc_operational_state::{ErrorStateEnum, OperationalStateEnum};
     assert_eq!(
         OperationalStateEnum::from_raw(0),
         OperationalStateEnum::Stopped
@@ -2367,21 +2373,21 @@ fn operational_state_missing_mandatory_fields_are_errors() {
     use matter_clusters::error::ClusterError;
     // CommandResponseState, ErrorState and ErrorStateID are unconditional M.
     assert!(matches!(
-        gen::operational_state::OperationalCommandResponse::decode(&struct_of(&|_| {})),
+        clusters::operational_state::OperationalCommandResponse::decode(&struct_of(&|_| {})),
         Err(ClusterError::MissingField("CommandResponseState"))
     ));
     assert!(matches!(
-        gen::rvc_operational_state::OperationalErrorEvent::decode(&struct_of(&|_| {})),
+        clusters::rvc_operational_state::OperationalErrorEvent::decode(&struct_of(&|_| {})),
         Err(ClusterError::MissingField("ErrorState"))
     ));
     assert!(matches!(
-        gen::oven_cavity_operational_state::decode_operational_error(&struct_of(&|w| {
+        clusters::oven_cavity_operational_state::decode_operational_error(&struct_of(&|w| {
             w.put_utf8(Tag::Context(1), "label only").unwrap();
         })),
         Err(ClusterError::MissingField("ErrorStateId"))
     ));
     assert!(matches!(
-        gen::operational_state::OperationCompletionEvent::decode(&struct_of(&|w| {
+        clusters::operational_state::OperationCompletionEvent::decode(&struct_of(&|w| {
             w.put_uint(Tag::Context(1), 5).unwrap();
         })),
         Err(ClusterError::MissingField("CompletionErrorCode"))
@@ -2398,7 +2404,7 @@ fn operational_state_missing_mandatory_fields_are_errors() {
 
 #[test]
 fn temperature_control_decodes_and_set_temperature_encodes() {
-    use gen::temperature_control::{
+    use clusters::temperature_control::{
         decode_max_temperature, decode_min_temperature, decode_selected_temperature_level,
         decode_step, decode_supported_temperature_levels, decode_temperature_setpoint,
         encode_set_temperature, Feature,
@@ -2428,7 +2434,7 @@ fn temperature_control_decodes_and_set_temperature_encodes() {
 
 #[test]
 fn laundry_washer_controls_decode_and_writes_encode() {
-    use gen::laundry_washer_controls::{
+    use clusters::laundry_washer_controls::{
         decode_number_of_rinses, decode_spin_speed_current, decode_spin_speeds,
         decode_supported_rinses, encode_number_of_rinses, encode_spin_speed_current,
         NumberOfRinsesEnum,
@@ -2463,7 +2469,7 @@ fn laundry_washer_controls_decode_and_writes_encode() {
 
 #[test]
 fn laundry_dryer_controls_decode_and_write_encodes() {
-    use gen::laundry_dryer_controls::{
+    use clusters::laundry_dryer_controls::{
         decode_selected_dryness_level, decode_supported_dryness_levels,
         encode_selected_dryness_level, DrynessLevelEnum,
     };
@@ -2490,7 +2496,7 @@ fn laundry_dryer_controls_decode_and_write_encodes() {
 
 #[test]
 fn microwave_oven_control_decodes_and_commands_encode() {
-    use gen::microwave_oven_control::{
+    use clusters::microwave_oven_control::{
         decode_cook_time, decode_max_cook_time, decode_max_power, decode_min_power,
         decode_power_setting, decode_power_step, decode_selected_watt_index,
         decode_supported_watts, decode_watt_rating, encode_add_more_time,
@@ -2607,7 +2613,7 @@ fn area_entry(
 
 #[test]
 fn service_area_supported_areas_decode_rvc_app_topology() {
-    use gen::service_area::{decode_supported_areas, LocationDescriptorStruct};
+    use clusters::service_area::{decode_supported_areas, LocationDescriptorStruct};
     // rvc-app's areas (rvc-service-area-delegate.cpp SetMapTopology): A (7)
     // and B (1234567) on map 3, C (10050) and D (0x88888888) on map 245;
     // PlayRoom 0x41, BackDoor 0x02, Couch 0x0D, NextTo 0x01.
@@ -2674,7 +2680,7 @@ fn service_area_supported_areas_decode_rvc_app_topology() {
 
 #[test]
 fn service_area_maps_selection_and_progress_decode() {
-    use gen::service_area::{
+    use clusters::service_area::{
         decode_current_area, decode_estimated_end_time, decode_progress, decode_selected_areas,
         decode_supported_maps, OperationalStatusEnum,
     };
@@ -2745,7 +2751,7 @@ fn service_area_maps_selection_and_progress_decode() {
 
 #[test]
 fn service_area_commands_encode_and_responses_decode() {
-    use gen::service_area::{
+    use clusters::service_area::{
         encode_select_areas, encode_skip_area, SelectAreasResponse, SelectAreasStatus,
         SkipAreaResponse, SkipAreaStatus,
     };
@@ -2793,14 +2799,14 @@ fn service_area_missing_mandatory_fields_are_errors() {
     use matter_clusters::error::ClusterError;
     // StatusText is an unconditional M in 1.4.2, and chip always sends it.
     assert!(matches!(
-        gen::service_area::SelectAreasResponse::decode(&struct_of(&|w| {
+        clusters::service_area::SelectAreasResponse::decode(&struct_of(&|w| {
             w.put_uint(Tag::Context(0), 0).unwrap();
         })),
         Err(ClusterError::MissingField("StatusText"))
     ));
     // AreaInfo is mandatory in every AreaStruct.
     assert!(matches!(
-        gen::service_area::decode_supported_areas(&list_of(&[&|w| {
+        clusters::service_area::decode_supported_areas(&list_of(&[&|w| {
             w.put_uint(Tag::Context(0), 7).unwrap();
             w.put_null(Tag::Context(1)).unwrap();
         }])),
@@ -2808,7 +2814,7 @@ fn service_area_missing_mandatory_fields_are_errors() {
     ));
     // LocationName is mandatory inside a present LocationDescriptorStruct.
     assert!(matches!(
-        gen::service_area::LocationDescriptorStruct::decode(&struct_of(&|w| {
+        clusters::service_area::LocationDescriptorStruct::decode(&struct_of(&|w| {
             w.put_null(Tag::Context(1)).unwrap();
             w.put_null(Tag::Context(2)).unwrap();
         })),

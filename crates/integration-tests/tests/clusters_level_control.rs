@@ -75,7 +75,7 @@ async fn level_control_move_to_level() {
 /// `MoveToLevelWithOnOff(level)` with the regenerated encoder: no transition,
 /// no option overrides (the `WithOnOff` variants ignore Options anyway).
 async fn move_to_level_with_on_off(node: &Node, level: u8) -> matter_controller::InvokeResult {
-    use matter_clusters::gen::level_control;
+    use matter_clusters::clusters::level_control;
     use matter_clusters::types::Nullable;
     let path = CommandPath {
         endpoint: 1,
@@ -100,7 +100,7 @@ async fn wait_for_on_off_and_level(
     node: &Node,
     done: impl Fn(&(Value, Value)) -> bool,
 ) -> (Value, Value) {
-    use matter_clusters::gen::on_off;
+    use matter_clusters::clusters::on_off;
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
         let got = (
@@ -124,7 +124,7 @@ async fn wait_for_on_off_and_level(
 /// bytes level the light to 90 and turn it on from off.
 #[tokio::test]
 async fn level_control_move_to_level_with_on_off_turns_on() {
-    use matter_clusters::gen::on_off;
+    use matter_clusters::clusters::on_off;
     use matter_controller::{ImStatus, InvokeResult};
 
     let cfg = integration_tests::dut_or_skip!();
@@ -165,7 +165,7 @@ async fn level_control_move_to_level_with_on_off_turns_on() {
 /// at 90 so "off" is the command's doing, and restores on at 90 afterwards.
 #[tokio::test]
 async fn level_control_move_to_level_with_on_off_empty_payload_turns_off() {
-    use matter_clusters::gen::level_control;
+    use matter_clusters::clusters::level_control;
     use matter_controller::{ImStatus, InvokeResult};
 
     let cfg = integration_tests::dut_or_skip!();

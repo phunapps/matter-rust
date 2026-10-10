@@ -17,7 +17,7 @@ device**: commissioning + reconnect; the full Interaction-Model op set
 sequences (OnOff, LevelControl, ColorControl, Thermostat, WindowCovering,
 FanControl); typed-decode of every sensor/measurement and utility/management
 cluster the DUT exposes, run against **real device bytes** through the generated
-`matter_clusters::gen::*::decode_*` codecs; groups + ACL + group-cast actuation;
+`matter_clusters::clusters::*::decode_*` codecs; groups + ACL + group-cast actuation;
 AccessControl enforcement (deny/grant); and a multi-admin loop (open window →
 second controller → fabric removal).
 
@@ -203,7 +203,7 @@ all-clusters-app** and is recorded as a gap (needs a `lock-app` DUT). See the
 Reads every sensor/measurement cluster all-clusters-app exposes (the 5
 measurement clusters + OccupancySensing, BooleanState, AirQuality, PowerSource —
 all on endpoint 1) and feeds the real device bytes through the generated
-`matter_clusters::gen::*::decode_*` typed decoders, asserting `Ok` (plus the exact
+`matter_clusters::clusters::*::decode_*` typed decoders, asserting `Ok` (plus the exact
 deterministic Min/Max defaults). This closes the long-standing "validate typed
 decoders against real device bytes" follow-up. **ElectricalPowerMeasurement /
 ElectricalEnergyMeasurement are absent from all-clusters-app** and recorded as a

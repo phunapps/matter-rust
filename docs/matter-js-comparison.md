@@ -111,7 +111,7 @@ These are language-idiomatic differences. They do not affect interop.
   DeviceEnergyManagementMode it still declares `kOnOff = 0x1`; we follow the
   XML there (the 1.4.2 XML outranks chip's codegen in our ambiguity order).
   Nothing a device reports is lost: FeatureMap reads as a raw `u32`
-  (`gen::globals::decode_u32`), so a set bit 0 is still visible.
+  (`clusters::globals::decode_u32`), so a set bit 0 is still visible.
   RefrigeratorAlarm disallows AlarmBase's RESET, so it has no `Latch`,
   `Reset` or `Feature::RESET`; matter.js keeps them as its `ResetComponent`
   (`clusters/refrigerator-alarm.d.ts`), chip's controller codegen omits them.

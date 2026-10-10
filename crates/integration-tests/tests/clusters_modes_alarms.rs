@@ -46,7 +46,7 @@ use integration_tests::sweep::{
     all_clusters_serves, attribute_ids, attribute_tlv, decode_every_attribute, invoke_for_response,
     invoke_for_status, newer_than_codegen, ok, read_cluster_attributes, standard_attribute_ids,
 };
-use matter_clusters::gen::{
+use matter_clusters::clusters::{
     activated_carbon_filter_monitoring, descriptor, device_energy_management_mode,
     dishwasher_alarm, dishwasher_mode, energy_evse_mode, hepa_filter_monitoring,
     laundry_washer_mode, microwave_oven_mode, mode_select, oven_mode, refrigerator_alarm,

@@ -54,7 +54,7 @@ use integration_tests::sweep::{
     newer_than_codegen, ok, read_cluster_attributes,
 };
 use integration_tests::{operational_command, sweep_operational_state};
-use matter_clusters::gen::{microwave_oven_control, operational_state};
+use matter_clusters::clusters::{microwave_oven_control, operational_state};
 use matter_clusters::types::Nullable;
 use matter_controller::{CommandPath, ImStatus, MatterController, Node};
 

@@ -5,14 +5,14 @@
 //! forward-compatibility), bitmaps, and — for clusters on the dump script's
 //! event allowlist — `event_id` consts plus decode-only `<Name>Event` payload
 //! structs (a cluster with events has an `event_id` module in its
-//! `gen::<cluster>` module). The cluster modules live under
-//! [`gen`]; the hand-written foundation is [`Nullable<T>`](types::Nullable)
+//! `clusters::<cluster>` module). The cluster modules live under
+//! [`clusters`]; the hand-written foundation is [`Nullable<T>`](types::Nullable)
 //! (distinct from `Option`), [`ClusterError`](error::ClusterError), and
 //! [`datatypes::SemanticTagStruct`].
 //!
 //! # Pipeline
 //!
-//! The `gen/` modules are generated, not hand-written: a pinned `@matter/model`
+//! The [`clusters`] modules are generated, not hand-written: a pinned `@matter/model`
 //! dump becomes the committed `xtask/model/clusters.json`, which
 //! `cargo xtask codegen` turns into the committed `src/gen/*.rs`. CI gates drift
 //! with `cargo xtask codegen --check`. **Do not edit `src/gen/` by hand** —
@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 72 clusters are generated today. The full list is [`gen`]; by area:
+//! 72 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -85,7 +85,7 @@
 //! request); decoders take the attribute value bytes from a report.
 //!
 //! ```
-//! use matter_clusters::gen::{basic_information, on_off};
+//! use matter_clusters::clusters::{basic_information, on_off};
 //!
 //! // Command payload — embed in an InvokeRequest (see the `control_onoff` example).
 //! let _toggle = on_off::encode_toggle();
@@ -121,7 +121,18 @@ pub mod types;
 
 pub use datatypes::SemanticTagStruct;
 
-pub mod gen;
+// The generated cluster modules. The files stay in `src/gen/` (the directory
+// `cargo xtask codegen` writes and `codegen --check` gates); the module is
+// `clusters` because `gen` is a reserved keyword from Rust edition 2024, where
+// `matter_clusters::gen::…` no longer parses (only `r#gen` would).
+#[path = "gen/mod.rs"]
+pub mod clusters;
+
+/// The generated cluster modules under their pre-0.6 name: an alias of
+/// [`clusters`], kept so `matter_clusters::gen::…` paths in edition 2015–2021
+/// code keep compiling. Hidden from the docs; use [`clusters`].
+#[doc(hidden)]
+pub use self::clusters as gen;
 
 #[cfg(test)]
 mod golden;
@@ -136,3 +147,21 @@ mod golden_tests;
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
+
+/// Edition 2024 (M9-A3 B4): `gen` is a reserved keyword there, so the
+/// generated modules must be reachable under another name. These blocks
+/// compile as edition 2024 crates.
+///
+/// ```edition2024
+/// use matter_clusters::clusters::on_off;
+/// assert_eq!(on_off::CLUSTER_ID, 0x0006);
+/// ```
+///
+/// The old path does not parse in edition 2024, which is why the module was
+/// renamed:
+///
+/// ```compile_fail,edition2024
+/// use matter_clusters::gen::on_off;
+/// ```
+#[cfg(doctest)]
+struct Edition2024Doctests;

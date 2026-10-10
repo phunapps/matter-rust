@@ -27,7 +27,7 @@
 //! - PowerSource, PumpConfigurationAndControl, OtaSoftwareUpdateRequestor: no
 //!   stimulus exists in all-clusters; anything reported is decoded.
 
-use matter_clusters::gen::{
+use matter_clusters::clusters::{
     access_control, basic_information, boolean_state, general_diagnostics, occupancy_sensing,
     ota_software_update_requestor, power_source, pump_configuration_and_control,
     time_synchronization,

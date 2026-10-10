@@ -42,7 +42,7 @@ use integration_tests::sweep::{
     newer_than_codegen, ok, read_cluster_attributes, write_attribute,
 };
 use integration_tests::{operational_command, sweep_operational_state};
-use matter_clusters::gen::{
+use matter_clusters::clusters::{
     laundry_dryer_controls, laundry_washer_controls, operational_state,
     oven_cavity_operational_state, rvc_operational_state, temperature_control,
 };

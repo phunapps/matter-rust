@@ -299,7 +299,7 @@ pub async fn invoke_for_status(
 /// (`ModeBaseCluster.cpp` `HandleChangeToMode`), and it leaves `StatusText`
 /// out of that reply, which the server builds itself (spec §3.1); the macro
 /// asserts both. `$m` is the generated
-/// module, in scope at the call site (`use matter_clusters::gen::rvc_run_mode;`).
+/// module, in scope at the call site (`use matter_clusters::clusters::rvc_run_mode;`).
 ///
 /// Panics (it is a test helper) on any failure, naming the cluster.
 #[macro_export]

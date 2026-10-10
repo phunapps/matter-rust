@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::{
+use matter_clusters::clusters::{
     access_control, administrator_commissioning, group_key_management,
     ota_software_update_requestor,
 };

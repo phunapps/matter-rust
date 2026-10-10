@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::{air_quality, boolean_state, occupancy_sensing};
+use matter_clusters::clusters::{air_quality, boolean_state, occupancy_sensing};
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{Node, ReadPath, Value};
 

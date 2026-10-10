@@ -8,14 +8,14 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use matter_clusters::gen;
+use matter_clusters::clusters;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = gen::on_off::decode_on_time(data);
-    let _ = gen::on_off::decode_start_up_on_off(data);
-    let _ = gen::color_control::decode_color_capabilities(data);
-    let _ = gen::basic_information::decode_capability_minima(data);
-    let _ = gen::descriptor::decode_server_list(data);
-    let _ = gen::descriptor::decode_device_type_list(data);
-    let _ = gen::descriptor::decode_tag_list(data);
+    let _ = clusters::on_off::decode_on_time(data);
+    let _ = clusters::on_off::decode_start_up_on_off(data);
+    let _ = clusters::color_control::decode_color_capabilities(data);
+    let _ = clusters::basic_information::decode_capability_minima(data);
+    let _ = clusters::descriptor::decode_server_list(data);
+    let _ = clusters::descriptor::decode_device_type_list(data);
+    let _ = clusters::descriptor::decode_tag_list(data);
 });

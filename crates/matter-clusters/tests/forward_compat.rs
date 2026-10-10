@@ -6,8 +6,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use matter_clusters::gen::descriptor::{decode_device_type_list, DeviceTypeStruct};
-use matter_clusters::gen::occupancy_sensing::decode_occupancy;
+use matter_clusters::clusters::descriptor::{decode_device_type_list, DeviceTypeStruct};
+use matter_clusters::clusters::occupancy_sensing::decode_occupancy;
 use matter_codec::{Tag, TlvWriter};
 
 /// `{ ctx0=u(0x1234_5678), <unknown ctx99 struct{ctx0=u(1)}>, ctx1=u(7) }`

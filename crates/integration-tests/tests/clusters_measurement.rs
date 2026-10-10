@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::{
+use matter_clusters::clusters::{
     flow_measurement, illuminance_measurement, pressure_measurement, relative_humidity_measurement,
     temperature_measurement,
 };

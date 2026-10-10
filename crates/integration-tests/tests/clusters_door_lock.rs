@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::door_lock::{self, LockStateEnum};
+use matter_clusters::clusters::door_lock::{self, LockStateEnum};
 use matter_clusters::types::Nullable;
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{CommandPath, Node, ReadPath, Value};

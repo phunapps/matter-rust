@@ -9,7 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use base64::Engine as _;
-use matter_clusters::gen;
+use matter_clusters::clusters;
 use matter_clusters::types::Nullable;
 use std::fs;
 use std::path::PathBuf;
@@ -40,39 +40,39 @@ fn cmd(rel: &str) -> Vec<u8> {
 #[test]
 fn on_time_roundtrips() {
     let bytes = attr("on_off/attr_on_time.json");
-    let v = gen::on_off::decode_on_time(&bytes).unwrap();
-    assert_eq!(gen::on_off::encode_on_time(v), bytes);
+    let v = clusters::on_off::decode_on_time(&bytes).unwrap();
+    assert_eq!(clusters::on_off::encode_on_time(v), bytes);
 }
 
 #[test]
 fn start_up_on_off_present_roundtrips() {
     let bytes = attr("on_off/attr_start_up_on_off_present.json");
-    let v = gen::on_off::decode_start_up_on_off(&bytes).unwrap();
-    assert_eq!(gen::on_off::encode_start_up_on_off(v), bytes);
+    let v = clusters::on_off::decode_start_up_on_off(&bytes).unwrap();
+    assert_eq!(clusters::on_off::encode_start_up_on_off(v), bytes);
 }
 
 #[test]
 fn start_up_on_off_null_roundtrips() {
     let bytes = attr("on_off/attr_start_up_on_off_null.json");
-    let v = gen::on_off::decode_start_up_on_off(&bytes).unwrap();
+    let v = clusters::on_off::decode_start_up_on_off(&bytes).unwrap();
     assert!(matches!(v, Nullable::Null));
-    assert_eq!(gen::on_off::encode_start_up_on_off(v), bytes);
+    assert_eq!(clusters::on_off::encode_start_up_on_off(v), bytes);
 }
 
 #[test]
 fn node_label_roundtrips() {
     let bytes = attr("basic_information/attr_node_label.json");
-    let v = gen::basic_information::decode_node_label(&bytes).unwrap();
+    let v = clusters::basic_information::decode_node_label(&bytes).unwrap();
     assert_eq!(v, "matter-rust");
-    assert_eq!(gen::basic_information::encode_node_label(&v), bytes);
+    assert_eq!(clusters::basic_information::encode_node_label(&v), bytes);
 }
 
 // ---- read-only attributes: decode succeeds (+ spot checks) ---------------
 
 #[test]
 fn bool_and_nullable_uint_decode() {
-    assert!(gen::on_off::decode_on_off(&attr("on_off/attr_on_off.json")).unwrap());
-    let lvl = gen::level_control::decode_current_level(&attr(
+    assert!(clusters::on_off::decode_on_off(&attr("on_off/attr_on_off.json")).unwrap());
+    let lvl = clusters::level_control::decode_current_level(&attr(
         "level_control/attr_current_level_present.json",
     ))
     .unwrap();
@@ -81,7 +81,7 @@ fn bool_and_nullable_uint_decode() {
 
 #[test]
 fn temperature_signed_decode() {
-    let t = gen::temperature_measurement::decode_measured_value(&attr(
+    let t = clusters::temperature_measurement::decode_measured_value(&attr(
         "temperature_measurement/attr_measured_value.json",
     ))
     .unwrap();
@@ -91,7 +91,7 @@ fn temperature_signed_decode() {
 #[test]
 fn bitmap_u16_decode() {
     // ColorCapabilities is a map16 bitmap — proves the u16-backing fix.
-    let caps = gen::color_control::decode_color_capabilities(&attr(
+    let caps = clusters::color_control::decode_color_capabilities(&attr(
         "color_control/attr_color_capabilities.json",
     ))
     .unwrap();
@@ -100,7 +100,7 @@ fn bitmap_u16_decode() {
 
 #[test]
 fn struct_attribute_decode() {
-    let m = gen::basic_information::decode_capability_minima(&attr(
+    let m = clusters::basic_information::decode_capability_minima(&attr(
         "basic_information/attr_capability_minima.json",
     ))
     .unwrap();
@@ -111,12 +111,14 @@ fn struct_attribute_decode() {
 #[test]
 fn list_of_scalars_and_structs_decode() {
     let server =
-        gen::descriptor::decode_server_list(&attr("descriptor/attr_server_list.json")).unwrap();
+        clusters::descriptor::decode_server_list(&attr("descriptor/attr_server_list.json"))
+            .unwrap();
     assert_eq!(server, vec![0x06, 0x1d, 0x28]);
 
-    let dts =
-        gen::descriptor::decode_device_type_list(&attr("descriptor/attr_device_type_list.json"))
-            .unwrap();
+    let dts = clusters::descriptor::decode_device_type_list(&attr(
+        "descriptor/attr_device_type_list.json",
+    ))
+    .unwrap();
     assert_eq!(dts.len(), 1);
     assert_eq!(dts[0].device_type, 256);
     assert_eq!(dts[0].revision, 1);
@@ -127,7 +129,7 @@ fn measurement_accuracy_struct_decodes() {
     // M9-A2.2: EEM.Accuracy is a MeasurementAccuracyStruct whose AccuracyRanges
     // is a list-of-struct with optional fields present/absent — the genuinely-new
     // nested wire shape. Decode the matter.js-captured bytes and assert structure.
-    let acc = gen::electrical_energy_measurement::decode_accuracy(&attr(
+    let acc = clusters::electrical_energy_measurement::decode_accuracy(&attr(
         "electrical_energy_measurement/attr_accuracy.json",
     ))
     .unwrap();
@@ -153,13 +155,16 @@ fn measurement_accuracy_struct_decodes() {
 
 #[test]
 fn toggle_command() {
-    assert_eq!(gen::on_off::encode_toggle(), cmd("on_off/cmd_toggle.json"));
+    assert_eq!(
+        clusters::on_off::encode_toggle(),
+        cmd("on_off/cmd_toggle.json")
+    );
 }
 
 #[test]
 fn on_with_timed_off_command() {
-    let got = gen::on_off::encode_on_with_timed_off(
-        gen::on_off::OnOffControlBitmap::from_bits_truncate(1),
+    let got = clusters::on_off::encode_on_with_timed_off(
+        clusters::on_off::OnOffControlBitmap::from_bits_truncate(1),
         60,
         0,
     );
@@ -168,11 +173,11 @@ fn on_with_timed_off_command() {
 
 #[test]
 fn move_to_level_command() {
-    let got = gen::level_control::encode_move_to_level(
+    let got = clusters::level_control::encode_move_to_level(
         128,
         Nullable::Value(10),
-        gen::level_control::OptionsBitmap::from_bits_truncate(0),
-        gen::level_control::OptionsBitmap::from_bits_truncate(0),
+        clusters::level_control::OptionsBitmap::from_bits_truncate(0),
+        clusters::level_control::OptionsBitmap::from_bits_truncate(0),
     );
     assert_eq!(got, cmd("level_control/cmd_move_to_level.json"));
 }
@@ -185,11 +190,11 @@ fn move_to_level_with_on_off_command() {
     // chip decodes the missing fields as zero/null and executes it, so an
     // empty MoveToLevelWithOnOff dims to the minimum level and switches off.
     // The vector is encoded with matter.js's own LevelControl requestSchema.
-    let got = gen::level_control::encode_move_to_level_with_on_off(
+    let got = clusters::level_control::encode_move_to_level_with_on_off(
         128,
         Nullable::Value(10),
-        gen::level_control::OptionsBitmap::from_bits_truncate(0),
-        gen::level_control::OptionsBitmap::from_bits_truncate(0),
+        clusters::level_control::OptionsBitmap::from_bits_truncate(0),
+        clusters::level_control::OptionsBitmap::from_bits_truncate(0),
     );
     assert_eq!(got, cmd("level_control/cmd_move_to_level_with_on_off.json"));
 }
@@ -200,15 +205,15 @@ fn set_temperature_command() {
     // (TargetTemperature, int16 0.01 °C, put_int) next to an omitted optional
     // one (TargetTemperatureLevel). Encoded with matter.js's own
     // TemperatureControl TlvSetTemperatureRequest.
-    let got = gen::temperature_control::encode_set_temperature(Some(-1250), None);
+    let got = clusters::temperature_control::encode_set_temperature(Some(-1250), None);
     assert_eq!(got, cmd("temperature_control/cmd_set_temperature.json"));
 }
 
 #[test]
 fn lock_door_optional_field() {
-    let with = gen::door_lock::encode_lock_door(Some(vec![1, 2, 3, 4]));
+    let with = clusters::door_lock::encode_lock_door(Some(vec![1, 2, 3, 4]));
     assert_eq!(with, cmd("door_lock/cmd_lock_door_with_pin.json"));
-    let without = gen::door_lock::encode_lock_door(None);
+    let without = clusters::door_lock::encode_lock_door(None);
     assert_eq!(without, cmd("door_lock/cmd_lock_door_no_pin.json"));
 }
 
@@ -217,7 +222,7 @@ fn atomic_request_command_encodes() {
     // Thermostat.AtomicRequest with a populated list<attrib-id> — proves the
     // list-typed-command-field encode matches matter.js byte-for-byte.
     assert_eq!(
-        gen::thermostat::encode_atomic_request(0, &vec![5, 6], Some(1000)),
+        clusters::thermostat::encode_atomic_request(0, &vec![5, 6], Some(1000)),
         cmd("thermostat/cmd_atomic_request.json")
     );
 }
@@ -228,7 +233,7 @@ fn network_interface_struct_decodes() {
     // bytes field, a keyword `Type` field, and byte-string-element lists
     // (the new A2.4 shape). Field names are the generated snake form (IPv4 ->
     // i_pv4).
-    let ifaces = gen::general_diagnostics::decode_network_interfaces(&attr(
+    let ifaces = clusters::general_diagnostics::decode_network_interfaces(&attr(
         "general_diagnostics/attr_network_interfaces.json",
     ))
     .unwrap();
@@ -258,13 +263,14 @@ fn float_attribute_decodes_matter_js_bytes() {
     let present = attr("carbon_dioxide_concentration_measurement/attr_measured_value_present.json");
     assert_eq!(present[0], 0x0a, "matter.js must emit anonymous FLOAT32");
     assert_eq!(
-        gen::carbon_dioxide_concentration_measurement::decode_measured_value(&present).unwrap(),
+        clusters::carbon_dioxide_concentration_measurement::decode_measured_value(&present)
+            .unwrap(),
         Nullable::Value(415.5)
     );
 
     let null = attr("carbon_dioxide_concentration_measurement/attr_measured_value_null.json");
     assert_eq!(
-        gen::carbon_dioxide_concentration_measurement::decode_measured_value(&null).unwrap(),
+        clusters::carbon_dioxide_concentration_measurement::decode_measured_value(&null).unwrap(),
         Nullable::Null
     );
 
@@ -272,7 +278,7 @@ fn float_attribute_decodes_matter_js_bytes() {
     // bits (stricter than `==`, which would accept `-0.0` for `0.0`).
     let unc = attr("carbon_dioxide_concentration_measurement/attr_uncertainty.json");
     assert_eq!(
-        gen::carbon_dioxide_concentration_measurement::decode_uncertainty(&unc)
+        clusters::carbon_dioxide_concentration_measurement::decode_uncertainty(&unc)
             .unwrap()
             .to_bits(),
         0.25_f32.to_bits()
@@ -285,17 +291,17 @@ fn review_fabric_restrictions_recursive_list_encodes() {
     // the recursive list-of-struct command encode (M9-A2.5 gap 2) must match
     // matter.js byte-for-byte. AccessRestrictionStruct.Id is Nullable<u32>.
     let arl = vec![
-        gen::access_control::CommissioningAccessRestrictionEntryStruct {
+        clusters::access_control::CommissioningAccessRestrictionEntryStruct {
             endpoint: 1,
             cluster: 0x0006,
-            restrictions: vec![gen::access_control::AccessRestrictionStruct {
-                r#type: gen::access_control::AccessRestrictionTypeEnum::from_raw(0),
+            restrictions: vec![clusters::access_control::AccessRestrictionStruct {
+                r#type: clusters::access_control::AccessRestrictionTypeEnum::from_raw(0),
                 id: Nullable::Value(0x1234),
             }],
         },
     ];
     assert_eq!(
-        gen::access_control::encode_review_fabric_restrictions(&arl),
+        clusters::access_control::encode_review_fabric_restrictions(&arl),
         cmd("access_control/cmd_review_fabric_restrictions.json")
     );
 }

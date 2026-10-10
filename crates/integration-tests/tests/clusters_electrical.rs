@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::{electrical_energy_measurement, electrical_power_measurement};
+use matter_clusters::clusters::{electrical_energy_measurement, electrical_power_measurement};
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{Node, ReadPath, Value};
 
@@ -349,7 +349,7 @@ async fn decode_every_energy_event(node: &Node) {
 #[tokio::test]
 async fn energy_mode_clusters_decode_and_change_to_current_mode() {
     use integration_tests::sweep::{attribute_ids, attribute_tlv, read_cluster_attributes};
-    use matter_clusters::gen::{device_energy_management_mode, energy_evse_mode};
+    use matter_clusters::clusters::{device_energy_management_mode, energy_evse_mode};
 
     let cfg = integration_tests::dut_or_skip!();
     if !cfg.is_app("evse") {
@@ -407,7 +407,7 @@ async fn energy_mode_clusters_decode_and_change_to_current_mode() {
 /// (device-energy-management-modes.h), split from the test to keep it short.
 async fn assert_dem_modes(node: &Node) {
     use integration_tests::sweep::{attribute_ids, attribute_tlv, read_cluster_attributes};
-    use matter_clusters::gen::device_energy_management_mode::{
+    use matter_clusters::clusters::device_energy_management_mode::{
         self as dem,
         attribute_id::{CURRENT_MODE, SUPPORTED_MODES},
         ModeTag,

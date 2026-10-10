@@ -45,8 +45,10 @@ use integration_tests::sweep::{
     invoke_for_response, newer_than_codegen, ok, read_cluster_attributes,
 };
 use integration_tests::{operational_command, sweep_operational_state};
+use matter_clusters::clusters::{
+    rvc_clean_mode, rvc_operational_state, rvc_run_mode, service_area,
+};
 use matter_clusters::error::ClusterError;
-use matter_clusters::gen::{rvc_clean_mode, rvc_operational_state, rvc_run_mode, service_area};
 use matter_clusters::types::Nullable;
 use matter_controller::{CommandPath, MatterController, Node};
 

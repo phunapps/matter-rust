@@ -35,7 +35,7 @@ use anyhow::{bail, Context};
 use clap::Parser;
 
 use matter_cert::{MatterCertificate, MatterTime, TrustAnchor, TrustedRoots};
-use matter_clusters::gen::{basic_information, on_off};
+use matter_clusters::clusters::{basic_information, on_off};
 use matter_codec::{Tag, TlvWriter, Value};
 use matter_commissioning::attestation::{CdSigningRoots, Paa, PaaTrustStore};
 use matter_commissioning::driver::{

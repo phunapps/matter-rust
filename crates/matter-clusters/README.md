@@ -4,8 +4,10 @@ Typed Matter cluster definitions: per-cluster attribute/command/struct codecs,
 feature flags, enums (with `Unknown(n)` forward-compat), bitmaps, and — for
 clusters on the dump script's event allowlist — event-id constants plus
 decode-only event payload structs (a cluster with events has an `event_id`
-module in its `gen::<cluster>` module). The modules under `gen/` are generated
-from a pinned `@matter/model` dump by the `xtask` codegen tool.
+module in its `clusters::<cluster>` module). The modules under `clusters` are
+generated from a pinned `@matter/model` dump by the `xtask` codegen tool.
+(Before 0.6 the module was called `gen`, a reserved keyword from Rust edition
+2024; `matter_clusters::gen` remains as a hidden alias.)
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
@@ -113,7 +115,7 @@ remains the universal answer. Hand-written support lives in `types`
 ## Usage
 
 ```rust
-use matter_clusters::gen::{basic_information, on_off};
+use matter_clusters::clusters::{basic_information, on_off};
 
 // Command payload — embed in an InvokeRequest.
 let _toggle = on_off::encode_toggle();

@@ -8,7 +8,7 @@
     clippy::items_after_statements
 )]
 
-use matter_clusters::gen::{binding, fixed_label, user_label};
+use matter_clusters::clusters::{binding, fixed_label, user_label};
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{AttributePath, ImStatus, Node, ReadPath, Value};
 

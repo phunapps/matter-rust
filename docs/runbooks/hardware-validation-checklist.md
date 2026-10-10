@@ -87,7 +87,7 @@ these automatic and retire this section.
       already validated live.
 - [ ] **Typed-decode of real Tapo energy bytes** — the M9-D sweep captured real
       ElectricalPower/EnergyMeasurement bytes but only decoded them to generic
-      `Value`. Feed them through `matter_clusters::gen::*::decode_*`. (evse-app
+      `Value`. Feed them through `matter_clusters::clusters::*::decode_*`. (evse-app
       in `just integration-energy` already covers typed-decode-vs-real-bytes, so
       this is confidence-only.)
 

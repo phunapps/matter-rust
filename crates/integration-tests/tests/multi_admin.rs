@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use matter_clusters::gen::access_control;
+use matter_clusters::clusters::access_control;
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{
     AttestationTrust, AttributePath, FabricConfig, FileStore, ImStatus, MatterController,

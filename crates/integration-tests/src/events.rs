@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
-use matter_clusters::gen::general_diagnostics;
+use matter_clusters::clusters::general_diagnostics;
 use matter_codec::{Tag, TlvWriter, Value};
 use matter_controller::{
     CommandPath, EventPath, EventReport, EventReportItem, ImStatus, InvokeResult, Node,
