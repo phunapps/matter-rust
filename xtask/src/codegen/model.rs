@@ -3,8 +3,10 @@
 //! Validation is intentionally strict: anything the generator cannot map
 //! faithfully is a hard error naming the offending element, never a silent
 //! skip. The semantic checks here (unknown type strings, duplicate IDs,
-//! dangling response IDs, dangling type references) are the Rust-side half
-//! of the contract the dump script enforces on the JS side.
+//! dangling response IDs, dangling type references, and `mandatoryOnWrite`
+//! appearing anywhere but an optional fabric-sensitive field of a
+//! fabric-scoped struct) are the Rust-side half of the contract the dump
+//! script enforces on the JS side.
 
 // Structs and functions are scaffolding used by the emitter (next task).
 
@@ -251,6 +253,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                     f.entry_type.as_deref(),
                     &datatype_names,
                 )?;
+                reject_payload_write_marker(&c.name, &cmd.name, f, "a command")?;
             }
         }
 
@@ -268,6 +271,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                     f.entry_type.as_deref(),
                     &datatype_names,
                 )?;
+                reject_payload_write_marker(&c.name, &ev.name, f, "an event")?;
             }
         }
 
@@ -288,7 +292,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
             }
         }
 
-        // Struct-field type references.
+        // Struct-field type references, and where `mandatoryOnWrite` may sit.
         for d in &c.datatypes {
             for f in &d.fields {
                 check_type(
@@ -298,8 +302,62 @@ pub fn validate(model: &Model) -> Result<(), String> {
                     f.entry_type.as_deref(),
                     &datatype_names,
                 )?;
+                check_struct_write_marker(&c.name, d, f)?;
             }
         }
+    }
+    Ok(())
+}
+
+/// `mandatoryOnWrite` (M9-A3 spec §5.4) is legal only on a datatype struct
+/// field that is `optional` (relaxed for decode), `fabricSensitive`, and in a
+/// struct carrying field 254 (`FabricIndex`, the fabric-scoped signal). The
+/// emitter's encoder guard keys on exactly that combination, so a marker
+/// anywhere else would be silently ignored and its encoder would omit a
+/// `None` the device must receive — the hazard §5.4 closes. Reject it.
+fn check_struct_write_marker(cluster: &str, d: &Datatype, f: &FieldDef) -> Result<(), String> {
+    if !f.mandatory_on_write {
+        return Ok(());
+    }
+    let at = format!("{cluster}.{}.{}", d.name, f.name);
+    if d.kind != "struct" {
+        return Err(format!(
+            "{at}: mandatoryOnWrite on a field of `{}` datatype (not a struct)",
+            d.kind
+        ));
+    }
+    if !f.optional {
+        return Err(format!(
+            "{at}: mandatoryOnWrite on a field that is not optional (the marker means \"relaxed to optional for decode only\")"
+        ));
+    }
+    if !f.fabric_sensitive {
+        return Err(format!(
+            "{at}: mandatoryOnWrite on a field that is not fabricSensitive"
+        ));
+    }
+    if !d.fields.iter().any(|g| g.id == 254) {
+        return Err(format!(
+            "{at}: mandatoryOnWrite in a struct with no field 254 (FabricIndex), i.e. not fabric-scoped"
+        ));
+    }
+    Ok(())
+}
+
+/// Event and command payload fields never carry `mandatoryOnWrite`: the
+/// encoder guard exists only for datatype structs (spec §5.4, "Events are
+/// exempt"; request payloads are never write-guarded).
+fn reject_payload_write_marker(
+    cluster: &str,
+    payload: &str,
+    f: &FieldDef,
+    kind: &str,
+) -> Result<(), String> {
+    if f.mandatory_on_write {
+        return Err(format!(
+            "{cluster}.{payload}.{}: mandatoryOnWrite on {kind} field (allowed only on datatype struct fields)",
+            f.name
+        ));
     }
     Ok(())
 }
@@ -464,6 +522,133 @@ mod tests {
         .unwrap();
         assert!(relaxed.mandatory_on_write);
         assert!(!marked.mandatory_on_write);
+    }
+
+    // ---- mandatoryOnWrite placement (M9-A3 spec §5.4) -------------------
+
+    /// The marked field as the dump writes it: optional for decode,
+    /// fabric-sensitive, still required on write.
+    fn guarded_field() -> serde_json::Value {
+        serde_json::json!({ "id": 1, "name": "Data", "type": "octstr", "metatype": "bytes",
+            "nullable": false, "optional": true, "fabricSensitive": true,
+            "mandatoryOnWrite": true })
+    }
+
+    fn fabric_index_field() -> serde_json::Value {
+        serde_json::json!({ "id": 254, "name": "FabricIndex", "type": "fabric-idx",
+            "metatype": "integer", "nullable": false, "optional": false })
+    }
+
+    /// A one-cluster model whose only datatype is `kind` `ExtStruct` with
+    /// `fields`, plus the given events and commands.
+    fn model_with(
+        kind: &str,
+        fields: &[serde_json::Value],
+        events: &serde_json::Value,
+        commands: &serde_json::Value,
+    ) -> Model {
+        Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x1f, "name": "AccessControl", "revision": 2, "features": [],
+                "attributes": [], "commands": commands, "events": events,
+                "datatypes": [{ "name": "ExtStruct", "base": "struct", "kind": kind,
+                    "fields": fields }]
+            }))],
+        }
+    }
+
+    fn struct_model(fields: &[serde_json::Value]) -> Model {
+        model_with(
+            "struct",
+            fields,
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+        )
+    }
+
+    #[test]
+    fn accepts_mandatory_on_write_on_an_optional_sensitive_field_of_a_fabric_scoped_struct() {
+        let m = struct_model(&[guarded_field(), fabric_index_field()]);
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn rejects_mandatory_on_write_on_a_non_optional_field() {
+        let mut f = guarded_field();
+        f["optional"] = serde_json::json!(false);
+        let err = validate(&struct_model(&[f, fabric_index_field()])).unwrap_err();
+        assert!(
+            err.contains("AccessControl.ExtStruct.Data") && err.contains("not optional"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_mandatory_on_write_without_fabric_sensitive() {
+        let mut f = guarded_field();
+        f["fabricSensitive"] = serde_json::json!(false);
+        let err = validate(&struct_model(&[f, fabric_index_field()])).unwrap_err();
+        assert!(
+            err.contains("AccessControl.ExtStruct.Data") && err.contains("not fabricSensitive"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_mandatory_on_write_in_a_struct_without_field_254() {
+        let err = validate(&struct_model(&[guarded_field()])).unwrap_err();
+        assert!(
+            err.contains("AccessControl.ExtStruct.Data") && err.contains("no field 254"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_mandatory_on_write_in_a_non_struct_datatype() {
+        let m = model_with(
+            "enum",
+            &[guarded_field(), fabric_index_field()],
+            &serde_json::json!([]),
+            &serde_json::json!([]),
+        );
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("AccessControl.ExtStruct.Data") && err.contains("not a struct"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_mandatory_on_write_on_an_event_field() {
+        let m = model_with(
+            "struct",
+            &[],
+            &serde_json::json!([{ "id": 0, "name": "EntryChanged", "priority": "info",
+                "fields": [guarded_field(), fabric_index_field()] }]),
+            &serde_json::json!([]),
+        );
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("AccessControl.EntryChanged.Data") && err.contains("event field"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_mandatory_on_write_on_a_command_field() {
+        let m = model_with(
+            "struct",
+            &[],
+            &serde_json::json!([]),
+            &serde_json::json!([{ "id": 0, "name": "Review", "direction": "request",
+                "responseId": null, "fields": [guarded_field(), fabric_index_field()] }]),
+        );
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("AccessControl.Review.Data") && err.contains("command field"),
+            "got: {err}"
+        );
     }
 
     #[test]

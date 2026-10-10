@@ -109,11 +109,17 @@ impl ClientTypeEnum {
 #[non_exhaustive]
 pub struct MonitoringRegistrationStruct {
     /// Field CheckInNodeId (tag 1).
-    pub check_in_node_id: u64,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub check_in_node_id: Option<u64>,
     /// Field MonitoredSubject (tag 2).
-    pub monitored_subject: u64,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub monitored_subject: Option<u64>,
     /// Field ClientType (tag 4).
-    pub client_type: ClientTypeEnum,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub client_type: Option<ClientTypeEnum>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
 }
@@ -245,11 +251,9 @@ impl MonitoringRegistrationStruct {
             }
         }
         Ok(Self {
-            check_in_node_id: f_check_in_node_id
-                .ok_or(ClusterError::MissingField("CheckInNodeId"))?,
-            monitored_subject: f_monitored_subject
-                .ok_or(ClusterError::MissingField("MonitoredSubject"))?,
-            client_type: f_client_type.ok_or(ClusterError::MissingField("ClientType"))?,
+            check_in_node_id: f_check_in_node_id,
+            monitored_subject: f_monitored_subject,
+            client_type: f_client_type,
             fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
         })
     }
@@ -273,28 +277,55 @@ impl MonitoringRegistrationStruct {
         Self::decode_from(&mut r)
     }
     /// Write this struct's fields into an already-open container.
+    ///
+    /// A device withholds this struct's fabric-sensitive fields for entries of
+    /// other fabrics, so a read result can hold entries with them `None`. Filter
+    /// a read result to your own `fabric_index` before writing it back.
+    ///
+    /// # Errors
+    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
+    /// write is `None`; nothing is written in that case.
     #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(1), u64::from(self.check_in_node_id))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(2), u64::from(self.monitored_subject))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(4), u64::from(self.client_type.to_raw()))
-            .expect("infallible: vec writer");
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {
+        if self.check_in_node_id.is_none() {
+            return Err(ClusterError::MissingField("CheckInNodeId"));
+        }
+        if self.monitored_subject.is_none() {
+            return Err(ClusterError::MissingField("MonitoredSubject"));
+        }
+        if self.client_type.is_none() {
+            return Err(ClusterError::MissingField("ClientType"));
+        }
+        if let Some(check_in_node_id) = &self.check_in_node_id {
+            w.put_uint(Tag::Context(1), u64::from(*check_in_node_id))
+                .expect("infallible: vec writer");
+        }
+        if let Some(monitored_subject) = &self.monitored_subject {
+            w.put_uint(Tag::Context(2), u64::from(*monitored_subject))
+                .expect("infallible: vec writer");
+        }
+        if let Some(client_type) = &self.client_type {
+            w.put_uint(Tag::Context(4), u64::from((*client_type).to_raw()))
+                .expect("infallible: vec writer");
+        }
         w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
             .expect("infallible: vec writer");
+        Ok(())
     }
     /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
+    ///
+    /// # Errors
+    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
+    /// write is `None` (see [`Self::write_fields`]).
     #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Result<Vec<u8>, ClusterError> {
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous)
             .expect("infallible: vec writer");
-        self.write_fields(&mut w);
+        self.write_fields(&mut w)?;
         w.end_container().expect("infallible: vec writer");
-        buf
+        Ok(buf)
     }
 }
 

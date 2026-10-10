@@ -408,8 +408,13 @@ fn access_control_entry_decodes_subjects_u64() {
         })
     ));
     let e = gen::access_control::AccessControlEntryStruct::decode_from(&mut r).unwrap();
-    assert_eq!(e.subjects, Nullable::Value(vec![0x1122_3344_5566_7788u64]));
-    assert!(matches!(e.targets, Nullable::Null));
+    // Subjects/Targets are fabric-sensitive, so `Option`-wrapped (M9-A3 §5.4);
+    // our own fabric's entry carries them.
+    assert_eq!(
+        e.subjects,
+        Some(Nullable::Value(vec![0x1122_3344_5566_7788u64]))
+    );
+    assert!(matches!(e.targets, Some(Nullable::Null)));
     assert_eq!(e.fabric_index, 1u8);
 }
 
@@ -866,4 +871,213 @@ fn switch_multi_press_complete_event_missing_field_errors() {
         w.end_container().unwrap();
     }
     assert!(gen::switch::MultiPressCompleteEvent::decode(&buf).is_err());
+}
+
+// ---- M9-A3 B1: fabric-sensitive fields withheld for other fabrics -----------
+//
+// Our reads are unfiltered (IsFabricFiltered=false). chip then returns every
+// fabric's entries of a fabric-scoped list and, for another fabric's entry,
+// encodes ONLY FabricIndex: the sensitive fields are written only when
+// `includeSensitive` (connectedhomeip
+// zzz_generated/app-common/clusters/AccessControl/Structs.ipp:225-251,
+// IcdManagement/Structs.ipp:45-60). matter.js cannot produce this shape, so
+// the bytes are hand-built to match chip.
+
+/// A list attribute's wire value: an anonymous array of anonymous structs,
+/// each written by one closure.
+fn list_of(entries: &[&dyn Fn(&mut TlvWriter<'_>)]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        for write_entry in entries {
+            w.start_structure(Tag::Anonymous).unwrap();
+            write_entry(&mut w);
+            w.end_container().unwrap();
+        }
+        w.end_container().unwrap();
+    }
+    buf
+}
+
+/// One anonymous struct written by `write_fields` (a single entry's bytes).
+fn struct_of(write_fields: &dyn Fn(&mut TlvWriter<'_>)) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).unwrap();
+        write_fields(&mut w);
+        w.end_container().unwrap();
+    }
+    buf
+}
+
+/// Another fabric's entry as chip sends it: `FabricIndex` only.
+fn other_fabric_entry(w: &mut TlvWriter<'_>) {
+    w.put_uint(Tag::Context(254), 2).unwrap();
+}
+
+/// Our fabric's ACL entry: Administer / CASE / [node 0x1122], Targets null.
+fn own_acl_entry(w: &mut TlvWriter<'_>) {
+    w.put_uint(Tag::Context(1), 5).unwrap();
+    w.put_uint(Tag::Context(2), 2).unwrap();
+    w.start_array(Tag::Context(3)).unwrap();
+    w.put_uint(Tag::Anonymous, 0x1122).unwrap();
+    w.end_container().unwrap();
+    w.put_null(Tag::Context(4)).unwrap();
+    w.put_uint(Tag::Context(254), 1).unwrap();
+}
+
+#[test]
+fn acl_list_with_another_fabrics_entry_decodes() {
+    // The regression: before §5.4 one other-fabric entry failed the WHOLE
+    // list with MissingField("Privilege").
+    let acl = gen::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry]))
+        .expect("an unfiltered ACL read with a second fabric must decode");
+    assert_eq!(acl.len(), 2);
+}
+
+#[test]
+fn acl_other_fabric_entry_has_every_sensitive_field_none() {
+    use gen::access_control::{AccessControlEntryAuthModeEnum, AccessControlEntryPrivilegeEnum};
+    let acl =
+        gen::access_control::decode_acl(&list_of(&[&own_acl_entry, &other_fabric_entry])).unwrap();
+    let (own, other) = (&acl[0], &acl[1]);
+    assert_eq!(
+        own.privilege,
+        Some(AccessControlEntryPrivilegeEnum::from_raw(5))
+    );
+    assert_eq!(
+        own.auth_mode,
+        Some(AccessControlEntryAuthModeEnum::from_raw(2))
+    );
+    assert_eq!(own.subjects, Some(Nullable::Value(vec![0x1122])));
+    assert_eq!(own.targets, Some(Nullable::Null));
+    assert_eq!(own.fabric_index, 1);
+    assert_eq!(other.privilege, None);
+    assert_eq!(other.auth_mode, None);
+    assert_eq!(other.subjects, None);
+    assert_eq!(other.targets, None);
+    assert_eq!(other.fabric_index, 2);
+}
+
+#[test]
+fn acl_entry_with_some_sensitive_fields_withheld_decodes_field_by_field() {
+    // No 1.4 server does this, but nothing in the encoding forbids it: each
+    // sensitive field is independently present or absent.
+    let partial = |w: &mut TlvWriter<'_>| {
+        w.put_uint(Tag::Context(1), 3).unwrap(); // Privilege: Operate
+        w.put_null(Tag::Context(4)).unwrap(); // Targets: null (present)
+        w.put_uint(Tag::Context(254), 2).unwrap();
+    };
+    let acl = gen::access_control::decode_acl(&list_of(&[&partial])).unwrap();
+    assert_eq!(
+        acl[0].privilege,
+        Some(gen::access_control::AccessControlEntryPrivilegeEnum::from_raw(3))
+    );
+    assert_eq!(acl[0].auth_mode, None);
+    assert_eq!(acl[0].subjects, None);
+    // Present-but-null is distinct from withheld.
+    assert_eq!(acl[0].targets, Some(Nullable::Null));
+}
+
+#[test]
+fn extension_other_fabric_entry_decodes_and_refuses_reencode() {
+    let own = |w: &mut TlvWriter<'_>| {
+        w.put_bytes(Tag::Context(1), &[0x17, 0x18]).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    };
+    let ext =
+        gen::access_control::decode_extension(&list_of(&[&own, &other_fabric_entry])).unwrap();
+    assert_eq!(ext[0].data, Some(vec![0x17, 0x18]));
+    assert_eq!(ext[1].data, None);
+    assert_eq!(ext[1].fabric_index, 2);
+    // Read-modify-write of the unfiltered list must not re-home the other
+    // fabric's entry onto ours with its data missing.
+    assert!(matches!(
+        ext[1].encode(),
+        Err(matter_clusters::error::ClusterError::MissingField("Data"))
+    ));
+    // Our own entry still encodes, byte-identical to what was read.
+    assert_eq!(ext[0].encode().unwrap(), struct_of(&own));
+}
+
+#[test]
+fn arl_other_fabric_entry_has_every_sensitive_field_none() {
+    let own = |w: &mut TlvWriter<'_>| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 0x0006).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    };
+    let arl = gen::access_control::decode_arl(&list_of(&[&own, &other_fabric_entry])).unwrap();
+    assert_eq!(arl[0].endpoint, Some(1));
+    assert_eq!(arl[0].cluster, Some(0x0006));
+    assert_eq!(arl[0].restrictions.as_ref().map(Vec::len), Some(1));
+    assert_eq!(arl[1].endpoint, None);
+    assert_eq!(arl[1].cluster, None);
+    assert_eq!(arl[1].restrictions, None);
+    assert_eq!(arl[1].fabric_index, 2);
+}
+
+/// Our fabric's ICD registration: `CheckInNodeId` 0x1122, `MonitoredSubject`
+/// 0x3344, `ClientType` 1 (Ephemeral).
+fn own_icd_entry(w: &mut TlvWriter<'_>) {
+    w.put_uint(Tag::Context(1), 0x1122).unwrap();
+    w.put_uint(Tag::Context(2), 0x3344).unwrap();
+    w.put_uint(Tag::Context(4), 1).unwrap();
+    w.put_uint(Tag::Context(254), 1).unwrap();
+}
+
+#[test]
+fn icd_registered_clients_other_fabric_entry_has_every_sensitive_field_none() {
+    let clients = gen::icd_management::decode_registered_clients(&list_of(&[
+        &own_icd_entry,
+        &other_fabric_entry,
+    ]))
+    .expect("an unfiltered RegisteredClients read with a second fabric must decode");
+    assert_eq!(clients[0].check_in_node_id, Some(0x1122));
+    assert_eq!(clients[0].monitored_subject, Some(0x3344));
+    assert_eq!(
+        clients[0].client_type,
+        Some(gen::icd_management::ClientTypeEnum::from_raw(1))
+    );
+    assert_eq!(clients[1].check_in_node_id, None);
+    assert_eq!(clients[1].monitored_subject, None);
+    assert_eq!(clients[1].client_type, None);
+    assert_eq!(clients[1].fabric_index, 2);
+}
+
+#[test]
+fn icd_monitoring_registration_refuses_each_missing_sensitive_field() {
+    use gen::icd_management::MonitoringRegistrationStruct;
+    use matter_clusters::error::ClusterError;
+    let full = MonitoringRegistrationStruct::decode(&struct_of(&own_icd_entry)).unwrap();
+    assert_eq!(full.encode().unwrap(), struct_of(&own_icd_entry));
+
+    let mut e = full.clone();
+    e.check_in_node_id = None;
+    assert!(matches!(
+        e.encode(),
+        Err(ClusterError::MissingField("CheckInNodeId"))
+    ));
+
+    let mut e = full.clone();
+    e.monitored_subject = None;
+    assert!(matches!(
+        e.encode(),
+        Err(ClusterError::MissingField("MonitoredSubject"))
+    ));
+
+    let mut e = full;
+    e.client_type = None;
+    assert!(matches!(
+        e.encode(),
+        Err(ClusterError::MissingField("ClientType"))
+    ));
 }

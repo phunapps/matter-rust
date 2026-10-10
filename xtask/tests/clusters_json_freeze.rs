@@ -186,3 +186,125 @@ fn doorlock_aliro_surface_is_excluded_and_recorded() {
     });
     assert!(recorded, "DoorLock Aliro exclusions not recorded in header");
 }
+
+// ---- M9-A3 B1: fabric-sensitive fields (spec §5.4) ---------------------------
+
+/// Every datatype-struct field the dump relaxes because a device withholds it
+/// for other fabrics' entries: `(cluster, struct, field)`. Each is
+/// `fabricSensitive`, `optional` (for decode) and `mandatoryOnWrite`. A model
+/// change that adds or drops one must be reviewed, so the set is pinned exactly.
+const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 11] = [
+    ("AccessControl", "AccessControlEntryStruct", "AuthMode"),
+    ("AccessControl", "AccessControlEntryStruct", "Privilege"),
+    ("AccessControl", "AccessControlEntryStruct", "Subjects"),
+    ("AccessControl", "AccessControlEntryStruct", "Targets"),
+    ("AccessControl", "AccessControlExtensionStruct", "Data"),
+    ("AccessControl", "AccessRestrictionEntryStruct", "Cluster"),
+    ("AccessControl", "AccessRestrictionEntryStruct", "Endpoint"),
+    (
+        "AccessControl",
+        "AccessRestrictionEntryStruct",
+        "Restrictions",
+    ),
+    (
+        "IcdManagement",
+        "MonitoringRegistrationStruct",
+        "CheckInNodeId",
+    ),
+    (
+        "IcdManagement",
+        "MonitoringRegistrationStruct",
+        "ClientType",
+    ),
+    (
+        "IcdManagement",
+        "MonitoringRegistrationStruct",
+        "MonitoredSubject",
+    ),
+];
+
+#[test]
+fn dump_script_version_is_3() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 3);
+}
+
+#[test]
+fn relaxed_fabric_sensitive_fields_are_optional_mandatory_on_write_and_recorded() {
+    let v = load();
+    let mut marked = Vec::new();
+    for c in clusters(&v) {
+        let cname = c["name"].as_str().unwrap();
+        for d in c["datatypes"].as_array().unwrap() {
+            for f in d["fields"].as_array().into_iter().flatten() {
+                if f["mandatoryOnWrite"] == true {
+                    let fname = f["name"].as_str().unwrap();
+                    assert_eq!(
+                        f["optional"], true,
+                        "{cname}.{}.{fname} not optional",
+                        d["name"]
+                    );
+                    assert_eq!(
+                        f["fabricSensitive"], true,
+                        "{cname}.{}.{fname} mandatoryOnWrite but not fabricSensitive",
+                        d["name"]
+                    );
+                    marked.push((
+                        cname.to_string(),
+                        d["name"].as_str().unwrap().to_string(),
+                        fname.to_string(),
+                    ));
+                }
+                if f["id"] == 254 {
+                    assert!(
+                        f.get("fabricSensitive").is_none() && f.get("mandatoryOnWrite").is_none(),
+                        "{cname}.{}: FabricIndex marked",
+                        d["name"]
+                    );
+                }
+            }
+        }
+    }
+    marked.sort();
+    let want: Vec<(String, String, String)> = FABRIC_SENSITIVE_RELAXED
+        .iter()
+        .map(|(c, d, f)| ((*c).to_string(), (*d).to_string(), (*f).to_string()))
+        .collect();
+    assert_eq!(marked, want);
+
+    let relaxed = v["meta"]["relaxed"].as_array().expect("meta.relaxed array");
+    assert_eq!(relaxed.len(), FABRIC_SENSITIVE_RELAXED.len());
+    for (c, d, f) in FABRIC_SENSITIVE_RELAXED {
+        let element = format!("{d}.{f}");
+        assert!(
+            relaxed.iter().any(|r| r["cluster"] == c
+                && r["element"] == element.as_str()
+                && r["class"] == "P"
+                && r["reason"] == "fabric-sensitive (withheld for other fabrics)"),
+            "meta.relaxed lacks {c}.{element}"
+        );
+    }
+}
+
+#[test]
+fn no_event_or_command_field_is_marked_fabric_sensitive() {
+    // Spec §5.4 "Events are exempt": the marker is for datatype structs only.
+    let v = load();
+    for c in clusters(&v) {
+        let cname = c["name"].as_str().unwrap();
+        let payloads = c["events"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .chain(c["commands"].as_array().into_iter().flatten());
+        for p in payloads {
+            for f in p["fields"].as_array().unwrap() {
+                assert!(
+                    f.get("fabricSensitive").is_none() && f.get("mandatoryOnWrite").is_none(),
+                    "{cname}.{}.{}: payload field carries a write marker",
+                    p["name"],
+                    f["name"]
+                );
+            }
+        }
+    }
+}

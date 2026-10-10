@@ -7,7 +7,8 @@
 //
 // JSON contract (flat — consumed by xtask/src/codegen/model.rs in M7.3):
 //   { meta: { matterJsModelVersion, specRevision, dumpScriptVersion,
-//             generatedClusters: [name], excluded: [{cluster,element,kind,reason}] },
+//             generatedClusters: [name], excluded: [{cluster,element,kind,reason}],
+//             relaxed: [{cluster,element,class,reason}] },
 //     clusters: [ {
 //       id, name, revision,
 //       features:   [{ bit, code, name, description }],
@@ -19,7 +20,8 @@
 //                      bits?:   [{bit,name,description}],
 //                      fields?: [field] }]
 //     } ] }
-//   field = { id, name, type, metatype, entryType?, nullable, optional, description }
+//   field = { id, name, type, metatype, entryType?, nullable, optional, description,
+//             fabricSensitive?, mandatoryOnWrite? }   (both: datatype struct fields only)
 //
 // All exclusions are recorded in meta.excluded with a reason. Hard error
 // on: an allowlisted cluster the model doesn't expose, a missing
@@ -39,7 +41,9 @@ const OUT_PATH = join(REPO_ROOT, 'xtask', 'model', 'clusters.json');
 
 // Bump when the JSON shape changes (recorded in the header for audit).
 // v2: per-cluster `events` array (dumped for EVENT_ALLOWLIST clusters).
-const DUMP_SCRIPT_VERSION = 2;
+// v3: `fabricSensitive` / `mandatoryOnWrite` on datatype struct fields +
+//     `meta.relaxed` (M9-A3 §5.4).
+const DUMP_SCRIPT_VERSION = 3;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -129,6 +133,22 @@ const excluded = [];
 function recordExclusion(cluster, element, kind, reason) {
   excluded.push({ cluster, element, kind, reason });
 }
+
+// Fields the dump made LESS strict than the model (optional or nullable),
+// each with the finding class it resolves (P presence, N nullability; see
+// scripts/chip-xml-conformance.py) and why. Audited in meta.relaxed.
+const relaxed = [];
+function recordRelaxation(cluster, element, findingClass, reason) {
+  relaxed.push({ cluster, element, class: findingClass, reason });
+}
+
+// M9-A3 spec §5.4. Our reads are unfiltered (IsFabricFiltered=false), so for a
+// fabric-scoped list attribute chip returns every fabric's entries and leaves
+// the fabric-sensitive fields out of the entries that belong to another fabric
+// (zzz_generated/app-common/clusters/AccessControl/Structs.ipp: encoded only
+// when `includeSensitive`). @matter/model marks no struct as fabric-scoped, so
+// field 254 (FabricIndex) is the signal.
+const FABRIC_SENSITIVE_REASON = 'fabric-sensitive (withheld for other fabrics)';
 
 function fail(msg) {
   throw new Error(`dump-model: ${msg}`);
@@ -311,6 +331,10 @@ function dumpDatatype(dt, where, nameOverride) {
     }));
   } else if (meta === 'object') {
     out.kind = 'struct';
+    // `where` always starts with the owning cluster's name ("X.datatype",
+    // "X.global", "X.synth").
+    const owner = where.split('.')[0];
+    const fabricScoped = [...dt.children].some((c) => c.id === 254);
     // Drop fields with no readable type — write-only / fabric-sensitive fields
     // (e.g. IcdManagement MonitoringRegistrationStruct.Key) the device never
     // returns, so they are not decodable. Keeping them would fail
@@ -324,7 +348,25 @@ function dumpDatatype(dt, where, nameOverride) {
         }
         return true;
       })
-      .map((c, i) => dumpField(c, `${where}.${dt.name}.field[${i}]`));
+      .map((c, i) => {
+        const field = dumpField(c, `${where}.${dt.name}.field[${i}]`);
+        // Datatype struct fields only: event and command payload fields go
+        // through dumpField directly and never get the marker (§5.4: chip
+        // drops other fabrics' fabric-sensitive events outright and sends our
+        // own in full, so event payloads are exempt).
+        if (c.effectiveAccess && c.effectiveAccess.fabricSensitive) {
+          field.fabricSensitive = true;
+          // Relaxed for decode only: still required on write, so the
+          // emitter's encoders refuse None here. A field optional in the model
+          // itself is left alone (None = omit on write, as for any optional).
+          if (fabricScoped && !field.optional) {
+            field.optional = true;
+            field.mandatoryOnWrite = true;
+            recordRelaxation(owner, `${name}.${c.name}`, 'P', FABRIC_SENSITIVE_REASON);
+          }
+        }
+        return field;
+      });
   }
   return out;
 }
@@ -551,6 +593,7 @@ clusters.sort((x, y) => x.id - y.id);
 excluded.sort(
   (x, y) => x.cluster.localeCompare(y.cluster) || x.kind.localeCompare(y.kind) || x.element.localeCompare(y.element),
 );
+relaxed.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.localeCompare(y.element));
 
 const doc = {
   meta: {
@@ -559,6 +602,7 @@ const doc = {
     dumpScriptVersion: DUMP_SCRIPT_VERSION,
     generatedClusters: clusters.map((c) => c.name),
     excluded,
+    relaxed,
   },
   clusters,
 };

@@ -45,9 +45,16 @@ async fn access_control_typed_decode() {
     const C: u32 = 0x001F;
 
     let acl = read_attr(&node, 0, C, 0x0000).await;
+    let entries = access_control::decode_acl(&value_to_tlv(&acl))
+        .unwrap_or_else(|e| panic!("AccessControl.Acl typed-decode failed: {e}; {acl:?}"));
+    // Privilege is fabric-sensitive (Option since M9-A3 §5.4): our fabric's
+    // admin entry carries it.
     assert!(
-        access_control::decode_acl(&value_to_tlv(&acl)).is_ok(),
-        "AccessControl.Acl typed-decode failed: {acl:?}"
+        entries
+            .iter()
+            .any(|e| e.privilege
+                == Some(access_control::AccessControlEntryPrivilegeEnum::from_raw(5))),
+        "no Administer entry with its Privilege present: {entries:?}"
     );
     let per_fabric = read_attr(&node, 0, C, 0x0004).await;
     let n = access_control::decode_access_control_entries_per_fabric(&value_to_tlv(&per_fabric))

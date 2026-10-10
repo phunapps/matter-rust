@@ -56,6 +56,22 @@ investigate. Add the divergence as a test vector, then fix the Rust side.
 
 These are language-idiomatic differences. They do not affect interop.
 
+## Where we decode more leniently than matter.js
+
+- **Fabric-sensitive fields of fabric-scoped structs are `Option`**
+  (`matter-clusters` 0.6.0, M9-A3). Our reads are unfiltered
+  (`IsFabricFiltered=false`), so for a fabric-scoped list such as AccessControl
+  `Acl` a device returns every fabric's entries and leaves the fabric-sensitive
+  fields out of the entries that belong to another fabric (connectedhomeip
+  `zzz_generated/app-common/clusters/AccessControl/Structs.ipp`: written only
+  when `includeSensitive`). matter.js `@matter/types` 0.16.11 declares those
+  fields mandatory (`TlvAccessControlEntry.privilege: TlvField(1, …)`,
+  `clusters/access-control.js`). We decode them as `Option`, where `None` means
+  "withheld: another fabric's entry". The structs' `encode`/`write_fields`
+  refuse a `None` sensitive field with `ClusterError::MissingField`, because
+  chip's ACL write path treats a missing `Subjects` as every CASE node on the
+  fabric. A complete entry encodes byte-identically to before.
+
 ## CASE handshake performance (measured 2026-07-12)
 
 The load-bearing perf comparison for the "embedded-grade performance"

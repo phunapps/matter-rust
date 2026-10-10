@@ -141,13 +141,21 @@ impl AccessControlEntryPrivilegeEnum {
 #[non_exhaustive]
 pub struct AccessControlEntryStruct {
     /// Field Privilege (tag 1).
-    pub privilege: AccessControlEntryPrivilegeEnum,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub privilege: Option<AccessControlEntryPrivilegeEnum>,
     /// Field AuthMode (tag 2).
-    pub auth_mode: AccessControlEntryAuthModeEnum,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub auth_mode: Option<AccessControlEntryAuthModeEnum>,
     /// Field Subjects (tag 3).
-    pub subjects: Nullable<Vec<u64>>,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub subjects: Option<Nullable<Vec<u64>>>,
     /// Field Targets (tag 4).
-    pub targets: Nullable<Vec<AccessControlTargetStruct>>,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub targets: Option<Nullable<Vec<AccessControlTargetStruct>>>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
 }
@@ -157,7 +165,9 @@ pub struct AccessControlEntryStruct {
 #[non_exhaustive]
 pub struct AccessControlExtensionStruct {
     /// Field Data (tag 1).
-    pub data: Vec<u8>,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub data: Option<Vec<u8>>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
 }
@@ -179,11 +189,17 @@ pub struct AccessControlTargetStruct {
 #[non_exhaustive]
 pub struct AccessRestrictionEntryStruct {
     /// Field Endpoint (tag 0).
-    pub endpoint: u16,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub endpoint: Option<u16>,
     /// Field Cluster (tag 1).
-    pub cluster: u32,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub cluster: Option<u32>,
     /// Field Restrictions (tag 2).
-    pub restrictions: Vec<AccessRestrictionStruct>,
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub restrictions: Option<Vec<AccessRestrictionStruct>>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
 }
@@ -388,10 +404,10 @@ impl AccessControlEntryStruct {
             }
         }
         Ok(Self {
-            privilege: f_privilege.ok_or(ClusterError::MissingField("Privilege"))?,
-            auth_mode: f_auth_mode.ok_or(ClusterError::MissingField("AuthMode"))?,
-            subjects: f_subjects.ok_or(ClusterError::MissingField("Subjects"))?,
-            targets: f_targets.ok_or(ClusterError::MissingField("Targets"))?,
+            privilege: f_privilege,
+            auth_mode: f_auth_mode,
+            subjects: f_subjects,
+            targets: f_targets,
             fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
         })
     }
@@ -446,7 +462,7 @@ impl AccessControlExtensionStruct {
             }
         }
         Ok(Self {
-            data: f_data.ok_or(ClusterError::MissingField("Data"))?,
+            data: f_data,
             fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
         })
     }
@@ -470,24 +486,41 @@ impl AccessControlExtensionStruct {
         Self::decode_from(&mut r)
     }
     /// Write this struct's fields into an already-open container.
+    ///
+    /// A device withholds this struct's fabric-sensitive fields for entries of
+    /// other fabrics, so a read result can hold entries with them `None`. Filter
+    /// a read result to your own `fabric_index` before writing it back.
+    ///
+    /// # Errors
+    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
+    /// write is `None`; nothing is written in that case.
     #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_bytes(Tag::Context(1), &self.data)
-            .expect("infallible: vec writer");
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {
+        if self.data.is_none() {
+            return Err(ClusterError::MissingField("Data"));
+        }
+        if let Some(data) = &self.data {
+            w.put_bytes(Tag::Context(1), &*data)
+                .expect("infallible: vec writer");
+        }
         w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
             .expect("infallible: vec writer");
+        Ok(())
     }
     /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
+    ///
+    /// # Errors
+    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
+    /// write is `None` (see [`Self::write_fields`]).
     #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Result<Vec<u8>, ClusterError> {
         let mut buf = Vec::new();
         let mut w = TlvWriter::new(&mut buf);
         w.start_structure(Tag::Anonymous)
             .expect("infallible: vec writer");
-        self.write_fields(&mut w);
+        self.write_fields(&mut w)?;
         w.end_container().expect("infallible: vec writer");
-        buf
+        Ok(buf)
     }
 }
 
@@ -677,9 +710,9 @@ impl AccessRestrictionEntryStruct {
             }
         }
         Ok(Self {
-            endpoint: f_endpoint.ok_or(ClusterError::MissingField("Endpoint"))?,
-            cluster: f_cluster.ok_or(ClusterError::MissingField("Cluster"))?,
-            restrictions: f_restrictions.ok_or(ClusterError::MissingField("Restrictions"))?,
+            endpoint: f_endpoint,
+            cluster: f_cluster,
+            restrictions: f_restrictions,
             fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
         })
     }
