@@ -3734,3 +3734,271 @@ fn water_heater_boost_encodes_and_boost_started_decodes() {
         [0x00, 0x01]
     );
 }
+
+// ---- M9-A3 B5: DeviceEnergyManagement --------------------------------------
+//
+// 1.4.2 DeviceEnergyManagement.xml. Forecast is a nullable ForecastStruct
+// whose Slots each may carry a list of CostStruct; PowerAdjustmentCapability
+// is a nullable struct whose own list is nullable too. evse-app sets PA, PFR,
+// STA, PAU, FA and CON (master evse-app/linux/main.cpp; v1.4.2.0 has no
+// evse-app, and energy-management-app/linux/main.cpp sets the same six);
+// v1.4.2.0's all-clusters sets PA, PFR, SFR, STA and PAU
+// (device-energy-management-stub.cpp, absent at master).
+
+#[test]
+fn device_energy_management_attributes_and_capability_decode() {
+    use clusters::device_energy_management::{
+        decode_abs_max_power, decode_abs_min_power, decode_esa_can_generate, decode_esa_state,
+        decode_esa_type, decode_opt_out_state, decode_power_adjustment_capability, ESAStateEnum,
+        ESATypeEnum, Feature, OptOutStateEnum, PowerAdjustReasonEnum,
+    };
+    assert_eq!(
+        (Feature::PA | Feature::PFR | Feature::STA | Feature::PAU | Feature::FA | Feature::CON)
+            .bits(),
+        0x7B,
+        "evse-app's features"
+    );
+    assert_eq!(decode_esa_type(&uint_attr(0)).unwrap(), ESATypeEnum::Evse);
+    assert_eq!(
+        decode_esa_type(&uint_attr(255)).unwrap(),
+        ESATypeEnum::Other
+    );
+    assert!(!decode_esa_can_generate(&bool_attr(false)).unwrap());
+    assert_eq!(
+        decode_esa_state(&uint_attr(3)).unwrap(),
+        ESAStateEnum::PowerAdjustActive
+    );
+    // power-mW is a signed 64-bit integer (evse-app at master and
+    // energy-management-app at v1.4.2.0: 1.2 kW to 7.6 kW).
+    assert_eq!(
+        decode_abs_min_power(&int_attr(1_200_000)).unwrap(),
+        1_200_000
+    );
+    assert_eq!(
+        decode_abs_max_power(&int_attr(7_600_000)).unwrap(),
+        7_600_000
+    );
+    assert_eq!(
+        decode_opt_out_state(&uint_attr(2)).unwrap(),
+        OptOutStateEnum::GridOptOut
+    );
+    // Null until the device can adjust; then a list (itself nullable) of
+    // ranges and a reason.
+    assert_eq!(
+        decode_power_adjustment_capability(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    let cap = decode_power_adjustment_capability(&struct_of(&|w| {
+        w.start_array(Tag::Context(0)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_int(Tag::Context(0), 1_200_000).unwrap();
+        w.put_int(Tag::Context(1), 7_600_000).unwrap();
+        w.put_uint(Tag::Context(2), 10).unwrap();
+        w.put_uint(Tag::Context(3), 3600).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+    }))
+    .unwrap();
+    let Nullable::Value(cap) = cap else {
+        panic!("expected a capability")
+    };
+    assert_eq!(
+        cap.cause,
+        PowerAdjustReasonEnum::LocalOptimizationAdjustment
+    );
+    let Nullable::Value(ranges) = &cap.power_adjust_capability else {
+        panic!("expected a list")
+    };
+    assert_eq!(
+        (
+            ranges[0].min_power,
+            ranges[0].max_power,
+            ranges[0].max_duration
+        ),
+        (1_200_000, 7_600_000, 3600)
+    );
+    let cap = decode_power_adjustment_capability(&struct_of(&|w| {
+        w.put_null(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+    }))
+    .unwrap();
+    let Nullable::Value(cap) = cap else {
+        panic!("expected a capability")
+    };
+    assert_eq!(cap.power_adjust_capability, Nullable::Null);
+}
+
+#[test]
+fn device_energy_management_forecast_decodes_nested_slots_and_costs() {
+    use clusters::device_energy_management::{
+        decode_forecast, CostTypeEnum, ForecastUpdateReasonEnum,
+    };
+    // Two slots: the first pausable with a financial cost, the second with
+    // neither PAU nor cost fields.
+    let forecast = decode_forecast(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 7).unwrap(); // ForecastId
+        w.put_uint(Tag::Context(1), 0).unwrap(); // ActiveSlotNumber
+        w.put_uint(Tag::Context(2), 1000).unwrap(); // StartTime
+        w.put_uint(Tag::Context(3), 4600).unwrap(); // EndTime
+        w.put_null(Tag::Context(4)).unwrap(); // EarliestStartTime (STA)
+        w.put_uint(Tag::Context(5), 9000).unwrap(); // LatestEndTime (STA)
+        w.put_bool(Tag::Context(6), true).unwrap(); // IsPausable
+        w.start_array(Tag::Context(7)).unwrap(); // Slots
+        w.start_structure(Tag::Anonymous).unwrap();
+        for (tag, v) in [(0, 600), (1, 1200), (2, 900), (3, 0), (4, 900)] {
+            w.put_uint(Tag::Context(tag), v).unwrap();
+        }
+        w.put_bool(Tag::Context(5), true).unwrap(); // SlotIsPausable
+        w.put_uint(Tag::Context(6), 60).unwrap();
+        w.put_uint(Tag::Context(7), 600).unwrap();
+        w.put_int(Tag::Context(9), 2_500_000).unwrap(); // NominalPower (PFR)
+        w.start_array(Tag::Context(13)).unwrap(); // Costs
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0).unwrap(); // Financial
+        w.put_int(Tag::Context(1), -150).unwrap(); // a credit
+        w.put_uint(Tag::Context(2), 2).unwrap();
+        w.put_uint(Tag::Context(3), 826).unwrap(); // GBP
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        for (tag, v) in [(0, 300), (1, 300), (2, 300), (3, 0), (4, 300)] {
+            w.put_uint(Tag::Context(tag), v).unwrap();
+        }
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(8), 1).unwrap(); // ForecastUpdateReason
+    }))
+    .unwrap();
+    let Nullable::Value(f) = forecast else {
+        panic!("expected a forecast")
+    };
+    assert_eq!(
+        (
+            f.forecast_id,
+            f.active_slot_number,
+            f.earliest_start_time,
+            f.latest_end_time
+        ),
+        (7, Nullable::Value(0), Some(Nullable::Null), Some(9000))
+    );
+    assert_eq!(
+        f.forecast_update_reason,
+        ForecastUpdateReasonEnum::LocalOptimization
+    );
+    assert_eq!(f.slots.len(), 2);
+    let costs = f.slots[0].costs.as_ref().unwrap();
+    assert_eq!(
+        (
+            costs[0].cost_type,
+            costs[0].value,
+            costs[0].decimal_points,
+            costs[0].currency
+        ),
+        (CostTypeEnum::Financial, -150, 2, Some(826))
+    );
+    assert_eq!(f.slots[0].nominal_power, Some(2_500_000));
+    assert_eq!(f.slots[0].slot_is_pausable, Some(true));
+    assert_eq!(
+        (
+            f.slots[1].costs.as_ref(),
+            f.slots[1].slot_is_pausable,
+            f.slots[1].manufacturer_esa_state
+        ),
+        (None, None, None)
+    );
+    assert_eq!(decode_forecast(&null_attr()).unwrap(), Nullable::Null);
+}
+
+#[test]
+fn device_energy_management_requests_encode_and_events_decode() {
+    use clusters::device_energy_management::{
+        encode_cancel_request, encode_modify_forecast_request, encode_pause_request,
+        encode_power_adjust_request, encode_request_constraint_based_forecast, event_id,
+        AdjustmentCauseEnum, CauseEnum, ConstraintsStruct, PowerAdjustEndEvent, ResumedEvent,
+        SlotAdjustmentStruct,
+    };
+    assert_eq!(
+        encode_power_adjust_request(-3_000_000, 600, AdjustmentCauseEnum::GridOptimization),
+        struct_of(&|w| {
+            w.put_int(Tag::Context(0), -3_000_000).unwrap();
+            w.put_uint(Tag::Context(1), 600).unwrap();
+            w.put_uint(Tag::Context(2), 1).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_pause_request(60, AdjustmentCauseEnum::LocalOptimization),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 60).unwrap();
+            w.put_uint(Tag::Context(1), 0).unwrap();
+        })
+    );
+    assert_eq!(encode_cancel_request(), [0x15, 0x18]);
+    // Without PFR a slot adjustment leaves NominalPower out.
+    let adjust = vec![SlotAdjustmentStruct {
+        slot_index: 0,
+        nominal_power: None,
+        duration: 1200,
+    }];
+    assert_eq!(
+        encode_modify_forecast_request(7, &adjust, AdjustmentCauseEnum::LocalOptimization),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 7).unwrap();
+            w.start_array(Tag::Context(1)).unwrap();
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_uint(Tag::Context(2), 1200).unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(2), 0).unwrap();
+        })
+    );
+    let constraints = vec![ConstraintsStruct {
+        start_time: 5000,
+        duration: 600,
+        nominal_power: Some(1_000_000),
+        maximum_energy: Some(200_000),
+        load_control: None,
+    }];
+    assert_eq!(
+        encode_request_constraint_based_forecast(
+            &constraints,
+            AdjustmentCauseEnum::GridOptimization
+        ),
+        struct_of(&|w| {
+            w.start_array(Tag::Context(0)).unwrap();
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), 5000).unwrap();
+            w.put_uint(Tag::Context(1), 600).unwrap();
+            w.put_int(Tag::Context(2), 1_000_000).unwrap();
+            w.put_int(Tag::Context(3), 200_000).unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(1), 1).unwrap();
+        })
+    );
+    let end = PowerAdjustEndEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 4).unwrap();
+        w.put_uint(Tag::Context(1), 42).unwrap();
+        w.put_int(Tag::Context(2), 1_500).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (end.cause, end.duration, end.energy_use),
+        (CauseEnum::Cancelled, 42, 1_500)
+    );
+    let resumed =
+        ResumedEvent::decode(&struct_of(&|w| w.put_uint(Tag::Context(0), 0).unwrap())).unwrap();
+    assert_eq!(resumed.cause, CauseEnum::NormalCompletion);
+    // PowerAdjustStart and Paused carry nothing: ids only.
+    assert_eq!(
+        [
+            event_id::POWER_ADJUST_START,
+            event_id::POWER_ADJUST_END,
+            event_id::PAUSED,
+            event_id::RESUMED
+        ],
+        [0x00, 0x01, 0x02, 0x03]
+    );
+}

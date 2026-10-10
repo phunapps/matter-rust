@@ -17,8 +17,8 @@ fn all_real_clusters_generate_and_format() {
         .expect("real model loads + validates");
     assert_eq!(
         model.clusters.len(),
-        79,
-        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect + 2 AlarmBase + 3 ResourceMonitoring + 3 A3-B3 OperationalState + 4 appliance-control + 1 ServiceArea + 2 A3-B4 safety-sensor + 1 valve + 1 ScenesManagement + 2 A3-B5 attribute-only energy clusters + 1 WaterHeaterManagement"
+        80,
+        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect + 2 AlarmBase + 3 ResourceMonitoring + 3 A3-B3 OperationalState + 4 appliance-control + 1 ServiceArea + 2 A3-B4 safety-sensor + 1 valve + 1 ScenesManagement + 2 A3-B5 attribute-only energy clusters + 1 WaterHeaterManagement + 1 DeviceEnergyManagement"
     );
     for c in &model.clusters {
         let src = xtask::codegen::rustgen::emit::generate_cluster(c);
@@ -37,12 +37,15 @@ fn all_real_clusters_generate_and_format() {
 /// reachable from a request command, or a scalar struct reachable from a
 /// writable attribute). A new entry is a new public encoder to review; a
 /// missing one is a breaking removal.
-const ENCODED_STRUCTS: [(&str, &str); 19] = [
+const ENCODED_STRUCTS: [(&str, &str); 21] = [
     ("AccessControl", "AccessControlExtensionStruct"),
     ("AccessControl", "AccessControlTargetStruct"),
     ("AccessControl", "AccessRestrictionStruct"),
     ("AccessControl", "CommissioningAccessRestrictionEntryStruct"),
     ("Binding", "TargetStruct"),
+    // M9-A3 B5: ModifyForecastRequest and RequestConstraintBasedForecast.
+    ("DeviceEnergyManagement", "ConstraintsStruct"),
+    ("DeviceEnergyManagement", "SlotAdjustmentStruct"),
     ("DoorLock", "CredentialStruct"),
     ("GroupKeyManagement", "GroupKeyMapStruct"),
     ("GroupKeyManagement", "GroupKeySetStruct"),

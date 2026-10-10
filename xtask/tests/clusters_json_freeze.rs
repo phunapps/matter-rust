@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 79] = [
+const TARGET_CLUSTERS: [&str; 80] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -117,6 +117,8 @@ const TARGET_CLUSTERS: [&str; 79] = [
     "PowerTopology",
     // M9-A3 B5, WaterHeaterManagement:
     "WaterHeaterManagement",
+    // M9-A3 B5, DeviceEnergyManagement:
+    "DeviceEnergyManagement",
 ];
 
 fn load() -> Value {
@@ -407,7 +409,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 23] = [
+const EVENT_CLUSTERS: [&str; 24] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -439,6 +441,8 @@ const EVENT_CLUSTERS: [&str; 23] = [
     "ValveConfigurationAndControl",
     // M9-A3 B5, WaterHeaterManagement:
     "WaterHeaterManagement",
+    // M9-A3 B5, DeviceEnergyManagement:
+    "DeviceEnergyManagement",
 ];
 
 #[test]
@@ -1894,4 +1898,71 @@ fn water_heater_management_keeps_its_boost_shapes() {
         [("BoostInfo", false)]
     );
     assert_eq!(field_optionality(&c["events"][1]["fields"]), []);
+}
+
+#[test]
+fn device_energy_management_keeps_its_shapes() {
+    // 1.4.2 DeviceEnergyManagement.xml: eight requests, every one answered
+    // with a status; the two list-carrying requests take scalar structs whose
+    // feature-gated fields are optional; four events, two of them fieldless.
+    let v = load();
+    let c = cluster(&v, "DeviceEnergyManagement");
+    let requests: Vec<(&str, bool)> = c["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cmd| (cmd["name"].as_str().unwrap(), cmd["responseId"].is_null()))
+        .collect();
+    assert_eq!(
+        requests,
+        [
+            ("PowerAdjustRequest", true),
+            ("CancelPowerAdjustRequest", true),
+            ("StartTimeAdjustRequest", true),
+            ("PauseRequest", true),
+            ("ResumeRequest", true),
+            ("ModifyForecastRequest", true),
+            ("RequestConstraintBasedForecast", true),
+            ("CancelRequest", true)
+        ]
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "SlotAdjustmentStruct")["fields"]),
+        [
+            ("SlotIndex", false),
+            ("NominalPower", true),
+            ("Duration", false)
+        ]
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "ConstraintsStruct")["fields"]),
+        [
+            ("StartTime", false),
+            ("Duration", false),
+            ("NominalPower", true),
+            ("MaximumEnergy", true),
+            ("LoadControl", true)
+        ]
+    );
+    let cap = datatype(c, "PowerAdjustCapabilityStruct");
+    assert_eq!(cap["fields"][0]["name"], "PowerAdjustCapability");
+    assert_eq!(cap["fields"][0]["nullable"], true);
+    let events: Vec<(&str, Vec<(&str, bool)>)> = c["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["name"].as_str().unwrap(), field_optionality(&e["fields"])))
+        .collect();
+    assert_eq!(
+        events,
+        [
+            ("PowerAdjustStart", vec![]),
+            (
+                "PowerAdjustEnd",
+                vec![("Cause", false), ("Duration", false), ("EnergyUse", false)]
+            ),
+            ("Paused", vec![]),
+            ("Resumed", vec![("Cause", false)]),
+        ]
+    );
 }

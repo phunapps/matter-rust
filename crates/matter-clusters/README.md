@@ -19,7 +19,7 @@ matter-clusters = "0.5"
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  79 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  80 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -27,7 +27,7 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 79 listed below. More
+- It is **not** the full Matter cluster set — only the 80 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -46,7 +46,7 @@ may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-79 clusters are generated today, covering their **mandatory and optional**
+80 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
@@ -69,8 +69,8 @@ attributes, by area:
 - **Energy** — ElectricalPowerMeasurement, ElectricalEnergyMeasurement.
 - **Energy management** — EnergyPreference (provisional: the specification
   marks the whole cluster provisional, so its shape may change between
-  specification revisions), PowerTopology, WaterHeaterManagement (with its
-  events).
+  specification revisions), PowerTopology, WaterHeaterManagement and
+  DeviceEnergyManagement (both with their events).
 - **Appliance modes** — ModeSelect, OvenMode, LaundryWasherMode,
   RefrigeratorAndTemperatureControlledCabinetMode, RvcRunMode, RvcCleanMode,
   DishwasherMode, MicrowaveOvenMode, EnergyEvseMode, WaterHeaterMode,

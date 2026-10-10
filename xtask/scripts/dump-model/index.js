@@ -202,6 +202,10 @@ const ALLOWLIST = [
   // TargetReheat form an at-most-one choice group and whose TargetPercentage
   // is required with TargetReheat; BoostStarted carries the same struct):
   { id: 0x0094, name: 'WaterHeaterManagement' },
+  // M9-A3 B5, DeviceEnergyManagement (eight requests, two with a list of
+  // scalar structs; Forecast nests SlotStruct and CostStruct lists;
+  // PowerAdjustCapability is a nullable list inside a nullable struct):
+  { id: 0x0098, name: 'DeviceEnergyManagement' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -245,6 +249,9 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B5, WaterHeaterManagement (BoostStarted: WaterHeaterBoostInfoStruct;
   // BoostEnded: fieldless):
   'WaterHeaterManagement',
+  // M9-A3 B5, DeviceEnergyManagement (PowerAdjustStart and Paused fieldless;
+  // PowerAdjustEnd and Resumed carry a CauseEnum):
+  'DeviceEnergyManagement',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

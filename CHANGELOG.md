@@ -366,6 +366,11 @@ The codegen now generates only what a client can use:
   and `target_reheat`, and `target_percentage` whenever `target_reheat` is
   set. chip's server refuses a Boost that breaks either with
   `InvalidCommand`.
+- **DeviceEnergyManagement (0x0098)**, with its four events (`PowerAdjustEnd`
+  and `Resumed` carry a cause; `PowerAdjustStart` and `Paused` are ids
+  only): every attribute, including the nested `Forecast` (slots, each with
+  optional costs) and `PowerAdjustmentCapability`, and encoders for all
+  eight requests.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

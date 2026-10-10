@@ -15,6 +15,7 @@ pub mod carbon_dioxide_concentration_measurement;
 pub mod carbon_monoxide_concentration_measurement;
 pub mod color_control;
 pub mod descriptor;
+pub mod device_energy_management;
 pub mod device_energy_management_mode;
 pub mod dishwasher_alarm;
 pub mod dishwasher_mode;
