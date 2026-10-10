@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 4,
+    "dumpScriptVersion": 5,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -662,7 +662,8 @@
         "class": "C",
         "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
       }
-    ]
+    ],
+    "supplemented": []
   },
   "clusters": [
     {

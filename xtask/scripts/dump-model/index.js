@@ -8,7 +8,8 @@
 // JSON contract (flat — consumed by xtask/src/codegen/model.rs in M7.3):
 //   { meta: { matterJsModelVersion, specRevision, dumpScriptVersion,
 //             generatedClusters: [name], excluded: [{cluster,element,kind,reason}],
-//             relaxed: [{cluster,element,class,reason}] },
+//             relaxed: [{cluster,element,class,reason}],
+//             supplemented: [{cluster,element,source}] },
 //     clusters: [ {
 //       id, name, revision,
 //       features:   [{ bit, code, name, description }],
@@ -32,7 +33,7 @@
 // rename must not silently widen the DoorLock surface).
 
 import '@matter/model/resources'; // SIDE-EFFECT, FIRST: populates .details
-import { Matter, GLOBAL_IDS, Conformance } from '@matter/model';
+import { Matter, GLOBAL_IDS, Conformance, AttributeModel, CommandModel, FieldModel } from '@matter/model';
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -41,6 +42,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..', '..', '..'); // dump-model -> scripts -> xtask -> repo root
 const OUT_PATH = join(REPO_ROOT, 'xtask', 'model', 'clusters.json');
+const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 
 // Bump when the JSON shape changes (recorded in the header for audit).
 // v2: per-cluster `events` array (dumped for EVENT_ALLOWLIST clusters).
@@ -49,7 +51,9 @@ const OUT_PATH = join(REPO_ROOT, 'xtask', 'model', 'clusters.json');
 // v4: `provisional` (features, attributes, commands, events, fields),
 //     `choice` (fields) and `globalName` (datatypes), for generated rustdoc
 //     (M9-A3 B4).
-const DUMP_SCRIPT_VERSION = 4;
+// v5: `meta.supplemented` — Matter 1.4 elements the 1.5.1 model removed,
+//     added from supplement-1.4.json (M9-A3 B4).
+const DUMP_SCRIPT_VERSION = 5;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -1109,6 +1113,203 @@ function checkConditionalRelaxations(clusterName, commands, datatypes) {
   }
 }
 
+// --- the Matter 1.4 supplement (M9-A3 B4) --------------------------------
+//
+// @matter/model 0.17.1 follows Matter 1.5.1, which removed a few elements a
+// 1.4 device may still implement and chip's controller codegen still generates
+// (src/controller/data_model/controller-clusters.matter): Thermostat's weekly
+// schedule (feature SCH) and WindowCovering's absolute positioning (feature
+// ABS). The user's decision (spec rev 6, §2): follow chip and synthesise them.
+//
+// supplement-1.4.json holds them, transcribed from chip's
+// data_model/1.4.2/clusters/*.xml, one element per entry with its `source`.
+// Before any cluster is dumped, each entry becomes a real @matter/model element
+// (AttributeModel / CommandModel / FieldModel) added to its cluster, so it goes
+// through exactly the path model elements take: exclusionReason, dumpField (the
+// §3.1 rule and its class-C recording), dumpCommand, the send-side guard,
+// inlining and the emitter. Datatypes are never supplemented: an element refers
+// to the model's own (Thermostat keeps ScheduleDayOfWeekBitmap,
+// ScheduleModeBitmap, StartOfWeekEnum and WeeklyScheduleTransitionStruct).
+//
+// The merge is additive only. The dump stops when: a cluster is not
+// allowlisted; its model revision is not the one the entry was reviewed
+// against (a model upgrade may have restored or changed the element); an
+// element collides with a model element (same id or name; for a feature,
+// same bit or code); a type does not resolve; a key is unknown; or a
+// supplemented element is not in the dumped output. Every element is recorded
+// in meta.supplemented with its source, and scripts/chip-xml-conformance.py
+// checks each one against the 1.4.2 XML (class S).
+
+const supplemented = [];
+
+const SUPPLEMENT_KEYS = {
+  cluster: new Set(['reviewedModelRevision', 'features', 'attributes', 'commands']),
+  feature: new Set(['bit', 'code', 'title', 'conformance', 'details', 'source']),
+  attribute: new Set(['id', 'name', 'type', 'conformance', 'access', 'quality', 'details', 'source']),
+  command: new Set(['id', 'name', 'direction', 'response', 'conformance', 'access', 'fields', 'details', 'source']),
+  field: new Set(['id', 'name', 'type', 'entry', 'conformance', 'quality']),
+};
+
+function checkKeys(obj, kind, where) {
+  for (const k of Object.keys(obj)) {
+    if (!SUPPLEMENT_KEYS[kind].has(k)) fail(`supplement ${where}: unknown ${kind} key \`${k}\``);
+  }
+  if (kind !== 'cluster' && kind !== 'field' && !obj.source) fail(`supplement ${where}: missing \`source\``);
+}
+
+// "0x0020" -> 32. Hex strings keep ids readable in JSON (as in the spec).
+function hexId(text, where) {
+  if (typeof text !== 'string' || !/^0x[0-9a-f]+$/i.test(text)) fail(`supplement ${where}: id must be a hex string, got ${JSON.stringify(text)}`);
+  return Number(text);
+}
+
+function supplementField(f, where) {
+  checkKeys(f, 'field', where);
+  const children = f.entry ? [new FieldModel({ name: 'entry', type: f.entry })] : [];
+  return new FieldModel({
+    id: f.id,
+    name: f.name,
+    type: f.type,
+    conformance: f.conformance,
+    quality: f.quality,
+    children,
+  });
+}
+
+// The reason `el` (a supplement entry of `kind`) cannot be added to `cluster`,
+// or null. Pure: reads the model, never changes it.
+function supplementCollision(cluster, kind, el) {
+  if (kind === 'feature') {
+    const hit = cluster.features.find((f) => f.name === el.code || (f.constraint && f.constraint.value === el.bit));
+    return hit ? `collides with model feature ${hit.name}` : null;
+  }
+  if (kind === 'attribute') {
+    const id = hexId(el.id, `${cluster.name}.${el.name}`);
+    const hit = cluster.attributes.find((a) => a.id === id || a.name === el.name);
+    return hit ? `collides with model attribute ${hit.name} (${hit.id})` : null;
+  }
+  const id = hexId(el.id, `${cluster.name}.${el.name}`);
+  const isResponse = el.direction === 'response';
+  const hit = cluster.commands.find((c) => c.name === el.name || (c.id === id && c.isResponse === isResponse));
+  return hit ? `collides with model command ${hit.name} (${hit.id})` : null;
+}
+
+// Load-time self-check of supplementCollision against the real model: every
+// row must collide (or not) as stated, so a broken check fails the dump
+// instead of letting a supplement shadow a model element.
+{
+  const thermostat = Matter.clusters(0x0201);
+  for (const [kind, el, want] of [
+    ['attribute', { id: '0x0000', name: 'Anything' }, true], // LocalTemperature's id
+    ['attribute', { id: '0x7f00', name: 'LocalTemperature' }, true],
+    ['attribute', { id: '0x7f00', name: 'NoSuchAttribute' }, false],
+    ['feature', { bit: 0, code: 'XX' }, true], // HEAT's bit
+    ['feature', { bit: 31, code: 'HEAT' }, true],
+    ['feature', { bit: 31, code: 'XX' }, false],
+    ['command', { id: '0x00', name: 'Other', direction: 'request' }, true], // SetpointRaiseLower
+    ['command', { id: '0x00', name: 'Other', direction: 'response' }, false],
+    ['command', { id: '0x7f', name: 'SetpointRaiseLower', direction: 'request' }, true],
+  ]) {
+    if ((supplementCollision(thermostat, kind, el) !== null) !== want) {
+      fail(`supplement self-check: ${kind} ${JSON.stringify(el)} should ${want ? '' : 'not '}collide with Thermostat`);
+    }
+  }
+}
+
+function buildSupplementElement(kind, el, where) {
+  if (kind === 'feature') {
+    return new FieldModel({ name: el.code, constraint: String(el.bit), title: el.title, conformance: el.conformance, details: el.details });
+  }
+  if (kind === 'attribute') {
+    return new AttributeModel({
+      id: hexId(el.id, where),
+      name: el.name,
+      type: el.type,
+      conformance: el.conformance,
+      access: el.access,
+      quality: el.quality,
+      details: el.details,
+    });
+  }
+  return new CommandModel({
+    id: hexId(el.id, where),
+    name: el.name,
+    direction: el.direction,
+    response: el.response,
+    conformance: el.conformance,
+    access: el.access,
+    details: el.details,
+    children: (el.fields || []).map((f, i) => supplementField(f, `${where}.field[${i}]`)),
+  });
+}
+
+// Every type a supplemented element names must resolve in its cluster, or the
+// element would dump with no metatype.
+function checkSupplementTypes(model, where) {
+  const els = model.tag === 'command' ? [...model.children] : [model];
+  for (const e of els) {
+    if (!e.effectiveMetatype) fail(`supplement ${where}.${e.name}: type \`${e.type}\` does not resolve`);
+    if (e.effectiveMetatype === 'array' && !(e.listEntry && e.listEntry.effectiveMetatype)) {
+      fail(`supplement ${where}.${e.name}: list entry type does not resolve`);
+    }
+  }
+}
+
+function applySupplement() {
+  const doc = JSON.parse(readFileSync(SUPPLEMENT_PATH, 'utf8'));
+  for (const k of Object.keys(doc)) {
+    if (k !== 'comment' && k !== 'clusters') fail(`supplement: unknown top-level key \`${k}\``);
+  }
+  for (const [clusterName, entry] of Object.entries(doc.clusters || {})) {
+    const allow = ALLOWLIST.find((e) => e.name === clusterName);
+    if (!allow) fail(`supplement: ${clusterName} is not allowlisted`);
+    checkKeys(entry, 'cluster', clusterName);
+    const cluster = Matter.clusters(allow.id);
+    if (cluster.revision !== entry.reviewedModelRevision) {
+      fail(
+        `supplement: ${clusterName} model revision is ${cluster.revision}, reviewed against ${entry.reviewedModelRevision} — model drift; review supplement-1.4.json`,
+      );
+    }
+    const featureMap = [...cluster.children].find((c) => c.id === 0xfffc);
+    for (const [key, kind, label] of [
+      ['features', 'feature', 'Feature'],
+      ['attributes', 'attribute', 'Attribute'],
+      ['commands', 'command', 'Command'],
+    ]) {
+      for (const el of entry[key] || []) {
+        const name = kind === 'feature' ? el.code : el.name;
+        const where = `${clusterName}.${label}.${name}`;
+        checkKeys(el, kind, where);
+        const collision = supplementCollision(cluster, kind, el);
+        if (collision) fail(`supplement ${where}: ${collision}`);
+        const model = buildSupplementElement(kind, el, where);
+        if (kind === 'feature') {
+          if (!featureMap) fail(`supplement ${where}: ${clusterName} has no FeatureMap of its own`);
+          featureMap.children.push(model);
+        } else {
+          cluster.children.push(model);
+          checkSupplementTypes(model, where);
+        }
+        supplemented.push({ cluster: clusterName, element: `${label}.${name}`, source: el.source });
+      }
+    }
+  }
+}
+
+// Every supplemented element must reach the output: an exclusion (a bare `P`,
+// a disallowed feature) would silently drop what the supplement exists to add.
+function checkSupplementDumped(clusters) {
+  for (const s of supplemented) {
+    const c = clusters.find((x) => x.name === s.cluster);
+    const [label, name] = s.element.split('.');
+    const found =
+      label === 'Feature'
+        ? c.features.some((f) => f.code === name)
+        : (label === 'Attribute' ? c.attributes : c.commands).some((e) => e.name === name);
+    if (!found) fail(`supplement ${s.cluster}.${s.element} was not dumped — it was excluded; review the entry`);
+  }
+}
+
 // --- main -----------------------------------------------------------------
 
 function modelVersion() {
@@ -1117,8 +1318,11 @@ function modelVersion() {
   return JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 }
 
+applySupplement();
 const clusters = ALLOWLIST.map(dumpCluster);
 clusters.sort((x, y) => x.id - y.id);
+checkSupplementDumped(clusters);
+supplemented.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.localeCompare(y.element));
 for (const key of TYPE_WIDENINGS.keys()) {
   const owner = key.split('.')[0];
   if (ALLOWLIST.some((e) => e.name === owner) && !appliedWidenings.has(key)) {
@@ -1138,6 +1342,7 @@ const doc = {
     generatedClusters: clusters.map((c) => c.name),
     excluded,
     relaxed,
+    supplemented,
   },
   clusters,
 };

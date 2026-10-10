@@ -23,6 +23,12 @@ Findings that FAIL the run (exit 1) unless allow-listed:
   N  a field or attribute nullable in 1.4.2 but non-nullable in the model
   W  a model integer/enum type whose range does not cover the 1.4.2 type's
      range (narrower width, or unsigned in the model where 1.4.2 is signed)
+Findings that always FAIL (never allow-listed: fix the supplement):
+  S  an element clusters.json records in meta.supplemented (added by the dump
+     from xtask/scripts/dump-model/supplement-1.4.json, not by the model) that
+     does not match 1.4.2 exactly: absent from 1.4.2 or from clusters.json, a
+     different id, bit, direction or name, a field set that differs, or a
+     field or attribute whose type, nullability or optionality differs
 
 Reported without failing:
   MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
@@ -37,6 +43,7 @@ Reported without failing:
                integer, or 1.4.2 leaves the type blank)
   STALE-ALLOW  an allow-list entry that matched no finding
   STALE-ACK    an acknowledgement that matched no XML-ONLY item
+  SUPPLEMENTED meta.supplemented elements verified against 1.4.2 (no S finding)
 
 Python 3 standard library only. Dev-only: CI has no chip checkout, so this is
 not part of `just gate`; each batch runs it and quotes the output.
@@ -45,7 +52,7 @@ Usage:
     python3 scripts/chip-xml-conformance.py <chip-checkout> [--cluster <Name>]...
                                             [--model <clusters.json>]
 
-Exit codes: 0 clean, 1 unresolved P/N/W findings, 2 usage or input error.
+Exit codes: 0 clean, 1 unresolved P/N/W or any S finding, 2 usage or input error.
 """
 
 import argparse
@@ -300,6 +307,7 @@ def own_tables(root):
                        if c.get("id") is not None else None),
                 "direction": c.get("direction"),
                 "conf": conformance_of(c),
+                "fields": xml_fields(c),
             }
     feats = root.find("features")
     if feats is not None:
@@ -537,6 +545,7 @@ class Report:
         self.ack = ack  # {xml-only key: reason}
         self.acked = set()
         self.failing, self.allowed = [], []
+        self.supplemented = []
         self.model_only, self.xml_only, self.uncheckable = [], [], []
         self.acknowledged = []
 
@@ -709,6 +718,88 @@ def check_cluster(rep, c, xt, zap, meta):
             rep.xml_only_item(f"{cname}.Attribute.{xa.get('name')}", f"(id {aid:#06x})")
 
 
+# ------------------------------------------------------------ supplement ---
+
+
+def same_type(mtok, xtok, dts, xt, zap):
+    """True when a model type token and a 1.4.2 one are the same type: equal
+    integer ranges when both resolve to integers, else the same name."""
+    mr = model_range(mtok, dts)
+    xr = xml_range(xtok, xt, zap)
+    if mr is not None or xr is not None:
+        return mr == xr
+    return norm(mtok) == norm(xtok)
+
+
+def field_mismatches(mf, xf, dts, xt, zap):
+    """How a supplemented field or attribute differs from its 1.4.2
+    counterpart (an empty list when it matches)."""
+    out = []
+    if norm(mf["name"]) != norm(xf.get("name")):
+        out.append(f"name {mf['name']!r} vs 1.4.2 {xf.get('name')!r}")
+    is_list = mf["type"] == "list"
+    if is_list != (xf.get("type") == "list"):
+        out.append(f"type {mf['type']!r} vs 1.4.2 {xf.get('type')!r}")
+    elif not same_type(model_type_token(mf), xml_type_token(xf) or "", dts, xt, zap):
+        out.append(f"type {model_type_token(mf)!r} vs 1.4.2 {xml_type_token(xf)!r}")
+    if bool(xf.get("nullable")) != mf["nullable"]:
+        out.append(f"nullable {mf['nullable']} vs 1.4.2 {bool(xf.get('nullable'))}")
+    if mf["optional"] != (xf.get("conf") != "M"):
+        out.append(f"optional {mf['optional']} vs 1.4.2 conformance {xf.get('conf')}")
+    return out
+
+
+def check_supplemented(rep, c, xt, zap, meta):
+    """Class S: every meta.supplemented element of cluster `c` matches its
+    1.4.2 counterpart exactly (the supplement is hand-transcribed, so a
+    'covers' check is not enough)."""
+    cname = c["name"]
+    dts = {d["name"]: d for d in c["datatypes"]}
+    for s in meta.get("supplemented", []):
+        if s.get("cluster") != cname:
+            continue
+        key = f"{cname}.{s.get('element')}"
+        label, _, name = (s.get("element") or "").partition(".")
+        problems = []
+        if label == "Feature":
+            mf = next((f for f in c["features"] if f["code"] == name), None)
+            xf = xt["feature"].get(norm(name))
+            if mf is None or xf is None:
+                problems.append("absent from " + ("clusters.json" if mf is None else "1.4.2"))
+            elif mf["bit"] != xf.get("bit"):
+                problems.append(f"bit {mf['bit']} vs 1.4.2 {xf.get('bit')}")
+        elif label == "Attribute":
+            ma = next((a for a in c["attributes"] if a["name"] == name), None)
+            xa = xt["attr"].get(ma["id"]) if ma is not None else None
+            if ma is None or xa is None:
+                problems.append("absent from " + ("clusters.json" if ma is None else "1.4.2"))
+            else:
+                problems += field_mismatches(ma, xa, dts, xt, zap)
+        elif label == "Command":
+            mc = next((x for x in c["commands"] if x["name"] == name), None)
+            xc = xt["cmd"].get(norm(name))
+            if mc is None or xc is None:
+                problems.append("absent from " + ("clusters.json" if mc is None else "1.4.2"))
+            else:
+                direction = "response" if xc.get("direction") == "responseFromServer" else "request"
+                if (mc["direction"], mc["id"]) != (direction, xc.get("id")):
+                    problems.append(f"{mc['direction']} id {mc['id']} vs 1.4.2 {direction} id {xc.get('id')}")
+                xfields = xc.get("fields", {})
+                mids = sorted(f["id"] for f in mc["fields"])
+                if mids != sorted(xfields):
+                    problems.append(f"field ids {mids} vs 1.4.2 {sorted(xfields)}")
+                for mf in mc["fields"]:
+                    if mf["id"] in xfields:
+                        problems += [f"{mf['name']}: {p}" for p in
+                                     field_mismatches(mf, xfields[mf["id"]], dts, xt, zap)]
+        else:
+            problems.append(f"unknown element kind {label!r}")
+        if problems:
+            rep.failing.append(f"S  {key}: " + "; ".join(problems))
+        else:
+            rep.supplemented.append(f"{key}  [source: {s.get('source')}]")
+
+
 # ------------------------------------------------------------------- main ---
 
 
@@ -791,6 +882,7 @@ def main():
             continue
         try:
             check_cluster(rep, c, xt, zap, meta)
+            check_supplemented(rep, c, xt, zap, meta)
         except (KeyError, TypeError, AttributeError) as e:
             # A model cluster missing a key the check reads is an input error
             # (exit 2), not a finding (exit 1).
@@ -801,7 +893,7 @@ def main():
         for line in lines:
             print(f"  {line}")
 
-    section("FAIL: P/N/W findings", rep.failing)
+    section("FAIL: P/N/W/S findings", rep.failing)
     section("allowed P/N/W findings", rep.allowed)
     section("MODEL-ONLY (absent from 1.4.2)", rep.model_only)
     section("XML-ONLY (absent from model, not excluded or acknowledged)", rep.xml_only)
@@ -813,6 +905,7 @@ def main():
     stale_ack = [k for k in rep.ack if k not in rep.acked and
                  (not args.cluster or k.split(".")[0] in args.cluster)]
     section("STALE-ACK (matched nothing)", stale_ack)
+    section("SUPPLEMENTED (verified against 1.4.2)", rep.supplemented)
     print(f"chip-xml-conformance: {len(clusters)} clusters, "
           f"{len(rep.failing)} failing, {len(rep.allowed)} allowed")
     return 1 if rep.failing else 0

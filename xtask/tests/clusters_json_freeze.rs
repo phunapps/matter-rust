@@ -299,8 +299,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_4() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 4);
+fn dump_script_version_is_5() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 5);
 }
 
 #[test]
@@ -1188,4 +1188,39 @@ fn service_area_location_struct_records_its_global_name() {
         .map(|d| d["name"].as_str().unwrap())
         .collect();
     assert_eq!(named, ["LocationDescriptorStruct"]);
+}
+
+// ---- M9-A3 B4: the Matter 1.4 supplement ------------------------------------
+
+/// Matter 1.4 elements the 1.5.1 model removed, added by the dump from
+/// `xtask/scripts/dump-model/supplement-1.4.json` (spec §2, rev 6), as
+/// `(cluster, "<Feature|Attribute|Command>.<name>")`. Each is checked against
+/// chip's 1.4.2 XML by `scripts/chip-xml-conformance.py` (class S).
+const SUPPLEMENTED: [(&str, &str); 0] = [];
+
+#[test]
+fn supplemented_elements_are_exactly_these_and_cite_a_source() {
+    let v = load();
+    let rows = v["meta"]["supplemented"]
+        .as_array()
+        .expect("meta.supplemented is an array");
+    let mut got: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|r| {
+            assert!(
+                r["source"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("data_model/1.4.2")),
+                "{r}"
+            );
+            (
+                r["cluster"].as_str().unwrap(),
+                r["element"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    got.sort_unstable();
+    let mut want = SUPPLEMENTED.to_vec();
+    want.sort_unstable();
+    assert_eq!(got, want);
 }

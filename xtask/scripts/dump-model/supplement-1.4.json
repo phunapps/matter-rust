@@ -1,0 +1,4 @@
+{
+  "comment": "Matter 1.4 elements absent from the @matter/model 1.5.1 model, added at dump time (M9-A3 spec §2, rev 6). Transcribed from chip's data_model/1.4.2/clusters/*.xml; see the supplement section of index.js for the merge rules.",
+  "clusters": {}
+}
