@@ -332,6 +332,19 @@ The codegen now generates only what a client can use:
   cluster provisional; the Matter 1.4.2 specification does not (revision 1
   removed the provisional status), so it carries no provisional note.
 
+### matter-clusters: Changed — rustdoc states provisional clusters and field dependencies
+
+- A cluster the Matter specification marks provisional as a whole carries a
+  module paragraph: its shape may change between specification revisions,
+  and a change is still a breaking release. EnergyPreference, added below,
+  is the first.
+- A struct field whose presence depends on another field of the struct
+  says so: "Required when `endpoint` is present" (or "absent"). Nothing
+  checks it. Today: Binding `TargetStruct` (`node`, `group`, `endpoint`),
+  ElectricalPowerMeasurement `MeasurementRangeStruct` (the start, min and
+  max timestamps and systimes) and, below, WaterHeaterManagement
+  `WaterHeaterBoostInfoStruct.target_percentage`.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

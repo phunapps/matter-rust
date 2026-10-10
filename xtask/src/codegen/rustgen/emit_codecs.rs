@@ -961,6 +961,7 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         mandatory_on_write: f.mandatory_on_write,
         provisional: f.provisional,
         choice: f.choice.clone(),
+        required_when: f.required_when.clone(),
     }
 }
 
@@ -1501,6 +1502,7 @@ mod tests {
             mandatory_on_write: false,
             provisional: false,
             choice: None,
+            required_when: None,
         }
     }
 
@@ -1705,6 +1707,7 @@ mod tests {
             id: 0x1,
             name: "T".to_string(),
             revision: 1,
+            provisional: false,
             features: vec![],
             attributes: vec![],
             commands,

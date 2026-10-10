@@ -5,9 +5,9 @@
 //! skip. The semantic checks here (unknown type strings, duplicate IDs,
 //! dangling response IDs, dangling type references, and `mandatoryOnWrite`
 //! appearing anywhere but an optional fabric-sensitive field of a
-//! fabric-scoped struct, and a class-C `meta.relaxed` entry on a field we
-//! encode) are the Rust-side half of the contract the dump script enforces
-//! on the JS side.
+//! fabric-scoped struct, a class-C `meta.relaxed` entry on a field we
+//! encode, and a `requiredWhen` naming no sibling field) are the Rust-side
+//! half of the contract the dump script enforces on the JS side.
 
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -32,6 +32,13 @@ pub struct Cluster {
     pub name: String,
     /// Cluster revision.
     pub revision: u16,
+    /// The Matter specification marks the whole cluster provisional
+    /// (`<provisionalConform/>` on its cluster id; the dump's
+    /// `PROVISIONAL_CLUSTERS`): its shape may change between specification
+    /// revisions. Drives a module rustdoc paragraph. Absent in the JSON means
+    /// `false` (M9-A3 B5).
+    #[serde(default)]
+    pub provisional: bool,
     /// Feature bits.
     #[serde(default)]
     pub features: Vec<Feature>,
@@ -218,6 +225,23 @@ pub struct FieldDef {
     /// not enforce it, so it drives a generated rustdoc line.
     #[serde(default)]
     pub choice: Option<Choice>,
+    /// The sibling field this field's presence depends on (conformance
+    /// `TargetReheat, [TP]`, `Endpoint`, `!Group`; M9-A3 B5). Datatype struct
+    /// fields only. The generated encoders do not enforce it, so it drives a
+    /// generated rustdoc line.
+    #[serde(default, rename = "requiredWhen")]
+    pub required_when: Option<RequiredWhen>,
+}
+
+/// A presence dependency between two fields of one struct (M9-A3 B5): the
+/// field carrying it is required when `field` is present (`present: true`,
+/// conformance `Field`) or when it is absent (`present: false`, `!Field`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RequiredWhen {
+    /// The sibling field's `PascalCase` name.
+    pub field: String,
+    /// `true`: required when `field` is present; `false`: when it is absent.
+    pub present: bool,
 }
 
 /// A choice-conformance group (Matter Core spec 7.3: `O.a` = exactly one field
@@ -417,6 +441,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                     &datatype_names,
                 )?;
                 check_struct_write_marker(&c.name, d, f)?;
+                check_required_when(&c.name, d, f)?;
             }
         }
         check_supplemented(c)?;
@@ -466,6 +491,22 @@ fn check_supplemented(c: &Cluster) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A field's `requiredWhen` must name another field of the same struct: the
+/// generated rustdoc names it, and a dangling name would document a rule about
+/// a field the struct does not have.
+fn check_required_when(cluster: &str, d: &Datatype, f: &FieldDef) -> Result<(), String> {
+    let Some(dep) = &f.required_when else {
+        return Ok(());
+    };
+    if dep.field != f.name && d.fields.iter().any(|o| o.name == dep.field) {
+        return Ok(());
+    }
+    Err(format!(
+        "{cluster}.{}.{}: requiredWhen names `{}`, not another field of the struct",
+        d.name, f.name, dep.field
+    ))
 }
 
 /// A class-C relaxation (a field whose conformance is conditional, which the
@@ -1011,6 +1052,48 @@ mod tests {
         let mut m = relaxed_model("ScalarStruct.Label");
         m.meta["relaxed"][0]["class"] = serde_json::json!("P");
         assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn required_when_must_name_a_sibling_field() {
+        let with_dep = |dep: &str| Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x94, "name": "WaterHeaterManagement", "revision": 2, "features": [],
+                "attributes": [], "commands": [],
+                "datatypes": [{ "name": "WaterHeaterBoostInfoStruct", "base": "struct", "kind": "struct",
+                    "fields": [
+                        { "id": 4, "name": "TargetPercentage", "type": "percent", "metatype": "integer",
+                          "nullable": false, "optional": true,
+                          "requiredWhen": { "field": dep, "present": true } },
+                        { "id": 5, "name": "TargetReheat", "type": "percent", "metatype": "integer",
+                          "nullable": false, "optional": true }
+                    ] }]
+            }))],
+        };
+        assert_eq!(validate(&with_dep("TargetReheat")), Ok(()));
+        let err = validate(&with_dep("NoSuchField")).unwrap_err();
+        assert!(
+            err.contains("WaterHeaterBoostInfoStruct.TargetPercentage")
+                && err.contains("`NoSuchField`"),
+            "got: {err}"
+        );
+        let err = validate(&with_dep("TargetPercentage")).unwrap_err();
+        assert!(err.contains("not another field"), "got: {err}");
+    }
+
+    #[test]
+    fn cluster_provisional_defaults_to_false() {
+        let c = cluster(serde_json::json!({
+            "id": 6, "name": "OnOff", "revision": 6, "features": [], "datatypes": [],
+            "attributes": [], "commands": []
+        }));
+        assert!(!c.provisional);
+        let c = cluster(serde_json::json!({
+            "id": 0x9b, "name": "EnergyPreference", "revision": 1, "provisional": true,
+            "features": [], "datatypes": [], "attributes": [], "commands": []
+        }));
+        assert!(c.provisional);
     }
 
     #[test]

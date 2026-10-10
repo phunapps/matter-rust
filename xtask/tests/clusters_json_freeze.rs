@@ -309,8 +309,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_6() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 6);
+fn dump_script_version_is_7() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 7);
 }
 
 #[test]
@@ -1663,4 +1663,117 @@ fn scenes_management_shape_follows_1_4() {
         && e["element"] == "DoNotUse"
         && e["kind"] == "attribute"
         && e["reason"] == "disallowed"));
+}
+
+// ---- M9-A3 B5: provisional clusters and presence dependencies -------------
+
+/// Clusters the Matter specification marks provisional as a whole (spec §2:
+/// `EnergyPreference` and `ContentControl`, included and marked provisional), from
+/// the dump's `PROVISIONAL_CLUSTERS`. Each gets a module rustdoc paragraph;
+/// `scripts/chip-xml-conformance.py` checks the marking against chip's 1.4.2
+/// XML both ways (class V).
+const PROVISIONAL_CLUSTERS: [&str; 0] = [];
+
+/// Datatype struct fields whose presence depends on a sibling field
+/// (`requiredWhen`), as `(cluster, "<Struct>.<Field>", sibling, present)`.
+/// Each gets a generated "Required when ..." rustdoc line; nothing enforces
+/// it.
+const REQUIRED_WHEN: [(&str, &str, &str, bool); 9] = [
+    ("Binding", "TargetStruct.Endpoint", "Group", false),
+    ("Binding", "TargetStruct.Group", "Endpoint", false),
+    ("Binding", "TargetStruct.Node", "Endpoint", true),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementRangeStruct.MaxSystime",
+        "EndSystime",
+        true,
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementRangeStruct.MaxTimestamp",
+        "EndTimestamp",
+        true,
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementRangeStruct.MinSystime",
+        "EndSystime",
+        true,
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementRangeStruct.MinTimestamp",
+        "EndTimestamp",
+        true,
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementRangeStruct.StartSystime",
+        "EndSystime",
+        true,
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementRangeStruct.StartTimestamp",
+        "EndTimestamp",
+        true,
+    ),
+];
+
+#[test]
+fn provisional_clusters_are_exactly_these() {
+    let v = load();
+    let got: Vec<&str> = clusters(&v)
+        .iter()
+        .filter(|c| c["provisional"] == true)
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(got, PROVISIONAL_CLUSTERS);
+    // The key is written only when true.
+    assert!(clusters(&v).iter().all(|c| c["provisional"] != false));
+}
+
+#[test]
+fn presence_dependencies_are_exactly_these() {
+    let v = load();
+    let mut got: Vec<(String, String, String, bool)> = Vec::new();
+    for c in clusters(&v) {
+        for d in c["datatypes"].as_array().unwrap() {
+            for f in d["fields"].as_array().into_iter().flatten() {
+                let dep = &f["requiredWhen"];
+                if dep.is_null() {
+                    continue;
+                }
+                got.push((
+                    c["name"].as_str().unwrap().to_string(),
+                    format!(
+                        "{}.{}",
+                        d["name"].as_str().unwrap(),
+                        f["name"].as_str().unwrap()
+                    ),
+                    dep["field"].as_str().unwrap().to_string(),
+                    dep["present"].as_bool().unwrap(),
+                ));
+            }
+        }
+    }
+    got.sort();
+    let got: Vec<(&str, &str, &str, bool)> = got
+        .iter()
+        .map(|(c, f, s, p)| (c.as_str(), f.as_str(), s.as_str(), *p))
+        .collect();
+    let mut want = REQUIRED_WHEN.to_vec();
+    want.sort_unstable();
+    assert_eq!(got, want);
+    // Never on a command or event field (the emitter documents struct fields
+    // only, and the dump stops on any other).
+    for c in clusters(&v) {
+        for kind in ["commands", "events"] {
+            for e in c[kind].as_array().into_iter().flatten() {
+                for f in e["fields"].as_array().unwrap() {
+                    assert!(f["requiredWhen"].is_null(), "{}.{}", e["name"], f["name"]);
+                }
+            }
+        }
+    }
 }

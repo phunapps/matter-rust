@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 6,
+    "dumpScriptVersion": 7,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -2238,7 +2238,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field is the remote target node ID. If the Endpoint field is present, this field shall be present."
+              "description": "This field is the remote target node ID. If the Endpoint field is present, this field shall be present.",
+              "requiredWhen": {
+                "field": "Endpoint",
+                "present": true
+              }
             },
             {
               "id": 2,
@@ -2247,7 +2251,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field is the target group ID that represents remote endpoints. If the Endpoint field is present, this field shall NOT be present."
+              "description": "This field is the target group ID that represents remote endpoints. If the Endpoint field is present, this field shall NOT be present.",
+              "requiredWhen": {
+                "field": "Endpoint",
+                "present": false
+              }
             },
             {
               "id": 3,
@@ -2256,7 +2264,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field is the remote endpoint that the local endpoint is bound to. If the Group field is present, this field shall NOT be present."
+              "description": "This field is the remote endpoint that the local endpoint is bound to. If the Group field is present, this field shall NOT be present.",
+              "requiredWhen": {
+                "field": "Group",
+                "present": false
+              }
             },
             {
               "id": 4,
@@ -15632,7 +15644,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the timestamp in UTC of the beginning of the measurement period.\nIf the server had not yet determined the time in UTC at or before the beginning of the measurement period, or does not have the capability of determining the time in UTC, this field shall be omitted."
+              "description": "This field shall be the timestamp in UTC of the beginning of the measurement period.\nIf the server had not yet determined the time in UTC at or before the beginning of the measurement period, or does not have the capability of determining the time in UTC, this field shall be omitted.",
+              "requiredWhen": {
+                "field": "EndTimestamp",
+                "present": true
+              }
             },
             {
               "id": 4,
@@ -15650,7 +15666,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the most recent timestamp in UTC that the value in the Min field was measured.\nThis field shall be greater than or equal to the value of the StartTimestamp field.\nThis field shall be less than or equal to the value of the EndTimestamp field."
+              "description": "This field shall be the most recent timestamp in UTC that the value in the Min field was measured.\nThis field shall be greater than or equal to the value of the StartTimestamp field.\nThis field shall be less than or equal to the value of the EndTimestamp field.",
+              "requiredWhen": {
+                "field": "EndTimestamp",
+                "present": true
+              }
             },
             {
               "id": 6,
@@ -15659,7 +15679,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the most recent timestamp in UTC of the value in the Max field.\nThis field shall be greater than or equal to the value of the StartTimestamp field.\nThis field shall be less than or equal to the value of the EndTimestamp field."
+              "description": "This field shall be the most recent timestamp in UTC of the value in the Max field.\nThis field shall be greater than or equal to the value of the StartTimestamp field.\nThis field shall be less than or equal to the value of the EndTimestamp field.",
+              "requiredWhen": {
+                "field": "EndTimestamp",
+                "present": true
+              }
             },
             {
               "id": 7,
@@ -15668,7 +15692,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the time since boot of the beginning of the measurement period.\nIf the server had determined the time in UTC at or before the start of the measurement period, this field may be omitted along with the EndSystime, MinSystime, and MaxSystime fields."
+              "description": "This field shall be the time since boot of the beginning of the measurement period.\nIf the server had determined the time in UTC at or before the start of the measurement period, this field may be omitted along with the EndSystime, MinSystime, and MaxSystime fields.",
+              "requiredWhen": {
+                "field": "EndSystime",
+                "present": true
+              }
             },
             {
               "id": 8,
@@ -15686,7 +15714,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the measurement time since boot of the value in the Min field was measured.\nThis field shall be greater than or equal to the value of the StartSystime field.\nThis field shall be less than or equal to the value of the EndSystime field."
+              "description": "This field shall be the measurement time since boot of the value in the Min field was measured.\nThis field shall be greater than or equal to the value of the StartSystime field.\nThis field shall be less than or equal to the value of the EndSystime field.",
+              "requiredWhen": {
+                "field": "EndSystime",
+                "present": true
+              }
             },
             {
               "id": 10,
@@ -15695,7 +15727,11 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the measurement time since boot of the value in the Max field.\nThis field shall be greater than or equal to the value of the StartSystime field.\nThis field shall be less than or equal to the value of the EndSystime field."
+              "description": "This field shall be the measurement time since boot of the value in the Max field.\nThis field shall be greater than or equal to the value of the StartSystime field.\nThis field shall be less than or equal to the value of the EndSystime field.",
+              "requiredWhen": {
+                "field": "EndSystime",
+                "present": true
+              }
             }
           ]
         },

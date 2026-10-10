@@ -50,6 +50,11 @@ Resolve a P or N finding by relaxing the field in the dump script (recorded in
 `clusters.json` `meta.relaxed`), a W finding by widening the type. Add an
 allow-list line only when chip's own generated type is equally strict.
 
+A **V** finding always fails and is never allow-listed: a generated cluster's
+provisional marking (`provisional` in `clusters.json`, from the dump's
+`PROVISIONAL_CLUSTERS`) must match whether its 1.4.2 `<clusterId>` carries
+`<provisionalConform/>`. Fix the dump's list.
+
 Report-only sections (they never change the exit code):
 
 - **MODEL-ONLY** — model elements absent from 1.4.2 (expected 1.5 additions).

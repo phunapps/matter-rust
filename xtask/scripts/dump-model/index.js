@@ -22,9 +22,11 @@
 //                      fields?: [field] }]
 //     } ] }
 //   field = { id, name, type, metatype, entryType?, nullable, optional, description,
-//             fabricSensitive?, mandatoryOnWrite?,   (both: datatype struct fields only)
+//             fabricSensitive?, mandatoryOnWrite?, requiredWhen?,
+//                                     (all three: datatype struct fields only)
 //             provisional?, choice? }
-//   provisional? (true only) also on features, attributes, commands, events;
+//   provisional? (true only) also on clusters (PROVISIONAL_CLUSTERS), features,
+//   attributes, commands, events;
 //   supplemented? { from, removedIn, removedInRevision, feature, conformance }
 //     and deprecated? (true only) on a feature, attribute or command the
 //     Matter 1.4 supplement added (see the supplement section);
@@ -60,7 +62,9 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 // v6: per-element `supplemented` provenance and `deprecated` on every element
 //     the supplement adds, and `keptFor` on each KEEP_DATATYPES enum, for
 //     generated rustdoc (M9-A3 B4 fix wave).
-const DUMP_SCRIPT_VERSION = 6;
+// v7: `provisional` on clusters (PROVISIONAL_CLUSTERS) and `requiredWhen` on
+//     datatype struct fields (M9-A3 B5).
+const DUMP_SCRIPT_VERSION = 7;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -228,6 +232,18 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B4, ValveConfigurationAndControl (ValveStateChanged, ValveFault):
   'ValveConfigurationAndControl',
 ]);
+
+// Clusters the Matter specification marks provisional as a whole: chip's
+// data_model/1.4.2 XML carries `<provisionalConform/>` on the cluster's
+// `<clusterId>` (and still does in 1.5 and 1.5.1). @matter/model records no
+// cluster-level conformance, so the list is kept here, each entry with its
+// source. The dump marks the cluster `provisional: true`; the emitter writes a
+// module rustdoc paragraph saying its shape may change between specification
+// revisions (spec §2: included, marked provisional; a later shape change is
+// still a breaking matter-clusters release). scripts/chip-xml-conformance.py
+// checks the marking against the 1.4.2 XML both ways (class V). A key that is
+// not allowlisted fails the dump.
+const PROVISIONAL_CLUSTERS = new Map([]);
 
 const excluded = [];
 function recordExclusion(cluster, element, kind, reason) {
@@ -509,6 +525,59 @@ for (const [text, want] of [
   }
 }
 
+// The sibling field a struct field's presence depends on (M9-A3 B5), or null:
+// `{ field, present }` for a conformance whose first term (alone, or the first
+// branch of an otherwise-form) is a sibling field's bare name (`TargetReheat,
+// [TP]`, `Endpoint`, `EndTimestamp`: mandatory when that field is present) or
+// its negation (`!Endpoint`, `!Group`: mandatory when it is absent). Generated
+// encoders take such a field as an Option and do not check the rule, so the
+// emitter documents it. chip's WaterHeaterManagement server refuses a Boost
+// whose TargetReheat comes without TargetPercentage (InvalidCommand, at
+// v1.4.2.0 and master). `[F]` (optional when F is present) and comparisons
+// (`Status == Success`) are not presence dependencies. `siblings` holds the
+// other fields' names.
+function presenceDependency(el, siblings) {
+  const ast = el.effectiveConformance && el.effectiveConformance.ast;
+  if (!ast) return null;
+  const first = ast.type === Conformance.Special.Otherwise ? ast.param[0] : ast;
+  if (!first) return null;
+  if (first.type === Conformance.Special.Name && siblings.has(first.param)) {
+    return { field: first.param, present: true };
+  }
+  if (
+    first.type === Conformance.Operator.NOT &&
+    first.param.type === Conformance.Special.Name &&
+    siblings.has(first.param.param)
+  ) {
+    return { field: first.param.param, present: false };
+  }
+  return null;
+}
+
+// Load-time self-check of presenceDependency over hand-written conformance
+// forms (parsed by @matter/model itself), siblings A and B. Rows:
+// conformance, expected (`field/present`, '' = none).
+{
+  const siblings = new Set(['A', 'B']);
+  for (const [text, want] of [
+    ['A', 'A/true'],
+    ['!A', 'A/false'],
+    ['A, [TP]', 'A/true'],
+    ['!B, O', 'B/false'],
+    ['[A]', ''],
+    ['TP', ''],
+    ['A == 1', ''],
+    ['M', ''],
+    ['O.a', ''],
+    ['P, A', ''],
+    ['TP, A', ''],
+  ]) {
+    const dep = presenceDependency({ effectiveConformance: new Conformance(text) }, siblings);
+    const got = dep ? `${dep.field}/${dep.present}` : '';
+    if (got !== want) fail(`presenceDependency self-check: \`${text}\` gave '${got}', want '${want}'`);
+  }
+}
+
 // Add the rustdoc notes to a dumped element `out` from its model element.
 // Keys appear only when set, so elements without notes dump as before.
 function addNotes(out, el, { choice = false } = {}) {
@@ -610,6 +679,12 @@ let _conditional = [];
 
 function dumpField(f, where, ctx) {
   requireIdNameType(f, where);
+  const dependency = presenceDependency(f, ctx.siblings);
+  if (dependency && ctx.role !== 'struct') {
+    // The emitter documents requiredWhen on datatype struct fields only; no
+    // command or event field has one (whole-model scan, @matter/model 0.17.1).
+    fail(`${where} (${f.name}): conformance "${f.effectiveConformance}" depends on field ${dependency.field}, which is only documented on datatype struct fields — extend the emitter first`);
+  }
   if (isConditionalRelaxation(f.effectiveConformance)) {
     _conditional.push({
       element: `${ctx.element}.${f.name}`,
@@ -628,10 +703,17 @@ function dumpField(f, where, ctx) {
       nullable: !!(f.effectiveQuality && f.effectiveQuality.nullable),
       optional: !isUnconditionallyMandatory(f),
       description: f.details || null,
+      requiredWhen: dependency || undefined, // omitted by JSON.stringify when absent
     },
     f,
     { choice: true },
   );
+}
+
+// The names of `members` other than `self`: the fields a conformance may refer
+// to (presenceDependency).
+function siblingNames(members, self) {
+  return new Set([...members].filter((m) => m !== self).map((m) => m.name));
 }
 
 function dumpAttribute(a, where) {
@@ -686,6 +768,7 @@ function dumpCommand(cmd, clusterName) {
       dumpField(c, `${where}.${cmd.name}.field[${i}]`, {
         element: cmd.name,
         role: cmd.isResponse ? 'response' : 'request',
+        siblings: siblingNames(cmd.members, c),
       }),
     );
   });
@@ -716,7 +799,13 @@ function dumpEvent(ev, clusterName) {
       recordExclusion(clusterName, `${ev.name}.${c.name}`, 'event-field', 'disallowed');
       return;
     }
-    fields.push(dumpField(c, `${where}.${ev.name}.field[${i}]`, { element: ev.name, role: 'event' }));
+    fields.push(
+      dumpField(c, `${where}.${ev.name}.field[${i}]`, {
+        element: ev.name,
+        role: 'event',
+        siblings: siblingNames(ev.members, c),
+      }),
+    );
   });
   return addNotes({ id: ev.id, name: ev.name, priority: ev.priority, fields }, ev);
 }
@@ -768,7 +857,11 @@ function dumpDatatype(dt, where, nameOverride) {
         return true;
       })
       .map((c, i) => {
-        const field = dumpField(c, `${where}.${dt.name}.field[${i}]`, { element: name, role: 'struct' });
+        const field = dumpField(c, `${where}.${dt.name}.field[${i}]`, {
+          element: name,
+          role: 'struct',
+          siblings: siblingNames(dt.members, c),
+        });
         // Datatype struct fields only: event and command payload fields go
         // through dumpField directly and never get the marker (§5.4: chip
         // drops other fabrics' fabric-sensitive events outright and sends our
@@ -1106,7 +1199,9 @@ function dumpCluster(entry) {
   datatypes.sort((x, y) => x.name.localeCompare(y.name));
   features.sort((x, y) => (x.bit ?? 0) - (y.bit ?? 0));
 
-  return { id: cluster.id, name: cluster.name, revision: cluster.revision, features, attributes, commands, events, datatypes };
+  const out = { id: cluster.id, name: cluster.name, revision: cluster.revision };
+  if (PROVISIONAL_CLUSTERS.has(cluster.name)) out.provisional = true;
+  return { ...out, features, attributes, commands, events, datatypes };
 }
 
 // The datatype names (any kind) reachable from the type names in `seeds`,
@@ -1729,6 +1824,9 @@ const clusters = ALLOWLIST.map(dumpCluster);
 clusters.sort((x, y) => x.id - y.id);
 stampSupplemented(clusters);
 supplemented.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.localeCompare(y.element));
+for (const name of PROVISIONAL_CLUSTERS.keys()) {
+  if (!ALLOWLIST.some((e) => e.name === name)) fail(`PROVISIONAL_CLUSTERS ${name} is not allowlisted`);
+}
 for (const key of KEEP_DATATYPES.keys()) {
   if (!appliedKeeps.has(key)) fail(`KEEP_DATATYPES ${key} matched no datatype — model drift; review KEEP_DATATYPES`);
 }

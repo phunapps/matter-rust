@@ -23,7 +23,8 @@ Findings that FAIL the run (exit 1) unless allow-listed:
   N  a field or attribute nullable in 1.4.2 but non-nullable in the model
   W  a model integer/enum type whose range does not cover the 1.4.2 type's
      range (narrower width, or unsigned in the model where 1.4.2 is signed)
-Findings that always FAIL (never allow-listed: fix the supplement):
+Findings that always FAIL (never allow-listed: fix the supplement, or the
+dump's PROVISIONAL_CLUSTERS):
   S  an element clusters.json records in meta.supplemented (added by the dump
      from xtask/scripts/dump-model/supplement-1.4.json, not by the model) that
      does not match 1.4.2 exactly: absent from 1.4.2 or from clusters.json
@@ -38,6 +39,10 @@ Findings that always FAIL (never allow-listed: fix the supplement):
      <otherwiseConform>) or deprecation (the dump's `deprecated` vs a
      <deprecateConform/>, directly or as an <otherwiseConform> branch)
      differs
+  V  a generated cluster whose provisional marking (clusters.json
+     `provisional`, from the dump's PROVISIONAL_CLUSTERS) differs from its 1.4.2
+     `<clusterId>`: marked but no `<provisionalConform/>` there, or
+     `<provisionalConform/>` there but not marked
 
 Reported without failing:
   MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
@@ -61,7 +66,7 @@ Usage:
     python3 scripts/chip-xml-conformance.py <chip-checkout> [--cluster <Name>]...
                                             [--model <clusters.json>]
 
-Exit codes: 0 clean, 1 unresolved P/N/W or any S finding, 2 usage or input error.
+Exit codes: 0 clean, 1 unresolved P/N/W or any S or V finding, 2 usage or input error.
 """
 
 import argparse
@@ -465,6 +470,9 @@ def load_chip_xml(chip):
                 continue  # an id-less base (Mode Base)
             t = tables_for(root)
             add_implicit_fabric_index(t)
+            # The whole cluster is provisional (ContentControl,
+            # EnergyPreference): checked against clusters.json (class V).
+            t["provisional"] = cid.find("provisionalConform") is not None
             by_id[parse_int(cid.get("id"), f"{root.get('name')}: clusterId")] = t
     return by_id
 
@@ -998,6 +1006,12 @@ def main():
                     rep.failing.append(f"S  {c['name']}.{s.get('element')}: cluster id "
                                        f"{c['id']:#06x} not in 1.4.2, so it cannot be verified")
             continue
+        marked = c.get("provisional", False) is True
+        if marked != xt["provisional"]:
+            rep.failing.append(
+                f"V  {c['name']}: provisional in clusters.json is {marked}, but its 1.4.2 "
+                f"clusterId {'carries' if xt['provisional'] else 'has no'} <provisionalConform/> "
+                "(fix PROVISIONAL_CLUSTERS in xtask/scripts/dump-model/index.js)")
         try:
             check_cluster(rep, c, xt, zap, meta)
             check_supplemented(rep, c, xt, zap, meta)
@@ -1011,7 +1025,7 @@ def main():
         for line in lines:
             print(f"  {line}")
 
-    section("FAIL: P/N/W/S findings", rep.failing)
+    section("FAIL: P/N/W/S/V findings", rep.failing)
     section("allowed P/N/W findings", rep.allowed)
     section("MODEL-ONLY (absent from 1.4.2)", rep.model_only)
     section("XML-ONLY (absent from model, not excluded or acknowledged)", rep.xml_only)
