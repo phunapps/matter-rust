@@ -146,8 +146,20 @@ pub struct AclEntry {
     pub auth_mode: AclAuthMode,
     /// Subject list: `None` ⇒ wildcard (applies to all subjects). `Some(v)` ⇒
     /// specific node IDs, CAT IDs, or group IDs.
+    ///
+    /// Unlike the generated
+    /// [`AccessControlEntryStruct`](matter_clusters::gen::access_control::AccessControlEntryStruct)
+    /// (where `None` = withheld by the device and `Some(Nullable::Null)` =
+    /// wildcard), `None` here is always a wildcard: an entry whose Subjects
+    /// field was withheld is never returned.
     pub subjects: Option<Vec<u64>>,
     /// Target list: `None` ⇒ wildcard (all targets). `Some(v)` ⇒ specific targets.
+    ///
+    /// Unlike the generated
+    /// [`AccessControlEntryStruct`](matter_clusters::gen::access_control::AccessControlEntryStruct)
+    /// (where `None` = withheld by the device and `Some(Nullable::Null)` =
+    /// wildcard), `None` here is always a wildcard: an entry whose Targets
+    /// field was withheld is never returned.
     pub targets: Option<Vec<AclTarget>>,
     /// Fabric index assigned by the device. `None` on write (the device fills
     /// this in for the accessing fabric); always `Some` on read.
@@ -310,8 +322,16 @@ fn parse_entry(v: &Value) -> Option<AclEntry> {
             Value::Uint(u) => *u as u8,
             _ => return None,
         }),
-        subjects: match ctx(m, TAG_SUBJECTS) {
-            Some(Value::Array(a)) => Some(
+        // Subjects and Targets are nullable, and present-null means wildcard.
+        // An ABSENT tag means the device withheld the field (another fabric's
+        // entry on an unfiltered read). Absent must never collapse into
+        // wildcard: a caller that wrote the entry back would grant the
+        // privilege to every subject/target. So an absent (or wrong-typed)
+        // field drops the whole entry. chip always encodes both fields, null
+        // or array, for the accessing fabric's own entries.
+        subjects: match ctx(m, TAG_SUBJECTS)? {
+            Value::Null => None,
+            Value::Array(a) => Some(
                 a.iter()
                     .filter_map(|x| {
                         if let Value::Uint(u) = x {
@@ -322,11 +342,12 @@ fn parse_entry(v: &Value) -> Option<AclEntry> {
                     })
                     .collect(),
             ),
-            _ => None,
+            _ => return None,
         },
-        targets: match ctx(m, TAG_TARGETS) {
-            Some(Value::Array(a)) => Some(a.iter().filter_map(parse_target).collect()),
-            _ => None,
+        targets: match ctx(m, TAG_TARGETS)? {
+            Value::Null => None,
+            Value::Array(a) => Some(a.iter().filter_map(parse_target).collect()),
+            _ => return None,
         },
         fabric_index: match ctx(m, TAG_FABRIC_INDEX) {
             Some(Value::Uint(u)) => Some(*u as u8),
@@ -340,7 +361,9 @@ fn parse_entry(v: &Value) -> Option<AclEntry> {
 /// Searches `reports` for the attribute path whose `cluster` field equals
 /// [`ACCESS_CONTROL_CLUSTER`] and whose `attribute` field equals [`ATTR_ACL`],
 /// then decodes each `AccessControlEntryStruct` inside it.
-/// Malformed entries are silently skipped. Returns an empty `Vec` when the
+/// Malformed entries are silently skipped, and so is any entry missing its
+/// Privilege, `AuthMode`, Subjects or Targets tag: a withheld field (another
+/// fabric's entry) is never read as a wildcard. Returns an empty `Vec` when the
 /// attribute is absent or contains no decodable entries (infallible).
 pub(crate) fn parse_acl(reports: &[(AttributePath, Value)]) -> Vec<AclEntry> {
     for (path, value) in reports {
@@ -495,6 +518,83 @@ mod tests {
         assert_eq!(targets[0].endpoint, Some(1));
         assert_eq!(targets[0].device_type, None);
         assert_eq!(parsed[1].fabric_index, Some(1));
+    }
+
+    /// Parse a single raw entry structure through the public-to-crate path
+    /// (`parse_acl`), exactly as `Node::read_acl` does.
+    fn parse_one(members: Vec<(Tag, Value)>) -> Vec<AclEntry> {
+        let path = AttributePath {
+            endpoint: 0,
+            cluster: ACCESS_CONTROL_CLUSTER,
+            attribute: ATTR_ACL,
+        };
+        parse_acl(&[(path, Value::Array(vec![Value::Structure(members)]))])
+    }
+
+    fn privilege_and_auth() -> Vec<(Tag, Value)> {
+        vec![
+            (Tag::Context(TAG_PRIVILEGE), Value::Uint(5)),
+            (Tag::Context(TAG_AUTH_MODE), Value::Uint(2)),
+        ]
+    }
+
+    #[test]
+    fn entry_without_subjects_tag_is_dropped_not_wildcarded() {
+        // A withheld Subjects field must never read back as `None` (wildcard):
+        // writing it back would grant the privilege to every CASE node.
+        let mut m = privilege_and_auth();
+        m.push((Tag::Context(TAG_TARGETS), Value::Null));
+        m.push((Tag::Context(TAG_FABRIC_INDEX), Value::Uint(2)));
+        assert_eq!(parse_one(m), []);
+    }
+
+    #[test]
+    fn entry_without_targets_tag_is_dropped_not_wildcarded() {
+        let mut m = privilege_and_auth();
+        m.push((
+            Tag::Context(TAG_SUBJECTS),
+            Value::Array(vec![Value::Uint(7)]),
+        ));
+        m.push((Tag::Context(TAG_FABRIC_INDEX), Value::Uint(2)));
+        assert_eq!(parse_one(m), []);
+    }
+
+    #[test]
+    fn present_null_subjects_and_targets_are_wildcards() {
+        let mut m = privilege_and_auth();
+        m.push((Tag::Context(TAG_SUBJECTS), Value::Null));
+        m.push((Tag::Context(TAG_TARGETS), Value::Null));
+        m.push((Tag::Context(TAG_FABRIC_INDEX), Value::Uint(1)));
+        let parsed = parse_one(m);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].subjects, None);
+        assert_eq!(parsed[0].targets, None);
+        assert_eq!(parsed[0].fabric_index, Some(1));
+    }
+
+    #[test]
+    fn chip_shaped_other_fabric_entry_is_dropped() {
+        // chip `AccessControl/Structs.ipp` without `includeSensitive`: only
+        // the FabricIndex (254) is encoded.
+        assert_eq!(
+            parse_one(vec![(Tag::Context(TAG_FABRIC_INDEX), Value::Uint(2))]),
+            []
+        );
+    }
+
+    #[test]
+    fn wrong_typed_subjects_or_targets_is_dropped_not_wildcarded() {
+        // Neither Null nor an array: malformed, so skipped like any other
+        // malformed entry rather than read as a wildcard.
+        let mut m = privilege_and_auth();
+        m.push((Tag::Context(TAG_SUBJECTS), Value::Uint(7)));
+        m.push((Tag::Context(TAG_TARGETS), Value::Null));
+        assert_eq!(parse_one(m), []);
+
+        let mut m = privilege_and_auth();
+        m.push((Tag::Context(TAG_SUBJECTS), Value::Null));
+        m.push((Tag::Context(TAG_TARGETS), Value::Bool(true)));
+        assert_eq!(parse_one(m), []);
     }
 
     #[test]

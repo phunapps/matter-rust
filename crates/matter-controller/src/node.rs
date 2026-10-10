@@ -1111,6 +1111,12 @@ impl Node {
 
     /// Read the device's `AccessControl.Acl` list (the ACL entries on this fabric).
     ///
+    /// Entries belonging to other fabrics (whose fabric-sensitive fields the
+    /// device withholds on this unfiltered read) are not returned, nor is any
+    /// entry missing its Subjects or Targets field: a withheld field is never
+    /// reported as a wildcard, so the result is safe to modify and pass back to
+    /// [`Node::write_acl`].
+    ///
     /// # Errors
     ///
     /// An interaction error if the read fails.
