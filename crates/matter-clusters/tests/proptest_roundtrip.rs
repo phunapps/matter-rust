@@ -309,4 +309,53 @@ proptest! {
         prop_assert_eq!(t.cool_setpoint, as_nullable(cool));
         prop_assert_eq!(t.encode(), bytes);
     }
+
+    // ---- M9-A3 B4: ScenesManagement ----------------------------------------
+
+    #[test]
+    fn attribute_value_pair_reencodes(
+        attribute in any::<u32>(),
+        which in 0u8..8,
+        raw in any::<u64>(),
+    ) {
+        // AttributeValuePairStruct: an attribute id plus exactly one of eight
+        // optional value fields (choice group a), unsigned or signed, 8 to 64
+        // bits. AddScene sends a list of them inside each ExtensionFieldSetStruct;
+        // decode -> encode must give the same bytes for every variant.
+        let mut bytes = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut bytes);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), u64::from(attribute)).unwrap();
+            let tag = Tag::Context(which + 1);
+            // Truncate `raw` to the variant's width (wrapping casts are the point).
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            match which {
+                0 => w.put_uint(tag, u64::from(raw as u8)).unwrap(),
+                1 => w.put_int(tag, i64::from(raw as i8)).unwrap(),
+                2 => w.put_uint(tag, u64::from(raw as u16)).unwrap(),
+                3 => w.put_int(tag, i64::from(raw as i16)).unwrap(),
+                4 => w.put_uint(tag, u64::from(raw as u32)).unwrap(),
+                5 => w.put_int(tag, i64::from(raw as i32)).unwrap(),
+                6 => w.put_uint(tag, raw).unwrap(),
+                _ => w.put_int(tag, raw as i64).unwrap(),
+            }
+            w.end_container().unwrap();
+        }
+        let p = clusters::scenes_management::AttributeValuePairStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(p.attribute_id, attribute);
+        let present = [
+            p.value_unsigned8.is_some(),
+            p.value_signed8.is_some(),
+            p.value_unsigned16.is_some(),
+            p.value_signed16.is_some(),
+            p.value_unsigned32.is_some(),
+            p.value_signed32.is_some(),
+            p.value_unsigned64.is_some(),
+            p.value_signed64.is_some(),
+        ];
+        prop_assert_eq!(present.iter().filter(|b| **b).count(), 1);
+        prop_assert!(present[usize::from(which)]);
+        prop_assert_eq!(p.encode(), bytes);
+    }
 }

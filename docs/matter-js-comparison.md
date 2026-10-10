@@ -154,10 +154,19 @@ These are language-idiomatic differences. They do not affect interop.
   that no generated attribute, command or event uses is not generated
   (chip's controller codegen omits them too); matter.js generates every
   model datatype. Exceptions: a cluster's `StatusCodeEnum`, and four enums
-  that give meaning to a raw integer (`KEEP_DATATYPES` in the dump). And a
+  that give meaning to a raw integer (`KEEP_DATATYPES` in the dump); scalar
+  typedefs (Thermostat's `SignedTemperature` and the like) are never
+  pruned, since they produce no Rust item (every use is generated as its
+  base integer). And a
   struct has an encoder only when a client sends it (a command request
   field, or an all-scalar struct a writable attribute carries); matter.js's
   TLV schemas encode and decode everything.
+
+- **ScenesManagement has no `LogicalSceneTable` type** (M9-A3 B4). The
+  specification describes the Logical Scene Table as data a device keeps,
+  not a wire type; matter.js 0.16.11 generates `TlvLogicalSceneTable`,
+  chip's controller codegen has no such struct, and our pruning rule drops
+  it (nothing on the wire uses it).
 
 ## CASE handshake performance (measured 2026-07-12)
 

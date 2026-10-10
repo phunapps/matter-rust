@@ -3311,3 +3311,230 @@ fn valve_commands_encode_and_events_decode() {
         ))
     ));
 }
+
+// ---- M9-A3 B4: ScenesManagement ----------------------------------------------
+//
+// 1.4.2 Scenes.xml (cluster 0x0062): SceneTableSize, FabricSceneInfo (a
+// fabric-scoped list of SceneInfoStruct whose CurrentScene, CurrentGroup and
+// SceneValid are fabric-sensitive, spec §5.4), eight commands with their
+// responses, no events. AttributeValuePairStruct's eight value fields are a
+// choice group (O.a): each is an Option, and exactly one should be present.
+
+/// Our fabric's `FabricSceneInfo` entry as chip encodes it (every field).
+fn own_scene_info(w: &mut TlvWriter<'_>) {
+    w.put_uint(Tag::Context(0), 2).unwrap();
+    w.put_uint(Tag::Context(1), 1).unwrap();
+    w.put_uint(Tag::Context(2), 0).unwrap();
+    w.put_bool(Tag::Context(3), true).unwrap();
+    w.put_uint(Tag::Context(4), 6).unwrap();
+    w.put_uint(Tag::Context(254), 1).unwrap();
+}
+
+/// Another fabric's entry as chip's `SceneInfoStruct::EncodeForRead` sends it
+/// on an unfiltered read: `SceneCount`, `RemainingCapacity` and `FabricIndex` only
+/// (`zzz_generated/app-common/clusters/ScenesManagement/Structs.ipp`).
+fn other_fabric_scene_info(w: &mut TlvWriter<'_>) {
+    w.put_uint(Tag::Context(0), 1).unwrap();
+    w.put_uint(Tag::Context(4), 7).unwrap();
+    w.put_uint(Tag::Context(254), 2).unwrap();
+}
+
+#[test]
+fn scenes_fabric_scene_info_decodes_with_other_fabrics_fields_withheld() {
+    use clusters::scenes_management::{decode_fabric_scene_info, decode_scene_table_size};
+    // all-clusters' SceneTableSize default (16).
+    assert_eq!(decode_scene_table_size(&uint_attr(16)).unwrap(), 16);
+    let list =
+        decode_fabric_scene_info(&list_of(&[&own_scene_info, &other_fabric_scene_info])).unwrap();
+    let got: Vec<_> = list
+        .iter()
+        .map(|e| {
+            (
+                e.fabric_index,
+                e.scene_count,
+                e.current_scene,
+                e.current_group,
+                e.scene_valid,
+                e.remaining_capacity,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (1, 2, Some(1), Some(0), Some(true), 6),
+            (2, 1, None, None, None, 7)
+        ]
+    );
+}
+
+#[test]
+fn scenes_scene_info_with_one_sensitive_field_missing_still_decodes() {
+    // chip withholds the three sensitive fields together, but each is relaxed
+    // on its own (spec §5.4), so an entry missing any one of them decodes.
+    // SceneInfoStruct is decode-only (FabricSceneInfo is read-only and no
+    // request carries it, so it has no encoder: M9-A3 B4 encoder rule).
+    for missing in 1..=3 {
+        let bytes = struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 2).unwrap();
+            if missing != 1 {
+                w.put_uint(Tag::Context(1), 1).unwrap();
+            }
+            if missing != 2 {
+                w.put_uint(Tag::Context(2), 0).unwrap();
+            }
+            if missing != 3 {
+                w.put_bool(Tag::Context(3), true).unwrap();
+            }
+            w.put_uint(Tag::Context(4), 6).unwrap();
+            w.put_uint(Tag::Context(254), 1).unwrap();
+        });
+        let e = clusters::scenes_management::SceneInfoStruct::decode(&bytes).unwrap();
+        assert_eq!(
+            [
+                e.current_scene.is_none(),
+                e.current_group.is_none(),
+                e.scene_valid.is_none()
+            ],
+            [missing == 1, missing == 2, missing == 3]
+        );
+    }
+}
+
+#[test]
+fn scenes_responses_decode() {
+    use clusters::scenes_management::{
+        AddSceneResponse, CopySceneResponse, GetSceneMembershipResponse, ViewSceneResponse,
+    };
+    let add = AddSceneResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!((add.status, add.group_id, add.scene_id), (0, 0, 1));
+    // A found scene: transition, name and one OnOff extension field set.
+    let view = ViewSceneResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_uint(Tag::Context(3), 1000).unwrap();
+        w.put_utf8(Tag::Context(4), "Evening").unwrap();
+        w.start_array(Tag::Context(5)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 6).unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(view.transition_time, Some(1000));
+    assert_eq!(view.scene_name.as_deref(), Some("Evening"));
+    let efs = view.extension_field_set_structs.unwrap();
+    assert_eq!(efs.len(), 1);
+    assert_eq!(efs[0].cluster_id, 6);
+    let pair = &efs[0].attribute_value_list[0];
+    assert_eq!(
+        (pair.attribute_id, pair.value_unsigned8, pair.value_signed16),
+        (0, Some(1), None)
+    );
+    // NotFound (0x8B): chip sets only Status, GroupId and SceneId
+    // (ScenesManagementCluster::HandleViewScene; "Status == Success" fields).
+    let missing = ViewSceneResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0x8B).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 9).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            missing.status,
+            missing.transition_time,
+            missing.scene_name,
+            missing.extension_field_set_structs
+        ),
+        (0x8B, None, None, None)
+    );
+    let membership = GetSceneMembershipResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 14).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.start_array(Tag::Context(3)).unwrap();
+        w.put_uint(Tag::Anonymous, 1).unwrap();
+        w.put_uint(Tag::Anonymous, 2).unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (membership.capacity, membership.scene_list),
+        (Nullable::Value(14), Some(vec![1, 2]))
+    );
+    let unknown_capacity = GetSceneMembershipResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0x85).unwrap();
+        w.put_null(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), 7).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (unknown_capacity.capacity, unknown_capacity.scene_list),
+        (Nullable::Null, None)
+    );
+    let copy = CopySceneResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            copy.status,
+            copy.group_identifier_from,
+            copy.scene_identifier_from
+        ),
+        (0, 0, 1)
+    );
+}
+
+#[test]
+fn scenes_requests_encode() {
+    use clusters::scenes_management::{
+        encode_copy_scene, encode_get_scene_membership, encode_recall_scene,
+        encode_remove_all_scenes, encode_remove_scene, encode_store_scene, encode_view_scene,
+        CopyModeBitmap,
+    };
+    let group_scene = struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+    });
+    assert_eq!(encode_view_scene(0, 1), group_scene);
+    assert_eq!(encode_remove_scene(0, 1), group_scene);
+    assert_eq!(encode_store_scene(0, 1), group_scene);
+    let group_only = struct_of(&|w| w.put_uint(Tag::Context(0), 0).unwrap());
+    assert_eq!(encode_remove_all_scenes(0), group_only);
+    assert_eq!(encode_get_scene_membership(0), group_only);
+    // RecallScene's TransitionTime: absent, null and a value differ.
+    assert_eq!(encode_recall_scene(0, 1, None), group_scene);
+    assert_eq!(
+        encode_recall_scene(0, 1, Some(Nullable::Null)),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_uint(Tag::Context(1), 1).unwrap();
+            w.put_null(Tag::Context(2)).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_copy_scene(CopyModeBitmap::empty(), 0, 1, 0, 3),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_uint(Tag::Context(1), 0).unwrap();
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.put_uint(Tag::Context(3), 0).unwrap();
+            w.put_uint(Tag::Context(4), 3).unwrap();
+        })
+    );
+}

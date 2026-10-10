@@ -265,6 +265,46 @@ fn open_with_null_duration_command() {
 }
 
 #[test]
+fn add_scene_command() {
+    // M9-A3 B4: nested request lists (ExtensionFieldSetStruct ->
+    // AttributeValuePairStruct) whose entries leave out all but one of eight
+    // optional value fields, with an unsigned and a signed value, against
+    // matter.js's own ScenesManagement TlvAddSceneRequest.
+    use clusters::scenes_management::{
+        encode_add_scene, AttributeValuePairStruct, ExtensionFieldSetStruct,
+    };
+    let pair = |attribute_id| AttributeValuePairStruct {
+        attribute_id,
+        value_unsigned8: None,
+        value_signed8: None,
+        value_unsigned16: None,
+        value_signed16: None,
+        value_unsigned32: None,
+        value_signed32: None,
+        value_unsigned64: None,
+        value_signed64: None,
+    };
+    let set = |cluster_id, pair| ExtensionFieldSetStruct {
+        cluster_id,
+        attribute_value_list: vec![pair],
+    };
+    let mut on = pair(0x0000);
+    on.value_unsigned8 = Some(1);
+    let mut level = pair(0x0000);
+    level.value_unsigned8 = Some(128);
+    let mut heat = pair(0x0012);
+    heat.value_signed16 = Some(-250);
+    let got = encode_add_scene(
+        0,
+        1,
+        1000,
+        &"Evening".to_string(),
+        &vec![set(0x0006, on), set(0x0008, level), set(0x0201, heat)],
+    );
+    assert_eq!(got, cmd("scenes_management/cmd_add_scene.json"));
+}
+
+#[test]
 fn network_interface_struct_decodes() {
     // GeneralDiagnostics.NetworkInterfaces: a NetworkInterface with a hwadr
     // bytes field, a keyword `Type` field, and byte-string-element lists

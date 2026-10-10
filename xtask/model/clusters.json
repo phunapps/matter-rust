@@ -45,6 +45,7 @@
       "MicrowaveOvenControl",
       "OperationalState",
       "RvcOperationalState",
+      "ScenesManagement",
       "HepaFilterMonitoring",
       "ActivatedCarbonFilterMonitoring",
       "WaterTankLevelMonitoring",
@@ -472,6 +473,18 @@
         "reason": "disallowed"
       },
       {
+        "cluster": "ScenesManagement",
+        "element": "DoNotUse",
+        "kind": "attribute",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "ScenesManagement",
+        "element": "LogicalSceneTable",
+        "kind": "datatype",
+        "reason": "unreferenced (no generated attribute, command or event uses it)"
+      },
+      {
         "cluster": "Thermostat",
         "element": "HvacSystemTypeConfiguration",
         "kind": "attribute",
@@ -682,6 +695,24 @@
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
         "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "ScenesManagement",
+        "element": "SceneInfoStruct.CurrentGroup",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "ScenesManagement",
+        "element": "SceneInfoStruct.CurrentScene",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "ScenesManagement",
+        "element": "SceneInfoStruct.SceneValid",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
       },
       {
         "cluster": "WaterHeaterMode",
@@ -13205,6 +13236,820 @@
               "nullable": false,
               "optional": true,
               "description": "This field is present when the OperationalStateID is from the set reserved for Manufacturer Specific States. If present, this shall contain a human-readable description of the operational state."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 98,
+      "name": "ScenesManagement",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "SN",
+          "name": "SceneNames",
+          "description": "This feature indicates the ability to store a name for a scene when a scene is added."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 1,
+          "name": "SceneTableSize",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the number of entries in the Scene Table on this endpoint. This is the total across all fabrics; note that a single fabric cannot use all those entries (see Handling of fabric-scoping). The minimum size of this table, (i.e., the minimum number of scenes to support across all fabrics per endpoint) shall be 16, unless a device type in which this cluster is used, defines a larger value in the device type definition."
+        },
+        {
+          "id": 2,
+          "name": "FabricSceneInfo",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "SceneInfoStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a list of fabric scoped information about scenes on this endpoint.\nThe number of list entries for this attribute shall NOT exceed the number of supported fabrics by the device."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "AddScene",
+          "direction": "request",
+          "responseId": 0,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            },
+            {
+              "id": 1,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the scene identifier in the Scene Table."
+            },
+            {
+              "id": 2,
+              "name": "TransitionTime",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the transition time of the scene, measured in milliseconds."
+            },
+            {
+              "id": 3,
+              "name": "SceneName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of the scene."
+            },
+            {
+              "id": 4,
+              "name": "ExtensionFieldSetStructs",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ExtensionFieldSetStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contains the list of extension fields."
+            }
+          ]
+        },
+        {
+          "id": 0,
+          "name": "AddSceneResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for AddScene command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The GroupID field shall be set to the corresponding field of the received AddScene command."
+            },
+            {
+              "id": 2,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The SceneID field shall be set to the corresponding field of the received AddScene command."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ViewScene",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            },
+            {
+              "id": 1,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the scene identifier in the Scene Table."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ViewSceneResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for ViewScene command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The GroupID field shall be set to the corresponding field of the received ViewScene command."
+            },
+            {
+              "id": 2,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The SceneID field shall be set to the corresponding field of the received ViewScene command."
+            },
+            {
+              "id": 3,
+              "name": "TransitionTime",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be set to the corresponding field in the Scene Table entry."
+            },
+            {
+              "id": 4,
+              "name": "SceneName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be set to the corresponding field in the Scene Table entry."
+            },
+            {
+              "id": 5,
+              "name": "ExtensionFieldSetStructs",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ExtensionFieldSetStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be set to the corresponding field in the Scene Table entry."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "RemoveScene",
+          "direction": "request",
+          "responseId": 2,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            },
+            {
+              "id": 1,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the scene identifier in the Scene Table."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "RemoveSceneResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for RemoveScene command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The GroupID field shall be set to the corresponding field of the received RemoveScene command."
+            },
+            {
+              "id": 2,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The SceneID field shall be set to the corresponding field of the received RemoveScene command."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "RemoveAllScenes",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "RemoveAllScenesResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for RemoveAllScenes command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The GroupID field shall be set to the corresponding field of the received RemoveAllScenes command."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "StoreScene",
+          "direction": "request",
+          "responseId": 4,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            },
+            {
+              "id": 1,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the scene identifier in the Scene Table."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "StoreSceneResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for StoreScene command."
+            },
+            {
+              "id": 1,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The GroupID field shall be set to the corresponding field of the received StoreScene command."
+            },
+            {
+              "id": 2,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The SceneID field shall be set to the corresponding field of the received StoreScene command."
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "RecallScene",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            },
+            {
+              "id": 1,
+              "name": "SceneId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the scene identifier in the Scene Table."
+            },
+            {
+              "id": 2,
+              "name": "TransitionTime",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the transition time of the scene, measured in milliseconds."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "GetSceneMembership",
+          "direction": "request",
+          "responseId": 6,
+          "fields": [
+            {
+              "id": 0,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the group identifier in the Group Table."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "GetSceneMembershipResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for GetSceneMembership command."
+            },
+            {
+              "id": 1,
+              "name": "Capacity",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall contain the remaining capacity of the Scene Table of the server (for all groups for the accessing fabric). The following values apply:\n  - 0 - No further scenes may be added.\n  - 0 < Capacity < 0xFE - Capacity holds the number of scenes that may be added.\n  - 0xFE - At least 1 further scene may be added (exact number is unknown).\n  - null - It is unknown if any further scenes may be added."
+            },
+            {
+              "id": 2,
+              "name": "GroupId",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the corresponding field of the received GetSceneMembership command."
+            },
+            {
+              "id": 3,
+              "name": "SceneList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "uint8",
+              "nullable": false,
+              "optional": true,
+              "description": "If the status is not SUCCESS then this field shall be omitted, else this field shall contain the identifiers of all the scenes in the Scene Table with the corresponding Group ID."
+            }
+          ]
+        },
+        {
+          "id": 64,
+          "name": "CopyScene",
+          "direction": "request",
+          "responseId": 64,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Mode",
+              "type": "CopyModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the information of how the scene copy is to proceed.\nThe CopyAllScenes bit of the Mode indicates whether all scenes are to be copied. If this value is set to 1, all scenes are to be copied and the SceneIdentifierFrom and SceneIdentifierTo fields shall be ignored. Otherwise this bit is set to 0."
+            },
+            {
+              "id": 1,
+              "name": "GroupIdentifierFrom",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the identifier of the group from which the scene is to be copied. Together with the SceneIdentifierFrom field, this field uniquely identifies the scene to copy from the Scene Table."
+            },
+            {
+              "id": 2,
+              "name": "SceneIdentifierFrom",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the identifier of the scene from which the scene is to be copied. Together with the GroupIdentifierFrom field, this field uniquely identifies the scene to copy from the Scene Table."
+            },
+            {
+              "id": 3,
+              "name": "GroupIdentifierTo",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the identifier of the group to which the scene is to be copied. Together with the SceneIdentifierTo field, this field uniquely identifies the scene to copy to the Scene Table."
+            },
+            {
+              "id": 4,
+              "name": "SceneIdentifierTo",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the identifier of the scene to which the scene is to be copied. Together with the GroupIdentifierTo field, this field uniquely identifies the scene to copy to the Scene Table."
+            }
+          ]
+        },
+        {
+          "id": 64,
+          "name": "CopySceneResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set according to the Effect on Receipt section for the CopyScene command."
+            },
+            {
+              "id": 1,
+              "name": "GroupIdentifierFrom",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the same values as in the corresponding fields of the received CopyScene command."
+            },
+            {
+              "id": 2,
+              "name": "SceneIdentifierFrom",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the same values as in the corresponding fields of the received CopyScene command."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "AttributeValuePairStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This data type indicates a combination of an identifier and the value of an attribute.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AttributeId",
+              "type": "attrib-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be present for all instances in a given ExtensionFieldSetStruct.\nWhich Value field is used shall be determined based on the data type of the attribute indicated by AttributeID, as described in the Value Fields subsection.\nThe AttributeID field shall NOT refer to an attribute without the Scenes (\"S\") designation in the Quality column of the cluster specification."
+            },
+            {
+              "id": 1,
+              "name": "ValueUnsigned8",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 2,
+              "name": "ValueSigned8",
+              "type": "int8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 3,
+              "name": "ValueUnsigned16",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 4,
+              "name": "ValueSigned16",
+              "type": "int16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 5,
+              "name": "ValueUnsigned32",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 6,
+              "name": "ValueSigned32",
+              "type": "int32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 7,
+              "name": "ValueUnsigned64",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            },
+            {
+              "id": 8,
+              "name": "ValueSigned64",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": false,
+                "orLess": false
+              }
+            }
+          ]
+        },
+        {
+          "name": "CopyModeBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "CopyAllScenes",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ExtensionFieldSetStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This data type indicates for a given cluster a set of attributes and their values.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ClusterId",
+              "type": "cluster-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the cluster-id of the cluster whose attributes are in the AttributeValueList field."
+            },
+            {
+              "id": 1,
+              "name": "AttributeValueList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AttributeValuePairStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a set of attributes and their values which are stored as part of a scene.\nAttributes which do not have the Scenes (\"S\") designation in the Quality column of their cluster specification shall NOT be used in the AttributeValueList field."
+            }
+          ]
+        },
+        {
+          "name": "SceneInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "SceneCount",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the number of scenes currently used in the server's Scene Table on the endpoint where the Scenes Management cluster appears.\nThis only includes the count for the associated fabric."
+            },
+            {
+              "id": 1,
+              "name": "CurrentScene",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the scene identifier of the scene last invoked on the associated fabric. If no scene has been invoked, the value of this field shall be 0xFF, the undefined scene identifier.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 2,
+              "name": "CurrentGroup",
+              "type": "group-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the group identifier of the scene last invoked on the associated fabric, or 0 if the scene last invoked is not associated with a group.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 3,
+              "name": "SceneValid",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate whether the state of the server corresponds to that associated with the CurrentScene and CurrentGroup fields of the SceneInfoStruct they belong to. TRUE indicates that these fields are valid, FALSE indicates that they are not valid.\nThis field shall be set to False for all other fabrics when an attribute with the Scenes (\"S\") designation in the Quality column of another cluster present on the same endpoint is modified or when the current scene is modified by a fabric through the RecallScene or StoreScene commands, regardless of the fabric-scoped access quality of the command.\nIn the event where the SceneValid field is set to False for a fabric, the CurrentScene and CurrentGroup fields shall be the last invoked scene and group for that fabric. In the event where no scene was previously invoked for that fabric, the CurrentScene and CurrentGroup fields shall be their default values.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 4,
+              "name": "RemainingCapacity",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the remaining capacity of the Scene Table on this endpoint for the accessing fabric. Note that this value may change between reads, even if no entries are added or deleted on the accessing fabric, due to other clients associated with other fabrics adding or deleting entries that impact the resource usage on the device."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
             }
           ]
         }

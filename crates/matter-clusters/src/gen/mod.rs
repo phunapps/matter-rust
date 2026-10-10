@@ -62,6 +62,7 @@ pub mod relative_humidity_measurement;
 pub mod rvc_clean_mode;
 pub mod rvc_operational_state;
 pub mod rvc_run_mode;
+pub mod scenes_management;
 pub mod service_area;
 pub mod smoke_co_alarm;
 pub mod switch;

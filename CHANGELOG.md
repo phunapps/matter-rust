@@ -45,6 +45,8 @@ fabric's entry":
 - `AccessRestrictionEntryStruct`: `endpoint`, `cluster`, `restrictions`
 - `MonitoringRegistrationStruct` (IcdManagement): `check_in_node_id`,
   `monitored_subject`, `client_type`
+- `SceneInfoStruct` (ScenesManagement, new in 0.6.0): `current_scene`,
+  `current_group`, `scene_valid`
 
 For `subjects` and `targets` the two layers are distinct: `None` is withheld,
 `Some(Nullable::Null)` is the wildcard.
@@ -243,7 +245,10 @@ The codegen now generates only what a client can use:
   `MovementStatus` for each field of `OperationalStatusBitmap`). Removed:
   `bridged_device_basic_information::CapabilityMinimaStruct`,
   `door_lock::AlarmMaskBitmap`, `door_lock::EventTypeEnum`,
-  `microwave_oven_mode::ModeChangeStatus`.
+  `microwave_oven_mode::ModeChangeStatus`. Scalar typedefs (Thermostat's
+  `SignedTemperature`, `UnsignedTemperature`, `TemperatureDifference`) are
+  exempt: they never become a Rust item (every use is generated as its base
+  integer), so there is nothing to prune.
 - **`write_fields` / `encode` exist only on structs a client sends**: those a
   command request carries, and the all-scalar ones a writable attribute
   carries. Every decoder stays. Removed from:
@@ -288,6 +293,15 @@ The codegen now generates only what a client can use:
   `Option<Nullable<u32>>`: `None` uses the valve's DefaultOpenDuration,
   `Some(Nullable::Null)` opens it until it is closed. Pinned against a
   matter.js byte vector.
+- **ScenesManagement (0x0062)**: `SceneTableSize`, `FabricSceneInfo`, and
+  the eight scene commands with their responses (`RecallScene` answers with
+  a status). `FabricSceneInfo` is fabric-scoped: on our unfiltered reads,
+  another fabric's entry arrives without `CurrentScene`, `CurrentGroup` and
+  `SceneValid`, so those are `Option` (`None` = withheld).
+  `AttributeValuePairStruct`'s eight value fields are each an `Option`;
+  exactly one should be set (its rustdoc says so; devices refuse a pair
+  without exactly one). `encode_add_scene` is pinned against a matter.js
+  byte vector.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

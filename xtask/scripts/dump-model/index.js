@@ -176,6 +176,10 @@ const ALLOWLIST = [
   // M9-A3 B4, ValveConfigurationAndControl (nullable attributes, an Open
   // request with an optional nullable field, two events):
   { id: 0x0081, name: 'ValveConfigurationAndControl' },
+  // M9-A3 B4, ScenesManagement (fabric-scoped FabricSceneInfo, spec §5.4;
+  // AddScene's list of ExtensionFieldSetStruct of AttributeValuePairStruct;
+  // no events):
+  { id: 0x0062, name: 'ScenesManagement' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -1116,7 +1120,18 @@ function encodedStructs(attributes, commands, datatypes) {
 // the cluster's StatusCodeEnum (the cluster-specific status codes of an IM
 // status response, which no field names), or KEEP_DATATYPES lists it. Anything
 // else is a model datatype no generated item uses: dropped, and recorded in
-// meta.excluded (kind `datatype`).
+// meta.excluded (kind `datatype`). Scalar typedefs (kind `scalar`, e.g.
+// SignedTemperature) are exempt: never pruned. They produce no Rust item, and
+// every reference to one was already rewritten to its base type above, so the
+// reachability walk cannot see their uses and would wrongly report a used
+// typedef as unreferenced.
+//
+// A pruned struct takes its records with it, so no meta.relaxed or
+// meta.excluded entry names a struct that is no longer generated: its
+// fabric-sensitive (class P) relaxations, its §3.1 conditional fields (not yet
+// recorded: checkConditionalRelaxations runs after pruning and would record
+// them as class C) and its unreadable-field (`struct-field`) exclusions.
+// checkNoRecordNamesAPrunedDatatype asserts this once every cluster is dumped.
 const UNREFERENCED_REASON = 'unreferenced (no generated attribute, command or event uses it)';
 
 // Datatypes kept although no field names them: each is the meaning of a raw
@@ -1153,9 +1168,40 @@ function pruneUnreferencedDatatypes(clusterName, attributes, commands, events, d
       for (let i = relaxed.length - 1; i >= 0; i--) {
         if (relaxed[i].cluster === clusterName && relaxed[i].element.startsWith(`${d.name}.`)) relaxed.splice(i, 1);
       }
+      // So do its §3.1 conditional fields, before they are recorded as class C.
+      _conditional = _conditional.filter((r) => !(r.role === 'struct' && r.owner === d.name));
+      // And its unreadable-field exclusions (recorded by dumpDatatype under
+      // "<cluster>.datatype", "<cluster>.global" or "<cluster>.synth").
+      for (let i = excluded.length - 1; i >= 0; i--) {
+        const e = excluded[i];
+        if (e.kind === 'struct-field' && e.cluster.split('.')[0] === clusterName && e.element.startsWith(`${d.name}.`)) {
+          excluded.splice(i, 1);
+        }
+      }
     }
   }
   datatypes.splice(0, datatypes.length, ...kept);
+}
+
+// Self-check, run once every cluster is dumped: no meta.relaxed entry (class P
+// or C) and no `struct-field` exclusion may name a datatype the prune dropped.
+// Such a record would describe a struct clusters.json no longer has, so the
+// dump stops instead of writing it.
+function checkNoRecordNamesAPrunedDatatype() {
+  const pruned = new Set(
+    excluded.filter((e) => e.kind === 'datatype').map((e) => `${e.cluster}.${e.element}`),
+  );
+  const namesPruned = (cluster, element) => pruned.has(`${cluster.split('.')[0]}.${element.split('.')[0]}`);
+  for (const e of excluded) {
+    if (e.kind === 'struct-field' && namesPruned(e.cluster, e.element)) {
+      fail(`exclusion ${e.cluster} ${e.element} names a pruned datatype — pruneUnreferencedDatatypes must drop it`);
+    }
+  }
+  for (const r of relaxed) {
+    if (namesPruned(r.cluster, r.element)) {
+      fail(`relaxation ${r.cluster} ${r.element} (class ${r.class}) names a pruned datatype — pruneUnreferencedDatatypes must drop it`);
+    }
+  }
 }
 
 // M9-A3 (B2 review ruling, landed in B3): the §3.1 rule may relax only fields
@@ -1548,6 +1594,7 @@ supplemented.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.loca
 for (const key of KEEP_DATATYPES.keys()) {
   if (!appliedKeeps.has(key)) fail(`KEEP_DATATYPES ${key} matched no datatype — model drift; review KEEP_DATATYPES`);
 }
+checkNoRecordNamesAPrunedDatatype();
 for (const key of TYPE_WIDENINGS.keys()) {
   const owner = key.split('.')[0];
   if (ALLOWLIST.some((e) => e.name === owner) && !appliedWidenings.has(key)) {

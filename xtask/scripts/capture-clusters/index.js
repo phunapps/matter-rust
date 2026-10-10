@@ -38,6 +38,11 @@ import { Thermostat } from '@matter/types/clusters/thermostat';
 // first request field that is both optional and nullable.
 import { ValveConfigurationAndControl } from '@matter/types/clusters/valve-configuration-and-control';
 
+// matter.js's own ScenesManagement request schema (M9-A3 B4): a request list of
+// structs whose own list entries leave out all but one of eight optional
+// fields.
+import { ScenesManagement } from '@matter/types/clusters/scenes-management';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -349,6 +354,44 @@ cmd('valve_configuration_and_control', 'cmd_open_null_duration.json',
     ],
     note: 'an optional nullable request field sent as null (open until closed), TargetLevel 50 (encoded with matter.js TlvOpenRequest)' },
   ValveConfigurationAndControl.TlvOpenRequest.encode({ openDuration: null, targetLevel: 50 }));
+
+// ---------------------------------------------------------------------------
+// ScenesManagement (0x0062) AddScene (0x00) — M9-A3 B4. ExtensionFieldSetStructs
+// is a list of ExtensionFieldSetStruct, each holding a list of
+// AttributeValuePairStruct whose eight value fields form a choice group (O.a:
+// exactly one present). The first vector where optional fields are omitted
+// inside the entries of a nested request list, with unsigned and signed values
+// (OnOff OnOff = 1, LevelControl CurrentLevel = 128, Thermostat
+// OccupiedHeatingSetpoint = -250). Encoded with matter.js's own
+// TlvAddSceneRequest; @matter/types 0.16.11 and the 0.17.1 model agree on
+// every field.
+// ---------------------------------------------------------------------------
+
+cmd('scenes_management', 'cmd_add_scene.json',
+  { cluster: 'ScenesManagement', cluster_id: 0x62, command: 'AddScene', command_id: 0x00,
+    fields: [
+      { name: 'GroupId', id: 0, value: 0 },
+      { name: 'SceneId', id: 1, value: 1 },
+      { name: 'TransitionTime', id: 2, value: 1000 },
+      { name: 'SceneName', id: 3, value: 'Evening' },
+      { name: 'ExtensionFieldSetStructs', id: 4, value: [
+        { ClusterId: 0x0006, AttributeValueList: [{ AttributeId: 0x0000, ValueUnsigned8: 1 }] },
+        { ClusterId: 0x0008, AttributeValueList: [{ AttributeId: 0x0000, ValueUnsigned8: 128 }] },
+        { ClusterId: 0x0201, AttributeValueList: [{ AttributeId: 0x0012, ValueSigned16: -250 }] },
+      ] },
+    ],
+    note: 'nested request lists whose AttributeValuePairStruct entries carry one of eight optional value fields (encoded with matter.js TlvAddSceneRequest)' },
+  ScenesManagement.TlvAddSceneRequest.encode({
+    groupId: 0,
+    sceneId: 1,
+    transitionTime: 1000,
+    sceneName: 'Evening',
+    extensionFieldSetStructs: [
+      { clusterId: 0x0006, attributeValueList: [{ attributeId: 0x0000, valueUnsigned8: 1 }] },
+      { clusterId: 0x0008, attributeValueList: [{ attributeId: 0x0000, valueUnsigned8: 128 }] },
+      { clusterId: 0x0201, attributeValueList: [{ attributeId: 0x0012, valueSigned16: -250 }] },
+    ],
+  }));
 
 // ---------------------------------------------------------------------------
 // GeneralDiagnostics (0x0033) NetworkInterfaces (0x00) — list<NetworkInterface>.

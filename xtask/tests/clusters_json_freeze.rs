@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 75] = [
+const TARGET_CLUSTERS: [&str; 76] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -110,6 +110,8 @@ const TARGET_CLUSTERS: [&str; 75] = [
     "SmokeCoAlarm",
     "BooleanStateConfiguration",
     "ValveConfigurationAndControl",
+    // M9-A3 B4, ScenesManagement (no events):
+    "ScenesManagement",
 ];
 
 fn load() -> Value {
@@ -228,7 +230,7 @@ fn doorlock_aliro_surface_is_excluded_and_recorded() {
 /// for other fabrics' entries: `(cluster, struct, field)`. Each is
 /// `fabricSensitive`, `optional` (for decode) and `mandatoryOnWrite`. A model
 /// change that adds or drops one must be reviewed, so the set is pinned exactly.
-const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 11] = [
+const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 14] = [
     ("AccessControl", "AccessControlEntryStruct", "AuthMode"),
     ("AccessControl", "AccessControlEntryStruct", "Privilege"),
     ("AccessControl", "AccessControlEntryStruct", "Subjects"),
@@ -256,6 +258,10 @@ const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 11] = [
         "MonitoringRegistrationStruct",
         "MonitoredSubject",
     ),
+    // M9-A3 B4: born with the rule.
+    ("ScenesManagement", "SceneInfoStruct", "CurrentGroup"),
+    ("ScenesManagement", "SceneInfoStruct", "CurrentScene"),
+    ("ScenesManagement", "SceneInfoStruct", "SceneValid"),
 ];
 
 #[test]
@@ -1117,7 +1123,7 @@ const PROVISIONAL: [(&str, &str, &str); 25] = [
 /// Fields in a choice-conformance group (`O.a`, `O.a+`, `[F].b+`): the
 /// encoders take each as an `Option` and do not enforce the group, so it is
 /// documented on the generated type or encoder.
-const CHOICE: [(&str, &str, &str); 11] = [
+const CHOICE: [(&str, &str, &str); 19] = [
     (
         "ElectricalEnergyMeasurement",
         "MeasurementAccuracyRangeStruct.FixedMax",
@@ -1172,6 +1178,47 @@ const CHOICE: [(&str, &str, &str); 11] = [
         "OperationalCredentials",
         "SetVidVerificationStatement.Vvsc",
         "a/1+",
+    ),
+    // M9-A3 B4, ScenesManagement (O.a: exactly one value field):
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueSigned16",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueSigned32",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueSigned64",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueSigned8",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueUnsigned16",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueUnsigned32",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueUnsigned64",
+        "a/1",
+    ),
+    (
+        "ScenesManagement",
+        "AttributeValuePairStruct.ValueUnsigned8",
+        "a/1",
     ),
 ];
 
@@ -1327,11 +1374,14 @@ fn thermostat_weekly_schedule_uses_the_models_own_datatypes() {
 
 /// The datatypes the dump dropped because no generated attribute, command or
 /// event uses them (the user's pruning rule), as `(cluster, datatype)`.
-const PRUNED_DATATYPES: [(&str, &str); 4] = [
+const PRUNED_DATATYPES: [(&str, &str); 5] = [
     ("BridgedDeviceBasicInformation", "CapabilityMinimaStruct"),
     ("DoorLock", "AlarmMaskBitmap"),
     ("DoorLock", "EventTypeEnum"),
     ("MicrowaveOvenMode", "ModeChangeStatus"),
+    // M9-A3 B4: the specification's descriptive Logical Scene Table, not a
+    // wire type (chip's controller codegen has no such struct).
+    ("ScenesManagement", "LogicalSceneTable"),
 ];
 
 /// Datatypes kept although no field names them (`KEEP_DATATYPES` in
@@ -1449,4 +1499,48 @@ fn valve_open_fields_are_optional_and_open_duration_nullable() {
         field_optionality(&c["events"][0]["fields"]),
         [("ValveState", false), ("ValveLevel", true)]
     );
+}
+
+#[test]
+fn scenes_management_shape_follows_1_4() {
+    // FabricSceneInfo is a list of the fabric-scoped SceneInfoStruct (field
+    // 254): its three fabric-sensitive fields are relaxed for decode and
+    // mandatory on write (spec §5.4, asserted with the other relaxations).
+    // ViewSceneResponse's and GetSceneMembershipResponse's success-only fields
+    // ("Status == Success") are optional, so a NotFound reply decodes. The
+    // descriptive DoNotUse attribute (0x0000, conformance X) is excluded. No
+    // events.
+    let v = load();
+    let c = cluster(&v, "ScenesManagement");
+    assert_eq!(
+        element_names(c, "attributes"),
+        ["SceneTableSize", "FabricSceneInfo"]
+    );
+    assert_eq!(c["attributes"][1]["entryType"], "SceneInfoStruct");
+    assert_eq!(element_names(c, "events"), Vec::<&str>::new());
+    assert_eq!(
+        field_optionality(&command(c, "ViewSceneResponse")["fields"]),
+        [
+            ("Status", false),
+            ("GroupId", false),
+            ("SceneId", false),
+            ("TransitionTime", true),
+            ("SceneName", true),
+            ("ExtensionFieldSetStructs", true)
+        ]
+    );
+    assert_eq!(
+        field_optionality(&command(c, "GetSceneMembershipResponse")["fields"]),
+        [
+            ("Status", false),
+            ("Capacity", false),
+            ("GroupId", false),
+            ("SceneList", true)
+        ]
+    );
+    let excluded = v["meta"]["excluded"].as_array().unwrap();
+    assert!(excluded.iter().any(|e| e["cluster"] == "ScenesManagement"
+        && e["element"] == "DoNotUse"
+        && e["kind"] == "attribute"
+        && e["reason"] == "disallowed"));
 }
