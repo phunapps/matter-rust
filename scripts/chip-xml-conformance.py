@@ -151,7 +151,6 @@ def zap_token(ztype):
 # AtomicResponse entry; chip's global-structs.xml calls it
 # AtomicAttributeStatusStruct.
 ZAP_STRUCT_ALIASES = {
-    "locationdesc": "LocationDescriptorStruct",
     "ThermostatAttributeStatusEntryStruct": "AtomicAttributeStatusStruct",
 }
 

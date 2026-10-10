@@ -41,7 +41,9 @@
 //!
 //! The tests run single-threaded (`--test-threads=1`, xtask `run_tests`)
 //! against one microwave-oven-app booted with a fresh KVS, and restore every
-//! value they change. SetCookingParameters without a CookMode applies the
+//! value they change. The boot values are held in memory only (CookTime in
+//! the cluster server, PowerSetting in the app's device class; neither is
+//! written to the KVS), so restarting the app resets them. SetCookingParameters without a CookMode applies the
 //! Normal mode (0), which MicrowaveOvenMode boots in (ModeBase `Init` takes
 //! the first supported mode; microwave-oven-device.h:257-262), so the mode
 //! never changes.

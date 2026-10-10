@@ -10,6 +10,9 @@
 
 //! The RVC clusters on a live rvc-app (`just integration-rvc`), endpoint 1.
 //!
+//! NOT YET RUN LIVE: rvc-app needs Rosetta 2 to build on Apple silicon. Every
+//! expected value below is read from chip source instead.
+//!
 //! M9-A3 B2: RvcRunMode and RvcCleanMode. rvc-app's modes come from
 //! examples/rvc-app/rvc-common/include/rvc-mode-delegates.h; its mode-change
 //! rules from rvc-common/src/rvc-device.cpp (`HandleRvcRunChangeToMode`,

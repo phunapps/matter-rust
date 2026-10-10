@@ -27,8 +27,11 @@
 //! v1.4.2.0), the laundry servers, and the `OperationalStateChange` pipe
 //! command (AllClustersCommandDelegate.cpp, both refs).
 //!
-//! Each test sets the state it starts from (OperationalState clusters: a
-//! `Stop`, which ends in Stopped from any state) and restores what it changes.
+//! Each test restores what it changes. The OperationalState and
+//! OvenCavityOperationalState tests set the state they start from with a
+//! `Stop`, which ends in Stopped from any state. The RvcOperationalState test
+//! cannot (RVC disallows Stop): it relies on the app booting Stopped and on
+//! no other test moving the RVC state.
 
 use integration_tests::dut::DutConfig;
 use integration_tests::events::{

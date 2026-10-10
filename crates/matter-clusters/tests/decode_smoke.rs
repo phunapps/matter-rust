@@ -2498,7 +2498,9 @@ fn microwave_oven_control_decodes_and_commands_encode() {
     };
     // chip microwave-oven-app's values (MicrowaveOvenControlCluster.cpp,
     // examples/microwave-oven-app/microwave-oven-common/src/
-    // microwave-oven-device.cpp): cook time 30 s of at most 86400 s, power
+    // microwave-oven-device.cpp, and include/microwave-oven-device.h L229-233,
+    // chip master 5cd2917a: power 20..=90 in steps of 10, at most 86400 s of
+    // cook time, 90 by default): cook time 30 s of at most 86400 s, power
     // 20..=90 in steps of 10, set to 90, 1000 W rating (MicrowaveOvenInit's
     // non-WATTS branch, ~L48: `mWattRating = kExampleWatt5`). SupportedWatts
     // and SelectedWattIndex 4 are the WATTS-branch values (~L43-44: the last

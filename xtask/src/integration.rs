@@ -135,8 +135,10 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
         },
         // M9-A3 B3: MicrowaveOvenControl, which only microwave-oven-app
         // serves. Nothing is stimulated: the tests use no events, and the app
-        // reads no pipe (microwave-oven-app/linux/main.cpp) and has no
-        // test-event triggers, so it gets neither --enable-key nor --app-pipe.
+        // reads no pipe (microwave-oven-app/linux/main.cpp), and nothing these
+        // tests need is stimulated by a trigger (AppMain's test-event handlers
+        // are generic ones, none for these clusters), so it gets neither
+        // --enable-key nor --app-pipe.
         "microwave-oven" => AppSpec {
             name: "microwave-oven",
             target_suffix: "microwave-oven",

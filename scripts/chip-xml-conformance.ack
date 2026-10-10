@@ -27,15 +27,16 @@ WindowCovering.Attribute.InstalledClosedLimitTilt provisionalConform (ABS) in 1.
 WindowCovering.Command.GoToLiftValue provisionalConform (ABS) in 1.4.2
 WindowCovering.Command.GoToTiltValue provisionalConform (ABS) in 1.4.2
 
-# Thermostat ScheduleConfiguration (SCH, bit 3) and its weekly schedule.
-Thermostat.Feature.SCH 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Attribute.StartOfWeek 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Attribute.NumberOfWeeklyTransitions 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Attribute.NumberOfDailyTransitions 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Command.SetWeeklySchedule 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Command.GetWeeklySchedule 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Command.ClearWeeklySchedule 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
-Thermostat.Command.GetWeeklyScheduleResponse 1.4 feature absent from the 1.5.1 model; synthesise-vs-known-gap pending user decision
+# Thermostat ScheduleConfiguration (SCH, bit 3) and its weekly schedule. These
+# go STALE-ACK when B4 lands and are removed then.
+Thermostat.Feature.SCH 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Attribute.StartOfWeek 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Attribute.NumberOfWeeklyTransitions 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Attribute.NumberOfDailyTransitions 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Command.SetWeeklySchedule 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Command.GetWeeklySchedule 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Command.ClearWeeklySchedule 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
+Thermostat.Command.GetWeeklyScheduleResponse 1.4 feature absent from the 1.5.1 model; decided spec rev 6: synthesised by the B4 1.4 supplement
 
 # DoorLock legacy PIN/RFID/user-status/user-type commands (!USR).
 DoorLock.Command.SetPINCode legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)

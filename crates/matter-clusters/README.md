@@ -89,14 +89,20 @@ sensing sets, plus one vector for each novel wire shape a later cluster
 introduced: the nested `MeasurementAccuracyStruct`, the list-typed
 `AtomicRequest` command, GeneralDiagnostics' struct-with-byte-fields
 `NetworkInterface`, the recursive list-of-struct in
-`AccessControl.ReviewFabricRestrictions`, and FLOAT32 attributes. The read/write
+`AccessControl.ReviewFabricRestrictions`, FLOAT32 attributes, LevelControl's
+`MoveToLevelWithOnOff` (the inherited command fields), and TemperatureControl's
+`SetTemperature` (a negative signed request field). The read/write
 actuator clusters additionally carry `decode(encode(x)) == x` roundtrips, and
 floats get both a binary32-edge roundtrip (signed zero, subnormals, infinities,
 NaN — compared by bits) and a `proptest` roundtrip drawn uniformly from the
 whole binary32 bit space. A `single` attribute accepts a FLOAT32 element only,
 matching chip's strict `TLVReader::Get(float&)`. No connectedhomeip example
 app serves WaterTankLevelMonitoring, so it is validated by decode tests and the
-chip 1.4.2 XML check (`scripts/chip-xml-conformance.py`) only.
+chip 1.4.2 XML check (`scripts/chip-xml-conformance.py`) only. ServiceArea,
+MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's GoHome and
+its events; RvcRunMode / RvcCleanMode's refused changes) are validated the same
+way only for now: their live tests are written but have not run, because
+rvc-app and microwave-oven-app need Rosetta 2 to build on Apple silicon.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`
