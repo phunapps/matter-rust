@@ -195,6 +195,16 @@ fn move_to_level_with_on_off_command() {
 }
 
 #[test]
+fn set_temperature_command() {
+    // M9-A3 B3: the first byte-parity vector for a signed request field
+    // (TargetTemperature, int16 0.01 °C, put_int) next to an omitted optional
+    // one (TargetTemperatureLevel). Encoded with matter.js's own
+    // TemperatureControl TlvSetTemperatureRequest.
+    let got = gen::temperature_control::encode_set_temperature(Some(-1250), None);
+    assert_eq!(got, cmd("temperature_control/cmd_set_temperature.json"));
+}
+
+#[test]
 fn lock_door_optional_field() {
     let with = gen::door_lock::encode_lock_door(Some(vec![1, 2, 3, 4]));
     assert_eq!(with, cmd("door_lock/cmd_lock_door_with_pin.json"));

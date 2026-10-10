@@ -25,6 +25,10 @@ import {
 // model of the command's fields, not a schema we wrote (M9-A3 B2).
 import { LevelControl } from '@matter/types/clusters/level-control';
 
+// matter.js's own TemperatureControl request schema (M9-A3 B3): the first
+// vector for a signed integer field in a command request.
+import { TemperatureControl } from '@matter/types/clusters/temperature-control';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -153,6 +157,23 @@ cmd('level_control', 'cmd_move_to_level_with_on_off.json',
   LevelControl.Cluster.commands.moveToLevelWithOnOff.requestSchema.encode({
     level: 128, transitionTime: 10, optionsMask: {}, optionsOverride: {},
   }));
+
+// ---------------------------------------------------------------------------
+// TemperatureControl (0x0056) SetTemperature (0x00) — M9-A3 B3. The first
+// command vector with a SIGNED field (put_int; TargetTemperature is a
+// temperature, int16 in 0.01 °C) and an omitted optional field
+// (TargetTemperatureLevel is TL-gated). Encoded with matter.js's own
+// TlvSetTemperatureRequest; both @matter/types 0.16.11 and the 0.17.1 model
+// agree on the two fields.
+// ---------------------------------------------------------------------------
+
+cmd('temperature_control', 'cmd_set_temperature.json',
+  { cluster: 'TemperatureControl', cluster_id: 0x56, command: 'SetTemperature', command_id: 0x00,
+    fields: [
+      { name: 'TargetTemperature', id: 0, value: -1250 },
+    ],
+    note: 'a negative signed request field, the optional TargetTemperatureLevel omitted (encoded with matter.js TlvSetTemperatureRequest)' },
+  TemperatureControl.TlvSetTemperatureRequest.encode({ targetTemperature: -1250 }));
 
 // ---------------------------------------------------------------------------
 // TemperatureMeasurement (0x0402)

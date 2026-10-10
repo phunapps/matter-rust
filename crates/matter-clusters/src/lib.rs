@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 67 clusters are generated today. The full list is [`gen`]; by area:
+//! 71 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -54,6 +54,8 @@
 //! - **Appliance operational state:** `OperationalState`,
 //!   `OvenCavityOperationalState`, `RvcOperationalState` (with their
 //!   `OperationalError` and `OperationCompletion` events).
+//! - **Appliance controls:** `TemperatureControl`, `LaundryWasherControls`,
+//!   `LaundryDryerControls`, `MicrowaveOvenControl`.
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

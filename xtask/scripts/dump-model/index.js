@@ -149,6 +149,13 @@ const ALLOWLIST = [
   { id: 0x0060, name: 'OperationalState' },
   { id: 0x0048, name: 'OvenCavityOperationalState' },
   { id: 0x0061, name: 'RvcOperationalState' },
+  // M9-A3 B3, appliance controls (feature-gated scalar attributes, lists of
+  // strings or enums, writable nullable attributes, all-optional command
+  // fields; no events):
+  { id: 0x0056, name: 'TemperatureControl' },
+  { id: 0x0053, name: 'LaundryWasherControls' },
+  { id: 0x004a, name: 'LaundryDryerControls' },
+  { id: 0x005f, name: 'MicrowaveOvenControl' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

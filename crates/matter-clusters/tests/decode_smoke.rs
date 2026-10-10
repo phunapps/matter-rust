@@ -2387,3 +2387,157 @@ fn operational_state_missing_mandatory_fields_are_errors() {
         Err(ClusterError::MissingField("CompletionErrorCode"))
     ));
 }
+
+// ---- M9-A3 B3: appliance controls --------------------------------------------
+//
+// TemperatureControl, LaundryWasherControls, LaundryDryerControls and
+// MicrowaveOvenControl: feature-gated scalar attributes, lists of strings and
+// of enums, writable nullable attributes, and all-optional command fields
+// (1.4.2 TemperatureControl.xml, LaundryWasherControls.xml,
+// LaundryDryerControls.xml, MicrowaveOvenControl.xml). No events.
+
+#[test]
+fn temperature_control_decodes_and_set_temperature_encodes() {
+    use gen::temperature_control::{
+        decode_max_temperature, decode_min_temperature, decode_selected_temperature_level,
+        decode_step, decode_supported_temperature_levels, decode_temperature_setpoint,
+        encode_set_temperature, Feature,
+    };
+    // chip all-clusters' levels (static-supported-temperature-levels.cpp).
+    assert_eq!(
+        decode_supported_temperature_levels(&str_list_attr(&["Hot", "Warm", "Freezing"])).unwrap(),
+        ["Hot", "Warm", "Freezing"]
+    );
+    assert_eq!(decode_selected_temperature_level(&uint_attr(0)).unwrap(), 0);
+    // Temperatures are signed 0.01 °C.
+    assert_eq!(
+        decode_temperature_setpoint(&int_attr(-1250)).unwrap(),
+        -1250
+    );
+    assert_eq!(decode_min_temperature(&int_attr(-2000)).unwrap(), -2000);
+    assert_eq!(decode_max_temperature(&int_attr(25000)).unwrap(), 25000);
+    assert_eq!(decode_step(&int_attr(50)).unwrap(), 50);
+    assert_eq!(Feature::TL.bits(), 0b010);
+    // Each field is present only under its feature, so both are optional.
+    assert_eq!(
+        encode_set_temperature(None, Some(2)),
+        struct_of(&|w| w.put_uint(Tag::Context(1), 2).unwrap())
+    );
+    assert_eq!(encode_set_temperature(None, None), [0x15, 0x18]);
+}
+
+#[test]
+fn laundry_washer_controls_decode_and_writes_encode() {
+    use gen::laundry_washer_controls::{
+        decode_number_of_rinses, decode_spin_speed_current, decode_spin_speeds,
+        decode_supported_rinses, encode_number_of_rinses, encode_spin_speed_current,
+        NumberOfRinsesEnum,
+    };
+    // chip all-clusters' options (laundry-washer-controls-delegate-impl.cpp).
+    assert_eq!(
+        decode_spin_speeds(&str_list_attr(&["Off", "Low", "Medium", "High"])).unwrap(),
+        ["Off", "Low", "Medium", "High"]
+    );
+    assert_eq!(
+        decode_supported_rinses(&uint_array_attr(&[1, 2])).unwrap(),
+        [NumberOfRinsesEnum::Normal, NumberOfRinsesEnum::Extra]
+    );
+    for v in [Nullable::Null, Nullable::Value(2)] {
+        assert_eq!(
+            decode_spin_speed_current(&encode_spin_speed_current(v)).unwrap(),
+            v
+        );
+    }
+    assert_eq!(encode_spin_speed_current(Nullable::Value(2)), uint_attr(2));
+    assert_eq!(encode_spin_speed_current(Nullable::Null), null_attr());
+    assert_eq!(
+        decode_number_of_rinses(&encode_number_of_rinses(NumberOfRinsesEnum::Max)).unwrap(),
+        NumberOfRinsesEnum::Max
+    );
+    // A rinse count a newer revision adds is kept, not an error.
+    assert_eq!(
+        decode_number_of_rinses(&uint_attr(9)).unwrap(),
+        NumberOfRinsesEnum::Unknown(9)
+    );
+}
+
+#[test]
+fn laundry_dryer_controls_decode_and_write_encodes() {
+    use gen::laundry_dryer_controls::{
+        decode_selected_dryness_level, decode_supported_dryness_levels,
+        encode_selected_dryness_level, DrynessLevelEnum,
+    };
+    // chip all-clusters' levels (laundry-dryer-controls-delegate-impl.cpp).
+    assert_eq!(
+        decode_supported_dryness_levels(&uint_array_attr(&[0, 1, 3])).unwrap(),
+        [
+            DrynessLevelEnum::Low,
+            DrynessLevelEnum::Normal,
+            DrynessLevelEnum::Max
+        ]
+    );
+    for v in [Nullable::Null, Nullable::Value(DrynessLevelEnum::Extra)] {
+        assert_eq!(
+            decode_selected_dryness_level(&encode_selected_dryness_level(v)).unwrap(),
+            v
+        );
+    }
+    assert_eq!(
+        encode_selected_dryness_level(Nullable::Value(DrynessLevelEnum::Normal)),
+        uint_attr(1)
+    );
+}
+
+#[test]
+fn microwave_oven_control_decodes_and_commands_encode() {
+    use gen::microwave_oven_control::{
+        decode_cook_time, decode_max_cook_time, decode_max_power, decode_min_power,
+        decode_power_setting, decode_power_step, decode_selected_watt_index,
+        decode_supported_watts, decode_watt_rating, encode_add_more_time,
+        encode_set_cooking_parameters, Feature,
+    };
+    // chip microwave-oven-app's values (microwave-oven-device.h,
+    // MicrowaveOvenControlCluster.cpp): cook time 30 s of at most 86400 s,
+    // power 20..=90 in steps of 10, set to 90, 1000 W rating.
+    assert_eq!(decode_cook_time(&uint_attr(30)).unwrap(), 30);
+    assert_eq!(decode_max_cook_time(&uint_attr(86_400)).unwrap(), 86_400);
+    assert_eq!(decode_power_setting(&uint_attr(90)).unwrap(), 90);
+    assert_eq!(decode_min_power(&uint_attr(20)).unwrap(), 20);
+    assert_eq!(decode_max_power(&uint_attr(90)).unwrap(), 90);
+    assert_eq!(decode_power_step(&uint_attr(10)).unwrap(), 10);
+    assert_eq!(decode_watt_rating(&uint_attr(1000)).unwrap(), 1000);
+    assert_eq!(
+        decode_supported_watts(&uint_array_attr(&[100, 300, 500, 800, 1000])).unwrap(),
+        [100, 300, 500, 800, 1000]
+    );
+    assert_eq!(decode_selected_watt_index(&uint_attr(4)).unwrap(), 4);
+    assert_eq!(
+        (Feature::PWRNUM | Feature::PWRLMTS).bits(),
+        0b101,
+        "microwave-oven-app's features"
+    );
+    // Every SetCookingParameters field is optional; absent ones are omitted.
+    assert_eq!(
+        encode_set_cooking_parameters(None, Some(45), Some(60), None, None),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(1), 45).unwrap();
+            w.put_uint(Tag::Context(2), 60).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_set_cooking_parameters(Some(1), None, None, Some(4), Some(false)),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 1).unwrap();
+            w.put_uint(Tag::Context(3), 4).unwrap();
+            w.put_bool(Tag::Context(4), false).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_set_cooking_parameters(None, None, None, None, None),
+        [0x15, 0x18]
+    );
+    assert_eq!(
+        encode_add_more_time(10),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 10).unwrap())
+    );
+}

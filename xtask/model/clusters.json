@@ -28,16 +28,20 @@
       "IcdManagement",
       "OvenCavityOperationalState",
       "OvenMode",
+      "LaundryDryerControls",
       "ModeSelect",
       "LaundryWasherMode",
       "RefrigeratorAndTemperatureControlledCabinetMode",
+      "LaundryWasherControls",
       "RvcRunMode",
       "RvcCleanMode",
+      "TemperatureControl",
       "RefrigeratorAlarm",
       "DishwasherMode",
       "AirQuality",
       "DishwasherAlarm",
       "MicrowaveOvenMode",
+      "MicrowaveOvenControl",
       "OperationalState",
       "RvcOperationalState",
       "HepaFilterMonitoring",
@@ -9519,6 +9523,67 @@
       ]
     },
     {
+      "id": 74,
+      "name": "LaundryDryerControls",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "SupportedDrynessLevels",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "DrynessLevelEnum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the list of supported dryness levels available to the appliance in the currently selected mode. The dryness level values are determined by the manufacturer. At least one dryness level value shall be provided in the SupportedDrynessLevels list. The list of dryness levels may change depending on the currently-selected Laundry Dryer mode."
+        },
+        {
+          "id": 1,
+          "name": "SelectedDrynessLevel",
+          "type": "DrynessLevelEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the currently-selected dryness level and it shall be the index into the SupportedDrynessLevels list of the selected dryness level.\nIf an attempt is made to write this attribute with a value other than null or a value contained in SupportedDrynessLevels, a CONSTRAINT_ERROR response shall be sent as the response. If an attempt is made to write this attribute while the device is not in a state that supports modifying the dryness level, an INVALID_IN_STATE error shall be sent as the response. A value of null shall indicate that there will be no dryness level setting for the current mode."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "DrynessLevelEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "This enum provides a representation of the level of dryness that will be used while drying in a selected mode.\nIt is up to the device manufacturer to determine the mapping between the enum values and the corresponding temperature level.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Normal",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Extra",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Max",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 80,
       "name": "ModeSelect",
       "revision": 2,
@@ -10159,6 +10224,101 @@
       ]
     },
     {
+      "id": 83,
+      "name": "LaundryWasherControls",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "SPIN",
+          "name": "Spin",
+          "description": "This feature indicates multiple spin speeds are supported in at least one supported mode. Note that some modes may not support multiple spin speeds even if this feature is supported."
+        },
+        {
+          "bit": 1,
+          "code": "RINSE",
+          "name": "Rinse",
+          "description": "This feature indicates multiple rinse cycles are supported in at least one supported mode. Note that some modes may not support selection of the number of rinse cycles even if this feature is supported."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "SpinSpeeds",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of spin speeds available to the appliance in the currently selected mode. The spin speed values are determined by the manufacturer. At least one spin speed value shall be provided in the SpinSpeeds list. The list of spin speeds may change depending on the currently selected Laundry Washer mode. For example, Quick mode might have a completely different list of SpinSpeeds than Delicates mode."
+        },
+        {
+          "id": 1,
+          "name": "SpinSpeedCurrent",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the currently selected spin speed. It is the index into the SpinSpeeds list of the selected spin speed, as such, this attribute can be an integer between 0 and the number of entries in SpinSpeeds - 1. If a value is received that is outside of the defined constraints, a CONSTRAINT_ERROR shall be sent as the response. If a value is attempted to be written that doesn't match a valid index (e.g. an index of 5 when the list has 4 values), a CONSTRAINT_ERROR shall be sent as the response. If null is written to this attribute, there will be no spin speed for the selected cycle. If the value is null, there will be no spin speed on the current mode."
+        },
+        {
+          "id": 2,
+          "name": "NumberOfRinses",
+          "type": "NumberOfRinsesEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates how many times a rinse cycle shall be performed on a device for the current mode of operation. A value of None shall indicate that no rinse cycle will be performed. This value may be set by the client to adjust the number of rinses that are performed for the current mode of operation. If the device is not in a compatible state to accept the provided value, an INVALID_IN_STATE error shall be sent as the response."
+        },
+        {
+          "id": 3,
+          "name": "SupportedRinses",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NumberOfRinsesEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the amount of rinses allowed for a specific mode. Each entry shall indicate a NumberOfRinsesEnum value that is possible in the selected mode on the device. The value of this attribute may change at runtime based on the currently selected mode. Each entry shall be distinct."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "NumberOfRinsesEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "The NumberOfRinsesEnum provides a representation of the number of rinses that will be performed for a selected mode. NumberOfRinsesEnum is derived from enum8. It is up to the device manufacturer to determine the mapping between the enum values and the corresponding numbers of rinses.",
+          "values": [
+            {
+              "value": 0,
+              "name": "None",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Normal",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Extra",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Max",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 84,
       "name": "RvcRunMode",
       "revision": 4,
@@ -10701,6 +10861,124 @@
           ]
         }
       ]
+    },
+    {
+      "id": 86,
+      "name": "TemperatureControl",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "TN",
+          "name": "TemperatureNumber",
+          "description": "For devices that use an actual temperature value for the temperature setpoint, such as some water heaters, the feature TN shall be used. Note that this cluster provides and supports temperatures in degrees Celsius via the temperature data type."
+        },
+        {
+          "bit": 1,
+          "code": "TL",
+          "name": "TemperatureLevel",
+          "description": "For devices that use vendor-specific temperature levels for the temperature setpoint, such as some washers, the feature TL shall be used."
+        },
+        {
+          "bit": 2,
+          "code": "STEP",
+          "name": "TemperatureStep",
+          "description": "For devices that support discrete temperature setpoints that are larger than the temperature resolution imposed via the temperature data type, the Step feature may be used."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "TemperatureSetpoint",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the desired Temperature Setpoint on the device."
+        },
+        {
+          "id": 1,
+          "name": "MinTemperature",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum temperature to which the TemperatureSetpoint attribute may be set."
+        },
+        {
+          "id": 2,
+          "name": "MaxTemperature",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum temperature to which the TemperatureSetpoint attribute may be set.\nIf the Step attribute is supported, this attribute shall be such that MaxTemperature = MinTemperature + (Step * n), where n is an integer and n $>$ 0. If the Step attribute is not supported, this attribute shall be such that MaxTemperature $>$ MinTemperature."
+        },
+        {
+          "id": 3,
+          "name": "Step",
+          "type": "temperature",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the discrete value by which the TemperatureSetpoint attribute can be changed via the SetTemperature command.\n> [!NOTE]\n> For example, if the value of MinTemperature is 25.00C (2500) and the Step value is 0.50C (50), valid values of the TargetTemperature field of the SetTemperature command would be 25.50C (2550), 26.00C (2600), 26.50C (2650), etc."
+        },
+        {
+          "id": 4,
+          "name": "SelectedTemperatureLevel",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the currently selected temperature level setting of the server. This attribute shall be the positional index of the list item in the SupportedTemperatureLevels list that represents the currently selected temperature level setting of the server."
+        },
+        {
+          "id": 5,
+          "name": "SupportedTemperatureLevels",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of supported temperature level settings that may be selected via the TargetTemperatureLevel field in the SetTemperature command. Each string is readable text that describes each temperature level setting in a way that can be easily understood by humans. For example, a washing machine can have temperature levels like \"Cold\", \"Warm\", and \"Hot\". Each string is specified by the manufacturer.\nEach item in this list shall represent a unique temperature level. Each entry in this list shall have a unique value. The entries in this list shall appear in order of increasing temperature level with list item 0 being the setting with the lowest temperature level."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SetTemperature",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TargetTemperature",
+              "type": "temperature",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the desired temperature setpoint that the server is to be set to.\nThe TargetTemperature shall be from MinTemperature to MaxTemperature inclusive. If the Step attribute is supported, TargetTemperature shall be such that (TargetTemperature - MinTemperature) % Step == 0."
+            },
+            {
+              "id": 1,
+              "name": "TargetTemperatureLevel",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the index of the list item in the SupportedTemperatureLevels list that represents the desired temperature level setting of the server. The value of this field shall be between 0 and the length of the SupportedTemperatureLevels list -1."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": []
     },
     {
       "id": 87,
@@ -11497,6 +11775,198 @@
           ]
         }
       ]
+    },
+    {
+      "id": 95,
+      "name": "MicrowaveOvenControl",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "PWRNUM",
+          "name": "PowerAsNumber",
+          "description": "Power is specified as a unitless number or a percentage"
+        },
+        {
+          "bit": 1,
+          "code": "WATTS",
+          "name": "PowerInWatts",
+          "description": "Power is specified in Watts"
+        },
+        {
+          "bit": 2,
+          "code": "PWRLMTS",
+          "name": "PowerNumberLimits",
+          "description": "Supports the limit attributes used with the PWRNUM feature"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "CookTime",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the total cook time associated with the operation of the device.\nThis attribute shall remain unchanged during the operation of the oven unless the value is changed via a command or out-of-band action."
+        },
+        {
+          "id": 1,
+          "name": "MaxCookTime",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum value to which the CookTime attribute can be set."
+        },
+        {
+          "id": 2,
+          "name": "PowerSetting",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the power level associated with the operation of the device.\nIf the MinPower, MaxPower, and PowerStep attributes are not supported:\n  - The minimum value of this attribute shall be 10,\n  - The maximum value of this attribute shall be 100,\n  - The value shall be in even multiples of 10,\n  - The default value shall be 100.\nIf the MinPower, MaxPower, and PowerStep attributes are supported:\n  - The value of this attribute shall be between MinPower and MaxPower inclusive.\n  - The value of this attribute shall be such that (PowerSetting - MinPower) % PowerStep == 0"
+        },
+        {
+          "id": 3,
+          "name": "MinPower",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum value to which the PowerSetting attribute that can be set on the server."
+        },
+        {
+          "id": 4,
+          "name": "MaxPower",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum value to which the PowerSetting attribute that can be set on the server."
+        },
+        {
+          "id": 5,
+          "name": "PowerStep",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the increment of power that can be set on the server.\nThe value of this attribute shall be between 1 and MaxPower inclusive.\nThe value of this attribute shall be such that (MaxPower - MinPower) % PowerStep == 0\nFor example, if MinPower is 1, MaxPower is 10, and PowerSetting can be set to any integer between MinPower and MaxPower, PowerStep would be set to 1."
+        },
+        {
+          "id": 6,
+          "name": "SupportedWatts",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "uint16",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the list of power levels (in W) supported by the server."
+        },
+        {
+          "id": 7,
+          "name": "SelectedWattIndex",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the index into the list of SupportedWatts of the currently selected power setting.\nThe index shall be a valid index into the SupportedWatts list."
+        },
+        {
+          "id": 8,
+          "name": "WattRating",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the rating, in Watts, of the microwave power of the oven.\nSupporting this attribute can assist clients in suggesting cooking settings for various foods and beverages."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SetCookingParameters",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CookMode",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the value to which the CurrentMode attribute of the Microwave Oven Mode cluster should be set. The value of this field shall be one from the list of SupportedModes from the Microwave Oven Mode cluster.\nIf this field is missing, the CurrentMode attribute shall be set to a mode having the Normal mode tag."
+            },
+            {
+              "id": 1,
+              "name": "CookTime",
+              "type": "elapsed-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the CookTime associated with the operation of the device. The value of this field shall be subject to the constraints of the CookTime attribute of this cluster.\nIf this field is missing, the CookTime attribute shall be set to 30 seconds by the server."
+            },
+            {
+              "id": 2,
+              "name": "PowerSetting",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the PowerSetting associated with the operation of the device. The value of this field shall be subject to the constraints of the PowerSetting attribute of this cluster. If the PowerSetting field does not conform to the constraints of the PowerSetting attribute, the server shall return a CONSTRAINT_ERROR status.\nIf this field is missing, the PowerSetting attribute shall be set to 100 if MaxPower is not supported by the server, otherwise it shall be set to MaxPower if the MaxPower attribute is supported by the server."
+            },
+            {
+              "id": 3,
+              "name": "WattSettingIndex",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the value to which the SelectedWattIndex attribute is set. If the value of this field is greater than or equal to the length of the SupportedWatts attribute list, the server shall return a CONSTRAINT_ERROR status and the value of the SelectedWattIndex attribute shall be unchanged.\nIf this field is missing, the SelectedWattIndex attribute shall be set by the server to the index associated with the highest Watt setting for the selected CookMode."
+            },
+            {
+              "id": 4,
+              "name": "StartAfterSetting",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate whether or not oven operation shall be started when the command is received."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "AddMoreTime",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TimeToAdd",
+              "type": "elapsed-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the number of seconds to be added to the CookTime attribute."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": []
     },
     {
       "id": 96,

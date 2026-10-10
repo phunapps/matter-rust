@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 67] = [
+const TARGET_CLUSTERS: [&str; 71] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -99,6 +99,11 @@ const TARGET_CLUSTERS: [&str; 67] = [
     "OperationalState",
     "OvenCavityOperationalState",
     "RvcOperationalState",
+    // M9-A3 B3, appliance controls:
+    "TemperatureControl",
+    "LaundryWasherControls",
+    "LaundryDryerControls",
+    "MicrowaveOvenControl",
 ];
 
 fn load() -> Value {
@@ -858,4 +863,38 @@ fn operational_state_derived_clusters_carry_inherited_commands_fields_and_values
     assert!((0x40..=0x46).all(|x| states.contains(&x)), "{states:?}");
     let errors = enum_values(datatype(rvc, "ErrorStateEnum"));
     assert!((0x40..=0x4E).all(|x| errors.contains(&x)), "{errors:?}");
+}
+
+// ---- M9-A3 B3: appliance controls -----------------------------------------------
+
+#[test]
+fn appliance_control_commands_have_only_optional_fields_and_watts_are_kept() {
+    // SetTemperature's two fields are each gated on a feature (TN, TL), and
+    // every SetCookingParameters field is optional or feature-gated, so all of
+    // them are Option in the encoders. MicrowaveOvenControl's SupportedWatts
+    // and SelectedWattIndex ("P, WATTS" in 1.4.2 and the model) are kept:
+    // chip's controller-clusters.matter generates them (as provisional).
+    let v = load();
+    let all_optional = |cluster_name: &str, cmd: &str| {
+        let c = cluster(&v, cluster_name);
+        field_optionality(&command(c, cmd)["fields"])
+            .iter()
+            .all(|(_, optional)| *optional)
+    };
+    assert!(all_optional("TemperatureControl", "SetTemperature"));
+    assert!(all_optional("MicrowaveOvenControl", "SetCookingParameters"));
+    assert_eq!(
+        element_names(cluster(&v, "MicrowaveOvenControl"), "attributes"),
+        [
+            "CookTime",
+            "MaxCookTime",
+            "PowerSetting",
+            "MinPower",
+            "MaxPower",
+            "PowerStep",
+            "SupportedWatts",
+            "SelectedWattIndex",
+            "WattRating"
+        ]
+    );
 }

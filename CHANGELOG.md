@@ -155,6 +155,15 @@ payload struct (Switch already had its seven):
   `OperationalStateStruct::operational_state_label` are `Option`: 1.4 asks
   for a label only on manufacturer-specific ids, and chip's own errors carry
   none.
+- **TemperatureControl (0x0056), LaundryWasherControls (0x0053),
+  LaundryDryerControls (0x004A) and MicrowaveOvenControl (0x005F)**:
+  attribute decoders, writers for the writable laundry attributes, and
+  `encode_set_temperature`, `encode_set_cooking_parameters` and
+  `encode_add_more_time`, whose feature-gated or optional fields are each an
+  `Option` (left out of the command when `None`). `encode_set_temperature`
+  is pinned against a matter.js byte vector. MicrowaveOvenControl keeps the
+  provisional `SupportedWatts` / `SelectedWattIndex` attributes, as chip's
+  controller codegen does.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
