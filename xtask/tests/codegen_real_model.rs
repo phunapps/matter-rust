@@ -17,8 +17,8 @@ fn all_real_clusters_generate_and_format() {
         .expect("real model loads + validates");
     assert_eq!(
         model.clusters.len(),
-        81,
-        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect + 2 AlarmBase + 3 ResourceMonitoring + 3 A3-B3 OperationalState + 4 appliance-control + 1 ServiceArea + 2 A3-B4 safety-sensor + 1 valve + 1 ScenesManagement + 2 A3-B5 attribute-only energy clusters + 1 WaterHeaterManagement + 1 DeviceEnergyManagement + 1 EnergyEvse"
+        82,
+        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect + 2 AlarmBase + 3 ResourceMonitoring + 3 A3-B3 OperationalState + 4 appliance-control + 1 ServiceArea + 2 A3-B4 safety-sensor + 1 valve + 1 ScenesManagement + 2 A3-B5 attribute-only energy clusters + 1 WaterHeaterManagement + 1 DeviceEnergyManagement + 1 EnergyEvse + 1 Messages"
     );
     for c in &model.clusters {
         let src = xtask::codegen::rustgen::emit::generate_cluster(c);
@@ -37,7 +37,7 @@ fn all_real_clusters_generate_and_format() {
 /// reachable from a request command, or a scalar struct reachable from a
 /// writable attribute). A new entry is a new public encoder to review; a
 /// missing one is a breaking removal.
-const ENCODED_STRUCTS: [(&str, &str); 23] = [
+const ENCODED_STRUCTS: [(&str, &str); 24] = [
     ("AccessControl", "AccessControlExtensionStruct"),
     ("AccessControl", "AccessControlTargetStruct"),
     ("AccessControl", "AccessRestrictionStruct"),
@@ -52,6 +52,8 @@ const ENCODED_STRUCTS: [(&str, &str); 23] = [
     ("EnergyEvse", "ChargingTargetStruct"),
     ("GroupKeyManagement", "GroupKeyMapStruct"),
     ("GroupKeyManagement", "GroupKeySetStruct"),
+    // M9-A3 B5: PresentMessagesRequest's Responses.
+    ("Messages", "MessageResponseOptionStruct"),
     ("OtaSoftwareUpdateRequestor", "ProviderLocation"),
     // M9-A3 B4: AddScene's extension field sets.
     ("ScenesManagement", "AttributeValuePairStruct"),

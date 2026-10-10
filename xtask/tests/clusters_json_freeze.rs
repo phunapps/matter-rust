@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 81] = [
+const TARGET_CLUSTERS: [&str; 82] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -121,6 +121,8 @@ const TARGET_CLUSTERS: [&str; 81] = [
     "DeviceEnergyManagement",
     // M9-A3 B5, EnergyEvse:
     "EnergyEvse",
+    // M9-A3 B5, Messages:
+    "Messages",
 ];
 
 fn load() -> Value {
@@ -239,7 +241,7 @@ fn doorlock_aliro_surface_is_excluded_and_recorded() {
 /// for other fabrics' entries: `(cluster, struct, field)`. Each is
 /// `fabricSensitive`, `optional` (for decode) and `mandatoryOnWrite`. A model
 /// change that adds or drops one must be reviewed, so the set is pinned exactly.
-const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 14] = [
+const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 20] = [
     ("AccessControl", "AccessControlEntryStruct", "AuthMode"),
     ("AccessControl", "AccessControlEntryStruct", "Privilege"),
     ("AccessControl", "AccessControlEntryStruct", "Subjects"),
@@ -267,6 +269,14 @@ const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 14] = [
         "MonitoringRegistrationStruct",
         "MonitoredSubject",
     ),
+    // M9-A3 B5: born with the rule (Responses is optional in the model, so it
+    // is not relaxed).
+    ("Messages", "MessageStruct", "Duration"),
+    ("Messages", "MessageStruct", "MessageControl"),
+    ("Messages", "MessageStruct", "MessageId"),
+    ("Messages", "MessageStruct", "MessageText"),
+    ("Messages", "MessageStruct", "Priority"),
+    ("Messages", "MessageStruct", "StartTime"),
     // M9-A3 B4: born with the rule.
     ("ScenesManagement", "SceneInfoStruct", "CurrentGroup"),
     ("ScenesManagement", "SceneInfoStruct", "CurrentScene"),
@@ -411,7 +421,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 25] = [
+const EVENT_CLUSTERS: [&str; 26] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -447,6 +457,8 @@ const EVENT_CLUSTERS: [&str; 25] = [
     "DeviceEnergyManagement",
     // M9-A3 B5, EnergyEvse:
     "EnergyEvse",
+    // M9-A3 B5, Messages:
+    "Messages",
 ];
 
 #[test]
@@ -659,10 +671,12 @@ fn microwave_oven_mode_has_inherited_fields_and_no_commands() {
 #[test]
 fn every_relaxation_is_fabric_sensitive_widened_or_conditional() {
     // meta.relaxed holds exactly the §5.4 presence relaxations (class P), the
-    // §5.3 widenings (class W) and the §3.1 conditional-conformance
-    // relaxations (class C, decode-only: codegen's model.rs refuses one on a
-    // field we send). The one W today is ModeSelect StandardNamespace: model
-    // `namespace` is enum8, 1.4.2 is enum16.
+    // fields chip's servers leave out (class P, FIELD_RELAXATIONS: see
+    // `fields_chip_omits_are_optional_and_recorded`), the §5.3 widenings
+    // (class W) and the §3.1 conditional-conformance relaxations (class C,
+    // decode-only: codegen's model.rs refuses one on a field we send). The one
+    // W today is ModeSelect StandardNamespace: model `namespace` is enum8,
+    // 1.4.2 is enum16.
     let v = load();
     let relaxed = v["meta"]["relaxed"].as_array().unwrap();
     let widened: Vec<(&str, &str)> = relaxed
@@ -681,7 +695,8 @@ fn every_relaxation_is_fabric_sensitive_widened_or_conditional() {
             r["class"] == "W"
                 || r["class"] == "C"
                 || (r["class"] == "P"
-                    && r["reason"] == "fabric-sensitive (withheld for other fabrics)"),
+                    && (r["reason"] == "fabric-sensitive (withheld for other fabrics)"
+                        || r["reason"].as_str().unwrap().starts_with("chip does not "))),
             "unexpected relaxation {r}"
         );
     }
@@ -2038,5 +2053,88 @@ fn energy_evse_keeps_its_shapes() {
             "Fault",
             "Rfid"
         ]
+    );
+}
+
+// ---- M9-A3 B5: fields a real chip server leaves out (FIELD_RELAXATIONS) -----
+
+/// Fields the dump relaxed to optional because chip's servers leave them out
+/// although the model and the 1.4.2 XML make them mandatory (spec §5.1 step
+/// 3), as `(cluster, "<Struct|Event>.<Field>")`. Recorded in `meta.relaxed`
+/// with class P.
+const CHIP_OMITS_RELAXED: [(&str, &str); 4] = [
+    ("Messages", "MessageComplete.FabricIndex"),
+    ("Messages", "MessagePresented.FabricIndex"),
+    ("Messages", "MessageQueued.FabricIndex"),
+    ("Messages", "MessageStruct.FabricIndex"),
+];
+
+#[test]
+fn fields_chip_omits_are_optional_and_recorded() {
+    let v = load();
+    let relaxed = v["meta"]["relaxed"].as_array().unwrap();
+    let mut got: Vec<(&str, &str)> = relaxed
+        .iter()
+        .filter(|r| r["reason"].as_str().unwrap().starts_with("chip does not "))
+        .map(|r| {
+            assert_eq!(r["class"], "P");
+            (
+                r["cluster"].as_str().unwrap(),
+                r["element"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    got.sort_unstable();
+    assert_eq!(got, CHIP_OMITS_RELAXED);
+    let c = cluster(&v, "Messages");
+    let fabric_index = |fields: &Value| -> bool {
+        fields
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == 254)
+            .unwrap()["optional"]
+            .as_bool()
+            .unwrap()
+    };
+    assert!(fabric_index(&datatype(c, "MessageStruct")["fields"]));
+    for e in c["events"].as_array().unwrap() {
+        assert!(fabric_index(&e["fields"]), "{}", e["name"]);
+    }
+}
+
+#[test]
+fn messages_keeps_its_shapes() {
+    // 1.4.2 Messages.xml: both requests are answered with a status;
+    // CancelMessagesRequest takes a list<octstr>; PresentMessagesRequest's
+    // Responses is RESP-gated (optional). MessageStruct is decode-only: the
+    // Messages attribute is read-only and no request carries it.
+    let v = load();
+    let c = cluster(&v, "Messages");
+    let cancel = command(c, "CancelMessagesRequest");
+    assert!(cancel["responseId"].is_null());
+    assert_eq!(cancel["fields"][0]["name"], "MessageIDs");
+    assert_eq!(cancel["fields"][0]["entryType"], "octstr");
+    let present = command(c, "PresentMessagesRequest");
+    assert!(present["responseId"].is_null());
+    assert_eq!(
+        field_optionality(&present["fields"]),
+        [
+            ("MessageId", false),
+            ("Priority", false),
+            ("MessageControl", false),
+            ("StartTime", false),
+            ("Duration", false),
+            ("MessageText", false),
+            ("Responses", true)
+        ]
+    );
+    assert_eq!(
+        element_names(c, "events"),
+        ["MessageQueued", "MessagePresented", "MessageComplete"]
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "MessageResponseOptionStruct")["fields"]),
+        [("MessageResponseId", false), ("Label", false)]
     );
 }

@@ -382,3 +382,51 @@ fn review_fabric_restrictions_recursive_list_encodes() {
         cmd("access_control/cmd_review_fabric_restrictions.json")
     );
 }
+
+#[test]
+fn cancel_messages_request_encodes_a_byte_string_list() {
+    // M9-A3 B5: CancelMessagesRequest.MessageIDs is a list<octstr>, the first
+    // request list whose elements are byte strings (spec §10), against
+    // matter.js's own TlvCancelMessagesRequest.
+    let a: Vec<u8> = (0x00..0x10).collect();
+    let b: Vec<u8> = (0xf0..=0xff).collect();
+    assert_eq!(
+        clusters::messages::encode_cancel_messages_request(&vec![a, b]),
+        cmd("messages/cmd_cancel_messages_request.json")
+    );
+}
+
+#[test]
+fn present_messages_request_encodes_an_optional_list() {
+    // M9-A3 B5: Responses is the first optional request list (here present,
+    // two structs), next to a 16-byte octstr, a map16 bitmap value that fits
+    // in one byte, a null epoch-s and a nullable uint64 with a value, against
+    // matter.js's own TlvPresentMessagesRequest.
+    use clusters::messages::{
+        encode_present_messages_request, MessageControlBitmap, MessagePriorityEnum,
+        MessageResponseOptionStruct,
+    };
+    let id: Vec<u8> = (0x00..0x10).collect();
+    let responses = vec![
+        MessageResponseOptionStruct {
+            message_response_id: 1,
+            label: "Coming".to_string(),
+        },
+        MessageResponseOptionStruct {
+            message_response_id: 2,
+            label: "Later".to_string(),
+        },
+    ];
+    assert_eq!(
+        encode_present_messages_request(
+            &id,
+            MessagePriorityEnum::High,
+            MessageControlBitmap::CONFIRMATION_REQUIRED | MessageControlBitmap::RESPONSE_REQUIRED,
+            Nullable::Null,
+            Nullable::Value(60_000),
+            &"Dinner is ready".to_string(),
+            Some(responses),
+        ),
+        cmd("messages/cmd_present_messages_request.json")
+    );
+}

@@ -54,6 +54,7 @@
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
       "WaterHeaterManagement",
+      "Messages",
       "DeviceEnergyManagement",
       "EnergyEvse",
       "EnergyPreference",
@@ -676,6 +677,66 @@
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
         "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageComplete.FabricIndex",
+        "class": "P",
+        "reason": "chip does not fabric-scope it (zap messages-cluster.xml \"TODO: enable isFabricScoped\"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessagePresented.FabricIndex",
+        "class": "P",
+        "reason": "chip does not fabric-scope it (zap messages-cluster.xml \"TODO: enable isFabricScoped\"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageQueued.FabricIndex",
+        "class": "P",
+        "reason": "chip does not fabric-scope it (zap messages-cluster.xml \"TODO: enable isFabricScoped\"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.Duration",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.FabricIndex",
+        "class": "P",
+        "reason": "chip does not fabric-scope it (zap messages-cluster.xml \"TODO: enable isFabricScoped\"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.MessageControl",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.MessageId",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.MessageText",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.Priority",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "Messages",
+        "element": "MessageStruct.StartTime",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
       },
       {
         "cluster": "ModeSelect",
@@ -16648,6 +16709,479 @@
             {
               "bit": 4,
               "name": "Other",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 151,
+      "name": "Messages",
+      "revision": 3,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CONF",
+          "name": "ReceivedConfirmation",
+          "description": "This feature shall indicate that the device can get confirmation from a user that the message was received."
+        },
+        {
+          "bit": 1,
+          "code": "RESP",
+          "name": "ConfirmationResponse",
+          "description": "This feature shall indicate that the device is capable of presenting a list of responses to the user and recording the user's choice of response."
+        },
+        {
+          "bit": 2,
+          "code": "RPLY",
+          "name": "ConfirmationReply",
+          "description": "This feature shall indicate that the device is capable of collecting a free-form text response to a message."
+        },
+        {
+          "bit": 3,
+          "code": "PROT",
+          "name": "ProtectedMessages",
+          "description": "This feature shall indicate that the device is capable of requiring the user to authenticate before viewing a message; e.g. entering a PIN or password before viewing a message with billing information."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Messages",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "MessageStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a list of queued messages.\nIn addition to filtering based upon fabric, to preserve user privacy, the server may further limit the set of messages returned in a read request. At minimum, the server shall return to a client those messages that the client itself created/submitted."
+        },
+        {
+          "id": 1,
+          "name": "ActiveMessageIDs",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "octstr",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a list of the MessageIDs of the Messages currently being presented. If this list is empty, no messages are currently being presented.\nThis list shall NOT be fabric-scoped; it shall contain MessageIDs for all Messages being presented, no matter what fabric the client that queued them is on."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "PresentMessagesRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a globally unique ID for this message. See MessageID."
+            },
+            {
+              "id": 1,
+              "name": "Priority",
+              "type": "MessagePriorityEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the priority level for this message. See Priority."
+            },
+            {
+              "id": 2,
+              "name": "MessageControl",
+              "type": "MessageControlBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate control information related to the message. See MessageControl."
+            },
+            {
+              "id": 3,
+              "name": "StartTime",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the time in UTC at which the message becomes available to be presented. A null value shall indicate \"now.\" See StartTime."
+            },
+            {
+              "id": 4,
+              "name": "Duration",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the amount of time, in milliseconds, after the StartTime during which the message is available to be presented. A null value shall indicate \"until changed\". See Duration."
+            },
+            {
+              "id": 5,
+              "name": "MessageText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a string containing the message to be presented. See MessageText."
+            },
+            {
+              "id": 6,
+              "name": "Responses",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "MessageResponseOptionStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate a list of potential responses to the message. The entries in this list shall have unique values of MessageResponseID.\nIf the ResponseRequired bit is set on the message but this list is empty, the device shall provide a generic acknowledgement button, e.g. \"OK\".\nIf the ResponseRequired bit is not set on the message, this list shall be ignored.\nSee Responses."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "CancelMessagesRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageIDs",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "octstr",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the MessageIDs for the messages being cancelled.\nCancelling a message shall cause it to be removed from Messages, cause its MessageID to be removed from ActiveMessageIDs and cause any active presentation of the message to cease.\nMessage IDs in this command that indicate messages that do not exist in Messages, or that are not scoped to the fabric of the sender, shall be ignored."
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "MessageQueued",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the MessageID for newly added message."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "MessagePresented",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the MessageID for the message being presented."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "MessageComplete",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the MessageID for the message being confirmed."
+            },
+            {
+              "id": 1,
+              "name": "ResponseId",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the MessageResponseID selected by the user. If there was no response before the Duration field of the message has elapsed, this field shall be null."
+            },
+            {
+              "id": 2,
+              "name": "Reply",
+              "type": "string",
+              "metatype": "string",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate a user-provided reply to the message. If there was no reply, or the message did not have the ReplyRequired bit set, this field shall be null."
+            },
+            {
+              "id": 3,
+              "name": "FutureMessagesPreference",
+              "type": "FutureMessagePreferenceEnum",
+              "metatype": "enum",
+              "nullable": true,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "FutureMessagePreferenceEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "A display device may include this preference in the MessageComplete event as a hint to clients about how to handle future similar messages.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Allowed",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Increased",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Reduced",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Disallowed",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Banned",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MessageControlBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": "This data type is derived from map16, and indicates control information related to a message.",
+          "bits": [
+            {
+              "bit": 0,
+              "name": "ConfirmationRequired",
+              "description": "This bit shall indicate that the message originator requests a confirmation of receipt by the user. If confirmation is required, the device SHOULD present the message until it is either confirmed by the user selecting a confirmation option, or the message expires."
+            },
+            {
+              "bit": 1,
+              "name": "ResponseRequired",
+              "description": "This bit shall indicate that a MessagePresented event SHOULD be generated based on the response of the user to the message."
+            },
+            {
+              "bit": 2,
+              "name": "ReplyMessage",
+              "description": "This bit shall indicate that a free-form user reply is to be included in the confirmation of receipt."
+            },
+            {
+              "bit": 3,
+              "name": "MessageConfirmed",
+              "description": "This bit shall indicate the current confirmation state of a message, which is useful in the event that there are multiple Messages cluster client devices on a network."
+            },
+            {
+              "bit": 4,
+              "name": "MessageProtected",
+              "description": "This bit shall indicate that user authentication (e.g. by password or PIN) is required before viewing a message."
+            }
+          ]
+        },
+        {
+          "name": "MessageID",
+          "base": "octstr",
+          "kind": "scalar",
+          "description": "This data type is an octstr of fixed length 16, containing the binary encoding of a UUID as specified in RFC 4122."
+        },
+        {
+          "name": "MessagePriorityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "Priority SHOULD be used to decide which messages to show when the number of eligible messages is larger than the device's capacity to present them.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Low",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Medium",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Critical",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "MessageResponseOptionStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This represents a possible response to a message.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageResponseId",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a unique unsigned 32-bit number identifier for this message response option."
+            },
+            {
+              "id": 1,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the text for this option; e.g. \"Yes\", \"No\", etc."
+            }
+          ]
+        },
+        {
+          "name": "MessageStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This represents a single message.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MessageId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate a globally unique ID for this message.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 1,
+              "name": "Priority",
+              "type": "MessagePriorityEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the priority level for this message.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 2,
+              "name": "MessageControl",
+              "type": "MessageControlBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate control information related to the message.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 3,
+              "name": "StartTime",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the time in UTC at which the message becomes available to be presented. A null value shall indicate \"now.\"",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 4,
+              "name": "Duration",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the amount of time, in milliseconds, after the StartTime during which the message is available to be presented. A null value shall indicate \"until changed\".",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 5,
+              "name": "MessageText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate a string containing the message to be presented.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 6,
+              "name": "Responses",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "MessageResponseOptionStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate a list of potential responses to the message. The entries in this list shall have unique values of MessageResponseID.\nIf the ResponseRequired bit is set on the message but this list is empty, the device shall provide a generic acknowledgement button, e.g. \"OK\".\nIf the ResponseRequired bit is not set on the message, this list shall be ignored.",
+              "fabricSensitive": true
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
               "description": null
             }
           ]

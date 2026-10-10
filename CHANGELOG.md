@@ -378,6 +378,14 @@ The codegen now generates only what a client can use:
   retries it as a timed interaction when the device asks. Each
   `ChargingTargetStruct` should carry at least one of `target_so_c` and
   `added_energy` (its rustdoc says so; the encoder does not check it).
+- **Messages (0x0097)**, with its three events: `Messages`,
+  `ActiveMessageIDs`, `encode_present_messages_request` and
+  `encode_cancel_messages_request`, both pinned against matter.js byte
+  vectors. `Messages` is fabric-scoped: another fabric's entry arrives
+  without its fabric-sensitive fields, so `MessageStruct`'s fields are
+  `Option` (`None` = withheld). Its `fabric_index`, and the events'
+  `fabric_index`, are `Option` too: chip does not fabric-scope them and its
+  servers send them without FabricIndex.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

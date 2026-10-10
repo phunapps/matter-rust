@@ -43,6 +43,10 @@ import { ValveConfigurationAndControl } from '@matter/types/clusters/valve-confi
 // fields.
 import { ScenesManagement } from '@matter/types/clusters/scenes-management';
 
+// matter.js's own Messages request schemas (M9-A3 B5): the first request list
+// of byte strings, and the first optional request list.
+import { Messages } from '@matter/types/clusters/messages';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -390,6 +394,55 @@ cmd('scenes_management', 'cmd_add_scene.json',
       { clusterId: 0x0006, attributeValueList: [{ attributeId: 0x0000, valueUnsigned8: 1 }] },
       { clusterId: 0x0008, attributeValueList: [{ attributeId: 0x0000, valueUnsigned8: 128 }] },
       { clusterId: 0x0201, attributeValueList: [{ attributeId: 0x0012, valueSigned16: -250 }] },
+    ],
+  }));
+
+// ---------------------------------------------------------------------------
+// Messages (0x0097) — M9-A3 B5. CancelMessagesRequest (0x01): MessageIDs is a
+// list<octstr> (16-byte ids), the first request list whose elements are byte
+// strings. PresentMessagesRequest (0x00): a 16-byte octstr, a 16-bit bitmap
+// value that fits in one byte, a null epoch-s, a nullable uint64 with a value,
+// and Responses, the first optional request list (of structs). Encoded with
+// matter.js's own TlvCancelMessagesRequest / TlvPresentMessagesRequest;
+// @matter/types 0.16.11 and the 0.17.1 model agree on every field.
+// ---------------------------------------------------------------------------
+
+const MESSAGE_ID_A = Uint8Array.from({ length: 16 }, (_, i) => i);
+const MESSAGE_ID_B = Uint8Array.from({ length: 16 }, (_, i) => 0xf0 + i);
+
+cmd('messages', 'cmd_cancel_messages_request.json',
+  { cluster: 'Messages', cluster_id: 0x97, command: 'CancelMessagesRequest', command_id: 0x01,
+    fields: [
+      { name: 'MessageIDs', id: 0, value: ['000102030405060708090a0b0c0d0e0f', 'f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'] },
+    ],
+    note: 'a request list of two 16-byte octstr message ids (encoded with matter.js TlvCancelMessagesRequest)' },
+  Messages.TlvCancelMessagesRequest.encode({ messageIDs: [MESSAGE_ID_A, MESSAGE_ID_B] }));
+
+cmd('messages', 'cmd_present_messages_request.json',
+  { cluster: 'Messages', cluster_id: 0x97, command: 'PresentMessagesRequest', command_id: 0x00,
+    fields: [
+      { name: 'MessageId', id: 0, value: '000102030405060708090a0b0c0d0e0f' },
+      { name: 'Priority', id: 1, value: 2 },
+      { name: 'MessageControl', id: 2, value: 3 },
+      { name: 'StartTime', id: 3, value: null },
+      { name: 'Duration', id: 4, value: 60000 },
+      { name: 'MessageText', id: 5, value: 'Dinner is ready' },
+      { name: 'Responses', id: 6, value: [
+        { MessageResponseId: 1, Label: 'Coming' },
+        { MessageResponseId: 2, Label: 'Later' },
+      ] },
+    ],
+    note: 'High priority, confirmation and response required, start now (null), 60 s, two responses: the first optional request list (encoded with matter.js TlvPresentMessagesRequest)' },
+  Messages.TlvPresentMessagesRequest.encode({
+    messageId: MESSAGE_ID_A,
+    priority: Messages.MessagePriority.High,
+    messageControl: { confirmationRequired: true, responseRequired: true },
+    startTime: null,
+    duration: 60000,
+    messageText: 'Dinner is ready',
+    responses: [
+      { messageResponseId: 1, label: 'Coming' },
+      { messageResponseId: 2, label: 'Later' },
     ],
   }));
 

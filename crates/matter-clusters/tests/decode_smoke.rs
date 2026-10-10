@@ -4255,3 +4255,162 @@ fn energy_evse_events_decode() {
         [0x00, 0x01, 0x02, 0x03, 0x04, 0x05]
     );
 }
+
+// ---- M9-A3 B5: Messages -----------------------------------------------------
+//
+// 1.4.2 Messages.xml makes the Messages attribute fabric-scoped: on our
+// unfiltered read, another fabric's entry carries only FabricIndex (spec
+// §5.4). chip does not fabric-scope MessageStruct or the three events (zap
+// messages-cluster.xml "TODO: enable isFabricScoped"; no field 254 in its
+// generated types, v1.4.2.0 and master): tv-app sends every field of every
+// entry and no FabricIndex. All three shapes must decode.
+
+/// One `MessageStruct` entry's fields, as chip's tv-app encodes them: no `FabricIndex`.
+fn message_fields(w: &mut TlvWriter<'_>) {
+    w.put_bytes(Tag::Context(0), &[0x11; 16]).unwrap();
+    w.put_uint(Tag::Context(1), 3).unwrap(); // Critical
+    w.put_uint(Tag::Context(2), 0x03).unwrap();
+    w.put_null(Tag::Context(3)).unwrap();
+    w.put_uint(Tag::Context(4), 60_000).unwrap();
+    w.put_utf8(Tag::Context(5), "Storm warning").unwrap();
+    w.start_array(Tag::Context(6)).unwrap();
+    w.start_structure(Tag::Anonymous).unwrap();
+    w.put_uint(Tag::Context(0), 1).unwrap();
+    w.put_utf8(Tag::Context(1), "OK").unwrap();
+    w.end_container().unwrap();
+    w.end_container().unwrap();
+}
+
+#[test]
+fn messages_list_decodes_chip_and_spec_shapes() {
+    use clusters::messages::{decode_messages, MessageControlBitmap, MessagePriorityEnum};
+    let list = decode_messages(&list_of(&[
+        // chip's tv-app: every field, no FabricIndex.
+        &message_fields,
+        // The spec's shape for our own fabric: every field plus FabricIndex.
+        &|w| {
+            message_fields(w);
+            w.put_uint(Tag::Context(254), 1).unwrap();
+        },
+        // The spec's shape for another fabric: FabricIndex only.
+        &|w| w.put_uint(Tag::Context(254), 2).unwrap(),
+    ]))
+    .unwrap();
+    assert_eq!(list.len(), 3);
+    let chip = &list[0];
+    assert_eq!(chip.message_id.as_deref(), Some(&[0x11; 16][..]));
+    assert_eq!(chip.priority, Some(MessagePriorityEnum::Critical));
+    assert_eq!(
+        chip.message_control,
+        Some(MessageControlBitmap::CONFIRMATION_REQUIRED | MessageControlBitmap::RESPONSE_REQUIRED)
+    );
+    assert_eq!(
+        (chip.start_time, chip.duration),
+        (Some(Nullable::Null), Some(Nullable::Value(60_000)))
+    );
+    assert_eq!(chip.message_text.as_deref(), Some("Storm warning"));
+    let responses = chip.responses.as_ref().unwrap();
+    assert_eq!(
+        (
+            responses[0].message_response_id,
+            responses[0].label.as_str()
+        ),
+        (1, "OK")
+    );
+    assert_eq!(chip.fabric_index, None);
+    assert_eq!(list[1].fabric_index, Some(1));
+    assert_eq!(list[1].message_text, chip.message_text);
+    let other = &list[2];
+    assert_eq!(other.fabric_index, Some(2));
+    assert_eq!(
+        (
+            &other.message_id,
+            other.priority,
+            other.message_control,
+            other.start_time,
+            other.duration,
+            &other.message_text,
+            &other.responses
+        ),
+        (&None, None, None, None, None, &None, &None)
+    );
+}
+
+#[test]
+fn messages_ids_and_events_decode() {
+    use clusters::messages::{
+        decode_active_message_i_ds, event_id, FutureMessagePreferenceEnum, MessageCompleteEvent,
+        MessagePresentedEvent, MessageQueuedEvent,
+    };
+    let ids = {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        w.put_bytes(Tag::Anonymous, &[0x11; 16]).unwrap();
+        w.put_bytes(Tag::Anonymous, &[0x22; 16]).unwrap();
+        w.end_container().unwrap();
+        buf
+    };
+    assert_eq!(
+        decode_active_message_i_ds(&ids).unwrap(),
+        [vec![0x11; 16], vec![0x22; 16]]
+    );
+    // With FabricIndex (the spec) and without it (chip's generated events).
+    let queued = MessageQueuedEvent::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &[0x11; 16]).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (queued.message_id, queued.fabric_index),
+        (vec![0x11; 16], Some(1))
+    );
+    let presented = MessagePresentedEvent::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &[0x11; 16]).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(presented.fabric_index, None);
+    // Without RESP / RPLY, ResponseId and Reply are left out; the
+    // preference is mandatory but nullable.
+    let complete = MessageCompleteEvent::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &[0x11; 16]).unwrap();
+        w.put_null(Tag::Context(3)).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            complete.response_id,
+            complete.reply,
+            complete.future_messages_preference
+        ),
+        (None, None, Nullable::Null)
+    );
+    let complete = MessageCompleteEvent::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &[0x11; 16]).unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+        w.put_utf8(Tag::Context(2), "On my way").unwrap();
+        w.put_uint(Tag::Context(3), 2).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            complete.response_id,
+            complete.reply.clone(),
+            complete.future_messages_preference
+        ),
+        (
+            Some(Nullable::Value(1)),
+            Some(Nullable::Value("On my way".to_string())),
+            Nullable::Value(FutureMessagePreferenceEnum::Reduced)
+        )
+    );
+    assert_eq!(
+        [
+            event_id::MESSAGE_QUEUED,
+            event_id::MESSAGE_PRESENTED,
+            event_id::MESSAGE_COMPLETE
+        ],
+        [0x00, 0x01, 0x02]
+    );
+}

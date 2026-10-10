@@ -41,6 +41,7 @@ pub mod laundry_dryer_controls;
 pub mod laundry_washer_controls;
 pub mod laundry_washer_mode;
 pub mod level_control;
+pub mod messages;
 pub mod microwave_oven_control;
 pub mod microwave_oven_mode;
 pub mod mode_select;

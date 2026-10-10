@@ -210,6 +210,10 @@ const ALLOWLIST = [
   // carry a list of schedules, each a list of targets whose TargetSoC and
   // AddedEnergy form an at-least-one choice group):
   { id: 0x0099, name: 'EnergyEvse' },
+  // M9-A3 B5, Messages (the fabric-scoped Messages list, spec §5.4;
+  // CancelMessagesRequest's list<octstr>; FIELD_RELAXATIONS for chip's
+  // FabricIndex-less MessageStruct and events):
+  { id: 0x0097, name: 'Messages' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -258,6 +262,8 @@ const EVENT_ALLOWLIST = new Set([
   'DeviceEnergyManagement',
   // M9-A3 B5, EnergyEvse (six events; Rfid carries the tag's UID):
   'EnergyEvse',
+  // M9-A3 B5, Messages (MessageQueued, MessagePresented, MessageComplete):
+  'Messages',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's
@@ -318,6 +324,32 @@ const TYPE_WIDENINGS = new Map([
   ],
 ]);
 const appliedWidenings = new Set();
+
+// M9-A3 spec §5.1 step 3: a datatype struct or event field that a real 1.4
+// server leaves out although the model (and the 1.4.2 XML) makes it
+// mandatory. Each is dumped optional and recorded in meta.relaxed with class
+// P and its reason. Keys use the checker's spelling,
+// `<Cluster>.<Struct|Event>.<Field>`. The dump fails when a key whose cluster
+// is allowlisted matches no field, when the field is already optional (the
+// model changed: review the entry), or when the field is one we send (a
+// request field, or a field of a struct the emitter encodes): relaxing it
+// would let an encoder omit a mandatory field.
+//
+// Messages: chip does not fabric-scope MessageStruct or the three Messages
+// events (zap messages-cluster.xml: "TODO: enable isFabricScoped"; the
+// generated Structs.h / Events.h have kIsFabricScoped = false and no
+// FabricIndex field, at v1.4.2.0 and master), so a chip-SDK server, tv-app
+// included, sends them without field 254. matter.js keeps FabricIndex
+// mandatory (docs/matter-js-comparison.md).
+const MESSAGES_FABRIC_INDEX_REASON =
+  'chip does not fabric-scope it (zap messages-cluster.xml "TODO: enable isFabricScoped"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex';
+const FIELD_RELAXATIONS = new Map([
+  ['Messages.MessageStruct.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
+  ['Messages.MessageQueued.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
+  ['Messages.MessagePresented.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
+  ['Messages.MessageComplete.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
+]);
+const appliedFieldRelaxations = new Set();
 
 function fail(msg) {
   throw new Error(`dump-model: ${msg}`);
@@ -712,6 +744,10 @@ for (const [text, want] of [
 // `owner` naming the struct).
 let _conditional = [];
 
+// Every FIELD_RELAXATIONS entry applied in the cluster being dumped, checked
+// (not on an encoded struct) and recorded by checkConditionalRelaxations.
+let _fieldRelaxed = [];
+
 function dumpField(f, where, ctx) {
   requireIdNameType(f, where);
   const dependency = presenceDependency(f, ctx.siblings);
@@ -728,7 +764,7 @@ function dumpField(f, where, ctx) {
       conformance: `${f.effectiveConformance}`,
     });
   }
-  return addNotes(
+  const out = addNotes(
     {
       id: f.id,
       name: f.name,
@@ -743,6 +779,17 @@ function dumpField(f, where, ctx) {
     f,
     { choice: true },
   );
+  const cluster = where.split('.')[0];
+  const relaxKey = `${cluster}.${ctx.element}.${f.name}`;
+  const reason = FIELD_RELAXATIONS.get(relaxKey);
+  if (reason) {
+    if (ctx.role === 'request') fail(`FIELD_RELAXATIONS ${relaxKey} is a request field — we send it, so it cannot be relaxed`);
+    if (out.optional) fail(`FIELD_RELAXATIONS ${relaxKey} is already optional — model drift; review the entry`);
+    out.optional = true;
+    appliedFieldRelaxations.add(relaxKey);
+    _fieldRelaxed.push({ element: `${ctx.element}.${f.name}`, role: ctx.role, owner: ctx.element, reason });
+  }
+  return out;
 }
 
 // The names of `members` other than `self`: the fields a conformance may refer
@@ -1081,6 +1128,7 @@ function dumpCluster(entry) {
   // Collect synthesized anonymous-struct datatypes for this cluster.
   _synthSink = [];
   _conditional = [];
+  _fieldRelaxed = [];
   _synthOwner = cluster.name;
 
   const featureNames = new Set(cluster.features.map((f) => f.name));
@@ -1391,6 +1439,12 @@ function checkConditionalRelaxations(clusterName, attributes, commands, datatype
       );
     }
     recordRelaxation(clusterName, r.element, 'C', `conditional conformance "${r.conformance}" (spec §3.1: only an unconditional M is mandatory)`);
+  }
+  for (const r of _fieldRelaxed) {
+    if (r.role === 'struct' && encoded.has(r.owner)) {
+      fail(`FIELD_RELAXATIONS ${clusterName}.${r.element}: ${r.owner} is encoded, so relaxing it would let its encoder omit a mandatory field`);
+    }
+    recordRelaxation(clusterName, r.element, 'P', r.reason);
   }
 }
 
@@ -1866,6 +1920,12 @@ for (const key of KEEP_DATATYPES.keys()) {
   if (!appliedKeeps.has(key)) fail(`KEEP_DATATYPES ${key} matched no datatype — model drift; review KEEP_DATATYPES`);
 }
 checkNoRecordNamesAPrunedDatatype();
+for (const key of FIELD_RELAXATIONS.keys()) {
+  const owner = key.split('.')[0];
+  if (ALLOWLIST.some((e) => e.name === owner) && !appliedFieldRelaxations.has(key)) {
+    fail(`FIELD_RELAXATIONS ${key} matched no field — model drift; review FIELD_RELAXATIONS`);
+  }
+}
 for (const key of TYPE_WIDENINGS.keys()) {
   const owner = key.split('.')[0];
   if (ALLOWLIST.some((e) => e.name === owner) && !appliedWidenings.has(key)) {

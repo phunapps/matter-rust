@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 81 clusters are generated today. The full list is [`clusters`]; by area:
+//! 82 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -49,6 +49,8 @@
 //!   change), `PowerTopology`, `WaterHeaterManagement`,
 //!   `DeviceEnergyManagement`, `EnergyEvse` (the last three with their
 //!   events).
+//! - **Messaging:** `Messages` (with its events; other fabrics' `Messages`
+//!   entries decode with their fabric-sensitive fields `None`).
 //! - **Appliance modes:** `ModeSelect`, `OvenMode`, `LaundryWasherMode`,
 //!   `RefrigeratorAndTemperatureControlledCabinetMode`, `RvcRunMode`,
 //!   `RvcCleanMode`, `DishwasherMode`, `MicrowaveOvenMode`, `EnergyEvseMode`,

@@ -85,6 +85,22 @@ These are language-idiomatic differences. They do not affect interop.
   matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
   with a withheld field rather than reading it as a wildcard.
 
+- **Messages: `MessageStruct` and the events have an optional
+  `fabric_index`** (`matter-clusters` 0.6.0, M9-A3 B5). The 1.4.2 XML makes
+  the `Messages` attribute fabric-scoped and the three events
+  fabric-sensitive, so both carry FabricIndex (field 254), and matter.js
+  `@matter/types` 0.16.11 declares it mandatory
+  (`fabricIndex: TlvField(254, TlvFabricIndex)`, `clusters/messages.js`).
+  chip does not fabric-scope them: its zap `messages-cluster.xml` says "TODO:
+  enable isFabricScoped", and its generated `MessageStruct` and event types
+  have `kIsFabricScoped = false` and no field 254, at v1.4.2.0 and master. So
+  chip's tv-app sends every entry in full, to every fabric, without
+  FabricIndex. We decode FabricIndex as `Option` (the dump's
+  `FIELD_RELAXATIONS`, `meta.relaxed` class P). `MessageStruct`'s six
+  mandatory fabric-sensitive fields are `Option` as well (the rule above);
+  it is decode-only, since the attribute is read-only and no request
+  carries it.
+
 - **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
   0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and
   matter.js `@matter/types` 0.16.11 declares it mandatory
