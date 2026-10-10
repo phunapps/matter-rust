@@ -116,6 +116,19 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             linux_platform_mdns: false,
             events: EventStimulus::TestEventTriggers,
         },
+        // M9-A3 B2: RvcRunMode / RvcCleanMode (B3 adds RvcOperationalState and
+        // ServiceArea, whose events need the app pipe rvc-app reads).
+        "rvc" => AppSpec {
+            name: "rvc",
+            target_suffix: "rvc",
+            binary: "chip-rvc-app",
+            fixed_qr: None,
+            test_filter: Some("clusters_rvc"),
+            extra_args: &[],
+            needs_ota_image: false,
+            linux_platform_mdns: false,
+            events: EventStimulus::None,
+        },
         "icd" => AppSpec {
             name: "icd",
             target_suffix: "lit-icd",
@@ -159,7 +172,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
         other => {
             return Err(format!(
                 "unknown integration app '{other}' \
-                 (expected: all-clusters, lock, evse, icd, ota)"
+                 (expected: all-clusters, lock, evse, icd, ota, rvc)"
             ))
         }
     })
@@ -765,6 +778,26 @@ mod tests {
         let args = launch_args(&spec, Some(Path::new("/x/app-pipe")));
         assert_eq!(args[args.len() - 2..], ["--app-pipe", "/x/app-pipe"]);
         assert!(!launch_args(&spec, None).contains(&"--app-pipe".to_string()));
+    }
+
+    #[test]
+    fn rvc_host_runs_only_its_own_suite_with_plain_arguments() {
+        // `build_examples.py --target darwin-arm64-rvc` (linux-x64-rvc on
+        // Linux) builds out/<target>-rvc/chip-rvc-app.
+        let spec = app_spec(Some("rvc")).unwrap();
+        assert_eq!(
+            (spec.name, spec.target_suffix, spec.binary),
+            ("rvc", "rvc", "chip-rvc-app")
+        );
+        assert_eq!(spec.test_filter, Some("clusters_rvc"));
+        assert_eq!(spec.fixed_qr, None);
+        assert_eq!(launch_args(&spec, None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn unknown_app_names_the_rvc_host_among_the_choices() {
+        let err = app_spec(Some("nope")).err().unwrap();
+        assert!(err.contains("rvc"), "{err}");
     }
 
     #[test]

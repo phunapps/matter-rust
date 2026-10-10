@@ -182,3 +182,9 @@ integration-icd:
 # Build + launch ota-requestor-app and run the OTA provider end-to-end test.
 integration-ota:
     cargo run -p xtask -- integration ota
+
+# Build + launch rvc-app and run the RVC integration tests (local only; not in
+# the nightly workflow). On Apple Silicon the build needs Rosetta 2: chip's
+# ZAP code generator ships only as an x86_64 binary for macOS.
+integration-rvc:
+    cargo run -p xtask -- integration rvc

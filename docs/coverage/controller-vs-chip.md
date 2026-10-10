@@ -127,6 +127,7 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | HepaFilterMonitoring, ActivatedCarbonFilterMonitoring (attributes + ResetCondition) | `clusters_modes_alarms::filter_monitoring_clusters_decode_and_reset_condition` | ✓-live |
 | WaterTankLevelMonitoring | — no connectedhomeip example app serves it (decode smoke + `chip-xml-conformance.py` only) | unit only |
 | EnergyEvseMode, DeviceEnergyManagementMode (attributes + ChangeToMode, on evse-app) | `clusters_electrical::energy_mode_clusters_decode_and_change_to_current_mode` | ✓-live, **local only** (`just integration-energy`) |
+| RvcRunMode, RvcCleanMode on rvc-app (attributes + ChangeToMode; a refused run-mode or clean-mode change carries StatusText) | `clusters_rvc::rvc_mode_clusters_decode_and_change_to_current_mode`, `clusters_rvc::refused_run_mode_change_decodes_its_status_text` | compiled; **not run** — pending: requires Rosetta 2 to build rvc-app on Apple Silicon; run `just integration-rvc` once built (local only) |
 
 ### Groups, ACL & access enforcement
 
