@@ -30,7 +30,7 @@ pub mod command_id {
     /// `SetPoint` (request).
     pub const SET_POINT: u32 = 0x03;
     /// `Pick` (request).
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
     pub const PICK: u32 = 0x04;
 }
 
@@ -61,7 +61,7 @@ pub mod attribute_id {
     /// `Scoped`.
     pub const SCOPED: u32 = 0x000B;
     /// `Draft`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
     pub const DRAFT: u32 = 0x000C;
 }
 
@@ -72,7 +72,7 @@ pub mod event_id {
     /// `LevelChanged` (info priority).
     pub const LEVEL_CHANGED: u32 = 0x01;
     /// `Drafted` (info priority).
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
     pub const DRAFTED: u32 = 0x02;
 }
 
@@ -83,7 +83,7 @@ bitflags::bitflags! {
         /// FeatureA (FA).
         const FA = 1 << 0;
         /// FeatureB (FB).
-        /// Provisional in the Matter specification: a later revision may change or remove it.
+        /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
         const FB = 1 << 1;
     }
 }
@@ -146,7 +146,7 @@ bitflags::bitflags! {
 ///
 /// Generated from the Matter global type `pickdesc`.
 ///
-/// Choice group `a`: a sender includes at least one of `small`, `large`. Not checked when encoding.
+/// Choice group `a`: a sender includes at least one of `small`, `large`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PickStruct {
@@ -155,7 +155,7 @@ pub struct PickStruct {
     /// Field Large (tag 1).
     pub large: Option<u16>,
     /// Field Draft (tag 2).
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
     pub draft: Option<u8>,
 }
 
@@ -752,7 +752,7 @@ pub fn decode_scoped(tlv: &[u8]) -> Result<Vec<ScopedEntryStruct>, ClusterError>
 
 /// Decode the `Draft` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -769,7 +769,7 @@ pub fn decode_draft(tlv: &[u8]) -> Result<u8, ClusterError> {
 
 /// Encode the `Draft` attribute value as a standalone TLV element.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_draft(value: u8) -> Vec<u8> {
@@ -895,9 +895,9 @@ pub fn encode_set_point(point: PointStruct) -> Vec<u8> {
 
 /// Encode the `Pick` command request payload.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
 ///
-/// Choice group `a`: a sender includes exactly one of `small`, `large`. Not checked when encoding.
+/// Choice group `a`: a sender includes exactly one of `small`, `large`. Neither encoding nor decoding checks it.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_pick(small: Option<u8>, large: Option<u16>) -> Vec<u8> {
@@ -990,7 +990,7 @@ impl LevelChangedEvent {
 #[non_exhaustive]
 pub struct DraftedEvent {
     /// Field Value (tag 0).
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
     pub value: u8,
 }
 

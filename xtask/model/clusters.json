@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 5,
+    "dumpScriptVersion": 6,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -760,7 +760,7 @@
       {
         "cluster": "Thermostat",
         "element": "Feature.SCH",
-        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH); removed in Thermostat revision 10 (1.5); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH, `[Zigbee], D`: deprecated in 1.4.2); removed in Thermostat revision 10 (Matter 1.5.1; data_model/1.5.1/clusters/Thermostat.xml:71); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
       },
       {
         "cluster": "WindowCovering",
@@ -815,7 +815,7 @@
       {
         "cluster": "WindowCovering",
         "element": "Feature.ABS",
-        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:85 (feature bit 3 ABS, provisional in 1.4.2); removed in 1.5.1; controller-clusters.matter keeps kAbsolutePosition = 0x8"
+        "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:85 (feature bit 3 ABS, provisional in 1.4.2); removed in WindowCovering revision 7 (Matter 1.5; data_model/1.5/clusters/WindowCovering.xml:68); controller-clusters.matter keeps kAbsolutePosition = 0x8"
       }
     ]
   },
@@ -19605,7 +19605,14 @@
           "code": "ABS",
           "name": "AbsolutePosition",
           "description": "Absolute positioning is supported.",
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, O"
+          }
         },
         {
           "bit": 4,
@@ -19634,7 +19641,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, [LF & PA_LF & ABS]"
+          }
         },
         {
           "id": 2,
@@ -19645,7 +19659,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, [TL & PA_TL & ABS]"
+          }
         },
         {
           "id": 3,
@@ -19656,7 +19677,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, [LF & PA_LF & ABS]"
+          }
         },
         {
           "id": 4,
@@ -19667,7 +19695,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, [TL & PA_TL & ABS]"
+          }
         },
         {
           "id": 5,
@@ -19788,7 +19823,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, LF & PA_LF & ABS"
+          }
         },
         {
           "id": 17,
@@ -19799,7 +19841,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, LF & PA_LF & ABS"
+          }
         },
         {
           "id": 18,
@@ -19810,7 +19859,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, TL & PA_TL & ABS"
+          }
         },
         {
           "id": 19,
@@ -19821,7 +19877,14 @@
           "optional": true,
           "writable": false,
           "description": null,
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, TL & PA_TL & ABS"
+          }
         },
         {
           "id": 23,
@@ -19882,7 +19945,14 @@
               "description": null
             }
           ],
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, [LF & ABS]"
+          }
         },
         {
           "id": 5,
@@ -19917,7 +19987,14 @@
               "description": null
             }
           ],
-          "provisional": true
+          "provisional": true,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5",
+            "removedInRevision": 7,
+            "feature": "ABS",
+            "conformance": "P, [TL & ABS]"
+          }
         },
         {
           "id": 8,
@@ -21313,7 +21390,15 @@
           "bit": 3,
           "code": "SCH",
           "name": "ScheduleConfiguration",
-          "description": "Supports remote configuration of a weekly schedule of setpoint transitions."
+          "description": "Supports remote configuration of a weekly schedule of setpoint transitions.",
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "[Zigbee], D"
+          },
+          "deprecated": true
         },
         {
           "bit": 4,
@@ -21565,7 +21650,14 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": null
+          "description": null,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 33,
@@ -21575,7 +21667,14 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": null
+          "description": null,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 34,
@@ -21585,7 +21684,14 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": null
+          "description": null,
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 35,
@@ -21922,7 +22028,14 @@
               "optional": false,
               "description": null
             }
-          ]
+          ],
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 1,
@@ -21967,7 +22080,14 @@
               "optional": false,
               "description": null
             }
-          ]
+          ],
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 2,
@@ -21993,14 +22113,28 @@
               "optional": false,
               "description": null
             }
-          ]
+          ],
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 3,
           "name": "ClearWeeklySchedule",
           "direction": "request",
           "responseId": null,
-          "fields": []
+          "fields": [],
+          "supplemented": {
+            "from": "1.4.2",
+            "removedIn": "1.5.1",
+            "removedInRevision": 10,
+            "feature": "SCH",
+            "conformance": "SCH"
+          }
         },
         {
           "id": 5,

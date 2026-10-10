@@ -309,8 +309,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_5() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 5);
+fn dump_script_version_is_6() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 6);
 }
 
 #[test]
@@ -1310,6 +1310,78 @@ fn supplemented_elements_are_exactly_these_and_cite_a_source() {
     let mut want = SUPPLEMENTED.to_vec();
     want.sort_unstable();
     assert_eq!(got, want);
+}
+
+/// Each supplemented cluster's provenance, as stamped on its elements:
+/// `(cluster, removedIn, removedInRevision, feature)`, from chip's `data_model`
+/// revision histories (Thermostat.xml revision 10 in 1.5.1 "Removed Zigbee
+/// related elements"; WindowCovering.xml revision 7 in 1.5 "Removed ABS
+/// feature and all associated elements").
+const PROVENANCE: [(&str, &str, u64, &str); 2] = [
+    ("Thermostat", "1.5.1", 10, "SCH"),
+    ("WindowCovering", "1.5", 7, "ABS"),
+];
+
+#[test]
+fn every_supplemented_element_is_stamped_with_its_provenance() {
+    // The per-element stamp (dump v6) drives the generated rustdoc line: the
+    // stamped set is exactly meta.supplemented, each stamp carries its
+    // cluster's provenance and the 1.4.2 conformance, and only SCH (1.4.2
+    // `[Zigbee], D`) is deprecated.
+    let v = load();
+    let mut stamped = Vec::new();
+    let mut deprecated = Vec::new();
+    for c in clusters(&v) {
+        let cname = c["name"].as_str().unwrap();
+        for (key, label, name_key) in [
+            ("features", "Feature", "code"),
+            ("attributes", "Attribute", "name"),
+            ("commands", "Command", "name"),
+        ] {
+            for e in c[key].as_array().unwrap() {
+                let element = format!("{label}.{}", e[name_key].as_str().unwrap());
+                if e["deprecated"] == true {
+                    deprecated.push((cname, element.clone()));
+                }
+                let s = &e["supplemented"];
+                if s.is_null() {
+                    assert!(e["deprecated"].is_null(), "{cname}.{element}: {e}");
+                    continue;
+                }
+                let (_, removed_in, revision, feature) = PROVENANCE
+                    .iter()
+                    .find(|p| p.0 == cname)
+                    .unwrap_or_else(|| panic!("{cname} has no supplement provenance"));
+                assert_eq!(s["from"], "1.4.2", "{cname}.{element}");
+                assert_eq!(s["removedIn"], *removed_in, "{cname}.{element}");
+                assert_eq!(s["removedInRevision"], *revision, "{cname}.{element}");
+                assert_eq!(s["feature"], *feature, "{cname}.{element}");
+                assert!(
+                    s["conformance"].as_str().is_some_and(|t| !t.is_empty()),
+                    "{cname}.{element}"
+                );
+                assert_eq!(s.as_object().unwrap().len(), 5, "{cname}.{element}: {s}");
+                stamped.push((cname, element));
+            }
+        }
+    }
+    stamped.sort_unstable();
+    let mut want: Vec<(&str, String)> = SUPPLEMENTED
+        .iter()
+        .map(|(c, e)| (*c, (*e).to_string()))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(stamped, want);
+    assert_eq!(deprecated, [("Thermostat", "Feature.SCH".to_string())]);
+    assert_eq!(
+        cluster(&v, "Thermostat")["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["code"] == "SCH")
+            .unwrap()["supplemented"]["conformance"],
+        "[Zigbee], D"
+    );
 }
 
 #[test]

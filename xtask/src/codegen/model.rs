@@ -59,6 +59,37 @@ pub struct Feature {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// Deprecated in its 1.4.2 conformance (see [`Supplemented`]).
+    #[serde(default)]
+    pub deprecated: bool,
+    /// Added from the Matter 1.4 supplement (see [`Supplemented`]).
+    #[serde(default)]
+    pub supplemented: Option<Supplemented>,
+}
+
+/// Provenance of an element the dump added from the Matter 1.4 supplement
+/// (`xtask/scripts/dump-model/supplement-1.4.json`, M9-A3 B4): an element the
+/// 1.5.1 model removed but a Matter 1.4 device may still implement, transcribed
+/// from chip's 1.4.2 data model. Drives the element's generated rustdoc line,
+/// which replaces the generic provisional note (that one names the model's
+/// 1.5.1 revision, which does not have the element). A supplemented element's
+/// `deprecated` flag is set when its 1.4.2 conformance is deprecated (`D`, or an
+/// otherwise-form with a `D` branch such as `[Zigbee], D`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Supplemented {
+    /// The chip data model the element comes from (`1.4.2`).
+    pub from: String,
+    /// The Matter release that removed it (`1.5`, `1.5.1`).
+    #[serde(rename = "removedIn")]
+    pub removed_in: String,
+    /// The cluster revision that removed it.
+    #[serde(rename = "removedInRevision")]
+    pub removed_in_revision: u16,
+    /// Code of the supplemented feature the element belongs to (its own code
+    /// for a feature).
+    pub feature: String,
+    /// The element's 1.4.2 conformance, as transcribed (`[Zigbee], D`).
+    pub conformance: String,
 }
 
 /// A cluster attribute.
@@ -87,6 +118,12 @@ pub struct Attribute {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// Deprecated in its 1.4.2 conformance (see [`Supplemented`]).
+    #[serde(default)]
+    pub deprecated: bool,
+    /// Added from the Matter 1.4 supplement (see [`Supplemented`]).
+    #[serde(default)]
+    pub supplemented: Option<Supplemented>,
 }
 
 /// A request or response command.
@@ -107,6 +144,12 @@ pub struct CommandDef {
     /// Provisional in the specification (see [`FieldDef::provisional`]).
     #[serde(default)]
     pub provisional: bool,
+    /// Deprecated in its 1.4.2 conformance (see [`Supplemented`]).
+    #[serde(default)]
+    pub deprecated: bool,
+    /// Added from the Matter 1.4 supplement (see [`Supplemented`]).
+    #[serde(default)]
+    pub supplemented: Option<Supplemented>,
 }
 
 /// A cluster event.
@@ -185,8 +228,8 @@ pub struct Choice {
     pub group: String,
     /// How many fields of the group the sender includes.
     pub count: u32,
-    /// `true`: at least `count` (`O.a+`).
-    #[serde(rename = "orMore")]
+    /// `true`: at least `count` (`O.a+`). Absent in the JSON means `false`.
+    #[serde(default, rename = "orMore")]
     pub or_more: bool,
     /// `true`: at most `count` (`O.a-`). Neither flag: exactly `count`.
     #[serde(default, rename = "orLess")]
@@ -365,8 +408,53 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 check_struct_write_marker(&c.name, d, f)?;
             }
         }
+        check_supplemented(c)?;
     }
     check_conditional_relaxations(model)
+}
+
+/// Every supplemented element ([`Supplemented`]) must belong to a feature of
+/// its cluster that is itself supplemented (its rustdoc line reads that
+/// feature's deprecation), and only a supplemented element may be
+/// `deprecated`: the dump excludes a deprecated model element, so the flag
+/// anywhere else would be a hand edit the emitter would misdescribe.
+fn check_supplemented(c: &Cluster) -> Result<(), String> {
+    let elements = c
+        .features
+        .iter()
+        .map(|f| (f.code.as_str(), f.deprecated, f.supplemented.as_ref()))
+        .chain(
+            c.attributes
+                .iter()
+                .map(|a| (a.name.as_str(), a.deprecated, a.supplemented.as_ref())),
+        )
+        .chain(
+            c.commands
+                .iter()
+                .map(|cmd| (cmd.name.as_str(), cmd.deprecated, cmd.supplemented.as_ref())),
+        );
+    for (name, deprecated, supplemented) in elements {
+        let at = format!("{}.{name}", c.name);
+        let Some(s) = supplemented else {
+            if deprecated {
+                return Err(format!(
+                    "{at}: `deprecated` on an element the supplement did not add"
+                ));
+            }
+            continue;
+        };
+        let owner = c
+            .features
+            .iter()
+            .find(|f| f.code == s.feature && f.supplemented.is_some());
+        if owner.is_none() {
+            return Err(format!(
+                "{at}: supplemented element names feature `{}`, which is not a supplemented feature of {}",
+                s.feature, c.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A class-C relaxation (a field whose conformance is conditional, which the
@@ -925,5 +1013,55 @@ mod tests {
             }))],
         };
         assert!(validate(&m).is_ok());
+    }
+
+    // ---- M9-A3 B4 fix wave: supplement provenance ----
+
+    /// A Thermostat with the supplemented SCH feature and one attribute it
+    /// gates, both stamped; `attr_feature` is the feature the attribute's
+    /// stamp names.
+    fn supplemented_model(attr_feature: &str) -> Model {
+        let stamp = |feature: &str, conformance: &str| {
+            serde_json::json!({ "from": "1.4.2", "removedIn": "1.5.1", "removedInRevision": 10,
+                "feature": feature, "conformance": conformance })
+        };
+        Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x0201, "name": "Thermostat", "revision": 10, "datatypes": [], "commands": [],
+                "features": [
+                    { "bit": 0, "code": "HEAT", "name": "Heating" },
+                    { "bit": 3, "code": "SCH", "name": "ScheduleConfiguration", "deprecated": true,
+                      "supplemented": stamp("SCH", "[Zigbee], D") }
+                ],
+                "attributes": [{ "id": 0x20, "name": "StartOfWeek", "type": "uint8",
+                    "metatype": "integer", "nullable": false, "optional": true, "writable": false,
+                    "supplemented": stamp(attr_feature, "SCH") }]
+            }))],
+        }
+    }
+
+    #[test]
+    fn a_supplemented_element_names_a_supplemented_feature() {
+        assert_eq!(validate(&supplemented_model("SCH")), Ok(()));
+        // HEAT is a model feature, not a supplemented one.
+        let err = validate(&supplemented_model("HEAT")).unwrap_err();
+        assert!(
+            err.contains("Thermostat.StartOfWeek") && err.contains("not a supplemented feature"),
+            "got: {err}"
+        );
+        let err = validate(&supplemented_model("NOPE")).unwrap_err();
+        assert!(err.contains("feature `NOPE`"), "got: {err}");
+    }
+
+    #[test]
+    fn only_a_supplemented_element_may_be_deprecated() {
+        let mut m = supplemented_model("SCH");
+        m.clusters[0].features[0].deprecated = true;
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("Thermostat.HEAT") && err.contains("did not add"),
+            "got: {err}"
+        );
     }
 }

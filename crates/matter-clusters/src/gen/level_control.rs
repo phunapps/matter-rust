@@ -82,7 +82,7 @@ bitflags::bitflags! {
         /// Lighting (LT).
         const LT = 1 << 1;
         /// Frequency (FQ).
-        /// Provisional in the Matter specification: a later revision may change or remove it.
+        /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
         const FQ = 1 << 2;
     }
 }

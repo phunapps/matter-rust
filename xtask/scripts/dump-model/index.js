@@ -25,6 +25,9 @@
 //             fabricSensitive?, mandatoryOnWrite?,   (both: datatype struct fields only)
 //             provisional?, choice? }
 //   provisional? (true only) also on features, attributes, commands, events;
+//   supplemented? { from, removedIn, removedInRevision, feature, conformance }
+//     and deprecated? (true only) on a feature, attribute or command the
+//     Matter 1.4 supplement added (see the supplement section);
 //   globalName? on a datatype inlined from a lowercase model global.
 //
 // All exclusions are recorded in meta.excluded with a reason. Hard error
@@ -53,7 +56,9 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 //     (M9-A3 B4).
 // v5: `meta.supplemented` — Matter 1.4 elements the 1.5.1 model removed,
 //     added from supplement-1.4.json (M9-A3 B4).
-const DUMP_SCRIPT_VERSION = 5;
+// v6: per-element `supplemented` provenance and `deprecated` on every element
+//     the supplement adds, for generated rustdoc (M9-A3 B4 fix wave).
+const DUMP_SCRIPT_VERSION = 6;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -472,6 +477,33 @@ for (const [text, wantP, wantChoice] of [
   const gotChoice = c ? `${c.group}/${c.count}${c.orMore ? '+' : ''}${c.orLess ? '-' : ''}` : '';
   if (isProvisional(el) !== wantP || gotChoice !== wantChoice) {
     fail(`conformance-notes self-check: \`${text}\` gave provisional=${isProvisional(el)} choice='${gotChoice}', want ${wantP} '${wantChoice}'`);
+  }
+}
+
+// True for a conformance the specification marks deprecated: `D`, or an
+// otherwise-form with a `D` branch (`[Zigbee], D`, Thermostat SCH in 1.4.2).
+// Used only for supplemented elements: a deprecated MODEL element is excluded
+// (exclusionReason), so it never reaches the output. chip's XML spells the same
+// thing `<deprecateConform/>`, which scripts/chip-xml-conformance.py compares
+// against (class S).
+function isDeprecatedConformance(el) {
+  const ast = el.effectiveConformance && el.effectiveConformance.ast;
+  if (!ast) return false;
+  if (ast.type === Conformance.Flag.Deprecated) return true;
+  return ast.type === Conformance.Special.Otherwise && ast.param.some((b) => b.type === Conformance.Flag.Deprecated);
+}
+
+for (const [text, want] of [
+  ['[Zigbee], D', true],
+  ['D', true],
+  ['O, D', true],
+  ['SCH', false],
+  ['P, O', false],
+  ['P, [LF & PA_LF & ABS]', false],
+  ['M', false],
+]) {
+  if (isDeprecatedConformance({ effectiveConformance: new Conformance(text) }) !== want) {
+    fail(`isDeprecatedConformance self-check: \`${text}\` should ${want ? '' : 'not '}be deprecated`);
   }
 }
 
@@ -1256,15 +1288,31 @@ function checkConditionalRelaxations(clusterName, attributes, commands, datatype
 // rules. Every element is recorded in meta.supplemented with its source, and
 // scripts/chip-xml-conformance.py checks each one against the 1.4.2 XML
 // (class S).
+//
+// Each cluster entry carries a `provenance` ({ from, removedIn,
+// removedInRevision }: the chip data model the entries come from, and the
+// Matter release and cluster revision that removed them), validated by
+// provenanceProblem. Every dumped element the supplement adds (feature,
+// attribute, request or response command; the supplement adds no datatype and
+// no field outside its command) is stamped with
+// `supplemented: { ...provenance, feature, conformance }`, where `feature` is
+// the supplemented feature the element belongs to (exactly one, or the dump
+// stops) and `conformance` its 1.4.2 text, plus `deprecated: true` when that
+// text is deprecated (isDeprecatedConformance; Thermostat SCH is `[Zigbee], D`).
+// The emitter turns the stamp into the element's rustdoc line, so a reader can
+// tell a supplemented element from a 1.5.1 one.
 
 const supplemented = [];
+// `<cluster>.<Feature|Attribute|Command>.<name>` -> { supplemented, deprecated },
+// stamped onto the dumped element by stampSupplemented.
+const supplementStamps = new Map();
 
 // Appended to every message that may mean a model upgrade restored the element.
 const MODEL_CARRIES_HINT =
   'the model may now carry this element — remove the supplement entry and its .ack line';
 
 const SUPPLEMENT_KEYS = {
-  cluster: new Set(['reviewedModelRevision', 'features', 'attributes', 'commands']),
+  cluster: new Set(['reviewedModelRevision', 'provenance', 'features', 'attributes', 'commands']),
   feature: new Set(['bit', 'code', 'title', 'conformance', 'details', 'source']),
   attribute: new Set(['id', 'name', 'type', 'conformance', 'access', 'quality', 'details', 'source']),
   command: new Set(['id', 'name', 'direction', 'response', 'conformance', 'access', 'fields', 'details', 'source']),
@@ -1322,6 +1370,69 @@ function supplementShapeProblem(kind, el) {
     }
   }
   return null;
+}
+
+const PROVENANCE_KEYS = ['from', 'removedIn', 'removedInRevision'];
+
+// The first problem with a cluster entry's `provenance`, or null. Pure.
+// `modelRevision` is the cluster's revision in the model, which no longer
+// carries the elements, so the revision that removed them cannot be later.
+// `from` must be 1.4.2: class S checks every entry against chip's 1.4.2 XML, so
+// any other value would be a claim nothing verifies.
+function provenanceProblem(p, modelRevision) {
+  if (p === undefined) return 'missing `provenance` ({ from, removedIn, removedInRevision })';
+  if (p === null || typeof p !== 'object' || Array.isArray(p)) return '`provenance` must be an object';
+  for (const k of Object.keys(p)) {
+    if (!PROVENANCE_KEYS.includes(k)) return `unknown provenance key \`${k}\``;
+  }
+  for (const k of PROVENANCE_KEYS) {
+    if (p[k] === undefined) return `provenance: missing \`${k}\``;
+  }
+  if (p.from !== '1.4.2') return `provenance.from must be "1.4.2" (the data model class S checks), got ${JSON.stringify(p.from)}`;
+  if (typeof p.removedIn !== 'string' || !/^1\.\d+(\.\d+)?$/.test(p.removedIn)) {
+    return `provenance.removedIn must be a Matter release such as "1.5", got ${JSON.stringify(p.removedIn)}`;
+  }
+  if (!Number.isInteger(p.removedInRevision) || p.removedInRevision < 1 || p.removedInRevision > modelRevision) {
+    return `provenance.removedInRevision must be an integer 1..${modelRevision} (the model's revision), got ${JSON.stringify(p.removedInRevision)}`;
+  }
+  return null;
+}
+
+// Load-time self-check of provenanceProblem: each row must be rejected (or
+// accepted) as stated.
+{
+  const ok = { from: '1.4.2', removedIn: '1.5.1', removedInRevision: 10 };
+  const without = (o, k) => Object.fromEntries(Object.entries(o).filter(([key]) => key !== k));
+  for (const [p, want] of [
+    [ok, false],
+    [{ ...ok, removedIn: '1.5' }, false],
+    [undefined, true],
+    [null, true],
+    [without(ok, 'from'), true],
+    [without(ok, 'removedIn'), true],
+    [without(ok, 'removedInRevision'), true],
+    [{ ...ok, typo: 1 }, true],
+    [{ ...ok, from: '1.4' }, true],
+    [{ ...ok, removedIn: 'soon' }, true],
+    [{ ...ok, removedInRevision: '10' }, true],
+    [{ ...ok, removedInRevision: 11 }, true],
+    [{ ...ok, removedInRevision: 0 }, true],
+  ]) {
+    if ((provenanceProblem(p, 10) !== null) !== want) {
+      fail(`supplement self-check: provenance ${JSON.stringify(p)} should ${want ? '' : 'not '}be rejected`);
+    }
+  }
+}
+
+// The supplemented feature an entry of `kind` belongs to: its own code for a
+// feature, else the one supplemented feature (of `features`, this cluster's
+// supplemented codes) its conformance names. null when it names none or
+// several, which the caller reports.
+function supplementedFeatureOf(kind, el, features) {
+  if (kind === 'feature') return el.code;
+  const names = collectNames(new Conformance(el.conformance).ast, new Set());
+  const hits = features.filter((f) => names.has(f));
+  return hits.length === 1 ? hits[0] : null;
 }
 
 // matter.js parses conformance, access, quality and constraint text leniently
@@ -1529,8 +1640,11 @@ function applySupplement() {
         `supplement: ${clusterName} model revision is ${cluster.revision}, reviewed against ${entry.reviewedModelRevision} — model drift; review supplement-1.4.json`,
       );
     }
+    const provenanceErr = provenanceProblem(entry.provenance, cluster.revision);
+    if (provenanceErr) fail(`supplement ${clusterName}: ${provenanceErr}`);
     const featureMap = [...cluster.children].find((c) => c.id === 0xfffc);
     const added = [];
+    const suppFeatures = []; // features come first, so every later entry sees them all
     for (const [key, kind, label] of [
       ['features', 'feature', 'Feature'],
       ['attributes', 'attribute', 'Attribute'],
@@ -1554,6 +1668,18 @@ function applySupplement() {
           checkSupplementTypes(model, where);
         }
         if (kind === 'command') added.push([model, el, where]);
+        if (kind === 'feature') suppFeatures.push(el.code);
+        const feature = supplementedFeatureOf(kind, el, suppFeatures);
+        if (!feature) {
+          fail(
+            `supplement ${where}: conformance \`${el.conformance}\` must name exactly one supplemented feature ` +
+              `(${suppFeatures.join(', ') || 'none'}) — its rustdoc line names that feature's provenance`,
+          );
+        }
+        supplementStamps.set(`${clusterName}.${label}.${name}`, {
+          supplemented: { ...entry.provenance, feature, conformance: el.conformance },
+          deprecated: isDeprecatedConformance({ effectiveConformance: new Conformance(el.conformance) }),
+        });
         supplemented.push({ cluster: clusterName, element: `${label}.${name}`, source: el.source });
       }
     }
@@ -1566,15 +1692,20 @@ function applySupplement() {
 
 // Every supplemented element must reach the output: an exclusion (a bare `P`,
 // a disallowed feature) would silently drop what the supplement exists to add.
-function checkSupplementDumped(clusters) {
+// Each one found is stamped with its provenance (and `deprecated` when its
+// 1.4.2 conformance is).
+function stampSupplemented(clusters) {
   for (const s of supplemented) {
     const c = clusters.find((x) => x.name === s.cluster);
     const [label, name] = s.element.split('.');
     const found =
       label === 'Feature'
-        ? c.features.some((f) => f.code === name)
-        : (label === 'Attribute' ? c.attributes : c.commands).some((e) => e.name === name);
+        ? c.features.find((f) => f.code === name)
+        : (label === 'Attribute' ? c.attributes : c.commands).find((e) => e.name === name);
     if (!found) fail(`supplement ${s.cluster}.${s.element} was not dumped — it was excluded; review the entry`);
+    const stamp = supplementStamps.get(`${s.cluster}.${s.element}`);
+    found.supplemented = stamp.supplemented;
+    if (stamp.deprecated) found.deprecated = true;
   }
 }
 
@@ -1589,7 +1720,7 @@ function modelVersion() {
 applySupplement();
 const clusters = ALLOWLIST.map(dumpCluster);
 clusters.sort((x, y) => x.id - y.id);
-checkSupplementDumped(clusters);
+stampSupplemented(clusters);
 supplemented.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.localeCompare(y.element));
 for (const key of KEEP_DATATYPES.keys()) {
   if (!appliedKeeps.has(key)) fail(`KEEP_DATATYPES ${key} matched no datatype — model drift; review KEEP_DATATYPES`);

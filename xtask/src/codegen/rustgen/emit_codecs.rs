@@ -1,7 +1,7 @@
 //! Codec emission: struct, attribute, and command encode/decode.
 
 use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, EventDef, FieldDef};
-use crate::codegen::rustgen::emit::{choice_docs, line, PROVISIONAL_DOC};
+use crate::codegen::rustgen::emit::{choice_docs, element_note, line, PROVISIONAL_DOC};
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, snake, Position};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -98,16 +98,23 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
         }
     }
     for a in &c.attributes {
-        emit_attr_decoder(s, a, &dts);
+        let note = element_note(c, a.provisional, a.deprecated, a.supplemented.as_ref());
+        emit_attr_decoder(s, a, &dts, note.as_deref());
         if a.writable {
-            emit_attr_encoder(s, a, &dts);
+            emit_attr_encoder(s, a, &dts, note.as_deref());
         }
     }
     for cmd in &c.commands {
+        let note = element_note(
+            c,
+            cmd.provisional,
+            cmd.deprecated,
+            cmd.supplemented.as_ref(),
+        );
         if cmd.direction == "request" {
-            emit_command_encoder(s, cmd, &dts);
+            emit_command_encoder(s, cmd, &dts, note.as_deref());
         } else {
-            emit_response_decoder(s, cmd, &dts);
+            emit_response_decoder(s, cmd, &dts, note.as_deref());
         }
     }
     for ev in &c.events {
@@ -429,7 +436,8 @@ fn emit_list_read_into(
 }
 
 #[allow(clippy::too_many_lines)] // a code emitter — long but linear.
-fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
+/// `note`: the attribute's [`element_note`] (supplement or provisional line).
+fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>, note: Option<&str>) {
     let ret = rust_type(
         &a.ty,
         a.entry_type.as_deref(),
@@ -438,9 +446,9 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         Position::Attribute,
     );
     line!(s, "/// Decode the `{}` attribute value.", a.name);
-    if a.provisional {
+    if let Some(note) = note {
         line!(s, "///");
-        line!(s, "/// {PROVISIONAL_DOC}");
+        line!(s, "/// {note}");
     }
     line!(s, "///");
     line!(s, "/// # Errors");
@@ -566,7 +574,8 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
     line!(s, "}}\n");
 }
 
-fn emit_attr_encoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
+/// `note`: the attribute's [`element_note`] (supplement or provisional line).
+fn emit_attr_encoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>, note: Option<&str>) {
     if a.metatype == "object" || a.metatype == "array" {
         return;
     }
@@ -582,9 +591,9 @@ fn emit_attr_encoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         "/// Encode the `{}` attribute value as a standalone TLV element.",
         a.name
     );
-    if a.provisional {
+    if let Some(note) = note {
         line!(s, "///");
-        line!(s, "/// {PROVISIONAL_DOC}");
+        line!(s, "/// {note}");
     }
     line!(s, "#[must_use]");
     line!(s, "#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.");
@@ -625,7 +634,13 @@ fn borrowed(ty: &str) -> String {
     }
 }
 
-fn emit_command_encoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>) {
+/// `note`: the command's [`element_note`] (supplement or provisional line).
+fn emit_command_encoder(
+    s: &mut String,
+    cmd: &CommandDef,
+    dts: &DatatypeMap<'_>,
+    note: Option<&str>,
+) {
     let args: Vec<String> = cmd
         .fields
         .iter()
@@ -641,9 +656,9 @@ fn emit_command_encoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>)
         })
         .collect();
     line!(s, "/// Encode the `{}` command request payload.", cmd.name);
-    if cmd.provisional {
+    if let Some(note) = note {
         line!(s, "///");
-        line!(s, "/// {PROVISIONAL_DOC}");
+        line!(s, "/// {note}");
     }
     for doc in choice_docs(&cmd.fields) {
         line!(s, "///");
@@ -853,7 +868,14 @@ fn emit_guarded_write(
     }
 }
 
-fn emit_response_decoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>) {
+/// `note`: the response's [`element_note`] (supplement or provisional line),
+/// written on the payload struct.
+fn emit_response_decoder(
+    s: &mut String,
+    cmd: &CommandDef,
+    dts: &DatatypeMap<'_>,
+    note: Option<&str>,
+) {
     // A response command decodes into an anonymous struct shape; reuse the
     // struct-decode pattern by treating its fields as a struct named after
     // the command.
@@ -868,7 +890,7 @@ fn emit_response_decoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>
     };
     // Response payloads are decode-only (the gate is `!decl`), so the reachable
     // set is never consulted here — pass an empty one.
-    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new());
+    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new(), note);
 }
 
 fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
@@ -890,7 +912,7 @@ fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
         fields: ev.fields.iter().map(clone_field).collect(),
         global_name: None,
     };
-    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new());
+    emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new(), None);
 }
 
 fn clone_field(f: &FieldDef) -> FieldDef {
@@ -985,13 +1007,14 @@ pub fn encoded_struct_names(c: &Cluster) -> HashSet<&str> {
 fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>, encoded: &HashSet<&str>) {
     // Struct *decl* was already emitted by emit.rs::emit_struct; emit only the
     // codec here.
-    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encoded);
+    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encoded, None);
 }
 
 /// Emit the codec for a struct `d`: `decode_from`(positioned reader) +
 /// `decode`(bytes) + `write_fields`(into a writer) + `encode`(standalone
 /// bytes). When `decl` is true, also emit the `pub struct` declaration
-/// (response payloads aren't in the cluster datatypes).
+/// (response payloads aren't in the cluster datatypes), with `note` (the
+/// response's [`element_note`]) as a rustdoc paragraph on it.
 #[allow(clippy::too_many_lines)] // a code emitter — long but linear.
 fn emit_struct_decl_and_codec(
     s: &mut String,
@@ -999,9 +1022,14 @@ fn emit_struct_decl_and_codec(
     decl: bool,
     dts: &DatatypeMap<'_>,
     encoded: &HashSet<&str>,
+    note: Option<&str>,
 ) {
     if decl {
         line!(s, "/// Decoded `{}` payload.", d.name);
+        if let Some(note) = note {
+            line!(s, "///");
+            line!(s, "/// {note}");
+        }
         line!(s, "#[derive(Clone, Debug, PartialEq)]");
         line!(s, "#[non_exhaustive]");
         line!(s, "pub struct {} {{", d.name);
@@ -1591,6 +1619,8 @@ mod tests {
             response_id: None,
             fields,
             provisional: false,
+            deprecated: false,
+            supplemented: None,
         }
     }
 
@@ -1749,9 +1779,11 @@ mod tests {
             optional: true,
             writable: false,
             provisional: false,
+            deprecated: false,
+            supplemented: None,
         };
         let mut s = String::new();
-        emit_attr_decoder(&mut s, &a, &HashMap::new());
+        emit_attr_decoder(&mut s, &a, &HashMap::new(), None);
         assert!(s.contains("value: Value::Double(v), .. }) => Ok(v)"), "{s}");
         assert!(
             s.contains("value: Value::Float(v), .. }) => Ok(f64::from(v))"),
@@ -1789,9 +1821,11 @@ mod tests {
             optional: true,
             writable: false,
             provisional: false,
+            deprecated: false,
+            supplemented: None,
         };
         let mut s = String::new();
-        emit_attr_decoder(&mut s, &a, &HashMap::new());
+        emit_attr_decoder(&mut s, &a, &HashMap::new(), None);
         assert!(
             s.contains(
                 "pub fn decode_measured_value(tlv: &[u8]) -> Result<Nullable<f32>, ClusterError>"
@@ -2047,7 +2081,7 @@ mod tests {
         let dts: DatatypeMap<'_> = std::iter::once(("HasList", &d)).collect();
         let reachable: HashSet<&str> = std::iter::once("HasList").collect();
         let mut s = String::new();
-        emit_struct_decl_and_codec(&mut s, &d, /*decl=*/ false, &dts, &reachable);
+        emit_struct_decl_and_codec(&mut s, &d, /*decl=*/ false, &dts, &reachable, None);
         assert!(
             s.contains("pub fn write_fields"),
             "reachable list struct writes: {s}"
@@ -2068,6 +2102,8 @@ mod tests {
             optional: false,
             writable,
             provisional: false,
+            deprecated: false,
+            supplemented: None,
         }
     }
 

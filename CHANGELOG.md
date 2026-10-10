@@ -187,15 +187,19 @@ build on Apple silicon.
 ### matter-clusters: Changed — rustdoc states provisional elements and choice groups
 
 - A feature, attribute, command, event or field that Matter marks
-  provisional (conformance `P`, or `P, …`) carries "Provisional in the Matter
-  specification: a later revision may change or remove it." Today: DoorLock's
+  provisional (conformance `P`, or `P, …`) carries "Provisional in Matter
+  1.5.1, the codegen model's revision: a later revision may change or remove
+  it." The note names 1.5.1 because that is where the mark comes from: an
+  element provisional there may be plain in 1.4.2 (DoorLock's RID is plain
+  `O` in 1.4.2). Today: DoorLock's
   RID, FGP and FACE features, ElectricalEnergyMeasurement's APPE and REAE
   features and fields, LevelControl FQ, GroupKeyManagement CS,
   MicrowaveOvenControl WATTS with `SupportedWatts` / `SelectedWattIndex`, and
   BasicInformation / BridgedDeviceBasicInformation `ConfigurationVersion`.
-- Fields in a choice group (`O.a+` and the like) are each an `Option`, and the
-  encoders do not check the group; the struct or encoder rustdoc now states
-  it ("a sender includes at least one of …"): MicrowaveOvenControl
+- Fields in a choice group (`O.a+` and the like) are each an `Option`, and
+  neither the encoders nor the decoders check the group; the struct or
+  encoder rustdoc now states it ("a sender includes at least one of ….
+  Neither encoding nor decoding checks it."): MicrowaveOvenControl
   `encode_set_cooking_parameters`, OperationalCredentials
   `encode_set_vid_verification_statement`, both
   `MeasurementAccuracyRangeStruct`s.
@@ -227,11 +231,18 @@ and checked against it:
   and `WeeklyScheduleTransitionStruct`. `WeeklyScheduleTransitionStruct` is
   no longer `#[non_exhaustive]`, so a schedule can be built to send.
   `encode_set_weekly_schedule` is pinned against a matter.js byte vector.
+  Matter 1.4 itself deprecates SCH (conformance `[Zigbee], D`: optional only
+  for a Zigbee device, deprecated otherwise), and Matter 1.5.1 removed it
+  (Thermostat revision 10); each item's rustdoc says both.
 - **WindowCovering absolute position (feature `ABS`, bit 3):**
   `PhysicalClosedLimitLift` / `Tilt`, `CurrentPositionLift` / `Tilt`
   (nullable), `InstalledOpenLimitLift` / `Tilt`, `InstalledClosedLimitLift`
   / `Tilt`, `encode_go_to_lift_value` and `encode_go_to_tilt_value`. Matter
-  1.4 marks all of them provisional, and their rustdoc says so.
+  1.4 marks all of them provisional, and Matter 1.5 removed them
+  (WindowCovering revision 7); each item's rustdoc says both.
+- Each of these items carries one rustdoc line in place of the provisional
+  note ("Matter 1.4 element (from chip's 1.4.2 data model via the 1.4
+  supplement); …"), so it cannot be mistaken for a 1.5.1 element.
 
 ### matter-clusters: Removed (breaking) — unused types, and encoders nothing sends
 

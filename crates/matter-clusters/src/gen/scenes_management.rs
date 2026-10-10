@@ -72,7 +72,7 @@ bitflags::bitflags! {
 
 /// `AttributeValuePairStruct` struct.
 ///
-/// Choice group `a`: a sender includes exactly one of `value_unsigned8`, `value_signed8`, `value_unsigned16`, `value_signed16`, `value_unsigned32`, `value_signed32`, `value_unsigned64`, `value_signed64`. Not checked when encoding.
+/// Choice group `a`: a sender includes exactly one of `value_unsigned8`, `value_signed8`, `value_unsigned16`, `value_signed16`, `value_unsigned32`, `value_signed32`, `value_unsigned64`, `value_signed64`. Neither encoding nor decoding checks it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AttributeValuePairStruct {
     /// Field AttributeId (tag 0).

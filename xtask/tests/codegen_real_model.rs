@@ -79,3 +79,23 @@ fn encoders_exist_only_for_structs_a_client_sends() {
     got.sort_unstable();
     assert_eq!(got, ENCODED_STRUCTS);
 }
+
+#[test]
+fn the_provisional_doc_names_the_models_spec_revision() {
+    // PROVISIONAL_DOC says which revision marks an element provisional; a
+    // model upgrade that changes meta.specRevision must update it too.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
+        .expect("real model loads + validates");
+    let revision = model.meta["specRevision"]
+        .as_str()
+        .expect("meta.specRevision");
+    assert!(
+        xtask::codegen::rustgen::emit::PROVISIONAL_DOC
+            .starts_with(&format!("Provisional in Matter {revision}, ")),
+        "{revision}"
+    );
+}

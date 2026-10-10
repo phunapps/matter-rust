@@ -5,15 +5,73 @@
 //! is later normalized by rustfmt, so we optimise for correctness, not
 //! whitespace.
 
-use crate::codegen::model::{Choice, Cluster, Datatype, FieldDef};
+use crate::codegen::model::{Choice, Cluster, Datatype, FieldDef, Supplemented};
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, screaming, snake, Position};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
 /// The rustdoc sentence on every generated item the specification marks
-/// provisional (`FieldDef::provisional` and its siblings; M9-A3 B4).
-pub(crate) const PROVISIONAL_DOC: &str =
-    "Provisional in the Matter specification: a later revision may change or remove it.";
+/// provisional (`FieldDef::provisional` and its siblings; M9-A3 B4). It names
+/// the revision the mark comes from: the codegen model follows Matter 1.5.1
+/// (`meta.specRevision` in `clusters.json`; `codegen_real_model` pins the two
+/// together), and an element provisional there may be plain in 1.4.2. An
+/// element added from the Matter 1.4 supplement gets `element_note`'s
+/// supplement line instead.
+pub const PROVISIONAL_DOC: &str =
+    "Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.";
+
+/// The one rustdoc note of a generated feature, attribute or command item, or
+/// `None` (M9-A3 B4). An element added from the Matter 1.4 supplement
+/// (`supplemented`) gets a line saying where it comes from, whether 1.4 itself
+/// deprecates it (its own conformance, or its feature's) or marks it
+/// provisional, and which Matter release and cluster revision removed it. That
+/// line replaces [`PROVISIONAL_DOC`], which names the 1.5.1 revision the
+/// element is not in. Any other element gets [`PROVISIONAL_DOC`] when
+/// `provisional`.
+///
+/// # Panics
+///
+/// At codegen time, if a supplemented element names a feature `c` does not
+/// have (`model::validate` rejects that first).
+pub(crate) fn element_note(
+    c: &Cluster,
+    provisional: bool,
+    deprecated: bool,
+    supplemented: Option<&Supplemented>,
+) -> Option<String> {
+    let Some(s) = supplemented else {
+        return provisional.then(|| PROVISIONAL_DOC.to_string());
+    };
+    let Some(feature) = c.features.iter().find(|f| f.code == s.feature) else {
+        panic!(
+            "codegen: {} supplemented element names feature `{}`, which the cluster lacks",
+            c.name, s.feature
+        );
+    };
+    let origin = format!(
+        "Matter 1.4 element (from chip's {} data model via the 1.4 supplement)",
+        s.from
+    );
+    let removed = format!(
+        "removed in Matter {} ({} revision {})",
+        s.removed_in, c.name, s.removed_in_revision
+    );
+    Some(if deprecated {
+        format!(
+            "{origin}; deprecated in 1.4 itself (`{}`) and {removed}.",
+            s.conformance
+        )
+    } else if let Some(fs) = feature.supplemented.as_ref().filter(|_| feature.deprecated) {
+        format!(
+            "{origin}; deprecated in 1.4 itself (feature `{}` is `{}`) and {removed}.",
+            feature.code, fs.conformance
+        )
+    } else if provisional {
+        format!("{origin}; provisional in Matter {} and {removed}.", s.from)
+    } else {
+        format!("{origin}; {removed}.")
+    })
+}
 
 /// One rustdoc sentence per choice-conformance group among `fields`, in the
 /// order the groups first appear (M9-A3 B4): the generated types take every
@@ -46,7 +104,8 @@ pub(crate) fn choice_docs(fields: &[FieldDef]) -> Vec<String> {
                 c.count.to_string()
             };
             format!(
-                "Choice group `{}`: a sender includes {how} {count} of {}. Not checked when encoding.",
+                "Choice group `{}`: a sender includes {how} {count} of {}. Neither encoding nor \
+                 decoding checks it.",
                 c.group,
                 names.join(", ")
             )
@@ -187,8 +246,13 @@ fn emit_ids(s: &mut String, c: &Cluster) {
     line!(s, "pub mod command_id {{");
     for cmd in &c.commands {
         line!(s, "    /// `{}` ({}).", cmd.name, cmd.direction);
-        if cmd.provisional {
-            line!(s, "    /// {PROVISIONAL_DOC}");
+        if let Some(note) = element_note(
+            c,
+            cmd.provisional,
+            cmd.deprecated,
+            cmd.supplemented.as_ref(),
+        ) {
+            line!(s, "    /// {note}");
         }
         line!(
             s,
@@ -203,8 +267,8 @@ fn emit_ids(s: &mut String, c: &Cluster) {
     line!(s, "pub mod attribute_id {{");
     for a in &c.attributes {
         line!(s, "    /// `{}`.", a.name);
-        if a.provisional {
-            line!(s, "    /// {PROVISIONAL_DOC}");
+        if let Some(note) = element_note(c, a.provisional, a.deprecated, a.supplemented.as_ref()) {
+            line!(s, "    /// {note}");
         }
         line!(
             s,
@@ -246,8 +310,8 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "    pub struct Feature: u32 {{");
     for f in &c.features {
         line!(s, "        /// {} ({}).", f.name, f.code);
-        if f.provisional {
-            line!(s, "        /// {PROVISIONAL_DOC}");
+        if let Some(note) = element_note(c, f.provisional, f.deprecated, f.supplemented.as_ref()) {
+            line!(s, "        /// {note}");
         }
         line!(s, "        const {} = 1 << {};", screaming(&f.code), f.bit);
     }
@@ -566,6 +630,8 @@ mod tests {
             optional: false,
             writable: false,
             provisional: false,
+            deprecated: false,
+            supplemented: None,
         };
         let mut s = String::new();
         emit_header(
@@ -637,6 +703,8 @@ mod tests {
             optional: true,
             writable: false,
             provisional,
+            deprecated: false,
+            supplemented: None,
         };
         let mut c = cluster_with(vec![], vec![attr("Plain", false), attr("Draft", true)]);
         c.commands = vec![CommandDef {
@@ -646,6 +714,8 @@ mod tests {
             response_id: None,
             fields: vec![],
             provisional: true,
+            deprecated: false,
+            supplemented: None,
         }];
         c.events = vec![EventDef {
             id: 0,
@@ -660,12 +730,16 @@ mod tests {
                 code: "PL".to_string(),
                 name: "Plain".to_string(),
                 provisional: false,
+                deprecated: false,
+                supplemented: None,
             },
             Feature {
                 bit: 1,
                 code: "DR".to_string(),
                 name: "Draft".to_string(),
                 provisional: true,
+                deprecated: false,
+                supplemented: None,
             },
         ];
         let mut s = String::new();
@@ -697,11 +771,11 @@ mod tests {
             choice_docs(&fields),
             [
                 "Choice group `a`: a sender includes exactly one of `value_unsigned8`, \
-                 `value_signed8`. Not checked when encoding.",
+                 `value_signed8`. Neither encoding nor decoding checks it.",
                 "Choice group `b`: a sender includes at least one of `cook_time`, `cook_mode`. \
-                 Not checked when encoding.",
-                "Choice group `c`: a sender includes at most one of `one_shot`. Not checked when \
-                 encoding.",
+                 Neither encoding nor decoding checks it.",
+                "Choice group `c`: a sender includes at most one of `one_shot`. Neither encoding \
+                 nor decoding checks it.",
             ]
         );
         assert_eq!(
@@ -730,7 +804,7 @@ mod tests {
             s.starts_with(
                 "/// `LocationDescriptorStruct` struct.\n///\n/// Generated from the Matter \
                  global type `locationdesc`.\n///\n/// Choice group `a`: a sender includes \
-                 exactly one of `a`, `b`. Not checked when encoding.\n"
+                 exactly one of `a`, `b`. Neither encoding nor decoding checks it.\n"
             ),
             "{s}"
         );
@@ -741,5 +815,84 @@ mod tests {
             "{s}"
         );
         assert_eq!(s.matches(PROVISIONAL_DOC).count(), 1, "{s}");
+    }
+
+    // ---- M9-A3 B4 fix wave: supplemented-element rustdoc ----
+
+    fn supplemented(feature: &str, conformance: &str, removed_in: &str, rev: u16) -> Supplemented {
+        Supplemented {
+            from: "1.4.2".to_string(),
+            removed_in: removed_in.to_string(),
+            removed_in_revision: rev,
+            feature: feature.to_string(),
+            conformance: conformance.to_string(),
+        }
+    }
+
+    fn supplemented_feature(
+        code: &str,
+        provisional: bool,
+        deprecated: bool,
+        s: Supplemented,
+    ) -> crate::codegen::model::Feature {
+        crate::codegen::model::Feature {
+            bit: 3,
+            code: code.to_string(),
+            name: code.to_string(),
+            provisional,
+            deprecated,
+            supplemented: Some(s),
+        }
+    }
+
+    #[test]
+    fn supplemented_elements_carry_their_provenance_instead_of_the_provisional_doc() {
+        let sch = supplemented("SCH", "[Zigbee], D", "1.5.1", 10);
+        let mut thermostat = cluster_with(vec![], vec![]);
+        thermostat.name = "Thermostat".to_string();
+        thermostat.features = vec![supplemented_feature("SCH", false, true, sch.clone())];
+        assert_eq!(
+            element_note(&thermostat, false, true, Some(&sch)).as_deref(),
+            Some(
+                "Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); \
+                 deprecated in 1.4 itself (`[Zigbee], D`) and removed in Matter 1.5.1 \
+                 (Thermostat revision 10)."
+            )
+        );
+        // An element SCH gates: the deprecation is its feature's.
+        let gated = supplemented("SCH", "SCH", "1.5.1", 10);
+        assert_eq!(
+            element_note(&thermostat, false, false, Some(&gated)).as_deref(),
+            Some(
+                "Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); \
+                 deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in \
+                 Matter 1.5.1 (Thermostat revision 10)."
+            )
+        );
+        let abs = supplemented("ABS", "P, O", "1.5", 7);
+        let mut window = cluster_with(vec![], vec![]);
+        window.name = "WindowCovering".to_string();
+        window.features = vec![supplemented_feature("ABS", true, false, abs.clone())];
+        let want_abs = "Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); \
+                        provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering \
+                        revision 7).";
+        assert_eq!(
+            element_note(&window, true, false, Some(&abs)).as_deref(),
+            Some(want_abs)
+        );
+        // The generic provisional note never lands on a supplemented element,
+        // and a plain element gets no note at all.
+        assert_eq!(
+            element_note(&window, true, false, None).as_deref(),
+            Some(PROVISIONAL_DOC)
+        );
+        assert_eq!(element_note(&window, false, false, None), None);
+        let mut s = String::new();
+        emit_feature_bitflags(&mut s, &window);
+        assert!(
+            s.contains(&format!("        /// ABS (ABS).\n        /// {want_abs}\n")),
+            "{s}"
+        );
+        assert!(!s.contains(PROVISIONAL_DOC), "{s}");
     }
 }

@@ -24,12 +24,16 @@ pub mod command_id {
     /// `SetpointRaiseLower` (request).
     pub const SETPOINT_RAISE_LOWER: u32 = 0x00;
     /// `GetWeeklyScheduleResponse` (response).
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const GET_WEEKLY_SCHEDULE_RESPONSE: u32 = 0x00;
     /// `SetWeeklySchedule` (request).
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const SET_WEEKLY_SCHEDULE: u32 = 0x01;
     /// `GetWeeklySchedule` (request).
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const GET_WEEKLY_SCHEDULE: u32 = 0x02;
     /// `ClearWeeklySchedule` (request).
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const CLEAR_WEEKLY_SCHEDULE: u32 = 0x03;
     /// `SetActiveScheduleRequest` (request).
     pub const SET_ACTIVE_SCHEDULE_REQUEST: u32 = 0x05;
@@ -86,10 +90,13 @@ pub mod attribute_id {
     /// `ThermostatRunningMode`.
     pub const THERMOSTAT_RUNNING_MODE: u32 = 0x001E;
     /// `StartOfWeek`.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const START_OF_WEEK: u32 = 0x0020;
     /// `NumberOfWeeklyTransitions`.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const NUMBER_OF_WEEKLY_TRANSITIONS: u32 = 0x0021;
     /// `NumberOfDailyTransitions`.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
     pub const NUMBER_OF_DAILY_TRANSITIONS: u32 = 0x0022;
     /// `TemperatureSetpointHold`.
     pub const TEMPERATURE_SETPOINT_HOLD: u32 = 0x0023;
@@ -156,6 +163,7 @@ bitflags::bitflags! {
         /// Occupancy (OCC).
         const OCC = 1 << 2;
         /// ScheduleConfiguration (SCH).
+        /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (`[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
         const SCH = 1 << 3;
         /// Setback (SB).
         const SB = 1 << 4;
@@ -2203,6 +2211,8 @@ pub fn decode_thermostat_running_mode(
 
 /// Decode the `StartOfWeek` attribute value.
 ///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_start_of_week(tlv: &[u8]) -> Result<StartOfWeekEnum, ClusterError> {
@@ -2222,6 +2232,8 @@ pub fn decode_start_of_week(tlv: &[u8]) -> Result<StartOfWeekEnum, ClusterError>
 
 /// Decode the `NumberOfWeeklyTransitions` attribute value.
 ///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_number_of_weekly_transitions(tlv: &[u8]) -> Result<u8, ClusterError> {
@@ -2239,6 +2251,8 @@ pub fn decode_number_of_weekly_transitions(tlv: &[u8]) -> Result<u8, ClusterErro
 }
 
 /// Decode the `NumberOfDailyTransitions` attribute value.
+///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -2961,6 +2975,8 @@ pub fn encode_setpoint_raise_lower(mode: SetpointRaiseLowerModeEnum, amount: i8)
 }
 
 /// Decoded `GetWeeklyScheduleResponse` payload.
+///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct GetWeeklyScheduleResponse {
@@ -3076,6 +3092,8 @@ impl GetWeeklyScheduleResponse {
 }
 
 /// Encode the `SetWeeklySchedule` command request payload.
+///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_set_weekly_schedule(
@@ -3111,6 +3129,8 @@ pub fn encode_set_weekly_schedule(
 }
 
 /// Encode the `GetWeeklySchedule` command request payload.
+///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_get_weekly_schedule(
@@ -3130,6 +3150,8 @@ pub fn encode_get_weekly_schedule(
 }
 
 /// Encode the `ClearWeeklySchedule` command request payload.
+///
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); deprecated in 1.4 itself (feature `SCH` is `[Zigbee], D`) and removed in Matter 1.5.1 (Thermostat revision 10).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_clear_weekly_schedule() -> Vec<u8> {

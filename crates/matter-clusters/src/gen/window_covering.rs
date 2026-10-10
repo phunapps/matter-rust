@@ -28,12 +28,12 @@ pub mod command_id {
     /// `StopMotion` (request).
     pub const STOP_MOTION: u32 = 0x02;
     /// `GoToLiftValue` (request).
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const GO_TO_LIFT_VALUE: u32 = 0x04;
     /// `GoToLiftPercentage` (request).
     pub const GO_TO_LIFT_PERCENTAGE: u32 = 0x05;
     /// `GoToTiltValue` (request).
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const GO_TO_TILT_VALUE: u32 = 0x07;
     /// `GoToTiltPercentage` (request).
     pub const GO_TO_TILT_PERCENTAGE: u32 = 0x08;
@@ -44,16 +44,16 @@ pub mod attribute_id {
     /// `Type`.
     pub const TYPE: u32 = 0x0000;
     /// `PhysicalClosedLimitLift`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const PHYSICAL_CLOSED_LIMIT_LIFT: u32 = 0x0001;
     /// `PhysicalClosedLimitTilt`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const PHYSICAL_CLOSED_LIMIT_TILT: u32 = 0x0002;
     /// `CurrentPositionLift`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const CURRENT_POSITION_LIFT: u32 = 0x0003;
     /// `CurrentPositionTilt`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const CURRENT_POSITION_TILT: u32 = 0x0004;
     /// `NumberOfActuationsLift`.
     pub const NUMBER_OF_ACTUATIONS_LIFT: u32 = 0x0005;
@@ -78,16 +78,16 @@ pub mod attribute_id {
     /// `CurrentPositionTiltPercent100ths`.
     pub const CURRENT_POSITION_TILT_PERCENT100THS: u32 = 0x000F;
     /// `InstalledOpenLimitLift`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const INSTALLED_OPEN_LIMIT_LIFT: u32 = 0x0010;
     /// `InstalledClosedLimitLift`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const INSTALLED_CLOSED_LIMIT_LIFT: u32 = 0x0011;
     /// `InstalledOpenLimitTilt`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const INSTALLED_OPEN_LIMIT_TILT: u32 = 0x0012;
     /// `InstalledClosedLimitTilt`.
-    /// Provisional in the Matter specification: a later revision may change or remove it.
+    /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
     pub const INSTALLED_CLOSED_LIMIT_TILT: u32 = 0x0013;
     /// `Mode`.
     pub const MODE: u32 = 0x0017;
@@ -106,7 +106,7 @@ bitflags::bitflags! {
         /// PositionAwareLift (PA_LF).
         const PA_LF = 1 << 2;
         /// AbsolutePosition (ABS).
-        /// Provisional in the Matter specification: a later revision may change or remove it.
+        /// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
         const ABS = 1 << 3;
         /// PositionAwareTilt (PA_TL).
         const PA_TL = 1 << 4;
@@ -434,7 +434,7 @@ pub fn decode_type(tlv: &[u8]) -> Result<TypeEnum, ClusterError> {
 
 /// Decode the `PhysicalClosedLimitLift` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -456,7 +456,7 @@ pub fn decode_physical_closed_limit_lift(tlv: &[u8]) -> Result<u16, ClusterError
 
 /// Decode the `PhysicalClosedLimitTilt` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -478,7 +478,7 @@ pub fn decode_physical_closed_limit_tilt(tlv: &[u8]) -> Result<u16, ClusterError
 
 /// Decode the `CurrentPositionLift` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -502,7 +502,7 @@ pub fn decode_current_position_lift(tlv: &[u8]) -> Result<Nullable<u16>, Cluster
 
 /// Decode the `CurrentPositionTilt` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -763,7 +763,7 @@ pub fn decode_current_position_tilt_percent100ths(
 
 /// Decode the `InstalledOpenLimitLift` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -785,7 +785,7 @@ pub fn decode_installed_open_limit_lift(tlv: &[u8]) -> Result<u16, ClusterError>
 
 /// Decode the `InstalledClosedLimitLift` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -805,7 +805,7 @@ pub fn decode_installed_closed_limit_lift(tlv: &[u8]) -> Result<u16, ClusterErro
 
 /// Decode the `InstalledOpenLimitTilt` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -827,7 +827,7 @@ pub fn decode_installed_open_limit_tilt(tlv: &[u8]) -> Result<u16, ClusterError>
 
 /// Decode the `InstalledClosedLimitTilt` attribute value.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
@@ -930,7 +930,7 @@ pub fn encode_stop_motion() -> Vec<u8> {
 
 /// Encode the `GoToLiftValue` command request payload.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_go_to_lift_value(lift_value: u16) -> Vec<u8> {
@@ -960,7 +960,7 @@ pub fn encode_go_to_lift_percentage(lift_percent100ths_value: u16) -> Vec<u8> {
 
 /// Encode the `GoToTiltValue` command request payload.
 ///
-/// Provisional in the Matter specification: a later revision may change or remove it.
+/// Matter 1.4 element (from chip's 1.4.2 data model via the 1.4 supplement); provisional in Matter 1.4.2 and removed in Matter 1.5 (WindowCovering revision 7).
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_go_to_tilt_value(tilt_value: u16) -> Vec<u8> {

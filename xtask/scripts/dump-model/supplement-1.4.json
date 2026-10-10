@@ -1,13 +1,14 @@
 {
-  "comment": "Matter 1.4 elements absent from the @matter/model 1.5.1 model, added at dump time (M9-A3 spec §2, rev 6). Transcribed from chip's data_model/1.4.2/clusters/*.xml (frozen in chip; line numbers as of chip 5cd2917a); every entry is checked against that XML by scripts/chip-xml-conformance.py (class S). See the supplement section of index.js for the merge rules.",
+  "comment": "Matter 1.4 elements absent from the @matter/model 1.5.1 model, added at dump time (M9-A3 spec §2, rev 6). Transcribed from chip's data_model/1.4.2/clusters/*.xml (frozen in chip; line numbers as of chip 5cd2917a); every entry is checked against that XML by scripts/chip-xml-conformance.py (class S). Each cluster's `provenance` (from: the chip data model the entries come from, always 1.4.2; removedIn / removedInRevision: the Matter release and cluster revision that removed them, per chip's data_model/<release>/clusters/*.xml revision history) is stamped on every element the cluster supplements and becomes its generated rustdoc line. See the supplement section of index.js for the merge rules.",
   "clusters": {
     "Thermostat": {
       "reviewedModelRevision": 10,
+      "provenance": { "from": "1.4.2", "removedIn": "1.5.1", "removedInRevision": 10 },
       "features": [
         {
           "bit": 3, "code": "SCH", "title": "ScheduleConfiguration", "conformance": "[Zigbee], D",
           "details": "Supports remote configuration of a weekly schedule of setpoint transitions.",
-          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH); removed in Thermostat revision 10 (1.5); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH, `[Zigbee], D`: deprecated in 1.4.2); removed in Thermostat revision 10 (Matter 1.5.1; data_model/1.5.1/clusters/Thermostat.xml:71); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
         }
       ],
       "attributes": [
@@ -61,11 +62,12 @@
     },
     "WindowCovering": {
       "reviewedModelRevision": 8,
+      "provenance": { "from": "1.4.2", "removedIn": "1.5", "removedInRevision": 7 },
       "features": [
         {
           "bit": 3, "code": "ABS", "title": "AbsolutePosition", "conformance": "P, O",
           "details": "Absolute positioning is supported.",
-          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:85 (feature bit 3 ABS, provisional in 1.4.2); removed in 1.5.1; controller-clusters.matter keeps kAbsolutePosition = 0x8"
+          "source": "chip data_model/1.4.2/clusters/WindowCovering.xml:85 (feature bit 3 ABS, provisional in 1.4.2); removed in WindowCovering revision 7 (Matter 1.5; data_model/1.5/clusters/WindowCovering.xml:68); controller-clusters.matter keeps kAbsolutePosition = 0x8"
         }
       ],
       "attributes": [
