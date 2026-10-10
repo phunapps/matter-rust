@@ -55,7 +55,8 @@ attributes, by area:
   bridge/aggregator).
 - **Lighting and actuators** — OnOff, LevelControl, ColorControl, DoorLock
   (Aliro features excluded), WindowCovering (with the Matter 1.4 absolute
-  position), Thermostat (with the Matter 1.4 weekly schedule),
+  position, provisional in Matter 1.4, removed in 1.5), Thermostat (with the
+  Matter 1.4 weekly schedule, deprecated in Matter 1.4, removed in 1.5.1),
   ThermostatUserInterfaceConfiguration, FanControl,
   PumpConfigurationAndControl.
 - **Sensing** — OccupancySensing, TemperatureMeasurement,
@@ -98,15 +99,21 @@ introduced: the nested `MeasurementAccuracyStruct`, the list-typed
 `AtomicRequest` command, GeneralDiagnostics' struct-with-byte-fields
 `NetworkInterface`, the recursive list-of-struct in
 `AccessControl.ReviewFabricRestrictions`, FLOAT32 attributes, LevelControl's
-`MoveToLevelWithOnOff` (the inherited command fields), and TemperatureControl's
-`SetTemperature` (a negative signed request field). The read/write
+`MoveToLevelWithOnOff` (the inherited command fields), TemperatureControl's
+`SetTemperature` (a negative signed request field), Thermostat's
+`SetWeeklySchedule` (TLV null inside list entries), ValveConfigurationAndControl's
+`Open(null, 50)` (the first `Option<Nullable<T>>` request field), and
+ScenesManagement's `AddScene` (nested request lists). The read/write
 actuator clusters additionally carry `decode(encode(x)) == x` roundtrips, and
 floats get both a binary32-edge roundtrip (signed zero, subnormals, infinities,
 NaN — compared by bits) and a `proptest` roundtrip drawn uniformly from the
 whole binary32 bit space. A `single` attribute accepts a FLOAT32 element only,
 matching chip's strict `TLVReader::Get(float&)`. No connectedhomeip example
 app serves WaterTankLevelMonitoring, so it is validated by decode tests and the
-chip 1.4.2 XML check (`scripts/chip-xml-conformance.py`) only. ServiceArea,
+chip 1.4.2 XML check (`scripts/chip-xml-conformance.py`) only. No chip example
+app the harness drives serves Thermostat's Matter 1.4 weekly schedule (SCH, at
+v1.4.2.0 or master), so it is validated by decode tests, the matter.js vector
+and the chip 1.4.2 XML check only. ServiceArea,
 MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's GoHome and
 its events; RvcRunMode / RvcCleanMode's refused changes) are validated the same
 way only for now: their live tests are written but have not run, because

@@ -233,13 +233,19 @@ and checked against it:
   `encode_set_weekly_schedule` is pinned against a matter.js byte vector.
   Matter 1.4 itself deprecates SCH (conformance `[Zigbee], D`: optional only
   for a Zigbee device, deprecated otherwise), and Matter 1.5.1 removed it
-  (Thermostat revision 10); each item's rustdoc says both.
+  (Thermostat revision 10); each item's rustdoc says both. No chip example
+  app the harness drives serves SCH (at v1.4.2.0 or master), so it is
+  validated by decode tests, the matter.js vector and the chip 1.4.2 XML
+  check only.
 - **WindowCovering absolute position (feature `ABS`, bit 3):**
   `PhysicalClosedLimitLift` / `Tilt`, `CurrentPositionLift` / `Tilt`
   (nullable), `InstalledOpenLimitLift` / `Tilt`, `InstalledClosedLimitLift`
   / `Tilt`, `encode_go_to_lift_value` and `encode_go_to_tilt_value`. Matter
   1.4 marks all of them provisional, and Matter 1.5 removed them
-  (WindowCovering revision 7); each item's rustdoc says both.
+  (WindowCovering revision 7); each item's rustdoc says both. Live: the
+  attributes decode against all-clusters, which does not set ABS and
+  refuses GoToLiftValue/GoToTiltValue; no successful absolute move has been
+  observed.
 - Each of these items carries one rustdoc line in place of the provisional
   note ("Matter 1.4 element (from chip's 1.4.2 data model via the 1.4
   supplement); …"), so it cannot be mistaken for a 1.5.1 element.
@@ -296,7 +302,7 @@ The codegen now generates only what a client can use:
   `SensorFault` events: every attribute,
   `encode_current_sensitivity_level`, `encode_suppress_alarm` and
   `encode_enable_disable_alarm`. `AlarmsStateChanged.alarms_suppressed` is
-  an `Option`: devices send it only with the alarm-suppress feature.
+  an `Option`: chip's server sends it only with the alarm-suppress feature.
 - **ValveConfigurationAndControl (0x0081)**, with its `ValveStateChanged`
   and `ValveFault` events: every attribute, the writers for
   `DefaultOpenDuration` and `DefaultOpenLevel`, `encode_open` and
@@ -310,9 +316,11 @@ The codegen now generates only what a client can use:
   another fabric's entry arrives without `CurrentScene`, `CurrentGroup` and
   `SceneValid`, so those are `Option` (`None` = withheld).
   `AttributeValuePairStruct`'s eight value fields are each an `Option`;
-  exactly one should be set (its rustdoc says so; devices refuse a pair
-  without exactly one). `encode_add_scene` is pinned against a matter.js
-  byte vector.
+  exactly one should be set (its rustdoc says so; chip's server refuses a
+  pair without exactly one). `encode_add_scene` is pinned against a
+  matter.js byte vector. chip's zap and controller codegen still mark the
+  cluster provisional; the Matter 1.4.2 specification does not (revision 1
+  removed the provisional status), so it carries no provisional note.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

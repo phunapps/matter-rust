@@ -75,9 +75,13 @@ These are language-idiomatic differences. They do not affect interop.
   these structs has a generated encoder, `AccessControlExtensionStruct`; its
   `encode`/`write_fields` return `ClusterError::MissingField` for a `None` in a
   `mandatoryOnWrite` field, and a complete entry encodes byte-identically to
-  before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct` and (since
+  before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct`, (since
   M9-A3 B4: IcdManagement `RegisteredClients` is read-only)
-  `MonitoringRegistrationStruct` are decode-only. ACL writes go through
+  `MonitoringRegistrationStruct` and (M9-A3 B4) ScenesManagement
+  `SceneInfoStruct` are decode-only. matter.js 0.16.11 declares
+  `SceneInfoStruct`'s fabric-sensitive fields mandatory too (`TlvSceneInfo`:
+  `currentScene: TlvField(1, …)`, `currentGroup`, `sceneValid`,
+  `clusters/scenes-management.js`); we decode them as `Option`. ACL writes go through
   matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
   with a withheld field rather than reading it as a wildcard.
 
@@ -116,7 +120,6 @@ These are language-idiomatic differences. They do not affect interop.
   RefrigeratorAlarm disallows AlarmBase's RESET, so it has no `Latch`,
   `Reset` or `Feature::RESET`; matter.js keeps them as its `ResetComponent`
   (`clusters/refrigerator-alarm.d.ts`), chip's controller codegen omits them.
-
 - **ModeSelect `StandardNamespace` is `Nullable<u16>`** (M9-A3 B2). The
   matter.js model (`@matter/model` 0.17.1, which the dump reads) types it as the global `namespace`
   enum, which is enum8. chip's 1.4.2 XML
@@ -149,7 +152,6 @@ These are language-idiomatic differences. They do not affect interop.
   SetWeeklySchedule encoder matches its `TlvSetWeeklyScheduleRequest` byte
   for byte. The legacy DoorLock PIN/RFID/user-status commands stay out: chip
   never generated them.
-
 - **Only what a client uses is generated** (M9-A3 B4). A model datatype
   that no generated attribute, command or event uses is not generated
   (chip's controller codegen omits them too); matter.js generates every
@@ -161,7 +163,6 @@ These are language-idiomatic differences. They do not affect interop.
   struct has an encoder only when a client sends it (a command request
   field, or an all-scalar struct a writable attribute carries); matter.js's
   TLV schemas encode and decode everything.
-
 - **ScenesManagement has no `LogicalSceneTable` type** (M9-A3 B4). The
   specification describes the Logical Scene Table as data a device keeps,
   not a wire type; matter.js 0.16.11 generates `TlvLogicalSceneTable`,
