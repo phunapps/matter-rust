@@ -628,10 +628,12 @@ fn microwave_oven_mode_has_inherited_fields_and_no_commands() {
 }
 
 #[test]
-fn every_relaxation_is_fabric_sensitive_or_a_recorded_widening() {
-    // meta.relaxed holds exactly the §5.4 presence relaxations (class P) and
-    // the §5.3 widenings (class W). The one W today is ModeSelect
-    // StandardNamespace: model `namespace` is enum8, 1.4.2 is enum16.
+fn every_relaxation_is_fabric_sensitive_widened_or_conditional() {
+    // meta.relaxed holds exactly the §5.4 presence relaxations (class P), the
+    // §5.3 widenings (class W) and the §3.1 conditional-conformance
+    // relaxations (class C, decode-only: codegen's model.rs refuses one on a
+    // field we send). The one W today is ModeSelect StandardNamespace: model
+    // `namespace` is enum8, 1.4.2 is enum16.
     let v = load();
     let relaxed = v["meta"]["relaxed"].as_array().unwrap();
     let widened: Vec<(&str, &str)> = relaxed
@@ -865,6 +867,18 @@ fn operational_state_derived_clusters_carry_inherited_commands_fields_and_values
     assert!((0x40..=0x46).all(|x| states.contains(&x)), "{states:?}");
     let errors = enum_values(datatype(rvc, "ErrorStateEnum"));
     assert!((0x40..=0x4E).all(|x| errors.contains(&x)), "{errors:?}");
+    // The RVC values are RvcOperationalState's own additions: they must not
+    // leak into the base cluster or its other derived cluster (0x40..=0x7F is
+    // each derived cluster's own range; 0x80+ is manufacturer-specific and
+    // never in the model).
+    for name in ["OperationalState", "OvenCavityOperationalState"] {
+        let c = cluster(&v, name);
+        for e in ["OperationalStateEnum", "ErrorStateEnum"] {
+            let values = enum_values(datatype(c, e));
+            let high: Vec<u64> = values.into_iter().filter(|x| *x >= 0x40).collect();
+            assert_eq!(high, Vec::<u64>::new(), "{name}.{e}");
+        }
+    }
 }
 
 // ---- M9-A3 B3: appliance controls -----------------------------------------------
@@ -877,14 +891,26 @@ fn appliance_control_commands_have_only_optional_fields_and_watts_are_kept() {
     // and SelectedWattIndex ("P, WATTS" in 1.4.2 and the model) are kept:
     // chip's controller-clusters.matter generates them (as provisional).
     let v = load();
-    let all_optional = |cluster_name: &str, cmd: &str| {
-        let c = cluster(&v, cluster_name);
-        field_optionality(&command(c, cmd)["fields"])
-            .iter()
-            .all(|(_, optional)| *optional)
-    };
-    assert!(all_optional("TemperatureControl", "SetTemperature"));
-    assert!(all_optional("MicrowaveOvenControl", "SetCookingParameters"));
+    // Exact names, so an empty field list cannot pass as "all optional".
+    let set_temperature = command(cluster(&v, "TemperatureControl"), "SetTemperature");
+    assert_eq!(
+        field_optionality(&set_temperature["fields"]),
+        [
+            ("TargetTemperature", true),
+            ("TargetTemperatureLevel", true)
+        ]
+    );
+    let cooking = command(cluster(&v, "MicrowaveOvenControl"), "SetCookingParameters");
+    assert_eq!(
+        field_optionality(&cooking["fields"]),
+        [
+            ("CookMode", true),
+            ("CookTime", true),
+            ("PowerSetting", true),
+            ("WattSettingIndex", true),
+            ("StartAfterSetting", true)
+        ]
+    );
     assert_eq!(
         element_names(cluster(&v, "MicrowaveOvenControl"), "attributes"),
         [
