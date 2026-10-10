@@ -4002,3 +4002,256 @@ fn device_energy_management_requests_encode_and_events_decode() {
         [0x00, 0x01, 0x02, 0x03]
     );
 }
+
+// ---- M9-A3 B5: EnergyEvse ---------------------------------------------------
+//
+// 1.4.2 EnergyEVSE.xml (cluster revision 3; the 1.5.1 model is revision 4,
+// with the same elements). Master's evse-app sets all five features (PREF,
+// SOC, PNC, RFID, V2X; evse-common/src/EnergyEvseMain.cpp) and serves every
+// attribute. evse-app does not exist at v1.4.2.0: there the EVSE lives in
+// energy-management-app (energy-evse/src/EnergyEvseMain.cpp), which sets
+// PREF and RFID only, as does all-clusters (energy-evse-stub.cpp).
+
+#[test]
+fn energy_evse_attributes_decode() {
+    use clusters::energy_evse::{
+        decode_approximate_ev_efficiency, decode_battery_capacity, decode_charging_enabled_until,
+        decode_circuit_capacity, decode_fault_state, decode_session_duration, decode_session_id,
+        decode_state, decode_state_of_charge, decode_supply_state, decode_vehicle_id,
+        encode_approximate_ev_efficiency, encode_randomization_delay_window,
+        encode_user_maximum_charge_current, FaultStateEnum, Feature, StateEnum, SupplyStateEnum,
+    };
+    assert_eq!(Feature::all().bits(), 0x1F, "master evse-app's features");
+    assert_eq!(
+        (Feature::PREF | Feature::RFID).bits(),
+        0x09,
+        "v1.4.2.0 energy-management-app's and all-clusters' features"
+    );
+    assert_eq!(decode_state(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_state(&uint_attr(3)).unwrap(),
+        Nullable::Value(StateEnum::PluggedInCharging)
+    );
+    assert_eq!(
+        decode_supply_state(&uint_attr(4)).unwrap(),
+        SupplyStateEnum::DisabledDiagnostics
+    );
+    assert_eq!(
+        decode_fault_state(&uint_attr(255)).unwrap(),
+        FaultStateEnum::Other
+    );
+    assert_eq!(
+        decode_fault_state(&uint_attr(7)).unwrap(),
+        FaultStateEnum::GroundFault
+    );
+    assert_eq!(
+        decode_charging_enabled_until(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    // amperage-mA is a signed 64-bit integer (the basic-functionality trigger
+    // sets 32 A, in master's evse-app and v1.4.2.0's energy-management-app).
+    assert_eq!(decode_circuit_capacity(&int_attr(32_000)).unwrap(), 32_000);
+    assert_eq!(
+        decode_state_of_charge(&uint_attr(20)).unwrap(),
+        Nullable::Value(20)
+    );
+    assert_eq!(
+        decode_battery_capacity(&int_attr(70_000_000)).unwrap(),
+        Nullable::Value(70_000_000)
+    );
+    // Master evse-app's kEVSESetVehicleID trigger (not in v1.4.2.0).
+    assert_eq!(
+        decode_vehicle_id(&str_attr("Test-Vehicle-ID-012345789-ABCDEF")).unwrap(),
+        Nullable::Value("Test-Vehicle-ID-012345789-ABCDEF".to_string())
+    );
+    assert_eq!(decode_session_id(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_session_duration(&uint_attr(90)).unwrap(),
+        Nullable::Value(90)
+    );
+    assert_eq!(encode_user_maximum_charge_current(32_000), int_attr(32_000));
+    assert_eq!(encode_randomization_delay_window(600), uint_attr(600));
+    assert_eq!(
+        encode_approximate_ev_efficiency(Nullable::Null),
+        null_attr()
+    );
+    assert_eq!(
+        decode_approximate_ev_efficiency(&encode_approximate_ev_efficiency(Nullable::Value(3500)))
+            .unwrap(),
+        Nullable::Value(3500)
+    );
+}
+
+#[test]
+fn energy_evse_commands_encode_and_targets_decode() {
+    use clusters::energy_evse::{
+        encode_disable, encode_enable_charging, encode_enable_discharging, encode_set_targets,
+        ChargingTargetScheduleStruct, ChargingTargetStruct, GetTargetsResponse,
+        TargetDayOfWeekBitmap,
+    };
+    assert_eq!(encode_disable(), [0x15, 0x18]);
+    // Charge until further notice, between 6 A and 32 A.
+    assert_eq!(
+        encode_enable_charging(Nullable::Null, 6_000, 32_000),
+        struct_of(&|w| {
+            w.put_null(Tag::Context(0)).unwrap();
+            w.put_int(Tag::Context(1), 6_000).unwrap();
+            w.put_int(Tag::Context(2), 32_000).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_enable_discharging(Nullable::Value(1_000), 16_000),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 1_000).unwrap();
+            w.put_int(Tag::Context(1), 16_000).unwrap();
+        })
+    );
+    // Weekdays: 80 % by 07:30; Saturday: 25 kWh by 10:00. Each target carries
+    // one of TargetSoC / AddedEnergy (choice group a: at least one).
+    let schedules = vec![
+        ChargingTargetScheduleStruct {
+            day_of_week_for_sequence: TargetDayOfWeekBitmap::MONDAY
+                | TargetDayOfWeekBitmap::TUESDAY
+                | TargetDayOfWeekBitmap::WEDNESDAY
+                | TargetDayOfWeekBitmap::THURSDAY
+                | TargetDayOfWeekBitmap::FRIDAY,
+            charging_targets: vec![ChargingTargetStruct {
+                target_time_minutes_past_midnight: 450,
+                target_so_c: Some(80),
+                added_energy: None,
+            }],
+        },
+        ChargingTargetScheduleStruct {
+            day_of_week_for_sequence: TargetDayOfWeekBitmap::SATURDAY,
+            charging_targets: vec![ChargingTargetStruct {
+                target_time_minutes_past_midnight: 600,
+                target_so_c: None,
+                added_energy: Some(25_000_000),
+            }],
+        },
+    ];
+    let wire = struct_of(&|w| {
+        w.start_array(Tag::Context(0)).unwrap();
+        for (days, time, soc, energy) in [
+            (0x3E, 450, Some(80), None),
+            (0x40, 600, None, Some(25_000_000)),
+        ] {
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), days).unwrap();
+            w.start_array(Tag::Context(1)).unwrap();
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), time).unwrap();
+            if let Some(soc) = soc {
+                w.put_uint(Tag::Context(1), soc).unwrap();
+            }
+            if let Some(energy) = energy {
+                w.put_int(Tag::Context(2), energy).unwrap();
+            }
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+        }
+        w.end_container().unwrap();
+    });
+    assert_eq!(encode_set_targets(&schedules), wire);
+    // GetTargetsResponse carries the same list back.
+    assert_eq!(
+        GetTargetsResponse::decode(&wire)
+            .unwrap()
+            .charging_target_schedules,
+        schedules
+    );
+}
+
+#[test]
+fn energy_evse_events_decode() {
+    use clusters::energy_evse::{
+        event_id, EnergyTransferStartedEvent, EnergyTransferStoppedEvent,
+        EnergyTransferStoppedReasonEnum, EvConnectedEvent, EvNotDetectedEvent, FaultEvent,
+        FaultStateEnum, RfidEvent, StateEnum,
+    };
+    let connected =
+        EvConnectedEvent::decode(&struct_of(&|w| w.put_uint(Tag::Context(0), 3).unwrap())).unwrap();
+    assert_eq!(connected.session_id, 3);
+    // Without V2X the discharge fields are left out.
+    let gone = EvNotDetectedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+        w.put_uint(Tag::Context(2), 120).unwrap();
+        w.put_int(Tag::Context(3), 0).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            gone.state,
+            gone.session_duration,
+            gone.session_energy_discharged
+        ),
+        (StateEnum::PluggedInNoDemand, 120, None)
+    );
+    let started = EnergyTransferStartedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_uint(Tag::Context(1), 3).unwrap();
+        w.put_int(Tag::Context(2), 32_000).unwrap();
+        w.put_int(Tag::Context(3), 0).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (started.maximum_current, started.maximum_discharge_current),
+        (32_000, Some(0))
+    );
+    // Field 3 is reserved: EnergyTransferStopped's tags are 0, 1, 2, 4, 5.
+    let stopped = EnergyTransferStoppedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_uint(Tag::Context(1), 2).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_int(Tag::Context(4), 1_500).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            stopped.reason,
+            stopped.energy_transferred,
+            stopped.energy_discharged
+        ),
+        (EnergyTransferStoppedReasonEnum::EvseStopped, 1_500, None)
+    );
+    // A fault with no session in progress: SessionID is null.
+    let fault = FaultEvent::decode(&struct_of(&|w| {
+        w.put_null(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(1), 6).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.put_uint(Tag::Context(4), 7).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            fault.session_id,
+            fault.state,
+            fault.fault_state_previous_state,
+            fault.fault_state_current_state
+        ),
+        (
+            Nullable::Null,
+            StateEnum::Fault,
+            FaultStateEnum::NoError,
+            FaultStateEnum::GroundFault
+        )
+    );
+    // Master evse-app's kEVSETriggerRFID tag (not in v1.4.2.0).
+    let uid = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99];
+    let rfid =
+        RfidEvent::decode(&struct_of(&|w| w.put_bytes(Tag::Context(0), &uid).unwrap())).unwrap();
+    assert_eq!(rfid.uid, uid);
+    assert_eq!(
+        [
+            event_id::EV_CONNECTED,
+            event_id::EV_NOT_DETECTED,
+            event_id::ENERGY_TRANSFER_STARTED,
+            event_id::ENERGY_TRANSFER_STOPPED,
+            event_id::FAULT,
+            event_id::RFID
+        ],
+        [0x00, 0x01, 0x02, 0x03, 0x04, 0x05]
+    );
+}

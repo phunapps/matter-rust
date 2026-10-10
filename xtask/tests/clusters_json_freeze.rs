@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 80] = [
+const TARGET_CLUSTERS: [&str; 81] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -119,6 +119,8 @@ const TARGET_CLUSTERS: [&str; 80] = [
     "WaterHeaterManagement",
     // M9-A3 B5, DeviceEnergyManagement:
     "DeviceEnergyManagement",
+    // M9-A3 B5, EnergyEvse:
+    "EnergyEvse",
 ];
 
 fn load() -> Value {
@@ -409,7 +411,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 24] = [
+const EVENT_CLUSTERS: [&str; 25] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -443,6 +445,8 @@ const EVENT_CLUSTERS: [&str; 24] = [
     "WaterHeaterManagement",
     // M9-A3 B5, DeviceEnergyManagement:
     "DeviceEnergyManagement",
+    // M9-A3 B5, EnergyEvse:
+    "EnergyEvse",
 ];
 
 #[test]
@@ -1134,7 +1138,7 @@ const PROVISIONAL: [(&str, &str, &str); 25] = [
 /// Fields in a choice-conformance group (`O.a`, `O.a+`, `[F].b+`): the
 /// encoders take each as an `Option` and do not enforce the group, so it is
 /// documented on the generated type or encoder.
-const CHOICE: [(&str, &str, &str); 21] = [
+const CHOICE: [(&str, &str, &str); 23] = [
     (
         "ElectricalEnergyMeasurement",
         "MeasurementAccuracyRangeStruct.FixedMax",
@@ -1155,6 +1159,10 @@ const CHOICE: [(&str, &str, &str); 21] = [
         "MeasurementAccuracyRangeStruct.PercentMax",
         "a/1+",
     ),
+    // M9-A3 B5, EnergyEvse (`SOC, O.a+` and `[SOC], O.a+`: at least one;
+    // chip's 1.4.2 XML has the same):
+    ("EnergyEvse", "ChargingTargetStruct.AddedEnergy", "a/1+"),
+    ("EnergyEvse", "ChargingTargetStruct.TargetSoC", "a/1+"),
     (
         "MicrowaveOvenControl",
         "SetCookingParameters.CookMode",
@@ -1963,6 +1971,72 @@ fn device_energy_management_keeps_its_shapes() {
             ),
             ("Paused", vec![]),
             ("Resumed", vec![("Cause", false)]),
+        ]
+    );
+}
+
+#[test]
+fn energy_evse_keeps_its_shapes() {
+    // 1.4.2 EnergyEVSE.xml: GetTargets is answered by GetTargetsResponse,
+    // every other request by a status. SetTargets and the response carry the
+    // same list of ChargingTargetScheduleStruct. EnergyTransferStopped's field
+    // ids skip 3 (reserved), and Fault's skip 3 too.
+    let v = load();
+    let c = cluster(&v, "EnergyEvse");
+    assert_eq!(
+        command(c, "GetTargets")["responseId"],
+        command(c, "GetTargetsResponse")["id"]
+    );
+    for name in [
+        "Disable",
+        "EnableCharging",
+        "EnableDischarging",
+        "StartDiagnostics",
+        "SetTargets",
+        "ClearTargets",
+    ] {
+        assert!(command(c, name)["responseId"].is_null(), "{name}");
+    }
+    assert_eq!(
+        command(c, "SetTargets")["fields"][0]["entryType"],
+        "ChargingTargetScheduleStruct"
+    );
+    assert_eq!(
+        command(c, "GetTargetsResponse")["fields"][0]["entryType"],
+        "ChargingTargetScheduleStruct"
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "ChargingTargetStruct")["fields"]),
+        [
+            ("TargetTimeMinutesPastMidnight", false),
+            ("TargetSoC", true),
+            ("AddedEnergy", true)
+        ]
+    );
+    let ids = |event: &str| -> Vec<u64> {
+        c["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["name"] == event)
+            .unwrap()["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(ids("EnergyTransferStopped"), [0, 1, 2, 4, 5]);
+    assert_eq!(ids("Fault"), [0, 1, 2, 4]);
+    assert_eq!(
+        element_names(c, "events"),
+        [
+            "EvConnected",
+            "EvNotDetected",
+            "EnergyTransferStarted",
+            "EnergyTransferStopped",
+            "Fault",
+            "Rfid"
         ]
     );
 }

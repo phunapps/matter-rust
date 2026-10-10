@@ -388,4 +388,38 @@ proptest! {
         prop_assert_eq!(&back, &info);
         prop_assert_eq!(back.encode(), bytes);
     }
+
+    // ---- M9-A3 B5: EnergyEvse ------------------------------------------------
+
+    #[test]
+    fn charging_target_schedule_reencodes(
+        days in 0u8..0x80,
+        targets in proptest::collection::vec(
+            (0u16..1440, proptest::option::of(0u8..=100), proptest::option::of(any::<i64>())),
+            0..4,
+        ),
+    ) {
+        // ChargingTargetScheduleStruct: a day bitmap and a list of targets,
+        // each with two optional fields (TargetSoC, AddedEnergy). SetTargets
+        // sends a list of them and GetTargetsResponse returns it: encode ->
+        // decode gives the same schedule.
+        use clusters::energy_evse::{
+            ChargingTargetScheduleStruct, ChargingTargetStruct, TargetDayOfWeekBitmap,
+        };
+        let schedule = ChargingTargetScheduleStruct {
+            day_of_week_for_sequence: TargetDayOfWeekBitmap::from_bits_retain(days),
+            charging_targets: targets
+                .iter()
+                .map(|&(time, soc, energy)| ChargingTargetStruct {
+                    target_time_minutes_past_midnight: time,
+                    target_so_c: soc,
+                    added_energy: energy,
+                })
+                .collect(),
+        };
+        let bytes = schedule.encode();
+        let back = ChargingTargetScheduleStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(&back, &schedule);
+        prop_assert_eq!(back.encode(), bytes);
+    }
 }

@@ -206,6 +206,10 @@ const ALLOWLIST = [
   // scalar structs; Forecast nests SlotStruct and CostStruct lists;
   // PowerAdjustCapability is a nullable list inside a nullable struct):
   { id: 0x0098, name: 'DeviceEnergyManagement' },
+  // M9-A3 B5, EnergyEvse (timed commands; SetTargets and GetTargetsResponse
+  // carry a list of schedules, each a list of targets whose TargetSoC and
+  // AddedEnergy form an at-least-one choice group):
+  { id: 0x0099, name: 'EnergyEvse' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -252,6 +256,8 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B5, DeviceEnergyManagement (PowerAdjustStart and Paused fieldless;
   // PowerAdjustEnd and Resumed carry a CauseEnum):
   'DeviceEnergyManagement',
+  // M9-A3 B5, EnergyEvse (six events; Rfid carries the tag's UID):
+  'EnergyEvse',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

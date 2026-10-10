@@ -22,6 +22,7 @@ pub mod dishwasher_mode;
 pub mod door_lock;
 pub mod electrical_energy_measurement;
 pub mod electrical_power_measurement;
+pub mod energy_evse;
 pub mod energy_evse_mode;
 pub mod energy_preference;
 pub mod fan_control;

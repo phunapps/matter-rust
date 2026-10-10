@@ -371,6 +371,13 @@ The codegen now generates only what a client can use:
   only): every attribute, including the nested `Forecast` (slots, each with
   optional costs) and `PowerAdjustmentCapability`, and encoders for all
   eight requests.
+- **EnergyEvse (0x0099)**, with its six events: every attribute, the
+  writers for `UserMaximumChargeCurrent`, `RandomizationDelayWindow` and
+  `ApproximateEvEfficiency`, encoders for all seven requests, and
+  `GetTargetsResponse`. Every request is a timed command; `Node::invoke`
+  retries it as a timed interaction when the device asks. Each
+  `ChargingTargetStruct` should carry at least one of `target_so_c` and
+  `added_energy` (its rustdoc says so; the encoder does not check it).
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
