@@ -95,6 +95,41 @@ pub async fn send_app_pipe(cfg: &DutConfig, json: &str) -> Result<()> {
     Ok(())
 }
 
+/// The all-clusters app's pipe command dispatch, relative to a
+/// connectedhomeip checkout (`AllClustersAppCommandHandler::HandleCommand`).
+const ALL_CLUSTERS_PIPE_DISPATCH: &str =
+    "examples/all-clusters-app/linux/AllClustersCommandDelegate.cpp";
+
+/// Whether the all-clusters app built from `cfg.chip_root` handles the
+/// app-pipe command `name`. Check this before sending any command that is not
+/// in every chip release the harness runs against (master locally, the
+/// nightly's pinned `CHIP_REF`).
+///
+/// The pipe has no way to ask which commands exist, and an unknown one is
+/// fatal: `HandleCommand` ends in `VerifyOrDie(false && "Named pipe command
+/// not supported")`, which aborts the DUT (identical on v1.4.2.0 and master).
+/// The answer comes from the dispatch source itself: a branch
+/// `name == "<name>"`. This assumes the binary was built from that checkout;
+/// `xtask integration` reuses an existing binary, so a stale local build can
+/// still disagree with its source.
+///
+/// # Errors
+///
+/// If the dispatch source cannot be read. A moved file must fail the test,
+/// not quietly drop a stimulus the DUT does support.
+pub fn all_clusters_pipe_supports(cfg: &DutConfig, name: &str) -> Result<bool> {
+    let path = cfg.chip_root.join(ALL_CLUSTERS_PIPE_DISPATCH);
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("read all-clusters pipe dispatch {}", path.display()))?;
+    Ok(dispatch_handles(&source, name))
+}
+
+/// True when `source` has a `name == "<name>"` dispatch branch. The closing
+/// quote keeps `SetBooleanState` from matching `SetBooleanStateSensorFault`.
+fn dispatch_handles(source: &str, name: &str) -> bool {
+    source.contains(&format!("name == \"{name}\""))
+}
+
 /// Append `json` plus a newline to the FIFO at `path`, failing if the
 /// blocking open/write does not finish within `timeout`.
 ///
@@ -125,7 +160,11 @@ async fn write_fifo_line(path: PathBuf, json: &str, timeout: Duration) -> Result
             Err(TryRecvError::Empty) => {}
         }
         if Instant::now() >= deadline {
-            bail!("app pipe {shown}: no reader within {timeout:?}");
+            bail!(
+                "app pipe {shown}: no reader within {timeout:?} (the DUT is not reading \
+                 its pipe: it never opened it, or it has exited; a chip app aborts on a \
+                 pipe command it does not know, see `all_clusters_pipe_supports`)"
+            );
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -246,6 +285,41 @@ mod tests {
         // The writer thread stays blocked in open() on purpose: it must not
         // keep the runtime (or this test process) from exiting.
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod pipe_dispatch_tests {
+    use super::dispatch_handles;
+
+    /// Shaped like `AllClustersAppCommandHandler::HandleCommand`: v1.4.2.0
+    /// has `SetOccupancy` but no `SetBooleanState`; master adds
+    /// `SetBooleanState` and, after it, `SetBooleanStateSensorFault`.
+    const V1_4_2_0: &str = r#"
+    else if (name == "SetOccupancy")
+    {
+    }
+    "#;
+    const MASTER: &str = r#"
+    else if (name == "SetBooleanState")
+    {
+    }
+    else if (name == "SetBooleanStateSensorFault")
+    {
+    }
+    "#;
+    const SENSOR_FAULT_ONLY: &str = r#"else if (name == "SetBooleanStateSensorFault")"#;
+
+    #[test]
+    fn finds_a_dispatched_command() {
+        assert!(dispatch_handles(V1_4_2_0, "SetOccupancy"));
+        assert!(dispatch_handles(MASTER, "SetBooleanState"));
+    }
+
+    #[test]
+    fn missing_command_and_longer_name_are_not_matches() {
+        assert!(!dispatch_handles(V1_4_2_0, "SetBooleanState"));
+        assert!(!dispatch_handles(SENSOR_FAULT_ONLY, "SetBooleanState"));
     }
 }
 

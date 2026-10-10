@@ -40,8 +40,8 @@ use matter_controller::{
 };
 
 use integration_tests::events::{
-    latest_event_number, payload_tlv, read_event_items, send_app_pipe, wait_for_event,
-    wait_for_event_after,
+    all_clusters_pipe_supports, latest_event_number, payload_tlv, read_event_items, send_app_pipe,
+    wait_for_event, wait_for_event_after,
 };
 
 /// Our controller's operational node id: the fixture creates its fabric with
@@ -263,14 +263,44 @@ async fn occupancy_and_boolean_state_events_decode() {
         "latest OccupancyChanged after SetOccupancy 1 must be occupied: {latest:?}"
     );
 
-    // ── BooleanState (ep1): stimulate where the app supports it (master). ──
-    for state in [false, true] {
-        send_app_pipe(
-            &cfg,
-            &format!(r#"{{"Name": "SetBooleanState", "EndpointId": 1, "NewState": {state}}}"#),
-        )
-        .await
-        .expect("app pipe");
+    // ── BooleanState (ep1): SetBooleanState false then true, only where the
+    //    app has that pipe command (master; not v1.4.2.0, the nightly's pin).
+    //    An unknown pipe command aborts the DUT, so it is never sent blind.
+    //    BooleanStateCluster::SetStateValue emits StateChange only on a
+    //    change, and false-then-true ends on a change whatever the boot state,
+    //    so the newest StateChange after the baseline must say true.
+    use boolean_state::event_id::STATE_CHANGE;
+    if all_clusters_pipe_supports(&cfg, "SetBooleanState").expect("pipe dispatch probe") {
+        let baseline = latest_event_number(&node, 1, boolean_state::CLUSTER_ID, STATE_CHANGE)
+            .await
+            .expect("StateChange baseline");
+        for state in [false, true] {
+            send_app_pipe(
+                &cfg,
+                &format!(r#"{{"Name": "SetBooleanState", "EndpointId": 1, "NewState": {state}}}"#),
+            )
+            .await
+            .expect("app pipe");
+        }
+        let changes =
+            wait_for_event_after(&node, 1, boolean_state::CLUSTER_ID, STATE_CHANGE, baseline)
+                .await
+                .expect("StateChange");
+        let latest = changes
+            .iter()
+            .max_by_key(|i| i.event_number)
+            .expect("wait_for_event_after returns at least one event");
+        let latest = boolean_state::StateChangeEvent::decode(&payload_tlv(&latest.value))
+            .expect("StateChange decodes");
+        assert!(
+            latest.state_value,
+            "latest StateChange after SetBooleanState true must be true: {latest:?}"
+        );
+    } else {
+        eprintln!(
+            "[events] BooleanState: this chip's all-clusters app has no SetBooleanState \
+             pipe command (v1.4.2.0); decoding only events already present"
+        );
     }
     decode_every_event(&node, 1, boolean_state::CLUSTER_ID, |id, t| match id {
         boolean_state::event_id::STATE_CHANGE => ok(boolean_state::StateChangeEvent::decode(t)),

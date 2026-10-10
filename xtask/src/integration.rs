@@ -243,6 +243,11 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
         app_pipe.as_deref(),
     )?;
 
+    // A DUT that died mid-run fails every later test with a misleading error
+    // (no mDNS record, no pipe reader). Say so, with the tail of its log:
+    // later sweeps reuse app.log, so this may be the only copy that survives.
+    report_dut_exit(&mut guard, &log_path);
+
     // Explicit teardown before we inspect the exit status, so the process is
     // gone even on a test failure.
     guard.kill_and_wait();
@@ -535,6 +540,21 @@ impl DutGuard {
     fn kill_and_wait(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+/// Print a warning (with the last 30 log lines) when the DUT exited before
+/// the harness tore it down. Diagnostic only: the tests decide pass or fail.
+fn report_dut_exit(guard: &mut DutGuard, log_path: &Path) {
+    match guard.0.try_wait() {
+        Ok(None) => {}
+        Ok(Some(status)) => eprintln!(
+            "integration: WARNING: the DUT exited during the test run ({status}); \
+             any test after that point ran without one. Last lines of {}:\n{}",
+            log_path.display(),
+            read_tail(log_path, 30)
+        ),
+        Err(e) => eprintln!("integration: could not check whether the DUT is still running: {e}"),
     }
 }
 
