@@ -37,6 +37,8 @@ pub mod attribute_id {
 }
 
 /// `LightSensorTypeEnum` (enum8).
+///
+/// The value of the `LightSensorType` attribute (a raw `Nullable<u8>`, from `decode_light_sensor_type`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LightSensorTypeEnum {
     /// Photodiode = 0.

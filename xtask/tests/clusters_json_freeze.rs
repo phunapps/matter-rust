@@ -1496,9 +1496,35 @@ fn unreferenced_datatypes_are_pruned_except_the_keep_list() {
             "{c}.{d} still dumped"
         );
     }
+    // Each kept datatype says what it interprets (`keptFor`, its rustdoc
+    // line), and nothing else carries a `keptFor`.
+    let mut kept_for: Vec<(&str, &str)> = clusters(&v)
+        .iter()
+        .flat_map(|c| {
+            c["datatypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| !d["keptFor"].is_null())
+                .map(|d| (c["name"].as_str().unwrap(), d["name"].as_str().unwrap()))
+        })
+        .collect();
+    kept_for.sort_unstable();
+    assert_eq!(kept_for, KEPT_UNREFERENCED);
     for (c, d) in KEPT_UNREFERENCED {
-        let _ = datatype(cluster(&v, c), d);
+        let dt = datatype(cluster(&v, c), d);
+        assert_eq!(dt["kind"], "enum", "{c}.{d}");
+        assert!(
+            dt["keptFor"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("The value of ")),
+            "{c}.{d}: {dt}"
+        );
     }
+    assert_eq!(
+        datatype(cluster(&v, "WindowCovering"), "MovementStatus")["keptFor"],
+        "The value of each two-bit field (Global, Lift, Tilt) of `OperationalStatusBitmap`."
+    );
     // Every StatusCodeEnum stays: the cluster-specific status codes no field
     // names. A model StatusCodeEnum the prune dropped would be recorded as a
     // `datatype` exclusion (checked above against PRUNED_DATATYPES, and here by

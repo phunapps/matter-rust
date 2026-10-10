@@ -274,6 +274,8 @@ bitflags::bitflags! {
 }
 
 /// `MovementStatus` (enum8).
+///
+/// The value of each two-bit field (Global, Lift, Tilt) of `OperationalStatusBitmap`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MovementStatus {
     /// Stopped = 0.

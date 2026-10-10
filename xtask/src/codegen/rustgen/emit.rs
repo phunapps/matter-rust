@@ -376,6 +376,10 @@ fn emit_enum(s: &mut String, d: &Datatype) {
     let backing = enum_backing(&d.base);
     let catch_all = catch_all_variant(d);
     line!(s, "/// `{}` ({}).", d.name, d.base);
+    if let Some(kept_for) = &d.kept_for {
+        line!(s, "///");
+        line!(s, "/// {kept_for}");
+    }
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
     // Members like `4V5`/`523` (PowerSource BatCommonDesignationEnum) get an
     // `_`-prefixed variant name (see `ident`), which is not upper-camel-case.
@@ -523,6 +527,7 @@ mod tests {
             bits: vec![],
             fields: vec![],
             global_name: None,
+            kept_for: None,
         }
     }
 
@@ -594,6 +599,7 @@ mod tests {
                 f(254, "FabricIndex", false),
             ],
             global_name: None,
+            kept_for: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
@@ -627,6 +633,7 @@ mod tests {
             bits: vec![],
             fields: vec![],
             global_name: None,
+            kept_for: None,
         }
     }
 
@@ -680,6 +687,7 @@ mod tests {
             bits: vec![],
             fields: vec![],
             global_name: None,
+            kept_for: None,
         };
         // A normal data struct keeps #[non_exhaustive].
         let mut normal = String::new();
@@ -839,6 +847,7 @@ mod tests {
                 note_field("B", true, Some(("a", 1, false, false))),
             ],
             global_name: Some("locationdesc".to_string()),
+            kept_for: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
@@ -936,5 +945,19 @@ mod tests {
             "{s}"
         );
         assert!(!s.contains(PROVISIONAL_DOC), "{s}");
+    }
+
+    #[test]
+    fn a_kept_enum_says_what_it_interprets() {
+        let mut d = enum_dt("MovementStatus", "enum8", &[(0, "Stopped")]);
+        d.kept_for = Some("The value of each two-bit field of `X`.".to_string());
+        let mut s = String::new();
+        emit_enum(&mut s, &d);
+        assert!(
+            s.starts_with(
+                "/// `MovementStatus` (enum8).\n///\n/// The value of each two-bit field of `X`.\n#[derive("
+            ),
+            "{s}"
+        );
     }
 }

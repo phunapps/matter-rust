@@ -1443,7 +1443,8 @@
               "name": "DelayedOffSlowFade",
               "description": null
             }
-          ]
+          ],
+          "keptFor": "The value of `encode_off_with_effect`'s `effect_variant` (a raw `u8`) when `effect_identifier` is `EffectIdentifierEnum::DelayedAllOff`."
         },
         {
           "name": "DyingLightEffectVariantEnum",
@@ -1456,7 +1457,8 @@
               "name": "DyingLightFadeOff",
               "description": null
             }
-          ]
+          ],
+          "keptFor": "The value of `encode_off_with_effect`'s `effect_variant` (a raw `u8`) when `effect_identifier` is `EffectIdentifierEnum::DyingLight`."
         },
         {
           "name": "EffectIdentifierEnum",
@@ -20241,7 +20243,8 @@
               "name": "Closing",
               "description": "Covering is moving from open to closed"
             }
-          ]
+          ],
+          "keptFor": "The value of each two-bit field (Global, Lift, Tilt) of `OperationalStatusBitmap`."
         },
         {
           "name": "OperationalStatusBitmap",
@@ -25564,7 +25567,8 @@
               "name": "Cmos",
               "description": null
             }
-          ]
+          ],
+          "keptFor": "The value of the `LightSensorType` attribute (a raw `Nullable<u8>`, from `decode_light_sensor_type`)."
         }
       ]
     },

@@ -887,6 +887,7 @@ fn emit_response_decoder(
         bits: vec![],
         fields: cmd.fields.iter().map(clone_field).collect(),
         global_name: None,
+        kept_for: None,
     };
     // Response payloads are decode-only (the gate is `!decl`), so the reachable
     // set is never consulted here — pass an empty one.
@@ -911,6 +912,7 @@ fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
         bits: vec![],
         fields: ev.fields.iter().map(clone_field).collect(),
         global_name: None,
+        kept_for: None,
     };
     emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new(), None);
 }
@@ -1480,6 +1482,7 @@ mod tests {
             bits: vec![],
             fields,
             global_name: None,
+            kept_for: None,
         }
     }
 

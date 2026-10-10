@@ -63,6 +63,8 @@ bitflags::bitflags! {
 }
 
 /// `DelayedAllOffEffectVariantEnum` (enum8).
+///
+/// The value of `encode_off_with_effect`'s `effect_variant` (a raw `u8`) when `effect_identifier` is `EffectIdentifierEnum::DelayedAllOff`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DelayedAllOffEffectVariantEnum {
     /// DelayedOffFastFade = 0.
@@ -99,6 +101,8 @@ impl DelayedAllOffEffectVariantEnum {
 }
 
 /// `DyingLightEffectVariantEnum` (enum8).
+///
+/// The value of `encode_off_with_effect`'s `effect_variant` (a raw `u8`) when `effect_identifier` is `EffectIdentifierEnum::DyingLight`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DyingLightEffectVariantEnum {
     /// DyingLightFadeOff = 0.

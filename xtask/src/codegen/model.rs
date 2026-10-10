@@ -259,6 +259,11 @@ pub struct Datatype {
     /// `LocationDescriptorStruct`). Drives a generated rustdoc line.
     #[serde(default, rename = "globalName")]
     pub global_name: Option<String>,
+    /// Why the dump kept this datatype although no generated item names it
+    /// (`KEEP_DATATYPES`): the raw integer it interprets, as a rustdoc
+    /// sentence. Enums only (the dump and [`validate`] enforce it).
+    #[serde(default, rename = "keptFor")]
+    pub kept_for: Option<String>,
 }
 
 /// An enum member.
@@ -397,6 +402,12 @@ pub fn validate(model: &Model) -> Result<(), String> {
 
         // Struct-field type references, and where `mandatoryOnWrite` may sit.
         for d in &c.datatypes {
+            if d.kept_for.is_some() && d.kind != "enum" {
+                return Err(format!(
+                    "{}.{}: keptFor on a `{}` datatype (the emitter writes it for enums only)",
+                    c.name, d.name, d.kind
+                ));
+            }
             for f in &d.fields {
                 check_type(
                     &c.name,
@@ -1061,6 +1072,24 @@ mod tests {
         let err = validate(&m).unwrap_err();
         assert!(
             err.contains("Thermostat.HEAT") && err.contains("did not add"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn kept_for_is_for_enums_only() {
+        let m = Model {
+            meta: serde_json::Value::Null,
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x0102, "name": "WindowCovering", "revision": 8, "features": [],
+                "attributes": [], "commands": [],
+                "datatypes": [{ "name": "OperationalStatusBitmap", "base": "map8", "kind": "bitmap",
+                    "bits": [], "keptFor": "The value of something." }]
+            }))],
+        };
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("OperationalStatusBitmap") && err.contains("keptFor on a `bitmap`"),
             "got: {err}"
         );
     }

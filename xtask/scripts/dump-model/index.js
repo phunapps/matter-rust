@@ -28,7 +28,8 @@
 //   supplemented? { from, removedIn, removedInRevision, feature, conformance }
 //     and deprecated? (true only) on a feature, attribute or command the
 //     Matter 1.4 supplement added (see the supplement section);
-//   globalName? on a datatype inlined from a lowercase model global.
+//   globalName? on a datatype inlined from a lowercase model global;
+//   keptFor? on an enum KEEP_DATATYPES keeps (what raw integer it interprets).
 //
 // All exclusions are recorded in meta.excluded with a reason. Hard error
 // on: an allowlisted cluster the model doesn't expose, a missing
@@ -57,7 +58,8 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 // v5: `meta.supplemented` — Matter 1.4 elements the 1.5.1 model removed,
 //     added from supplement-1.4.json (M9-A3 B4).
 // v6: per-element `supplemented` provenance and `deprecated` on every element
-//     the supplement adds, for generated rustdoc (M9-A3 B4 fix wave).
+//     the supplement adds, and `keptFor` on each KEEP_DATATYPES enum, for
+//     generated rustdoc (M9-A3 B4 fix wave).
 const DUMP_SCRIPT_VERSION = 6;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
@@ -1167,14 +1169,17 @@ function encodedStructs(attributes, commands, datatypes) {
 const UNREFERENCED_REASON = 'unreferenced (no generated attribute, command or event uses it)';
 
 // Datatypes kept although no field names them: each is the meaning of a raw
-// integer a generated item carries. A key that is reachable (it no longer
-// needs keeping) or matches no datatype of an allowlisted cluster fails the
-// dump.
+// integer a generated item carries. The reason is dumped as the datatype's
+// `keptFor` and becomes a rustdoc line, so a reader can find what the type
+// interprets (rustdoc markup: the generated Rust names). A key that is
+// reachable (it no longer needs keeping) or matches no datatype of an
+// allowlisted cluster fails the dump. MovementStatus is kept because the
+// bitmap emitter cannot name OperationalStatusBitmap's two-bit fields.
 const KEEP_DATATYPES = new Map([
-  ['OnOff.DelayedAllOffEffectVariantEnum', 'OffWithEffect.EffectVariant (raw enum8) when EffectIdentifier is DelayedAllOff'],
-  ['OnOff.DyingLightEffectVariantEnum', 'OffWithEffect.EffectVariant (raw enum8) when EffectIdentifier is DyingLight'],
-  ['IlluminanceMeasurement.LightSensorTypeEnum', 'the LightSensorType attribute (raw uint8)'],
-  ['WindowCovering.MovementStatus', 'each two-bit field (Global, Lift, Tilt) of OperationalStatusBitmap, which the bitmap emitter cannot name'],
+  ['OnOff.DelayedAllOffEffectVariantEnum', 'The value of `encode_off_with_effect`\'s `effect_variant` (a raw `u8`) when `effect_identifier` is `EffectIdentifierEnum::DelayedAllOff`.'],
+  ['OnOff.DyingLightEffectVariantEnum', 'The value of `encode_off_with_effect`\'s `effect_variant` (a raw `u8`) when `effect_identifier` is `EffectIdentifierEnum::DyingLight`.'],
+  ['IlluminanceMeasurement.LightSensorTypeEnum', 'The value of the `LightSensorType` attribute (a raw `Nullable<u8>`, from `decode_light_sensor_type`).'],
+  ['WindowCovering.MovementStatus', 'The value of each two-bit field (Global, Lift, Tilt) of `OperationalStatusBitmap`.'],
 ]);
 const appliedKeeps = new Set();
 
@@ -1190,7 +1195,9 @@ function pruneUnreferencedDatatypes(clusterName, attributes, commands, events, d
     const key = `${clusterName}.${d.name}`;
     if (KEEP_DATATYPES.has(key)) {
       if (reached.has(d.name)) fail(`KEEP_DATATYPES ${key} is reachable — it no longer needs keeping`);
+      if (d.kind !== 'enum') fail(`KEEP_DATATYPES ${key} is a ${d.kind}; only an enum's keptFor is generated`);
       appliedKeeps.add(key);
+      d.keptFor = KEEP_DATATYPES.get(key);
       kept.push(d);
     } else if (reached.has(d.name) || d.name === 'StatusCodeEnum' || d.kind === 'scalar') {
       kept.push(d);
