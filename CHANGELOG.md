@@ -59,6 +59,16 @@ missing ACL `Subjects` as "every CASE node on the fabric"). A complete entry
 encodes byte-identically to before. `AccessControlEntryStruct` and
 `AccessRestrictionEntryStruct` remain decode-only.
 
+### matter-clusters: Fixed (breaking) — LevelControl's `*WithOnOff` commands sent no fields
+
+`encode_move_to_level_with_on_off`, `encode_move_with_on_off`,
+`encode_step_with_on_off` and `encode_stop_with_on_off` took no arguments and
+encoded an empty structure, which a device rejects with `INVALID_COMMAND`.
+These commands declare no fields of their own and inherit MoveToLevel's,
+Move's, Step's and Stop's, and the codegen read only a command's own fields.
+They now take the same arguments as their base command and encode
+byte-identically to matter.js.
+
 ### matter-clusters: Added — events for 13 more clusters
 
 54 new events, each with an `event_id` const and a decode-only `<Name>Event`

@@ -295,8 +295,14 @@ function dumpCommand(cmd, clusterName) {
   if (!cmd.name) fail(`${where} (id ${cmd.id}): command missing name`);
   // Drop `disallowed` (conformance X) reserved fields — e.g. WindowCovering's
   // GoToLiftPercentage/GoToTiltPercentage each carry a typeless `Ignored` field.
+  // `members`, not `children` (as in dumpEvent): a command that shares another
+  // command's fields carries none of its own. LevelControl's four *WithOnOff
+  // commands take MoveToLevel/Move/Step/Stop's fields this way, and a derived
+  // cluster's inherited command (MicrowaveOvenMode, OvenCavityOperationalState,
+  // RvcOperationalState) takes its base's. For every other command the two
+  // are the same.
   const fields = [];
-  [...cmd.children].forEach((c, i) => {
+  [...cmd.members].forEach((c, i) => {
     if (c.isDisallowed) {
       recordExclusion(clusterName, `${cmd.name}.${c.name}`, 'command-field', 'disallowed');
       return;
@@ -339,15 +345,22 @@ function dumpDatatype(dt, where, nameOverride) {
   // A synthesized anonymous struct has no effectiveType; record its base as `struct`.
   const base = nameOverride ? 'struct' : dt.effectiveType;
   const out = { name, base, kind: 'scalar', description: dt.details || null };
+  // `members`, not `children`, throughout (as in dumpEvent and dumpCommand): a
+  // derived cluster's datatype that overrides or inherits a base datatype
+  // carries only its own additions as children. ModeBase's derived clusters
+  // inherit ModeOptionStruct's three fields (no children at all), and RvcRunMode
+  // / RvcCleanMode's ModeChangeStatus adds values to the base's Success,
+  // UnsupportedMode, GenericFailure and InvalidInMode. For a datatype with no
+  // base the two are the same.
   if (meta === 'enum') {
     out.kind = 'enum';
-    out.values = [...dt.children].map((c) => {
+    out.values = [...dt.members].map((c) => {
       if (c.id === undefined || c.id === null) fail(`${where}.${dt.name}: enum member ${c.name} missing value`);
       return { value: c.id, name: c.name, description: c.details || null };
     });
   } else if (meta === 'bitmap') {
     out.kind = 'bitmap';
-    out.bits = [...dt.children].map((c) => ({
+    out.bits = [...dt.members].map((c) => ({
       bit: c.constraint ? c.constraint.value : null,
       name: c.name,
       description: c.details || null,
@@ -357,13 +370,13 @@ function dumpDatatype(dt, where, nameOverride) {
     // `where` always starts with the owning cluster's name ("X.datatype",
     // "X.global", "X.synth").
     const owner = where.split('.')[0];
-    const fabricScoped = [...dt.children].some((c) => c.id === 254);
+    const fabricScoped = [...dt.members].some((c) => c.id === 254);
     // Drop fields with no readable type — write-only / fabric-sensitive fields
     // (e.g. IcdManagement MonitoringRegistrationStruct.Key) the device never
     // returns, so they are not decodable. Keeping them would fail
     // `requireIdNameType`; the generated decoder decodes by tag id, so omitting
     // an undecodable field is safe.
-    out.fields = [...dt.children]
+    out.fields = [...dt.members]
       .filter((c) => {
         if (!c.effectiveType) {
           recordExclusion(where, `${dt.name}.${c.name}`, 'struct-field', 'no readable type (write-only/sensitive)');

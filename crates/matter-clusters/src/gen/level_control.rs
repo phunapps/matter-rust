@@ -649,10 +649,28 @@ pub fn encode_stop(options_mask: OptionsBitmap, options_override: OptionsBitmap)
 /// Encode the `MoveToLevelWithOnOff` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_move_to_level_with_on_off() -> Vec<u8> {
+pub fn encode_move_to_level_with_on_off(
+    level: u8,
+    transition_time: Nullable<u16>,
+    options_mask: OptionsBitmap,
+    options_override: OptionsBitmap,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(level))
+        .expect("infallible: vec writer");
+    match transition_time {
+        Nullable::Null => w.put_null(Tag::Context(1)).expect("infallible: vec writer"),
+        Nullable::Value(transition_time) => {
+            w.put_uint(Tag::Context(1), u64::from(transition_time))
+                .expect("infallible: vec writer");
+        }
+    }
+    w.put_uint(Tag::Context(2), u64::from(options_mask.bits()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(3), u64::from(options_override.bits()))
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
@@ -661,10 +679,28 @@ pub fn encode_move_to_level_with_on_off() -> Vec<u8> {
 /// Encode the `MoveWithOnOff` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_move_with_on_off() -> Vec<u8> {
+pub fn encode_move_with_on_off(
+    move_mode: MoveModeEnum,
+    rate: Nullable<u8>,
+    options_mask: OptionsBitmap,
+    options_override: OptionsBitmap,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(move_mode.to_raw()))
+        .expect("infallible: vec writer");
+    match rate {
+        Nullable::Null => w.put_null(Tag::Context(1)).expect("infallible: vec writer"),
+        Nullable::Value(rate) => {
+            w.put_uint(Tag::Context(1), u64::from(rate))
+                .expect("infallible: vec writer");
+        }
+    }
+    w.put_uint(Tag::Context(2), u64::from(options_mask.bits()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(3), u64::from(options_override.bits()))
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
@@ -673,10 +709,31 @@ pub fn encode_move_with_on_off() -> Vec<u8> {
 /// Encode the `StepWithOnOff` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_step_with_on_off() -> Vec<u8> {
+pub fn encode_step_with_on_off(
+    step_mode: StepModeEnum,
+    step_size: u8,
+    transition_time: Nullable<u16>,
+    options_mask: OptionsBitmap,
+    options_override: OptionsBitmap,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(step_mode.to_raw()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(1), u64::from(step_size))
+        .expect("infallible: vec writer");
+    match transition_time {
+        Nullable::Null => w.put_null(Tag::Context(2)).expect("infallible: vec writer"),
+        Nullable::Value(transition_time) => {
+            w.put_uint(Tag::Context(2), u64::from(transition_time))
+                .expect("infallible: vec writer");
+        }
+    }
+    w.put_uint(Tag::Context(3), u64::from(options_mask.bits()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(4), u64::from(options_override.bits()))
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
@@ -685,10 +742,17 @@ pub fn encode_step_with_on_off() -> Vec<u8> {
 /// Encode the `StopWithOnOff` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
-pub fn encode_stop_with_on_off() -> Vec<u8> {
+pub fn encode_stop_with_on_off(
+    options_mask: OptionsBitmap,
+    options_override: OptionsBitmap,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = TlvWriter::new(&mut buf);
     w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(options_mask.bits()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(1), u64::from(options_override.bits()))
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf

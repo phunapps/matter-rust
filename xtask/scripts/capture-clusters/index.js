@@ -20,6 +20,11 @@ import {
   TlvObject, TlvField, TlvOptionalField,
 } from '@matter/types';
 
+// matter.js's own LevelControl cluster definition: the MoveToLevelWithOnOff
+// vector below is encoded with its requestSchema, so the oracle is matter.js's
+// model of the command's fields, not a schema we wrote (M9-A3 B2).
+import { LevelControl } from '@matter/types/clusters/level-control';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,6 +136,23 @@ cmd('level_control', 'cmd_move_to_level.json',
     optionsMask: TlvField(2, TlvUInt8),
     optionsOverride: TlvField(3, TlvUInt8),
   }).encode({ level: 128, transitionTime: 10, optionsMask: 0, optionsOverride: 0 }));
+
+// MoveToLevelWithOnOff carries exactly MoveToLevel's four fields (chip
+// level-control-cluster.xml; the 1.4.2 spec XML lists none of its own). Until
+// M9-A3 B2 our dump read only the command's own fields and generated an
+// encoder with no parameters, which sends an empty structure.
+cmd('level_control', 'cmd_move_to_level_with_on_off.json',
+  { cluster: 'LevelControl', cluster_id: 0x08, command: 'MoveToLevelWithOnOff', command_id: 0x04,
+    fields: [
+      { name: 'Level', id: 0, value: 128 },
+      { name: 'TransitionTime', id: 1, value: 10 },
+      { name: 'OptionsMask', id: 2, value: 0 },
+      { name: 'OptionsOverride', id: 3, value: 0 },
+    ],
+    note: 'a command whose fields are inherited from MoveToLevel (encoded with matter.js LevelControl requestSchema)' },
+  LevelControl.Cluster.commands.moveToLevelWithOnOff.requestSchema.encode({
+    level: 128, transitionTime: 10, optionsMask: {}, optionsOverride: {},
+  }));
 
 // ---------------------------------------------------------------------------
 // TemperatureMeasurement (0x0402)

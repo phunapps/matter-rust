@@ -178,6 +178,21 @@ fn move_to_level_command() {
 }
 
 #[test]
+fn move_to_level_with_on_off_command() {
+    // M9-A3 B2: the four *WithOnOff commands inherit their fields from
+    // MoveToLevel/Move/Step/Stop. The encoder used to take no arguments and
+    // send an empty structure, which a server rejects (Level is mandatory).
+    // The vector is encoded with matter.js's own LevelControl requestSchema.
+    let got = gen::level_control::encode_move_to_level_with_on_off(
+        128,
+        Nullable::Value(10),
+        gen::level_control::OptionsBitmap::from_bits_truncate(0),
+        gen::level_control::OptionsBitmap::from_bits_truncate(0),
+    );
+    assert_eq!(got, cmd("level_control/cmd_move_to_level_with_on_off.json"));
+}
+
+#[test]
 fn lock_door_optional_field() {
     let with = gen::door_lock::encode_lock_door(Some(vec![1, 2, 3, 4]));
     assert_eq!(with, cmd("door_lock/cmd_lock_door_with_pin.json"));

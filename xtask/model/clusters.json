@@ -1374,28 +1374,167 @@
           "name": "MoveToLevelWithOnOff",
           "direction": "request",
           "responseId": null,
-          "fields": []
+          "fields": [
+            {
+              "id": 0,
+              "name": "Level",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "TransitionTime",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "OptionsMask",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "OptionsOverride",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
         },
         {
           "id": 5,
           "name": "MoveWithOnOff",
           "direction": "request",
           "responseId": null,
-          "fields": []
+          "fields": [
+            {
+              "id": 0,
+              "name": "MoveMode",
+              "type": "MoveModeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be one of the non-reserved values in MoveModeEnum."
+            },
+            {
+              "id": 1,
+              "name": "Rate",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the rate of movement in units per second. The actual rate of movement SHOULD be as close to this rate as the device is able. If the Rate field is null, then the value of the DefaultMoveRate attribute shall be used if that attribute is supported and its value is not null. If the Rate field is null and the DefaultMoveRate attribute is either not supported or set to null, then the device SHOULD move as fast as it is able. If the device is not able to move at a variable rate, this field may be disregarded."
+            },
+            {
+              "id": 2,
+              "name": "OptionsMask",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "OptionsOverride",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
         },
         {
           "id": 6,
           "name": "StepWithOnOff",
           "direction": "request",
           "responseId": null,
-          "fields": []
+          "fields": [
+            {
+              "id": 0,
+              "name": "StepMode",
+              "type": "StepModeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be one of the non-reserved values in StepModeEnum."
+            },
+            {
+              "id": 1,
+              "name": "StepSize",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the change to CurrentLevel."
+            },
+            {
+              "id": 2,
+              "name": "TransitionTime",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the time that shall be taken to perform the step, in tenths of a second. A step is a change in the CurrentLevel of StepSize units. The actual time taken SHOULD be as close to this as the device is able. If the TransitionTime field is equal to null, the device SHOULD move as fast as it is able.\nIf the device is not able to move at a variable rate, the TransitionTime field may be disregarded."
+            },
+            {
+              "id": 3,
+              "name": "OptionsMask",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 4,
+              "name": "OptionsOverride",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
         },
         {
           "id": 7,
           "name": "StopWithOnOff",
           "direction": "request",
           "responseId": null,
-          "fields": []
+          "fields": [
+            {
+              "id": 0,
+              "name": "OptionsMask",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "OptionsOverride",
+              "type": "OptionsBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
         },
         {
           "id": 8,

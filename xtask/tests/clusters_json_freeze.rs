@@ -224,6 +224,47 @@ const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 11] = [
 ];
 
 #[test]
+fn level_control_with_on_off_commands_carry_their_base_fields() {
+    // The dump reads command `members`: the four *WithOnOff commands declare
+    // no fields of their own and take MoveToLevel / Move / Step / Stop's.
+    // Read from `children` they came out empty (released bug, M9-A3 B2).
+    let v = load();
+    let lc = clusters(&v)
+        .iter()
+        .find(|c| c["name"] == "LevelControl")
+        .unwrap();
+    let fields = |name: &str| -> Vec<(String, String, bool, bool)> {
+        lc["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("LevelControl.{name} not dumped"))["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["name"].as_str().unwrap().to_string(),
+                    f["type"].as_str().unwrap().to_string(),
+                    f["optional"].as_bool().unwrap(),
+                    f["nullable"].as_bool().unwrap(),
+                )
+            })
+            .collect()
+    };
+    for (base, with) in [
+        ("MoveToLevel", "MoveToLevelWithOnOff"),
+        ("Move", "MoveWithOnOff"),
+        ("Step", "StepWithOnOff"),
+        ("Stop", "StopWithOnOff"),
+    ] {
+        assert_ne!(fields(with), [], "{with} has no fields");
+        assert_eq!(fields(with), fields(base), "{with}");
+    }
+}
+
+#[test]
 fn dump_script_version_is_3() {
     assert_eq!(load()["meta"]["dumpScriptVersion"], 3);
 }
