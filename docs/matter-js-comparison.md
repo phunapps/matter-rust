@@ -107,6 +107,9 @@ These are language-idiomatic differences. They do not affect interop.
   XML there (the 1.4.2 XML outranks chip's codegen in our ambiguity order).
   Nothing a device reports is lost: FeatureMap reads as a raw `u32`
   (`gen::globals::decode_u32`), so a set bit 0 is still visible.
+  RefrigeratorAlarm disallows AlarmBase's RESET, so it has no `Latch`,
+  `Reset` or `Feature::RESET`; matter.js keeps them as its `ResetComponent`
+  (`clusters/refrigerator-alarm.d.ts`), chip's controller codegen omits them.
 
 - **ModeSelect `StandardNamespace` is `Nullable<u16>`** (M9-A3 B2). The
   matter.js model (`@matter/model` 0.16.11) types it as the global `namespace`

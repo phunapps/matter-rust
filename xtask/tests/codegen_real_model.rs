@@ -17,8 +17,8 @@ fn all_real_clusters_generate_and_format() {
         .expect("real model loads + validates");
     assert_eq!(
         model.clusters.len(),
-        59,
-        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect clusters"
+        61,
+        "expected the 10 M7 + 5 A2.1 + 4 A2.2 + 5 A2.3 + 5 A2.4 + 4 A2.5 mgmt + 1 D2 + 1 F1 + 1 G-a + 1 G-c + 10 concentration-measurement + 1 bridge (BDBI) + 10 A3-B2 ModeBase + 1 ModeSelect + 2 AlarmBase clusters"
     );
     for c in &model.clusters {
         let src = xtask::codegen::rustgen::emit::generate_cluster(c);

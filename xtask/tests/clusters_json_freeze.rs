@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 59] = [
+const TARGET_CLUSTERS: [&str; 61] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -88,6 +88,9 @@ const TARGET_CLUSTERS: [&str; 59] = [
     "DeviceEnergyManagementMode",
     // M9-A3 B2, ModeSelect:
     "ModeSelect",
+    // M9-A3 B2, AlarmBase-derived:
+    "RefrigeratorAlarm",
+    "DishwasherAlarm",
 ];
 
 fn load() -> Value {
@@ -374,7 +377,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 14] = [
+const EVENT_CLUSTERS: [&str; 16] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -393,6 +396,9 @@ const EVENT_CLUSTERS: [&str; 14] = [
     "DoorLock",
     // M9-A3 B1, derived cluster:
     "BridgedDeviceBasicInformation",
+    // M9-A3 B2, AlarmBase-derived:
+    "RefrigeratorAlarm",
+    "DishwasherAlarm",
 ];
 
 #[test]
@@ -648,4 +654,46 @@ fn every_relaxation_is_fabric_sensitive_or_a_recorded_widening() {
             .any(|d| d["name"] == "namespace"),
         "namespace inlined into ModeSelect"
     );
+}
+
+#[test]
+fn refrigerator_alarm_drops_what_its_disallowed_reset_feature_gates() {
+    // RefrigeratorAlarm disallows AlarmBase's RESET feature (1.4.2
+    // RefrigeratorAlarm.xml), so Latch and Reset (RESET-gated) can never be
+    // implemented, and ModifyEnabledAlarms is disallowed outright. DishwasherAlarm
+    // keeps all of them.
+    let v = load();
+    let names = |c: &Value, key: &str| -> Vec<String> {
+        c[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let fridge = cluster(&v, "RefrigeratorAlarm");
+    assert_eq!(names(fridge, "attributes"), ["Mask", "State", "Supported"]);
+    assert_eq!(names(fridge, "commands"), Vec::<String>::new());
+    assert_eq!(fridge["features"], serde_json::json!([]));
+    let washer = cluster(&v, "DishwasherAlarm");
+    assert_eq!(
+        names(washer, "attributes"),
+        ["Mask", "Latch", "State", "Supported"]
+    );
+    assert_eq!(names(washer, "commands"), ["Reset", "ModifyEnabledAlarms"]);
+    let excluded = v["meta"]["excluded"].as_array().unwrap();
+    for (element, kind, reason) in [
+        ("RESET", "feature", "disallowed"),
+        ("Latch", "attribute", "feature-disallowed (RESET)"),
+        ("Reset", "command", "feature-disallowed (RESET)"),
+        ("ModifyEnabledAlarms", "command", "disallowed"),
+    ] {
+        assert!(
+            excluded.iter().any(|e| e["cluster"] == "RefrigeratorAlarm"
+                && e["element"] == element
+                && e["kind"] == kind
+                && e["reason"] == reason),
+            "RefrigeratorAlarm {kind} {element} exclusion missing"
+        );
+    }
 }

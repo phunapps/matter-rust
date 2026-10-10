@@ -1890,3 +1890,109 @@ fn mode_select_writable_modes_and_change_to_mode_encode() {
         struct_of(&|w| w.put_uint(Tag::Context(0), 4).unwrap())
     );
 }
+
+// ---- M9-A3 B2: AlarmBase-derived clusters -------------------------------------
+//
+// Mask / Latch / State / Supported are map32 AlarmBitmap attributes; Notify
+// carries four of them (1.4.2 AlarmBase.xml). RefrigeratorAlarm disallows the
+// RESET feature, so its Latch and Reset are not generated (chip's controller
+// codegen omits them too) and ModifyEnabledAlarms is disallowed outright.
+
+#[test]
+fn alarm_event_ids_pinned() {
+    assert_eq!(gen::dishwasher_alarm::event_id::NOTIFY, 0x00);
+    assert_eq!(gen::refrigerator_alarm::event_id::NOTIFY, 0x00);
+}
+
+#[test]
+fn dishwasher_alarm_attributes_commands_and_notify_decode() {
+    use gen::dishwasher_alarm::{
+        decode_latch, decode_mask, decode_state, decode_supported, encode_modify_enabled_alarms,
+        encode_reset, AlarmBitmap, NotifyEvent,
+    };
+    // chip all-clusters' boot values (dishwasher-alarm-stub.cpp): Supported
+    // and Mask 0x2F, Latch 0x03, State 0x07.
+    assert_eq!(
+        decode_supported(&uint_attr(0x2F)).unwrap(),
+        AlarmBitmap::from_bits_retain(0x2F)
+    );
+    assert_eq!(decode_mask(&uint_attr(0x2F)).unwrap().bits(), 0x2F);
+    assert_eq!(
+        decode_latch(&uint_attr(0x03)).unwrap(),
+        AlarmBitmap::INFLOW_ERROR | AlarmBitmap::DRAIN_ERROR
+    );
+    assert_eq!(decode_state(&uint_attr(0x07)).unwrap().bits(), 0x07);
+    // A bit beyond the six 1.4 alarms is kept, not dropped.
+    assert_eq!(decode_state(&uint_attr(1 << 31)).unwrap().bits(), 1 << 31);
+
+    assert_eq!(
+        encode_reset(AlarmBitmap::INFLOW_ERROR),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 1).unwrap())
+    );
+    assert_eq!(
+        encode_modify_enabled_alarms(AlarmBitmap::from_bits_retain(0x2F)),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 0x2F).unwrap())
+    );
+
+    // What chip sends after Reset(InflowError) from the boot state.
+    let e = NotifyEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0x01).unwrap();
+        w.put_uint(Tag::Context(2), 0x06).unwrap();
+        w.put_uint(Tag::Context(3), 0x2F).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.active, AlarmBitmap::empty());
+    assert_eq!(e.inactive, AlarmBitmap::INFLOW_ERROR);
+    assert_eq!(e.state, AlarmBitmap::DRAIN_ERROR | AlarmBitmap::DOOR_ERROR);
+    assert_eq!(e.mask.bits(), 0x2F);
+}
+
+#[test]
+fn notify_missing_a_field_is_an_error() {
+    use matter_clusters::error::ClusterError;
+    let three_of_four = struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+    });
+    assert!(matches!(
+        gen::dishwasher_alarm::NotifyEvent::decode(&three_of_four),
+        Err(ClusterError::MissingField("Mask"))
+    ));
+    assert!(matches!(
+        gen::refrigerator_alarm::NotifyEvent::decode(&three_of_four),
+        Err(ClusterError::MissingField("Mask"))
+    ));
+}
+
+#[test]
+fn refrigerator_alarm_decodes_and_door_open_notify() {
+    use gen::refrigerator_alarm::{
+        decode_mask, decode_state, decode_supported, AlarmBitmap, NotifyEvent,
+    };
+    // chip all-clusters' defaults (all-clusters-app.matter): Mask 1, State 0,
+    // Supported 1.
+    assert_eq!(decode_mask(&uint_attr(1)).unwrap(), AlarmBitmap::DOOR_OPEN);
+    assert_eq!(decode_state(&uint_attr(0)).unwrap(), AlarmBitmap::empty());
+    assert_eq!(
+        decode_supported(&uint_attr(1)).unwrap(),
+        AlarmBitmap::DOOR_OPEN
+    );
+    // What chip sends for app-pipe SetRefrigeratorDoorStatus DoorOpen=1.
+    let e = NotifyEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_uint(Tag::Context(3), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (e.active, e.inactive),
+        (AlarmBitmap::DOOR_OPEN, AlarmBitmap::empty())
+    );
+    assert_eq!(
+        (e.state, e.mask),
+        (AlarmBitmap::DOOR_OPEN, AlarmBitmap::DOOR_OPEN)
+    );
+}

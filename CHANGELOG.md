@@ -123,6 +123,10 @@ payload struct (Switch already had its seven):
   Value), distinct from the global `datatypes::SemanticTagStruct`.
   `StandardNamespace` decodes as `Nullable<u16>`: Matter 1.4 declares it
   enum16, wider than the enum8 namespace type in the codegen's model.
+- **DishwasherAlarm (0x005D) and RefrigeratorAlarm (0x0057)**, with their
+  `Notify` events (`event_id::NOTIFY`, decode-only `NotifyEvent`).
+  RefrigeratorAlarm has no `Latch`, `Reset` or `Feature::RESET`: it disallows
+  the RESET feature they depend on.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

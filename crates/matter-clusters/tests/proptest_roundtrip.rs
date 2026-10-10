@@ -159,4 +159,26 @@ proptest! {
         prop_assert_eq!(t.value.to_raw(), value);
         prop_assert_eq!(t.encode(), bytes);
     }
+
+    // ---- M9-A3 B2: AlarmBase-derived clusters -------------------------------
+
+    #[test]
+    fn alarm_bitmap_wire_roundtrip(bits in any::<u32>()) {
+        // AlarmBitmap is map32: encoded by Reset/ModifyEnabledAlarms, decoded
+        // from the four attributes and Notify. Every 32-bit pattern must
+        // survive the wire both ways, unknown bits included (from_bits_retain).
+        use gen::dishwasher_alarm::{decode_state, encode_reset, AlarmBitmap};
+        let v = AlarmBitmap::from_bits_retain(bits);
+        let mut attr = Vec::new();
+        TlvWriter::new(&mut attr).put_uint(Tag::Anonymous, u64::from(bits)).unwrap();
+        prop_assert_eq!(decode_state(&attr).unwrap(), v);
+        let mut cmd = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut cmd);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), u64::from(bits)).unwrap();
+            w.end_container().unwrap();
+        }
+        prop_assert_eq!(encode_reset(v), cmd);
+    }
 }

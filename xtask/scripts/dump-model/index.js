@@ -135,6 +135,10 @@ const ALLOWLIST = [
   { id: 0x009f, name: 'DeviceEnergyManagementMode' },
   // M9-A3 B2, ModeSelect (not ModeBase-derived; its own SemanticTagStruct):
   { id: 0x0050, name: 'ModeSelect' },
+  // M9-A3 B2, AlarmBase-derived (Mask/Latch/State/Supported AlarmBitmap,
+  // Reset/ModifyEnabledAlarms, Notify event):
+  { id: 0x0057, name: 'RefrigeratorAlarm' },
+  { id: 0x005d, name: 'DishwasherAlarm' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -160,6 +164,9 @@ const EVENT_ALLOWLIST = new Set([
   'DoorLock',
   // M9-A3 B1, derived cluster (event fields inherited from BasicInformation):
   'BridgedDeviceBasicInformation',
+  // M9-A3 B2, AlarmBase-derived (Notify: four AlarmBitmap fields):
+  'RefrigeratorAlarm',
+  'DishwasherAlarm',
 ]);
 
 const excluded = [];
@@ -167,9 +174,11 @@ function recordExclusion(cluster, element, kind, reason) {
   excluded.push({ cluster, element, kind, reason });
 }
 
-// Fields the dump made LESS strict than the model (optional or nullable),
-// each with the finding class it resolves (P presence, N nullability; see
-// scripts/chip-xml-conformance.py) and why. Audited in meta.relaxed.
+// Elements the dump made LESS strict than the model, each with the finding
+// class it resolves (see scripts/chip-xml-conformance.py) and why: P presence
+// (a field made optional), N nullability (a field made nullable), W type
+// widening (an attribute given chip's wider 1.4.2 type, TYPE_WIDENINGS).
+// Audited in meta.relaxed.
 const relaxed = [];
 function recordRelaxation(cluster, element, findingClass, reason) {
   relaxed.push({ cluster, element, class: findingClass, reason });
@@ -188,11 +197,15 @@ const FABRIC_SENSITIVE_REASON = 'fabric-sensitive (withheld for other fabrics)';
 // the 1.4.2 type and recorded in meta.relaxed with class W. Keys use the
 // checker's element spelling, `<Cluster>.Attribute.<Name>`. A key that matches
 // no attribute of an allowlisted cluster fails the dump, so a model rename
-// cannot silently drop a widening.
+// cannot silently drop a widening. `from` is the model type the widening was
+// reviewed against: if the model's type is anything else the dump fails, so a
+// model upgrade (which may have fixed or changed the type) forces a review
+// instead of being silently overridden.
 const TYPE_WIDENINGS = new Map([
   [
     'ModeSelect.Attribute.StandardNamespace',
     {
+      from: 'namespace',
       type: 'enum16',
       reason:
         'model type `namespace` is enum8; 1.4.2 ModeSelect.xml and chip mode-select-cluster.xml declare enum16',
@@ -231,6 +244,80 @@ function gatingFeatures(el, featureNames) {
   return new Set([...names].filter((n) => featureNames.has(n)));
 }
 
+// The disallowed features (codes in `disallowed`) that a conformance AST
+// REQUIRES to be present for its element to exist, or null when the element can
+// exist with every disallowed feature absent. Unlike gatingFeatures (every name
+// anywhere in the tree), this follows only positive references, so it never
+// drops an element that a disallowed feature's ABSENCE allows:
+//   `F`, `[F]`, `F.a` (choice) -> {F}: present only if F is.
+//   `F & G`                    -> {F}: needs both.
+//   `F | G`, `F ^ G`           -> only if BOTH sides require one (G may stand in).
+//   `F, O` (otherwise)         -> only if EVERY branch requires one (the `O`
+//                                 branch is the element present without F); an
+//                                 `X` branch never makes it present, so it is
+//                                 skipped (`F, X` -> {F}).
+//   `!F`                       -> null: present exactly when F is ABSENT.
+//   anything else (M/O flags, comparisons, values, revisions) -> null.
+// Conservative by construction: when unsure it returns null (keep the element),
+// because keeping an unimplementable element costs an unused API, while dropping
+// an implementable one loses device data.
+function requiredDisallowedFeatures(ast, disallowed) {
+  if (!ast || typeof ast !== 'object') return null;
+  switch (ast.type) {
+    case Conformance.Special.Name:
+      return disallowed.has(ast.param) ? new Set([ast.param]) : null;
+    case Conformance.Special.OptionalIf:
+      return requiredDisallowedFeatures(ast.param, disallowed);
+    case Conformance.Special.Choice:
+      return requiredDisallowedFeatures(ast.param.expr, disallowed);
+    case Conformance.Operator.AND: {
+      const l = requiredDisallowedFeatures(ast.param.lhs, disallowed);
+      const r = requiredDisallowedFeatures(ast.param.rhs, disallowed);
+      return l || r ? new Set([...(l ?? []), ...(r ?? [])]) : null;
+    }
+    case Conformance.Operator.OR:
+    case Conformance.Operator.XOR: {
+      const l = requiredDisallowedFeatures(ast.param.lhs, disallowed);
+      const r = requiredDisallowedFeatures(ast.param.rhs, disallowed);
+      return l && r ? new Set([...l, ...r]) : null;
+    }
+    case Conformance.Special.Otherwise: {
+      const live = ast.param.filter((b) => b.type !== Conformance.Flag.Disallowed);
+      const req = live.map((b) => requiredDisallowedFeatures(b, disallowed));
+      return live.length > 0 && req.every((s) => s !== null) ? new Set(req.flatMap((s) => [...s])) : null;
+    }
+    default:
+      return null;
+  }
+}
+
+// Load-time self-check of requiredDisallowedFeatures over hand-written
+// conformance forms (parsed by @matter/model itself), so a regression fails the
+// dump before it can reshape a cluster. Each row: conformance, then the
+// disallowed codes it requires ('' = keep the element). Only `F` is disallowed.
+for (const [text, want] of [
+  ['F', 'F'],
+  ['[F]', 'F'],
+  ['F.a', 'F'],
+  ['F & G', 'F'],
+  ['F, X', 'F'],
+  ['!F', ''],
+  ['!F, O', ''],
+  ['F, O', ''],
+  ['F, [G]', ''],
+  ['F | G', ''],
+  ['F | !F', ''],
+  ['G', ''],
+  ['M', ''],
+  ['O', ''],
+]) {
+  const got = requiredDisallowedFeatures(new Conformance(text).ast, new Set(['F']));
+  const gotText = got ? [...got].join(',') : '';
+  if (gotText !== want) {
+    fail(`requiredDisallowedFeatures self-check: \`${text}\` gave '${gotText}', want '${want}'`);
+  }
+}
+
 // Returns an exclusion reason string, or null to keep the element.
 function exclusionReason(el, aliroCodes, featureNames, disallowedCodes) {
   if (el.isDeprecated) return 'deprecated';
@@ -243,12 +330,17 @@ function exclusionReason(el, aliroCodes, featureNames, disallowedCodes) {
     return `aliro-feature-gated (${[...gating].join(',')})`;
   }
   // M9-A3 B2: a derived cluster can disallow a base feature (RefrigeratorAlarm
-  // disallows AlarmBase's RESET). An element present only under such features
-  // can never be implemented, so it is excluded like a disallowed element —
-  // chip's controller codegen drops RefrigeratorAlarm's Latch and Reset too
-  // (src/controller/data_model/controller-clusters.matter).
-  if (gating.size > 0 && [...gating].every((f) => disallowedCodes.has(f))) {
-    return `feature-disallowed (${[...gating].join(',')})`;
+  // disallows AlarmBase's RESET). An element whose conformance REQUIRES such a
+  // feature to be present can never be implemented, so it is excluded like a
+  // disallowed element — chip's controller codegen drops RefrigeratorAlarm's
+  // Latch and Reset too (src/controller/data_model/controller-clusters.matter).
+  // Positive references only (requiredDisallowedFeatures): an element under
+  // `!F` or `F, O` exists without F and is kept.
+  const required = el.effectiveConformance && el.effectiveConformance.ast
+    ? requiredDisallowedFeatures(el.effectiveConformance.ast, disallowedCodes)
+    : null;
+  if (required) {
+    return `feature-disallowed (${[...required].join(',')})`;
   }
   return null;
 }
@@ -605,6 +697,11 @@ function dumpCluster(entry) {
     const wideningKey = `${cluster.name}.Attribute.${a.name}`;
     const widening = TYPE_WIDENINGS.get(wideningKey);
     if (widening) {
+      if (dumped.type !== widening.from) {
+        fail(
+          `type widening ${wideningKey}: model type is \`${dumped.type}\`, reviewed against \`${widening.from}\` — model drift; review TYPE_WIDENINGS`,
+        );
+      }
       dumped.type = widening.type;
       appliedWidenings.add(wideningKey);
       recordRelaxation(cluster.name, `Attribute.${a.name}`, 'W', widening.reason);

@@ -32,8 +32,10 @@
       "RefrigeratorAndTemperatureControlledCabinetMode",
       "RvcRunMode",
       "RvcCleanMode",
+      "RefrigeratorAlarm",
       "DishwasherMode",
       "AirQuality",
+      "DishwasherAlarm",
       "MicrowaveOvenMode",
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
@@ -328,6 +330,30 @@
         "element": "AlarmMask",
         "kind": "attribute",
         "reason": "deprecated"
+      },
+      {
+        "cluster": "RefrigeratorAlarm",
+        "element": "Latch",
+        "kind": "attribute",
+        "reason": "feature-disallowed (RESET)"
+      },
+      {
+        "cluster": "RefrigeratorAlarm",
+        "element": "ModifyEnabledAlarms",
+        "kind": "command",
+        "reason": "disallowed"
+      },
+      {
+        "cluster": "RefrigeratorAlarm",
+        "element": "Reset",
+        "kind": "command",
+        "reason": "feature-disallowed (RESET)"
+      },
+      {
+        "cluster": "RefrigeratorAlarm",
+        "element": "RESET",
+        "kind": "feature",
+        "reason": "disallowed"
       },
       {
         "cluster": "RefrigeratorAndTemperatureControlledCabinetMode",
@@ -10319,6 +10345,105 @@
       ]
     },
     {
+      "id": 87,
+      "name": "RefrigeratorAlarm",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Mask",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit set in the Mask attribute corresponds to an alarm that shall be enabled."
+        },
+        {
+          "id": 2,
+          "name": "State",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit shall represent the state of an alarm. The value of true means the alarm is active, otherwise the alarm is inactive."
+        },
+        {
+          "id": 3,
+          "name": "Supported",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit shall represent whether or not an alarm is supported. The value of true means the alarm is supported, otherwise the alarm is not supported.\nIf an alarm is not supported, the corresponding bit in Mask, Latch, and State shall be false."
+        }
+      ],
+      "commands": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "Notify",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Active",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate those alarms that have become active."
+            },
+            {
+              "id": 1,
+              "name": "Inactive",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate those alarms that have become inactive."
+            },
+            {
+              "id": 2,
+              "name": "State",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be a copy of the new State attribute value that resulted in the event being generated. That is, this field shall have all the bits in Active set and shall NOT have any of the bits in Inactive set."
+            },
+            {
+              "id": 3,
+              "name": "Mask",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be a copy of the Mask attribute when this event was generated."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AlarmBitmap",
+          "base": "map32",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "DoorOpen",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 89,
       "name": "DishwasherMode",
       "revision": 3,
@@ -10642,6 +10767,182 @@
             {
               "value": 6,
               "name": "ExtremelyPoor",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 93,
+      "name": "DishwasherAlarm",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "RESET",
+          "name": "Reset",
+          "description": "This feature indicates that alarms can be reset via the Reset command."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Mask",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit set in the Mask attribute corresponds to an alarm that shall be enabled."
+        },
+        {
+          "id": 1,
+          "name": "Latch",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit set in the Latch attribute shall indicate that the corresponding alarm will be latched when set, and will not reset to inactive when the underlying condition which caused the alarm is no longer present, and so requires an explicit reset using the Reset command."
+        },
+        {
+          "id": 2,
+          "name": "State",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit shall represent the state of an alarm. The value of true means the alarm is active, otherwise the alarm is inactive."
+        },
+        {
+          "id": 3,
+          "name": "Supported",
+          "type": "AlarmBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a bitmap where each bit shall represent whether or not an alarm is supported. The value of true means the alarm is supported, otherwise the alarm is not supported.\nIf an alarm is not supported, the corresponding bit in Mask, Latch, and State shall be false."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "Reset",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Alarms",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a bitmap where each bit set in this field corresponds to an alarm that shall be reset to inactive in the State attribute unless the alarm definition requires manual intervention. If the alarms indicated are successfully reset, the response status code shall be SUCCESS, otherwise, the response status code shall be FAILURE."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ModifyEnabledAlarms",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Mask",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a bitmap where each bit set in the this field corresponds to an alarm that SHOULD be enabled or suppressed. A value of 1 shall indicate that the alarm SHOULD be enabled while a value of 0 shall indicate that the alarm SHOULD be suppressed.\nA server that receives this command with a Mask that includes bits that are set for unknown alarms shall respond with a status code of INVALID_COMMAND.\nA server that receives this command with a Mask that includes bits that are set for alarms which are not supported, as indicated in the Supported attribute, shall respond with a status code of INVALID_COMMAND.\nA server that is unable to enable a currently suppressed alarm, or is unable to suppress a currently enabled alarm shall respond with a status code of FAILURE; otherwise the server shall respond with a status code of SUCCESS.\nOn a SUCCESS case, the server shall also change the value of the Mask attribute to the value of the Mask field from this command. After that the server shall also update the value of its State attribute to reflect the status of the new alarm set as indicated by the new value of the Mask attribute."
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "Notify",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Active",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate those alarms that have become active."
+            },
+            {
+              "id": 1,
+              "name": "Inactive",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate those alarms that have become inactive."
+            },
+            {
+              "id": 2,
+              "name": "State",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be a copy of the new State attribute value that resulted in the event being generated. That is, this field shall have all the bits in Active set and shall NOT have any of the bits in Inactive set."
+            },
+            {
+              "id": 3,
+              "name": "Mask",
+              "type": "AlarmBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be a copy of the Mask attribute when this event was generated."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AlarmBitmap",
+          "base": "map32",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "InflowError",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "DrainError",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "DoorError",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "TempTooLow",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "TempTooHigh",
+              "description": null
+            },
+            {
+              "bit": 5,
+              "name": "WaterLevelError",
               "description": null
             }
           ]
