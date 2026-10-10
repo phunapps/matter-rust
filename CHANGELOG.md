@@ -268,6 +268,20 @@ The codegen now generates only what a client can use:
   `service_area::{LandmarkInfoStruct, LocationDescriptorStruct, MapStruct,
   ProgressStruct}`.
 
+### matter-clusters: Added — safety, valve and scenes clusters
+
+- **SmokeCoAlarm (0x005C)**, with its eleven events: every attribute,
+  `encode_smoke_sensitivity_level`, `encode_self_test_request`, and
+  payload decoders for the five events that carry an `AlarmSeverityLevel`
+  (SmokeAlarm, CoAlarm, LowBattery, InterconnectSmokeAlarm,
+  InterconnectCoAlarm); the other six carry no fields and have an
+  `event_id` constant only.
+- **BooleanStateConfiguration (0x0080)**, with its `AlarmsStateChanged` and
+  `SensorFault` events: every attribute,
+  `encode_current_sensitivity_level`, `encode_suppress_alarm` and
+  `encode_enable_disable_alarm`. `AlarmsStateChanged.alarms_suppressed` is
+  an `Option`: devices send it only with the alarm-suppress feature.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 72] = [
+const TARGET_CLUSTERS: [&str; 74] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -106,6 +106,9 @@ const TARGET_CLUSTERS: [&str; 72] = [
     "MicrowaveOvenControl",
     // M9-A3 B3, ServiceArea:
     "ServiceArea",
+    // M9-A3 B4, safety sensors:
+    "SmokeCoAlarm",
+    "BooleanStateConfiguration",
 ];
 
 fn load() -> Value {
@@ -392,7 +395,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 19] = [
+const EVENT_CLUSTERS: [&str; 21] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -418,6 +421,9 @@ const EVENT_CLUSTERS: [&str; 19] = [
     "OperationalState",
     "OvenCavityOperationalState",
     "RvcOperationalState",
+    // M9-A3 B4, safety sensors:
+    "SmokeCoAlarm",
+    "BooleanStateConfiguration",
 ];
 
 #[test]
@@ -1377,4 +1383,47 @@ fn unreferenced_datatypes_are_pruned_except_the_keep_list() {
     ] {
         let _ = datatype(cluster(&v, c), "StatusCodeEnum");
     }
+}
+
+// ---- M9-A3 B4: safety sensors ---------------------------------------------------
+
+#[test]
+fn safety_sensor_events_keep_their_payload_shapes() {
+    // SmokeCoAlarm's eleven events: five carry a mandatory AlarmSeverityLevel,
+    // six carry nothing. BooleanStateConfiguration's AlarmsSuppressed is
+    // SPRS-gated, so optional.
+    let v = load();
+    let smoke = cluster(&v, "SmokeCoAlarm");
+    let events: Vec<(&str, Vec<(&str, bool)>)> = smoke["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["name"].as_str().unwrap(), field_optionality(&e["fields"])))
+        .collect();
+    let sev = || vec![("AlarmSeverityLevel", false)];
+    assert_eq!(
+        events,
+        [
+            ("SmokeAlarm", sev()),
+            ("CoAlarm", sev()),
+            ("LowBattery", sev()),
+            ("HardwareFault", vec![]),
+            ("EndOfService", vec![]),
+            ("SelfTestComplete", vec![]),
+            ("AlarmMuted", vec![]),
+            ("MuteEnded", vec![]),
+            ("InterconnectSmokeAlarm", sev()),
+            ("InterconnectCoAlarm", sev()),
+            ("AllClear", vec![]),
+        ]
+    );
+    let bsc = cluster(&v, "BooleanStateConfiguration");
+    assert_eq!(
+        field_optionality(&bsc["events"][0]["fields"]),
+        [("AlarmsActive", false), ("AlarmsSuppressed", true)]
+    );
+    assert_eq!(
+        field_optionality(&bsc["events"][1]["fields"]),
+        [("SensorFault", false)]
+    );
 }

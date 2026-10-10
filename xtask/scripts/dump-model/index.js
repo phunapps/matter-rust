@@ -169,6 +169,10 @@ const ALLOWLIST = [
   // M9-A3 B3, ServiceArea (rvc-app's only; the global `locationdesc` inlined
   // as LocationDescriptorStruct, see GLOBAL_DATATYPE_NAMES):
   { id: 0x0150, name: 'ServiceArea' },
+  // M9-A3 B4, safety sensors (enum and bitmap attributes, one writable level,
+  // alarm commands, events with scalar or no fields):
+  { id: 0x005c, name: 'SmokeCoAlarm' },
+  { id: 0x0080, name: 'BooleanStateConfiguration' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -202,6 +206,11 @@ const EVENT_ALLOWLIST = new Set([
   'OperationalState',
   'OvenCavityOperationalState',
   'RvcOperationalState',
+  // M9-A3 B4, safety sensors (SmokeCoAlarm: 11 events, 5 with an
+  // AlarmSeverityLevel and 6 fieldless; BooleanStateConfiguration:
+  // AlarmsStateChanged, SensorFault):
+  'SmokeCoAlarm',
+  'BooleanStateConfiguration',
 ]);
 
 const excluded = [];

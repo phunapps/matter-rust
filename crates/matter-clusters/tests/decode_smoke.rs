@@ -2973,3 +2973,222 @@ fn window_covering_absolute_position_decodes_and_encodes() {
         struct_of(&|w| w.put_uint(Tag::Context(0), 900).unwrap())
     );
 }
+
+// ---- M9-A3 B4: SmokeCoAlarm and BooleanStateConfiguration ----------------
+//
+// SmokeCoAlarm (1.4.2 SmokeCOAlarm.xml): enum and bool attributes, a writable
+// SmokeSensitivityLevel, SelfTestRequest, and eleven events -- five carry an
+// AlarmSeverityLevel, six carry nothing (those get only their `event_id`
+// const, like BasicInformation `ShutDown`). BooleanStateConfiguration (1.4.2
+// BooleanStateConfiguration.xml): bitmap attributes, a writable sensitivity
+// level, SuppressAlarm / EnableDisableAlarm, AlarmsStateChanged and
+// SensorFault.
+
+#[test]
+fn smoke_co_alarm_attributes_decode() {
+    use clusters::smoke_co_alarm::{
+        decode_battery_alert, decode_co_state, decode_contamination_state, decode_device_muted,
+        decode_end_of_service_alert, decode_expiry_date, decode_expressed_state,
+        decode_hardware_fault_alert, decode_interconnect_co_alarm, decode_interconnect_smoke_alarm,
+        decode_smoke_sensitivity_level, decode_smoke_state, decode_test_in_progress,
+        encode_smoke_sensitivity_level, AlarmStateEnum, ContaminationStateEnum, EndOfServiceEnum,
+        ExpressedStateEnum, Feature, MuteStateEnum, SensitivityEnum,
+    };
+    assert_eq!(
+        (Feature::SMOKE | Feature::CO).bits(),
+        3,
+        "all-clusters' features"
+    );
+    assert_eq!(
+        decode_expressed_state(&uint_attr(1)).unwrap(),
+        ExpressedStateEnum::SmokeAlarm
+    );
+    // chip master adds Inoperative (9, revision 2): kept, not an error.
+    assert_eq!(
+        decode_expressed_state(&uint_attr(9)).unwrap(),
+        ExpressedStateEnum::Unknown(9)
+    );
+    assert_eq!(
+        decode_smoke_state(&uint_attr(2)).unwrap(),
+        AlarmStateEnum::Critical
+    );
+    assert_eq!(
+        decode_co_state(&uint_attr(1)).unwrap(),
+        AlarmStateEnum::Warning
+    );
+    assert_eq!(
+        decode_battery_alert(&uint_attr(0)).unwrap(),
+        AlarmStateEnum::Normal
+    );
+    assert_eq!(
+        decode_device_muted(&uint_attr(1)).unwrap(),
+        MuteStateEnum::Muted
+    );
+    assert!(decode_test_in_progress(&bool_attr(true)).unwrap());
+    assert!(!decode_hardware_fault_alert(&bool_attr(false)).unwrap());
+    assert_eq!(
+        decode_end_of_service_alert(&uint_attr(1)).unwrap(),
+        EndOfServiceEnum::Expired
+    );
+    assert_eq!(
+        decode_interconnect_smoke_alarm(&uint_attr(1)).unwrap(),
+        AlarmStateEnum::Warning
+    );
+    assert_eq!(
+        decode_interconnect_co_alarm(&uint_attr(0)).unwrap(),
+        AlarmStateEnum::Normal
+    );
+    assert_eq!(
+        decode_contamination_state(&uint_attr(3)).unwrap(),
+        ContaminationStateEnum::Critical
+    );
+    // all-clusters' ExpiryDate default at master (epoch-s).
+    assert_eq!(
+        decode_expiry_date(&uint_attr(3_976_214_400)).unwrap(),
+        3_976_214_400
+    );
+    assert_eq!(
+        decode_smoke_sensitivity_level(&encode_smoke_sensitivity_level(SensitivityEnum::Low))
+            .unwrap(),
+        SensitivityEnum::Low
+    );
+    assert_eq!(
+        encode_smoke_sensitivity_level(SensitivityEnum::Standard),
+        uint_attr(1)
+    );
+}
+
+#[test]
+fn smoke_co_alarm_events_and_self_test_decode() {
+    use clusters::smoke_co_alarm::{
+        encode_self_test_request, event_id, AlarmStateEnum, CoAlarmEvent, InterconnectCoAlarmEvent,
+        InterconnectSmokeAlarmEvent, LowBatteryEvent, SmokeAlarmEvent,
+    };
+    assert_eq!(encode_self_test_request(), [0x15, 0x18]);
+    let severity = |v| struct_of(&|w| w.put_uint(Tag::Context(0), v).unwrap());
+    assert_eq!(
+        SmokeAlarmEvent::decode(&severity(2))
+            .unwrap()
+            .alarm_severity_level,
+        AlarmStateEnum::Critical
+    );
+    assert_eq!(
+        CoAlarmEvent::decode(&severity(1))
+            .unwrap()
+            .alarm_severity_level,
+        AlarmStateEnum::Warning
+    );
+    assert_eq!(
+        LowBatteryEvent::decode(&severity(1))
+            .unwrap()
+            .alarm_severity_level,
+        AlarmStateEnum::Warning
+    );
+    assert_eq!(
+        InterconnectSmokeAlarmEvent::decode(&severity(1))
+            .unwrap()
+            .alarm_severity_level,
+        AlarmStateEnum::Warning
+    );
+    assert_eq!(
+        InterconnectCoAlarmEvent::decode(&severity(1))
+            .unwrap()
+            .alarm_severity_level,
+        AlarmStateEnum::Warning
+    );
+    // The six fieldless events are ids only (no payload struct).
+    assert_eq!(
+        [
+            event_id::SMOKE_ALARM,
+            event_id::CO_ALARM,
+            event_id::LOW_BATTERY,
+            event_id::HARDWARE_FAULT,
+            event_id::END_OF_SERVICE,
+            event_id::SELF_TEST_COMPLETE,
+            event_id::ALARM_MUTED,
+            event_id::MUTE_ENDED,
+            event_id::INTERCONNECT_SMOKE_ALARM,
+            event_id::INTERCONNECT_CO_ALARM,
+            event_id::ALL_CLEAR
+        ],
+        [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A]
+    );
+    assert!(matches!(
+        SmokeAlarmEvent::decode(&struct_of(&|_| {})),
+        Err(matter_clusters::error::ClusterError::MissingField(
+            "AlarmSeverityLevel"
+        ))
+    ));
+}
+
+#[test]
+fn boolean_state_configuration_decodes_and_commands_encode() {
+    use clusters::boolean_state_configuration::{
+        decode_alarms_active, decode_alarms_enabled, decode_alarms_supported,
+        decode_alarms_suppressed, decode_current_sensitivity_level,
+        decode_default_sensitivity_level, decode_sensor_fault, decode_supported_sensitivity_levels,
+        encode_current_sensitivity_level, encode_enable_disable_alarm, encode_suppress_alarm,
+        AlarmModeBitmap, AlarmsStateChangedEvent, Feature, SensorFaultBitmap, SensorFaultEvent,
+    };
+    // all-clusters: features 0x0F, three levels (default 2), both alarms.
+    assert_eq!(Feature::all().bits(), 0x0F);
+    assert_eq!(
+        decode_supported_sensitivity_levels(&uint_attr(3)).unwrap(),
+        3
+    );
+    assert_eq!(decode_default_sensitivity_level(&uint_attr(2)).unwrap(), 2);
+    assert_eq!(
+        decode_current_sensitivity_level(&encode_current_sensitivity_level(1)).unwrap(),
+        1
+    );
+    assert_eq!(
+        decode_alarms_supported(&uint_attr(3)).unwrap(),
+        AlarmModeBitmap::all()
+    );
+    assert_eq!(
+        decode_alarms_active(&uint_attr(0)).unwrap(),
+        AlarmModeBitmap::empty()
+    );
+    assert_eq!(
+        decode_alarms_enabled(&uint_attr(3)).unwrap(),
+        AlarmModeBitmap::all()
+    );
+    assert_eq!(
+        decode_alarms_suppressed(&uint_attr(1)).unwrap(),
+        AlarmModeBitmap::VISUAL
+    );
+    // A bit a later revision adds survives the decode.
+    assert_eq!(
+        decode_sensor_fault(&uint_attr(0x8001)).unwrap().bits(),
+        0x8001
+    );
+    assert_eq!(
+        encode_suppress_alarm(AlarmModeBitmap::VISUAL),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 1).unwrap())
+    );
+    assert_eq!(
+        encode_enable_disable_alarm(AlarmModeBitmap::all()),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 3).unwrap())
+    );
+    // chip sends AlarmsSuppressed only with the SPRS feature
+    // (GenerateAlarmsStateChangedEvent / emitAlarmsStateChangedEvent).
+    let e = AlarmsStateChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_uint(Tag::Context(1), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (e.alarms_active, e.alarms_suppressed),
+        (AlarmModeBitmap::all(), Some(AlarmModeBitmap::VISUAL))
+    );
+    let e = AlarmsStateChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.alarms_suppressed, None);
+    let f = SensorFaultEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(f.sensor_fault, SensorFaultBitmap::GENERAL_FAULT);
+}

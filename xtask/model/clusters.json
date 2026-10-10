@@ -39,6 +39,7 @@
       "RefrigeratorAlarm",
       "DishwasherMode",
       "AirQuality",
+      "SmokeCoAlarm",
       "DishwasherAlarm",
       "MicrowaveOvenMode",
       "MicrowaveOvenControl",
@@ -47,6 +48,7 @@
       "HepaFilterMonitoring",
       "ActivatedCarbonFilterMonitoring",
       "WaterTankLevelMonitoring",
+      "BooleanStateConfiguration",
       "ElectricalPowerMeasurement",
       "ElectricalEnergyMeasurement",
       "EnergyEvseMode",
@@ -11528,6 +11530,449 @@
       ]
     },
     {
+      "id": 92,
+      "name": "SmokeCoAlarm",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "SMOKE",
+          "name": "SmokeAlarm",
+          "description": "Supports Smoke alarm"
+        },
+        {
+          "bit": 1,
+          "code": "CO",
+          "name": "CoAlarm",
+          "description": "Supports CO alarm"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "ExpressedState",
+          "type": "ExpressedStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the visibly- and audibly-expressed state of the alarm. When multiple alarm conditions are being reflected in the server, this attribute shall indicate the condition with the highest priority. Priority order of conditions is determined by the manufacturer and shall be supplied as a part of certification procedure. If the value of ExpressedState is not Normal, the attribute corresponding to the value shall NOT be Normal. For example, if the ExpressedState is set to SmokeAlarm, the value of the SmokeState will indicate the severity of the alarm (Warning or Critical). Clients SHOULD also read the other attributes to be aware of further alarm conditions beyond the one indicated in ExpressedState.\nVisible expression is typically a LED light pattern. Audible expression is a horn or speaker pattern. Audible expression shall BE suppressed if the DeviceMuted attribute is supported and set to Muted."
+        },
+        {
+          "id": 1,
+          "name": "SmokeState",
+          "type": "AlarmStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the device's smoke sensor is currently triggering a smoke alarm."
+        },
+        {
+          "id": 2,
+          "name": "CoState",
+          "type": "AlarmStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the device's CO sensor is currently triggering a CO alarm."
+        },
+        {
+          "id": 3,
+          "name": "BatteryAlert",
+          "type": "AlarmStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether the power resource fault detection mechanism is currently triggered at the device. If the detection mechanism is triggered, this attribute shall be set to Warning or Critical, otherwise it shall be set to Normal. The battery state shall also be reflected in the Power Source cluster representing the device's battery using the appropriate supported attributes and events."
+        },
+        {
+          "id": 4,
+          "name": "DeviceMuted",
+          "type": "MuteStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the whether the audible expression of the device is currently muted. Audible expression is typically a horn or speaker pattern."
+        },
+        {
+          "id": 5,
+          "name": "TestInProgress",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether the device self-test is currently activated. If the device self-test is activated, this attribute shall be set to True, otherwise it shall be set to False."
+        },
+        {
+          "id": 6,
+          "name": "HardwareFaultAlert",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether the hardware fault detection mechanism is currently triggered. If the detection mechanism is triggered, this attribute shall be set to True, otherwise it shall be set to False."
+        },
+        {
+          "id": 7,
+          "name": "EndOfServiceAlert",
+          "type": "EndOfServiceEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether the end-of-service has been triggered at the device. This attribute shall be set to Expired when the device reaches the end-of-service."
+        },
+        {
+          "id": 8,
+          "name": "InterconnectSmokeAlarm",
+          "type": "AlarmStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the interconnected smoke alarm is currently triggering by branching devices. When the interconnected smoke alarm is being triggered, this attribute shall be set to Warning or Critical, otherwise it shall be set to Normal."
+        },
+        {
+          "id": 9,
+          "name": "InterconnectCoAlarm",
+          "type": "AlarmStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the interconnected CO alarm is currently triggering by branching devices. When the interconnected CO alarm is being triggered, this attribute shall be set to Warning or Critical, otherwise it shall be set to Normal."
+        },
+        {
+          "id": 10,
+          "name": "ContaminationState",
+          "type": "ContaminationStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the contamination level of the smoke sensor."
+        },
+        {
+          "id": 11,
+          "name": "SmokeSensitivityLevel",
+          "type": "SensitivityEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the sensitivity level of the smoke sensor configured on the device."
+        },
+        {
+          "id": 12,
+          "name": "ExpiryDate",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the date when the device reaches its stated expiry date. After the ExpiryDate has been reached, the EndOfServiceAlert shall start to be triggered. To account for better customer experience across time zones, the EndOfServiceAlert may be delayed by up to 24 hours after the ExpiryDate. Similarly, clients may delay any actions based on the ExpiryDate by up to 24 hours to best align with the local time zone."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SelfTestRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "SmokeAlarm",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmSeverityLevel",
+              "type": "AlarmStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the current value of the SmokeState attribute."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "CoAlarm",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmSeverityLevel",
+              "type": "AlarmStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the current value of the COState attribute."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "LowBattery",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmSeverityLevel",
+              "type": "AlarmStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the current value of the BatteryAlert attribute."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "HardwareFault",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 4,
+          "name": "EndOfService",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "SelfTestComplete",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 6,
+          "name": "AlarmMuted",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 7,
+          "name": "MuteEnded",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 8,
+          "name": "InterconnectSmokeAlarm",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmSeverityLevel",
+              "type": "AlarmStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the current value of the InterconnectSmokeAlarm attribute."
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "name": "InterconnectCoAlarm",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmSeverityLevel",
+              "type": "AlarmStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the current value of the InterconnectCOAlarm attribute."
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "name": "AllClear",
+          "priority": "info",
+          "fields": []
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AlarmStateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Normal",
+              "description": "This value shall indicate that this alarm is not alarming."
+            },
+            {
+              "value": 1,
+              "name": "Warning",
+              "description": "This value shall indicate that this alarm is in a warning state. Alarms in this state SHOULD be subject to being muted via physical interaction."
+            },
+            {
+              "value": 2,
+              "name": "Critical",
+              "description": "This value shall indicate that this alarm is in a critical state. Alarms in this state shall NOT be subject to being muted via physical interaction."
+            }
+          ]
+        },
+        {
+          "name": "ContaminationStateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Normal",
+              "description": "This value shall indicate that the smoke sensor has nominal contamination levels, no customer action is required."
+            },
+            {
+              "value": 1,
+              "name": "Low",
+              "description": "This value shall indicate that the smoke sensor has detectable contamination levels, but the contamination is too low to cause a visible or audible alarm."
+            },
+            {
+              "value": 2,
+              "name": "Warning",
+              "description": "This value shall indicate that the smoke sensor has contamination levels in a warning state. At this level, the contamination may cause a visible or audible alarm. User intervention is suggested."
+            },
+            {
+              "value": 3,
+              "name": "Critical",
+              "description": "This value shall indicate that the smoke sensor has contamination levels in a critical state. At this level, the contamination should cause a visible or audible alarm. User intervention is required. Critical contamination of the sensor shall also be reflected as a HardwareFault."
+            }
+          ]
+        },
+        {
+          "name": "EndOfServiceEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Normal",
+              "description": "This value shall indicate that the device has not yet reached its end of service, and does not need to be imminently replaced."
+            },
+            {
+              "value": 1,
+              "name": "Expired",
+              "description": "This value shall indicate that the device has reached its end of service, and needs to be replaced."
+            }
+          ]
+        },
+        {
+          "name": "ExpressedStateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Normal",
+              "description": "This value shall indicate that this alarm is not alarming."
+            },
+            {
+              "value": 1,
+              "name": "SmokeAlarm",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of Smoke Alarm. This value shall indicate that the alarm is currently expressing audible indication of Smoke Alarm unless the DeviceMuted attribute is supported and set to Muted."
+            },
+            {
+              "value": 2,
+              "name": "CoAlarm",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of CO Alarm. This value shall indicate that the alarm is currently expressing audible indication of CO Alarm unless the DeviceMuted attribute is supported and set to Muted."
+            },
+            {
+              "value": 3,
+              "name": "BatteryAlert",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of Critical Low Battery. This value shall indicate that the alarm is currently expressing audible indication of Critical Low Battery unless the DeviceMuted attribute is supported and set to Muted."
+            },
+            {
+              "value": 4,
+              "name": "Testing",
+              "description": "This value shall indicate that this alarm is currently expressing visual and audible indication of SelfTest."
+            },
+            {
+              "value": 5,
+              "name": "HardwareFault",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of Hardware Fault. This value shall indicate that the alarm is currently expressing audible indication of Hardware Fault unless the DeviceMuted attribute is supported and set to Muted."
+            },
+            {
+              "value": 6,
+              "name": "EndOfService",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of End Of Service. This value shall indicate that the alarm is currently expressing audible indication of End of Service unless the DeviceMuted attribute is supported and set to Muted."
+            },
+            {
+              "value": 7,
+              "name": "InterconnectSmoke",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of Smoke Alarm caused by Interconnect. This value shall indicate that the alarm is currently expressing audible indication of Smoke Alarm caused by Interconnect unless the DeviceMuted attribute is supported and set to Muted."
+            },
+            {
+              "value": 8,
+              "name": "InterconnectCo",
+              "description": "This value shall indicate that this alarm is currently expressing visual indication of CO Alarm caused by Interconnect. This value shall indicate that the alarm is currently expressing audible indication of CO Alarm caused by Interconnect unless the DeviceMuted attribute is supported and set to Muted."
+            }
+          ]
+        },
+        {
+          "name": "MuteStateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "NotMuted",
+              "description": "This value shall indicate that the device is not muted."
+            },
+            {
+              "value": 1,
+              "name": "Muted",
+              "description": "This value shall indicate that the device is muted."
+            }
+          ]
+        },
+        {
+          "name": "SensitivityEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "High",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Standard",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Low",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 93,
       "name": "DishwasherAlarm",
       "revision": 1,
@@ -13358,6 +13803,231 @@
               "metatype": "string",
               "nullable": false,
               "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 128,
+      "name": "BooleanStateConfiguration",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "VIS",
+          "name": "Visual",
+          "description": "Supports visual alarms"
+        },
+        {
+          "bit": 1,
+          "code": "AUD",
+          "name": "Audible",
+          "description": "Supports audible alarms"
+        },
+        {
+          "bit": 2,
+          "code": "SPRS",
+          "name": "AlarmSuppress",
+          "description": "This feature shall indicate that the device is able to suppress the supported alarm modes, when the user acknowledges the alarm. This is intended to stop visual and/or audible alarms, when the user has become aware that the sensor is triggered, but it is no longer desired to have the alarm modes active on the device, e.g.:\n  - The triggering cause have been resolved by the user, but the sensor has not yet stopped detecting the triggering cause.\n  - The user is not able to address the triggering cause, but is aware of the alarm and suppress/acknowledge it be addressed at a later point.\nAcknowledge of alarms will for the remainder of this cluster be referred to as suppress.\nA suppressed alarm is still considered active and will remain so unless it is actively disabled or the triggering condition is not longer present. The action of suppressing an alarm mode is only applicable to and is intended to stop the physical alarming, e.g. emitting a sound or blinking a light; it does not impact alarm reporting in AlarmsActive."
+        },
+        {
+          "bit": 3,
+          "code": "SENSLVL",
+          "name": "SensitivityLevel",
+          "description": "Supports ability to set sensor sensitivity"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "CurrentSensitivityLevel",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the currently selected sensitivity level.\nIf a write interaction to this attribute contains an unsupported sensitivity value, a CONSTRAINT_ERROR status shall be returned."
+        },
+        {
+          "id": 1,
+          "name": "SupportedSensitivityLevels",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of supported sensitivity levels by the device.\nThese supported sensitivity levels shall be ordered by sensitivity, where a value of 0 shall be considered the lowest sensitivity level (least sensitive) and the highest supported value shall be considered the highest sensitivity level. The number of supported sensitivity levels SHOULD represent unique sensitivity levels supported by the device."
+        },
+        {
+          "id": 2,
+          "name": "DefaultSensitivityLevel",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the default sensitivity level selected by the manufacturer."
+        },
+        {
+          "id": 3,
+          "name": "AlarmsActive",
+          "type": "AlarmModeBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates which specific alarm modes on the server are currently active. When the sensor is no longer triggered, this attribute shall be set to the inactive state, by setting the bit to 0, for all supported alarm modes.\nIf an alarm mode is not supported, the bit indicating this alarm mode shall always be 0.\nA bit shall indicate whether the alarm mode inactive or not:\n  - 0 = Inactive\n  - 1 = Active"
+        },
+        {
+          "id": 4,
+          "name": "AlarmsSuppressed",
+          "type": "AlarmModeBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates which specific alarm modes on the server are currently suppressed. When the sensor is no longer triggered, this attribute shall be set to the unsuppressed state, by setting the bit to 0, for all supported alarm modes.\nIf an alarm mode is not supported, the bit indicating this alarm mode shall always be 0.\nA bit shall indicate whether the alarm mode is suppressed or not:\n  - 0 = Not suppressed\n  - 1 = Suppressed"
+        },
+        {
+          "id": 5,
+          "name": "AlarmsEnabled",
+          "type": "AlarmModeBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the alarm modes that will be emitted if the sensor is triggered.\nIf an alarm mode is not supported, the bit indicating this alarm mode shall always be 0.\nA bit shall indicate whether the alarm mode is enabled or disabled:\n  - 0 = Disabled\n  - 1 = Enabled"
+        },
+        {
+          "id": 6,
+          "name": "AlarmsSupported",
+          "type": "AlarmModeBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the alarms supported by the sensor.\nA bit shall indicate whether the alarm mode is supported:\n  - 0 = Not supported\n  - 1 = Supported"
+        },
+        {
+          "id": 7,
+          "name": "SensorFault",
+          "type": "SensorFaultBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates any faults registered by the device."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SuppressAlarm",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmsToSuppress",
+              "type": "AlarmModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the alarm modes to suppress."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "EnableDisableAlarm",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmsToEnableDisable",
+              "type": "AlarmModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the alarm modes to either enable or disable depending on the bit status, as specified for the AlarmsEnabled attribute."
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "AlarmsStateChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmsActive",
+              "type": "AlarmModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the state of active alarm modes, as indicated by the AlarmsActive attribute, at the time the event was generated."
+            },
+            {
+              "id": 1,
+              "name": "AlarmsSuppressed",
+              "type": "AlarmModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the state of suppressed alarm modes, as indicated by the AlarmsSuppressed attribute, at the time the event was generated."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "SensorFault",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "SensorFault",
+              "type": "SensorFaultBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the value of the SensorFault attribute, at the time this event is generated."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AlarmModeBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Visual",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "Audible",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SensorFaultBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "GeneralFault",
               "description": null
             }
           ]
