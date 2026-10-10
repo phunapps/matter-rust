@@ -113,6 +113,9 @@ pub struct EventDef {
 
 /// A struct or command field.
 #[derive(Debug, Deserialize)]
+// A one-to-one serde mirror of a clusters.json field object: each flag is an
+// independent JSON key, so folding them into an enum would not model it.
+#[allow(clippy::struct_excessive_bools)]
 pub struct FieldDef {
     /// Field tag number.
     pub id: u32,
@@ -130,6 +133,22 @@ pub struct FieldDef {
     pub nullable: bool,
     /// Tag may be absent.
     pub optional: bool,
+    /// The field has the fabric-sensitive (`S`) access quality: in a
+    /// fabric-scoped struct (one carrying field 254, `FabricIndex`) a device
+    /// withholds it for another fabric's entries on an unfiltered read (M9-A3
+    /// spec §5.4). The dump records it on **datatype struct** fields only
+    /// (never on event or command payload fields); it drives the generated
+    /// "`None` when withheld" rustdoc. Absent in the JSON means `false`.
+    #[serde(default, rename = "fabricSensitive")]
+    pub fabric_sensitive: bool,
+    /// The dump relaxed this field from mandatory to `optional` only for
+    /// decoding (M9-A3 spec §5.4: a fabric-sensitive field the device
+    /// withholds for other fabrics' entries). On write it is still required,
+    /// so every encoder of its struct refuses `None` instead of omitting it.
+    /// A field optional in the model itself never carries it. Absent in the
+    /// JSON means `false`.
+    #[serde(default, rename = "mandatoryOnWrite")]
+    pub mandatory_on_write: bool,
 }
 
 /// A cluster-local datatype.
@@ -420,6 +439,31 @@ mod tests {
         assert!(validate(&m)
             .unwrap_err()
             .contains("unknown type `frobnicator`"));
+    }
+
+    #[test]
+    fn field_def_reads_the_write_markers_and_defaults_them_to_false() {
+        let marked: FieldDef = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "Data", "type": "octstr", "metatype": "bytes",
+            "nullable": false, "optional": true, "fabricSensitive": true
+        }))
+        .unwrap();
+        assert!(marked.fabric_sensitive);
+        let plain: FieldDef = serde_json::from_value(serde_json::json!({
+            "id": 254, "name": "FabricIndex", "type": "fabric-idx", "metatype": "integer",
+            "nullable": false, "optional": false
+        }))
+        .unwrap();
+        assert!(!plain.fabric_sensitive);
+        assert!(!plain.mandatory_on_write);
+        let relaxed: FieldDef = serde_json::from_value(serde_json::json!({
+            "id": 1, "name": "Data", "type": "octstr", "metatype": "bytes",
+            "nullable": false, "optional": true, "fabricSensitive": true,
+            "mandatoryOnWrite": true
+        }))
+        .unwrap();
+        assert!(relaxed.mandatory_on_write);
+        assert!(!marked.mandatory_on_write);
     }
 
     #[test]

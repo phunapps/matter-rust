@@ -55,6 +55,8 @@ pub mod attribute_id {
     pub const IDS: u32 = 0x0009;
     /// `Points`.
     pub const POINTS: u32 = 0x000A;
+    /// `Scoped`.
+    pub const SCOPED: u32 = 0x000B;
 }
 
 /// Event IDs.
@@ -139,6 +141,28 @@ pub struct PointStruct {
     pub y: u16,
 }
 
+/// `ScopedEntryStruct` struct.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ScopedEntryStruct {
+    /// Field Secret (tag 1).
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub secret: Option<u16>,
+    /// Field Kind (tag 2).
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub kind: Option<Nullable<ModeEnum>>,
+    /// Field Note (tag 3).
+    pub note: Option<String>,
+    /// Field Alias (tag 4).
+    /// Fabric-sensitive: `None` when the device withheld it because the entry
+    /// belongs to another fabric (unfiltered read).
+    pub alias: Option<String>,
+    /// Field FabricIndex (tag 254).
+    pub fabric_index: u8,
+}
+
 impl PointStruct {
     /// Decode the fields of an already-opened anonymous structure
     /// (reader positioned after the struct start; consumes to its end).
@@ -207,6 +231,147 @@ impl PointStruct {
         self.write_fields(&mut w);
         w.end_container().expect("infallible: vec writer");
         buf
+    }
+}
+
+impl ScopedEntryStruct {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_secret: Option<u16> = None;
+        let mut f_kind: Option<Nullable<ModeEnum>> = None;
+        let mut f_note: Option<String> = None;
+        let mut f_alias: Option<String> = None;
+        let mut f_fabric_index: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_secret =
+                        Some(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Secret"))?)
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Null,
+                }) => f_kind = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_kind = Some(Nullable::Value(ModeEnum::from_raw(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Kind"))?,
+                    )))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Utf8(v),
+                }) => f_note = Some(v),
+                Some(Element::Scalar {
+                    tag: Tag::Context(4),
+                    value: Value::Utf8(v),
+                }) => f_alias = Some(v),
+                Some(Element::Scalar {
+                    tag: Tag::Context(254),
+                    value: Value::Uint(v),
+                }) => {
+                    f_fabric_index = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricIndex"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            secret: f_secret,
+            kind: f_kind,
+            note: f_note,
+            alias: f_alias,
+            fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "ScopedEntryStruct",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+    /// Write this struct's fields into an already-open container.
+    ///
+    /// A device withholds this struct's fabric-sensitive fields for entries of
+    /// other fabrics, so a read result can hold entries with them `None`. Filter
+    /// a read result to your own `fabric_index` before writing it back.
+    ///
+    /// # Errors
+    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
+    /// write is `None`; nothing is written in that case.
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {
+        if self.secret.is_none() {
+            return Err(ClusterError::MissingField("Secret"));
+        }
+        if self.kind.is_none() {
+            return Err(ClusterError::MissingField("Kind"));
+        }
+        if let Some(secret) = &self.secret {
+            w.put_uint(Tag::Context(1), u64::from(*secret))
+                .expect("infallible: vec writer");
+        }
+        if let Some(kind) = &self.kind {
+            match kind {
+                Nullable::Null => w.put_null(Tag::Context(2)).expect("infallible: vec writer"),
+                Nullable::Value(kind) => {
+                    w.put_uint(Tag::Context(2), u64::from((*kind).to_raw()))
+                        .expect("infallible: vec writer");
+                }
+            }
+        }
+        if let Some(note) = &self.note {
+            w.put_utf8(Tag::Context(3), &*note)
+                .expect("infallible: vec writer");
+        }
+        if let Some(alias) = &self.alias {
+            w.put_utf8(Tag::Context(4), &*alias)
+                .expect("infallible: vec writer");
+        }
+        w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
+            .expect("infallible: vec writer");
+        Ok(())
+    }
+    /// Encode as a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
+    /// write is `None` (see [`Self::write_fields`]).
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn encode(&self) -> Result<Vec<u8>, ClusterError> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        self.write_fields(&mut w)?;
+        w.end_container().expect("infallible: vec writer");
+        Ok(buf)
     }
 }
 
@@ -451,6 +616,38 @@ pub fn decode_points(tlv: &[u8]) -> Result<Vec<PointStruct>, ClusterError> {
                 ..
             }) => {
                 out.push(PointStruct::decode_from(r)?);
+            }
+            None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+            Some(_) => {} // skip unknown scalar
+        }
+    }
+    Ok(out)
+}
+
+/// Decode the `Scoped` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_scoped(tlv: &[u8]) -> Result<Vec<ScopedEntryStruct>, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::ContainerStart {
+            kind: ContainerKind::Array,
+            ..
+        }) => {}
+        _ => return Err(ClusterError::UnexpectedType { context: "Scoped" }),
+    }
+    let r = &mut r;
+    let mut out = Vec::new();
+    loop {
+        match r.next()? {
+            Some(Element::ContainerEnd) => break,
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {
+                out.push(ScopedEntryStruct::decode_from(r)?);
             }
             None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
             Some(Element::ContainerStart { .. }) => r.skip_container()?,

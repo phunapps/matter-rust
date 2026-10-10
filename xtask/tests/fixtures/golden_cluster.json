@@ -31,7 +31,9 @@
         { "id": 9, "name": "Ids", "type": "list", "entryType": "uint32", "metatype": "array",
           "nullable": false, "optional": false, "writable": false },
         { "id": 10, "name": "Points", "type": "list", "entryType": "PointStruct", "metatype": "array",
-          "nullable": false, "optional": false, "writable": false }
+          "nullable": false, "optional": false, "writable": false },
+        { "id": 11, "name": "Scoped", "type": "list", "entryType": "ScopedEntryStruct", "metatype": "array",
+          "nullable": false, "optional": false, "writable": true }
       ],
       "commands": [
         { "id": 0, "name": "Reset", "direction": "request", "responseId": null, "fields": [] },
@@ -85,6 +87,21 @@
           "fields": [
             { "id": 0, "name": "X", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false },
             { "id": 1, "name": "Y", "type": "uint16", "metatype": "integer", "nullable": false, "optional": false }
+          ] },
+        { "name": "ScopedEntryStruct", "base": "struct", "kind": "struct", "description": null,
+          "fields": [
+            { "id": 1, "name": "Secret", "type": "uint16", "metatype": "integer",
+              "nullable": false, "optional": true, "fabricSensitive": true,
+              "mandatoryOnWrite": true },
+            { "id": 2, "name": "Kind", "type": "ModeEnum", "metatype": "enum",
+              "nullable": true, "optional": true, "fabricSensitive": true,
+              "mandatoryOnWrite": true },
+            { "id": 3, "name": "Note", "type": "string", "metatype": "string",
+              "nullable": false, "optional": true },
+            { "id": 4, "name": "Alias", "type": "string", "metatype": "string",
+              "nullable": false, "optional": true, "fabricSensitive": true },
+            { "id": 254, "name": "FabricIndex", "type": "fabric-idx", "metatype": "integer",
+              "nullable": false, "optional": false }
           ] }
       ]
     }

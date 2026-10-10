@@ -64,6 +64,7 @@ pub(crate) fn command_encode_reachable_structs<'a>(
 pub fn emit_codecs(s: &mut String, c: &Cluster) {
     let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
     let encode_reachable = command_encode_reachable_structs(c, &dts);
+    assert_no_write_guarded_command_structs(c, &dts, &encode_reachable);
     for d in &c.datatypes {
         if d.kind == "struct" {
             emit_struct_codec(s, d, &dts, &encode_reachable);
@@ -84,6 +85,37 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
     }
     for ev in &c.events {
         emit_event_decoder(s, ev, &dts);
+    }
+}
+
+/// Stop the generator if a request command can reach a write-guarded struct
+/// ([`struct_has_write_guarded_fields`]). Such a struct's `write_fields`
+/// returns `Result` (it refuses a `None` guarded field), and the
+/// command-encoder bodies call
+/// `write_fields` as an infallible statement. No 1.4 cluster has this shape;
+/// supporting it means making those encoders fallible, which is a reviewed
+/// emitter change, not something to slip through.
+///
+/// # Panics
+///
+/// Panics naming the cluster and struct when the shape appears.
+fn assert_no_write_guarded_command_structs(
+    c: &Cluster,
+    dts: &DatatypeMap<'_>,
+    encode_reachable: &HashSet<&str>,
+) {
+    let mut names: Vec<&&str> = encode_reachable.iter().collect();
+    names.sort();
+    for name in names {
+        let guarded = dts
+            .get(*name)
+            .is_some_and(|d| struct_has_write_guarded_fields(d));
+        assert!(
+            !guarded,
+            "{}: write-guarded struct {name} is reachable from a request command; \
+             command encoders cannot propagate its fallible write_fields",
+            c.name
+        );
     }
 }
 
@@ -825,7 +857,28 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         entry_type: f.entry_type.clone(),
         nullable: f.nullable,
         optional: f.optional,
+        fabric_sensitive: f.fabric_sensitive,
+        mandatory_on_write: f.mandatory_on_write,
     }
+}
+
+/// True for a fabric-scoped datatype struct: one carrying field 254
+/// (`FabricIndex`), the only fabric-scoped signal `@matter/model` gives. On an
+/// unfiltered read a device sends another fabric's entries of such a struct
+/// with their fabric-sensitive fields left out.
+pub(crate) fn struct_is_fabric_scoped(d: &Datatype) -> bool {
+    d.fields.iter().any(|f| f.id == 254)
+}
+
+/// True for a fabric-scoped struct with a field the dump relaxed to optional
+/// for decoding only (`mandatory_on_write`, M9-A3 spec §5.4). Every encoder of
+/// such a struct must refuse `None` in those fields: writing
+/// `{privilege: Administer, subjects: None}` back would grant fabric-wide
+/// admin. A sensitive field optional in the model itself is not guarded (it
+/// may be omitted on write like any optional field). Event and command
+/// payloads never qualify — the dump marks datatype struct fields only.
+pub(crate) fn struct_has_write_guarded_fields(d: &Datatype) -> bool {
+    struct_is_fabric_scoped(d) && d.fields.iter().any(|f| f.mandatory_on_write)
 }
 
 /// A generated datatype struct is write-capable iff every field is a scalar
@@ -983,46 +1036,142 @@ fn emit_struct_decl_and_codec(
     // Response-payload structs (`decl`) are decode-only — they may carry
     // composite fields (e.g. list[struct]) that we never re-encode.
     if !decl && (struct_is_write_capable(d) || encode_reachable.contains(d.name.as_str())) {
-        line!(
-            s,
-            "    /// Write this struct's fields into an already-open container."
-        );
-        line!(
-            s,
-            "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
-        );
-        line!(
-            s,
-            "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {{"
-        );
-        for f in &d.fields {
-            emit_field_write_self(s, f, dts);
+        if struct_has_write_guarded_fields(d) {
+            emit_guarded_struct_write(s, d, dts);
+        } else {
+            emit_infallible_write(s, d, dts);
         }
-        line!(s, "    }}");
-
-        line!(s, "    /// Encode as a standalone anonymous TLV structure.");
-        line!(s, "    #[must_use]");
-        line!(
-            s,
-            "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
-        );
-        line!(s, "    pub fn encode(&self) -> Vec<u8> {{");
-        line!(s, "        let mut buf = Vec::new();");
-        line!(s, "        let mut w = TlvWriter::new(&mut buf);");
-        line!(
-            s,
-            "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
-        );
-        line!(s, "        self.write_fields(&mut w);");
-        line!(
-            s,
-            "        w.end_container().expect(\"infallible: vec writer\");"
-        );
-        line!(s, "        buf");
-        line!(s, "    }}");
     }
 
     line!(s, "}}\n");
+}
+
+/// `write_fields` + `encode` for an ordinary datatype struct: both infallible.
+fn emit_infallible_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
+    line!(
+        s,
+        "    /// Write this struct's fields into an already-open container."
+    );
+    line!(
+        s,
+        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+    );
+    line!(
+        s,
+        "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {{"
+    );
+    for f in &d.fields {
+        emit_field_write_self(s, f, dts);
+    }
+    line!(s, "    }}");
+
+    line!(s, "    /// Encode as a standalone anonymous TLV structure.");
+    line!(s, "    #[must_use]");
+    line!(
+        s,
+        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+    );
+    line!(s, "    pub fn encode(&self) -> Vec<u8> {{");
+    line!(s, "        let mut buf = Vec::new();");
+    line!(s, "        let mut w = TlvWriter::new(&mut buf);");
+    line!(
+        s,
+        "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+    );
+    line!(s, "        self.write_fields(&mut w);");
+    line!(
+        s,
+        "        w.end_container().expect(\"infallible: vec writer\");"
+    );
+    line!(s, "        buf");
+    line!(s, "    }}");
+}
+
+/// `write_fields` + `encode` for a write-guarded struct (see
+/// [`struct_has_write_guarded_fields`]): both return `Result` and fail with
+/// `ClusterError::MissingField` when a `mandatory_on_write` field is `None`. Every sensitive field is checked **before** anything is written,
+/// so a refused `write_fields` leaves the caller's writer untouched. The
+/// field writes themselves are the ordinary ones.
+fn emit_guarded_struct_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>) {
+    let guarded: Vec<&FieldDef> = d.fields.iter().filter(|f| f.mandatory_on_write).collect();
+    line!(
+        s,
+        "    /// Write this struct's fields into an already-open container."
+    );
+    line!(s, "    ///");
+    line!(
+        s,
+        "    /// A device withholds this struct's fabric-sensitive fields for entries of"
+    );
+    line!(
+        s,
+        "    /// other fabrics, so a read result can hold entries with them `None`. Filter"
+    );
+    line!(
+        s,
+        "    /// a read result to your own `fabric_index` before writing it back."
+    );
+    line!(s, "    ///");
+    line!(s, "    /// # Errors");
+    line!(
+        s,
+        "    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on"
+    );
+    line!(
+        s,
+        "    /// write is `None`; nothing is written in that case."
+    );
+    line!(
+        s,
+        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+    );
+    line!(
+        s,
+        "    pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {{"
+    );
+    for f in &guarded {
+        line!(
+            s,
+            "        if self.{}.is_none() {{ return Err(ClusterError::MissingField(\"{}\")); }}",
+            field_ident(&f.name),
+            f.name
+        );
+    }
+    for f in &d.fields {
+        emit_field_write_self(s, f, dts);
+    }
+    line!(s, "        Ok(())");
+    line!(s, "    }}");
+
+    line!(s, "    /// Encode as a standalone anonymous TLV structure.");
+    line!(s, "    ///");
+    line!(s, "    /// # Errors");
+    line!(
+        s,
+        "    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on"
+    );
+    line!(s, "    /// write is `None` (see [`Self::write_fields`]).");
+    line!(
+        s,
+        "    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible."
+    );
+    line!(
+        s,
+        "    pub fn encode(&self) -> Result<Vec<u8>, ClusterError> {{"
+    );
+    line!(s, "        let mut buf = Vec::new();");
+    line!(s, "        let mut w = TlvWriter::new(&mut buf);");
+    line!(
+        s,
+        "        w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+    );
+    line!(s, "        self.write_fields(&mut w)?;");
+    line!(
+        s,
+        "        w.end_container().expect(\"infallible: vec writer\");"
+    );
+    line!(s, "        Ok(buf)");
+    line!(s, "    }}");
 }
 
 /// Emit a `write_fields` line for struct field `f`, reading `self.<field>`.
@@ -1203,6 +1352,8 @@ mod tests {
             entry_type: entry.map(str::to_string),
             nullable: false,
             optional: false,
+            fabric_sensitive: false,
+            mandatory_on_write: false,
         }
     }
 
@@ -1603,6 +1754,186 @@ mod tests {
             "Tag::Anonymous",
             "v",
             &HashMap::new(),
+        );
+    }
+
+    // ---- write-guarded (fabric-sensitive) structs (M9-A3 spec §5.4) -----
+
+    /// A fabric-scoped struct shaped like `AccessControlExtensionStruct` after
+    /// the dump: sensitive `Data` relaxed to optional for decode, still
+    /// required on write, plus field 254.
+    fn sensitive_dt() -> Datatype {
+        let mut data = field(1, "Data", "octstr", "bytes", None);
+        data.optional = true;
+        data.fabric_sensitive = true;
+        data.mandatory_on_write = true;
+        struct_dt(
+            "ExtensionStruct",
+            vec![
+                data,
+                field(254, "FabricIndex", "fabric-idx", "integer", None),
+            ],
+        )
+    }
+
+    #[test]
+    fn write_guard_needs_field_254_and_a_mandatory_on_write_field() {
+        assert!(struct_has_write_guarded_fields(&sensitive_dt()));
+        // Field 254 but nothing guarded (Binding TargetStruct's shape).
+        let target = struct_dt(
+            "TargetStruct",
+            vec![
+                field(1, "Node", "node-id", "integer", None),
+                field(254, "FabricIndex", "fabric-idx", "integer", None),
+            ],
+        );
+        assert!(struct_is_fabric_scoped(&target));
+        assert!(!struct_has_write_guarded_fields(&target));
+        // A guarded field but no field 254: not fabric-scoped.
+        let mut lone = field(1, "Data", "octstr", "bytes", None);
+        lone.mandatory_on_write = true;
+        assert!(!struct_has_write_guarded_fields(&struct_dt(
+            "Lone",
+            vec![lone]
+        )));
+    }
+
+    #[test]
+    fn write_guarded_struct_refuses_none_before_writing_anything() {
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &sensitive_dt(), &HashMap::new(), &HashSet::new());
+        assert!(
+            s.contains(
+                "pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {"
+            ),
+            "{s}"
+        );
+        let guard = "if self.data.is_none() { return Err(ClusterError::MissingField(\"Data\")); }";
+        let guard_at = s
+            .find(guard)
+            .unwrap_or_else(|| panic!("no None guard:\n{s}"));
+        let first_write = s.find("w.put_").unwrap_or_else(|| panic!("no write:\n{s}"));
+        assert!(
+            guard_at < first_write,
+            "guard must precede every write:\n{s}"
+        );
+        assert!(
+            s.contains("pub fn encode(&self) -> Result<Vec<u8>, ClusterError> {"),
+            "{s}"
+        );
+        assert!(s.contains("self.write_fields(&mut w)?;"), "{s}");
+        assert!(s.contains("Ok(buf)"), "{s}");
+        assert!(
+            s.contains("Filter") && s.contains("own `fabric_index` before writing it back"),
+            "encoder rustdoc must tell callers to filter to their own fabric:\n{s}"
+        );
+    }
+
+    #[test]
+    fn model_optional_sensitive_field_stays_omittable() {
+        // EcosystemDeviceStruct.DeviceName's shape: fabric-sensitive, but
+        // optional in the model itself, so the dump does not relax it and does
+        // not mark it mandatory-on-write. None means "omit" on write.
+        let mut name = field(0, "DeviceName", "string", "string", None);
+        name.optional = true;
+        name.fabric_sensitive = true;
+        let d = struct_dt(
+            "DeviceStruct",
+            vec![
+                name,
+                field(254, "FabricIndex", "fabric-idx", "integer", None),
+            ],
+        );
+        assert!(!struct_has_write_guarded_fields(&d));
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &HashSet::new());
+        assert!(
+            s.contains("pub fn write_fields(&self, w: &mut TlvWriter<'_>) {"),
+            "{s}"
+        );
+        assert!(s.contains("pub fn encode(&self) -> Vec<u8> {"), "{s}");
+        assert!(
+            s.contains("if let Some(device_name) = &self.device_name {"),
+            "{s}"
+        );
+        assert!(
+            !s.contains("is_none()"),
+            "no guard for a model-optional field:\n{s}"
+        );
+    }
+
+    #[test]
+    fn ordinary_struct_write_stays_infallible() {
+        let d = struct_dt(
+            "PointStruct",
+            vec![
+                field(0, "X", "uint16", "integer", None),
+                field(1, "Y", "uint16", "integer", None),
+            ],
+        );
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &HashSet::new());
+        assert!(
+            s.contains("pub fn write_fields(&self, w: &mut TlvWriter<'_>) {"),
+            "{s}"
+        );
+        assert!(s.contains("pub fn encode(&self) -> Vec<u8> {"), "{s}");
+        assert!(!s.contains("-> Result<(), ClusterError>"), "{s}");
+        assert!(!s.contains("Result<Vec<u8>, ClusterError>"), "{s}");
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "write-guarded struct ExtensionStruct is reachable from a request command"
+    )]
+    fn write_guarded_struct_reachable_from_a_command_stops_the_generator() {
+        let cmd = request_cmd(
+            "Push",
+            vec![field(0, "Entry", "ExtensionStruct", "object", None)],
+        );
+        let c = cluster_with(vec![cmd], vec![sensitive_dt()]);
+        let mut s = String::new();
+        emit_codecs(&mut s, &c);
+    }
+
+    #[test]
+    fn fabric_sensitive_event_fields_are_not_wrapped() {
+        // Even if the markers reached an event payload, the event struct keeps
+        // the model's optionality (spec §5.4 "Events are exempt"): chip sends
+        // our own fabric's events in full and drops other fabrics'
+        // fabric-sensitive events entirely.
+        let mut admin = field(1, "AdminNodeId", "node-id", "integer", None);
+        admin.nullable = true;
+        admin.fabric_sensitive = true;
+        admin.mandatory_on_write = true;
+        let mut change = field(3, "ChangeType", "uint8", "integer", None);
+        change.fabric_sensitive = true;
+        let ev = EventDef {
+            id: 0,
+            name: "AccessControlEntryChanged".to_string(),
+            priority: "info".to_string(),
+            fields: vec![
+                admin,
+                change,
+                field(254, "FabricIndex", "fabric-idx", "integer", None),
+            ],
+        };
+        let mut s = String::new();
+        emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
+        assert!(
+            s.contains("pub struct AccessControlEntryChangedEvent {"),
+            "{s}"
+        );
+        assert!(s.contains("pub admin_node_id: Nullable<u64>,"), "{s}");
+        assert!(s.contains("pub change_type: u8,"), "{s}");
+        assert!(s.contains("pub fabric_index: u8,"), "{s}");
+        assert!(
+            !s.contains("pub admin_node_id: Option<") && !s.contains("pub change_type: Option<"),
+            "event fields must not be wrapped:\n{s}"
+        );
+        assert!(
+            !s.contains("pub fn write_fields"),
+            "events are decode-only:\n{s}"
         );
     }
 

@@ -109,6 +109,8 @@ pub mod gen;
 
 #[cfg(test)]
 mod golden;
+#[cfg(test)]
+mod golden_tests;
 
 /// Compile-checks the Rust examples in this crate's `README.md`.
 ///

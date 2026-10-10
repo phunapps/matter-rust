@@ -278,6 +278,7 @@ fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
         line!(s, "#[non_exhaustive]");
     }
     line!(s, "pub struct {} {{", d.name);
+    let fabric_scoped = super::emit_codecs::struct_is_fabric_scoped(d);
     for f in &d.fields {
         let ty = rust_type(
             &f.ty,
@@ -287,6 +288,13 @@ fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
             Position::Field,
         );
         line!(s, "    /// Field {} (tag {}).", f.name, f.id);
+        if fabric_scoped && f.fabric_sensitive {
+            line!(
+                s,
+                "    /// Fabric-sensitive: `None` when the device withheld it because the entry"
+            );
+            line!(s, "    /// belongs to another fabric (unfiltered read).");
+        }
         // Escape reserved-word field names (`Type` -> `r#type`); see field_ident
         // in emit_codecs (the codec pass uses the same rule).
         line!(s, "    pub {}: {},", ident(&snake(&f.name)), ty);
@@ -357,6 +365,39 @@ mod tests {
         );
         assert!(s.contains("other => Self::Unrecognized(other),"), "{s}");
         assert!(s.contains("Self::Unrecognized(v) => v,"), "{s}");
+    }
+
+    #[test]
+    fn fabric_sensitive_field_doc_says_none_means_withheld() {
+        use crate::codegen::model::FieldDef;
+        let f = |id: u32, name: &str, sensitive: bool| FieldDef {
+            id,
+            name: name.to_string(),
+            ty: "uint16".to_string(),
+            metatype: "integer".to_string(),
+            entry_type: None,
+            nullable: false,
+            optional: sensitive,
+            fabric_sensitive: sensitive,
+            mandatory_on_write: false,
+        };
+        let d = Datatype {
+            name: "ScopedStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![
+                f(1, "Secret", true),
+                f(2, "Plain", false),
+                f(254, "FabricIndex", false),
+            ],
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new());
+        assert_eq!(s.matches("Fabric-sensitive: `None`").count(), 1, "{s}");
+        assert!(s.contains("pub secret: Option<u16>,"), "{s}");
+        assert!(s.contains("pub plain: u16,"), "{s}");
     }
 
     #[test]
