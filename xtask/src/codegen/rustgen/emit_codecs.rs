@@ -387,6 +387,37 @@ fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
     "integer"
 }
 
+/// How a list's scalar elements are written: the iterator call on the list
+/// (`iter_call`, appended to the list expression as `list.<iter_call>`) and the
+/// `put` statement for one element bound to `el`, at an anonymous tag.
+///
+/// Integers, enums, bitmaps, booleans and floats are `Copy`, so the list is
+/// iterated by value (`iter().copied()`) and `el` is the value itself. A byte
+/// string (`Vec<u8>`) or a string (`String`) is not `Copy`: the list is iterated
+/// by reference, and `el` (`&Vec<u8>` / `&String`) is passed straight to
+/// `put_bytes` / `put_utf8`, which take `&[u8]` / `&str` (M9-A3 B5: Messages
+/// `CancelMessagesRequest.MessageIDs` is a `list<octstr>`).
+fn list_scalar_element_write(
+    entry_meta: &str,
+    entry: &str,
+    dts: &DatatypeMap<'_>,
+) -> (&'static str, String) {
+    match entry_meta {
+        "bytes" => (
+            "iter()",
+            "w.put_bytes(Tag::Anonymous, el).expect(\"infallible: vec writer\");".to_string(),
+        ),
+        "string" => (
+            "iter()",
+            "w.put_utf8(Tag::Anonymous, el).expect(\"infallible: vec writer\");".to_string(),
+        ),
+        _ => (
+            "iter().copied()",
+            write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts),
+        ),
+    }
+}
+
 /// Emit (into `s`, indented by `indent`) statements that read a TLV array
 /// whose reader `r` is positioned just AFTER its `ContainerStart`, leaving
 /// the result in a local `out: Vec<ElementRust>`.
@@ -791,8 +822,8 @@ fn emit_list_field_write(
             );
             line!(s, "    }}");
         } else {
-            let put = write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts);
-            line!(s, "    for el in {expr}.iter().copied() {{");
+            let (iter, put) = list_scalar_element_write(entry_meta, entry, dts);
+            line!(s, "    for el in {expr}.{iter} {{");
             line!(s, "        {put}");
             line!(s, "    }}");
         }
@@ -1330,8 +1361,8 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
             );
             line!(s, "        }}");
         } else {
-            let put = write_scalar(entry_meta, entry, None, "Tag::Anonymous", "el", dts);
-            line!(s, "        for el in self.{var}.iter().copied() {{");
+            let (iter, put) = list_scalar_element_write(entry_meta, entry, dts);
+            line!(s, "        for el in self.{var}.{iter} {{");
             line!(s, "            {put}");
             line!(s, "        }}");
         }
@@ -1564,6 +1595,43 @@ mod tests {
         );
         assert!(s.contains("w.end_container()"), "{s}");
         assert!(!s.contains("compile_error!"), "no fallthrough:\n{s}");
+    }
+
+    #[test]
+    fn byte_string_and_string_list_elements_are_written_by_reference() {
+        // M9-A3 B5: Messages CancelMessagesRequest.MessageIDs is a
+        // list<octstr>. `Vec<u8>` and `String` are not Copy, so the elements
+        // are iterated by reference and passed to put_bytes / put_utf8 as is;
+        // `iter().copied()` there does not compile (spec §10).
+        let ids = field(0, "MessageIDs", "list", "array", Some("octstr"));
+        let mut s = String::new();
+        emit_field_write(&mut s, &ids, "message_i_ds", &HashMap::new());
+        assert!(s.contains("for el in message_i_ds.iter() {"), "{s}");
+        assert!(s.contains("w.put_bytes(Tag::Anonymous, el)"), "{s}");
+        assert!(!s.contains(".copied()"), "{s}");
+
+        let labels = field(1, "Labels", "list", "array", Some("string"));
+        let mut s = String::new();
+        emit_field_write(&mut s, &labels, "labels", &HashMap::new());
+        assert!(s.contains("for el in labels.iter() {"), "{s}");
+        assert!(s.contains("w.put_utf8(Tag::Anonymous, el)"), "{s}");
+        assert!(!s.contains(".copied()"), "{s}");
+    }
+
+    #[test]
+    fn encoded_struct_byte_string_list_field_is_written_by_reference() {
+        // The struct encoder (write_fields) shares the element rule: a
+        // list<octstr> field iterates `&self.<field>` by reference.
+        let d = struct_dt(
+            "TokenSetStruct",
+            vec![field(0, "Tokens", "list", "array", Some("octstr"))],
+        );
+        let dts: DatatypeMap<'_> = HashMap::new();
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        assert!(s.contains("for el in self.tokens.iter() {"), "{s}");
+        assert!(s.contains("w.put_bytes(Tag::Anonymous, el)"), "{s}");
+        assert!(!s.contains(".copied()"), "{s}");
     }
 
     #[test]
