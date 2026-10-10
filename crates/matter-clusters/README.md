@@ -17,7 +17,7 @@ matter-clusters = "0.5"
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  64 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  67 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -25,7 +25,7 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 64 listed below. More
+- It is **not** the full Matter cluster set — only the 67 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -44,7 +44,7 @@ may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-64 clusters are generated today, covering their **mandatory and optional**
+67 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
@@ -71,6 +71,9 @@ attributes, by area:
   `Notify` events).
 - **Resource monitoring** — HepaFilterMonitoring,
   ActivatedCarbonFilterMonitoring, WaterTankLevelMonitoring.
+- **Appliance operational state** — OperationalState,
+  OvenCavityOperationalState, RvcOperationalState (with their
+  `OperationalError` and `OperationCompletion` events).
 - **Administration** — AccessControl, GroupKeyManagement,
   AdministratorCommissioning, OperationalCredentials, IcdManagement,
   TimeSynchronization, OtaSoftwareUpdateRequestor, OtaSoftwareUpdateProvider.

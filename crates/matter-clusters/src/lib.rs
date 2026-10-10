@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 64 clusters are generated today. The full list is [`gen`]; by area:
+//! 67 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -51,6 +51,9 @@
 //!   `Notify` events).
 //! - **Resource monitoring:** `HepaFilterMonitoring`,
 //!   `ActivatedCarbonFilterMonitoring`, `WaterTankLevelMonitoring`.
+//! - **Appliance operational state:** `OperationalState`,
+//!   `OvenCavityOperationalState`, `RvcOperationalState` (with their
+//!   `OperationalError` and `OperationCompletion` events).
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

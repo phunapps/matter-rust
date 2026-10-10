@@ -181,4 +181,38 @@ proptest! {
         }
         prop_assert_eq!(encode_reset(v), cmd);
     }
+
+    // ---- M9-A3 B3: OperationalState family ---------------------------------
+
+    #[test]
+    fn error_state_struct_reencodes(
+        id in any::<u8>(),
+        label in proptest::option::of("[a-z ]{0,16}"),
+        details in proptest::option::of("[a-z ]{0,16}"),
+    ) {
+        // ErrorStateStruct (enum8 + two optional strings) has scalar fields
+        // only, so it is encodable as well as decodable; it is the payload of
+        // OperationalError, OperationalCommandResponse and the OperationalError
+        // event in all three OperationalState-family clusters (one template).
+        // Built by decoding (it is #[non_exhaustive]); decode -> encode must
+        // give the same bytes, an id outside the known set included.
+        let mut bytes = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut bytes);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), u64::from(id)).unwrap();
+            if let Some(l) = &label {
+                w.put_utf8(Tag::Context(1), l).unwrap();
+            }
+            if let Some(d) = &details {
+                w.put_utf8(Tag::Context(2), d).unwrap();
+            }
+            w.end_container().unwrap();
+        }
+        let e = gen::operational_state::ErrorStateStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(e.error_state_id.to_raw(), id);
+        prop_assert_eq!(&e.error_state_label, &label);
+        prop_assert_eq!(&e.error_state_details, &details);
+        prop_assert_eq!(e.encode(), bytes);
+    }
 }

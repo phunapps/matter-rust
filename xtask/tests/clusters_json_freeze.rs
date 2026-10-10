@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 64] = [
+const TARGET_CLUSTERS: [&str; 67] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -95,6 +95,10 @@ const TARGET_CLUSTERS: [&str; 64] = [
     "HepaFilterMonitoring",
     "ActivatedCarbonFilterMonitoring",
     "WaterTankLevelMonitoring",
+    // M9-A3 B3, OperationalState family:
+    "OperationalState",
+    "OvenCavityOperationalState",
+    "RvcOperationalState",
 ];
 
 fn load() -> Value {
@@ -381,7 +385,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 16] = [
+const EVENT_CLUSTERS: [&str; 19] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -403,6 +407,10 @@ const EVENT_CLUSTERS: [&str; 16] = [
     // M9-A3 B2, AlarmBase-derived:
     "RefrigeratorAlarm",
     "DishwasherAlarm",
+    // M9-A3 B3, OperationalState family (OperationalError, OperationCompletion):
+    "OperationalState",
+    "OvenCavityOperationalState",
+    "RvcOperationalState",
 ];
 
 #[test]
@@ -739,4 +747,115 @@ fn conditional_conformance_relaxations_are_exactly_the_mode_base_status_texts() 
         .collect();
     want.sort_unstable();
     assert_eq!(got, want);
+}
+
+// ---- M9-A3 B3: the OperationalState family ---------------------------------
+
+/// Element names under `key` (`attributes`, `commands`, `events`, ...), in
+/// dump order.
+fn element_names<'a>(c: &'a Value, key: &str) -> Vec<&'a str> {
+    c[key]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn operational_state_derived_clusters_carry_inherited_commands_fields_and_values() {
+    // OvenCavityOperationalState and RvcOperationalState inherit their
+    // commands, structs, enums and events from OperationalState. Read from
+    // `members` (B2's dump fix), the inherited OperationalCommandResponse keeps
+    // CommandResponseState and the derived enums keep the base values; on
+    // `children` the response came out empty. The disallowed commands
+    // (OvenCavity Pause/Resume, Rvc Start/Stop) are excluded, not generated.
+    let v = load();
+    let excluded = v["meta"]["excluded"].as_array().unwrap();
+    for (name, commands, disallowed) in [
+        (
+            "OperationalState",
+            vec![
+                "Pause",
+                "Stop",
+                "Start",
+                "Resume",
+                "OperationalCommandResponse",
+            ],
+            vec![],
+        ),
+        (
+            "OvenCavityOperationalState",
+            vec!["Stop", "Start", "OperationalCommandResponse"],
+            vec!["Pause", "Resume"],
+        ),
+        (
+            "RvcOperationalState",
+            vec!["Pause", "Resume", "OperationalCommandResponse", "GoHome"],
+            vec!["Start", "Stop"],
+        ),
+    ] {
+        let c = cluster(&v, name);
+        assert_eq!(element_names(c, "commands"), commands, "{name}");
+        for cmd in disallowed {
+            assert!(
+                excluded.iter().any(|e| e["cluster"] == name
+                    && e["element"] == cmd
+                    && e["kind"] == "command"
+                    && e["reason"] == "disallowed"),
+                "{name}.{cmd} exclusion missing"
+            );
+        }
+        let resp = command(c, "OperationalCommandResponse");
+        assert_eq!(
+            field_optionality(&resp["fields"]),
+            [("CommandResponseState", false)],
+            "{name}"
+        );
+        assert_eq!(resp["fields"][0]["type"], "ErrorStateStruct", "{name}");
+        assert_eq!(
+            field_optionality(&datatype(c, "ErrorStateStruct")["fields"]),
+            [
+                ("ErrorStateId", false),
+                ("ErrorStateLabel", true),
+                ("ErrorStateDetails", true)
+            ],
+            "{name}"
+        );
+        assert_eq!(
+            field_optionality(&datatype(c, "OperationalStateStruct")["fields"]),
+            [
+                ("OperationalStateId", false),
+                ("OperationalStateLabel", true)
+            ],
+            "{name}"
+        );
+        for e in ["OperationalStateEnum", "ErrorStateEnum"] {
+            let values = enum_values(datatype(c, e));
+            assert!(
+                (0..=3).all(|x| values.contains(&x)),
+                "{name}.{e}: {values:?}"
+            );
+        }
+        assert_eq!(
+            element_names(c, "events"),
+            ["OperationalError", "OperationCompletion"],
+            "{name}"
+        );
+        let completion = &c["events"][1]["fields"];
+        assert_eq!(
+            field_optionality(completion),
+            [
+                ("CompletionErrorCode", false),
+                ("TotalOperationalTime", true),
+                ("PausedTime", true)
+            ],
+            "{name}"
+        );
+    }
+    let rvc = cluster(&v, "RvcOperationalState");
+    let states = enum_values(datatype(rvc, "OperationalStateEnum"));
+    assert!((0x40..=0x46).all(|x| states.contains(&x)), "{states:?}");
+    let errors = enum_values(datatype(rvc, "ErrorStateEnum"));
+    assert!((0x40..=0x4E).all(|x| errors.contains(&x)), "{errors:?}");
 }

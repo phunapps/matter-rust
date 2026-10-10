@@ -2090,3 +2090,300 @@ fn replacement_product_missing_value_is_an_error() {
         Err(ClusterError::MissingField("ProductIdentifierValue"))
     ));
 }
+
+// ---- M9-A3 B3: OperationalState and its derived clusters ---------------------
+//
+// OperationalState, OvenCavityOperationalState and RvcOperationalState share
+// one shape (1.4.2 OperationalState.xml; the derived clusters inherit every
+// field through `members`): PhaseList (nullable list<string>), CurrentPhase
+// (nullable uint8), CountdownTime (nullable elapsed-s), OperationalStateList
+// (list<OperationalStateStruct>), OperationalState (enum8), OperationalError
+// (ErrorStateStruct); OperationalCommandResponse { CommandResponseState };
+// events OperationalError { ErrorState } and OperationCompletion
+// { CompletionErrorCode, TotalOperationalTime?, PausedTime? }.
+// ErrorStateLabel / OperationalStateLabel have the expression conformance
+// "ID >= 128 & ID <= 191", so they are optional (spec §3.1).
+
+/// An anonymous array of anonymous UTF-8 strings.
+fn str_list_attr(values: &[&str]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        for v in values {
+            w.put_utf8(Tag::Anonymous, v).unwrap();
+        }
+        w.end_container().unwrap();
+    }
+    buf
+}
+
+/// `OperationalStateList` as chip encodes it
+/// (`OperationalState/Structs.ipp` writes the label only when present):
+/// Stopped and Running without labels, and a manufacturer state 0x80 with one.
+fn operational_state_list() -> Vec<u8> {
+    list_of(&[
+        &|w| w.put_uint(Tag::Context(0), 0).unwrap(),
+        &|w| w.put_uint(Tag::Context(0), 1).unwrap(),
+        &|w| {
+            w.put_uint(Tag::Context(0), 0x80).unwrap();
+            w.put_utf8(Tag::Context(1), "Preheating").unwrap();
+        },
+    ])
+}
+
+/// `ErrorStateStruct` with only `ErrorStateID`: what chip's
+/// `GenericOperationalError(id)` encodes (no label, no details).
+fn error_state(id: u64) -> Vec<u8> {
+    struct_of(&|w| w.put_uint(Tag::Context(0), id).unwrap())
+}
+
+/// Two tests per `OperationalState`-shaped cluster: every attribute, then the
+/// command response and both events, including the optional and nullable
+/// fields chip leaves out or sends as null.
+macro_rules! operational_state_cluster_decodes {
+    ($attributes_test:ident, $payloads_test:ident, $m:ident) => {
+        #[test]
+        fn $attributes_test() {
+            use gen::$m::{
+                decode_countdown_time, decode_current_phase, decode_operational_error,
+                decode_operational_state, decode_operational_state_list, decode_phase_list,
+                ErrorStateEnum, OperationalStateEnum,
+            };
+            let states = decode_operational_state_list(&operational_state_list()).unwrap();
+            let got: Vec<_> = states
+                .iter()
+                .map(|s| (s.operational_state_id, s.operational_state_label.as_deref()))
+                .collect();
+            assert_eq!(
+                got,
+                [
+                    (OperationalStateEnum::Stopped, None),
+                    (OperationalStateEnum::Running, None),
+                    (OperationalStateEnum::Unknown(0x80), Some("Preheating")),
+                ]
+            );
+            // A null PhaseList (no phases) and a real one.
+            assert_eq!(decode_phase_list(&null_attr()).unwrap(), Nullable::Null);
+            assert_eq!(
+                decode_phase_list(&str_list_attr(&["pre-soak", "rinse"])).unwrap(),
+                Nullable::Value(vec!["pre-soak".to_string(), "rinse".to_string()])
+            );
+            assert_eq!(decode_current_phase(&null_attr()).unwrap(), Nullable::Null);
+            assert_eq!(
+                decode_current_phase(&uint_attr(1)).unwrap(),
+                Nullable::Value(1)
+            );
+            assert_eq!(decode_countdown_time(&null_attr()).unwrap(), Nullable::Null);
+            assert_eq!(
+                decode_countdown_time(&uint_attr(30)).unwrap(),
+                Nullable::Value(30)
+            );
+            assert_eq!(
+                decode_operational_state(&uint_attr(3)).unwrap(),
+                OperationalStateEnum::Error
+            );
+            let err = decode_operational_error(&error_state(0)).unwrap();
+            assert_eq!(
+                (
+                    err.error_state_id,
+                    err.error_state_label,
+                    err.error_state_details
+                ),
+                (ErrorStateEnum::NoError, None, None)
+            );
+            // A manufacturer error (0x80..=0xBF) with its label and details.
+            let err = decode_operational_error(&struct_of(&|w| {
+                w.put_uint(Tag::Context(0), 0x80).unwrap();
+                w.put_utf8(Tag::Context(1), "Door ajar").unwrap();
+                w.put_utf8(Tag::Context(2), "close the door").unwrap();
+            }))
+            .unwrap();
+            assert_eq!(err.error_state_id, ErrorStateEnum::Unknown(0x80));
+            assert_eq!(err.error_state_label.as_deref(), Some("Door ajar"));
+            assert_eq!(err.error_state_details.as_deref(), Some("close the door"));
+        }
+
+        #[test]
+        fn $payloads_test() {
+            use gen::$m::{
+                ErrorStateEnum, OperationCompletionEvent, OperationalCommandResponse,
+                OperationalErrorEvent,
+            };
+            // What chip sends for Pause from Stopped (OperationalStateCluster.cpp
+            // HandlePauseState): CommandInvalidInState, no label.
+            let r = OperationalCommandResponse::decode(&struct_of(&|w| {
+                w.start_structure(Tag::Context(0)).unwrap();
+                w.put_uint(Tag::Context(0), 3).unwrap();
+                w.end_container().unwrap();
+            }))
+            .unwrap();
+            assert_eq!(
+                r.command_response_state.error_state_id,
+                ErrorStateEnum::CommandInvalidInState
+            );
+            let e = OperationalErrorEvent::decode(&struct_of(&|w| {
+                w.start_structure(Tag::Context(0)).unwrap();
+                w.put_uint(Tag::Context(0), 2).unwrap();
+                w.end_container().unwrap();
+            }))
+            .unwrap();
+            assert_eq!(
+                e.error_state.error_state_id,
+                ErrorStateEnum::UnableToCompleteOperation
+            );
+            // OperationCompletion with both times (rvc-app's ActivityComplete
+            // sends 100 and 10), then with one absent and one null.
+            let e = OperationCompletionEvent::decode(&struct_of(&|w| {
+                w.put_uint(Tag::Context(0), 0).unwrap();
+                w.put_uint(Tag::Context(1), 100).unwrap();
+                w.put_uint(Tag::Context(2), 10).unwrap();
+            }))
+            .unwrap();
+            assert_eq!(
+                (
+                    e.completion_error_code,
+                    e.total_operational_time,
+                    e.paused_time
+                ),
+                (0, Some(Nullable::Value(100)), Some(Nullable::Value(10)))
+            );
+            let e = OperationCompletionEvent::decode(&struct_of(&|w| {
+                w.put_uint(Tag::Context(0), 2).unwrap();
+                w.put_null(Tag::Context(2)).unwrap();
+            }))
+            .unwrap();
+            assert_eq!(
+                (
+                    e.completion_error_code,
+                    e.total_operational_time,
+                    e.paused_time
+                ),
+                (2, None, Some(Nullable::Null))
+            );
+        }
+    };
+}
+
+operational_state_cluster_decodes!(
+    operational_state_attributes_decode,
+    operational_state_payloads_decode,
+    operational_state
+);
+operational_state_cluster_decodes!(
+    oven_cavity_operational_state_attributes_decode,
+    oven_cavity_operational_state_payloads_decode,
+    oven_cavity_operational_state
+);
+operational_state_cluster_decodes!(
+    rvc_operational_state_attributes_decode,
+    rvc_operational_state_payloads_decode,
+    rvc_operational_state
+);
+
+#[test]
+fn operational_state_event_ids_pinned() {
+    for (error, completion) in [
+        (
+            gen::operational_state::event_id::OPERATIONAL_ERROR,
+            gen::operational_state::event_id::OPERATION_COMPLETION,
+        ),
+        (
+            gen::oven_cavity_operational_state::event_id::OPERATIONAL_ERROR,
+            gen::oven_cavity_operational_state::event_id::OPERATION_COMPLETION,
+        ),
+        (
+            gen::rvc_operational_state::event_id::OPERATIONAL_ERROR,
+            gen::rvc_operational_state::event_id::OPERATION_COMPLETION,
+        ),
+    ] {
+        assert_eq!((error, completion), (0x00, 0x01));
+    }
+}
+
+#[test]
+fn operational_state_commands_are_empty_structures() {
+    // Every OperationalState-family request carries no fields (1.4.2
+    // OperationalState.xml, RvcOperationalState.xml GoHome). The disallowed
+    // ones are not generated: OvenCavity Pause/Resume, Rvc Start/Stop.
+    const EMPTY: [u8; 2] = [0x15, 0x18];
+    use gen::{
+        operational_state as os, oven_cavity_operational_state as oven,
+        rvc_operational_state as rvc,
+    };
+    for bytes in [
+        os::encode_pause(),
+        os::encode_stop(),
+        os::encode_start(),
+        os::encode_resume(),
+        oven::encode_stop(),
+        oven::encode_start(),
+        rvc::encode_pause(),
+        rvc::encode_resume(),
+        rvc::encode_go_home(),
+    ] {
+        assert_eq!(bytes, EMPTY);
+    }
+    assert_eq!(rvc::command_id::GO_HOME, 0x80);
+    assert_eq!(oven::command_id::OPERATIONAL_COMMAND_RESPONSE, 0x04);
+    assert_eq!(rvc::command_id::OPERATIONAL_COMMAND_RESPONSE, 0x04);
+}
+
+#[test]
+fn rvc_operational_state_keeps_base_and_derived_values() {
+    // The derived enums add values to the base's 0..=3; read from `members`,
+    // a plain Stopped / NoError decodes as itself, not Unknown.
+    use gen::rvc_operational_state::{ErrorStateEnum, OperationalStateEnum};
+    assert_eq!(
+        OperationalStateEnum::from_raw(0),
+        OperationalStateEnum::Stopped
+    );
+    assert_eq!(
+        OperationalStateEnum::from_raw(0x40),
+        OperationalStateEnum::SeekingCharger
+    );
+    assert_eq!(
+        OperationalStateEnum::from_raw(0x42),
+        OperationalStateEnum::Docked
+    );
+    assert_eq!(
+        OperationalStateEnum::from_raw(0x46),
+        OperationalStateEnum::UpdatingMaps
+    );
+    assert_eq!(ErrorStateEnum::from_raw(0), ErrorStateEnum::NoError);
+    assert_eq!(ErrorStateEnum::from_raw(0x41), ErrorStateEnum::Stuck);
+    assert_eq!(
+        ErrorStateEnum::from_raw(0x4E),
+        ErrorStateEnum::NavigationSensorObscured
+    );
+    assert_eq!(
+        ErrorStateEnum::from_raw(0x4F),
+        ErrorStateEnum::Unknown(0x4F)
+    );
+}
+
+#[test]
+fn operational_state_missing_mandatory_fields_are_errors() {
+    use matter_clusters::error::ClusterError;
+    // CommandResponseState, ErrorState and ErrorStateID are unconditional M.
+    assert!(matches!(
+        gen::operational_state::OperationalCommandResponse::decode(&struct_of(&|_| {})),
+        Err(ClusterError::MissingField("CommandResponseState"))
+    ));
+    assert!(matches!(
+        gen::rvc_operational_state::OperationalErrorEvent::decode(&struct_of(&|_| {})),
+        Err(ClusterError::MissingField("ErrorState"))
+    ));
+    assert!(matches!(
+        gen::oven_cavity_operational_state::decode_operational_error(&struct_of(&|w| {
+            w.put_utf8(Tag::Context(1), "label only").unwrap();
+        })),
+        Err(ClusterError::MissingField("ErrorStateId"))
+    ));
+    assert!(matches!(
+        gen::operational_state::OperationCompletionEvent::decode(&struct_of(&|w| {
+            w.put_uint(Tag::Context(1), 5).unwrap();
+        })),
+        Err(ClusterError::MissingField("CompletionErrorCode"))
+    ));
+}

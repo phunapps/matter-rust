@@ -144,6 +144,11 @@ const ALLOWLIST = [
   { id: 0x0071, name: 'HepaFilterMonitoring' },
   { id: 0x0072, name: 'ActivatedCarbonFilterMonitoring' },
   { id: 0x0079, name: 'WaterTankLevelMonitoring' },
+  // M9-A3 B3, OperationalState and its derived clusters (commands, structs,
+  // enums and both events inherited through `members`):
+  { id: 0x0060, name: 'OperationalState' },
+  { id: 0x0048, name: 'OvenCavityOperationalState' },
+  { id: 0x0061, name: 'RvcOperationalState' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -172,6 +177,11 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B2, AlarmBase-derived (Notify: four AlarmBitmap fields):
   'RefrigeratorAlarm',
   'DishwasherAlarm',
+  // M9-A3 B3, OperationalState family (OperationalError: ErrorStateStruct;
+  // OperationCompletion: scalars with optional nullable times):
+  'OperationalState',
+  'OvenCavityOperationalState',
+  'RvcOperationalState',
 ]);
 
 const excluded = [];

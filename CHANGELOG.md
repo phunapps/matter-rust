@@ -143,6 +143,19 @@ payload struct (Switch already had its seven):
   example app serves WaterTankLevelMonitoring; it is validated by decode
   tests and the chip 1.4.2 XML check only.
 
+### matter-clusters: Added — appliance operational-state, appliance-control and service-area clusters
+
+- **OperationalState (0x0060), OvenCavityOperationalState (0x0048) and
+  RvcOperationalState (0x0061)**, with their `OperationalError` and
+  `OperationCompletion` events: the six attributes, the commands each
+  cluster allows (OvenCavityOperationalState has no Pause/Resume and
+  RvcOperationalState no Start/Stop: they are disallowed there; RVC adds
+  `GoHome`), and `OperationalCommandResponse`, whose `CommandResponseState`
+  the derived clusters inherit. `ErrorStateStruct::error_state_label` and
+  `OperationalStateStruct::operational_state_label` are `Option`: 1.4 asks
+  for a label only on manufacturer-specific ids, and chip's own errors carry
+  none.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a
