@@ -141,6 +141,33 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 > fallback. A 2nd-controller commission failure is now a hard test error, so the
 > loop cannot pass vacuously.
 
+### Events and fabric-sensitive decode (M9-A3 B1)
+
+Generated `<Name>Event` decoders run against events read from the live DUT;
+the multi-fabric step runs the §5.4 fabric-sensitive decoders against chip's
+real withheld-field encoding.
+
+| Operation | Test | Status |
+|---|---|---|
+| Event sweep on all-clusters: BasicInformation + GeneralDiagnostics (boot + app-pipe fault events), OccupancySensing + BooleanState (app pipe), AccessControl (our own ACL/Extension writes), and TimeSynchronization / PowerSource / PumpConfigurationAndControl / OtaSoftwareUpdateRequestor (decode whatever is reported) | `clusters_events::{basic_information_and_general_diagnostics_events_decode, occupancy_and_boolean_state_events_decode, access_control_events_decode, time_sync_power_source_pump_and_ota_events_decode}` | ✓-live |
+| DoorLock events: LockOperation, DoorLockAlarm, DoorStateChange, LockUserChange, LockOperationError (on lock-app) | `clusters_door_lock::door_lock_events_from_lock_app` | ✓-live, **local only** (`just integration-lock`) |
+| ElectricalEnergyMeasurement energy-reporting events: CumulativeEnergyMeasured + PeriodicEnergyMeasured from the fake-load test event trigger; ElectricalPowerMeasurement `MeasurementPeriodRanges` decoded if reported (on evse-app) | `clusters_electrical::energy_reporting_events_decode` | ✓-live, **local only** (`just integration-energy`) |
+| Multi-fabric §5.4: another fabric's AccessControl `Acl` / `Extension` entries decode with every fabric-sensitive field `None`; a withheld Extension entry refuses to re-encode; `read_acl` → `write_acl` round trip leaves the other fabric's access intact | `multi_admin::open_window_second_controller_and_remove_fabric` (`assert_other_fabric_entries_withheld`) | ✓-live |
+
+Limits of this coverage, stated so they are not mistaken for gaps closed:
+
+- The lock-app and evse-app suites are **local only**: they are not in
+  `.github/workflows/integration-nightly.yml`, which runs the all-clusters,
+  ICD and OTA sweeps.
+- bridge-app was not built, so BridgedDeviceBasicInformation events are
+  validated only by decode smoke and `scripts/chip-xml-conformance.py`.
+- all-clusters has no stimulus for PowerSource, PumpConfigurationAndControl or
+  OtaSoftwareUpdateRequestor events, and the live run decoded 0 of them: those
+  decoders are covered by decode smoke only.
+- IcdManagement `RegisteredClients` and AccessControl `Arl` (the other
+  fabric-sensitive lists) are not covered live: no B1 host serves ICD, and
+  all-clusters lacks the MNGD feature that carries `Arl`.
+
 ---
 
 ## H2 — actuator clusters (DONE)

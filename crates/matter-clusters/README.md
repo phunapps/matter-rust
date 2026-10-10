@@ -2,10 +2,10 @@
 
 Typed Matter cluster definitions: per-cluster attribute/command/struct codecs,
 feature flags, enums (with `Unknown(n)` forward-compat), bitmaps, and — for
-clusters whose events are dumped (Switch today) — event-id constants plus
-decode-only event payload structs. The modules
-under `gen/` are generated from a pinned `@matter/model` dump by the `xtask`
-codegen tool.
+clusters on the dump script's event allowlist — event-id constants plus
+decode-only event payload structs (a cluster with events has an `event_id`
+module in its `gen::<cluster>` module). The modules under `gen/` are generated
+from a pinned `@matter/model` dump by the `xtask` codegen tool.
 
 Part of [`matter-rust`](https://github.com/phunapps/matter-rust).
 
@@ -57,9 +57,7 @@ attributes, by area:
   PumpConfigurationAndControl.
 - **Sensing** — OccupancySensing, TemperatureMeasurement,
   RelativeHumidityMeasurement, IlluminanceMeasurement, PressureMeasurement,
-  FlowMeasurement, BooleanState, Switch (attributes and, uniquely today, its
-  seven events — `event_id` consts plus decode-only `<Name>Event` payload
-  structs), AirQuality, and the ten
+  FlowMeasurement, BooleanState, Switch, AirQuality, and the ten
   ConcentrationMeasurement clusters (CarbonMonoxide 0x040C, CarbonDioxide
   0x040D, NitrogenDioxide 0x0413, Ozone 0x0415, Pm25 0x042A, Formaldehyde
   0x042B, Pm1 0x042C, Pm10 0x042D, TotalVolatileOrganicCompounds 0x042E, Radon

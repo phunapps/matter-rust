@@ -312,9 +312,12 @@ pub fn validate(model: &Model) -> Result<(), String> {
 /// `mandatoryOnWrite` (M9-A3 spec §5.4) is legal only on a datatype struct
 /// field that is `optional` (relaxed for decode), `fabricSensitive`, and in a
 /// struct carrying field 254 (`FabricIndex`, the fabric-scoped signal). The
-/// emitter's encoder guard keys on exactly that combination, so a marker
-/// anywhere else would be silently ignored and its encoder would omit a
-/// `None` the device must receive — the hazard §5.4 closes. Reject it.
+/// emitter's encoder guard keys only on field 254 plus the marker, so a marker
+/// elsewhere would be ignored or misgenerate: in a struct without field 254 it
+/// is ignored and the encoder omits a `None` the device must receive (the
+/// hazard §5.4 closes); on a non-optional field the guard does not compile; on
+/// a non-sensitive optional field it refuses a `None` that is legal to omit.
+/// Reject it.
 fn check_struct_write_marker(cluster: &str, d: &Datatype, f: &FieldDef) -> Result<(), String> {
     if !f.mandatory_on_write {
         return Ok(());

@@ -2,9 +2,10 @@
 //!
 //! Per-cluster attribute / command / struct **codecs** (encode/decode to Matter
 //! TLV), feature bitflags, enums (with an `Unknown(n)` variant for
-//! forward-compatibility), bitmaps, and — for clusters whose events are
-//! dumped (`Switch` today) — `event_id` consts plus decode-only
-//! `<Name>Event` payload structs. The cluster modules live under
+//! forward-compatibility), bitmaps, and — for clusters on the dump script's
+//! event allowlist — `event_id` consts plus decode-only `<Name>Event` payload
+//! structs (a cluster with events has an `event_id` module in its
+//! `gen::<cluster>` module). The cluster modules live under
 //! [`gen`]; the hand-written foundation is [`Nullable<T>`](types::Nullable)
 //! (distinct from `Option`), [`ClusterError`](error::ClusterError), and
 //! [`datatypes::SemanticTagStruct`].

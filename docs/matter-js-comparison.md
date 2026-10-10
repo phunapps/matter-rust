@@ -67,10 +67,18 @@ These are language-idiomatic differences. They do not affect interop.
   when `includeSensitive`). matter.js `@matter/types` 0.16.11 declares those
   fields mandatory (`TlvAccessControlEntry.privilege: TlvField(1, …)`,
   `clusters/access-control.js`). We decode them as `Option`, where `None` means
-  "withheld: another fabric's entry". The structs' `encode`/`write_fields`
-  refuse a `None` sensitive field with `ClusterError::MissingField`, because
-  chip's ACL write path treats a missing `Subjects` as every CASE node on the
-  fabric. A complete entry encodes byte-identically to before.
+  "withheld: another fabric's entry".
+
+  Writing is guarded by one rule: a withheld field is never written. The
+  reason is a chip hazard: chip's ACL write path reads a missing `Subjects` as
+  null, which grants the entry to every CASE node on the fabric. Only two of
+  these structs have generated encoders, `AccessControlExtensionStruct` and
+  `MonitoringRegistrationStruct`; their `encode`/`write_fields` return
+  `ClusterError::MissingField` for a `None` in a `mandatoryOnWrite` field, and a
+  complete entry encodes byte-identically to before. `AccessControlEntryStruct`
+  and `AccessRestrictionEntryStruct` are decode-only. ACL writes go through
+  matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
+  with a withheld field rather than reading it as a wildcard.
 
 ## CASE handshake performance (measured 2026-07-12)
 

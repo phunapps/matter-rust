@@ -22,6 +22,78 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased — matter-clusters 0.6.0 (in progress, M9-A3)
+
+**Not released.** This section collects changes on `main` that will ship
+when M9-A3 (cluster-library completion) finishes. Nothing below is on
+crates.io yet, and more will be added before the release.
+
+`matter-clusters` 0.6.0 is a breaking release. `matter-ota` must move to 0.6.0
+with it, because `OtaError::Cluster` exposes `matter_clusters::error::ClusterError`.
+
+### matter-clusters: Fixed (breaking) — fabric-sensitive fields of fabric-scoped structs are `Option`
+
+Our reads are unfiltered, so a fabric-scoped list such as AccessControl `Acl`
+returns every fabric's entries, and the device leaves the fabric-sensitive
+fields out of the entries that belong to another fabric. These fields were
+mandatory in the generated structs, so one such entry failed the decode of the
+whole list. They are now `Option`, where `None` means "withheld: another
+fabric's entry":
+
+- `AccessControlEntryStruct`: `privilege`, `auth_mode`, `subjects`, `targets`
+- `AccessControlExtensionStruct`: `data`
+- `AccessRestrictionEntryStruct`: `endpoint`, `cluster`, `restrictions`
+- `MonitoringRegistrationStruct` (IcdManagement): `check_in_node_id`,
+  `monitored_subject`, `client_type`
+
+For `subjects` and `targets` the two layers are distinct: `None` is withheld,
+`Some(Nullable::Null)` is the wildcard.
+
+### matter-clusters: Changed (breaking) — encoders refuse a withheld field
+
+`AccessControlExtensionStruct` and `MonitoringRegistrationStruct`
+`encode`/`write_fields` now return `Result` and fail with
+`ClusterError::MissingField` when a fabric-sensitive field is `None`, so a
+withheld entry is never written back as if it were complete (chip reads a
+missing ACL `Subjects` as "every CASE node on the fabric"). A complete entry
+encodes byte-identically to before. `AccessControlEntryStruct` and
+`AccessRestrictionEntryStruct` remain decode-only.
+
+### matter-clusters: Added — events for 13 more clusters
+
+54 new events, each with an `event_id` const and a decode-only `<Name>Event`
+payload struct (Switch already had its seven):
+
+- BasicInformation (4): StartUp, ShutDown, Leave, ReachableChanged
+- BridgedDeviceBasicInformation (5): StartUp, ShutDown, Leave,
+  ReachableChanged, ActiveChanged
+- BooleanState (1): StateChange
+- OccupancySensing (1): OccupancyChanged
+- PumpConfigurationAndControl (17): the alarm and fault events, SupplyVoltageLow
+  through TurbineOperation
+- TimeSynchronization (5): DSTTableEmpty, DSTStatus, TimeZoneStatus,
+  TimeFailure, MissingTrustedTimeSource
+- OtaSoftwareUpdateRequestor (3): StateTransition, VersionApplied, DownloadError
+- GeneralDiagnostics (4): HardwareFaultChange, RadioFaultChange,
+  NetworkFaultChange, BootReason
+- PowerSource (3): WiredFaultChange, BatFaultChange, BatChargeFaultChange
+- AccessControl (3): AccessControlEntryChanged, AccessControlExtensionChanged,
+  FabricRestrictionReviewUpdate
+- ElectricalEnergyMeasurement (2): CumulativeEnergyMeasured,
+  PeriodicEnergyMeasured
+- ElectricalPowerMeasurement (1): MeasurementPeriodRanges
+- DoorLock (5): DoorLockAlarm, DoorStateChange, LockOperation,
+  LockOperationError, LockUserChange
+
+### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
+
+`read_acl` used to read an entry with no Subjects (or Targets) field as a
+wildcard; written back by `write_acl`, such an entry would grant its privilege
+to every CASE node on the fabric. An entry missing either field is now
+dropped, as entries missing Privilege or AuthMode already were. Present-null
+still means wildcard. Conforming devices always send both fields for the
+reader's own fabric, so their results do not change.
+
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
 A subscription waiting for its device to come back no longer depends on the
