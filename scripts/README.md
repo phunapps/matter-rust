@@ -49,3 +49,20 @@ and quotes the output in its review.
 Resolve a P or N finding by relaxing the field in the dump script (recorded in
 `clusters.json` `meta.relaxed`), a W finding by widening the type. Add an
 allow-list line only when chip's own generated type is equally strict.
+
+Report-only sections (they never change the exit code):
+
+- **MODEL-ONLY** — model elements absent from 1.4.2 (expected 1.5 additions).
+- **XML-ONLY** — 1.4.2 attributes, events, request and response commands,
+  feature bits and fields absent from the model. An element `clusters.json`
+  records under `meta.excluded` is not reported; exclusions match by kind and
+  full element path, so an excluded event field `Leave.FabricIndex` never hides
+  an attribute named `FabricIndex`.
+- **ACKNOWLEDGED XML-ONLY** — XML-ONLY items listed in
+  `chip-xml-conformance.ack` (`<key> <reason>` per line, the key exactly as
+  XML-ONLY prints it before the parenthesised detail), printed with their
+  reason. Acknowledging keeps XML-ONLY down to new items; it records why an
+  element is absent today, not a decision to leave it out for good.
+- **UNCHECKABLE** — elements or type widths with nothing to compare against.
+- **STALE-ALLOW** / **STALE-ACK** — an allow-list or acknowledgement line that
+  matched nothing; delete it.

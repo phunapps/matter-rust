@@ -3,6 +3,9 @@
 **/*.rs.bk
 *.pdb
 
+# Python bytecode (scripts/*.py leave scripts/__pycache__/)
+__pycache__/
+
 # OS
 .DS_Store
 Thumbs.db

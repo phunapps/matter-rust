@@ -15,6 +15,7 @@ Inputs (read-only):
                      (global structs and enum/bitmap widths, and response
                       commands 1.4.2 lacks, looked up under their own cluster)
   * scripts/chip-xml-conformance.allow                 (accepted findings)
+  * scripts/chip-xml-conformance.ack                   (acknowledged XML-ONLY)
 
 Findings that FAIL the run (exit 1) unless allow-listed:
   P  a struct/event/command-response field that is mandatory in the model
@@ -25,12 +26,17 @@ Findings that FAIL the run (exit 1) unless allow-listed:
 
 Reported without failing:
   MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
-  XML-ONLY     1.4.2 elements absent from the model and not recorded as a
-               clusters.json exclusion
+  XML-ONLY     1.4.2 elements (attributes, events, request and response
+               commands, feature bits, fields) absent from the model, not
+               recorded as a clusters.json exclusion (matched by kind and
+               full element path), and not acknowledged
+  ACKNOWLEDGED XML-ONLY items listed in chip-xml-conformance.ack, with the
+               reason recorded there
   UNCHECKABLE  model elements with no 1.4.2 (or zap) counterpart, and type
                widths that cannot be compared (only one side resolves to an
                integer, or 1.4.2 leaves the type blank)
   STALE-ALLOW  an allow-list entry that matched no finding
+  STALE-ACK    an acknowledgement that matched no XML-ONLY item
 
 Python 3 standard library only. Dev-only: CI has no chip checkout, so this is
 not part of `just gate`; each batch runs it and quotes the output.
@@ -53,6 +59,7 @@ import xml.etree.ElementTree as ET
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_MODEL = os.path.join(REPO_ROOT, "xtask", "model", "clusters.json")
 ALLOW_PATH = os.path.join(REPO_ROOT, "scripts", "chip-xml-conformance.allow")
+ACK_PATH = os.path.join(REPO_ROOT, "scripts", "chip-xml-conformance.ack")
 
 # Conformance element tags (direct children of a field/attribute/event).
 CONFORMANCE_TAGS = {
@@ -155,6 +162,12 @@ def norm(name):
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
 
+def norm_path(element):
+    """`norm` per dot-separated component: an exclusion's full element path
+    (`Leave.FabricIndex`) compared component by component."""
+    return ".".join(norm(part) for part in (element or "").split("."))
+
+
 def die(msg):
     print(f"chip-xml-conformance: {msg}", file=sys.stderr)
     sys.exit(2)
@@ -232,8 +245,8 @@ def merge_fields(base, over):
 
 
 def empty_tables():
-    return {"struct": {}, "event": {}, "resp": {}, "attr": {},
-            "enum": {}, "bitmap": {}, "number": {}}
+    return {"struct": {}, "event": {}, "resp": {}, "cmd": {}, "attr": {},
+            "feature": {}, "enum": {}, "bitmap": {}, "number": {}}
 
 
 def own_tables(root):
@@ -279,6 +292,27 @@ def own_tables(root):
         for c in cmds.findall("command"):
             if c.get("direction") == "responseFromServer":
                 t["resp"][norm(c.get("name"))] = {"name": c.get("name"), "fields": xml_fields(c)}
+            # Every command, request and response, for XML-ONLY reporting.
+            # Keyed by name: a derived cluster's override may omit the id or
+            # direction (merged from the base like any other override).
+            t["cmd"][norm(c.get("name"))] = {
+                "name": c.get("name"),
+                "id": (parse_int(c.get("id"), f"{cname}: command id")
+                       if c.get("id") is not None else None),
+                "direction": c.get("direction"),
+                "conf": conformance_of(c),
+            }
+    feats = root.find("features")
+    if feats is not None:
+        for f in feats.findall("feature"):
+            if not f.get("code"):
+                continue
+            t["feature"][norm(f.get("code"))] = {
+                "code": f.get("code"),
+                "bit": (parse_int(f.get("bit"), f"{cname}: feature bit")
+                        if f.get("bit") is not None else None),
+                "conf": conformance_of(f),
+            }
     attrs = root.find("attributes")
     if attrs is not None:
         for a in attrs.findall("attribute"):
@@ -293,6 +327,8 @@ def overlay(base, over):
     for kind in ("enum", "bitmap", "number"):
         out[kind] = {**base[kind], **over[kind]}
     out["attr"] = merge_fields(base["attr"], over["attr"])
+    for kind in ("cmd", "feature"):
+        out[kind] = merge_fields(base[kind], over[kind])
     for kind in ("struct", "event", "resp"):
         merged = {k: dict(v, fields=dict(v["fields"])) for k, v in base[kind].items()}
         for k, v in over[kind].items():
@@ -496,11 +532,23 @@ def covers(model, xml):
 
 
 class Report:
-    def __init__(self, allow):
+    def __init__(self, allow, ack):
         self.allow = allow  # {(key, cls): justification}
         self.used = set()
+        self.ack = ack  # {xml-only key: reason}
+        self.acked = set()
         self.failing, self.allowed = [], []
         self.model_only, self.xml_only, self.uncheckable = [], [], []
+        self.acknowledged = []
+
+    def xml_only_item(self, key, detail):
+        """A 1.4.2 element absent from the model: ACKNOWLEDGED when the ack
+        file lists `key`, XML-ONLY otherwise."""
+        if key in self.ack:
+            self.acked.add(key)
+            self.acknowledged.append(f"{key} {detail}  [ack: {self.ack[key]}]")
+        else:
+            self.xml_only.append(f"{key} {detail}")
 
     def finding(self, cls, key, detail):
         line = f"{cls}  {key}: {detail}"
@@ -533,7 +581,7 @@ def check_width(rep, key, mf, xf, dts, xt, zap):
         rep.uncheckable.append(f"{key} (width: model {mtok!r} {mr}, 1.4.2 {xtok!r} {xr})")
 
 
-def check_fields(rep, cname, ename, mfields, xfields, dts, xt, zap):
+def check_fields(rep, cname, ename, mfields, xfields, dts, xt, zap, field_kind, excl):
     seen = set()
     for mf in mfields:
         key = f"{cname}.{ename}.{mf['name']}"
@@ -551,30 +599,36 @@ def check_fields(rep, cname, ename, mfields, xfields, dts, xt, zap):
         check_width(rep, key, mf, x, dts, xt, zap)
     for fid, x in sorted(xfields.items()):
         if fid not in seen and x.get("conf") not in ("X", "D"):
-            if not any(m["id"] == fid for m in mfields):
-                rep.xml_only.append(f"{cname}.{ename}.{x.get('name')} (id {fid})")
+            if any(m["id"] == fid for m in mfields):
+                continue
+            if (field_kind, norm_path(f"{ename}.{x.get('name')}")) in excl:
+                continue
+            rep.xml_only_item(f"{cname}.{ename}.{x.get('name')}", f"(id {fid})")
 
 
-def excluded_names(meta, cname):
-    """Normalised names of everything clusters.json records as excluded for
-    this cluster (attributes, commands, events, `<Element>.<Field>` fields)."""
-    names, events_off = set(), False
+def excluded_elements(meta, cname):
+    """`(kind, full element path)` for everything clusters.json records as
+    excluded for this cluster (`attribute`/`command`/`event` by name,
+    `struct-field`/`event-field`/`command-field` as `<Element>.<Field>`).
+
+    Matched by kind and full path only: an excluded `Leave.FabricIndex` event
+    field never hides an XML-only attribute that happens to be named
+    `FabricIndex`."""
+    excl, events_off = set(), False
     for e in meta.get("excluded", []):
         owner = e.get("cluster", "")
         if owner != cname and not owner.startswith(cname + "."):
             continue
         if e.get("reason") == "event dump not enabled for this cluster":
             events_off = True
-        names.add(norm(e.get("element")))
-        if "." in (e.get("element") or ""):
-            names.add(norm(e["element"].split(".")[-1]))
-    return names, events_off
+        excl.add((e.get("kind"), norm_path(e.get("element"))))
+    return excl, events_off
 
 
 def check_cluster(rep, c, xt, zap, meta):
     cname = c["name"]
     dts = {d["name"]: d for d in c["datatypes"]}
-    excl, events_off = excluded_names(meta, cname)
+    excl, events_off = excluded_elements(meta, cname)
 
     for d in c["datatypes"]:
         if d["kind"] != "struct":
@@ -586,19 +640,22 @@ def check_cluster(rep, c, xt, zap, meta):
         if xs is None:
             rep.uncheckable.append(f"{cname}.{d['name']} (struct not in 1.4.2 or zap globals)")
             continue
-        check_fields(rep, cname, d["name"], d["fields"], xs["fields"], dts, xt, zap)
+        check_fields(rep, cname, d["name"], d["fields"], xs["fields"], dts, xt, zap,
+                     "struct-field", excl)
 
     for ev in c.get("events", []):
         xe = xt["event"].get(norm(ev["name"]))
         if xe is None:
             rep.model_only.append(f"{cname}.{ev['name']} (event)")
             continue
-        check_fields(rep, cname, ev["name"], ev["fields"], xe["fields"], dts, xt, zap)
+        check_fields(rep, cname, ev["name"], ev["fields"], xe["fields"], dts, xt, zap,
+                     "event-field", excl)
     if not events_off:
         model_events = {norm(e["name"]) for e in c.get("events", [])}
         for k, xe in sorted(xt["event"].items()):
-            if k not in model_events and k not in excl and xe.get("conf") not in ("X", "D"):
-                rep.xml_only.append(f"{cname}.{xe['name']} (event)")
+            if (k not in model_events and ("event", k) not in excl
+                    and xe.get("conf") not in ("X", "D")):
+                rep.xml_only_item(f"{cname}.Event.{xe['name']}", "(event)")
 
     for cmd in c["commands"]:
         if cmd["direction"] != "response":
@@ -609,7 +666,31 @@ def check_cluster(rep, c, xt, zap, meta):
             rep.uncheckable.append(
                 f"{cname}.{cmd['name']} (response not in 1.4.2 or zap cluster {c['id']:#06x})")
             continue
-        check_fields(rep, cname, cmd["name"], cmd["fields"], xr["fields"], dts, xt, zap)
+        check_fields(rep, cname, cmd["name"], cmd["fields"], xr["fields"], dts, xt, zap,
+                     "command-field", excl)
+
+    # XML-only commands, request and response. A model command matches by
+    # direction and id, or by direction and name (an id-less override).
+    model_cmds = set()
+    for cmd in c["commands"]:
+        model_cmds.add((cmd["direction"], cmd["id"]))
+        model_cmds.add((cmd["direction"], norm(cmd["name"])))
+    for k, xc in sorted(xt["cmd"].items()):
+        direction = "response" if xc.get("direction") == "responseFromServer" else "request"
+        if xc.get("conf") in ("X", "D") or ("command", k) in excl:
+            continue
+        if (direction, xc.get("id")) in model_cmds or (direction, k) in model_cmds:
+            continue
+        cid = f"id {xc['id']:#04x}" if xc.get("id") is not None else "no id"
+        rep.xml_only_item(f"{cname}.Command.{xc['name']}", f"({cid}, {direction})")
+
+    # XML-only feature bits.
+    model_bits = {f["bit"] for f in c.get("features", [])}
+    for k, xf in sorted(xt["feature"].items()):
+        if xf.get("bit") is None or xf["bit"] in model_bits or xf.get("conf") in ("X", "D"):
+            continue
+        if ("feature", k) not in excl:
+            rep.xml_only_item(f"{cname}.Feature.{xf['code']}", f"(bit {xf['bit']})")
 
     model_attr_ids = set()
     for a in c["attributes"]:
@@ -625,8 +706,8 @@ def check_cluster(rep, c, xt, zap, meta):
     for aid, xa in sorted(xt["attr"].items()):
         if aid >= 0xFFF8 or aid in model_attr_ids or xa.get("conf") in ("X", "D"):
             continue
-        if norm(xa.get("name")) not in excl:
-            rep.xml_only.append(f"{cname}.Attribute.{xa.get('name')} (id {aid:#06x})")
+        if ("attribute", norm(xa.get("name"))) not in excl:
+            rep.xml_only_item(f"{cname}.Attribute.{xa.get('name')}", f"(id {aid:#06x})")
 
 
 # ------------------------------------------------------------------- main ---
@@ -648,6 +729,29 @@ def load_allow(path):
                 die(f"{path}:{n}: attributes take N or W only")
             allow[(parts[0], parts[1])] = parts[2]
     return allow
+
+
+def load_ack(path):
+    """Acknowledged XML-ONLY items: `<key> <reason>` per line, where `<key>`
+    is the item exactly as XML-ONLY prints it before its parenthesised
+    detail (`<Cluster>.Attribute.<Name>`, `<Cluster>.Command.<Name>`,
+    `<Cluster>.Event.<Name>`, `<Cluster>.Feature.<CODE>`,
+    `<Cluster>.<Element>.<Field>`)."""
+    ack = {}
+    if not os.path.exists(path):
+        return ack
+    with open(path, encoding="utf-8") as fh:
+        for n, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2 or parts[0].count(".") != 2:
+                die(f"{path}:{n}: expected `<Cluster>.<Kind|Element>.<Name> <reason>`")
+            if parts[0] in ack:
+                die(f"{path}:{n}: duplicate acknowledgement {parts[0]}")
+            ack[parts[0]] = parts[1]
+    return ack
 
 
 def main():
@@ -679,7 +783,7 @@ def main():
 
     xml = load_chip_xml(args.chip)
     zap = load_zap_globals(args.chip)
-    rep = Report(load_allow(ALLOW_PATH))
+    rep = Report(load_allow(ALLOW_PATH), load_ack(ACK_PATH))
     meta = model.get("meta", {})
     for c in clusters:
         xt = xml.get(c["id"])
@@ -688,7 +792,7 @@ def main():
             continue
         try:
             check_cluster(rep, c, xt, zap, meta)
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError, AttributeError) as e:
             # A model cluster missing a key the check reads is an input error
             # (exit 2), not a finding (exit 1).
             die(f"{args.model}: malformed cluster {c['name']}: {type(e).__name__}: {e}")
@@ -701,11 +805,15 @@ def main():
     section("FAIL: P/N/W findings", rep.failing)
     section("allowed P/N/W findings", rep.allowed)
     section("MODEL-ONLY (absent from 1.4.2)", rep.model_only)
-    section("XML-ONLY (absent from model, not excluded)", rep.xml_only)
+    section("XML-ONLY (absent from model, not excluded or acknowledged)", rep.xml_only)
+    section("ACKNOWLEDGED XML-ONLY", rep.acknowledged)
     section("UNCHECKABLE", rep.uncheckable)
     stale = [f"{k} {c}" for (k, c) in rep.allow if (k, c) not in rep.used and
              (not args.cluster or k.split(".")[0] in args.cluster)]
     section("STALE-ALLOW (matched nothing)", stale)
+    stale_ack = [k for k in rep.ack if k not in rep.acked and
+                 (not args.cluster or k.split(".")[0] in args.cluster)]
+    section("STALE-ACK (matched nothing)", stale_ack)
     print(f"chip-xml-conformance: {len(clusters)} clusters, "
           f"{len(rep.failing)} failing, {len(rep.allowed)} allowed")
     return 1 if rep.failing else 0
