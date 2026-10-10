@@ -896,6 +896,28 @@ fn struct_is_write_capable(d: &Datatype) -> bool {
     })
 }
 
+/// True when the emitter generates `write_fields`/`encode` for the datatype
+/// struct `d`: it is [`struct_is_write_capable`], or a request command reaches
+/// it (`encode_reachable`, from [`command_encode_reachable_structs`]). The one
+/// rule both [`emit_struct_decl_and_codec`] and [`encoded_struct_names`] use.
+fn struct_is_encoded(d: &Datatype, encode_reachable: &HashSet<&str>) -> bool {
+    struct_is_write_capable(d) || encode_reachable.contains(d.name.as_str())
+}
+
+/// Names of the datatype structs of `c` whose fields the emitter **encodes**
+/// (see [`struct_is_encoded`]). `model::validate` uses it to keep a class-C
+/// `meta.relaxed` field (a conditional conformance the dump relaxed to
+/// optional) out of every encoder, from the same rule the emitter follows.
+pub(crate) fn encoded_struct_names(c: &Cluster) -> HashSet<&str> {
+    let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
+    let encode_reachable = command_encode_reachable_structs(c, &dts);
+    c.datatypes
+        .iter()
+        .filter(|d| d.kind == "struct" && struct_is_encoded(d, &encode_reachable))
+        .map(|d| d.name.as_str())
+        .collect()
+}
+
 fn emit_struct_codec(
     s: &mut String,
     d: &Datatype,
@@ -1035,7 +1057,7 @@ fn emit_struct_decl_and_codec(
     // clusters guarantee have scalar-only fields, so write_fields compiles).
     // Response-payload structs (`decl`) are decode-only — they may carry
     // composite fields (e.g. list[struct]) that we never re-encode.
-    if !decl && (struct_is_write_capable(d) || encode_reachable.contains(d.name.as_str())) {
+    if !decl && struct_is_encoded(d, encode_reachable) {
         if struct_has_write_guarded_fields(d) {
             emit_guarded_struct_write(s, d, dts);
         } else {

@@ -20,8 +20,12 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         // matter.js `@matter/model` `namespace.element.js` declares
         // `type: "enum8"`): mapped to its raw integer like `status`/`priority`,
         // never emitted as a type.
+        // `tag` is the semantic tag within a namespace (Core spec 7.19.2.42,
+        // uint8; ServiceArea's LandmarkTag / RelativePositionTag / AreaType,
+        // M9-A3 B3), whose values depend on the namespace, so it stays a
+        // raw integer too.
         "uint8" | "percent" | "fabric-idx" | "action-id" | "status" | "priority" | "namespace"
-        | "enum8" | "map8" => "u8",
+        | "tag" | "enum8" | "map8" => "u8",
         // u16: primitive + semantic globals (unsigned 16-bit)
         "uint16" | "group-id" | "endpoint-no" | "vendor-id" | "percent100ths" | "enum16"
         | "map16" => "u16",
@@ -308,6 +312,21 @@ mod tests {
             rust_type("namespace", None, true, false, Position::Attribute),
             "Nullable<u8>"
         );
+    }
+
+    #[test]
+    fn global_semantic_tag_value_tag_is_its_raw_uint8() {
+        // `tag` is the model-global semantic tag value (Core spec 7.19.2.42,
+        // uint8). ServiceArea uses it for LandmarkTag, RelativePositionTag
+        // and the global `locationdesc` AreaType; codegen stopped with
+        // "unknown type `tag`" before it was mapped (M9-A3 B3).
+        assert!(is_known_type("tag"));
+        assert_eq!(base_type("tag", None), "u8");
+        assert_eq!(
+            rust_type("tag", None, true, false, Position::Field),
+            "Nullable<u8>"
+        );
+        assert_eq!(base_type("list", Some("tag")), "Vec<u8>");
     }
 
     #[test]

@@ -5,8 +5,9 @@
 //! skip. The semantic checks here (unknown type strings, duplicate IDs,
 //! dangling response IDs, dangling type references, and `mandatoryOnWrite`
 //! appearing anywhere but an optional fabric-sensitive field of a
-//! fabric-scoped struct) are the Rust-side half of the contract the dump
-//! script enforces on the JS side.
+//! fabric-scoped struct, and a class-C `meta.relaxed` entry on a field we
+//! encode) are the Rust-side half of the contract the dump script enforces
+//! on the JS side.
 
 // Structs and functions are scaffolding used by the emitter (next task).
 
@@ -191,6 +192,21 @@ pub struct BitDef {
     pub name: String,
 }
 
+/// One `meta.relaxed` entry: a field the dump made optional although the model
+/// does not (`class` `P`: fabric-sensitive, §5.4; `W`: a recorded type
+/// widening, §5.3; `C`: a conditional conformance the §3.1 rule relaxes). Only
+/// the keys [`validate`] checks are parsed; the rest of `meta` stays an opaque
+/// [`serde_json::Value`].
+#[derive(Debug, Deserialize)]
+pub struct Relaxation {
+    /// `PascalCase` name of the cluster the field belongs to.
+    pub cluster: String,
+    /// `<Owner>.<Field>`: the owning command, event or struct, then the field.
+    pub element: String,
+    /// Relaxation class (`P`, `W` or `C`).
+    pub class: String,
+}
+
 /// Load and validate `clusters.json` from `path`.
 ///
 /// # Errors
@@ -304,6 +320,77 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 )?;
                 check_struct_write_marker(&c.name, d, f)?;
             }
+        }
+    }
+    check_conditional_relaxations(model)
+}
+
+/// A class-C relaxation (a field whose conformance is conditional, which the
+/// §3.1 rule dumps optional) is safe only on a field we **decode**: a field we
+/// send would make its encoder take an `Option` and could silently omit a
+/// field the model says is mandatory. So every class-C `meta.relaxed` entry
+/// must resolve to a response command, event, or decode-only struct field —
+/// never a request command field, nor a field of a struct the emitter encodes
+/// ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names),
+/// the emitter's own rule). The dump enforces the same on regeneration; this
+/// half runs on every `codegen --check`. An entry naming no generated field is
+/// an error too, so a stale or misspelled entry cannot disable the check.
+fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
+    let relaxed: Vec<Relaxation> = match model.meta.get("relaxed") {
+        None => Vec::new(),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| format!("meta.relaxed: malformed entry: {e}"))?,
+    };
+    for r in relaxed.iter().filter(|r| r.class == "C") {
+        let at = format!("{}.{}", r.cluster, r.element);
+        let c = model
+            .clusters
+            .iter()
+            .find(|c| c.name == r.cluster)
+            .ok_or_else(|| {
+                format!(
+                    "{at}: class-C meta.relaxed entry names {}, not a generated cluster",
+                    r.cluster
+                )
+            })?;
+        let (owner, field) = r
+            .element
+            .split_once('.')
+            .ok_or_else(|| format!("{at}: class-C meta.relaxed element is not <Owner>.<Field>"))?;
+        let has = |fields: &[FieldDef]| fields.iter().any(|f| f.name == field);
+        let commands = |direction: &str| {
+            c.commands
+                .iter()
+                .any(|cmd| cmd.direction == direction && cmd.name == owner && has(&cmd.fields))
+        };
+        if commands("request") {
+            return Err(format!(
+                "{at}: class-C relaxation (conditional conformance dumped optional) of a request command field; \
+                 the encoder would take an Option and could omit a field the model makes mandatory — review it"
+            ));
+        }
+        let structs = |pred: &dyn Fn(&Datatype) -> bool| {
+            c.datatypes
+                .iter()
+                .any(|d| d.kind == "struct" && d.name == owner && has(&d.fields) && pred(d))
+        };
+        let encoded = crate::codegen::rustgen::emit_codecs::encoded_struct_names(c);
+        if structs(&|d| encoded.contains(d.name.as_str())) {
+            return Err(format!(
+                "{at}: class-C relaxation (conditional conformance dumped optional) of a field of {owner}, \
+                 which the emitter encodes; its encoder could omit a field the model makes mandatory — review it"
+            ));
+        }
+        let decoded = commands("response")
+            || c.events
+                .iter()
+                .any(|ev| ev.name == owner && has(&ev.fields))
+            || structs(&|_| true);
+        if !decoded {
+            return Err(format!(
+                "{at}: class-C meta.relaxed entry names no command, event or struct field of {}",
+                c.name
+            ));
         }
     }
     Ok(())
@@ -652,6 +739,111 @@ mod tests {
             err.contains("AccessControl.Review.Data") && err.contains("command field"),
             "got: {err}"
         );
+    }
+
+    // ---- class-C relaxations are decode-only (M9-A3 B3) -----------------
+
+    /// A ModeBase-shaped cluster: a request command, its response, a
+    /// scalar-only struct (encoded: write-capable), a struct with a list field
+    /// that a request command reaches (encoded: command-reachable), and a
+    /// struct with a list field nothing sends (decode-only), with one class-C
+    /// `meta.relaxed` entry on `element`.
+    fn relaxed_model(element: &str) -> Model {
+        let u8_field = |id: u32, name: &str| {
+            serde_json::json!({ "id": id, "name": name, "type": "uint8",
+                "metatype": "integer", "nullable": false, "optional": true })
+        };
+        let list_field = serde_json::json!({ "id": 1, "name": "Items", "type": "list",
+            "entryType": "uint8", "metatype": "array", "nullable": false, "optional": false });
+        let reach_field = serde_json::json!({ "id": 1, "name": "Target", "type": "SentStruct",
+            "metatype": "object", "nullable": false, "optional": false });
+        Model {
+            meta: serde_json::json!({ "specRevision": "1.4", "relaxed": [
+                { "cluster": "RvcRunMode", "element": element, "class": "C",
+                  "reason": "conditional conformance" }
+            ] }),
+            clusters: vec![cluster(serde_json::json!({
+                "id": 0x54, "name": "RvcRunMode", "revision": 3, "features": [],
+                "attributes": [],
+                "commands": [
+                    { "id": 0, "name": "ChangeToMode", "direction": "request", "responseId": 1,
+                      "fields": [u8_field(0, "NewMode"), reach_field] },
+                    { "id": 1, "name": "ChangeToModeResponse", "direction": "response",
+                      "responseId": null, "fields": [u8_field(0, "Status"), u8_field(1, "StatusText")] }
+                ],
+                "datatypes": [
+                    { "name": "ScalarStruct", "base": "struct", "kind": "struct",
+                      "fields": [u8_field(0, "Label")] },
+                    { "name": "SentStruct", "base": "struct", "kind": "struct",
+                      "fields": [u8_field(0, "Label"), list_field.clone()] },
+                    { "name": "ReadStruct", "base": "struct", "kind": "struct",
+                      "fields": [u8_field(0, "Label"), list_field] }
+                ]
+            }))],
+        }
+    }
+
+    #[test]
+    fn rejects_a_conditional_relaxation_of_a_request_command_field() {
+        let err = validate(&relaxed_model("ChangeToMode.NewMode")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ChangeToMode.NewMode") && err.contains("request command"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_conditional_relaxation_of_a_write_capable_struct_field() {
+        let err = validate(&relaxed_model("ScalarStruct.Label")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ScalarStruct.Label") && err.contains("encodes"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_conditional_relaxation_of_a_command_reachable_struct_field() {
+        let err = validate(&relaxed_model("SentStruct.Label")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.SentStruct.Label") && err.contains("encodes"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_conditional_relaxation_of_a_response_or_decode_only_struct_field() {
+        assert_eq!(
+            validate(&relaxed_model("ChangeToModeResponse.StatusText")),
+            Ok(())
+        );
+        assert_eq!(validate(&relaxed_model("ReadStruct.Label")), Ok(()));
+    }
+
+    #[test]
+    fn rejects_a_conditional_relaxation_naming_no_field() {
+        // A stale or misspelled entry must not silently disable the check.
+        let err = validate(&relaxed_model("ChangeToMode.NoSuchField")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ChangeToMode.NoSuchField") && err.contains("names no"),
+            "got: {err}"
+        );
+        let mut m = relaxed_model("ChangeToModeResponse.StatusText");
+        m.meta["relaxed"][0]["cluster"] = serde_json::json!("OvenMode");
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("OvenMode.ChangeToModeResponse.StatusText")
+                && err.contains("not a generated cluster"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn other_relaxation_classes_are_not_checked_here() {
+        // Class P (fabric-sensitive, mandatoryOnWrite-guarded) legitimately
+        // sits on encoded struct fields; only class C is decode-only.
+        let mut m = relaxed_model("ScalarStruct.Label");
+        m.meta["relaxed"][0]["class"] = serde_json::json!("P");
+        assert_eq!(validate(&m), Ok(()));
     }
 
     #[test]
