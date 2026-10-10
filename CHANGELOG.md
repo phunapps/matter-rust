@@ -100,6 +100,18 @@ payload struct (Switch already had its seven):
 - DoorLock (5): DoorLockAlarm, DoorStateChange, LockOperation,
   LockOperationError, LockUserChange
 
+### matter-clusters: Added — mode, alarm and resource-monitoring clusters
+
+- **ModeBase-derived mode clusters:** OvenMode (0x0049), LaundryWasherMode
+  (0x0051), RefrigeratorAndTemperatureControlledCabinetMode (0x0052),
+  RvcRunMode (0x0054), RvcCleanMode (0x0055) and DishwasherMode (0x0059):
+  SupportedModes / CurrentMode decoders, `encode_change_to_mode` and
+  `ChangeToModeResponse`. `ChangeToModeResponse::status_text` is
+  `Option<String>`: its 1.4 conformance is conditional and chip never sends
+  it, and the codegen now treats only an unconditional `M` field as
+  mandatory. A feature the cluster disallows (ModeBase's OnOff dependency,
+  DEPONOFF) gets no `Feature` flag.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

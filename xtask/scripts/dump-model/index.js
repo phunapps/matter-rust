@@ -121,6 +121,14 @@ const ALLOWLIST = [
   // cluster (NodeLabel / Reachable / UniqueId). Shares BasicInformation's
   // attribute-id space per the spec.
   { id: 0x0039, name: 'BridgedDeviceBasicInformation' },
+  // M9-A3 B2, ModeBase-derived clusters (ModeOptionStruct and
+  // ChangeToMode/ChangeToModeResponse inherited from the id-less ModeBase):
+  { id: 0x0049, name: 'OvenMode' },
+  { id: 0x0051, name: 'LaundryWasherMode' },
+  { id: 0x0052, name: 'RefrigeratorAndTemperatureControlledCabinetMode' },
+  { id: 0x0054, name: 'RvcRunMode' },
+  { id: 0x0055, name: 'RvcCleanMode' },
+  { id: 0x0059, name: 'DishwasherMode' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -200,7 +208,7 @@ function gatingFeatures(el, featureNames) {
 }
 
 // Returns an exclusion reason string, or null to keep the element.
-function exclusionReason(el, aliroCodes, featureNames) {
+function exclusionReason(el, aliroCodes, featureNames, disallowedCodes) {
   if (el.isDeprecated) return 'deprecated';
   if (el.isDisallowed) return 'disallowed';
   if (el.effectiveConformance && el.effectiveConformance.type === Conformance.Flag.Provisional) {
@@ -209,6 +217,14 @@ function exclusionReason(el, aliroCodes, featureNames) {
   const gating = gatingFeatures(el, featureNames);
   if (gating.size > 0 && [...gating].every((f) => aliroCodes.has(f))) {
     return `aliro-feature-gated (${[...gating].join(',')})`;
+  }
+  // M9-A3 B2: a derived cluster can disallow a base feature (RefrigeratorAlarm
+  // disallows AlarmBase's RESET). An element present only under such features
+  // can never be implemented, so it is excluded like a disallowed element —
+  // chip's controller codegen drops RefrigeratorAlarm's Latch and Reset too
+  // (src/controller/data_model/controller-clusters.matter).
+  if (gating.size > 0 && [...gating].every((f) => disallowedCodes.has(f))) {
+    return `feature-disallowed (${[...gating].join(',')})`;
   }
   return null;
 }
@@ -249,6 +265,21 @@ function entryTypeOf(el) {
   return undefined; // omitted by JSON.stringify
 }
 
+// M9-A3 spec §3.1: a field is mandatory (`optional: false`) only when its
+// effective conformance is an unconditional `M`. @matter/model's isMandatory
+// is also true for an otherwise-form such as "[Status == Success], M", which
+// the field's sender may legitimately leave out: ModeBase's
+// ChangeToModeResponse.StatusText, which chip never sends
+// (src/app/clusters/mode-base-server/ModeBaseCluster.cpp HandleChangeToMode:
+// "We are leaving the StatusText empty"). A generated decoder fails on a
+// missing mandatory field, so every other form (otherwise, feature-gated,
+// expression, choice) counts as optional. Whole-model scan, @matter/model
+// 0.17.1: only the ModeBase StatusText fields change, and no request field.
+function isUnconditionallyMandatory(el) {
+  const c = el.effectiveConformance;
+  return !!c && c.type === Conformance.Flag.Mandatory;
+}
+
 function dumpField(f, where) {
   requireIdNameType(f, where);
   return {
@@ -258,7 +289,7 @@ function dumpField(f, where) {
     metatype: f.effectiveMetatype,
     entryType: entryTypeOf(f),
     nullable: !!(f.effectiveQuality && f.effectiveQuality.nullable),
-    optional: f.effectiveConformance ? !f.effectiveConformance.isMandatory : true,
+    optional: !isUnconditionallyMandatory(f),
     description: f.details || null,
   };
 }
@@ -507,19 +538,31 @@ function dumpCluster(entry) {
     fail('DoorLock: no Aliro-titled features found — model shape changed; review the exclusion filter');
   }
 
-  const features = cluster.features.map((f) => ({
-    bit: f.constraint ? f.constraint.value : null,
-    code: f.name,
-    name: f.title || f.name,
-    description: f.details || null,
-  }));
+  // Features this cluster disallows (X) — inherited from a base that offers
+  // them (ModeBase's DEPONOFF in every derived mode cluster, AlarmBase's RESET
+  // in RefrigeratorAlarm). A device must never set their bit, so they get no
+  // Feature flag; chip's controller codegen has none for them either.
+  const disallowedCodes = new Set(cluster.features.filter((f) => f.isDisallowed).map((f) => f.name));
+  const features = [];
+  for (const f of cluster.features) {
+    if (f.isDisallowed) {
+      recordExclusion(cluster.name, f.name, 'feature', 'disallowed');
+      continue;
+    }
+    features.push({
+      bit: f.constraint ? f.constraint.value : null,
+      code: f.name,
+      name: f.title || f.name,
+      description: f.details || null,
+    });
+  }
 
   // Attributes: drop the 6 global attributes (handled by gen/globals.rs),
   // then apply conformance/feature exclusions.
   const attributes = [];
   for (const a of cluster.attributes) {
     if (GLOBAL_IDS.has(a.id)) continue; // global, not an exclusion to record
-    const reason = exclusionReason(a, aliroCodes, featureNames);
+    const reason = exclusionReason(a, aliroCodes, featureNames, disallowedCodes);
     if (reason) {
       recordExclusion(cluster.name, a.name, 'attribute', reason);
       continue;
@@ -541,7 +584,7 @@ function dumpCluster(entry) {
   // Commands: both request and response directions; apply exclusions.
   const commands = [];
   for (const cmd of cluster.commands) {
-    const reason = exclusionReason(cmd, aliroCodes, featureNames);
+    const reason = exclusionReason(cmd, aliroCodes, featureNames, disallowedCodes);
     if (reason) {
       recordExclusion(cluster.name, cmd.name, 'command', reason);
       continue;
@@ -555,7 +598,7 @@ function dumpCluster(entry) {
   const events = [];
   if (EVENT_ALLOWLIST.has(cluster.name)) {
     for (const ev of cluster.events) {
-      const reason = exclusionReason(ev, aliroCodes, featureNames);
+      const reason = exclusionReason(ev, aliroCodes, featureNames, disallowedCodes);
       if (reason) {
         recordExclusion(cluster.name, ev.name, 'event', reason);
         continue;

@@ -80,6 +80,26 @@ These are language-idiomatic differences. They do not affect interop.
   matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
   with a withheld field rather than reading it as a wildcard.
 
+- **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
+  0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and
+  matter.js `@matter/types` 0.16.11 declares it mandatory
+  (`statusText: TlvField(1, TlvString…)`, `clusters/mode-base.js`). chip never
+  sends it, not even for `UnsupportedMode`
+  (`src/app/clusters/mode-base-server/ModeBaseCluster.cpp`
+  `HandleChangeToMode`), so our codegen treats only an unconditional `M` field
+  as mandatory and decodes it as `Option<String>`.
+
+## Where our generated surface follows chip, not matter.js
+
+- **A feature a derived cluster disallows is not generated, nor is anything
+  only it enables** (M9-A3 B2). ModeBase's OnOff dependency (DEPONOFF) is
+  disallowed in every ModeBase-derived cluster, so they have no `Feature` flag
+  for it. matter.js 0.16.11 keeps `Feature.OnOff`
+  (`clusters/dishwasher-mode.d.ts`); chip's controller codegen
+  (`src/controller/data_model/controller-clusters.matter`) has no DEPONOFF bit
+  for any of them (RvcRunMode and RvcCleanMode carry only
+  `kDirectModeChange`; the other four have no feature bitmap).
+
 ## CASE handshake performance (measured 2026-07-12)
 
 The load-bearing perf comparison for the "embedded-grade performance"

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 48] = [
+const TARGET_CLUSTERS: [&str; 54] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -75,6 +75,13 @@ const TARGET_CLUSTERS: [&str; 48] = [
     "RadonConcentrationMeasurement",
     // Matter bridge support (Phase 0):
     "BridgedDeviceBasicInformation",
+    // M9-A3 B2, ModeBase-derived:
+    "OvenMode",
+    "LaundryWasherMode",
+    "RefrigeratorAndTemperatureControlledCabinetMode",
+    "RvcRunMode",
+    "RvcCleanMode",
+    "DishwasherMode",
 ];
 
 fn load() -> Value {
@@ -419,6 +426,137 @@ fn access_control_event_payloads_keep_model_optionality() {
             f["optional"], false,
             "AccessControlEntryChanged.{} relaxed",
             f["name"]
+        );
+    }
+}
+
+// ---- M9-A3 B2: modes ---------------------------------------------------------
+
+/// ModeBase-derived clusters whose `ChangeToMode` / `ChangeToModeResponse` are
+/// generated.
+const MODE_BASE_WITH_CHANGE_TO_MODE: [&str; 6] = [
+    "OvenMode",
+    "LaundryWasherMode",
+    "RefrigeratorAndTemperatureControlledCabinetMode",
+    "RvcRunMode",
+    "RvcCleanMode",
+    "DishwasherMode",
+];
+
+fn cluster<'a>(v: &'a Value, name: &str) -> &'a Value {
+    clusters(v)
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("{name} not generated"))
+}
+
+fn datatype<'a>(c: &'a Value, name: &str) -> &'a Value {
+    c["datatypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == name)
+        .unwrap_or_else(|| panic!("{}: no datatype {name}", c["name"]))
+}
+
+fn command<'a>(c: &'a Value, name: &str) -> &'a Value {
+    c["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["name"] == name)
+        .unwrap_or_else(|| panic!("{}: no command {name}", c["name"]))
+}
+
+/// `(name, optional)` for each field of a struct or command.
+fn field_optionality(fields: &Value) -> Vec<(&str, bool)> {
+    fields
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["name"].as_str().unwrap(),
+                f["optional"].as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn enum_values(d: &Value) -> Vec<u64> {
+    d["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["value"].as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn mode_base_derived_clusters_carry_inherited_fields_and_values() {
+    // The dump reads `members`: a derived cluster inherits ModeOptionStruct
+    // whole (no children of its own) and adds ModeChangeStatus values to the
+    // base's Success / UnsupportedMode / GenericFailure / InvalidInMode.
+    let v = load();
+    for name in MODE_BASE_WITH_CHANGE_TO_MODE {
+        let c = cluster(&v, name);
+        assert_eq!(
+            field_optionality(&datatype(c, "ModeOptionStruct")["fields"]),
+            [("Label", false), ("Mode", false), ("ModeTags", false)],
+            "{name}"
+        );
+        let status = enum_values(datatype(c, "ModeChangeStatus"));
+        for base in 0..=3 {
+            assert!(
+                status.contains(&base),
+                "{name}: ModeChangeStatus lacks {base}"
+            );
+        }
+        // ModeBase's DEPONOFF (OnOff dependency) is disallowed in every
+        // derivative: no Feature flag, and a recorded exclusion.
+        assert!(
+            !c["features"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["code"] == "DEPONOFF"),
+            "{name} kept DEPONOFF"
+        );
+        assert!(
+            v["meta"]["excluded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["cluster"] == name
+                    && e["element"] == "DEPONOFF"
+                    && e["kind"] == "feature"
+                    && e["reason"] == "disallowed"),
+            "{name}: DEPONOFF exclusion missing"
+        );
+    }
+    let run = enum_values(datatype(cluster(&v, "RvcRunMode"), "ModeChangeStatus"));
+    assert!((0x41..=0x48).all(|x| run.contains(&x)), "{run:?}");
+    let clean = enum_values(datatype(cluster(&v, "RvcCleanMode"), "ModeChangeStatus"));
+    assert!(clean.contains(&0x40), "{clean:?}");
+}
+
+#[test]
+fn only_an_unconditional_m_is_mandatory() {
+    // Spec §3.1: StatusText's conformance is "[Status == Success], M", which
+    // chip never satisfies (it sends no StatusText), so it is optional.
+    // Status ("M") and the request's NewMode ("M") stay mandatory.
+    let v = load();
+    for name in MODE_BASE_WITH_CHANGE_TO_MODE {
+        let c = cluster(&v, name);
+        assert_eq!(
+            field_optionality(&command(c, "ChangeToModeResponse")["fields"]),
+            [("Status", false), ("StatusText", true)],
+            "{name}"
+        );
+        assert_eq!(
+            field_optionality(&command(c, "ChangeToMode")["fields"]),
+            [("NewMode", false)],
+            "{name}"
         );
     }
 }

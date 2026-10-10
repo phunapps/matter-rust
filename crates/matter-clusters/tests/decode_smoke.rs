@@ -1607,3 +1607,169 @@ fn bridged_device_basic_information_events_decode() {
     .unwrap();
     assert_eq!(e.promised_active_duration, 30_000);
 }
+
+// ---- M9-A3 B2: ModeBase-derived clusters ------------------------------------
+//
+// Every ModeBase derivative has one wire shape (1.4.2 ModeBase.xml):
+// SupportedModes is a list of ModeOptionStruct { Label(0) string, Mode(1)
+// uint8, ModeTags(2) list<ModeTagStruct { MfgCode(0) vendor-id, optional;
+// Value(1) enum16 }> }; ChangeToMode is { NewMode(0) uint8 } and its response
+// { Status(0) enum8, StatusText(1) string }. The field set is inherited from
+// the id-less ModeBase: before the B2 `members` fix ModeOptionStruct came out
+// with no fields at all.
+
+/// `SupportedModes` as chip encodes it (`ModeBase/Structs.ipp` writes `MfgCode`
+/// only when present): mode 0 "Normal" tagged [`Auto` (0x0000), the cluster's
+/// first derived tag]; mode 7 "Vendor" tagged [mfg 0xFFF1 / 0x8001, a
+/// manufacturer-specific value no codegen knows].
+fn supported_modes(derived_tag: u64) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        for (label, mode, tags) in [
+            ("Normal", 0u64, vec![(None, 0x0000u64), (None, derived_tag)]),
+            ("Vendor", 7, vec![(Some(0xFFF1u64), 0x8001)]),
+        ] {
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_utf8(Tag::Context(0), label).unwrap();
+            w.put_uint(Tag::Context(1), mode).unwrap();
+            w.start_array(Tag::Context(2)).unwrap();
+            for (mfg, value) in tags {
+                w.start_structure(Tag::Anonymous).unwrap();
+                if let Some(mfg) = mfg {
+                    w.put_uint(Tag::Context(0), mfg).unwrap();
+                }
+                w.put_uint(Tag::Context(1), value).unwrap();
+                w.end_container().unwrap();
+            }
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+        }
+        w.end_container().unwrap();
+    }
+    buf
+}
+
+/// One test per `ModeBase` derivative: `SupportedModes` (its most complex
+/// attribute), `CurrentMode`, the `ChangeToMode` request bytes, and the
+/// response with and without `StatusText` (spec §3.1: chip never sends it).
+macro_rules! mode_base_cluster_decodes {
+    ($test:ident, $m:ident, $first_derived_tag:literal, $derived_variant:ident) => {
+        #[test]
+        fn $test() {
+            use gen::$m::{ChangeToModeResponse, ModeChangeStatus, ModeTag};
+            use matter_clusters::error::ClusterError;
+            let modes =
+                gen::$m::decode_supported_modes(&supported_modes($first_derived_tag)).unwrap();
+            assert_eq!(modes.len(), 2);
+            assert_eq!((modes[0].label.as_str(), modes[0].mode), ("Normal", 0));
+            let tags: Vec<_> = modes[0]
+                .mode_tags
+                .iter()
+                .map(|t| (t.mfg_code, t.value))
+                .collect();
+            assert_eq!(
+                tags,
+                [(None, ModeTag::Auto), (None, ModeTag::$derived_variant)]
+            );
+            assert_eq!((modes[1].label.as_str(), modes[1].mode), ("Vendor", 7));
+            assert_eq!(modes[1].mode_tags[0].mfg_code, Some(0xFFF1));
+            assert_eq!(modes[1].mode_tags[0].value, ModeTag::Unknown(0x8001));
+            assert_eq!(gen::$m::decode_current_mode(&uint_attr(7)).unwrap(), 7);
+
+            let new_mode_7 = struct_of(&|w| w.put_uint(Tag::Context(0), 7).unwrap());
+            assert_eq!(gen::$m::encode_change_to_mode(7), new_mode_7);
+
+            // What chip sends for an unsupported mode: Status only.
+            let r = ChangeToModeResponse::decode(&struct_of(&|w| {
+                w.put_uint(Tag::Context(0), 1).unwrap();
+            }))
+            .unwrap();
+            assert_eq!(
+                (r.status, r.status_text),
+                (ModeChangeStatus::UnsupportedMode, None)
+            );
+            let r = ChangeToModeResponse::decode(&struct_of(&|w| {
+                w.put_uint(Tag::Context(0), 0).unwrap();
+                w.put_utf8(Tag::Context(1), "done").unwrap();
+            }))
+            .unwrap();
+            assert_eq!(r.status, ModeChangeStatus::Success);
+            assert_eq!(r.status_text.as_deref(), Some("done"));
+            // An empty StatusText (which the spec allows) is present, not
+            // absent; a manufacturer status (0x80..=0xBF) is Unknown, not an error.
+            let r = ChangeToModeResponse::decode(&struct_of(&|w| {
+                w.put_uint(Tag::Context(0), 0x80).unwrap();
+                w.put_utf8(Tag::Context(1), "").unwrap();
+            }))
+            .unwrap();
+            assert_eq!(r.status, ModeChangeStatus::Unknown(0x80));
+            assert_eq!(r.status_text.as_deref(), Some(""));
+            // Status itself stays mandatory.
+            assert!(matches!(
+                ChangeToModeResponse::decode(&struct_of(&|_| {})),
+                Err(ClusterError::MissingField("Status"))
+            ));
+        }
+    };
+}
+
+mode_base_cluster_decodes!(oven_mode_decodes, oven_mode, 0x4000, Bake);
+mode_base_cluster_decodes!(
+    laundry_washer_mode_decodes,
+    laundry_washer_mode,
+    0x4000,
+    Normal
+);
+mode_base_cluster_decodes!(
+    refrigerator_and_tcc_mode_decodes,
+    refrigerator_and_temperature_controlled_cabinet_mode,
+    0x4000,
+    RapidCool
+);
+mode_base_cluster_decodes!(rvc_run_mode_decodes, rvc_run_mode, 0x4000, Idle);
+mode_base_cluster_decodes!(rvc_clean_mode_decodes, rvc_clean_mode, 0x4000, DeepClean);
+mode_base_cluster_decodes!(dishwasher_mode_decodes, dishwasher_mode, 0x4000, Normal);
+
+#[test]
+fn rvc_mode_change_status_keeps_base_and_derived_values() {
+    // The derived ModeChangeStatus adds values to the base's 0..=3; on
+    // `.children` the base values were missing, so a plain `Success` decoded
+    // as Unknown(0).
+    use gen::{rvc_clean_mode, rvc_run_mode};
+    assert_eq!(
+        rvc_run_mode::ModeChangeStatus::from_raw(0),
+        rvc_run_mode::ModeChangeStatus::Success
+    );
+    assert_eq!(
+        rvc_run_mode::ModeChangeStatus::from_raw(0x41),
+        rvc_run_mode::ModeChangeStatus::Stuck
+    );
+    assert_eq!(
+        rvc_run_mode::ModeChangeStatus::from_raw(0x48),
+        rvc_run_mode::ModeChangeStatus::BatteryLow
+    );
+    assert_eq!(
+        rvc_clean_mode::ModeChangeStatus::from_raw(0x40),
+        rvc_clean_mode::ModeChangeStatus::CleaningInProgress
+    );
+    assert_eq!(
+        rvc_clean_mode::ModeChangeStatus::from_raw(3),
+        rvc_clean_mode::ModeChangeStatus::InvalidInMode
+    );
+}
+
+#[test]
+fn mode_option_missing_mode_tags_is_an_error() {
+    use matter_clusters::error::ClusterError;
+    // ModeTags is mandatory (an empty list is valid; an absent one is not).
+    let bytes = list_of(&[&|w| {
+        w.put_utf8(Tag::Context(0), "x").unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+    }]);
+    assert!(matches!(
+        gen::dishwasher_mode::decode_supported_modes(&bytes),
+        Err(ClusterError::MissingField("ModeTags"))
+    ));
+}

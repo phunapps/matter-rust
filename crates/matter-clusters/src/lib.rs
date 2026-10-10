@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 48 clusters are generated today. The full list is [`gen`]; by area:
+//! 54 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -43,6 +43,9 @@
 //!   `Formaldehyde`, `Pm1`, `Pm10`, `TotalVolatileOrganicCompounds`,
 //!   `Radon`).
 //! - **Energy:** `ElectricalPowerMeasurement`, `ElectricalEnergyMeasurement`.
+//! - **Appliance modes:** `OvenMode`, `LaundryWasherMode`,
+//!   `RefrigeratorAndTemperatureControlledCabinetMode`, `RvcRunMode`,
+//!   `RvcCleanMode`, `DishwasherMode`.
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

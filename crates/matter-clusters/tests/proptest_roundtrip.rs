@@ -133,4 +133,30 @@ proptest! {
             Nullable::Null => prop_assert!(false, "float decoded as null"),
         }
     }
+
+    // ---- M9-A3 B2: ModeBase-derived clusters -------------------------------
+
+    #[test]
+    fn mode_tag_struct_reencodes(mfg in proptest::option::of(any::<u16>()), value in any::<u16>()) {
+        // ModeTagStruct has scalar fields only, so the emitter gives it
+        // write_fields/encode as well as decode. It is #[non_exhaustive], so it
+        // is built by decoding chip-shaped bytes; decode -> encode must give the
+        // same bytes back. Covers omitting the optional MfgCode and an enum16
+        // value outside the codegen's known tags (ModeTag::Unknown). All nine
+        // ModeBase derivatives emit this struct from one template.
+        let mut bytes = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut bytes);
+            w.start_structure(Tag::Anonymous).unwrap();
+            if let Some(m) = mfg {
+                w.put_uint(Tag::Context(0), u64::from(m)).unwrap();
+            }
+            w.put_uint(Tag::Context(1), u64::from(value)).unwrap();
+            w.end_container().unwrap();
+        }
+        let t = gen::rvc_run_mode::ModeTagStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(t.mfg_code, mfg);
+        prop_assert_eq!(t.value.to_raw(), value);
+        prop_assert_eq!(t.encode(), bytes);
+    }
 }
