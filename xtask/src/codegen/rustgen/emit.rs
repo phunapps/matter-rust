@@ -87,7 +87,9 @@ fn emit_header(s: &mut String, c: &Cluster) {
         s,
         "#![allow(clippy::all, clippy::pedantic, dead_code, unreachable_pub, unused_imports)]\n"
     );
-    line!(s, "use crate::datatypes::SemanticTagStruct;");
+    if !defines_local_semantic_tag_struct(c) {
+        line!(s, "use crate::datatypes::SemanticTagStruct;");
+    }
     line!(s, "use crate::error::ClusterError;");
     line!(s, "use crate::types::Nullable;");
     line!(
@@ -98,6 +100,42 @@ fn emit_header(s: &mut String, c: &Cluster) {
     line!(s, "pub const CLUSTER_ID: u32 = 0x{:04X};", c.id);
     line!(s, "/// Cluster revision.");
     line!(s, "pub const CLUSTER_REVISION: u16 = {};\n", c.revision);
+}
+
+/// True when the cluster defines its own `SemanticTagStruct` datatype, so the
+/// module must not import the hand-written global one (the `semtag` struct,
+/// `crate::datatypes::SemanticTagStruct`): the two names would collide
+/// (E0255). `ModeSelect` is the case: its cluster-local `SemanticTagStruct`
+/// (`MfgCode`, `Value`; 1.4.2 `ModeSelect.xml`) is a different struct from the
+/// global `semtag` (`MfgCode`, `NamespaceID`, `Tag`, `Label`).
+///
+/// # Panics
+///
+/// At codegen time, if such a cluster also references `semtag`: without the
+/// import, `SemanticTagStruct` would silently name the local struct there.
+fn defines_local_semantic_tag_struct(c: &Cluster) -> bool {
+    if !c.datatypes.iter().any(|d| d.name == "SemanticTagStruct") {
+        return false;
+    }
+    let refs_semtag = |ty: &str, entry: Option<&str>| ty == "semtag" || entry == Some("semtag");
+    let mut fields = c
+        .commands
+        .iter()
+        .flat_map(|cmd| &cmd.fields)
+        .chain(c.events.iter().flat_map(|e| &e.fields))
+        .chain(c.datatypes.iter().flat_map(|d| &d.fields));
+    let uses_global = c
+        .attributes
+        .iter()
+        .any(|a| refs_semtag(&a.ty, a.entry_type.as_deref()))
+        || fields.any(|f| refs_semtag(&f.ty, f.entry_type.as_deref()));
+    assert!(
+        !uses_global,
+        "codegen: {} defines its own SemanticTagStruct and also references the global \
+         `semtag`; the two would share one name — rename one before allowlisting it",
+        c.name
+    );
+    true
 }
 
 fn emit_ids(s: &mut String, c: &Cluster) {
@@ -398,6 +436,69 @@ mod tests {
         assert_eq!(s.matches("Fabric-sensitive: `None`").count(), 1, "{s}");
         assert!(s.contains("pub secret: Option<u16>,"), "{s}");
         assert!(s.contains("pub plain: u16,"), "{s}");
+    }
+
+    fn cluster_with(
+        datatypes: Vec<Datatype>,
+        attributes: Vec<crate::codegen::model::Attribute>,
+    ) -> Cluster {
+        Cluster {
+            id: 0x0050,
+            name: "Shadowing".to_string(),
+            revision: 1,
+            features: vec![],
+            attributes,
+            commands: vec![],
+            events: vec![],
+            datatypes,
+        }
+    }
+
+    fn struct_dt(name: &str) -> Datatype {
+        Datatype {
+            name: name.to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![],
+        }
+    }
+
+    #[test]
+    fn global_semantic_tag_import_is_kept_unless_a_local_struct_shadows_it() {
+        const IMPORT: &str = "use crate::datatypes::SemanticTagStruct;";
+        let mut plain = String::new();
+        emit_header(&mut plain, &cluster_with(vec![], vec![]));
+        assert!(plain.contains(IMPORT), "{plain}");
+        // ModeSelect's shape: a cluster-local struct of the same name.
+        let mut shadowed = String::new();
+        emit_header(
+            &mut shadowed,
+            &cluster_with(vec![struct_dt("SemanticTagStruct")], vec![]),
+        );
+        assert!(!shadowed.contains(IMPORT), "{shadowed}");
+    }
+
+    #[test]
+    #[should_panic(expected = "defines its own SemanticTagStruct and also references")]
+    fn a_local_semantic_tag_struct_next_to_a_semtag_reference_stops_codegen() {
+        use crate::codegen::model::Attribute;
+        let tag_list = Attribute {
+            id: 0,
+            name: "TagList".to_string(),
+            ty: "list".to_string(),
+            metatype: "array".to_string(),
+            entry_type: Some("semtag".to_string()),
+            nullable: false,
+            optional: false,
+            writable: false,
+        };
+        let mut s = String::new();
+        emit_header(
+            &mut s,
+            &cluster_with(vec![struct_dt("SemanticTagStruct")], vec![tag_list]),
+        );
     }
 
     #[test]
