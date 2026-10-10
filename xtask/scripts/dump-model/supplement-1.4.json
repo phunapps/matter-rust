@@ -1,4 +1,63 @@
 {
-  "comment": "Matter 1.4 elements absent from the @matter/model 1.5.1 model, added at dump time (M9-A3 spec §2, rev 6). Transcribed from chip's data_model/1.4.2/clusters/*.xml; see the supplement section of index.js for the merge rules.",
-  "clusters": {}
+  "comment": "Matter 1.4 elements absent from the @matter/model 1.5.1 model, added at dump time (M9-A3 spec §2, rev 6). Transcribed from chip's data_model/1.4.2/clusters/*.xml (frozen in chip; line numbers as of chip 5cd2917a); every entry is checked against that XML by scripts/chip-xml-conformance.py (class S). See the supplement section of index.js for the merge rules.",
+  "clusters": {
+    "Thermostat": {
+      "reviewedModelRevision": 10,
+      "features": [
+        {
+          "bit": 3, "code": "SCH", "title": "ScheduleConfiguration", "conformance": "[Zigbee], D",
+          "details": "Supports remote configuration of a weekly schedule of setpoint transitions.",
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH); removed in Thermostat revision 10 (1.5); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
+        }
+      ],
+      "attributes": [
+        {
+          "id": "0x0020", "name": "StartOfWeek", "type": "StartOfWeekEnum", "conformance": "SCH", "access": "R V", "quality": "F",
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:933; controller-clusters.matter `readonly attribute optional StartOfWeekEnum startOfWeek = 32`"
+        },
+        {
+          "id": "0x0021", "name": "NumberOfWeeklyTransitions", "type": "uint8", "conformance": "SCH", "access": "R V", "quality": "F",
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:943; controller-clusters.matter `readonly attribute optional int8u numberOfWeeklyTransitions = 33`"
+        },
+        {
+          "id": "0x0022", "name": "NumberOfDailyTransitions", "type": "uint8", "conformance": "SCH", "access": "R V", "quality": "F",
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:950; controller-clusters.matter `readonly attribute optional int8u numberOfDailyTransitions = 34`"
+        }
+      ],
+      "commands": [
+        {
+          "id": "0x00", "name": "GetWeeklyScheduleResponse", "direction": "response", "conformance": "SCH",
+          "fields": [
+            { "id": 0, "name": "NumberOfTransitionsForSequence", "type": "uint8", "conformance": "M" },
+            { "id": 1, "name": "DayOfWeekForSequence", "type": "ScheduleDayOfWeekBitmap", "conformance": "M" },
+            { "id": 2, "name": "ModeForSequence", "type": "ScheduleModeBitmap", "conformance": "M" },
+            { "id": 3, "name": "Transitions", "type": "list", "entry": "WeeklyScheduleTransitionStruct", "conformance": "M" }
+          ],
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1274; controller-clusters.matter `response struct GetWeeklyScheduleResponse = 0`"
+        },
+        {
+          "id": "0x01", "name": "SetWeeklySchedule", "direction": "request", "response": "status", "conformance": "SCH", "access": "M",
+          "fields": [
+            { "id": 0, "name": "NumberOfTransitionsForSequence", "type": "uint8", "conformance": "M" },
+            { "id": 1, "name": "DayOfWeekForSequence", "type": "ScheduleDayOfWeekBitmap", "conformance": "M" },
+            { "id": 2, "name": "ModeForSequence", "type": "ScheduleModeBitmap", "conformance": "M" },
+            { "id": 3, "name": "Transitions", "type": "list", "entry": "WeeklyScheduleTransitionStruct", "conformance": "M" }
+          ],
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1301; controller-clusters.matter `command access(invoke: manage) SetWeeklySchedule(SetWeeklyScheduleRequest): DefaultSuccess = 1`"
+        },
+        {
+          "id": "0x02", "name": "GetWeeklySchedule", "direction": "request", "response": "GetWeeklyScheduleResponse", "conformance": "SCH", "access": "O",
+          "fields": [
+            { "id": 0, "name": "DaysToReturn", "type": "ScheduleDayOfWeekBitmap", "conformance": "M" },
+            { "id": 1, "name": "ModeToReturn", "type": "ScheduleModeBitmap", "conformance": "M" }
+          ],
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1329; controller-clusters.matter `command GetWeeklySchedule(GetWeeklyScheduleRequest): GetWeeklyScheduleResponse = 2`"
+        },
+        {
+          "id": "0x03", "name": "ClearWeeklySchedule", "direction": "request", "response": "status", "conformance": "SCH", "access": "M",
+          "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1347; controller-clusters.matter `command access(invoke: manage) ClearWeeklySchedule(): DefaultSuccess = 3`"
+        }
+      ]
+    }
+  }
 }

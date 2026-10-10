@@ -228,6 +228,30 @@ fn atomic_request_command_encodes() {
 }
 
 #[test]
+fn set_weekly_schedule_command() {
+    // M9-A3 B4: a Matter 1.4 command the 1.5.1 model removed, generated from
+    // supplement-1.4.json, against matter.js 0.16.11's own
+    // TlvSetWeeklyScheduleRequest. The first request list whose entries carry a
+    // TLV null (CoolSetpoint).
+    use clusters::thermostat::{
+        encode_set_weekly_schedule, ScheduleDayOfWeekBitmap, ScheduleModeBitmap,
+        WeeklyScheduleTransitionStruct,
+    };
+    let transition = |time, heat| WeeklyScheduleTransitionStruct {
+        transition_time: time,
+        heat_setpoint: Nullable::Value(heat),
+        cool_setpoint: Nullable::Null,
+    };
+    let got = encode_set_weekly_schedule(
+        2,
+        ScheduleDayOfWeekBitmap::MONDAY | ScheduleDayOfWeekBitmap::WEDNESDAY,
+        ScheduleModeBitmap::HEAT_SETPOINT_PRESENT,
+        &vec![transition(360, 2000), transition(1410, 1600)],
+    );
+    assert_eq!(got, cmd("thermostat/cmd_set_weekly_schedule.json"));
+}
+
+#[test]
 fn network_interface_struct_decodes() {
     // GeneralDiagnostics.NetworkInterfaces: a NetworkInterface with a hwadr
     // bytes field, a keyword `Type` field, and byte-string-element lists

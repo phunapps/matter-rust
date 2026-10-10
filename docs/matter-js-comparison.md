@@ -134,6 +134,22 @@ These are language-idiomatic differences. They do not affect interop.
   the same. Each cluster that uses it gets its own copy of the struct, as with
   `MeasurementAccuracyStruct`.
 
+- **Matter 1.4 elements the 1.5.1 model removed are generated** (M9-A3 B4).
+  The dump reads `@matter/model` 0.17.1 (Matter 1.5.1), which dropped
+  Thermostat's weekly schedule (feature SCH: StartOfWeek,
+  NumberOfWeekly/DailyTransitions, Set/Get/ClearWeeklySchedule,
+  GetWeeklyScheduleResponse) and WindowCovering's absolute positioning
+  (feature ABS: the physical and installed limits, CurrentPositionLift/Tilt,
+  GoToLiftValue/GoToTiltValue). A 1.4 device may implement them, and chip's
+  controller codegen (`controller-clusters.matter`) still generates them, so
+  we add them back from `xtask/scripts/dump-model/supplement-1.4.json`,
+  transcribed from chip's 1.4.2 XML and checked against it exactly
+  (`chip-xml-conformance.py` class S). matter.js 0.17's own clusters follow
+  its 1.5.1 model and lack them; matter.js 0.16.11 still has them, and our
+  SetWeeklySchedule encoder matches its `TlvSetWeeklyScheduleRequest` byte
+  for byte. The legacy DoorLock PIN/RFID/user-status commands stay out: chip
+  never generated them.
+
 ## CASE handshake performance (measured 2026-07-12)
 
 The load-bearing perf comparison for the "embedded-grade performance"

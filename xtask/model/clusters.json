@@ -663,7 +663,48 @@
         "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
       }
     ],
-    "supplemented": []
+    "supplemented": [
+      {
+        "cluster": "Thermostat",
+        "element": "Attribute.NumberOfDailyTransitions",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:950; controller-clusters.matter `readonly attribute optional int8u numberOfDailyTransitions = 34`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Attribute.NumberOfWeeklyTransitions",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:943; controller-clusters.matter `readonly attribute optional int8u numberOfWeeklyTransitions = 33`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Attribute.StartOfWeek",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:933; controller-clusters.matter `readonly attribute optional StartOfWeekEnum startOfWeek = 32`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Command.ClearWeeklySchedule",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1347; controller-clusters.matter `command access(invoke: manage) ClearWeeklySchedule(): DefaultSuccess = 3`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Command.GetWeeklySchedule",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1329; controller-clusters.matter `command GetWeeklySchedule(GetWeeklyScheduleRequest): GetWeeklyScheduleResponse = 2`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Command.GetWeeklyScheduleResponse",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1274; controller-clusters.matter `response struct GetWeeklyScheduleResponse = 0`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Command.SetWeeklySchedule",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:1301; controller-clusters.matter `command access(invoke: manage) SetWeeklySchedule(SetWeeklyScheduleRequest): DefaultSuccess = 1`"
+      },
+      {
+        "cluster": "Thermostat",
+        "element": "Feature.SCH",
+        "source": "chip data_model/1.4.2/clusters/Thermostat.xml:96 (feature bit 3 SCH); removed in Thermostat revision 10 (1.5); controller-clusters.matter keeps kScheduleConfiguration = 0x8"
+      }
+    ]
   },
   "clusters": [
     {
@@ -19373,6 +19414,12 @@
           "description": "Supports Occupied and Unoccupied setpoints"
         },
         {
+          "bit": 3,
+          "code": "SCH",
+          "name": "ScheduleConfiguration",
+          "description": "Supports remote configuration of a weekly schedule of setpoint transitions."
+        },
+        {
           "bit": 4,
           "code": "SB",
           "name": "Setback",
@@ -19613,6 +19660,36 @@
           "optional": true,
           "writable": false,
           "description": "Indicates the running mode of the thermostat. This attribute uses the same values as SystemModeEnum but can only be Off, Cool or Heat. This attribute is intended to provide additional information when the thermostat's system mode is in auto mode."
+        },
+        {
+          "id": 32,
+          "name": "StartOfWeek",
+          "type": "StartOfWeekEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 33,
+          "name": "NumberOfWeeklyTransitions",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 34,
+          "name": "NumberOfDailyTransitions",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": null
         },
         {
           "id": 35,
@@ -19905,6 +19982,129 @@
               "description": "This field shall indicate the amount (possibly negative) that should be added to the setpoint(s), in steps of 0.1°C."
             }
           ]
+        },
+        {
+          "id": 0,
+          "name": "GetWeeklyScheduleResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NumberOfTransitionsForSequence",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "DayOfWeekForSequence",
+              "type": "ScheduleDayOfWeekBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "ModeForSequence",
+              "type": "ScheduleModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "Transitions",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "WeeklyScheduleTransitionStruct",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "SetWeeklySchedule",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NumberOfTransitionsForSequence",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "DayOfWeekForSequence",
+              "type": "ScheduleDayOfWeekBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "ModeForSequence",
+              "type": "ScheduleModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "Transitions",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "WeeklyScheduleTransitionStruct",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "GetWeeklySchedule",
+          "direction": "request",
+          "responseId": 0,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DaysToReturn",
+              "type": "ScheduleDayOfWeekBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ModeToReturn",
+              "type": "ScheduleModeBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "ClearWeeklySchedule",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
         },
         {
           "id": 5,

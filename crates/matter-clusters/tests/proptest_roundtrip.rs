@@ -280,4 +280,37 @@ proptest! {
         prop_assert_eq!(p.estimated_time, as_nullable(estimated));
         prop_assert_eq!(p.encode(), bytes);
     }
+
+    // ---- M9-A3 B4: Thermostat weekly schedule (supplemented SCH) ----------
+
+    #[test]
+    fn weekly_schedule_transition_reencodes(
+        time in 0u16..=1439,
+        heat in proptest::option::of(any::<i16>()),
+        cool in proptest::option::of(any::<i16>()),
+    ) {
+        // WeeklyScheduleTransitionStruct: a uint16 and two nullable signed
+        // temperatures. SetWeeklySchedule sends a list of them (the first
+        // request list whose entries carry null), so null and negative values
+        // must survive decode -> encode byte for byte.
+        let put = |w: &mut TlvWriter<'_>, tag: u8, v: Option<i16>| match v {
+            None => w.put_null(Tag::Context(tag)).unwrap(),
+            Some(x) => w.put_int(Tag::Context(tag), i64::from(x)).unwrap(),
+        };
+        let mut bytes = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut bytes);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), u64::from(time)).unwrap();
+            put(&mut w, 1, heat);
+            put(&mut w, 2, cool);
+            w.end_container().unwrap();
+        }
+        let as_nullable = |v: Option<i16>| v.map_or(Nullable::Null, Nullable::Value);
+        let t = clusters::thermostat::WeeklyScheduleTransitionStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(t.transition_time, time);
+        prop_assert_eq!(t.heat_setpoint, as_nullable(heat));
+        prop_assert_eq!(t.cool_setpoint, as_nullable(cool));
+        prop_assert_eq!(t.encode(), bytes);
+    }
 }

@@ -23,6 +23,14 @@ pub const CLUSTER_REVISION: u16 = 10;
 pub mod command_id {
     /// `SetpointRaiseLower` (request).
     pub const SETPOINT_RAISE_LOWER: u32 = 0x00;
+    /// `GetWeeklyScheduleResponse` (response).
+    pub const GET_WEEKLY_SCHEDULE_RESPONSE: u32 = 0x00;
+    /// `SetWeeklySchedule` (request).
+    pub const SET_WEEKLY_SCHEDULE: u32 = 0x01;
+    /// `GetWeeklySchedule` (request).
+    pub const GET_WEEKLY_SCHEDULE: u32 = 0x02;
+    /// `ClearWeeklySchedule` (request).
+    pub const CLEAR_WEEKLY_SCHEDULE: u32 = 0x03;
     /// `SetActiveScheduleRequest` (request).
     pub const SET_ACTIVE_SCHEDULE_REQUEST: u32 = 0x05;
     /// `SetActivePresetRequest` (request).
@@ -77,6 +85,12 @@ pub mod attribute_id {
     pub const SYSTEM_MODE: u32 = 0x001C;
     /// `ThermostatRunningMode`.
     pub const THERMOSTAT_RUNNING_MODE: u32 = 0x001E;
+    /// `StartOfWeek`.
+    pub const START_OF_WEEK: u32 = 0x0020;
+    /// `NumberOfWeeklyTransitions`.
+    pub const NUMBER_OF_WEEKLY_TRANSITIONS: u32 = 0x0021;
+    /// `NumberOfDailyTransitions`.
+    pub const NUMBER_OF_DAILY_TRANSITIONS: u32 = 0x0022;
     /// `TemperatureSetpointHold`.
     pub const TEMPERATURE_SETPOINT_HOLD: u32 = 0x0023;
     /// `TemperatureSetpointHoldDuration`.
@@ -141,6 +155,8 @@ bitflags::bitflags! {
         const COOL = 1 << 1;
         /// Occupancy (OCC).
         const OCC = 1 << 2;
+        /// ScheduleConfiguration (SCH).
+        const SCH = 1 << 3;
         /// Setback (SB).
         const SB = 1 << 4;
         /// AutoMode (AUTO).
@@ -912,7 +928,6 @@ impl ThermostatRunningModeEnum {
 
 /// `WeeklyScheduleTransitionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
 pub struct WeeklyScheduleTransitionStruct {
     /// Field TransitionTime (tag 0).
     pub transition_time: u16,
@@ -2253,6 +2268,63 @@ pub fn decode_thermostat_running_mode(
     }
 }
 
+/// Decode the `StartOfWeek` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_start_of_week(tlv: &[u8]) -> Result<StartOfWeekEnum, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(StartOfWeekEnum::from_raw(
+            u8::try_from(v).map_err(|_| ClusterError::InvalidLength("StartOfWeek"))?,
+        )),
+        _ => Err(ClusterError::UnexpectedType {
+            context: "StartOfWeek",
+        }),
+    }
+}
+
+/// Decode the `NumberOfWeeklyTransitions` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_number_of_weekly_transitions(tlv: &[u8]) -> Result<u8, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(u8::try_from(v)
+            .map_err(|_| ClusterError::InvalidLength("NumberOfWeeklyTransitions"))?),
+        _ => Err(ClusterError::UnexpectedType {
+            context: "NumberOfWeeklyTransitions",
+        }),
+    }
+}
+
+/// Decode the `NumberOfDailyTransitions` attribute value.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_number_of_daily_transitions(tlv: &[u8]) -> Result<u8, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => {
+            Ok(u8::try_from(v)
+                .map_err(|_| ClusterError::InvalidLength("NumberOfDailyTransitions"))?)
+        }
+        _ => Err(ClusterError::UnexpectedType {
+            context: "NumberOfDailyTransitions",
+        }),
+    }
+}
+
 /// Decode the `TemperatureSetpointHold` attribute value.
 ///
 /// # Errors
@@ -2950,6 +3022,187 @@ pub fn encode_setpoint_raise_lower(mode: SetpointRaiseLowerModeEnum, amount: i8)
     w.put_uint(Tag::Context(0), u64::from(mode.to_raw()))
         .expect("infallible: vec writer");
     w.put_int(Tag::Context(1), i64::from(amount))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Decoded `GetWeeklyScheduleResponse` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct GetWeeklyScheduleResponse {
+    /// Field NumberOfTransitionsForSequence (tag 0).
+    pub number_of_transitions_for_sequence: u8,
+    /// Field DayOfWeekForSequence (tag 1).
+    pub day_of_week_for_sequence: ScheduleDayOfWeekBitmap,
+    /// Field ModeForSequence (tag 2).
+    pub mode_for_sequence: ScheduleModeBitmap,
+    /// Field Transitions (tag 3).
+    pub transitions: Vec<WeeklyScheduleTransitionStruct>,
+}
+
+impl GetWeeklyScheduleResponse {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_number_of_transitions_for_sequence: Option<u8> = None;
+        let mut f_day_of_week_for_sequence: Option<ScheduleDayOfWeekBitmap> = None;
+        let mut f_mode_for_sequence: Option<ScheduleModeBitmap> = None;
+        let mut f_transitions: Option<Vec<WeeklyScheduleTransitionStruct>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_number_of_transitions_for_sequence = Some(u8::try_from(v).map_err(|_| {
+                        ClusterError::InvalidLength("NumberOfTransitionsForSequence")
+                    })?)
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_day_of_week_for_sequence = Some(ScheduleDayOfWeekBitmap::from_bits_retain(
+                        u8::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("DayOfWeekForSequence"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_mode_for_sequence = Some(ScheduleModeBitmap::from_bits_retain(
+                        u8::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("ModeForSequence"))?,
+                    ))
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(3),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::ContainerStart {
+                                kind: ContainerKind::Structure,
+                                ..
+                            }) => {
+                                out.push(WeeklyScheduleTransitionStruct::decode_from(r)?);
+                            }
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_transitions = Some(out);
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            number_of_transitions_for_sequence: f_number_of_transitions_for_sequence
+                .ok_or(ClusterError::MissingField("NumberOfTransitionsForSequence"))?,
+            day_of_week_for_sequence: f_day_of_week_for_sequence
+                .ok_or(ClusterError::MissingField("DayOfWeekForSequence"))?,
+            mode_for_sequence: f_mode_for_sequence
+                .ok_or(ClusterError::MissingField("ModeForSequence"))?,
+            transitions: f_transitions.ok_or(ClusterError::MissingField("Transitions"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "GetWeeklyScheduleResponse",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Encode the `SetWeeklySchedule` command request payload.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_set_weekly_schedule(
+    number_of_transitions_for_sequence: u8,
+    day_of_week_for_sequence: ScheduleDayOfWeekBitmap,
+    mode_for_sequence: ScheduleModeBitmap,
+    transitions: &Vec<WeeklyScheduleTransitionStruct>,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(
+        Tag::Context(0),
+        u64::from(number_of_transitions_for_sequence),
+    )
+    .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(1), u64::from(day_of_week_for_sequence.bits()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(2), u64::from(mode_for_sequence.bits()))
+        .expect("infallible: vec writer");
+    w.start_array(Tag::Context(3))
+        .expect("infallible: vec writer");
+    for el in transitions.iter() {
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        el.write_fields(&mut w);
+        w.end_container().expect("infallible: vec writer");
+    }
+    w.end_container().expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode the `GetWeeklySchedule` command request payload.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_get_weekly_schedule(
+    days_to_return: ScheduleDayOfWeekBitmap,
+    mode_to_return: ScheduleModeBitmap,
+) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(0), u64::from(days_to_return.bits()))
+        .expect("infallible: vec writer");
+    w.put_uint(Tag::Context(1), u64::from(mode_to_return.bits()))
+        .expect("infallible: vec writer");
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode the `ClearWeeklySchedule` command request payload.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_clear_weekly_schedule() -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf

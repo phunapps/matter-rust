@@ -209,6 +209,22 @@ could not write `use matter_clusters::gen::on_off;` (only `r#gen::on_off`).
 edition 2015–2021 code keeps compiling unchanged; new code should use
 `clusters`. The generated files did not move.
 
+### matter-clusters: Added — Matter 1.4 elements the 1.5.1 model removed
+
+The cluster model the codegen reads follows Matter 1.5.1, which removed a
+few elements a Matter 1.4 device may still implement. chip's controller
+generates them, and so do we now, transcribed from chip's 1.4.2 data model
+and checked against it:
+
+- **Thermostat weekly schedule (feature `SCH`, bit 3):** `StartOfWeek`,
+  `NumberOfWeeklyTransitions`, `NumberOfDailyTransitions`,
+  `encode_set_weekly_schedule`, `encode_get_weekly_schedule`,
+  `encode_clear_weekly_schedule` and `GetWeeklyScheduleResponse`, using the
+  existing `ScheduleDayOfWeekBitmap`, `ScheduleModeBitmap`, `StartOfWeekEnum`
+  and `WeeklyScheduleTransitionStruct`. `WeeklyScheduleTransitionStruct` is
+  no longer `#[non_exhaustive]`, so a schedule can be built to send.
+  `encode_set_weekly_schedule` is pinned against a matter.js byte vector.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

@@ -29,6 +29,11 @@ import { LevelControl } from '@matter/types/clusters/level-control';
 // vector for a signed integer field in a command request.
 import { TemperatureControl } from '@matter/types/clusters/temperature-control';
 
+// matter.js 0.16.11's Thermostat still models the Matter 1.4 weekly schedule
+// (feature SCH), which the 0.17.1 model dropped and our dump adds back from
+// supplement-1.4.json (M9-A3 B4): an oracle independent of the supplement.
+import { Thermostat } from '@matter/types/clusters/thermostat';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -290,6 +295,38 @@ cmd('thermostat', 'cmd_atomic_request.json',
     attributeRequests: TlvField(1, TlvArray(TlvUInt32)),
     timeout: TlvOptionalField(2, TlvUInt16),
   }).encode({ requestType: 0, attributeRequests: [5, 6], timeout: 1000 }));
+
+// ---------------------------------------------------------------------------
+// Thermostat (0x0201) SetWeeklySchedule (0x01) — M9-A3 B4. The first request
+// whose list entries carry a NULL field (WeeklyScheduleTransitionStruct
+// CoolSetpoint, a nullable temperature written as TLV null inside each struct
+// of the list), next to two bitmap fields. SetWeeklySchedule is a Matter 1.4
+// command the 1.5.1 model removed; matter.js 0.16.11 still has it, so the
+// vector is encoded with its own TlvSetWeeklyScheduleRequest and checks the
+// hand-transcribed supplement independently.
+// ---------------------------------------------------------------------------
+
+cmd('thermostat', 'cmd_set_weekly_schedule.json',
+  { cluster: 'Thermostat', cluster_id: 0x201, command: 'SetWeeklySchedule', command_id: 0x01,
+    fields: [
+      { name: 'NumberOfTransitionsForSequence', id: 0, value: 2 },
+      { name: 'DayOfWeekForSequence', id: 1, value: 0x0a },
+      { name: 'ModeForSequence', id: 2, value: 0x01 },
+      { name: 'Transitions', id: 3, value: [
+        { TransitionTime: 360, HeatSetpoint: 2000, CoolSetpoint: null },
+        { TransitionTime: 1410, HeatSetpoint: 1600, CoolSetpoint: null },
+      ] },
+    ],
+    note: 'list of structs whose CoolSetpoint is null, two bitmaps (Monday|Wednesday, heat only); encoded with matter.js 0.16.11 TlvSetWeeklyScheduleRequest' },
+  Thermostat.TlvSetWeeklyScheduleRequest.encode({
+    numberOfTransitionsForSequence: 2,
+    dayOfWeekForSequence: { monday: true, wednesday: true },
+    modeForSequence: { heatSetpointPresent: true },
+    transitions: [
+      { transitionTime: 360, heatSetpoint: 2000, coolSetpoint: null },
+      { transitionTime: 1410, heatSetpoint: 1600, coolSetpoint: null },
+    ],
+  }));
 
 // ---------------------------------------------------------------------------
 // GeneralDiagnostics (0x0033) NetworkInterfaces (0x00) — list<NetworkInterface>.

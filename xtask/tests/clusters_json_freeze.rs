@@ -1196,7 +1196,16 @@ fn service_area_location_struct_records_its_global_name() {
 /// `xtask/scripts/dump-model/supplement-1.4.json` (spec §2, rev 6), as
 /// `(cluster, "<Feature|Attribute|Command>.<name>")`. Each is checked against
 /// chip's 1.4.2 XML by `scripts/chip-xml-conformance.py` (class S).
-const SUPPLEMENTED: [(&str, &str); 0] = [];
+const SUPPLEMENTED: [(&str, &str); 8] = [
+    ("Thermostat", "Attribute.NumberOfDailyTransitions"),
+    ("Thermostat", "Attribute.NumberOfWeeklyTransitions"),
+    ("Thermostat", "Attribute.StartOfWeek"),
+    ("Thermostat", "Command.ClearWeeklySchedule"),
+    ("Thermostat", "Command.GetWeeklySchedule"),
+    ("Thermostat", "Command.GetWeeklyScheduleResponse"),
+    ("Thermostat", "Command.SetWeeklySchedule"),
+    ("Thermostat", "Feature.SCH"),
+];
 
 #[test]
 fn supplemented_elements_are_exactly_these_and_cite_a_source() {
@@ -1223,4 +1232,62 @@ fn supplemented_elements_are_exactly_these_and_cite_a_source() {
     let mut want = SUPPLEMENTED.to_vec();
     want.sort_unstable();
     assert_eq!(got, want);
+}
+
+#[test]
+fn thermostat_weekly_schedule_uses_the_models_own_datatypes() {
+    // The supplement adds SCH's feature, attributes and commands only; the
+    // datatypes they name are the model's own (kept by the 1.5.1 model), so
+    // each exists exactly once and the request and response share
+    // WeeklyScheduleTransitionStruct.
+    let v = load();
+    let c = cluster(&v, "Thermostat");
+    for name in [
+        "ScheduleDayOfWeekBitmap",
+        "ScheduleModeBitmap",
+        "StartOfWeekEnum",
+        "WeeklyScheduleTransitionStruct",
+    ] {
+        let count = c["datatypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| d["name"] == name)
+            .count();
+        assert_eq!(count, 1, "{name}");
+    }
+    let sch: Vec<_> = c["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["code"] == "SCH")
+        .map(|f| f["bit"].as_u64().unwrap())
+        .collect();
+    assert_eq!(sch, [3]);
+    for name in ["SetWeeklySchedule", "GetWeeklyScheduleResponse"] {
+        let cmd = command(c, name);
+        assert_eq!(
+            field_optionality(&cmd["fields"]),
+            [
+                ("NumberOfTransitionsForSequence", false),
+                ("DayOfWeekForSequence", false),
+                ("ModeForSequence", false),
+                ("Transitions", false)
+            ],
+            "{name}"
+        );
+        assert_eq!(
+            cmd["fields"][3]["entryType"],
+            "WeeklyScheduleTransitionStruct"
+        );
+    }
+    assert_eq!(command(c, "GetWeeklySchedule")["responseId"], 0);
+    assert_eq!(
+        field_optionality(&datatype(c, "WeeklyScheduleTransitionStruct")["fields"]),
+        [
+            ("TransitionTime", false),
+            ("HeatSetpoint", false),
+            ("CoolSetpoint", false)
+        ]
+    );
 }

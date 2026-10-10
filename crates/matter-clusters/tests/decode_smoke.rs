@@ -2821,3 +2821,111 @@ fn service_area_missing_mandatory_fields_are_errors() {
         Err(ClusterError::MissingField("LocationName"))
     ));
 }
+
+// ---- M9-A3 B4: Thermostat weekly schedule (Matter 1.4 SCH, supplemented) ----
+//
+// Feature SCH (bit 3): StartOfWeek / NumberOfWeeklyTransitions /
+// NumberOfDailyTransitions, SetWeeklySchedule / GetWeeklySchedule /
+// ClearWeeklySchedule and GetWeeklyScheduleResponse (1.4.2 Thermostat.xml).
+// The 1.5.1 model removed them; the dump adds them from supplement-1.4.json and
+// reuses the model's own ScheduleDayOfWeekBitmap, ScheduleModeBitmap,
+// StartOfWeekEnum and WeeklyScheduleTransitionStruct.
+
+#[test]
+fn thermostat_weekly_schedule_attributes_and_response_decode() {
+    use clusters::thermostat::{
+        attribute_id, command_id, decode_number_of_daily_transitions,
+        decode_number_of_weekly_transitions, decode_start_of_week, Feature,
+        GetWeeklyScheduleResponse, ScheduleDayOfWeekBitmap, ScheduleModeBitmap, StartOfWeekEnum,
+    };
+    assert_eq!(Feature::SCH.bits(), 1 << 3);
+    assert_eq!(
+        (
+            attribute_id::START_OF_WEEK,
+            attribute_id::NUMBER_OF_WEEKLY_TRANSITIONS,
+            attribute_id::NUMBER_OF_DAILY_TRANSITIONS
+        ),
+        (0x0020, 0x0021, 0x0022)
+    );
+    assert_eq!(
+        (
+            command_id::GET_WEEKLY_SCHEDULE_RESPONSE,
+            command_id::SET_WEEKLY_SCHEDULE,
+            command_id::GET_WEEKLY_SCHEDULE,
+            command_id::CLEAR_WEEKLY_SCHEDULE
+        ),
+        (0x00, 0x01, 0x02, 0x03)
+    );
+    assert_eq!(
+        decode_start_of_week(&uint_attr(1)).unwrap(),
+        StartOfWeekEnum::Monday
+    );
+    assert_eq!(
+        decode_number_of_weekly_transitions(&uint_attr(70)).unwrap(),
+        70
+    );
+    assert_eq!(
+        decode_number_of_daily_transitions(&uint_attr(10)).unwrap(),
+        10
+    );
+    // A reply for Saturday and Sunday, heat and cool, one transition whose
+    // heat setpoint is null (no heat change at 06:00).
+    let r = GetWeeklyScheduleResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 0b0100_0001).unwrap();
+        w.put_uint(Tag::Context(2), 0b11).unwrap();
+        w.start_array(Tag::Context(3)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 360).unwrap();
+        w.put_null(Tag::Context(1)).unwrap();
+        w.put_int(Tag::Context(2), -150).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(r.number_of_transitions_for_sequence, 1);
+    assert_eq!(
+        r.day_of_week_for_sequence,
+        ScheduleDayOfWeekBitmap::SUNDAY | ScheduleDayOfWeekBitmap::SATURDAY
+    );
+    assert_eq!(r.mode_for_sequence, ScheduleModeBitmap::all());
+    let t = &r.transitions[..];
+    assert_eq!(t.len(), 1);
+    assert_eq!(
+        (t[0].transition_time, t[0].heat_setpoint, t[0].cool_setpoint),
+        (360, Nullable::Null, Nullable::Value(-150))
+    );
+}
+
+#[test]
+fn thermostat_weekly_schedule_requests_encode() {
+    use clusters::thermostat::{
+        encode_clear_weekly_schedule, encode_get_weekly_schedule, ScheduleDayOfWeekBitmap,
+        ScheduleModeBitmap,
+    };
+    assert_eq!(encode_clear_weekly_schedule(), [0x15, 0x18]);
+    assert_eq!(
+        encode_get_weekly_schedule(
+            ScheduleDayOfWeekBitmap::AWAY,
+            ScheduleModeBitmap::COOL_SETPOINT_PRESENT
+        ),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0x80).unwrap();
+            w.put_uint(Tag::Context(1), 0x02).unwrap();
+        })
+    );
+}
+
+#[test]
+fn thermostat_weekly_schedule_response_missing_list_is_an_error() {
+    use matter_clusters::error::ClusterError;
+    // Transitions is an unconditional M in 1.4.2 (Thermostat.xml:1293).
+    assert!(matches!(
+        clusters::thermostat::GetWeeklyScheduleResponse::decode(&struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_uint(Tag::Context(1), 1).unwrap();
+            w.put_uint(Tag::Context(2), 1).unwrap();
+        })),
+        Err(ClusterError::MissingField("Transitions"))
+    ));
+}

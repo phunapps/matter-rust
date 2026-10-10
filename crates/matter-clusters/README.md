@@ -54,8 +54,8 @@ attributes, by area:
   BridgedDeviceBasicInformation (per-bridged-endpoint identity behind a
   bridge/aggregator).
 - **Lighting and actuators** — OnOff, LevelControl, ColorControl, DoorLock
-  (Aliro features excluded), WindowCovering, Thermostat,
-  ThermostatUserInterfaceConfiguration, FanControl,
+  (Aliro features excluded), WindowCovering, Thermostat (with the Matter 1.4
+  weekly schedule), ThermostatUserInterfaceConfiguration, FanControl,
   PumpConfigurationAndControl.
 - **Sensing** — OccupancySensing, TemperatureMeasurement,
   RelativeHumidityMeasurement, IlluminanceMeasurement, PressureMeasurement,
