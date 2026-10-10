@@ -5,6 +5,7 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -95,18 +96,38 @@ pub async fn send_app_pipe(cfg: &DutConfig, json: &str) -> Result<()> {
 
 /// Append `json` plus a newline to the FIFO at `path`, failing if the
 /// blocking open/write does not finish within `timeout`.
+///
+/// The open and write run on a detached `std::thread`, polled until the
+/// deadline, not on `tokio::task::spawn_blocking`. If nothing ever opens the
+/// FIFO for reading (the DUT died without unlinking it), `open` blocks for
+/// good. Dropping a tokio runtime waits for its blocking-pool threads, so a
+/// `spawn_blocking` writer would hang the `#[tokio::test]` at exit after it
+/// had already failed. A detached thread holds up neither runtime shutdown
+/// nor process exit.
 async fn write_fifo_line(path: PathBuf, json: &str, timeout: Duration) -> Result<()> {
     let line = format!("{json}\n");
     let shown = path.display().to_string();
-    let write = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        let mut fifo = std::fs::OpenOptions::new().write(true).open(&path)?;
-        fifo.write_all(line.as_bytes())
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .and_then(|mut fifo| fifo.write_all(line.as_bytes()));
+        // After a timeout the receiver is gone and nobody wants the result.
+        let _ = tx.send(result);
     });
-    tokio::time::timeout(timeout, write)
-        .await
-        .with_context(|| format!("app pipe {shown}: no reader within {timeout:?}"))?
-        .context("app pipe writer task panicked")?
-        .with_context(|| format!("write app pipe {shown}"))
+    let deadline = Instant::now() + timeout;
+    loop {
+        match rx.try_recv() {
+            Ok(result) => return result.with_context(|| format!("write app pipe {shown}")),
+            Err(TryRecvError::Disconnected) => bail!("app pipe {shown}: writer thread panicked"),
+            Err(TryRecvError::Empty) => {}
+        }
+        if Instant::now() >= deadline {
+            bail!("app pipe {shown}: no reader within {timeout:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// Every event currently readable on `path` (data reports only; a per-path
@@ -133,8 +154,26 @@ pub async fn read_event_items(node: &Node, path: EventPath) -> Result<Vec<EventR
     Ok(items)
 }
 
+/// The highest event number currently readable on `(endpoint, cluster,
+/// event)`, or `None` if there is none: the baseline to take before a
+/// stimulus and pass to [`wait_for_event_after`].
+///
+/// # Errors
+///
+/// As [`read_event_items`].
+pub async fn latest_event_number(
+    node: &Node,
+    endpoint: u16,
+    cluster: u32,
+    event: u32,
+) -> Result<Option<u64>> {
+    let items = read_event_items(node, EventPath::concrete(endpoint, cluster, event)).await?;
+    Ok(items.iter().map(|i| i.event_number).max())
+}
+
 /// Poll `(endpoint, cluster, event)` until at least one event is reported or
-/// [`EVENT_TIMEOUT`] passes; returns every reported event.
+/// [`EVENT_TIMEOUT`] passes; returns every reported event, old ones included.
+/// To wait for the event a stimulus caused, use [`wait_for_event_after`].
 ///
 /// # Errors
 ///
@@ -145,14 +184,39 @@ pub async fn wait_for_event(
     cluster: u32,
     event: u32,
 ) -> Result<Vec<EventReportItem>> {
+    wait_for_event_after(node, endpoint, cluster, event, None).await
+}
+
+/// Poll `(endpoint, cluster, event)` until at least one event numbered above
+/// `baseline` is reported (any event when `baseline` is `None`) or
+/// [`EVENT_TIMEOUT`] passes. Returns only those newer events. Take
+/// `baseline` with [`latest_event_number`] before the stimulus, because the
+/// event log keeps older events on the same path (commissioning's, earlier
+/// tests').
+///
+/// # Errors
+///
+/// A read error, or no newer event before the timeout.
+pub async fn wait_for_event_after(
+    node: &Node,
+    endpoint: u16,
+    cluster: u32,
+    event: u32,
+    baseline: Option<u64>,
+) -> Result<Vec<EventReportItem>> {
     let deadline = Instant::now() + EVENT_TIMEOUT;
     loop {
-        let items = read_event_items(node, EventPath::concrete(endpoint, cluster, event)).await?;
+        let mut items =
+            read_event_items(node, EventPath::concrete(endpoint, cluster, event)).await?;
+        items.retain(|i| baseline.is_none_or(|b| i.event_number > b));
         if !items.is_empty() {
             return Ok(items);
         }
         if Instant::now() >= deadline {
-            bail!("no event {cluster:#06x}/{event:#04x} on endpoint {endpoint} within {EVENT_TIMEOUT:?}");
+            bail!(
+                "no event {cluster:#06x}/{event:#04x} on endpoint {endpoint} after event \
+                 number {baseline:?} within {EVENT_TIMEOUT:?}"
+            );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
@@ -178,8 +242,8 @@ mod tests {
             .await
             .expect_err("a FIFO nobody reads must time out");
         assert!(err.to_string().contains("no reader"), "{err:#}");
-        // Unblock the leaked writer thread so the test process exits cleanly.
-        let _reader = std::fs::File::open(&fifo).unwrap();
+        // The writer thread stays blocked in open() on purpose: it must not
+        // keep the runtime (or this test process) from exiting.
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

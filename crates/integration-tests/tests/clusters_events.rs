@@ -39,7 +39,10 @@ use matter_controller::{
     Value,
 };
 
-use integration_tests::events::{payload_tlv, read_event_items, send_app_pipe, wait_for_event};
+use integration_tests::events::{
+    latest_event_number, payload_tlv, read_event_items, send_app_pipe, wait_for_event,
+    wait_for_event_after,
+};
 
 /// Our controller's operational node id: the fixture creates its fabric with
 /// `FabricConfig::new(1, 1, 1, ..)` (commissioner node id 1,
@@ -219,8 +222,17 @@ async fn occupancy_and_boolean_state_events_decode() {
         .expect("connect/commission DUT");
     let node = controller.node(node_id);
 
-    // ── OccupancySensing (ep1): flip occupancy both ways so at least one
-    //    SetOccupancy is a change, whatever the starting state.
+    // ── OccupancySensing (ep1): SetOccupancy 0 then 1. chip applies
+    //    "occupied" at once but delays "unoccupied" by HoldTime (30 s default;
+    //    OccupancySensingCluster::SetOccupancy starts a timer, and only
+    //    TimerFired emits the event). So the 0 only arms a timer and the 1
+    //    cancels it. The DUT boots unoccupied, so the 1 is a change and emits
+    //    OccupancyChanged with the Occupied bit set.
+    use occupancy_sensing::event_id::OCCUPANCY_CHANGED;
+    let occ_baseline =
+        latest_event_number(&node, 1, occupancy_sensing::CLUSTER_ID, OCCUPANCY_CHANGED)
+            .await
+            .expect("OccupancyChanged baseline");
     for occupancy in [0, 1] {
         send_app_pipe(
             &cfg,
@@ -229,16 +241,27 @@ async fn occupancy_and_boolean_state_events_decode() {
         .await
         .expect("app pipe");
     }
-    let occ = wait_for_event(
+    let occ = wait_for_event_after(
         &node,
         1,
         occupancy_sensing::CLUSTER_ID,
-        occupancy_sensing::event_id::OCCUPANCY_CHANGED,
+        OCCUPANCY_CHANGED,
+        occ_baseline,
     )
     .await
     .expect("OccupancyChanged");
-    occupancy_sensing::OccupancyChangedEvent::decode(&payload_tlv(&occ[0].value))
+    let latest = occ
+        .iter()
+        .max_by_key(|i| i.event_number)
+        .expect("wait_for_event_after returns at least one event");
+    let latest = occupancy_sensing::OccupancyChangedEvent::decode(&payload_tlv(&latest.value))
         .expect("OccupancyChanged decodes");
+    assert!(
+        latest
+            .occupancy
+            .contains(occupancy_sensing::OccupancyBitmap::OCCUPIED),
+        "latest OccupancyChanged after SetOccupancy 1 must be occupied: {latest:?}"
+    );
 
     // ── BooleanState (ep1): stimulate where the app supports it (master). ──
     for state in [false, true] {
@@ -254,6 +277,50 @@ async fn occupancy_and_boolean_state_events_decode() {
         other => newer_than_codegen("BooleanState", other),
     })
     .await;
+}
+
+/// Write one AccessControl Extension entry and clear it again, then wait for
+/// the AccessControlExtensionChanged event that caused.
+async fn write_and_clear_extension(node: &Node) {
+    use access_control::event_id as ac;
+    // Extension (EXTS): write one entry (Data = an empty anonymous TLV list,
+    // the only shape chip's CheckExtensionEntryDataFormat accepts), then clear.
+    let extension_path = AttributePath {
+        endpoint: 0,
+        cluster: access_control::CLUSTER_ID,
+        attribute: access_control::attribute_id::EXTENSION,
+    };
+    let ext_baseline = latest_event_number(
+        node,
+        0,
+        access_control::CLUSTER_ID,
+        ac::ACCESS_CONTROL_EXTENSION_CHANGED,
+    )
+    .await
+    .expect("AccessControlExtensionChanged baseline");
+    let one_entry = Value::Array(vec![Value::Structure(vec![(
+        Tag::Context(1),
+        Value::Bytes(vec![0x17, 0x18]),
+    )])]);
+    for (value, what) in [(one_entry, "write"), (Value::Array(vec![]), "clear")] {
+        let statuses = node
+            .write(&[(extension_path, value)])
+            .await
+            .unwrap_or_else(|e| panic!("Extension {what}: {e:?}"));
+        assert!(
+            statuses.iter().all(|(_, s)| matches!(s, ImStatus::Success)),
+            "Extension {what} statuses: {statuses:?}"
+        );
+    }
+    wait_for_event_after(
+        node,
+        0,
+        access_control::CLUSTER_ID,
+        ac::ACCESS_CONTROL_EXTENSION_CHANGED,
+        ext_baseline,
+    )
+    .await
+    .expect("AccessControlExtensionChanged");
 }
 
 /// AccessControl (ep0): our own ACL and Extension writes emit the events.
@@ -277,17 +344,14 @@ async fn access_control_events_decode() {
     // AdminPasscodeID and a null AdminNodeID. Only events numbered after this
     // baseline are ours.
     use access_control::event_id as ac;
-    let entry_changed = EventPath::concrete(
+    let baseline = latest_event_number(
+        &node,
         0,
         access_control::CLUSTER_ID,
         ac::ACCESS_CONTROL_ENTRY_CHANGED,
-    );
-    let baseline = read_event_items(&node, entry_changed)
-        .await
-        .expect("read AccessControlEntryChanged baseline")
-        .iter()
-        .map(|i| i.event_number)
-        .max();
+    )
+    .await
+    .expect("AccessControlEntryChanged baseline");
     let acl_before = node.read_acl().await.expect("read_acl");
     let mut acl = acl_before.clone();
     acl.push(AclEntry::new(
@@ -297,17 +361,17 @@ async fn access_control_events_decode() {
         None,
     ));
     node.write_acl(&acl).await.expect("write_acl (+View entry)");
-    let changed = wait_for_event(
+    let changed = wait_for_event_after(
         &node,
         0,
         access_control::CLUSTER_ID,
         ac::ACCESS_CONTROL_ENTRY_CHANGED,
+        baseline,
     )
     .await
     .expect("AccessControlEntryChanged");
     let added = changed
         .iter()
-        .filter(|i| baseline.is_none_or(|b| i.event_number > b))
         .map(|i| {
             access_control::AccessControlEntryChangedEvent::decode(&payload_tlv(&i.value))
                 .expect("AccessControlEntryChanged decodes")
@@ -328,35 +392,7 @@ async fn access_control_events_decode() {
         Nullable::Null => panic!("Added event without LatestValue"),
     }
 
-    // Extension (EXTS): write one entry (Data = an empty anonymous TLV list,
-    // the only shape chip's CheckExtensionEntryDataFormat accepts), then clear.
-    let extension_path = AttributePath {
-        endpoint: 0,
-        cluster: access_control::CLUSTER_ID,
-        attribute: access_control::attribute_id::EXTENSION,
-    };
-    let one_entry = Value::Array(vec![Value::Structure(vec![(
-        Tag::Context(1),
-        Value::Bytes(vec![0x17, 0x18]),
-    )])]);
-    for (value, what) in [(one_entry, "write"), (Value::Array(vec![]), "clear")] {
-        let statuses = node
-            .write(&[(extension_path, value)])
-            .await
-            .unwrap_or_else(|e| panic!("Extension {what}: {e:?}"));
-        assert!(
-            statuses.iter().all(|(_, s)| matches!(s, ImStatus::Success)),
-            "Extension {what} statuses: {statuses:?}"
-        );
-    }
-    wait_for_event(
-        &node,
-        0,
-        access_control::CLUSTER_ID,
-        ac::ACCESS_CONTROL_EXTENSION_CHANGED,
-    )
-    .await
-    .expect("AccessControlExtensionChanged");
+    write_and_clear_extension(&node).await;
     decode_every_event(&node, 0, access_control::CLUSTER_ID, |id, t| match id {
         ac::ACCESS_CONTROL_ENTRY_CHANGED => {
             ok(access_control::AccessControlEntryChangedEvent::decode(t))
