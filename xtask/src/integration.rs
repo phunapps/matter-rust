@@ -45,7 +45,8 @@ enum EventStimulus {
     TestEventTriggers,
     /// `--enable-key` plus `--app-pipe <dut_dir>/app-pipe` (exported to the
     /// tests as `MATTER_INTEGRATION_APP_PIPE`): the JSON command FIFO that
-    /// all-clusters and lock-app read, for events with no trigger.
+    /// all-clusters, lock-app and rvc-app read, for events with no trigger
+    /// (and, on rvc-app, to reset the robot between tests).
     TriggersAndAppPipe,
 }
 
@@ -116,8 +117,11 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             linux_platform_mdns: false,
             events: EventStimulus::TestEventTriggers,
         },
-        // M9-A3 B2: RvcRunMode / RvcCleanMode (B3 adds RvcOperationalState and
-        // ServiceArea, whose events need the app pipe rvc-app reads).
+        // M9-A3 B2: RvcRunMode / RvcCleanMode; B3: RvcOperationalState and
+        // ServiceArea. The tests drive rvc-app's state machine and stimulate
+        // its events over the app pipe (Reset, ErrorEvent, ActivityComplete,
+        // ...; rvc-app/linux/RvcAppCommandDelegate.cpp). rvc-app ignores the
+        // enable key: it has no test-event triggers.
         "rvc" => AppSpec {
             name: "rvc",
             target_suffix: "rvc",
@@ -127,7 +131,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
-            events: EventStimulus::None,
+            events: EventStimulus::TriggersAndAppPipe,
         },
         "icd" => AppSpec {
             name: "icd",
@@ -761,7 +765,7 @@ mod tests {
 
     #[test]
     fn event_hosts_launch_with_the_test_event_enable_key() {
-        for app in ["all-clusters", "lock", "evse"] {
+        for app in ["all-clusters", "lock", "evse", "rvc"] {
             let args = launch_args(&app_spec(Some(app)).unwrap(), None);
             let at = args
                 .iter()
@@ -781,9 +785,10 @@ mod tests {
     }
 
     #[test]
-    fn rvc_host_runs_only_its_own_suite_with_plain_arguments() {
+    fn rvc_host_runs_only_its_own_suite_with_the_app_pipe() {
         // `build_examples.py --target darwin-arm64-rvc` (linux-x64-rvc on
-        // Linux) builds out/<target>-rvc/chip-rvc-app.
+        // Linux) builds out/<target>-rvc/chip-rvc-app. M9-A3 B3: the tests
+        // reset rvc-app and stimulate its events over --app-pipe.
         let spec = app_spec(Some("rvc")).unwrap();
         assert_eq!(
             (spec.name, spec.target_suffix, spec.binary),
@@ -791,7 +796,16 @@ mod tests {
         );
         assert_eq!(spec.test_filter, Some("clusters_rvc"));
         assert_eq!(spec.fixed_qr, None);
-        assert_eq!(launch_args(&spec, None), Vec::<String>::new());
+        assert_eq!(spec.events, EventStimulus::TriggersAndAppPipe);
+        assert_eq!(
+            launch_args(&spec, Some(Path::new("/x/app-pipe"))),
+            [
+                "--enable-key",
+                "00112233445566778899aabbccddeeff",
+                "--app-pipe",
+                "/x/app-pipe"
+            ]
+        );
     }
 
     #[test]
