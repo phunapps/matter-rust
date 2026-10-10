@@ -83,17 +83,12 @@ fn tags_of_entries_for(list: &Value, fabric_index: u8) -> Vec<Vec<Tag>> {
         .collect()
 }
 
-/// M9-A3 spec §5.4 against real chip encoding. With B's fabric on the
-/// device, A reads AccessControl `Acl` and `Extension` unfiltered (our reads
-/// always are): chip returns B's entries carrying only FabricIndex, and the
-/// generated decoders must accept them with every fabric-sensitive field
+/// M9-A3 spec §5.4 against real chip encoding, AccessControl `Acl` and
+/// `Extension`. With B's fabric on the device, A reads both unfiltered (our
+/// reads always are): chip returns B's entries carrying only FabricIndex, and
+/// the generated decoders must accept them with every fabric-sensitive field
 /// `None` while A's own entries keep theirs.
-async fn assert_other_fabric_entries_withheld(
-    node_a: &Node,
-    node_b: &Node,
-    a_index: u8,
-    b_index: u8,
-) {
+async fn assert_acl_entries_withheld(node_a: &Node, node_b: &Node, a_index: u8, b_index: u8) {
     const ACL: u32 = access_control::attribute_id::ACL;
     const EXTENSION: u32 = access_control::attribute_id::EXTENSION;
     // Give B an Extension entry so A's read holds one of B's (Data = an empty
@@ -173,10 +168,12 @@ async fn assert_other_fabric_entries_withheld(
         b_ext[0].encode().is_err(),
         "a withheld Extension entry must not re-encode"
     );
+}
 
-    // matter-controller's hand-written ACL read-modify-write (acl.rs) skips
-    // the withheld entries and never writes them back: A's round trip leaves
-    // B's admin entry, and so B's access, intact.
+/// matter-controller's hand-written ACL read-modify-write (acl.rs) skips the
+/// entries another fabric's read withholds and never writes them back: A's
+/// round trip leaves B's admin entry, and so B's access, intact.
+async fn assert_acl_round_trip_keeps_other_fabric(node_a: &Node, node_b: &Node, b_index: u8) {
     let own = node_a.read_acl().await.expect("A.read_acl with B present");
     assert!(
         !own.is_empty() && own.iter().all(|e| e.fabric_index != Some(b_index)),
@@ -208,47 +205,9 @@ async fn assert_other_fabric_entries_withheld(
 
 // ── Multi-admin: open window → 2nd controller → list/remove fabric ───────────
 
-/// Drive the multi-admin loop against the live DUT:
-///   1. Controller A (fixture) commissions the device (fabric 1).
-///   2. A opens an enhanced commissioning window.
-///   3. Controller B (its own store + fabric 2, same dev-cert trust) commissions
-///      the device via the window's manual pairing code.
-///   4. A.list_fabrics() shows ≥ 2 fabrics; both A and B can read OnOff.
-///   5. A removes B's fabric by index; the fabric count drops back.
-///
-/// Plan T9 flagged a risk that `commission` might not consume an open-window
-/// manual code directly. That is now validated live: the full loop runs (B
-/// commissions through the window, A removes B's fabric), so a commission
-/// failure here is a hard error — never silently downgraded to a weaker
-/// assertion that could let a regression pass green. (One bounded retry
-/// absorbs the known transient: the window's mDNS advertisement lagging the
-/// open-window response; a regression fails both attempts.)
-#[tokio::test]
-async fn open_window_second_controller_and_remove_fabric() {
-    let cfg = integration_tests::dut_or_skip!();
-    let (controller_a, node_id_a) = integration_tests::fixture::connect(&cfg)
-        .await
-        .expect("connect/commission DUT (controller A)");
-    let node_a = controller_a.node(node_id_a);
-
-    // Sanity: A controls the device.
-    assert!(
-        read_onoff(&node_a).await.is_some(),
-        "controller A could not read OnOff before opening the window"
-    );
-
-    // 2. A opens an enhanced commissioning window.
-    let window = node_a
-        .open_commissioning_window(OpenWindowOpts::default())
-        .await
-        .expect("open_commissioning_window");
-    assert!(
-        !window.manual_code.is_empty(),
-        "commissioning window must yield a manual pairing code"
-    );
-
-    // 3. Build controller B: its own store under the per-run DUT dir, the same
-    //    development attestation roots, and a fresh fabric (id 2).
+/// Controller B: its own store under the per-run DUT dir, the same
+/// development attestation roots, and a fresh fabric ([`FABRIC_B_ID`]).
+async fn build_controller_b(cfg: &integration_tests::dut::DutConfig) -> MatterController {
     let trust = AttestationTrust::from_dirs(&cfg.paa_dir(), &cfg.cd_dir())
         .expect("loading development attestation roots (controller B)");
     let store_b = Arc::new(FileStore::new(cfg.dut_dir.join("controller-b-store.bin")));
@@ -272,84 +231,121 @@ async fn open_window_second_controller_and_remove_fabric() {
         ))
         .await
         .expect("creating controller B fabric");
+    controller_b
+}
 
-    // 4. B commissions the device through the open window. The window's
-    //    commissionable advertisement can lag the OpenCommissioningWindow
-    //    response by a beat (mDNS propagation on a busy DUT), which showed up
-    //    as a transient commission timeout in the sweep — tolerate ONE
-    //    transient failure with a short pause. A real regression fails both
-    //    attempts and still hard-fails the test.
-    let commissioned = match controller_b.commission(&window.manual_code, None).await {
-        Ok(id) => Ok(id),
+/// B commissions the device through the open window and returns its node id.
+/// The window's commissionable advertisement can lag the
+/// OpenCommissioningWindow response by a beat (mDNS propagation on a busy
+/// DUT), which showed up as a transient commission timeout in the sweep, so
+/// ONE transient failure is tolerated after a short pause. The full loop is
+/// validated live, so a real regression fails both attempts and panics:
+/// never a silent downgrade to a weaker assertion.
+async fn commission_through_window(controller_b: &MatterController, manual_code: &str) -> u64 {
+    let commissioned = match controller_b.commission(manual_code, None).await {
+        Ok(info) => Ok(info),
         Err(first) => {
             eprintln!("[multi_admin] B's first commission attempt failed ({first}); retrying once");
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            controller_b.commission(&window.manual_code, None).await
+            controller_b.commission(manual_code, None).await
         }
     };
-    match commissioned {
-        Ok(info_b) => {
-            let node_b = controller_b.node(info_b.node_id);
+    commissioned
+        .unwrap_or_else(|e| {
+            panic!("2nd-controller commission via the open-window manual code failed: {e:?}")
+        })
+        .node_id
+}
 
-            // Both control paths are live.
-            assert!(
-                read_onoff(&node_a).await.is_some(),
-                "controller A lost its OnOff read path after B joined"
-            );
-            assert!(
-                read_onoff(&node_b).await.is_some(),
-                "controller B could not read OnOff after commissioning"
-            );
+/// The device's fabric count as A sees it, and A's and B's fabric indices
+/// (found by fabric id, so B's index is never A's).
+async fn fabric_indices(node_a: &Node) -> (usize, u8, u8) {
+    let fabrics = node_a.list_fabrics().await.expect("A.list_fabrics");
+    assert!(
+        fabrics.len() >= 2,
+        "expected ≥ 2 fabrics after B joined, got {}: {fabrics:?}",
+        fabrics.len()
+    );
+    let index_of = |id: u64, who: &str| {
+        fabrics
+            .iter()
+            .find(|f| f.fabric_id == id)
+            .unwrap_or_else(|| panic!("{who}'s fabric must be present in A's fabric list"))
+            .fabric_index
+    };
+    (
+        fabrics.len(),
+        index_of(FABRIC_A_ID, "A"),
+        index_of(FABRIC_B_ID, "B"),
+    )
+}
 
-            // A sees both fabrics.
-            let fabrics = node_a.list_fabrics().await.expect("A.list_fabrics");
-            assert!(
-                fabrics.len() >= 2,
-                "expected ≥ 2 fabrics after B joined, got {}: {fabrics:?}",
-                fabrics.len()
-            );
+/// Drive the multi-admin loop against the live DUT:
+///   1. Controller A (fixture) commissions the device (fabric 1).
+///   2. A opens an enhanced commissioning window.
+///   3. Controller B (its own store + fabric 2, same dev-cert trust) commissions
+///      the device via the window's manual pairing code.
+///   4. A.list_fabrics() shows ≥ 2 fabrics; both A and B can read OnOff; the
+///      §5.4 fabric-sensitive regressions run with B present.
+///   5. A removes B's fabric by index; the fabric count drops back.
+///
+/// Plan T9 flagged a risk that `commission` might not consume an open-window
+/// manual code directly. That is now validated live: the full loop runs (B
+/// commissions through the window, A removes B's fabric), so a commission
+/// failure here is a hard error (see [`commission_through_window`]).
+#[tokio::test]
+async fn open_window_second_controller_and_remove_fabric() {
+    let cfg = integration_tests::dut_or_skip!();
+    let (controller_a, node_id_a) = integration_tests::fixture::connect(&cfg)
+        .await
+        .expect("connect/commission DUT (controller A)");
+    let node_a = controller_a.node(node_id_a);
+    assert!(
+        read_onoff(&node_a).await.is_some(),
+        "controller A could not read OnOff before opening the window"
+    );
 
-            // A removes B's fabric (the one whose fabric_id is B's, never A's).
-            let b_index = fabrics
-                .iter()
-                .find(|f| f.fabric_id == FABRIC_B_ID)
-                .map(|f| f.fabric_index)
-                .expect("B's fabric must be present in A's fabric list");
-            let a_index = fabrics
-                .iter()
-                .find(|f| f.fabric_id == FABRIC_A_ID)
-                .map(|f| f.fabric_index)
-                .expect("A's fabric must be present in A's fabric list");
+    let window = node_a
+        .open_commissioning_window(OpenWindowOpts::default())
+        .await
+        .expect("open_commissioning_window");
+    assert!(
+        !window.manual_code.is_empty(),
+        "commissioning window must yield a manual pairing code"
+    );
+    let controller_b = build_controller_b(&cfg).await;
+    let node_b =
+        controller_b.node(commission_through_window(&controller_b, &window.manual_code).await);
 
-            // §5.4 regression against real chip: unfiltered reads with B present.
-            assert_other_fabric_entries_withheld(&node_a, &node_b, a_index, b_index).await;
+    assert!(
+        read_onoff(&node_a).await.is_some(),
+        "controller A lost its OnOff read path after B joined"
+    );
+    assert!(
+        read_onoff(&node_b).await.is_some(),
+        "controller B could not read OnOff after commissioning"
+    );
+    let (count, a_index, b_index) = fabric_indices(&node_a).await;
 
-            node_a
-                .remove_fabric(b_index)
-                .await
-                .expect("A.remove_fabric(B)");
+    // §5.4 regressions against real chip: unfiltered reads with B present.
+    assert_acl_entries_withheld(&node_a, &node_b, a_index, b_index).await;
+    assert_acl_round_trip_keeps_other_fabric(&node_a, &node_b, b_index).await;
 
-            // The fabric count drops back.
-            let after = node_a
-                .list_fabrics()
-                .await
-                .expect("A.list_fabrics after removal");
-            assert!(
-                after.len() < fabrics.len(),
-                "fabric count did not drop after removing B: before={}, after={}",
-                fabrics.len(),
-                after.len()
-            );
-            assert!(
-                after.iter().all(|f| f.fabric_id != FABRIC_B_ID),
-                "B's fabric is still present after removal: {after:?}"
-            );
-        }
-        Err(e) => {
-            // The full multi-admin loop is validated live, so a 2nd-controller
-            // commission failure is a real regression — fail hard rather than
-            // pass vacuously.
-            panic!("2nd-controller commission via the open-window manual code failed: {e:?}");
-        }
-    }
+    node_a
+        .remove_fabric(b_index)
+        .await
+        .expect("A.remove_fabric(B)");
+    let after = node_a
+        .list_fabrics()
+        .await
+        .expect("A.list_fabrics after removal");
+    assert!(
+        after.len() < count,
+        "fabric count did not drop after removing B: before={count}, after={}",
+        after.len()
+    );
+    assert!(
+        after.iter().all(|f| f.fabric_id != FABRIC_B_ID),
+        "B's fabric is still present after removal: {after:?}"
+    );
 }
