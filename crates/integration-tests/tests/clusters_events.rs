@@ -41,8 +41,9 @@ use matter_controller::{
 
 use integration_tests::events::{
     all_clusters_pipe_supports, latest_event_number, payload_tlv, read_event_items, send_app_pipe,
-    wait_for_event, wait_for_event_after,
+    wait_for_event, wait_for_event_after, EVENT_TIMEOUT,
 };
+use std::time::{Duration, Instant};
 
 /// Our controller's operational node id: the fixture creates its fabric with
 /// `FabricConfig::new(1, 1, 1, ..)` (commissioner node id 1,
@@ -282,20 +283,7 @@ async fn occupancy_and_boolean_state_events_decode() {
             .await
             .expect("app pipe");
         }
-        let changes =
-            wait_for_event_after(&node, 1, boolean_state::CLUSTER_ID, STATE_CHANGE, baseline)
-                .await
-                .expect("StateChange");
-        let latest = changes
-            .iter()
-            .max_by_key(|i| i.event_number)
-            .expect("wait_for_event_after returns at least one event");
-        let latest = boolean_state::StateChangeEvent::decode(&payload_tlv(&latest.value))
-            .expect("StateChange decodes");
-        assert!(
-            latest.state_value,
-            "latest StateChange after SetBooleanState true must be true: {latest:?}"
-        );
+        wait_for_latest_state_change_true(&node, baseline).await;
     } else {
         eprintln!(
             "[events] BooleanState: this chip's all-clusters app has no SetBooleanState \
@@ -307,6 +295,37 @@ async fn occupancy_and_boolean_state_events_decode() {
         other => newer_than_codegen("BooleanState", other),
     })
     .await;
+}
+
+/// Poll BooleanState `StateChange` on ep1 until the newest event after
+/// `baseline` decodes `state_value == true`, failing after [`EVENT_TIMEOUT`].
+/// Taking the first new event could catch the `false` StateChange before the
+/// `true` one is logged; polling for the final state cannot.
+async fn wait_for_latest_state_change_true(node: &Node, baseline: Option<u64>) {
+    use boolean_state::event_id::STATE_CHANGE;
+    let deadline = Instant::now() + EVENT_TIMEOUT;
+    loop {
+        let mut items = read_event_items(
+            node,
+            EventPath::concrete(1, boolean_state::CLUSTER_ID, STATE_CHANGE),
+        )
+        .await
+        .expect("read StateChange");
+        items.retain(|i| baseline.is_none_or(|b| i.event_number > b));
+        let latest = items.iter().max_by_key(|i| i.event_number).map(|i| {
+            boolean_state::StateChangeEvent::decode(&payload_tlv(&i.value))
+                .expect("StateChange decodes")
+        });
+        if latest.as_ref().is_some_and(|e| e.state_value) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no StateChange with state_value true after event number {baseline:?} within \
+             {EVENT_TIMEOUT:?}; newest after the baseline: {latest:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 /// Write one AccessControl Extension entry and clear it again, then wait for

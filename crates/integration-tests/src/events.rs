@@ -108,8 +108,9 @@ const ALL_CLUSTERS_PIPE_DISPATCH: &str =
 /// The pipe has no way to ask which commands exist, and an unknown one is
 /// fatal: `HandleCommand` ends in `VerifyOrDie(false && "Named pipe command
 /// not supported")`, which aborts the DUT (identical on v1.4.2.0 and master).
-/// The answer comes from the dispatch source itself: a branch
-/// `name == "<name>"`. This assumes the binary was built from that checkout;
+/// The answer comes from the dispatch source itself: the quoted literal
+/// `"<name>"` anywhere in it (see `dispatch_handles`). This assumes the
+/// binary was built from that checkout;
 /// `xtask integration` reuses an existing binary, so a stale local build can
 /// still disagree with its source.
 ///
@@ -124,10 +125,19 @@ pub fn all_clusters_pipe_supports(cfg: &DutConfig, name: &str) -> Result<bool> {
     Ok(dispatch_handles(&source, name))
 }
 
-/// True when `source` has a `name == "<name>"` dispatch branch. The closing
-/// quote keeps `SetBooleanState` from matching `SetBooleanStateSensorFault`.
+/// True when `source` contains the quoted string literal `"<name>"`.
+///
+/// Matching the literal, not today's `name == "<name>"` branch shape, keeps
+/// the probe true if chip refactors the dispatch (a lookup table, a
+/// `strcmp`): a command that is still handled must not silently drop out of
+/// the master coverage. The quotes on both sides keep `SetBooleanState` from
+/// matching `SetBooleanStateSensorFault`. The literal also matches the file's
+/// usage comments (`echo '{"Name": "<name>", ...}'`), which only document
+/// commands the file handles. A false positive would need the literal in that
+/// file with no handler behind it; v1.4.2.0's file does not mention
+/// `SetBooleanState` at all.
 fn dispatch_handles(source: &str, name: &str) -> bool {
-    source.contains(&format!("name == \"{name}\""))
+    source.contains(&format!("\"{name}\""))
 }
 
 /// Append `json` plus a newline to the FIFO at `path`, failing if the
@@ -309,6 +319,15 @@ mod pipe_dispatch_tests {
     }
     "#;
     const SENSOR_FAULT_ONLY: &str = r#"else if (name == "SetBooleanStateSensorFault")"#;
+    /// A refactored dispatch: a lookup table instead of `name ==` branches.
+    const TABLE: &str = r#"
+    static const std::map<std::string, Handler> kHandlers = {
+        { "SetOccupancy", &OccupancyHandler },
+        { "SetBooleanState", &BooleanStateHandler },
+    };
+    "#;
+    const TABLE_SENSOR_FAULT_ONLY: &str =
+        r#"{ "SetBooleanStateSensorFault", &BooleanStateSensorFaultHandler },"#;
 
     #[test]
     fn finds_a_dispatched_command() {
@@ -317,9 +336,24 @@ mod pipe_dispatch_tests {
     }
 
     #[test]
+    fn finds_the_quoted_literal_in_any_dispatch_shape() {
+        assert!(dispatch_handles(TABLE, "SetBooleanState"));
+        assert!(dispatch_handles(TABLE, "SetOccupancy"));
+    }
+
+    #[test]
     fn missing_command_and_longer_name_are_not_matches() {
         assert!(!dispatch_handles(V1_4_2_0, "SetBooleanState"));
         assert!(!dispatch_handles(SENSOR_FAULT_ONLY, "SetBooleanState"));
+        assert!(!dispatch_handles(
+            TABLE_SENSOR_FAULT_ONLY,
+            "SetBooleanState"
+        ));
+        // An unquoted mention (a comment, an identifier) is not a match.
+        assert!(!dispatch_handles(
+            "// SetBooleanState is master only\nvoid SetBooleanStateHandler();",
+            "SetBooleanState"
+        ));
     }
 }
 

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 pub mod events;
 pub mod fixture;
+pub mod sweep;
 
 /// Device-under-test configuration and helpers.
 pub mod dut {

@@ -116,6 +116,16 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | OtaSoftwareUpdateRequestor (typed-decode) | `clusters_mgmt::ota_requestor_typed_decode` | ✓-live |
 | TimeSynchronization (SetUTCTime + read-back, SetTimeZone→DSTOffsetRequired, SetDSTOffset) | `clusters_time_sync::time_sync_set_and_read` | ✓-live (G-a) |
 | IcdManagement (register + check-in receive/verify + stay-active) | `checkin` byte-parity + `icd_listener` fake-ICD (in-process); `examples/icd_register_listen` + runbook (live lit-icd-app) | ✓ in-process (G-c); live via runbook |
+| LevelControl MoveToLevelWithOnOff (M9-A3 B2 encoder fix: the regenerated encoder turns the light on at level 90) | `clusters_level_control::level_control_move_to_level_with_on_off_turns_on` | ✓-live |
+| LevelControl MoveToLevelWithOnOff with the old empty payload (`15 18`): chip answers Success and leaves the light off at MinLevel, the released bug's documented impact | `clusters_level_control::level_control_move_to_level_with_on_off_empty_payload_turns_off` | ✓-live |
+| OvenMode, LaundryWasherMode, RefrigeratorAndTemperatureControlledCabinetMode, RvcRunMode, RvcCleanMode, DishwasherMode (attributes + ChangeToMode); MicrowaveOvenMode (attributes) | `clusters_modes_alarms::mode_base_clusters_decode_and_change_to_current_mode` | ✓-live |
+| EnergyEvseMode, WaterHeaterMode, DeviceEnergyManagementMode on all-clusters (served at v1.4.2.0 only: nightly) | `clusters_modes_alarms::energy_mode_clusters_decode_where_served` | ✓-live where served |
+| ModeBase ChangeToMode to an unsupported mode (no StatusText; spec §3.1) | `clusters_modes_alarms::change_to_an_unsupported_mode_decodes_without_status_text` | ✓-live |
+| ModeSelect (attributes + ChangeToMode) | `clusters_modes_alarms::mode_select_decodes_and_changes_to_current_mode` | ✓-live |
+| DishwasherAlarm (attributes + Reset → Notify event) | `clusters_modes_alarms::dishwasher_alarm_reset_emits_notify` | ✓-live |
+| RefrigeratorAlarm (attributes + app-pipe door open → Notify event) | `clusters_modes_alarms::refrigerator_alarm_door_open_emits_notify` | ✓-live |
+| HepaFilterMonitoring, ActivatedCarbonFilterMonitoring (attributes + ResetCondition) | `clusters_modes_alarms::filter_monitoring_clusters_decode_and_reset_condition` | ✓-live |
+| WaterTankLevelMonitoring | — no connectedhomeip example app serves it (decode smoke + `chip-xml-conformance.py` only) | unit only |
 
 ### Groups, ACL & access enforcement
 
