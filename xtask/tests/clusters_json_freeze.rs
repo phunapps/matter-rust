@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 54] = [
+const TARGET_CLUSTERS: [&str; 58] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -82,6 +82,10 @@ const TARGET_CLUSTERS: [&str; 54] = [
     "RvcRunMode",
     "RvcCleanMode",
     "DishwasherMode",
+    "MicrowaveOvenMode",
+    "EnergyEvseMode",
+    "WaterHeaterMode",
+    "DeviceEnergyManagementMode",
 ];
 
 fn load() -> Value {
@@ -434,13 +438,16 @@ fn access_control_event_payloads_keep_model_optionality() {
 
 /// ModeBase-derived clusters whose `ChangeToMode` / `ChangeToModeResponse` are
 /// generated.
-const MODE_BASE_WITH_CHANGE_TO_MODE: [&str; 6] = [
+const MODE_BASE_WITH_CHANGE_TO_MODE: [&str; 9] = [
     "OvenMode",
     "LaundryWasherMode",
     "RefrigeratorAndTemperatureControlledCabinetMode",
     "RvcRunMode",
     "RvcCleanMode",
     "DishwasherMode",
+    "EnergyEvseMode",
+    "WaterHeaterMode",
+    "DeviceEnergyManagementMode",
 ];
 
 fn cluster<'a>(v: &'a Value, name: &str) -> &'a Value {
@@ -557,6 +564,34 @@ fn only_an_unconditional_m_is_mandatory() {
             field_optionality(&command(c, "ChangeToMode")["fields"]),
             [("NewMode", false)],
             "{name}"
+        );
+    }
+}
+
+#[test]
+fn microwave_oven_mode_has_inherited_fields_and_no_commands() {
+    // ChangeToMode and its response are disallowed (X) in MicrowaveOvenMode;
+    // both are recorded exclusions, and ModeOptionStruct is still inherited.
+    let v = load();
+    let c = cluster(&v, "MicrowaveOvenMode");
+    assert_eq!(c["commands"], serde_json::json!([]));
+    // Its only feature, DEPONOFF, is disallowed (see the derived-cluster test).
+    assert_eq!(c["features"], serde_json::json!([]));
+    assert_eq!(
+        field_optionality(&datatype(c, "ModeOptionStruct")["fields"]),
+        [("Label", false), ("Mode", false), ("ModeTags", false)]
+    );
+    for cmd in ["ChangeToMode", "ChangeToModeResponse"] {
+        assert!(
+            v["meta"]["excluded"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["cluster"] == "MicrowaveOvenMode"
+                    && e["element"] == cmd
+                    && e["kind"] == "command"
+                    && e["reason"] == "disallowed"),
+            "MicrowaveOvenMode.{cmd} exclusion missing"
         );
     }
 }

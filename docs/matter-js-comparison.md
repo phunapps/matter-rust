@@ -94,11 +94,19 @@ These are language-idiomatic differences. They do not affect interop.
 - **A feature a derived cluster disallows is not generated, nor is anything
   only it enables** (M9-A3 B2). ModeBase's OnOff dependency (DEPONOFF) is
   disallowed in every ModeBase-derived cluster, so they have no `Feature` flag
-  for it. matter.js 0.16.11 keeps `Feature.OnOff`
-  (`clusters/dishwasher-mode.d.ts`); chip's controller codegen
-  (`src/controller/data_model/controller-clusters.matter`) has no DEPONOFF bit
-  for any of them (RvcRunMode and RvcCleanMode carry only
-  `kDirectModeChange`; the other four have no feature bitmap).
+  for it. The authority is chip's 1.4.2 cluster XML
+  (`data_model/1.4.2/clusters/Mode_*.xml`), which marks DEPONOFF
+  `<disallowConform/>` in all ten. matter.js 0.16.11 keeps `Feature.OnOff`
+  (`clusters/dishwasher-mode.d.ts`, and likewise for the other nine). chip's
+  controller codegen (`src/controller/data_model/controller-clusters.matter`)
+  agrees with the XML for seven: OvenMode, LaundryWasherMode,
+  RefrigeratorAndTemperatureControlledCabinetMode, DishwasherMode and
+  MicrowaveOvenMode have no feature bitmap, and RvcRunMode and RvcCleanMode
+  carry only `kDirectModeChange`. For EnergyEvseMode, WaterHeaterMode and
+  DeviceEnergyManagementMode it still declares `kOnOff = 0x1`; we follow the
+  XML there (the 1.4.2 XML outranks chip's codegen in our ambiguity order).
+  Nothing a device reports is lost: FeatureMap reads as a raw `u32`
+  (`gen::globals::decode_u32`), so a set bit 0 is still visible.
 
 ## CASE handshake performance (measured 2026-07-12)
 

@@ -1773,3 +1773,24 @@ fn mode_option_missing_mode_tags_is_an_error() {
         Err(ClusterError::MissingField("ModeTags"))
     ));
 }
+
+mode_base_cluster_decodes!(energy_evse_mode_decodes, energy_evse_mode, 0x4000, Manual);
+mode_base_cluster_decodes!(water_heater_mode_decodes, water_heater_mode, 0x4000, Off);
+mode_base_cluster_decodes!(
+    device_energy_management_mode_decodes,
+    device_energy_management_mode,
+    0x4000,
+    NoOptimization
+);
+
+#[test]
+fn microwave_oven_mode_decodes_without_commands() {
+    // MicrowaveOvenMode disallows ChangeToMode (1.4.2 MicrowaveOvenMode.xml:
+    // <disallowConform/>), so only its attributes are generated; there is no
+    // encode_change_to_mode and command_id is empty.
+    use gen::microwave_oven_mode::{decode_current_mode, decode_supported_modes, ModeTag};
+    let modes = decode_supported_modes(&supported_modes(0x4001)).unwrap();
+    assert_eq!(modes[0].mode_tags[1].value, ModeTag::Defrost);
+    assert_eq!(modes[1].mode_tags[0].value, ModeTag::Unknown(0x8001));
+    assert_eq!(decode_current_mode(&uint_attr(0)).unwrap(), 0);
+}

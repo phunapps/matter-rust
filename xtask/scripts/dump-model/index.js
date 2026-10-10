@@ -129,6 +129,10 @@ const ALLOWLIST = [
   { id: 0x0054, name: 'RvcRunMode' },
   { id: 0x0055, name: 'RvcCleanMode' },
   { id: 0x0059, name: 'DishwasherMode' },
+  { id: 0x005e, name: 'MicrowaveOvenMode' }, // ChangeToMode is disallowed (X): attributes only
+  { id: 0x009d, name: 'EnergyEvseMode' },
+  { id: 0x009e, name: 'WaterHeaterMode' },
+  { id: 0x009f, name: 'DeviceEnergyManagementMode' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 54 clusters are generated today. The full list is [`gen`]; by area:
+//! 58 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -45,7 +45,8 @@
 //! - **Energy:** `ElectricalPowerMeasurement`, `ElectricalEnergyMeasurement`.
 //! - **Appliance modes:** `OvenMode`, `LaundryWasherMode`,
 //!   `RefrigeratorAndTemperatureControlledCabinetMode`, `RvcRunMode`,
-//!   `RvcCleanMode`, `DishwasherMode`.
+//!   `RvcCleanMode`, `DishwasherMode`, `MicrowaveOvenMode`, `EnergyEvseMode`,
+//!   `WaterHeaterMode`, `DeviceEnergyManagementMode`.
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

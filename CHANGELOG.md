@@ -111,6 +111,14 @@ payload struct (Switch already had its seven):
   it, and the codegen now treats only an unconditional `M` field as
   mandatory. A feature the cluster disallows (ModeBase's OnOff dependency,
   DEPONOFF) gets no `Feature` flag.
+- MicrowaveOvenMode (0x005E; attributes only: ChangeToMode is disallowed
+  there), EnergyEvseMode (0x009D), WaterHeaterMode (0x009E) and
+  DeviceEnergyManagementMode (0x009F), with the same ModeBase surface.
+  DEPONOFF has no `Feature` flag in these either: the 1.4.2 cluster XML
+  disallows it in all four. chip's controller codegen still declares a
+  `kOnOff` bit for EnergyEvseMode, WaterHeaterMode and
+  DeviceEnergyManagementMode; a device that sets it loses nothing, since
+  FeatureMap reads as a raw `u32` (`gen::globals::decode_u32`).
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
