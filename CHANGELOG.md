@@ -65,14 +65,21 @@ encodes byte-identically to before. `AccessControlEntryStruct` and
 `encode_step_with_on_off` and `encode_stop_with_on_off` took no arguments and
 encoded an empty structure. A server that validates mandatory fields
 (matter.js) rejects it with `INVALID_ACTION`. A chip-based device does not: it
-decodes each missing field as zero or null and executes a different action
-from the one intended. An empty `MoveToLevelWithOnOff` is level 0, so the light
-dims to its minimum level and switches off, and the command still returns
-success. An empty `MoveWithOnOff` moves up at the default rate and switches
-on. These commands declare no fields of their own and inherit MoveToLevel's,
-Move's, Step's and Stop's, and the codegen read only a command's own fields.
-They now take the same arguments as their base command and encode
-byte-identically to matter.js.
+decodes each missing field as zero or null and acts on that. An empty
+`MoveToLevelWithOnOff` is level 0, so the light dims to its minimum level and
+switches off, and the command still returns success. An empty `MoveWithOnOff`
+moves up at the default rate and switches on. An empty `StepWithOnOff` is a
+step up by 0, which chip rejects with `INVALID_COMMAND` and nothing changes.
+An empty `StopWithOnOff` decodes as two zero option masks, so chip treats it
+like a `StopWithOnOff` with both masks zero: it stops any transition in
+progress and returns success. (chip's level-control server, `stepHandler` and
+`stopHandler`, is the same at v1.4.2.0 and master.) These commands declare no
+fields of their own and inherit MoveToLevel's, Move's, Step's and Stop's, and
+the codegen read only a command's own fields. They now take the same
+arguments as their base command. `MoveToLevelWithOnOff` is pinned against a
+matter.js byte vector; the other three use the same generated field encoding
+as their base command (`MoveWithOnOff` as `Move`, `StepWithOnOff` as `Step`,
+`StopWithOnOff` as `Stop`).
 
 ### matter-clusters: Added — events for 13 more clusters
 
@@ -107,9 +114,11 @@ payload struct (Switch already had its seven):
   RvcRunMode (0x0054), RvcCleanMode (0x0055) and DishwasherMode (0x0059):
   SupportedModes / CurrentMode decoders, `encode_change_to_mode` and
   `ChangeToModeResponse`. `ChangeToModeResponse::status_text` is
-  `Option<String>`: its 1.4 conformance is conditional and chip never sends
-  it, and the codegen now treats only an unconditional `M` field as
-  mandatory. A feature the cluster disallows (ModeBase's OnOff dependency,
+  `Option<String>`: its 1.4 conformance is conditional, chip's ModeBase
+  server leaves it out of the replies it builds itself (`UnsupportedMode`,
+  and `Success` for `ChangeToMode(CurrentMode)`), and the codegen now treats
+  only an unconditional `M` field as mandatory. An application delegate may
+  still include it (chip's rvc-app does, on the changes it refuses). A feature the cluster disallows (ModeBase's OnOff dependency,
   DEPONOFF) gets no `Feature` flag.
 - MicrowaveOvenMode (0x005E; attributes only: ChangeToMode is disallowed
   there), EnergyEvseMode (0x009D), WaterHeaterMode (0x009E) and

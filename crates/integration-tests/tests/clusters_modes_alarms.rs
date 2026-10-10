@@ -24,8 +24,9 @@
 //!
 //! Safe commands, chosen from what is generated:
 //! - ModeBase `ChangeToMode(CurrentMode)`: chip answers Success without
-//!   calling the delegate (ModeBaseCluster.cpp `HandleChangeToMode`), and never
-//!   sends StatusText (spec §3.1). MicrowaveOvenMode has no ChangeToMode.
+//!   calling the delegate (ModeBaseCluster.cpp `HandleChangeToMode`), and
+//!   leaves StatusText out of that reply (spec §3.1; only a delegate's reply
+//!   may carry it). MicrowaveOvenMode has no ChangeToMode.
 //! - ModeSelect `ChangeToMode(CurrentMode)`: a bare Success.
 //! - DishwasherAlarm `Reset(InflowError)`: clears one State bit and emits
 //!   Notify (dishwasher-alarm-server.cpp `ResetLatchedAlarms`).

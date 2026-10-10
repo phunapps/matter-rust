@@ -15,8 +15,11 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
     Some(match ty {
         "bool" => "bool",
         // u8: primitive + semantic globals. `namespace` is the global
-        // semantic-tag namespace enum (Core spec 7.19.2, enum8): mapped to its
-        // raw integer like `status`/`priority`, never emitted as a type.
+        // semantic-tag namespace enum, enum8 in both references (chip's zap
+        // `global-structs.xml` types SemanticTagStruct.NamespaceID `enum8`;
+        // matter.js `@matter/model` `namespace.element.js` declares
+        // `type: "enum8"`): mapped to its raw integer like `status`/`priority`,
+        // never emitted as a type.
         "uint8" | "percent" | "fabric-idx" | "action-id" | "status" | "priority" | "namespace"
         | "enum8" | "map8" => "u8",
         // u16: primitive + semantic globals (unsigned 16-bit)

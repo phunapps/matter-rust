@@ -89,7 +89,7 @@ NaN — compared by bits) and a `proptest` roundtrip drawn uniformly from the
 whole binary32 bit space. A `single` attribute accepts a FLOAT32 element only,
 matching chip's strict `TLVReader::Get(float&)`. No connectedhomeip example
 app serves WaterTankLevelMonitoring, so it is validated by decode tests and the
-chip 1.4.2 XML check (scripts/chip-xml-conformance.py) only.
+chip 1.4.2 XML check (`scripts/chip-xml-conformance.py`) only.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`

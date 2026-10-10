@@ -164,8 +164,9 @@ pub async fn invoke_for_status(
 ///
 /// `ChangeToMode(CurrentMode)` is the safe command: chip answers `Success`
 /// before it consults the app's delegate and changes nothing
-/// (`ModeBaseCluster.cpp` `HandleChangeToMode`), and it never sends
-/// `StatusText` (spec §3.1), which the macro asserts. `$m` is the generated
+/// (`ModeBaseCluster.cpp` `HandleChangeToMode`), and it leaves `StatusText`
+/// out of that reply, which the server builds itself (spec §3.1); the macro
+/// asserts both. `$m` is the generated
 /// module, in scope at the call site (`use matter_clusters::gen::rvc_run_mode;`).
 ///
 /// Panics (it is a test helper) on any failure, naming the cluster.
@@ -211,6 +212,9 @@ macro_rules! sweep_mode_base {
         let r = $m::ChangeToModeResponse::decode(&resp)
             .unwrap_or_else(|e| panic!("{name}: ChangeToModeResponse: {e}"));
         assert_eq!(r.status, $m::ModeChangeStatus::Success, "{name}");
-        assert_eq!(r.status_text, None, "{name}: chip sends no StatusText");
+        assert_eq!(
+            r.status_text, None,
+            "{name}: chip's server omits StatusText from this reply"
+        );
     }};
 }

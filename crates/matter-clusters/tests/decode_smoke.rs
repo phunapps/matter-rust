@@ -1653,7 +1653,9 @@ fn supported_modes(derived_tag: u64) -> Vec<u8> {
 
 /// One test per `ModeBase` derivative: `SupportedModes` (its most complex
 /// attribute), `CurrentMode`, the `ChangeToMode` request bytes, and the
-/// response with and without `StatusText` (spec §3.1: chip never sends it).
+/// response with and without `StatusText` (spec §3.1: chip's `ModeBase`
+/// server omits it from the replies it builds itself; an app delegate may
+/// set it).
 macro_rules! mode_base_cluster_decodes {
     ($test:ident, $m:ident, $first_derived_tag:literal, $derived_variant:ident) => {
         #[test]

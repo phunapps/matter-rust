@@ -83,11 +83,16 @@ These are language-idiomatic differences. They do not affect interop.
 - **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
   0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and
   matter.js `@matter/types` 0.16.11 declares it mandatory
-  (`statusText: TlvField(1, TlvString…)`, `clusters/mode-base.js`). chip never
-  sends it, not even for `UnsupportedMode`
+  (`statusText: TlvField(1, TlvString…)`, `clusters/mode-base.js`). chip's
+  ModeBase server leaves it out of the replies it builds itself, including
+  `UnsupportedMode`, where the conformance requires it, and `Success` for
+  `ChangeToMode(CurrentMode)`
   (`src/app/clusters/mode-base-server/ModeBaseCluster.cpp`
-  `HandleChangeToMode`), so our codegen treats only an unconditional `M` field
-  as mandatory and decodes it as `Option<String>`.
+  `HandleChangeToMode`). Any other reply comes from the application's
+  delegate, which may set it: rvc-app does on the four changes it refuses
+  (`examples/rvc-app/rvc-common/src/rvc-device.cpp`). A mandatory field would
+  fail to decode chip's `UnsupportedMode` reply, so our codegen treats only an
+  unconditional `M` field as mandatory and decodes it as `Option<String>`.
 
 ## Where our generated surface follows chip, not matter.js
 
@@ -112,7 +117,7 @@ These are language-idiomatic differences. They do not affect interop.
   (`clusters/refrigerator-alarm.d.ts`), chip's controller codegen omits them.
 
 - **ModeSelect `StandardNamespace` is `Nullable<u16>`** (M9-A3 B2). The
-  matter.js model (`@matter/model` 0.16.11) types it as the global `namespace`
+  matter.js model (`@matter/model` 0.17.1, which the dump reads) types it as the global `namespace`
   enum, which is enum8. chip's 1.4.2 XML
   (`data_model/1.4.2/clusters/ModeSelect.xml`), its zap XML
   (`mode-select-cluster.xml`) and its controller codegen

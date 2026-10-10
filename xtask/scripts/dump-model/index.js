@@ -402,11 +402,13 @@ function entryTypeOf(el) {
 // effective conformance is an unconditional `M`. @matter/model's isMandatory
 // is also true for an otherwise-form such as "[Status == Success], M", which
 // the field's sender may legitimately leave out: ModeBase's
-// ChangeToModeResponse.StatusText, which chip never sends
+// ChangeToModeResponse.StatusText, which chip's ModeBase server omits from
+// the replies it builds itself, UnsupportedMode included
 // (src/app/clusters/mode-base-server/ModeBaseCluster.cpp HandleChangeToMode:
-// "We are leaving the StatusText empty"). A generated decoder fails on a
-// missing mandatory field, so every other form (otherwise, feature-gated,
-// expression, choice) counts as optional. Whole-model scan, @matter/model
+// "We are leaving the StatusText empty"); only an app delegate's reply may
+// carry it. A generated decoder fails on a missing mandatory field, so every
+// other form (otherwise, feature-gated, expression, choice) counts as
+// optional. Whole-model scan, @matter/model
 // 0.17.1: only the ModeBase StatusText fields change, and no request field.
 function isUnconditionallyMandatory(el) {
   const c = el.effectiveConformance;
