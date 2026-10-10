@@ -9,8 +9,10 @@
 
 use std::time::Duration;
 
+use integration_tests::sweep::{attribute_tlv, invoke_for_status, read_cluster_attributes};
+use matter_clusters::clusters::window_covering::{self as wc, attribute_id as a};
 use matter_codec::Tag;
-use matter_controller::{CommandPath, Node, ReadPath, Value};
+use matter_controller::{CommandPath, ImStatus, Node, ReadPath, Value};
 
 const WINDOW_COVERING: u32 = 0x0102;
 const CMD_GO_TO_LIFT_PERCENTAGE: u32 = 0x05;
@@ -76,5 +78,90 @@ async fn window_covering_go_to_lift_percentage() {
         .await,
         Some(Value::Uint(2500)),
         "TargetPositionLiftPercent100ths did not become 2500"
+    );
+}
+
+/// M9-A3 B4: the Matter 1.4 absolute-position (ABS) elements, generated from
+/// the dump's 1.4 supplement. all-clusters serves the eight ABS attributes on
+/// endpoint 1 at master and v1.4.2.0 (all-clusters-app.matter) although its
+/// featureMap (0x17: LF, TL, PA_LF, PA_TL) leaves ABS out; each decodes with
+/// the generated decoder, the physical closed and installed limits at their
+/// .matter defaults (nothing writes them). GoToLiftValue / GoToTiltValue reach chip's handler
+/// (a malformed payload would be InvalidCommand) and are refused with Failure
+/// because ABS is not set (`emberAfWindowCoveringClusterGoToLiftValueCallback`,
+/// the same at both refs), leaving the target position unchanged.
+#[tokio::test]
+async fn window_covering_absolute_position_decodes_and_go_to_value_is_refused() {
+    let cfg = integration_tests::dut_or_skip!();
+    if !cfg.is_app("all-clusters") {
+        eprintln!("skipped: needs the all-clusters DUT");
+        return;
+    }
+    let (controller, node_id) = integration_tests::fixture::connect(&cfg)
+        .await
+        .expect("connect/commission DUT");
+    let node = controller.node(node_id);
+    let attrs = read_cluster_attributes(&node, 1, WINDOW_COVERING)
+        .await
+        .unwrap();
+    let tlv = |id| attribute_tlv(&attrs, id);
+    let limits = [
+        wc::decode_physical_closed_limit_lift(tlv(a::PHYSICAL_CLOSED_LIMIT_LIFT)).unwrap(),
+        wc::decode_physical_closed_limit_tilt(tlv(a::PHYSICAL_CLOSED_LIMIT_TILT)).unwrap(),
+        wc::decode_installed_open_limit_lift(tlv(a::INSTALLED_OPEN_LIMIT_LIFT)).unwrap(),
+        wc::decode_installed_closed_limit_lift(tlv(a::INSTALLED_CLOSED_LIMIT_LIFT)).unwrap(),
+        wc::decode_installed_open_limit_tilt(tlv(a::INSTALLED_OPEN_LIMIT_TILT)).unwrap(),
+        wc::decode_installed_closed_limit_tilt(tlv(a::INSTALLED_CLOSED_LIMIT_TILT)).unwrap(),
+    ];
+    let current = (
+        wc::decode_current_position_lift(tlv(a::CURRENT_POSITION_LIFT)).unwrap(),
+        wc::decode_current_position_tilt(tlv(a::CURRENT_POSITION_TILT)).unwrap(),
+    );
+    // The values chip served, for the log: the commit quotes them.
+    eprintln!(
+        "[abs] PhysicalClosedLimit Lift/Tilt, InstalledOpen/ClosedLimit Lift, \
+         InstalledOpen/ClosedLimit Tilt = {limits:04x?}; CurrentPosition Lift/Tilt = {current:?}"
+    );
+    // Physical closed limits and installed limits at their .matter defaults.
+    assert_eq!(limits, [0xFFFF, 0xFFFF, 0, 0xFFFF, 0, 0xFFFF]);
+
+    let target_before = read_attr(
+        &node,
+        1,
+        WINDOW_COVERING,
+        ATTR_TARGET_POSITION_LIFT_PERCENT100THS,
+    )
+    .await;
+    for (command, fields) in [
+        (
+            wc::command_id::GO_TO_LIFT_VALUE,
+            wc::encode_go_to_lift_value(100),
+        ),
+        (
+            wc::command_id::GO_TO_TILT_VALUE,
+            wc::encode_go_to_tilt_value(100),
+        ),
+    ] {
+        let path = CommandPath {
+            endpoint: 1,
+            cluster: WINDOW_COVERING,
+            command,
+        };
+        assert_eq!(
+            invoke_for_status(&node, path, fields).await.unwrap(),
+            ImStatus::Failure(0x01),
+            "{command:#04x} without ABS"
+        );
+    }
+    assert_eq!(
+        read_attr(
+            &node,
+            1,
+            WINDOW_COVERING,
+            ATTR_TARGET_POSITION_LIFT_PERCENT100THS
+        )
+        .await,
+        target_before,
+        "a refused GoToLiftValue moves nothing"
     );
 }

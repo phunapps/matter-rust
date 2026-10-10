@@ -10,11 +10,12 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use matter_clusters::clusters::access_control;
+use integration_tests::sweep::invoke_for_response;
+use matter_clusters::clusters::{access_control, scenes_management as scenes};
 use matter_codec::{Tag, TlvWriter};
 use matter_controller::{
-    AttestationTrust, AttributePath, FabricConfig, FileStore, ImStatus, MatterController,
-    MatterTime, Node, OpenWindowOpts, ReadPath, Value,
+    AttestationTrust, AttributePath, CommandPath, FabricConfig, FileStore, ImStatus,
+    MatterController, MatterTime, Node, OpenWindowOpts, ReadPath, Value,
 };
 
 const ONOFF_CLUSTER: u32 = 0x0006;
@@ -203,6 +204,93 @@ async fn assert_acl_round_trip_keeps_other_fabric(node_a: &Node, node_b: &Node, 
     );
 }
 
+/// Invoke one ScenesManagement command on endpoint 1 and return its
+/// response payload (the helper checks the response id, endpoint and cluster).
+async fn scenes_response(node: &Node, command: u32, fields: Vec<u8>, response: u32) -> Vec<u8> {
+    let path = CommandPath {
+        endpoint: 1,
+        cluster: scenes::CLUSTER_ID,
+        command,
+    };
+    invoke_for_response(node, path, fields, response)
+        .await
+        .expect("scenes command")
+}
+
+/// RemoveAllScenes(group 0) on `node`'s fabric: Success.
+async fn remove_all_scenes(node: &Node) {
+    use scenes::command_id as c;
+    let tlv = scenes_response(
+        node,
+        c::REMOVE_ALL_SCENES,
+        scenes::encode_remove_all_scenes(0),
+        c::REMOVE_ALL_SCENES_RESPONSE,
+    )
+    .await;
+    assert_eq!(
+        scenes::RemoveAllScenesResponse::decode(&tlv)
+            .unwrap()
+            .status,
+        0
+    );
+}
+
+/// M9-A3 spec §5.4 against real chip encoding, ScenesManagement
+/// `FabricSceneInfo` (endpoint 1). A empties its group-0 scenes (which gives
+/// A an entry) and B adds a scene (which gives B one); A's unfiltered read
+/// returns B's entry with only SceneCount, RemainingCapacity and FabricIndex
+/// (chip's `SceneInfoStruct::EncodeForRead`), the generated decoder accepts it
+/// with CurrentScene, CurrentGroup and SceneValid `None`, and A's own entry
+/// keeps all three. (SceneInfoStruct is decode-only: nothing a client sends
+/// carries it.) Both scene tables are emptied after.
+async fn assert_fabric_scene_info_withheld(node_a: &Node, node_b: &Node, a_index: u8, b_index: u8) {
+    use scenes::command_id as c;
+    remove_all_scenes(node_a).await;
+    let add = scenes::encode_add_scene(0, 1, 0, &"B".to_string(), &vec![]);
+    let added = scenes_response(node_b, c::ADD_SCENE, add, c::ADD_SCENE_RESPONSE).await;
+    assert_eq!(scenes::AddSceneResponse::decode(&added).unwrap().status, 0);
+    let raw = node_a
+        .read(&[ReadPath::concrete(
+            1,
+            scenes::CLUSTER_ID,
+            scenes::attribute_id::FABRIC_SCENE_INFO,
+        )])
+        .await
+        .expect("read FabricSceneInfo")
+        .into_iter()
+        .find(|(p, _)| p.attribute == scenes::attribute_id::FABRIC_SCENE_INFO)
+        .map(|(_, v)| v)
+        .expect("FabricSceneInfo in the report");
+    let b_wire = tags_of_entries_for(&raw, b_index);
+    assert_eq!(
+        b_wire,
+        [vec![Tag::Context(0), Tag::Context(4), Tag::Context(254)]],
+        "B's FabricSceneInfo entry on the wire: {raw:?}"
+    );
+    let list = scenes::decode_fabric_scene_info(&value_to_tlv(&raw))
+        .expect("an unfiltered FabricSceneInfo read with two fabrics must decode");
+    let b = list
+        .iter()
+        .find(|e| e.fabric_index == b_index)
+        .expect("B's entry");
+    assert_eq!(
+        (b.current_scene, b.current_group, b.scene_valid),
+        (None, None, None)
+    );
+    assert_eq!(b.scene_count, 1, "B's one scene");
+    let a = list
+        .iter()
+        .find(|e| e.fabric_index == a_index)
+        .expect("A's entry");
+    assert_eq!(
+        (a.scene_count, a.current_group, a.scene_valid),
+        (0, Some(0), Some(false)),
+        "A's own entry keeps its sensitive fields: {a:?}"
+    );
+    remove_all_scenes(node_b).await;
+    remove_all_scenes(node_a).await;
+}
+
 // ── Multi-admin: open window → 2nd controller → list/remove fabric ───────────
 
 /// Controller B: its own store under the per-run DUT dir, the same
@@ -273,11 +361,15 @@ async fn fabric_indices(node_a: &Node) -> (usize, u8, u8) {
             .unwrap_or_else(|| panic!("{who}'s fabric must be present in A's fabric list"))
             .fabric_index
     };
-    (
-        fabrics.len(),
-        index_of(FABRIC_A_ID, "A"),
-        index_of(FABRIC_B_ID, "B"),
-    )
+    // A first: it is the fixture's fabric, so a missing A is the more
+    // fundamental failure and its message must not be masked by B's.
+    let a_index = index_of(FABRIC_A_ID, "A");
+    let b_index = index_of(FABRIC_B_ID, "B");
+    assert_ne!(
+        a_index, b_index,
+        "A and B must hold distinct fabric indices: {fabrics:?}"
+    );
+    (fabrics.len(), a_index, b_index)
 }
 
 /// Drive the multi-admin loop against the live DUT:
@@ -330,6 +422,7 @@ async fn open_window_second_controller_and_remove_fabric() {
     // §5.4 regressions against real chip: unfiltered reads with B present.
     assert_acl_entries_withheld(&node_a, &node_b, a_index, b_index).await;
     assert_acl_round_trip_keeps_other_fabric(&node_a, &node_b, b_index).await;
+    assert_fabric_scene_info_withheld(&node_a, &node_b, a_index, b_index).await;
 
     node_a
         .remove_fabric(b_index)
