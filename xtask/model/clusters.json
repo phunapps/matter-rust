@@ -54,6 +54,7 @@
       "DeviceEnergyManagementMode",
       "DoorLock",
       "WindowCovering",
+      "ServiceArea",
       "PumpConfigurationAndControl",
       "Thermostat",
       "FanControl",
@@ -18294,6 +18295,465 @@
             {
               "value": 255,
               "name": "Unknown",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 336,
+      "name": "ServiceArea",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "SELRUN",
+          "name": "SelectWhileRunning",
+          "description": "This feature indicates whether this device allows changing the selected areas, by using the SelectAreas command, while operating."
+        },
+        {
+          "bit": 1,
+          "code": "PROG",
+          "name": "ProgressReporting",
+          "description": "The device implements the progress reporting feature"
+        },
+        {
+          "bit": 2,
+          "code": "MAPS",
+          "name": "Maps",
+          "description": "The device has map support"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "SupportedAreas",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "AreaStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain the list of areas that can be included in the SelectedAreas attribute's list. Each item in this list represents a unique area, as indicated by the AreaID field of AreaStruct.\nEach entry in this list shall have a unique value for the AreaID field.\nIf the SupportedMaps attribute is not empty, each entry in this list shall have a unique value for the combination of the MapID and AreaInfo fields.\nIf the SupportedMaps attribute is empty, each entry in this list shall have a unique value for the AreaInfo field and shall have the MapID field set to null.\nAn empty value indicates that the device is currently unable to provide the list of supported areas.\n> [!NOTE]\n> NOTE: due to the maximum size of this list and to the fact that the entries may include strings (see LocationName), care must be taken by implementers to avoid creating a data structure that is overly large, which can result in significant latency in accessing this attribute.\nThe value of this attribute may change at any time via an out-of-band interaction outside of the server, such as interactions with a user interface, or due to internal device changes.\nWhen removing entries in the SupportedAreas attribute list the server shall adjust the values of the SelectedAreas, CurrentArea, and Progress attributes such that they only reference valid entries in the updated SupportedAreas attribute list. These changes to the SelectedAreas, CurrentArea, and Progress attributes may result in the server setting some or all of them to empty (for SelectedAreas and Progress) or null (for CurrentArea), or updating them with data that matches the constraints from the description of the respective attributes. These actions are required to ensure having a consistent representation of the maps and locations available to the clients.\nThe SupportedAreas attribute list changes mentioned above SHOULD NOT be allowed while the device is operating, to reduce the impact on the clients, and the potential confusion for the users.\nA few examples are provided below.\nValid list of areas:\n  - AreaID=0, LocationName=\"yellow bedroom\", MapID=null\n  - AreaID=1, LocationName=\"orange bedroom\", MapID=null\nValid list of areas:\n  - AreaID=5, LocationName=\"hallway\", MapID=1\n  - AreaID=3, LocationName=\"hallway\", MapID=2"
+        },
+        {
+          "id": 1,
+          "name": "SupportedMaps",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "MapStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain the list of supported maps.\nA map is a full or a partial representation of a home, known to the device. For example:\n  - a single level home may be represented using a single map\n  - a two level home may be represented using two maps, one for each level\n  - a single level home may be represented using two maps, each including a different set of rooms, such as \"map of living room and kitchen\" and \"map of bedrooms and hallway\"\n  - a single level home may be represented using one map for the indoor areas (living room, bedrooms etc.) and one for the outdoor areas (garden, swimming pool etc.)\nEach map includes one or more areas - see the SupportedAreas attribute. In the context of this cluster specification, a map is effectively a group label for a set of areas, rather than a graphical representation that the clients can display to the users. The clients that present the list of available areas for user selection (see the SelectAreas command) may choose to filter the SupportedAreas list based on the associated map. For example, the clients may allow the user to indicate that the device is to operate on the first floor, and allow the user to choose only from the areas situated on that level.\nIf empty, that indicates that the device is currently unable to provide this information.\nEach entry in this list shall have a unique value for the MapID field.\nEach entry in this list shall have a unique value for the Name field.\n> [!NOTE]\n> NOTE: due to the maximum size of this list and to the fact that the entries may include strings (see the Name field of the MapStruct data type), care must be taken by implementers to avoid creating a data structure that is overly large, which can result in significant latency in accessing this attribute.\nThe value of this attribute may change at any time via an out-of-band interaction outside of the server, such as interactions with a user interface.\nWhen updating the SupportedMaps attribute list by deleting entries, or by setting the attribute to an empty list, the SupportedAreas attribute shall be updated such that all entries in that list meet the constraints indicated in the description of the SupportedAreas attribute. This may result in the server removing entries from the SupportedAreas attribute list. See the SupportedAreas attribute description for the implications of changing that attribute.\nThe SupportedMaps attribute list changes mentioned above SHOULD NOT be allowed while the device is operating, to reduce the impact on the clients, and the potential confusion for the users."
+        },
+        {
+          "id": 2,
+          "name": "SelectedAreas",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "uint32",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the set of areas where the device SHOULD attempt to operate.\nThe mobile devices may travel without operating across any areas while attempting to reach the areas indicated by the SelectedAreas attribute. For example, a robotic vacuum cleaner may drive without cleaning when traveling without operating.\nIf this attribute is empty, the device is not constrained to operate in any specific areas.\nIf this attribute is not empty:\n  - each item in this list shall match the AreaID field of an entry in the SupportedAreas attribute's list\n  - each entry in this list shall have a unique value"
+        },
+        {
+          "id": 3,
+          "name": "CurrentArea",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "If the device is mobile, this attribute shall indicate the area where the device is currently located, regardless of whether it is operating or not, such as while traveling between areas.\nIf the device is not mobile and can operate at multiple areas sequentially, this attribute shall indicate the area which is currently being serviced, or the area which is currently traversed by the device. For example, a camera device may use this attribute to indicate which area it currently takes video of (serviced area) or which area it currently has in view but not taking video of (e.g. an area which is traversed while panning).\n> [!NOTE]\n> NOTE: A device may traverse an area regardless of the status of the area (pending, skipped, or completed).\nIf a device can simultaneously operate at multiple areas, such as in the case of a sensor that can monitor multiple areas at the same time, the CurrentArea attribute shall NOT be implemented, since it doesn't apply. Else this attribute shall be optionally implemented.\nA null value indicates that the device is currently unable to provide this information. For example, the device is traversing an unknown area, or the SupportedAreas attribute was updated and the area where the device is located was removed from that list.\nIf not null, the value of this attribute shall match the AreaID field of an entry on the SupportedAreas attribute's list."
+        },
+        {
+          "id": 4,
+          "name": "EstimatedEndTime",
+          "type": "epoch-s",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the estimated Epoch time for completing operating at the area indicated by the CurrentArea attribute, in seconds.\nA value of 0 means that the operation has completed.\nWhen this attribute is null, that represents that there is no time currently defined until operation completion. This may happen, for example, because no operation is in progress or because the completion time is unknown.\nNull if the CurrentArea attribute is null.\nIf the Progress attribute is available, and it contains an entry matching CurrentArea, the server may use the time estimate provided in the EstimatedTime field of that entry to compute the EstimatedEndTime attribute.\nThe value of this attribute shall only be reported in the following cases:\n  - when it changes to or from 0\n  - when it decreases\n  - when it changes to or from null\n    > [!NOTE]\n    > NOTE: If the device is capable of pausing its operation, this attribute may be set to null, to indicate that completion time is unknown, or increment the value while being in the paused state."
+        },
+        {
+          "id": 5,
+          "name": "Progress",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ProgressStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the operating status at one or more areas.\nEach entry in this list shall have a unique value for the AreaID field.\nFor each entry in this list, the AreaID field shall match an entry on the SupportedAreas attribute's list.\nWhen this attribute is empty, that represents that no progress information is currently available.\nIf the SelectedAreas attribute is empty, indicating the device is not constrained to operate in any specific areas, the Progress attribute list may change while the device operates, due to the device adding new entries dynamically, when it determines which ones it can attempt to operate at.\nIf the SelectedAreas attribute is not empty, and the device starts operating:\n  - the Progress attribute list shall be updated so each entry of SelectedAreas has a matching Progress list entry, based on the AreaID field\n  - the length of the Progress and SelectedAreas list shall be the same\n  - the entries in the Progress list shall be initialized by the server, by having their status set to Pending or Operating, and the TotalOperationalTime field set to null\nWhen the device ends operation unexpectedly, such as due to an error, the server shall update all Progress list entries with the Status field set to Operating or Pending to Skipped.\nWhen the device finishes operating, successfully or not, it shall NOT change the Progress attribute, except in the case of an unexpected end of operation as described above, or due to changes to the SupportedMaps or SupportedAreas attributes, so the clients can retrieve the progress information at that time.\n> [!NOTE]\n> NOTE: if the device implements the Operational Status cluster, or a derivation of it, in case the device fails to service any locations in the SelectedAreas list before ending the operation, it SHOULD use the Operational Status cluster to indicate that the device was unable to complete the operation (see the UnableToCompleteOperation error from that cluster specification). The clients SHOULD then read the Progress attribute, and indicate which areas have been successfully serviced (marked as completed)."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SelectAreas",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NewAreas",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "uint32",
+              "nullable": false,
+              "optional": false,
+              "description": "This field indicates which areas the device is to operate at.\nIf this field is empty, that indicates that the device is to operate without being constrained to any specific areas, and the operation will not allow skipping using the SkipArea Command, otherwise the field shall be a list of unique values that match the AreaID field of entries on the SupportedAreas list."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "SelectAreasResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "SelectAreasStatus",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "If the Status field is set to Success or UnsupportedArea, the server may use a non-empty string for the StatusText field to provide additional information. For example, if Status is set to UnsupportedArea, the server may use StatusText to indicate which areas are unsupported.\nIf the Status field is not set to Success, or UnsupportedArea, the StatusText field shall include a vendor-defined error description which can be used to explain the error to the user. For example, if the Status field is set to InvalidInMode, the StatusText field SHOULD indicate why the request is not allowed, given the current mode of the device, which may involve other clusters."
+            },
+            {
+              "id": 1,
+              "name": "StatusText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "SkipArea",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "SkippedArea",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The SkippedArea field indicates the area to be skipped.\nThe SkippedArea field shall match an entry in the SupportedAreas list."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "SkipAreaResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "SkipAreaStatus",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "If the Status field is set to Success or InvalidAreaList, the server may use a non-empty string for the StatusText field to provide additional information. For example, if Status is set to InvalidAreaList, the server may use StatusText to indicate why this list is invalid.\nIf the Status field is not set to Success or InvalidAreaList, the StatusText field shall include a vendor defined error description which can be used to explain the error to the user. For example, if the Status field is set to InvalidInMode, the StatusText field SHOULD indicate why the request is not allowed, given the current mode of the device, which may involve other clusters."
+            },
+            {
+              "id": 1,
+              "name": "StatusText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "AreaInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "The data from this structure indicates the name and/or semantic data describing an area, as detailed below.\nThis data type includes the LocationInfo field, with the following fields: LocationName, FloorNumber, AreaType. Additional semantic data may be available in the LandmarkInfo field.\nFor an area description to be meaningful, it shall have at least one of the following:\n  - a non-empty name (LocationInfo's LocationName field)\nOR\n  - some semantic data (one or more of these: FloorNumber, AreaType or LandmarkTag) The normative text from the remainder of this section describes these constraints.\nIf the LocationInfo field is null, the LandmarkInfo field shall NOT be null.\nIf the LandmarkInfo field is null, the LocationInfo field shall NOT be null.\nIf LocationInfo is not null, and its LocationName field is an empty string, at least one of the following shall NOT be null:\n  - LocationInfo's FloorNumber field\n  - LocationInfo's AreaType field\n  - LandmarkInfo field\nIf all three of the following are null, LocationInfo's LocationName field shall NOT be an empty string:\n  - LocationInfo's FloorNumber field\n  - LocationInfo's AreaType field\n  - LandmarkInfo field",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LocationInfo",
+              "type": "LocationDescriptorStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the name of the area, floor number and/or area type.\nA few examples are provided below.\n  - An area can have LocationInfo's LocationName field set to \"blue room\", and the AreaType field set to the ID of a \"Living Room\" semantic tag. Clients wishing to direct the device to operate in (or service) the living room can use this area.\n  - An area can have LocationInfo set to null, the LandmarkInfo's LandmarkTag field set to the ID of the \"Table\" landmark semantic tag, and the RelativePositionTag field set to the ID of the \"Under\" position semantic tag. With such an area indication, the client can request the device to operate in (or service) the area located under the table."
+            },
+            {
+              "id": 1,
+              "name": "LandmarkInfo",
+              "type": "LandmarkInfoStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate an association with a landmark. A value of null indicates that the information is not available or known. For example, this may indicate that the area refers to a zone next to a table.\nIf this field is not null, that indicates that the area is restricted to the zone where the landmark is located, as indicated by the LandmarkTag and, if not null, by the RelativePositionTag fields, rather than to the entire room or floor where the landmark is located, if those are indicated by the LocationInfo field."
+            }
+          ]
+        },
+        {
+          "name": "AreaStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This is a struct representing an area known to the server.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AreaId",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the identifier of the area."
+            },
+            {
+              "id": 1,
+              "name": "MapId",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the map identifier which the area is associated with. A value of null indicates that the area is not associated with a map.\nIf the SupportedMaps attribute is not empty, this field shall match the MapID field of an entry from the SupportedMaps attribute's list. If the SupportedMaps attribute is empty, this field shall be null."
+            },
+            {
+              "id": 2,
+              "name": "AreaInfo",
+              "type": "AreaInfoStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain data describing the area.\nThis SHOULD be used by clients to determine the name and/or the full, or the partial, semantics of a certain area.\n> [!NOTE]\n> NOTE: If any entries on the SupportedAreas attribute's list have the AreaInfo field missing the semantic data, the client may remind the user to assign the respective data."
+            }
+          ]
+        },
+        {
+          "name": "LandmarkInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "The data from this structure indicates a landmark and position relative to the landmark.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LandmarkTag",
+              "type": "tag",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate that the area is associated with a landmark.\nThis field shall be the ID of a landmark semantic tag, located within the Common Landmark Namespace. For example, this tag may indicate that the area refers to an area next to a table."
+            },
+            {
+              "id": 1,
+              "name": "RelativePositionTag",
+              "type": "tag",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall identify the position of the area relative to a landmark. This is a static description of a zone known to the server, and this field never reflects the device's own proximity or position relative to the landmark, but that of the zone.\nThis field shall be the ID of a relative position semantic tag, located within the Common Relative Position Namespace.\nIf the RelativePositionTag field is null, this field indicates proximity to the landmark. Otherwise, the RelativePositionTag field indicates the position of the area relative to the landmark indicated by the LandmarkTag field. For example, this tag, in conjunction with the LandmarkTag field, may indicate that the area refers to a zone under a table."
+            }
+          ]
+        },
+        {
+          "name": "LocationDescriptorStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This data type shall be represented by the following structure:",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LocationName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of the location. For example, \"blue room\".\nIf the location name is not user provided, the logic that generates it (clients, devices etc.) SHOULD utilize synthesized user-friendly, understandable, names for the location, rather than opaque values such as \"private\" or \"2fe7c241-a50a-4863-896e-c5878da5ed68\"."
+            },
+            {
+              "id": 1,
+              "name": "FloorNumber",
+              "type": "int16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the level number. Negative values correspond to basement levels.\nValue zero indicates this is the main floor, which typically includes the main entrance to the user's home. For a building with multiple levels, it is the client's responsibility to map each level to/from a FloorNumber tag value, using the level numbering convention of the region where the client operates. For example, if the client operates in Europe, building level 1, which is one level up from the street level, SHOULD be mapped to FloorNumber tag value 0x1. If the client operates in North America, building level 1, which is at street level, SHOULD be mapped to FloorNumber tag value 0x0.\nA NULL value indicates that this information is not available.\nWhen the clients present the level information for user selection, they SHOULD use the operating region to determine how to render and map this data. For example, if the client operates in North America it SHOULD present the user a list that includes entries labeled \"basement\", \"first\", \"second\", and internally mapped to floor numbers -1, 0, and 1. If operating in Europe, the client SHOULD present a list that includes entries labeled \"basement\", \"ground\", \"first\", internally mapped to floor numbers -1, 0, and 1.\nThe floor number information is expected to be mostly useful to the clients, rather than the devices, such as for grouping devices that are located on the same level. For example, an automation may be defined for all devices located at the basement level (floor number -1).\n> [!NOTE]\n> NOTE: Handling complex level situations, such as half levels (side split houses), or the levels from an apartment building, is up to the client and/or user."
+            },
+            {
+              "id": 2,
+              "name": "AreaType",
+              "type": "tag",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall be the ID of an area semantic tag, located within the Common Area Namespace. For example, this tag may indicate that the location refers to a bedroom.\nIf this field is NULL, that indicates that the area type information is not available.\n> [!NOTE]\n> NOTE: This field only indicates the type of the area. Multiple areas of the same type, such as bedrooms, may exist in a user's home."
+            }
+          ]
+        },
+        {
+          "name": "MapStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This is a struct representing a map.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MapId",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the map's identifier."
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent a human understandable map description.\nFor example: \"Main Floor\", or \"Second Level\"."
+            }
+          ]
+        },
+        {
+          "name": "OperationalStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Pending",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Operating",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Skipped",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Completed",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ProgressStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This is a struct indicating the progress.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AreaId",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the identifier of the area, and the identifier shall be an entry in the SupportedAreas attribute's list."
+            },
+            {
+              "id": 1,
+              "name": "Status",
+              "type": "OperationalStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the operational status of the device regarding the area indicated by the AreaID field."
+            },
+            {
+              "id": 2,
+              "name": "TotalOperationalTime",
+              "type": "elapsed-s",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the total operational time, in seconds, from when the device started to operate at the area indicated by the AreaID field, until the operation finished, due to completion or due to skipping, including any time spent while paused.\nA value of null indicates that the total operational time is unknown.\nThere may be cases where the total operational time exceeds the maximum value that can be conveyed by this attribute, and in such instances this attribute shall be populated with null.\nNull if the Status field is not set to Completed or Skipped."
+            },
+            {
+              "id": 3,
+              "name": "EstimatedTime",
+              "type": "elapsed-s",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the estimated time for the operation, in seconds, from when the device will start operating at the area indicated by the AreaID field, until the operation completes, excluding any time spent while not operating in the area.\nA value of null indicates that the estimated time is unknown. If the estimated time is unknown, or if it exceeds the maximum value that can be conveyed by this attribute, this attribute shall be null.\nAfter initializing the ProgressStruct instance, the server SHOULD NOT change the value of this field, except when repopulating the entire instance, to avoid excessive reporting of the Progress attribute changes."
+            }
+          ]
+        },
+        {
+          "name": "SelectAreasStatus",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "UnsupportedArea",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "InvalidInMode",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "InvalidSet",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SkipAreaStatus",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "InvalidAreaList",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "InvalidInMode",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "InvalidSkippedArea",
               "description": null
             }
           ]

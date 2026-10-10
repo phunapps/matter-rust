@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 71] = [
+const TARGET_CLUSTERS: [&str; 72] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -104,6 +104,8 @@ const TARGET_CLUSTERS: [&str; 71] = [
     "LaundryWasherControls",
     "LaundryDryerControls",
     "MicrowaveOvenControl",
+    // M9-A3 B3, ServiceArea:
+    "ServiceArea",
 ];
 
 fn load() -> Value {
@@ -897,4 +899,64 @@ fn appliance_control_commands_have_only_optional_fields_and_watts_are_kept() {
             "WattRating"
         ]
     );
+}
+
+// ---- M9-A3 B3: ServiceArea ---------------------------------------------------------
+
+#[test]
+fn service_area_location_struct_takes_chips_name_and_tags_stay_raw() {
+    // The Matter-global `locationdesc` is inlined as LocationDescriptorStruct
+    // (chip's name: zap global-structs.xml, controller-clusters.matter), never
+    // under its lowercase model name, and every reference points at it. `tag`
+    // stays a raw type token (the emitter maps it to u8).
+    let v = load();
+    let sa = cluster(&v, "ServiceArea");
+    let names = element_names(sa, "datatypes");
+    assert!(names.contains(&"LocationDescriptorStruct"), "{names:?}");
+    assert!(!names.contains(&"locationdesc"), "{names:?}");
+    let fields = |d: &str| -> Vec<(String, String, bool, bool)> {
+        datatype(sa, d)["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["name"].as_str().unwrap().to_string(),
+                    f["type"].as_str().unwrap().to_string(),
+                    f["optional"].as_bool().unwrap(),
+                    f["nullable"].as_bool().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let row = |n: &str, t: &str, o: bool, nl: bool| (n.to_string(), t.to_string(), o, nl);
+    assert_eq!(
+        fields("LocationDescriptorStruct"),
+        [
+            row("LocationName", "string", false, false),
+            row("FloorNumber", "int16", false, true),
+            row("AreaType", "tag", false, true),
+        ]
+    );
+    assert_eq!(
+        fields("AreaInfoStruct"),
+        [
+            row("LocationInfo", "LocationDescriptorStruct", false, true),
+            row("LandmarkInfo", "LandmarkInfoStruct", false, true),
+        ]
+    );
+    assert_eq!(
+        fields("LandmarkInfoStruct"),
+        [
+            row("LandmarkTag", "tag", false, false),
+            row("RelativePositionTag", "tag", false, true),
+        ]
+    );
+    for resp in ["SelectAreasResponse", "SkipAreaResponse"] {
+        assert_eq!(
+            field_optionality(&command(sa, resp)["fields"]),
+            [("Status", false), ("StatusText", false)],
+            "{resp}: StatusText is an unconditional M"
+        );
+    }
 }

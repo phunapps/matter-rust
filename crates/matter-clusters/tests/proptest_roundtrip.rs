@@ -215,4 +215,69 @@ proptest! {
         prop_assert_eq!(&e.error_state_details, &details);
         prop_assert_eq!(e.encode(), bytes);
     }
+
+    // ---- M9-A3 B3: ServiceArea ---------------------------------------------
+
+    #[test]
+    fn location_descriptor_struct_reencodes(
+        name in "[A-Za-z ]{0,16}",
+        floor in proptest::option::of(any::<i16>()),
+        area_type in proptest::option::of(any::<u8>()),
+    ) {
+        // The global `locationdesc` (generated as LocationDescriptorStruct):
+        // a nullable signed field and a nullable `tag` (raw uint8), every
+        // permutation of null, negative floors included.
+        let mut bytes = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut bytes);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_utf8(Tag::Context(0), &name).unwrap();
+            match floor {
+                Some(f) => w.put_int(Tag::Context(1), i64::from(f)).unwrap(),
+                None => w.put_null(Tag::Context(1)).unwrap(),
+            }
+            match area_type {
+                Some(t) => w.put_uint(Tag::Context(2), u64::from(t)).unwrap(),
+                None => w.put_null(Tag::Context(2)).unwrap(),
+            }
+            w.end_container().unwrap();
+        }
+        let l = gen::service_area::LocationDescriptorStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(&l.location_name, &name);
+        prop_assert_eq!(l.floor_number, floor.map_or(Nullable::Null, Nullable::Value));
+        prop_assert_eq!(l.area_type, area_type.map_or(Nullable::Null, Nullable::Value));
+        prop_assert_eq!(l.encode(), bytes);
+    }
+
+    #[test]
+    fn progress_struct_reencodes(
+        area in any::<u32>(),
+        status in any::<u8>(),
+        total in proptest::option::of(proptest::option::of(any::<u32>())),
+        estimated in proptest::option::of(proptest::option::of(any::<u32>())),
+    ) {
+        // ProgressStruct's two `Option<Nullable<u32>>` fields: absent, null
+        // and a value are three different wire shapes, and all must survive.
+        let put = |w: &mut TlvWriter<'_>, tag: u8, v: Option<Option<u32>>| match v {
+            None => {}
+            Some(None) => w.put_null(Tag::Context(tag)).unwrap(),
+            Some(Some(x)) => w.put_uint(Tag::Context(tag), u64::from(x)).unwrap(),
+        };
+        let mut bytes = Vec::new();
+        {
+            let mut w = TlvWriter::new(&mut bytes);
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_uint(Tag::Context(0), u64::from(area)).unwrap();
+            w.put_uint(Tag::Context(1), u64::from(status)).unwrap();
+            put(&mut w, 2, total);
+            put(&mut w, 3, estimated);
+            w.end_container().unwrap();
+        }
+        let as_nullable = |v: Option<Option<u32>>| v.map(|x| x.map_or(Nullable::Null, Nullable::Value));
+        let p = gen::service_area::ProgressStruct::decode(&bytes).unwrap();
+        prop_assert_eq!((p.area_id, p.status.to_raw()), (area, status));
+        prop_assert_eq!(p.total_operational_time, as_nullable(total));
+        prop_assert_eq!(p.estimated_time, as_nullable(estimated));
+        prop_assert_eq!(p.encode(), bytes);
+    }
 }

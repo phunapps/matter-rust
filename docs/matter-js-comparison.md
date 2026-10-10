@@ -126,6 +126,13 @@ These are language-idiomatic differences. They do not affect interop.
   class W). On the wire, matter.js's codec is wider still
   (`TlvNullable(TlvEnum())`, where `TlvEnum` is `TlvUInt32`), so a value above
   `0xFFFF` decodes there and is an error here.
+- **The global location descriptor is `LocationDescriptorStruct`**
+  (`matter-clusters` 0.6.0, M9-A3 B3). The specification's lowercase
+  `locationdesc` struct, used by ServiceArea's `AreaInfoStruct.LocationInfo`,
+  takes chip's name (`global-structs.xml`, `controller-clusters.matter`);
+  matter.js 0.16.11 calls it `TlvLocationdesc` (`globals`). The wire format is
+  the same. Each cluster that uses it gets its own copy of the struct, as with
+  `MeasurementAccuracyStruct`.
 
 ## CASE handshake performance (measured 2026-07-12)
 

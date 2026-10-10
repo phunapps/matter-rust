@@ -164,6 +164,13 @@ payload struct (Switch already had its seven):
   is pinned against a matter.js byte vector. MicrowaveOvenControl keeps the
   provisional `SupportedWatts` / `SelectedWattIndex` attributes, as chip's
   controller codegen does.
+- **ServiceArea (0x0150)**: SupportedAreas, SupportedMaps, SelectedAreas,
+  CurrentArea, EstimatedEndTime, Progress, `encode_select_areas`,
+  `encode_skip_area` and their responses. The Matter-global location
+  descriptor (`locationdesc` in the specification) is generated as
+  `service_area::LocationDescriptorStruct`, chip's name for it; the
+  landmark, relative-position and area-type tags are raw `u8`s whose values
+  come from the Common Landmark, Relative Position and Area namespaces.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

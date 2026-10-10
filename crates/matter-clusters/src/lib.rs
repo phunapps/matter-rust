@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 71 clusters are generated today. The full list is [`gen`]; by area:
+//! 72 clusters are generated today. The full list is [`gen`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -56,6 +56,8 @@
 //!   `OperationalError` and `OperationCompletion` events).
 //! - **Appliance controls:** `TemperatureControl`, `LaundryWasherControls`,
 //!   `LaundryDryerControls`, `MicrowaveOvenControl`.
+//! - **Robotic cleaners:** `ServiceArea` (with the global location struct,
+//!   generated as `service_area::LocationDescriptorStruct`).
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,

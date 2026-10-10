@@ -61,6 +61,7 @@ pub mod relative_humidity_measurement;
 pub mod rvc_clean_mode;
 pub mod rvc_operational_state;
 pub mod rvc_run_mode;
+pub mod service_area;
 pub mod switch;
 pub mod temperature_control;
 pub mod temperature_measurement;

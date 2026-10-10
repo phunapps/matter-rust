@@ -2496,9 +2496,14 @@ fn microwave_oven_control_decodes_and_commands_encode() {
         decode_supported_watts, decode_watt_rating, encode_add_more_time,
         encode_set_cooking_parameters, Feature,
     };
-    // chip microwave-oven-app's values (microwave-oven-device.h,
-    // MicrowaveOvenControlCluster.cpp): cook time 30 s of at most 86400 s,
-    // power 20..=90 in steps of 10, set to 90, 1000 W rating.
+    // chip microwave-oven-app's values (MicrowaveOvenControlCluster.cpp,
+    // examples/microwave-oven-app/microwave-oven-common/src/
+    // microwave-oven-device.cpp): cook time 30 s of at most 86400 s, power
+    // 20..=90 in steps of 10, set to 90, 1000 W rating (MicrowaveOvenInit's
+    // non-WATTS branch, ~L48: `mWattRating = kExampleWatt5`). SupportedWatts
+    // and SelectedWattIndex 4 are the WATTS-branch values (~L43-44: the last
+    // index of the five-entry watt list); the app's default features are
+    // PWRNUM|PWRLMTS, so it serves neither.
     assert_eq!(decode_cook_time(&uint_attr(30)).unwrap(), 30);
     assert_eq!(decode_max_cook_time(&uint_attr(86_400)).unwrap(), 86_400);
     assert_eq!(decode_power_setting(&uint_attr(90)).unwrap(), 90);
@@ -2540,4 +2545,271 @@ fn microwave_oven_control_decodes_and_commands_encode() {
         encode_add_more_time(10),
         struct_of(&|w| w.put_uint(Tag::Context(0), 10).unwrap())
     );
+}
+
+// ---- M9-A3 B3: ServiceArea -----------------------------------------------------
+//
+// SupportedAreas is a list of AreaStruct { AreaID uint32, MapID nullable
+// uint32, AreaInfo AreaInfoStruct { LocationInfo nullable
+// LocationDescriptorStruct, LandmarkInfo nullable LandmarkInfoStruct } }
+// (1.4.2 ServiceArea.xml). LocationDescriptorStruct is the Matter-global
+// `locationdesc` (LocationName string, FloorNumber nullable int16, AreaType
+// nullable `tag`), generated under chip's name for it; the landmark and area
+// type `tag`s are raw uint8 (their values come from the Common Landmark /
+// Area namespaces).
+
+/// One `AreaStruct` as chip writes it (`ServiceArea/Structs.ipp`: every field,
+/// null where unset).
+#[allow(clippy::type_complexity)]
+fn area_entry(
+    id: u64,
+    map: u64,
+    location: Option<(&str, Option<i64>, Option<u64>)>,
+    landmark: Option<(u64, Option<u64>)>,
+) -> impl Fn(&mut TlvWriter<'_>) + '_ {
+    move |w| {
+        w.put_uint(Tag::Context(0), id).unwrap();
+        w.put_uint(Tag::Context(1), map).unwrap();
+        w.start_structure(Tag::Context(2)).unwrap();
+        match location {
+            Some((name, floor, area_type)) => {
+                w.start_structure(Tag::Context(0)).unwrap();
+                w.put_utf8(Tag::Context(0), name).unwrap();
+                match floor {
+                    Some(f) => w.put_int(Tag::Context(1), f).unwrap(),
+                    None => w.put_null(Tag::Context(1)).unwrap(),
+                }
+                match area_type {
+                    Some(t) => w.put_uint(Tag::Context(2), t).unwrap(),
+                    None => w.put_null(Tag::Context(2)).unwrap(),
+                }
+                w.end_container().unwrap();
+            }
+            None => w.put_null(Tag::Context(0)).unwrap(),
+        }
+        match landmark {
+            Some((tag, position)) => {
+                w.start_structure(Tag::Context(1)).unwrap();
+                w.put_uint(Tag::Context(0), tag).unwrap();
+                match position {
+                    Some(p) => w.put_uint(Tag::Context(1), p).unwrap(),
+                    None => w.put_null(Tag::Context(1)).unwrap(),
+                }
+                w.end_container().unwrap();
+            }
+            None => w.put_null(Tag::Context(1)).unwrap(),
+        }
+        w.end_container().unwrap();
+    }
+}
+
+#[test]
+fn service_area_supported_areas_decode_rvc_app_topology() {
+    use gen::service_area::{decode_supported_areas, LocationDescriptorStruct};
+    // rvc-app's areas (rvc-service-area-delegate.cpp SetMapTopology): A (7)
+    // and B (1234567) on map 3, C (10050) and D (0x88888888) on map 245;
+    // PlayRoom 0x41, BackDoor 0x02, Couch 0x0D, NextTo 0x01.
+    let area_a = area_entry(7, 3, Some(("My Location A", Some(4), None)), None);
+    let area_b = area_entry(1_234_567, 3, Some(("My Location B", None, None)), None);
+    let area_c = area_entry(
+        10_050,
+        245,
+        Some(("", Some(-1), Some(0x41))),
+        Some((0x02, Some(0x01))),
+    );
+    let area_d = area_entry(
+        0x8888_8888,
+        245,
+        Some(("My Location D", None, None)),
+        Some((0x0D, Some(0x01))),
+    );
+    let areas = decode_supported_areas(&list_of(&[&area_a, &area_b, &area_c, &area_d])).unwrap();
+    let ids: Vec<(u32, Nullable<u32>)> = areas.iter().map(|x| (x.area_id, x.map_id)).collect();
+    assert_eq!(
+        ids,
+        [
+            (7, Nullable::Value(3)),
+            (1_234_567, Nullable::Value(3)),
+            (10_050, Nullable::Value(245)),
+            (0x8888_8888, Nullable::Value(245)),
+        ]
+    );
+    let location = |i: usize| -> LocationDescriptorStruct {
+        match &areas[i].area_info.location_info {
+            Nullable::Value(l) => l.clone(),
+            Nullable::Null => panic!("area {i}: null LocationInfo"),
+        }
+    };
+    let a_loc = location(0);
+    assert_eq!(
+        (
+            a_loc.location_name.as_str(),
+            a_loc.floor_number,
+            a_loc.area_type
+        ),
+        ("My Location A", Nullable::Value(4), Nullable::Null)
+    );
+    let c_loc = location(2);
+    assert_eq!(
+        (
+            c_loc.location_name.as_str(),
+            c_loc.floor_number,
+            c_loc.area_type
+        ),
+        ("", Nullable::Value(-1), Nullable::Value(0x41))
+    );
+    assert_eq!(areas[0].area_info.landmark_info, Nullable::Null);
+    match &areas[3].area_info.landmark_info {
+        Nullable::Value(l) => {
+            assert_eq!(
+                (l.landmark_tag, l.relative_position_tag),
+                (0x0D, Nullable::Value(0x01))
+            );
+        }
+        Nullable::Null => panic!("area D: null LandmarkInfo"),
+    }
+}
+
+#[test]
+fn service_area_maps_selection_and_progress_decode() {
+    use gen::service_area::{
+        decode_current_area, decode_estimated_end_time, decode_progress, decode_selected_areas,
+        decode_supported_maps, OperationalStatusEnum,
+    };
+    let maps = decode_supported_maps(&list_of(&[
+        &|w| {
+            w.put_uint(Tag::Context(0), 3).unwrap();
+            w.put_utf8(Tag::Context(1), "My Map XX").unwrap();
+        },
+        &|w| {
+            w.put_uint(Tag::Context(0), 245).unwrap();
+            w.put_utf8(Tag::Context(1), "My Map YY").unwrap();
+        },
+    ]))
+    .unwrap();
+    let got: Vec<(u32, &str)> = maps.iter().map(|m| (m.map_id, m.name.as_str())).collect();
+    assert_eq!(got, [(3, "My Map XX"), (245, "My Map YY")]);
+    assert_eq!(
+        decode_selected_areas(&uint_array_attr(&[7, 1_234_567])).unwrap(),
+        [7, 1_234_567]
+    );
+    assert_eq!(decode_current_area(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_current_area(&uint_attr(7)).unwrap(),
+        Nullable::Value(7)
+    );
+    assert_eq!(
+        decode_estimated_end_time(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    // Progress during a run (service-area-server.cpp SetProgressStatus): the
+    // operating area's TotalOperationalTime is null, a pending one has none.
+    let progress = decode_progress(&list_of(&[
+        &|w| {
+            w.put_uint(Tag::Context(0), 7).unwrap();
+            w.put_uint(Tag::Context(1), 1).unwrap();
+            w.put_null(Tag::Context(2)).unwrap();
+        },
+        &|w| {
+            w.put_uint(Tag::Context(0), 1_234_567).unwrap();
+            w.put_uint(Tag::Context(1), 0).unwrap();
+        },
+    ]))
+    .unwrap();
+    let got: Vec<_> = progress
+        .iter()
+        .map(|p| {
+            (
+                p.area_id,
+                p.status,
+                p.total_operational_time,
+                p.estimated_time,
+            )
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (
+                7,
+                OperationalStatusEnum::Operating,
+                Some(Nullable::Null),
+                None
+            ),
+            (1_234_567, OperationalStatusEnum::Pending, None, None),
+        ]
+    );
+}
+
+#[test]
+fn service_area_commands_encode_and_responses_decode() {
+    use gen::service_area::{
+        encode_select_areas, encode_skip_area, SelectAreasResponse, SelectAreasStatus,
+        SkipAreaResponse, SkipAreaStatus,
+    };
+    // SelectAreas carries a list<uint32>; SkipArea one uint32.
+    let mut select = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut select);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_array(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Anonymous, 7).unwrap();
+        w.put_uint(Tag::Anonymous, 0x8888_8888).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }
+    assert_eq!(encode_select_areas(&vec![7, 0x8888_8888]), select);
+    assert_eq!(
+        encode_skip_area(7),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 7).unwrap())
+    );
+    // chip always sends StatusText, empty unless the status needs a reason.
+    let r = SelectAreasResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_utf8(
+            Tag::Context(1),
+            "all selected areas must be in the same map",
+        )
+        .unwrap();
+    }))
+    .unwrap();
+    assert_eq!(r.status, SelectAreasStatus::InvalidSet);
+    assert_eq!(r.status_text, "all selected areas must be in the same map");
+    let r = SkipAreaResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_utf8(Tag::Context(1), "").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (r.status, r.status_text.as_str()),
+        (SkipAreaStatus::InvalidAreaList, "")
+    );
+}
+
+#[test]
+fn service_area_missing_mandatory_fields_are_errors() {
+    use matter_clusters::error::ClusterError;
+    // StatusText is an unconditional M in 1.4.2, and chip always sends it.
+    assert!(matches!(
+        gen::service_area::SelectAreasResponse::decode(&struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap();
+        })),
+        Err(ClusterError::MissingField("StatusText"))
+    ));
+    // AreaInfo is mandatory in every AreaStruct.
+    assert!(matches!(
+        gen::service_area::decode_supported_areas(&list_of(&[&|w| {
+            w.put_uint(Tag::Context(0), 7).unwrap();
+            w.put_null(Tag::Context(1)).unwrap();
+        }])),
+        Err(ClusterError::MissingField("AreaInfo"))
+    ));
+    // LocationName is mandatory inside a present LocationDescriptorStruct.
+    assert!(matches!(
+        gen::service_area::LocationDescriptorStruct::decode(&struct_of(&|w| {
+            w.put_null(Tag::Context(1)).unwrap();
+            w.put_null(Tag::Context(2)).unwrap();
+        })),
+        Err(ClusterError::MissingField("LocationName"))
+    ));
 }

@@ -156,6 +156,9 @@ const ALLOWLIST = [
   { id: 0x0053, name: 'LaundryWasherControls' },
   { id: 0x004a, name: 'LaundryDryerControls' },
   { id: 0x005f, name: 'MicrowaveOvenControl' },
+  // M9-A3 B3, ServiceArea (rvc-app's only; the global `locationdesc` inlined
+  // as LocationDescriptorStruct, see GLOBAL_DATATYPE_NAMES):
+  { id: 0x0150, name: 'ServiceArea' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -663,6 +666,16 @@ const RUST_HANDLED_TYPE_TOKENS = new Set([
   'namespace',
 ]);
 
+// Model-global composite datatypes whose model name is lowercase, and the name
+// they are generated under (M9-A3 B3). Inlined as-is, `locationdesc` would
+// become `pub struct locationdesc` (non_camel_case_types). The new name is
+// chip's own for the same struct (zap global-structs.xml and
+// controller-clusters.matter: `struct LocationDescriptorStruct`), so
+// scripts/chip-xml-conformance.py finds it among chip's zap global structs and
+// checks its fields. A lowercase global composite with no entry here fails the
+// dump (inlineGlobalDatatypes), so no such name can reach the emitter.
+const GLOBAL_DATATYPE_NAMES = new Map([['locationdesc', 'LocationDescriptorStruct']]);
+
 // Resolve a datatype NAME to its @matter/model node at root (global) scope,
 // or null if no such named child exists (then it is a scalar/semantic/
 // primitive token the Rust scalar map handles, e.g. `voltage-mV`, `uint64`).
@@ -681,6 +694,7 @@ function globalDatatypeNode(name) {
 // emitter — cluster modules are independent by design.
 function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
   const present = new Set(datatypes.map((d) => d.name));
+  const renamed = new Map(); // model name -> GLOBAL_DATATYPE_NAMES name, as inlined
   const queue = [];
   const addRef = (t) => {
     if (t) queue.push(t);
@@ -705,13 +719,32 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
     if (!node) continue; // scalar/semantic/primitive — not an inlinable datatype
     const meta = node.effectiveMetatype;
     if (meta !== 'object' && meta !== 'enum' && meta !== 'bitmap') continue; // scalar global
-    const dt = dumpDatatype(node, `${clusterName}.global`);
+    const rename = GLOBAL_DATATYPE_NAMES.get(name);
+    if (!rename && !/^[A-Z]/.test(name)) {
+      fail(`${clusterName}: global ${meta} \`${name}\` is lowercase — add it to GLOBAL_DATATYPE_NAMES (or RUST_HANDLED_TYPE_TOKENS)`);
+    }
+    const dt = dumpDatatype(node, `${clusterName}.global`, rename);
     datatypes.push(dt);
     present.add(name);
+    if (rename) {
+      present.add(rename);
+      renamed.set(name, rename);
+    }
     for (const f of dt.fields || []) {
       addRef(f.type);
       addRef(f.entryType);
     }
+  }
+  // Point every reference at the generated name (the event carriers share
+  // their field objects with the events, so events are rewritten too).
+  if (renamed.size > 0) {
+    const fix = (el) => {
+      if (renamed.has(el.type)) el.type = renamed.get(el.type);
+      if (renamed.has(el.entryType)) el.entryType = renamed.get(el.entryType);
+    };
+    attributes.forEach(fix);
+    for (const cmd of commands) cmd.fields.forEach(fix);
+    for (const dt of datatypes) (dt.fields || []).forEach(fix);
   }
 }
 
