@@ -415,7 +415,8 @@ function dumpDatatype(dt, where, nameOverride) {
 // must NOT be inlined as cluster datatypes (see xtask/src/codegen/rustgen/types.rs):
 //   - bare base metatypes (`enum8`/`enum16` → uN, `map8`/`map16`/`map32` → uN)
 //     and enum-based semantic globals Rust maps as plain integers (`status`,
-//     `priority`) — handled by `scalar_rust`.
+//     `priority`, `namespace`) — handled by `scalar_rust`. `namespace` is
+//     lowercase: inlined, it would become `pub enum namespace` (M9-A3 B2).
 //   - `semtag` — handled by `global_type_rust` (a hand-written foundation struct).
 // Integer/string semantic globals (e.g. `voltage-mV`, `cluster-id`) never reach
 // here: the metatype gate in inlineGlobalDatatypes already skips them.
@@ -428,6 +429,7 @@ const RUST_HANDLED_TYPE_TOKENS = new Set([
   'map32',
   'status',
   'priority',
+  'namespace',
 ]);
 
 // Resolve a datatype NAME to its @matter/model node at root (global) scope,

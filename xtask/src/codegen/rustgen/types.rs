@@ -14,9 +14,11 @@
 fn scalar_rust(ty: &str) -> Option<&'static str> {
     Some(match ty {
         "bool" => "bool",
-        // u8: primitive + semantic globals
-        "uint8" | "percent" | "fabric-idx" | "action-id" | "status" | "priority" | "enum8"
-        | "map8" => "u8",
+        // u8: primitive + semantic globals. `namespace` is the global
+        // semantic-tag namespace enum (Core spec 7.19.2, enum8): mapped to its
+        // raw integer like `status`/`priority`, never emitted as a type.
+        "uint8" | "percent" | "fabric-idx" | "action-id" | "status" | "priority" | "namespace"
+        | "enum8" | "map8" => "u8",
         // u16: primitive + semantic globals (unsigned 16-bit)
         "uint16" | "group-id" | "endpoint-no" | "vendor-id" | "percent100ths" | "enum16"
         | "map16" => "u16",
@@ -290,6 +292,19 @@ mod tests {
         assert!(is_known_type("uint16"));
         assert!(is_known_type("cluster-id"));
         assert!(!is_known_type("StartUpOnOffEnum"));
+    }
+
+    #[test]
+    fn global_enum_namespace_is_its_raw_enum8() {
+        // `namespace` is a lowercase model-global enum (ModeSelect references
+        // it). As a type name it would emit `pub enum namespace`, which fails
+        // `non_camel_case_types`; like `status` it maps to the raw integer.
+        assert!(is_known_type("namespace"));
+        assert_eq!(base_type("namespace", None), "u8");
+        assert_eq!(
+            rust_type("namespace", None, true, false, Position::Attribute),
+            "Nullable<u8>"
+        );
     }
 
     #[test]
