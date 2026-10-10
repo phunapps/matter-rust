@@ -625,7 +625,8 @@ async fn alarms_baseline(node: &Node) -> Option<u64> {
 async fn bsc_command(node: &Node, command: u32, alarms: bsc::AlarmModeBitmap) -> ImStatus {
     let fields = match command {
         bsc::command_id::SUPPRESS_ALARM => bsc::encode_suppress_alarm(alarms),
-        _ => bsc::encode_enable_disable_alarm(alarms),
+        bsc::command_id::ENABLE_DISABLE_ALARM => bsc::encode_enable_disable_alarm(alarms),
+        other => panic!("bsc_command: command {other:#04x} takes no AlarmModeBitmap"),
     };
     status_of(node, bsc::CLUSTER_ID, command, fields).await
 }
@@ -889,7 +890,7 @@ async fn valve_decodes_every_attribute_and_writes_its_defaults() {
 }
 
 /// Every ValveStateChanged after `baseline`, decoded, oldest first, once one
-/// of them reports `last` (bounded by the events helper's timeout).
+/// of them reports `last`; panics if none does within 10 s.
 async fn valve_states_until(
     node: &Node,
     baseline: Option<u64>,

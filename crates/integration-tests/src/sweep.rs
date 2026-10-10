@@ -87,7 +87,8 @@ pub fn all_clusters_serves_attribute(
 
 /// Whether the `server cluster <cluster> {` block inside `.matter` `source`'s
 /// `endpoint <endpoint> {` block declares `attribute <attribute>` (any storage:
-/// `ram`, `persist`, `callback`). The cluster block ends at its own `}`,
+/// `ram`, `persist`, `callback`; with or without `default = ...`, so the name
+/// may end in the line's `;`). The cluster block ends at its own `}`,
 /// indented by two.
 fn cluster_serves_attribute(
     source: &str,
@@ -108,10 +109,14 @@ fn cluster_serves_attribute(
         bail!("endpoint {endpoint} serves no cluster {cluster}");
     }
     Ok(block.take_while(|l| l.trim() != "}").any(|l| {
-        let words: Vec<&str> = l.split_whitespace().collect();
-        words
-            .windows(2)
-            .any(|w| w[0] == "attribute" && w[1] == attribute)
+        // The name is the word after the first `attribute`; without a
+        // `default = ...` the line's `;` is glued to it.
+        let mut words = l.split_whitespace().skip_while(|w| *w != "attribute");
+        words.next().is_some()
+            && words
+                .next()
+                .map(|name| name.strip_suffix(';').unwrap_or(name))
+                == Some(attribute)
     }))
 }
 
@@ -606,6 +611,8 @@ endpoint 1 {
     persist  attribute expressedState default = 0;
     ram      attribute expiryDate default = 3976214400;
     ram      attribute unmounted default = 0;
+    callback attribute currentSensitivityLevel;
+    ram      attribute openDuration;
   }
   server cluster OnOff {
     ram      attribute unmountedx default = 0;
@@ -617,6 +624,32 @@ endpoint 1 {
     fn an_attribute_in_the_cluster_block_is_served() {
         assert!(cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "unmounted").unwrap());
         assert!(cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "expiryDate").unwrap());
+    }
+
+    #[test]
+    fn a_declaration_without_a_default_is_served() {
+        // No `default = ...`, so the `;` is glued to the name; `callback`
+        // attributes never carry a default.
+        assert!(
+            cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "currentSensitivityLevel").unwrap()
+        );
+        assert!(cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "openDuration").unwrap());
+    }
+
+    #[test]
+    fn a_near_miss_of_a_declaration_without_a_default_is_not_served() {
+        for name in [
+            "currentSensitivity",
+            "currentSensitivityLevelX",
+            "openDuration;",
+            "default",
+            "=",
+        ] {
+            assert!(
+                !cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", name).unwrap(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
