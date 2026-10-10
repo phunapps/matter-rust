@@ -83,6 +83,9 @@ struct AppSpec {
 }
 
 /// Resolve the DUT app spec from the optional `xtask integration <app>` argument.
+// One match arm per chip example app the harness drives (eight with tv-app):
+// splitting the table would only hide it.
+#[allow(clippy::too_many_lines)]
 fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
     Ok(match app.unwrap_or("all-clusters") {
         "all-clusters" => AppSpec {
@@ -153,6 +156,22 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             linux_platform_mdns: false,
             events: EventStimulus::None,
         },
+        // M9-A3 B5: Messages, which only tv-app serves among chip's example
+        // apps (B7 adds the media clusters). Nothing is stimulated: chip's
+        // Messages server logs no events, and tv-app reads no pipe, so it
+        // gets neither --enable-key nor --app-pipe. Like rvc-app, it does not
+        // build on Apple Silicon without Rosetta 2.
+        "tv" => AppSpec {
+            name: "tv",
+            target_suffix: "tv-app",
+            binary: "chip-tv-app",
+            fixed_qr: None,
+            tests: &["clusters_messages"],
+            extra_args: &[],
+            needs_ota_image: false,
+            linux_platform_mdns: false,
+            events: EventStimulus::None,
+        },
         "icd" => AppSpec {
             name: "icd",
             target_suffix: "lit-icd",
@@ -196,7 +215,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
         other => {
             return Err(format!(
                 "unknown integration app '{other}' \
-                 (expected: all-clusters, lock, evse, icd, ota, rvc, microwave-oven)"
+                 (expected: all-clusters, lock, evse, icd, ota, rvc, microwave-oven, tv)"
             ))
         }
     })
@@ -867,10 +886,27 @@ mod tests {
     }
 
     #[test]
-    fn unknown_app_names_the_rvc_and_microwave_oven_hosts_among_the_choices() {
+    fn tv_host_runs_only_its_own_suite_with_plain_arguments() {
+        // `build_examples.py --target darwin-arm64-tv-app` (linux-x64-tv-app
+        // on Linux) builds out/<target>-tv-app/chip-tv-app
+        // (scripts/build/builders/host.py). No triggers, no pipe.
+        let spec = app_spec(Some("tv")).unwrap();
+        assert_eq!(
+            (spec.name, spec.target_suffix, spec.binary),
+            ("tv", "tv-app", "chip-tv-app")
+        );
+        assert_eq!(spec.tests, ["clusters_messages"]);
+        assert_eq!(spec.fixed_qr, None);
+        assert_eq!(spec.events, EventStimulus::None);
+        assert!(!spec.needs_ota_image && !spec.linux_platform_mdns);
+        assert_eq!(launch_args(&spec, None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn unknown_app_names_the_rvc_microwave_oven_and_tv_hosts_among_the_choices() {
         let err = app_spec(Some("nope")).err().unwrap();
         assert!(
-            err.contains("rvc") && err.contains("microwave-oven"),
+            err.contains("rvc") && err.contains("microwave-oven") && err.contains("tv"),
             "{err}"
         );
     }
