@@ -313,7 +313,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 9] = [
+const EVENT_CLUSTERS: [&str; 13] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -325,6 +325,11 @@ const EVENT_CLUSTERS: [&str; 9] = [
     // M9-A3 B1, list-of-enum payloads:
     "GeneralDiagnostics",
     "PowerSource",
+    // M9-A3 B1, composite-field payloads:
+    "AccessControl",
+    "ElectricalEnergyMeasurement",
+    "ElectricalPowerMeasurement",
+    "DoorLock",
 ];
 
 #[test]
@@ -347,5 +352,27 @@ fn event_enabled_clusters_are_exactly_the_allowlist() {
                 "{cname} has events dumped AND an 'event dump not enabled' exclusion"
             );
         }
+    }
+}
+
+#[test]
+fn access_control_event_payloads_keep_model_optionality() {
+    let v = load();
+    let acl = clusters(&v)
+        .iter()
+        .find(|c| c["name"] == "AccessControl")
+        .unwrap();
+    let ev = acl["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "AccessControlEntryChanged")
+        .expect("AccessControlEntryChanged dumped");
+    for f in ev["fields"].as_array().unwrap() {
+        assert_eq!(
+            f["optional"], false,
+            "AccessControlEntryChanged.{} relaxed",
+            f["name"]
+        );
     }
 }

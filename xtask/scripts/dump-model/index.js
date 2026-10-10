@@ -139,6 +139,11 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B1, list-of-enum payloads:
   'GeneralDiagnostics',
   'PowerSource',
+  // M9-A3 B1, composite-field payloads:
+  'AccessControl',
+  'ElectricalEnergyMeasurement',
+  'ElectricalPowerMeasurement',
+  'DoorLock',
 ]);
 
 const excluded = [];

@@ -45,6 +45,16 @@ pub mod attribute_id {
     pub const ARL: u32 = 0x0006;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `AccessControlEntryChanged` (info priority).
+    pub const ACCESS_CONTROL_ENTRY_CHANGED: u32 = 0x00;
+    /// `AccessControlExtensionChanged` (info priority).
+    pub const ACCESS_CONTROL_EXTENSION_CHANGED: u32 = 0x01;
+    /// `FabricRestrictionReviewUpdate` (info priority).
+    pub const FABRIC_RESTRICTION_REVIEW_UPDATE: u32 = 0x02;
+}
+
 bitflags::bitflags! {
     /// `AccessControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -1203,6 +1213,327 @@ impl ReviewFabricRestrictionsResponse {
             _ => {
                 return Err(ClusterError::UnexpectedType {
                     context: "ReviewFabricRestrictionsResponse",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `AccessControlEntryChangedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AccessControlEntryChangedEvent {
+    /// Field AdminNodeId (tag 1).
+    pub admin_node_id: Nullable<u64>,
+    /// Field AdminPasscodeId (tag 2).
+    pub admin_passcode_id: Nullable<u16>,
+    /// Field ChangeType (tag 3).
+    pub change_type: ChangeTypeEnum,
+    /// Field LatestValue (tag 4).
+    pub latest_value: Nullable<AccessControlEntryStruct>,
+    /// Field FabricIndex (tag 254).
+    pub fabric_index: u8,
+}
+
+impl AccessControlEntryChangedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_admin_node_id: Option<Nullable<u64>> = None;
+        let mut f_admin_passcode_id: Option<Nullable<u16>> = None;
+        let mut f_change_type: Option<ChangeTypeEnum> = None;
+        let mut f_latest_value: Option<Nullable<AccessControlEntryStruct>> = None;
+        let mut f_fabric_index: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Null,
+                }) => f_admin_node_id = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_admin_node_id = Some(Nullable::Value(
+                        u64::try_from(v).map_err(|_| ClusterError::InvalidLength("AdminNodeId"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Null,
+                }) => f_admin_passcode_id = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_admin_passcode_id =
+                        Some(Nullable::Value(u16::try_from(v).map_err(|_| {
+                            ClusterError::InvalidLength("AdminPasscodeId")
+                        })?))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Uint(v),
+                }) => {
+                    f_change_type = Some(ChangeTypeEnum::from_raw(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("ChangeType"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(4),
+                    value: Value::Null,
+                }) => f_latest_value = Some(Nullable::Null),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(4),
+                    kind: ContainerKind::Structure,
+                }) => {
+                    f_latest_value =
+                        Some(Nullable::Value(AccessControlEntryStruct::decode_from(r)?))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(254),
+                    value: Value::Uint(v),
+                }) => {
+                    f_fabric_index = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricIndex"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            admin_node_id: f_admin_node_id.ok_or(ClusterError::MissingField("AdminNodeId"))?,
+            admin_passcode_id: f_admin_passcode_id
+                .ok_or(ClusterError::MissingField("AdminPasscodeId"))?,
+            change_type: f_change_type.ok_or(ClusterError::MissingField("ChangeType"))?,
+            latest_value: f_latest_value.ok_or(ClusterError::MissingField("LatestValue"))?,
+            fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "AccessControlEntryChangedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `AccessControlExtensionChangedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AccessControlExtensionChangedEvent {
+    /// Field AdminNodeId (tag 1).
+    pub admin_node_id: Nullable<u64>,
+    /// Field AdminPasscodeId (tag 2).
+    pub admin_passcode_id: Nullable<u16>,
+    /// Field ChangeType (tag 3).
+    pub change_type: ChangeTypeEnum,
+    /// Field LatestValue (tag 4).
+    pub latest_value: Nullable<AccessControlExtensionStruct>,
+    /// Field FabricIndex (tag 254).
+    pub fabric_index: u8,
+}
+
+impl AccessControlExtensionChangedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_admin_node_id: Option<Nullable<u64>> = None;
+        let mut f_admin_passcode_id: Option<Nullable<u16>> = None;
+        let mut f_change_type: Option<ChangeTypeEnum> = None;
+        let mut f_latest_value: Option<Nullable<AccessControlExtensionStruct>> = None;
+        let mut f_fabric_index: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Null,
+                }) => f_admin_node_id = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_admin_node_id = Some(Nullable::Value(
+                        u64::try_from(v).map_err(|_| ClusterError::InvalidLength("AdminNodeId"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Null,
+                }) => f_admin_passcode_id = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_admin_passcode_id =
+                        Some(Nullable::Value(u16::try_from(v).map_err(|_| {
+                            ClusterError::InvalidLength("AdminPasscodeId")
+                        })?))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Uint(v),
+                }) => {
+                    f_change_type = Some(ChangeTypeEnum::from_raw(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("ChangeType"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(4),
+                    value: Value::Null,
+                }) => f_latest_value = Some(Nullable::Null),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(4),
+                    kind: ContainerKind::Structure,
+                }) => {
+                    f_latest_value = Some(Nullable::Value(
+                        AccessControlExtensionStruct::decode_from(r)?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(254),
+                    value: Value::Uint(v),
+                }) => {
+                    f_fabric_index = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricIndex"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            admin_node_id: f_admin_node_id.ok_or(ClusterError::MissingField("AdminNodeId"))?,
+            admin_passcode_id: f_admin_passcode_id
+                .ok_or(ClusterError::MissingField("AdminPasscodeId"))?,
+            change_type: f_change_type.ok_or(ClusterError::MissingField("ChangeType"))?,
+            latest_value: f_latest_value.ok_or(ClusterError::MissingField("LatestValue"))?,
+            fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "AccessControlExtensionChangedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `FabricRestrictionReviewUpdateEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct FabricRestrictionReviewUpdateEvent {
+    /// Field Token (tag 0).
+    pub token: u64,
+    /// Field Instruction (tag 1).
+    pub instruction: Option<String>,
+    /// Field ArlRequestFlowUrl (tag 2).
+    pub arl_request_flow_url: Option<String>,
+    /// Field FabricIndex (tag 254).
+    pub fabric_index: u8,
+}
+
+impl FabricRestrictionReviewUpdateEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_token: Option<u64> = None;
+        let mut f_instruction: Option<String> = None;
+        let mut f_arl_request_flow_url: Option<String> = None;
+        let mut f_fabric_index: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_token =
+                        Some(u64::try_from(v).map_err(|_| ClusterError::InvalidLength("Token"))?)
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Utf8(v),
+                }) => f_instruction = Some(v),
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Utf8(v),
+                }) => f_arl_request_flow_url = Some(v),
+                Some(Element::Scalar {
+                    tag: Tag::Context(254),
+                    value: Value::Uint(v),
+                }) => {
+                    f_fabric_index = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricIndex"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            token: f_token.ok_or(ClusterError::MissingField("Token"))?,
+            instruction: f_instruction,
+            arl_request_flow_url: f_arl_request_flow_url,
+            fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "FabricRestrictionReviewUpdateEvent",
                 })
             }
         }

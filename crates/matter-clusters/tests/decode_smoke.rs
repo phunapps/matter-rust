@@ -1339,3 +1339,221 @@ fn list_of_enum_event_missing_list_is_an_error() {
         Err(ClusterError::MissingField("BootReason"))
     ));
 }
+
+// ---- M9-A3 B1: events, composite-field shapes -------------------------------
+
+#[test]
+fn access_control_event_ids_pinned() {
+    use gen::access_control::event_id as ev;
+    assert_eq!(ev::ACCESS_CONTROL_ENTRY_CHANGED, 0x00);
+    assert_eq!(ev::ACCESS_CONTROL_EXTENSION_CHANGED, 0x01);
+    assert_eq!(ev::FABRIC_RESTRICTION_REVIEW_UPDATE, 0x02);
+}
+
+#[test]
+fn access_control_entry_changed_event_decodes_with_unwrapped_fields() {
+    use gen::access_control::{
+        AccessControlEntryChangedEvent, AccessControlEntryPrivilegeEnum, ChangeTypeEnum,
+    };
+    // chip (access-control-cluster.cpp OnEntryChanged): a CASE admin added an
+    // entry — AdminNodeID set, AdminPasscodeID null, LatestValue the full
+    // entry (our own fabric's event: chip encodes it with includeSensitive).
+    let bytes = struct_of(&|w| {
+        w.put_uint(Tag::Context(1), 0x0000_0000_0001_B669).unwrap();
+        w.put_null(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Context(3), 1).unwrap(); // Added
+        w.start_structure(Tag::Context(4)).unwrap();
+        own_acl_entry(w);
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    });
+    let e = AccessControlEntryChangedEvent::decode(&bytes).unwrap();
+    // §5.4 "events are exempt": the event's own fields keep the model's
+    // optionality. These bindings fail to compile if a field became Option.
+    let admin: Nullable<u64> = e.admin_node_id;
+    let passcode: Nullable<u16> = e.admin_passcode_id;
+    let change: ChangeTypeEnum = e.change_type;
+    let fabric: u8 = e.fabric_index;
+    assert_eq!(admin, Nullable::Value(0x1_B669));
+    assert_eq!(passcode, Nullable::Null);
+    assert_eq!(change, ChangeTypeEnum::from_raw(1));
+    assert_eq!(fabric, 1);
+    // LatestValue is the shared datatype struct, so its sensitive fields are
+    // Option — and present, because chip sends our own fabric's event in full.
+    match e.latest_value {
+        Nullable::Value(entry) => {
+            assert_eq!(
+                entry.privilege,
+                Some(AccessControlEntryPrivilegeEnum::from_raw(5))
+            );
+            assert_eq!(entry.subjects, Some(Nullable::Value(vec![0x1122])));
+        }
+        Nullable::Null => panic!("LatestValue should be present"),
+    }
+}
+
+#[test]
+fn access_control_extension_changed_and_review_events_decode() {
+    use gen::access_control::{
+        AccessControlExtensionChangedEvent, ChangeTypeEnum, FabricRestrictionReviewUpdateEvent,
+    };
+    let e = AccessControlExtensionChangedEvent::decode(&struct_of(&|w| {
+        w.put_null(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap(); // a PASE admin
+        w.put_uint(Tag::Context(3), 2).unwrap(); // Removed
+        w.put_null(Tag::Context(4)).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.admin_node_id, Nullable::Null);
+    assert_eq!(e.admin_passcode_id, Nullable::Value(0));
+    assert_eq!(e.change_type, ChangeTypeEnum::from_raw(2));
+    assert_eq!(e.latest_value, Nullable::Null);
+    let e = FabricRestrictionReviewUpdateEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 77).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.token, 77);
+    assert_eq!(e.instruction, None);
+    assert_eq!(e.arl_request_flow_url, None);
+}
+
+#[test]
+fn electrical_energy_measured_events_decode() {
+    use gen::electrical_energy_measurement::{
+        event_id as ev, CumulativeEnergyMeasuredEvent, PeriodicEnergyMeasuredEvent,
+    };
+    assert_eq!(ev::CUMULATIVE_ENERGY_MEASURED, 0x00);
+    assert_eq!(ev::PERIODIC_ENERGY_MEASURED, 0x01);
+    // An importing load (chip's FakeReadings 1 kW trigger): EnergyImported
+    // only; EnergyExported absent (both are optional, feature-gated).
+    let e = CumulativeEnergyMeasuredEvent::decode(&struct_of(&|w| {
+        w.start_structure(Tag::Context(0)).unwrap();
+        w.put_int(Tag::Context(0), 555).unwrap(); // Energy (mWh)
+        w.put_uint(Tag::Context(1), 1_000).unwrap(); // StartTimestamp
+        w.put_uint(Tag::Context(2), 1_002).unwrap(); // EndTimestamp
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    let imported = e.energy_imported.expect("EnergyImported present");
+    assert_eq!(imported.energy, 555);
+    assert_eq!(imported.start_timestamp, Some(1_000));
+    assert_eq!(e.energy_exported, None);
+    let e = PeriodicEnergyMeasuredEvent::decode(&struct_of(&|w| {
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.put_int(Tag::Context(0), 2_500).unwrap();
+        w.put_uint(Tag::Context(3), 9_000).unwrap(); // StartSystime
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.energy_imported, None);
+    assert_eq!(
+        e.energy_exported.map(|x| x.start_systime),
+        Some(Some(9_000))
+    );
+}
+
+#[test]
+fn electrical_power_measurement_period_ranges_event_decodes() {
+    use gen::electrical_power_measurement::{
+        event_id, MeasurementPeriodRangesEvent, MeasurementTypeEnum,
+    };
+    assert_eq!(event_id::MEASUREMENT_PERIOD_RANGES, 0x00);
+    let e = MeasurementPeriodRangesEvent::decode(&struct_of(&|w| {
+        w.start_array(Tag::Context(0)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap(); // Voltage
+        w.put_int(Tag::Context(1), 229_000).unwrap();
+        w.put_int(Tag::Context(2), 231_000).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.ranges.len(), 1);
+    assert_eq!(
+        e.ranges[0].measurement_type,
+        MeasurementTypeEnum::from_raw(1)
+    );
+    assert_eq!((e.ranges[0].min, e.ranges[0].max), (229_000, 231_000));
+}
+
+#[test]
+fn door_lock_event_ids_pinned() {
+    use gen::door_lock::event_id as ev;
+    assert_eq!(ev::DOOR_LOCK_ALARM, 0x00);
+    assert_eq!(ev::DOOR_STATE_CHANGE, 0x01);
+    assert_eq!(ev::LOCK_OPERATION, 0x02);
+    assert_eq!(ev::LOCK_OPERATION_ERROR, 0x03);
+    assert_eq!(ev::LOCK_USER_CHANGE, 0x04);
+}
+
+#[test]
+fn door_lock_events_decode() {
+    use gen::door_lock::{
+        AlarmCodeEnum, DataOperationTypeEnum, DoorLockAlarmEvent, DoorStateChangeEvent,
+        DoorStateEnum, LockDataTypeEnum, LockOperationErrorEvent, LockOperationEvent,
+        LockOperationTypeEnum, LockUserChangeEvent, OperationErrorEnum, OperationSourceEnum,
+    };
+    let e = DoorLockAlarmEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap(); // LockJammed
+    }))
+    .unwrap();
+    assert_eq!(e.alarm_code, AlarmCodeEnum::from_raw(0));
+    let e = DoorStateChangeEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap(); // DoorClosed
+    }))
+    .unwrap();
+    assert_eq!(e.door_state, DoorStateEnum::from_raw(1));
+    // A remote unlock with no PIN (lock-app): UserIndex null, Credentials null.
+    let e = LockOperationEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap(); // Unlock
+        w.put_uint(Tag::Context(1), 7).unwrap(); // Remote
+        w.put_null(Tag::Context(2)).unwrap();
+        w.put_uint(Tag::Context(3), 1).unwrap();
+        w.put_uint(Tag::Context(4), 0x1_B669).unwrap();
+        w.put_null(Tag::Context(5)).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.lock_operation_type, LockOperationTypeEnum::from_raw(1));
+    assert_eq!(e.operation_source, OperationSourceEnum::from_raw(7));
+    assert_eq!(e.user_index, Nullable::Null);
+    assert_eq!(e.fabric_index, Nullable::Value(1));
+    assert_eq!(e.source_node, Nullable::Value(0x1_B669));
+    assert_eq!(e.credentials, Some(Nullable::Null));
+    // A failed operation with a credential list; Credentials may also be absent.
+    let e = LockOperationErrorEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 7).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap(); // InvalidCredential
+        w.put_uint(Tag::Context(3), 2).unwrap();
+        w.put_null(Tag::Context(4)).unwrap();
+        w.put_null(Tag::Context(5)).unwrap();
+        w.start_array(Tag::Context(6)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 1).unwrap(); // Pin
+        w.put_uint(Tag::Context(1), 3).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.operation_error, OperationErrorEnum::from_raw(1));
+    assert_eq!(e.user_index, Nullable::Value(2));
+    match e.credentials {
+        Some(Nullable::Value(creds)) => assert_eq!(creds[0].credential_index, 3),
+        other => panic!("expected one credential, got {other:?}"),
+    }
+    let e = LockUserChangeEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap(); // UserIndex
+        w.put_uint(Tag::Context(1), 0).unwrap(); // Add
+        w.put_uint(Tag::Context(2), 7).unwrap(); // Remote
+        w.put_uint(Tag::Context(3), 2).unwrap();
+        w.put_uint(Tag::Context(4), 1).unwrap();
+        w.put_uint(Tag::Context(5), 0x1_B669).unwrap();
+        w.put_uint(Tag::Context(6), 2).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.lock_data_type, LockDataTypeEnum::from_raw(2));
+    assert_eq!(e.data_operation_type, DataOperationTypeEnum::from_raw(0));
+    assert_eq!(e.data_index, Nullable::Value(2));
+}

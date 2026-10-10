@@ -55,12 +55,6 @@
     ],
     "excluded": [
       {
-        "cluster": "AccessControl",
-        "element": "3 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
         "cluster": "BridgedDeviceBasicInformation",
         "element": "CapabilityMinima",
         "kind": "attribute",
@@ -179,24 +173,6 @@
         "element": "Toggle",
         "kind": "command",
         "reason": "disallowed"
-      },
-      {
-        "cluster": "DoorLock",
-        "element": "5 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
-        "cluster": "ElectricalEnergyMeasurement",
-        "element": "2 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
-        "cluster": "ElectricalPowerMeasurement",
-        "element": "1 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "GeneralDiagnostics",
@@ -1814,7 +1790,155 @@
           ]
         }
       ],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "AccessControlEntryChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 1,
+              "name": "AdminNodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "The Node ID of the Administrator that made the change, if the change occurred via a CASE session.\nExactly one of AdminNodeID and AdminPasscodeID shall be set, depending on whether the change occurred via a CASE or PASE session; the other shall be null."
+            },
+            {
+              "id": 2,
+              "name": "AdminPasscodeId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "The Passcode ID of the Administrator that made the change, if the change occurred via a PASE session. Non-zero values are reserved for future use (see PasscodeId generation in PBKDFParamRequest).\nExactly one of AdminNodeID and AdminPasscodeID shall be set, depending on whether the change occurred via a CASE or PASE session; the other shall be null."
+            },
+            {
+              "id": 3,
+              "name": "ChangeType",
+              "type": "ChangeTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The type of change as appropriate."
+            },
+            {
+              "id": 4,
+              "name": "LatestValue",
+              "type": "AccessControlEntryStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": false,
+              "description": "The latest value of the changed entry.\nThis field SHOULD be set if resources are adequate for it; otherwise it shall be set to NULL if resources are scarce."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "AccessControlExtensionChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 1,
+              "name": "AdminNodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "The Node ID of the Administrator that made the change, if the change occurred via a CASE session.\nExactly one of AdminNodeID and AdminPasscodeID shall be set, depending on whether the change occurred via a CASE or PASE session; the other shall be null."
+            },
+            {
+              "id": 2,
+              "name": "AdminPasscodeId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "The Passcode ID of the Administrator that made the change, if the change occurred via a PASE session. Non-zero values are reserved for future use (see PasscodeId generation in PBKDFParamRequest).\nExactly one of AdminNodeID and AdminPasscodeID shall be set, depending on whether the change occurred via a CASE or PASE session; the other shall be null."
+            },
+            {
+              "id": 3,
+              "name": "ChangeType",
+              "type": "ChangeTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The type of change as appropriate."
+            },
+            {
+              "id": 4,
+              "name": "LatestValue",
+              "type": "AccessControlExtensionStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": false,
+              "description": "The latest value of the changed extension.\nThis field SHOULD be set if resources are adequate for it; otherwise it shall be set to NULL if resources are scarce."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "FabricRestrictionReviewUpdate",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Token",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Token that can be used to correlate a ReviewFabricRestrictionsResponse with a FabricRestrictionReviewUpdate event."
+            },
+            {
+              "id": 1,
+              "name": "Instruction",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall provide human readable text that may be displayed to the user to help them locate the user interface for managing access restrictions for each fabric.\nA device SHOULD implement the Localization Configuration Cluster when it has no other means to determine the locale to use for this text.\nExamples include \"Please try again and immediately access device display for further instructions.\" or \"Please check email associated with your Acme account.\""
+            },
+            {
+              "id": 2,
+              "name": "ArlRequestFlowUrl",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the URL for the service associated with the device maker which the user can visit to manage fabric limitations. The syntax of this field shall follow the syntax as specified in RFC 1738 and shall use the https scheme for internet-hosted URLs.\n  - The URL may embed the token, fabric index, fabric vendor, or other information transparently in order to pass context about the originating ReviewFabricRestrictions command to the service associated with the URL. The service associated with the device vendor may perform vendor ID verification on the fabric from which the ReviewFabricRestrictions command originated.\n  - If the device grants the request, the ARL attribute in the Access Control Cluster shall be updated to reflect the new access rights and a successful response shall be returned to the device making the request using the MTaer field of the callbackUrl. If the request is denied, the ARL attribute shall remain unchanged and a failure response shall be returned to the device making the request using the MTaer field of the callbackUrl.\n  - The device using this mechanism shall provide a service at the URL that can accept requests for additional access and return responses indicating whether the requests were granted or denied.\n  - This URL will typically lead to a server which (e.g. by looking at the User-Agent) redirects the user to allow viewing, downloading, installing or using a manufacturer-provided means for guiding the user through the process to review and approve or deny the request. The device manufacturer may choose to use a constructed URL which is valid in a HTTP GET request (i.e. dedicated for the product) such as, for example, https://domain.example/arl-app?vid=FFF1&pid=1234. If a client follows or launches the ARLRequestFlowUrl, it shall expand it as described in Section 9.10.9.3.4, \"ARLRequestFlowUrl format\".\n  - A manufacturer contemplating using this flow should realize that\n  - This flow typically requires internet access to access the URL, and access extension may fail when internet connectivity is not available.\n  - If the flow prefers to redirect the user to an app which is available on popular platforms, it SHOULD also provide a fallback option such as a web browser interface to ensure users can complete access extension.\n  - A malicious Administrator could tamper with the URL (including any parameters it contains) in order to reduce restrictions for another Fabric. A well-implemented web service or app SHOULD validate that the VID in flow URL invocations match recent requests for review by comparing with VID and token pairs from recent ReviewFabricRestrictions requests.\n  - An Administrator supporting this flow should realize that if the device serving this cluster is malicious, it could send dangerous URLs to the client which could take the user to malicious     sites. The Administrator SHOULD provide details, such as the VID, to the user about the device sending the event so that the user can make an informed decision about whether to trust the URL."
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "AccessControlEntryAuthModeEnum",
@@ -8634,7 +8758,25 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "MeasurementPeriodRanges",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Ranges",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "MeasurementRangeStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This shall indicate the value of the Ranges attribute at the time of event generation."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "HarmonicMeasurementStruct",
@@ -9126,7 +9268,58 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "CumulativeEnergyMeasured",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "EnergyImported",
+              "type": "EnergyMeasurementStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the value of CumulativeEnergyImported attribute at the timestamp indicated in its EndTimestamp field, EndSystime field, or both."
+            },
+            {
+              "id": 1,
+              "name": "EnergyExported",
+              "type": "EnergyMeasurementStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the value of CumulativeEnergyExported attribute at the timestamp indicated in its EndTimestamp field, EndSystime field, or both."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "PeriodicEnergyMeasured",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "EnergyImported",
+              "type": "EnergyMeasurementStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the value of PeriodicEnergyImported attribute at the timestamp indicated in its EndTimestamp field, EndSystime field, or both."
+            },
+            {
+              "id": 1,
+              "name": "EnergyExported",
+              "type": "EnergyMeasurementStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be the value of PeriodicEnergyExported attribute at the timestamp indicated in its EndTimestamp field, EndSystime field, or both."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "CumulativeEnergyResetStruct",
@@ -10877,7 +11070,243 @@
           ]
         }
       ],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "DoorLockAlarm",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AlarmCode",
+              "type": "AlarmCodeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the alarm code of the event that has happened."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "DoorStateChange",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "DoorState",
+              "type": "DoorStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new door state for this door event."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "LockOperation",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LockOperationType",
+              "type": "LockOperationTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of the lock operation that was performed."
+            },
+            {
+              "id": 1,
+              "name": "OperationSource",
+              "type": "OperationSourceEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the source of the lock operation that was performed."
+            },
+            {
+              "id": 2,
+              "name": "UserIndex",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the UserIndex who performed the lock operation. This shall be null if there is no user index that can be determined for the given operation source. This shall NOT be null if a user index can be determined. In particular, this shall NOT be null if the operation was associated with a valid credential."
+            },
+            {
+              "id": 3,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the fabric index of the fabric that performed the lock operation. This shall be null if there is no fabric that can be determined for the given operation source. This shall NOT be null if the operation source is \"Remote\"."
+            },
+            {
+              "id": 4,
+              "name": "SourceNode",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the Node ID of the node that performed the lock operation. This shall be null if there is no Node associated with the given operation source. This shall NOT be null if the operation source is \"Remote\"."
+            },
+            {
+              "id": 5,
+              "name": "Credentials",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "CredentialStruct",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the list of credentials used in performing the lock operation. This shall be null if no credentials were involved."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "LockOperationError",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LockOperationType",
+              "type": "LockOperationTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of the lock operation that was performed."
+            },
+            {
+              "id": 1,
+              "name": "OperationSource",
+              "type": "OperationSourceEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the source of the lock operation that was performed."
+            },
+            {
+              "id": 2,
+              "name": "OperationError",
+              "type": "OperationErrorEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the lock operation error triggered when the operation was performed."
+            },
+            {
+              "id": 3,
+              "name": "UserIndex",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the lock UserIndex who performed the lock operation. This shall be null if there is no user id that can be determined for the given operation source."
+            },
+            {
+              "id": 4,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the fabric index of the fabric that performed the lock operation. This shall be null if there is no fabric that can be determined for the given operation source. This shall NOT be null if the operation source is \"Remote\"."
+            },
+            {
+              "id": 5,
+              "name": "SourceNode",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the Node ID of the node that performed the lock operation. This shall be null if there is no Node associated with the given operation source. This shall NOT be null if the operation source is \"Remote\"."
+            },
+            {
+              "id": 6,
+              "name": "Credentials",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "CredentialStruct",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the list of credentials used in performing the lock operation. This shall be null if no credentials were involved."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "LockUserChange",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LockDataType",
+              "type": "LockDataTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the lock data type that was changed."
+            },
+            {
+              "id": 1,
+              "name": "DataOperationType",
+              "type": "DataOperationTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the data operation performed on the lock data type changed."
+            },
+            {
+              "id": 2,
+              "name": "OperationSource",
+              "type": "OperationSourceEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the source of the user data change."
+            },
+            {
+              "id": 3,
+              "name": "UserIndex",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the lock UserIndex associated with the change (if any). This shall be null if there is no specific user associated with the data operation. This shall be 0xFFFE if all users are affected (e.g. Clear Users)."
+            },
+            {
+              "id": 4,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the fabric index of the fabric that performed the change (if any). This shall be null if there is no fabric that can be determined to have caused the change. This shall NOT be null if the operation source is \"Remote\"."
+            },
+            {
+              "id": 5,
+              "name": "SourceNode",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the Node ID that performed the change (if any). The Node ID of the node that performed the change. This shall be null if there was no Node involved in the change. This shall NOT be null if the operation source is \"Remote\"."
+            },
+            {
+              "id": 6,
+              "name": "DataIndex",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the index of the specific item that was changed (e.g. schedule, PIN, RFID, etc.) in the list of items identified by LockDataType. This shall be null if the LockDataType does not correspond to a list that can be indexed into (e.g. ProgrammingUser). This shall be 0xFFFE if all indices are affected (e.g. ClearPINCode, ClearRFIDCode, ClearWeekDaySchedule, ClearYearDaySchedule, etc.)."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "AlarmCodeEnum",

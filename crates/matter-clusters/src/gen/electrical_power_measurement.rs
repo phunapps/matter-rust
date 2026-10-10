@@ -64,6 +64,12 @@ pub mod attribute_id {
     pub const NEUTRAL_CURRENT: u32 = 0x0012;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `MeasurementPeriodRanges` (info priority).
+    pub const MEASUREMENT_PERIOD_RANGES: u32 = 0x00;
+}
+
 bitflags::bitflags! {
     /// `ElectricalPowerMeasurement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -1334,5 +1340,79 @@ pub fn decode_neutral_current(tlv: &[u8]) -> Result<Nullable<i64>, ClusterError>
         _ => Err(ClusterError::UnexpectedType {
             context: "NeutralCurrent",
         }),
+    }
+}
+
+/// Decoded `MeasurementPeriodRangesEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MeasurementPeriodRangesEvent {
+    /// Field Ranges (tag 0).
+    pub ranges: Vec<MeasurementRangeStruct>,
+}
+
+impl MeasurementPeriodRangesEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_ranges: Option<Vec<MeasurementRangeStruct>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::ContainerStart {
+                                kind: ContainerKind::Structure,
+                                ..
+                            }) => {
+                                out.push(MeasurementRangeStruct::decode_from(r)?);
+                            }
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_ranges = Some(out);
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            ranges: f_ranges.ok_or(ClusterError::MissingField("Ranges"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "MeasurementPeriodRangesEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
     }
 }

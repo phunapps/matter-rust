@@ -38,6 +38,14 @@ pub mod attribute_id {
     pub const CUMULATIVE_ENERGY_RESET: u32 = 0x0005;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `CumulativeEnergyMeasured` (info priority).
+    pub const CUMULATIVE_ENERGY_MEASURED: u32 = 0x00;
+    /// `PeriodicEnergyMeasured` (info priority).
+    pub const PERIODIC_ENERGY_MEASURED: u32 = 0x01;
+}
+
 bitflags::bitflags! {
     /// `ElectricalEnergyMeasurement` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -926,5 +934,127 @@ pub fn decode_cumulative_energy_reset(
         _ => Err(ClusterError::UnexpectedType {
             context: "CumulativeEnergyReset",
         }),
+    }
+}
+
+/// Decoded `CumulativeEnergyMeasuredEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct CumulativeEnergyMeasuredEvent {
+    /// Field EnergyImported (tag 0).
+    pub energy_imported: Option<EnergyMeasurementStruct>,
+    /// Field EnergyExported (tag 1).
+    pub energy_exported: Option<EnergyMeasurementStruct>,
+}
+
+impl CumulativeEnergyMeasuredEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_energy_imported: Option<EnergyMeasurementStruct> = None;
+        let mut f_energy_exported: Option<EnergyMeasurementStruct> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Structure,
+                }) => f_energy_imported = Some(EnergyMeasurementStruct::decode_from(r)?),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind: ContainerKind::Structure,
+                }) => f_energy_exported = Some(EnergyMeasurementStruct::decode_from(r)?),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            energy_imported: f_energy_imported,
+            energy_exported: f_energy_exported,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "CumulativeEnergyMeasuredEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `PeriodicEnergyMeasuredEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PeriodicEnergyMeasuredEvent {
+    /// Field EnergyImported (tag 0).
+    pub energy_imported: Option<EnergyMeasurementStruct>,
+    /// Field EnergyExported (tag 1).
+    pub energy_exported: Option<EnergyMeasurementStruct>,
+}
+
+impl PeriodicEnergyMeasuredEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_energy_imported: Option<EnergyMeasurementStruct> = None;
+        let mut f_energy_exported: Option<EnergyMeasurementStruct> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Structure,
+                }) => f_energy_imported = Some(EnergyMeasurementStruct::decode_from(r)?),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind: ContainerKind::Structure,
+                }) => f_energy_exported = Some(EnergyMeasurementStruct::decode_from(r)?),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            energy_imported: f_energy_imported,
+            energy_exported: f_energy_exported,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "PeriodicEnergyMeasuredEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
     }
 }
