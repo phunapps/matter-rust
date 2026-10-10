@@ -136,6 +136,9 @@ const EVENT_ALLOWLIST = new Set([
   'PumpConfigurationAndControl',
   'TimeSynchronization',
   'OtaSoftwareUpdateRequestor',
+  // M9-A3 B1, list-of-enum payloads:
+  'GeneralDiagnostics',
+  'PowerSource',
 ]);
 
 const excluded = [];

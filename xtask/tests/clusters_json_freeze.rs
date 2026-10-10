@@ -313,7 +313,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 7] = [
+const EVENT_CLUSTERS: [&str; 9] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -322,6 +322,9 @@ const EVENT_CLUSTERS: [&str; 7] = [
     "PumpConfigurationAndControl",
     "TimeSynchronization",
     "OtaSoftwareUpdateRequestor",
+    // M9-A3 B1, list-of-enum payloads:
+    "GeneralDiagnostics",
+    "PowerSource",
 ];
 
 #[test]

@@ -1230,3 +1230,112 @@ fn ota_requestor_events_decode() {
     assert_eq!(e.progress_percent, Nullable::Value(42));
     assert_eq!(e.platform_code, Nullable::Value(-7));
 }
+
+// ---- M9-A3 B1: events, list-of-enum shapes ----------------------------------
+
+#[test]
+fn general_diagnostics_events_decode() {
+    use gen::general_diagnostics::{
+        event_id as ev, BootReasonEnum, BootReasonEvent, HardwareFaultChangeEvent,
+        HardwareFaultEnum, NetworkFaultChangeEvent, NetworkFaultEnum, RadioFaultChangeEvent,
+        RadioFaultEnum,
+    };
+    assert_eq!(ev::HARDWARE_FAULT_CHANGE, 0x00);
+    assert_eq!(ev::RADIO_FAULT_CHANGE, 0x01);
+    assert_eq!(ev::NETWORK_FAULT_CHANGE, 0x02);
+    assert_eq!(ev::BOOT_REASON, 0x03);
+    // HardwareFault and NetworkFault use the lists chip's all-clusters
+    // fault injection sends (`OnGeneralFaultEventHandler`): hardware
+    // previous [Radio, PowerSource] → current [Radio, Sensor, PowerSource,
+    // UserInterfaceFault] = [1, 5] → [1, 2, 5, 8]. RadioFault adds an empty list.
+    let faults = |current: &[u64], previous: &[u64]| {
+        let (current, previous) = (current.to_vec(), previous.to_vec());
+        struct_of(&move |w| {
+            w.start_array(Tag::Context(0)).unwrap();
+            for v in &current {
+                w.put_uint(Tag::Anonymous, *v).unwrap();
+            }
+            w.end_container().unwrap();
+            w.start_array(Tag::Context(1)).unwrap();
+            for v in &previous {
+                w.put_uint(Tag::Anonymous, *v).unwrap();
+            }
+            w.end_container().unwrap();
+        })
+    };
+    let e = HardwareFaultChangeEvent::decode(&faults(&[1, 2, 5, 8], &[1, 5])).unwrap();
+    assert_eq!(
+        e.current,
+        [1, 2, 5, 8].map(HardwareFaultEnum::from_raw).to_vec()
+    );
+    assert_eq!(e.previous, [1, 5].map(HardwareFaultEnum::from_raw).to_vec());
+    let e = RadioFaultChangeEvent::decode(&faults(&[1, 3], &[])).unwrap();
+    assert_eq!(e.current, [1, 3].map(RadioFaultEnum::from_raw).to_vec());
+    assert_eq!(e.previous, []);
+    let e = NetworkFaultChangeEvent::decode(&faults(&[1, 2, 3], &[1, 2])).unwrap();
+    assert_eq!(
+        e.current,
+        [1, 2, 3].map(NetworkFaultEnum::from_raw).to_vec()
+    );
+    assert_eq!(e.previous, [1, 2].map(NetworkFaultEnum::from_raw).to_vec());
+    let e = BootReasonEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap(); // PowerOnReboot
+    }))
+    .unwrap();
+    assert_eq!(e.boot_reason, BootReasonEnum::from_raw(1));
+}
+
+#[test]
+fn power_source_fault_events_decode() {
+    use gen::power_source::{
+        event_id as ev, BatChargeFaultChangeEvent, BatChargeFaultEnum, BatFaultChangeEvent,
+        BatFaultEnum, WiredFaultChangeEvent, WiredFaultEnum,
+    };
+    assert_eq!(ev::WIRED_FAULT_CHANGE, 0x00);
+    assert_eq!(ev::BAT_FAULT_CHANGE, 0x01);
+    assert_eq!(ev::BAT_CHARGE_FAULT_CHANGE, 0x02);
+    let pair = |current: u64, previous: Option<u64>| {
+        struct_of(&move |w| {
+            w.start_array(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Anonymous, current).unwrap();
+            w.end_container().unwrap();
+            w.start_array(Tag::Context(1)).unwrap();
+            if let Some(p) = previous {
+                w.put_uint(Tag::Anonymous, p).unwrap();
+            }
+            w.end_container().unwrap();
+        })
+    };
+    let e = WiredFaultChangeEvent::decode(&pair(1, None)).unwrap();
+    assert_eq!(e.current, vec![WiredFaultEnum::from_raw(1)]);
+    assert_eq!(e.previous, []);
+    let e = BatFaultChangeEvent::decode(&pair(2, Some(1))).unwrap();
+    assert_eq!(e.current, vec![BatFaultEnum::from_raw(2)]);
+    assert_eq!(e.previous, vec![BatFaultEnum::from_raw(1)]);
+    let e = BatChargeFaultChangeEvent::decode(&pair(3, None)).unwrap();
+    assert_eq!(e.current, vec![BatChargeFaultEnum::from_raw(3)]);
+}
+
+#[test]
+fn list_of_enum_event_missing_list_is_an_error() {
+    use matter_clusters::error::ClusterError;
+    // Both lists are mandatory in 1.4.2: a missing list is MissingField,
+    // never an empty-list default (an empty list is a different statement).
+    let only_current = struct_of(&|w| {
+        w.start_array(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Anonymous, 1).unwrap();
+        w.end_container().unwrap();
+    });
+    assert!(matches!(
+        gen::general_diagnostics::HardwareFaultChangeEvent::decode(&only_current),
+        Err(ClusterError::MissingField("Previous"))
+    ));
+    assert!(matches!(
+        gen::power_source::BatFaultChangeEvent::decode(&only_current),
+        Err(ClusterError::MissingField("Previous"))
+    ));
+    assert!(matches!(
+        gen::general_diagnostics::BootReasonEvent::decode(&struct_of(&|_| {})),
+        Err(ClusterError::MissingField("BootReason"))
+    ));
+}

@@ -55,6 +55,18 @@ pub mod attribute_id {
     pub const TEST_EVENT_TRIGGERS_ENABLED: u32 = 0x0008;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `HardwareFaultChange` (critical priority).
+    pub const HARDWARE_FAULT_CHANGE: u32 = 0x00;
+    /// `RadioFaultChange` (critical priority).
+    pub const RADIO_FAULT_CHANGE: u32 = 0x01;
+    /// `NetworkFaultChange` (critical priority).
+    pub const NETWORK_FAULT_CHANGE: u32 = 0x02;
+    /// `BootReason` (critical priority).
+    pub const BOOT_REASON: u32 = 0x03;
+}
+
 bitflags::bitflags! {
     /// `GeneralDiagnostics` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -884,6 +896,378 @@ impl PayloadTestResponse {
             _ => {
                 return Err(ClusterError::UnexpectedType {
                     context: "PayloadTestResponse",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `HardwareFaultChangeEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct HardwareFaultChangeEvent {
+    /// Field Current (tag 0).
+    pub current: Vec<HardwareFaultEnum>,
+    /// Field Previous (tag 1).
+    pub previous: Vec<HardwareFaultEnum>,
+}
+
+impl HardwareFaultChangeEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_current: Option<Vec<HardwareFaultEnum>> = None;
+        let mut f_previous: Option<Vec<HardwareFaultEnum>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(HardwareFaultEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Current"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_current = Some(out);
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(HardwareFaultEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Previous"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_previous = Some(out);
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            current: f_current.ok_or(ClusterError::MissingField("Current"))?,
+            previous: f_previous.ok_or(ClusterError::MissingField("Previous"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "HardwareFaultChangeEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `RadioFaultChangeEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct RadioFaultChangeEvent {
+    /// Field Current (tag 0).
+    pub current: Vec<RadioFaultEnum>,
+    /// Field Previous (tag 1).
+    pub previous: Vec<RadioFaultEnum>,
+}
+
+impl RadioFaultChangeEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_current: Option<Vec<RadioFaultEnum>> = None;
+        let mut f_previous: Option<Vec<RadioFaultEnum>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(RadioFaultEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Current"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_current = Some(out);
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(RadioFaultEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Previous"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_previous = Some(out);
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            current: f_current.ok_or(ClusterError::MissingField("Current"))?,
+            previous: f_previous.ok_or(ClusterError::MissingField("Previous"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "RadioFaultChangeEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `NetworkFaultChangeEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct NetworkFaultChangeEvent {
+    /// Field Current (tag 0).
+    pub current: Vec<NetworkFaultEnum>,
+    /// Field Previous (tag 1).
+    pub previous: Vec<NetworkFaultEnum>,
+}
+
+impl NetworkFaultChangeEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_current: Option<Vec<NetworkFaultEnum>> = None;
+        let mut f_previous: Option<Vec<NetworkFaultEnum>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(NetworkFaultEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Current"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_current = Some(out);
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(NetworkFaultEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Previous"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_previous = Some(out);
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            current: f_current.ok_or(ClusterError::MissingField("Current"))?,
+            previous: f_previous.ok_or(ClusterError::MissingField("Previous"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "NetworkFaultChangeEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `BootReasonEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BootReasonEvent {
+    /// Field BootReason (tag 0).
+    pub boot_reason: BootReasonEnum,
+}
+
+impl BootReasonEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_boot_reason: Option<BootReasonEnum> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_boot_reason = Some(BootReasonEnum::from_raw(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("BootReason"))?,
+                    ))
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            boot_reason: f_boot_reason.ok_or(ClusterError::MissingField("BootReason"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "BootReasonEvent",
                 })
             }
         }

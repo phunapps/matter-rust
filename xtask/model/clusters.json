@@ -205,12 +205,6 @@
         "reason": "disallowed"
       },
       {
-        "cluster": "GeneralDiagnostics",
-        "element": "4 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
         "cluster": "GroupKeyManagement",
         "element": "KeySetReadAllIndices.DoNotUse",
         "kind": "command-field",
@@ -221,12 +215,6 @@
         "element": "MonitoringRegistrationStruct.Key",
         "kind": "struct-field",
         "reason": "no readable type (write-only/sensitive)"
-      },
-      {
-        "cluster": "PowerSource",
-        "element": "3 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "PumpConfigurationAndControl",
@@ -3736,7 +3724,89 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "WiredFaultChange",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "WiredFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per ActiveWiredFaults."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "WiredFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per ActiveWiredFaults."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "BatFaultChange",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "BatFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per ActiveBatFaults."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "BatFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per ActiveBatFaults."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "BatChargeFaultChange",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "BatChargeFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per ActiveBatChargeFaults."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "BatChargeFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per ActiveBatChargeFaults."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "BatApprovedChemistryEnum",
@@ -4781,7 +4851,105 @@
           ]
         }
       ],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "HardwareFaultChange",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "HardwareFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per HardwareFaultEnum."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "HardwareFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per HardwareFaultEnum."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "RadioFaultChange",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "RadioFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per RadioFaultEnum."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "RadioFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per RadioFaultEnum."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "NetworkFaultChange",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "NetworkFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per NetworkFaultEnum."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "NetworkFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per NetworkFaultEnum."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "BootReason",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "BootReason",
+              "type": "BootReasonEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the reason for this BootReason event."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "BootReasonEnum",
