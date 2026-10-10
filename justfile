@@ -171,7 +171,8 @@ integration:
 integration-lock:
     cargo run -p xtask -- integration lock
 
-# Build + launch evse-app and run the Electrical* integration tests.
+# Build + launch evse-app and run the Electrical*, energy-mode and EnergyEvse /
+# DeviceEnergyManagement / PowerTopology integration tests (local only).
 integration-energy:
     cargo run -p xtask -- integration evse
 

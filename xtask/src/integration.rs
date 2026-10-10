@@ -61,9 +61,10 @@ struct AppSpec {
     /// If set, this fixed setup QR is used; if `None`, the device's QR is parsed
     /// from the app log (keeps the proven all-clusters path on its known QR).
     fixed_qr: Option<&'static str>,
-    /// If set, `cargo test` is restricted to this single `--test <name>` binary
-    /// (so a minimal DUT doesn't run the all-clusters cluster tests).
-    test_filter: Option<&'static str>,
+    /// The `--test <name>` binaries `cargo test` is restricted to, so a
+    /// minimal DUT doesn't run the all-clusters cluster tests. Empty: every
+    /// test binary (all-clusters).
+    tests: &'static [&'static str],
     /// Extra CLI args passed to the DUT after `--KVS <path>` (default `&[]`).
     /// e.g. lit-icd-app's short ICD timers so a Check-In is prompt.
     extra_args: &'static [&'static str],
@@ -89,7 +90,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "all-clusters",
             binary: "chip-all-clusters-app",
             fixed_qr: Some("MT:-24J042C00KA0648G00"),
-            test_filter: None,
+            tests: &[],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -100,7 +101,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "lock",
             binary: "chip-lock-app",
             fixed_qr: None,
-            test_filter: Some("clusters_door_lock"),
+            tests: &["clusters_door_lock"],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -111,7 +112,9 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "evse",
             binary: "chip-evse-app",
             fixed_qr: None,
-            test_filter: Some("clusters_electrical"),
+            // M9-A3 B5: EnergyEvse, DeviceEnergyManagement and PowerTopology
+            // in clusters_evse, next to the Electrical* and energy-mode tests.
+            tests: &["clusters_electrical", "clusters_evse"],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -127,7 +130,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "rvc",
             binary: "chip-rvc-app",
             fixed_qr: None,
-            test_filter: Some("clusters_rvc"),
+            tests: &["clusters_rvc"],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -144,7 +147,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "microwave-oven",
             binary: "chip-microwave-oven-app",
             fixed_qr: None,
-            test_filter: Some("clusters_microwave_oven"),
+            tests: &["clusters_microwave_oven"],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -155,7 +158,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "lit-icd",
             binary: "lit-icd-app",
             fixed_qr: None,
-            test_filter: Some("icd_checkin"),
+            tests: &["icd_checkin"],
             // Short ICD timers so the device goes idle ~1s after we go quiet and
             // checks in on a 15s cycle (defaults are 10s active / 3600s idle).
             // chip requires activeModeDuration(ms) <= idleModeDuration(s).
@@ -177,7 +180,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "ota-requestor",
             binary: "chip-ota-requestor-app",
             fixed_qr: None,
-            test_filter: Some("ota_flow"),
+            tests: &["ota_flow"],
             // Without --autoApplyImage the app stops after the BDX download
             // (StateTransition -> idle) and never sends ApplyUpdateRequest /
             // NotifyUpdateApplied, so the provider-side flow can't complete.
@@ -733,7 +736,7 @@ fn run_tests(
     cmd.args(["test", "-p", "integration-tests", "--no-fail-fast"]);
     // Minimal DUTs run only their own test binary (so they don't execute the
     // all-clusters cluster tests against an app that lacks those clusters).
-    if let Some(test) = spec.test_filter {
+    for test in spec.tests {
         cmd.args(["--test", test]);
     }
     cmd.args(["--", "--nocapture", "--test-threads=1"]);
@@ -811,7 +814,7 @@ mod tests {
             (spec.name, spec.target_suffix, spec.binary),
             ("rvc", "rvc", "chip-rvc-app")
         );
-        assert_eq!(spec.test_filter, Some("clusters_rvc"));
+        assert_eq!(spec.tests, ["clusters_rvc"]);
         assert_eq!(spec.fixed_qr, None);
         assert_eq!(spec.events, EventStimulus::TriggersAndAppPipe);
         assert_eq!(
@@ -841,11 +844,26 @@ mod tests {
                 "chip-microwave-oven-app"
             )
         );
-        assert_eq!(spec.test_filter, Some("clusters_microwave_oven"));
+        assert_eq!(spec.tests, ["clusters_microwave_oven"]);
         assert_eq!(spec.fixed_qr, None);
         assert_eq!(spec.events, EventStimulus::None);
         assert!(!spec.needs_ota_image && !spec.linux_platform_mdns);
         assert_eq!(launch_args(&spec, None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn evse_host_runs_its_electrical_and_evse_suites_with_triggers() {
+        // M9-A3 B5: the EnergyEvse / DEM / PowerTopology tests are their own
+        // binary; evse-app runs it after the B1/B2 Electrical* and mode tests.
+        let spec = app_spec(Some("evse")).unwrap();
+        assert_eq!(spec.tests, ["clusters_electrical", "clusters_evse"]);
+        assert_eq!(spec.events, EventStimulus::TestEventTriggers);
+        assert_eq!(
+            launch_args(&spec, None),
+            ["--enable-key", "00112233445566778899aabbccddeeff"]
+        );
+        // all-clusters runs every test binary.
+        assert_eq!(app_spec(None).unwrap().tests, Vec::<&str>::new());
     }
 
     #[test]
