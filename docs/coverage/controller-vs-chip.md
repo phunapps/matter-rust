@@ -119,7 +119,7 @@ network commissioning, OTA/BDX transfer, ICD, BLE/Thread transport.
 | LevelControl MoveToLevelWithOnOff (M9-A3 B2 encoder fix: the regenerated encoder turns the light on at level 90) | `clusters_level_control::level_control_move_to_level_with_on_off_turns_on` | ✓-live |
 | LevelControl MoveToLevelWithOnOff with the old empty payload (`15 18`): chip answers Success and leaves the light off at MinLevel, the released bug's documented impact | `clusters_level_control::level_control_move_to_level_with_on_off_empty_payload_turns_off` | ✓-live |
 | OvenMode, LaundryWasherMode, RefrigeratorAndTemperatureControlledCabinetMode, RvcRunMode, RvcCleanMode, DishwasherMode (attributes + ChangeToMode); MicrowaveOvenMode (attributes) | `clusters_modes_alarms::mode_base_clusters_decode_and_change_to_current_mode` | ✓-live |
-| EnergyEvseMode, WaterHeaterMode, DeviceEnergyManagementMode on all-clusters (served at v1.4.2.0 only: nightly) | `clusters_modes_alarms::energy_mode_clusters_decode_where_served` | ✓-live where served |
+| EnergyEvseMode, WaterHeaterMode, DeviceEnergyManagementMode on all-clusters (required where the checkout's `all-clusters-app.matter` serves them on ep1) | `clusters_modes_alarms::energy_mode_clusters_decode_where_served` | ✓-live on the nightly (v1.4.2.0); skipped on local master, which does not serve them |
 | ModeBase ChangeToMode to an unsupported mode (no StatusText; spec §3.1) | `clusters_modes_alarms::change_to_an_unsupported_mode_decodes_without_status_text` | ✓-live |
 | ModeSelect (attributes + ChangeToMode) | `clusters_modes_alarms::mode_select_decodes_and_changes_to_current_mode` | ✓-live |
 | DishwasherAlarm (attributes + Reset → Notify event) | `clusters_modes_alarms::dishwasher_alarm_reset_emits_notify` | ✓-live |

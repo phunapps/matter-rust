@@ -7,7 +7,54 @@ use anyhow::{bail, Context, Result};
 use matter_clusters::error::ClusterError;
 use matter_controller::{CommandPath, ImStatus, InvokeResult, Node, ReadPath};
 
+use crate::dut::DutConfig;
 use crate::events::payload_tlv;
+
+/// The all-clusters app's endpoint configuration (ZAP's `.matter` IDL),
+/// relative to the connectedhomeip checkout.
+const ALL_CLUSTERS_MATTER: &str =
+    "examples/all-clusters-app/all-clusters-common/all-clusters-app.matter";
+
+/// Whether the all-clusters app built from `cfg.chip_root` serves cluster
+/// `name` (its `.matter` name, e.g. `WaterHeaterMode`) on `endpoint`,
+/// according to that checkout's `all-clusters-app.matter`.
+///
+/// For a cluster whose presence differs between the chip releases the
+/// harness runs against: v1.4.2.0 (the nightly's pin) serves
+/// `EnergyEvseMode`, `WaterHeaterMode` and `DeviceEnergyManagementMode` on
+/// endpoint 1, master does not. A test that asks the source can require the
+/// cluster where it is served, instead of passing vacuously whenever the
+/// Descriptor leaves it out. Like
+/// [`crate::events::all_clusters_pipe_supports`], this assumes the binary was
+/// built from that checkout.
+///
+/// # Errors
+///
+/// If the file cannot be read or has no `endpoint <endpoint> {` block: a
+/// moved or reshaped file must fail the test, not quietly drop coverage.
+pub fn all_clusters_serves(cfg: &DutConfig, endpoint: u16, name: &str) -> Result<bool> {
+    let path = cfg.chip_root.join(ALL_CLUSTERS_MATTER);
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("read all-clusters endpoint config {}", path.display()))?;
+    endpoint_serves(&source, endpoint, name).with_context(|| format!("in {}", path.display()))
+}
+
+/// Whether `.matter` `source` declares `server cluster <name>` inside its
+/// `endpoint <endpoint> {` block. The block runs to the `}` that closes it at
+/// column 0; the clusters inside are indented, so their own `}` never ends it.
+fn endpoint_serves(source: &str, endpoint: u16, name: &str) -> Result<bool> {
+    let header = format!("endpoint {endpoint} {{");
+    let mut lines = source.lines().skip_while(|l| l.trim_end() != header);
+    if lines.next().is_none() {
+        bail!("no `{header}` block");
+    }
+    Ok(lines.take_while(|l| !l.starts_with('}')).any(|l| {
+        l.trim_start()
+            .strip_prefix("server cluster ")
+            .and_then(|rest| rest.split([' ', '{', ';']).next())
+            == Some(name)
+    }))
+}
 
 /// Global attribute ids (`AcceptedCommandList`, `AttributeList`, ...,
 /// 0xF000..=0xFFFE) are left out of a sweep: `gen/globals.rs` covers them for
@@ -217,4 +264,72 @@ macro_rules! sweep_mode_base {
             "{name}: chip's server omits StatusText from this reply"
         );
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    /// The shape of `all-clusters-app.matter`: cluster definitions first,
+    /// then one block per endpoint whose clusters are indented by two.
+    const MATTER: &str = "\
+cluster WaterHeaterMode = 158 {
+  revision 1;
+}
+
+endpoint 0 {
+  device type ma_rootdevice = 22, version 1;
+
+  server cluster DeviceEnergyManagementMode {
+    callback attribute supportedModes;
+  }
+}
+endpoint 1 {
+  device type ma_onofflight = 256, version 1;
+
+  binding cluster OnOff;
+
+  server cluster EnergyEvseModeX {
+    callback attribute supportedModes;
+  }
+  server cluster WaterHeaterMode {
+    callback attribute supportedModes;
+    callback attribute currentMode;
+  }
+  client cluster EnergyEvseMode {
+  }
+}
+endpoint 2 {
+  server cluster EnergyEvseMode {
+  }
+}
+";
+
+    #[test]
+    fn a_server_cluster_on_the_endpoint_is_served() {
+        assert!(endpoint_serves(MATTER, 1, "WaterHeaterMode").unwrap());
+    }
+
+    #[test]
+    fn a_cluster_absent_from_the_endpoint_is_not_served() {
+        // Served on endpoint 0 only.
+        assert!(!endpoint_serves(MATTER, 1, "DeviceEnergyManagementMode").unwrap());
+        // A client on endpoint 1, a server only on endpoint 2, and a longer
+        // name that starts with it: none is a server on endpoint 1.
+        assert!(!endpoint_serves(MATTER, 1, "EnergyEvseMode").unwrap());
+        // Declared as a cluster definition, not served on endpoint 0.
+        assert!(!endpoint_serves(MATTER, 0, "WaterHeaterMode").unwrap());
+    }
+
+    #[test]
+    fn the_last_endpoint_block_is_searched_too() {
+        assert!(endpoint_serves(MATTER, 2, "EnergyEvseMode").unwrap());
+    }
+
+    #[test]
+    fn a_missing_endpoint_block_is_an_error() {
+        let err = endpoint_serves(MATTER, 9, "WaterHeaterMode").unwrap_err();
+        assert!(err.to_string().contains("endpoint 9 {"), "{err:#}");
+    }
 }

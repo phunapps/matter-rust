@@ -18,7 +18,9 @@
 //! HepaFilterMonitoring, ActivatedCarbonFilterMonitoring. At v1.4.2.0 (the
 //! nightly's pin) all-clusters also serves EnergyEvseMode, WaterHeaterMode and
 //! DeviceEnergyManagementMode on endpoint 1; master dropped them, so they are
-//! swept where the Descriptor lists them. evse-app covers EnergyEvseMode and
+//! required and swept where the checkout's `all-clusters-app.matter` serves
+//! them (the nightly is WaterHeaterMode's only live coverage), and skipped
+//! with a log line where it does not. evse-app covers EnergyEvseMode and
 //! DeviceEnergyManagementMode locally (`clusters_electrical.rs`).
 //! WaterTankLevelMonitoring has no chip host.
 //!
@@ -41,8 +43,8 @@ use integration_tests::events::{
     latest_event_number, payload_tlv, send_app_pipe, wait_for_event_after,
 };
 use integration_tests::sweep::{
-    attribute_ids, attribute_tlv, decode_every_attribute, invoke_for_response, invoke_for_status,
-    newer_than_codegen, ok, read_cluster_attributes,
+    all_clusters_serves, attribute_ids, attribute_tlv, decode_every_attribute, invoke_for_response,
+    invoke_for_status, newer_than_codegen, ok, read_cluster_attributes,
 };
 use matter_clusters::gen::{
     activated_carbon_filter_monitoring, descriptor, device_energy_management_mode,
@@ -106,12 +108,14 @@ async fn mode_base_clusters_decode_and_change_to_current_mode() {
     assert!(ids.contains(&mw::SUPPORTED_MODES) && ids.contains(&mw::CURRENT_MODE));
 }
 
-/// EnergyEvseMode, WaterHeaterMode and DeviceEnergyManagementMode, where
-/// endpoint 1's Descriptor ServerList has them (v1.4.2.0 all-clusters: yes;
-/// master: no). Each one present gets the full ModeBase sweep.
+/// EnergyEvseMode, WaterHeaterMode and DeviceEnergyManagementMode, where the
+/// chip checkout's `all-clusters-app.matter` serves them on endpoint 1
+/// (v1.4.2.0: yes; master: no). Each one the source serves must be in
+/// endpoint 1's Descriptor ServerList and gets the full ModeBase sweep, so a
+/// missing cluster fails instead of passing vacuously.
 #[tokio::test]
 async fn energy_mode_clusters_decode_where_served() {
-    let Some((_, controller, node_id)) = connect_all_clusters().await else {
+    let Some((cfg, controller, node_id)) = connect_all_clusters().await else {
         return;
     };
     let node = controller.node(node_id);
@@ -123,20 +127,32 @@ async fn energy_mode_clusters_decode_where_served() {
         descriptor::attribute_id::SERVER_LIST,
     ))
     .unwrap();
-    let served = |id: u32| {
-        let yes = servers.contains(&id);
-        if !yes {
-            eprintln!("[sweep] cluster {id:#06x} not served on ep{EP} by this chip build; skipped");
+    let served = |name: &str, id: u32| {
+        let listed = all_clusters_serves(&cfg, EP, name).expect("probe all-clusters-app.matter");
+        if listed {
+            assert!(
+                servers.contains(&id),
+                "{name} ({id:#06x}) is served on ep{EP} in all-clusters-app.matter but missing \
+                 from the Descriptor ServerList {servers:04x?}"
+            );
+        } else {
+            eprintln!(
+                "[sweep] {name} ({id:#06x}): not served on ep{EP} by this checkout's \
+                 all-clusters-app.matter; skipped"
+            );
         }
-        yes
+        listed
     };
-    if served(energy_evse_mode::CLUSTER_ID) {
+    if served("EnergyEvseMode", energy_evse_mode::CLUSTER_ID) {
         integration_tests::sweep_mode_base!(&node, EP, energy_evse_mode);
     }
-    if served(water_heater_mode::CLUSTER_ID) {
+    if served("WaterHeaterMode", water_heater_mode::CLUSTER_ID) {
         integration_tests::sweep_mode_base!(&node, EP, water_heater_mode);
     }
-    if served(device_energy_management_mode::CLUSTER_ID) {
+    if served(
+        "DeviceEnergyManagementMode",
+        device_energy_management_mode::CLUSTER_ID,
+    ) {
         integration_tests::sweep_mode_base!(&node, EP, device_energy_management_mode);
     }
 }
