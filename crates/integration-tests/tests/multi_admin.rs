@@ -138,6 +138,10 @@ async fn assert_other_fabric_entries_withheld(
     // Typed: the whole list decodes; B's entries are all-None, A's are full.
     let acl = access_control::decode_acl(&value_to_tlv(&acl_raw))
         .expect("an unfiltered Acl read with two fabrics must decode");
+    assert!(
+        acl.iter().any(|e| e.fabric_index == a_index),
+        "A's unfiltered Acl read holds none of A's own entries: {acl:?}"
+    );
     for e in &acl {
         let sensitive = [
             e.privilege.is_some(),
@@ -175,13 +179,27 @@ async fn assert_other_fabric_entries_withheld(
     // B's admin entry, and so B's access, intact.
     let own = node_a.read_acl().await.expect("A.read_acl with B present");
     assert!(
-        own.iter().all(|e| e.fabric_index != Some(b_index)),
-        "read_acl returned B's withheld entries: {own:?}"
+        !own.is_empty() && own.iter().all(|e| e.fabric_index != Some(b_index)),
+        "read_acl must return A's entries and none of B's: {own:?}"
     );
-    node_a
+    // `write_acl` is Ok even when the device rejects the write (the per-path
+    // status carries that), so the statuses must be checked explicitly.
+    let statuses = node_a
         .write_acl(&own)
         .await
         .expect("A.write_acl round trip");
+    assert!(
+        !statuses.is_empty() && statuses.iter().all(|(_, s)| matches!(s, ImStatus::Success)),
+        "A's write_acl round-trip statuses: {statuses:?}"
+    );
+    let reread = node_a
+        .read_acl()
+        .await
+        .expect("A.read_acl after the round trip");
+    assert_eq!(
+        reread, own,
+        "A's ACL changed across its own write_acl round trip"
+    );
     assert!(
         read_onoff(node_b).await.is_some(),
         "B lost access after A's ACL round trip"
