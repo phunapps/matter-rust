@@ -1135,12 +1135,21 @@ function checkConditionalRelaxations(clusterName, commands, datatypes) {
 // allowlisted; its model revision is not the one the entry was reviewed
 // against (a model upgrade may have restored or changed the element); an
 // element collides with a model element (same id or name; for a feature,
-// same bit or code); a type does not resolve; a key is unknown; or a
-// supplemented element is not in the dumped output. Every element is recorded
-// in meta.supplemented with its source, and scripts/chip-xml-conformance.py
-// checks each one against the 1.4.2 XML (class S).
+// same bit or code); an entry's shape is wrong (an unknown key, a missing
+// conformance, a direction other than request/response, a non-integer bit
+// or field id, a duplicate field id or name); its conformance, access or
+// quality text does not parse; a type does not resolve; a request's
+// `response` does not resolve; or a supplemented element is not in the
+// dumped output. Two load-time self-checks pin the collision and entry
+// rules. Every element is recorded in meta.supplemented with its source, and
+// scripts/chip-xml-conformance.py checks each one against the 1.4.2 XML
+// (class S).
 
 const supplemented = [];
+
+// Appended to every message that may mean a model upgrade restored the element.
+const MODEL_CARRIES_HINT =
+  'the model may now carry this element — remove the supplement entry and its .ack line';
 
 const SUPPLEMENT_KEYS = {
   cluster: new Set(['reviewedModelRevision', 'features', 'attributes', 'commands']),
@@ -1150,11 +1159,76 @@ const SUPPLEMENT_KEYS = {
   field: new Set(['id', 'name', 'type', 'entry', 'conformance', 'quality']),
 };
 
-function checkKeys(obj, kind, where) {
-  for (const k of Object.keys(obj)) {
-    if (!SUPPLEMENT_KEYS[kind].has(k)) fail(`supplement ${where}: unknown ${kind} key \`${k}\``);
+const isText = (v) => typeof v === 'string' && v.trim() !== '';
+
+// The first problem with the SHAPE of supplement entry `el` of `kind`, or null.
+// Pure. Each rule closes a silent path: a missing conformance would dump as
+// optional, an unknown direction as a request, a string bit or field id would
+// reach the model unchecked, and a duplicate field would shadow its twin.
+function supplementShapeProblem(kind, el) {
+  if (el === null || typeof el !== 'object' || Array.isArray(el)) return `a ${kind} must be an object`;
+  for (const k of Object.keys(el)) {
+    if (!SUPPLEMENT_KEYS[kind].has(k)) return `unknown ${kind} key \`${k}\``;
   }
-  if (kind !== 'cluster' && kind !== 'field' && !obj.source) fail(`supplement ${where}: missing \`source\``);
+  if (kind !== 'field' && !isText(el.source)) return 'missing `source`';
+  if (!isText(el.conformance)) return 'missing `conformance`';
+  if (kind === 'feature') {
+    if (!Number.isInteger(el.bit) || el.bit < 0 || el.bit > 31) {
+      return `bit must be an integer 0..31, got ${JSON.stringify(el.bit)}`;
+    }
+    return isText(el.code) ? null : 'missing `code`';
+  }
+  if (!isText(el.name)) return 'missing `name`';
+  if (kind === 'field') {
+    if (!Number.isInteger(el.id) || el.id < 0) return `field id must be a non-negative integer, got ${JSON.stringify(el.id)}`;
+  } else if (typeof el.id !== 'string' || !/^0x[0-9a-f]+$/i.test(el.id)) {
+    return `id must be a hex string, got ${JSON.stringify(el.id)}`;
+  }
+  if (kind === 'attribute' || kind === 'field') {
+    if (!isText(el.type)) return 'missing `type`';
+    if (kind === 'attribute' && el.type === 'list') return 'a list attribute needs an entry type, which the supplement does not support';
+    if (kind === 'field' && (el.type === 'list') !== (el.entry !== undefined)) return '`entry` goes with type `list`, and only with it';
+    return null;
+  }
+  // command
+  if (el.direction !== 'request' && el.direction !== 'response') {
+    return `direction must be "request" or "response", got ${JSON.stringify(el.direction)}`;
+  }
+  if (el.direction === 'request' && !isText(el.response)) return 'a request needs `response` ("status" or a response command name)';
+  if (el.direction === 'response' && el.response !== undefined) return 'a response takes no `response`';
+  if (el.fields !== undefined && !Array.isArray(el.fields)) return '`fields` must be an array';
+  const fields = el.fields || [];
+  for (const [i, f] of fields.entries()) {
+    const p = supplementShapeProblem('field', f);
+    if (p) return `field[${i}]: ${p}`;
+  }
+  for (const prop of ['id', 'name']) {
+    const seen = new Set();
+    for (const f of fields) {
+      if (seen.has(f[prop])) return `duplicate field ${prop} ${JSON.stringify(f[prop])}`;
+      seen.add(f[prop]);
+    }
+  }
+  return null;
+}
+
+// matter.js parses conformance, access, quality and constraint text leniently
+// and records what it could not parse on the aspect's `.errors`: `SCH &&& ???`
+// becomes `SCH & undefined`, an unknown access flag is dropped, an unknown
+// quality flag ignored. The first such error in `model` or its children
+// (command fields, a list's entry), or null.
+function aspectProblem(model) {
+  for (const aspect of ['conformance', 'access', 'quality', 'constraint']) {
+    const errors = model[aspect] && model[aspect].errors;
+    if (errors && errors.length) {
+      return `${model.name}: ${aspect} does not parse (${errors.map((e) => e.message).join('; ')})`;
+    }
+  }
+  for (const child of model.children) {
+    const p = aspectProblem(child);
+    if (p) return p;
+  }
+  return null;
 }
 
 // "0x0020" -> 32. Hex strings keep ids readable in JSON (as in the spec).
@@ -1163,8 +1237,7 @@ function hexId(text, where) {
   return Number(text);
 }
 
-function supplementField(f, where) {
-  checkKeys(f, 'field', where);
+function supplementField(f) {
   const children = f.entry ? [new FieldModel({ name: 'entry', type: f.entry })] : [];
   return new FieldModel({
     id: f.id,
@@ -1211,7 +1284,10 @@ function supplementCollision(cluster, kind, el) {
     ['command', { id: '0x7f', name: 'SetpointRaiseLower', direction: 'request' }, true],
   ]) {
     if ((supplementCollision(thermostat, kind, el) !== null) !== want) {
-      fail(`supplement self-check: ${kind} ${JSON.stringify(el)} should ${want ? '' : 'not '}collide with Thermostat`);
+      fail(
+        `supplement self-check: ${kind} ${JSON.stringify(el)} should ${want ? '' : 'not '}collide with Thermostat` +
+          ` (${MODEL_CARRIES_HINT}; or the check itself is broken)`,
+      );
     }
   }
 }
@@ -1239,8 +1315,63 @@ function buildSupplementElement(kind, el, where) {
     conformance: el.conformance,
     access: el.access,
     details: el.details,
-    children: (el.fields || []).map((f, i) => supplementField(f, `${where}.field[${i}]`)),
+    children: (el.fields || []).map(supplementField),
   });
+}
+
+// Build entry `el` of `kind` and check its parse errors: `{ model, problem }`.
+// Some malformed text (conformance `M &&`) makes matter.js throw instead of
+// recording `.errors`; that is a problem too, never a crash with no context.
+function buildChecked(kind, el, where) {
+  try {
+    const model = buildSupplementElement(kind, el, where);
+    return { model, problem: aspectProblem(model) };
+  } catch (e) {
+    return { model: null, problem: `does not parse (${e.message})` };
+  }
+}
+
+// Shape, then (on the built model) parse errors: the first problem with
+// entry `el` of `kind`, or null. Pure: the model is built but not attached.
+function supplementEntryProblem(kind, el, where) {
+  return supplementShapeProblem(kind, el) || buildChecked(kind, el, where).problem;
+}
+
+// Load-time self-check of supplementEntryProblem: each row must be rejected
+// (or accepted) as stated, so a validation rule cannot silently stop working.
+{
+  const attr = { id: '0x7f00', name: 'X', type: 'uint8', conformance: 'O', access: 'R V', quality: 'F', source: 's' };
+  const field = { id: 0, name: 'A', type: 'uint8', conformance: 'M' };
+  const req = { id: '0x7f', name: 'C', direction: 'request', response: 'status', conformance: 'O', access: 'O', source: 's', fields: [field] };
+  const feat = { bit: 30, code: 'XX', title: 'T', conformance: 'O', source: 's' };
+  const without = (o, k) => Object.fromEntries(Object.entries(o).filter(([key]) => key !== k));
+  for (const [kind, el, want] of [
+    ['attribute', attr, false],
+    ['attribute', without(attr, 'conformance'), true],
+    ['attribute', { ...attr, conformance: 'SCH &&& ???' }, true],
+    ['attribute', { ...attr, access: 'garbage!!' }, true],
+    ['attribute', { ...attr, quality: 'ZZZ' }, true],
+    ['attribute', { ...attr, typo: 1 }, true],
+    ['attribute', { ...attr, id: 32 }, true],
+    ['feature', feat, false],
+    ['feature', { ...feat, bit: '30' }, true],
+    ['feature', without(feat, 'conformance'), true],
+    ['command', req, false],
+    ['command', { ...req, direction: 'sideways' }, true],
+    ['command', without(req, 'response'), true],
+    ['command', { ...req, direction: 'response' }, true], // a response with `response`
+    ['command', { ...req, fields: [{ ...field, id: '0' }] }, true],
+    ['command', { ...req, fields: [field, { ...field, name: 'B' }] }, true], // duplicate id
+    ['command', { ...req, fields: [field, { ...field, id: 1 }] }, true], // duplicate name
+    ['command', { ...req, fields: [without(field, 'conformance')] }, true],
+    ['command', { ...req, fields: [{ ...field, conformance: 'M &&' }] }, true],
+    ['command', { ...req, fields: [{ ...field, type: 'list' }] }, true], // list without entry
+    ['command', { ...req, fields: [{ ...field, entry: 'uint8' }] }, true], // entry without list
+  ]) {
+    if ((supplementEntryProblem(kind, el, 'self-check') !== null) !== want) {
+      fail(`supplement self-check: ${kind} ${JSON.stringify(el)} should ${want ? '' : 'not '}be rejected`);
+    }
+  }
 }
 
 // Every type a supplemented element names must resolve in its cluster, or the
@@ -1255,6 +1386,20 @@ function checkSupplementTypes(model, where) {
   }
 }
 
+// A request's `response` must resolve once the whole cluster is merged (its
+// response may be supplemented after it): "status" to no response command, a
+// name to the response command of that name. Otherwise the command would dump
+// with `responseId: null` and the emitter would treat it as status-only.
+function responseProblem(model, el) {
+  if (el.direction !== 'request') return null;
+  const r = model.responseModel;
+  if (el.response === 'status') return r ? `response "status" resolves to command ${r.name}` : null;
+  if (!r || !r.isResponse || r.name !== el.response) {
+    return `response \`${el.response}\` does not resolve to a response command of the cluster`;
+  }
+  return null;
+}
+
 function applySupplement() {
   const doc = JSON.parse(readFileSync(SUPPLEMENT_PATH, 'utf8'));
   for (const k of Object.keys(doc)) {
@@ -1263,7 +1408,9 @@ function applySupplement() {
   for (const [clusterName, entry] of Object.entries(doc.clusters || {})) {
     const allow = ALLOWLIST.find((e) => e.name === clusterName);
     if (!allow) fail(`supplement: ${clusterName} is not allowlisted`);
-    checkKeys(entry, 'cluster', clusterName);
+    for (const k of Object.keys(entry)) {
+      if (!SUPPLEMENT_KEYS.cluster.has(k)) fail(`supplement ${clusterName}: unknown cluster key \`${k}\``);
+    }
     const cluster = Matter.clusters(allow.id);
     if (cluster.revision !== entry.reviewedModelRevision) {
       fail(
@@ -1271,18 +1418,22 @@ function applySupplement() {
       );
     }
     const featureMap = [...cluster.children].find((c) => c.id === 0xfffc);
+    const added = [];
     for (const [key, kind, label] of [
       ['features', 'feature', 'Feature'],
       ['attributes', 'attribute', 'Attribute'],
       ['commands', 'command', 'Command'],
     ]) {
+      if (entry[key] !== undefined && !Array.isArray(entry[key])) fail(`supplement ${clusterName}: \`${key}\` must be an array`);
       for (const el of entry[key] || []) {
-        const name = kind === 'feature' ? el.code : el.name;
+        const name = el && (kind === 'feature' ? el.code : el.name);
         const where = `${clusterName}.${label}.${name}`;
-        checkKeys(el, kind, where);
+        const shape = supplementShapeProblem(kind, el);
+        if (shape) fail(`supplement ${where}: ${shape}`);
         const collision = supplementCollision(cluster, kind, el);
-        if (collision) fail(`supplement ${where}: ${collision}`);
-        const model = buildSupplementElement(kind, el, where);
+        if (collision) fail(`supplement ${where}: ${collision} (${MODEL_CARRIES_HINT})`);
+        const { model, problem } = buildChecked(kind, el, where);
+        if (problem) fail(`supplement ${where}: ${problem}`);
         if (kind === 'feature') {
           if (!featureMap) fail(`supplement ${where}: ${clusterName} has no FeatureMap of its own`);
           featureMap.children.push(model);
@@ -1290,8 +1441,13 @@ function applySupplement() {
           cluster.children.push(model);
           checkSupplementTypes(model, where);
         }
+        if (kind === 'command') added.push([model, el, where]);
         supplemented.push({ cluster: clusterName, element: `${label}.${name}`, source: el.source });
       }
+    }
+    for (const [model, el, where] of added) {
+      const p = responseProblem(model, el);
+      if (p) fail(`supplement ${where}: ${p}`);
     }
   }
 }

@@ -26,9 +26,12 @@ Findings that FAIL the run (exit 1) unless allow-listed:
 Findings that always FAIL (never allow-listed: fix the supplement):
   S  an element clusters.json records in meta.supplemented (added by the dump
      from xtask/scripts/dump-model/supplement-1.4.json, not by the model) that
-     does not match 1.4.2 exactly: absent from 1.4.2 or from clusters.json, a
-     different id, bit, direction or name, a field set that differs, or a
-     field or attribute whose type, nullability or optionality differs
+     does not match 1.4.2 exactly: absent from 1.4.2 or from clusters.json
+     (or its cluster is), a different id, bit, direction or name, a field set
+     that differs, a field or attribute whose type, nullability or
+     optionality differs (a named enum, bitmap or struct must be the same
+     name, not just the same width), an attribute whose writability differs,
+     or a request whose response (status, or which response command) differs
 
 Reported without failing:
   MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
@@ -226,6 +229,17 @@ def xml_field(el):
     }
 
 
+def writable_of(el):
+    """True when the attribute is writable in 1.4.2 (`write="true"`, or
+    `write="optional"`, which matter.js models as `R[W]`: writable), False
+    when <access> states `write` otherwise, None when unstated (a derived
+    cluster's override inherits the base's)."""
+    access = el.find("access")
+    if access is None or access.get("write") is None:
+        return None
+    return access.get("write") in ("true", "optional")
+
+
 def xml_fields(el):
     out = {}
     for f in el.findall("field"):  # direct children only: never constraint refs
@@ -306,6 +320,7 @@ def own_tables(root):
                 "id": (parse_int(c.get("id"), f"{cname}: command id")
                        if c.get("id") is not None else None),
                 "direction": c.get("direction"),
+                "response": c.get("response"),
                 "conf": conformance_of(c),
                 "fields": xml_fields(c),
             }
@@ -324,7 +339,8 @@ def own_tables(root):
     if attrs is not None:
         for a in attrs.findall("attribute"):
             if a.get("id") is not None:
-                t["attr"][parse_int(a.get("id"), f"{cname}: attribute id")] = xml_field(a)
+                t["attr"][parse_int(a.get("id"), f"{cname}: attribute id")] = dict(
+                    xml_field(a), writable=writable_of(a))
     return t
 
 
@@ -721,11 +737,29 @@ def check_cluster(rep, c, xt, zap, meta):
 # ------------------------------------------------------------ supplement ---
 
 
+def is_named_type(mtok, xtok, dts, xt, zap):
+    """True when either token names a datatype (an enum, bitmap, struct or
+    scalar of the model cluster; an enum, bitmap, struct or number of the
+    1.4.2 cluster; a zap global struct, enum or bitmap) rather than a
+    primitive."""
+    if mtok in dts:
+        return True
+    key = norm(xtok)
+    return (any(key in xt[kind] for kind in ("enum", "bitmap", "struct", "number"))
+            or key in zap["struct"] or key in zap["int"])
+
+
 def same_type(mtok, xtok, dts, xt, zap):
-    """True when a model type token and a 1.4.2 one are the same type: equal
-    integer ranges when both resolve to integers, else the same name."""
-    mr = model_range(mtok, dts)
-    xr = xml_range(xtok, xt, zap)
+    """True when a model type token and a 1.4.2 one are the same type. A
+    named type must be the SAME name: two 8-bit enums or bitmaps share a
+    range but are not interchangeable, and neither is `uint8` for an 8-bit
+    enum. Primitive integer tokens (`uint16`, `temperature`) compare by
+    range, since 1.4.2 and the model spell some wire-identical types apart.
+    Anything else compares by name."""
+    if is_named_type(mtok, xtok, dts, xt, zap):
+        return norm(mtok) == norm(xtok)
+    mr = int_range(mtok)
+    xr = int_range(xtok)
     if mr is not None or xr is not None:
         return mr == xr
     return norm(mtok) == norm(xtok)
@@ -747,6 +781,26 @@ def field_mismatches(mf, xf, dts, xt, zap):
     if mf["optional"] != (xf.get("conf") != "M"):
         out.append(f"optional {mf['optional']} vs 1.4.2 conformance {xf.get('conf')}")
     return out
+
+
+def response_mismatches(mc, xc, xt):
+    """How a supplemented command's response link differs from 1.4.2: a
+    request answered by status (`response="Y"`) has no responseId; one
+    answered by a named response command has that command's id; a response
+    has no responseId."""
+    if xc.get("direction") == "responseFromServer":
+        return [] if mc["responseId"] is None else [f"responseId {mc['responseId']} on a response"]
+    xresp = xc.get("response")
+    if xresp == "Y":
+        want = None
+    else:
+        target = xt["cmd"].get(norm(xresp))
+        if target is None or target.get("direction") != "responseFromServer":
+            return [f"1.4.2 response {xresp!r} is not a response command"]
+        want = target.get("id")
+    if mc["responseId"] != want:
+        return [f"responseId {mc['responseId']} vs 1.4.2 response {xresp!r} (id {want})"]
+    return []
 
 
 def check_supplemented(rep, c, xt, zap, meta):
@@ -775,6 +829,8 @@ def check_supplemented(rep, c, xt, zap, meta):
                 problems.append("absent from " + ("clusters.json" if ma is None else "1.4.2"))
             else:
                 problems += field_mismatches(ma, xa, dts, xt, zap)
+                if ma["writable"] != bool(xa.get("writable")):
+                    problems.append(f"writable {ma['writable']} vs 1.4.2 {bool(xa.get('writable'))}")
         elif label == "Command":
             mc = next((x for x in c["commands"] if x["name"] == name), None)
             xc = xt["cmd"].get(norm(name))
@@ -784,6 +840,7 @@ def check_supplemented(rep, c, xt, zap, meta):
                 direction = "response" if xc.get("direction") == "responseFromServer" else "request"
                 if (mc["direction"], mc["id"]) != (direction, xc.get("id")):
                     problems.append(f"{mc['direction']} id {mc['id']} vs 1.4.2 {direction} id {xc.get('id')}")
+                problems += response_mismatches(mc, xc, xt)
                 xfields = xc.get("fields", {})
                 mids = sorted(f["id"] for f in mc["fields"])
                 if mids != sorted(xfields):
@@ -871,14 +928,23 @@ def main():
                 die(f"--cluster {name}: not a generated cluster in {args.model}")
         clusters = [c for c in clusters if c["name"] in args.cluster]
 
+    all_names = {c["name"] for c in model["clusters"]}
     xml = load_chip_xml(args.chip)
     zap = load_zap_globals(args.chip)
     rep = Report(load_allow(ALLOW_PATH), load_ack(ACK_PATH))
     meta = model.get("meta", {})
+    for s in meta.get("supplemented", []):
+        if s.get("cluster") not in all_names and (not args.cluster or s.get("cluster") in args.cluster):
+            rep.failing.append(f"S  {s.get('cluster')}.{s.get('element')}: not a cluster in clusters.json")
     for c in clusters:
         xt = xml.get(c["id"])
         if xt is None:
             rep.uncheckable.append(f"{c['name']} (cluster id {c['id']:#06x} not in 1.4.2)")
+            # A supplemented element must be verified, never skipped.
+            for s in meta.get("supplemented", []):
+                if s.get("cluster") == c["name"]:
+                    rep.failing.append(f"S  {c['name']}.{s.get('element')}: cluster id "
+                                       f"{c['id']:#06x} not in 1.4.2, so it cannot be verified")
             continue
         try:
             check_cluster(rep, c, xt, zap, meta)
