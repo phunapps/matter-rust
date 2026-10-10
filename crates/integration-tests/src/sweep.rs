@@ -5,7 +5,8 @@
 
 use anyhow::{bail, Context, Result};
 use matter_clusters::error::ClusterError;
-use matter_controller::{CommandPath, ImStatus, InvokeResult, Node, ReadPath};
+use matter_codec::TlvReader;
+use matter_controller::{AttributePath, CommandPath, ImStatus, InvokeResult, Node, ReadPath};
 
 use crate::dut::DutConfig;
 use crate::events::payload_tlv;
@@ -144,6 +145,22 @@ pub fn standard_attribute_ids(attrs: &[(u32, Vec<u8>)]) -> Vec<u32> {
         .collect()
 }
 
+/// Assert that a sweep read exactly the standard attribute ids `want`, in
+/// order ([`standard_attribute_ids`]: vendor attributes are left out). No
+/// fewer (a vacuous or partial sweep) and no more (an attribute the test does
+/// not know the host serves).
+///
+/// # Panics
+///
+/// When the standard ids read differ from `want`, naming `cluster`.
+pub fn assert_exact_attribute_ids(cluster: &str, attrs: &[(u32, Vec<u8>)], want: &[u32]) {
+    let got = standard_attribute_ids(attrs);
+    assert_eq!(
+        got, want,
+        "{cluster}: served attribute ids {got:04x?}, expected {want:04x?}"
+    );
+}
+
 /// The value TLV of attribute `id` in a sweep's results.
 ///
 /// # Panics
@@ -230,6 +247,27 @@ fn response_payload(
     }
 }
 
+/// Write one attribute with the value TLV a generated `encode_<attribute>`
+/// returned, and return the status the device answered for that path.
+///
+/// # Errors
+///
+/// A TLV the codec cannot read back, a transport error, or a response that is
+/// not exactly one status for `path`.
+pub async fn write_attribute(node: &Node, path: AttributePath, tlv: Vec<u8>) -> Result<ImStatus> {
+    let (_, value) = TlvReader::new(&tlv)
+        .read_value()
+        .context("read back the generated attribute TLV")?;
+    let statuses = node
+        .write(&[(path, value)])
+        .await
+        .with_context(|| format!("write {path:?}"))?;
+    match statuses.as_slice() {
+        [(p, s)] if *p == path => Ok(*s),
+        other => bail!("write {path:?}: expected one status for the path, got {other:?}"),
+    }
+}
+
 /// Invoke `path` with pre-encoded `fields` and return the bare status the
 /// device answered (a command with no response command).
 ///
@@ -310,6 +348,67 @@ macro_rules! sweep_mode_base {
             r.status_text, None,
             "{name}: chip's server omits StatusText from this reply"
         );
+    }};
+}
+
+/// Sweep one `OperationalState`-family cluster (M9-A3 B3: `OperationalState`,
+/// `OvenCavityOperationalState`, `RvcOperationalState`) on `$endpoint`: decode
+/// every attribute from a wildcard read, assert the standard ids served are
+/// exactly `$ids`, and evaluate to the sweep's `(id, tlv)` pairs for value
+/// checks. `$m` is the generated module, in scope at the call site.
+///
+/// Panics (it is a test helper) on any failure, naming the cluster.
+#[macro_export]
+macro_rules! sweep_operational_state {
+    ($node:expr, $endpoint:expr, $m:ident, $ids:expr) => {{
+        use $crate::sweep::{
+            assert_exact_attribute_ids, decode_every_attribute, newer_than_codegen, ok,
+        };
+        use $m::attribute_id as op;
+        let name = stringify!($m);
+        let attrs = decode_every_attribute($node, $endpoint, $m::CLUSTER_ID, |id, t| match id {
+            op::PHASE_LIST => ok($m::decode_phase_list(t)),
+            op::CURRENT_PHASE => ok($m::decode_current_phase(t)),
+            op::COUNTDOWN_TIME => ok($m::decode_countdown_time(t)),
+            op::OPERATIONAL_STATE_LIST => ok($m::decode_operational_state_list(t)),
+            op::OPERATIONAL_STATE => ok($m::decode_operational_state(t)),
+            op::OPERATIONAL_ERROR => ok($m::decode_operational_error(t)),
+            other => newer_than_codegen(name, other),
+        })
+        .await;
+        assert_exact_attribute_ids(name, &attrs, $ids);
+        attrs
+    }};
+}
+
+/// Invoke one `OperationalState`-family command (`$cmd`, a `command_id`
+/// constant; `$encode`, its generated encoder) on `$endpoint` and evaluate to
+/// the decoded `OperationalCommandResponse.CommandResponseState`. Every such
+/// command answers with that response, never a bare status
+/// (`OperationalStateCluster.cpp`; `operational-state-server.cpp` at
+/// v1.4.2.0).
+///
+/// Panics (it is a test helper) on a transport error, a bare status or an
+/// undecodable response, naming the command.
+#[macro_export]
+macro_rules! operational_command {
+    ($node:expr, $endpoint:expr, $m:ident, $cmd:ident, $encode:ident) => {{
+        let path = ::matter_controller::CommandPath {
+            endpoint: $endpoint,
+            cluster: $m::CLUSTER_ID,
+            command: $m::command_id::$cmd,
+        };
+        let resp = $crate::sweep::invoke_for_response(
+            $node,
+            path,
+            $m::$encode(),
+            $m::command_id::OPERATIONAL_COMMAND_RESPONSE,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{}.{}: {e:#}", stringify!($m), stringify!($cmd)));
+        $m::OperationalCommandResponse::decode(&resp)
+            .unwrap_or_else(|e| panic!("{}.{}: {e}", stringify!($m), stringify!($cmd)))
+            .command_response_state
     }};
 }
 
