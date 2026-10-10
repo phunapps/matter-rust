@@ -44,7 +44,7 @@ use integration_tests::events::{
 };
 use integration_tests::sweep::{
     all_clusters_serves, attribute_ids, attribute_tlv, decode_every_attribute, invoke_for_response,
-    invoke_for_status, newer_than_codegen, ok, read_cluster_attributes,
+    invoke_for_status, newer_than_codegen, ok, read_cluster_attributes, standard_attribute_ids,
 };
 use matter_clusters::gen::{
     activated_carbon_filter_monitoring, descriptor, device_energy_management_mode,
@@ -215,18 +215,20 @@ async fn mode_select_decodes_and_changes_to_current_mode() {
         other => newer_than_codegen("ModeSelect", other),
     })
     .await;
-    let ids = attribute_ids(&attrs);
-    for want in [
-        ms::DESCRIPTION,
-        ms::STANDARD_NAMESPACE,
-        ms::SUPPORTED_MODES,
-        ms::CURRENT_MODE,
-    ] {
-        assert!(
-            ids.contains(&want),
-            "ModeSelect {want:#06x} missing: {ids:04x?}"
-        );
-    }
+    // Both refs' all-clusters-app.matter serve all six; v1.4.2.0 adds the
+    // vendor attribute manufacturerExtension (0xFFF1_0001), left out here.
+    assert_eq!(
+        standard_attribute_ids(&attrs),
+        [
+            ms::DESCRIPTION,
+            ms::STANDARD_NAMESPACE,
+            ms::SUPPORTED_MODES,
+            ms::CURRENT_MODE,
+            ms::START_UP_MODE,
+            ms::ON_MODE,
+        ],
+        "ModeSelect"
+    );
     let tlv = |id| attribute_tlv(&attrs, id);
     assert_eq!(
         mode_select::decode_description(tlv(ms::DESCRIPTION)).unwrap(),
@@ -372,18 +374,20 @@ macro_rules! sweep_resource_monitoring {
             other => newer_than_codegen(stringify!($m), other),
         })
         .await;
-        let ids = attribute_ids(&attrs);
-        for want in [
-            rm::CONDITION,
-            rm::CHANGE_INDICATION,
-            rm::REPLACEMENT_PRODUCT_LIST,
-        ] {
-            assert!(
-                ids.contains(&want),
-                "{} {want:#06x}: {ids:04x?}",
-                stringify!($m)
-            );
-        }
+        // Both refs' all-clusters-app.matter serve all six.
+        assert_eq!(
+            standard_attribute_ids(&attrs),
+            [
+                rm::CONDITION,
+                rm::DEGRADATION_DIRECTION,
+                rm::CHANGE_INDICATION,
+                rm::IN_PLACE_INDICATOR,
+                rm::LAST_CHANGED_TIME,
+                rm::REPLACEMENT_PRODUCT_LIST,
+            ],
+            "{}",
+            stringify!($m)
+        );
         let products = $m::decode_replacement_product_list(attribute_tlv(
             &attrs,
             rm::REPLACEMENT_PRODUCT_LIST,

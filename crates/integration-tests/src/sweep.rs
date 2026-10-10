@@ -122,6 +122,28 @@ pub fn attribute_ids(attrs: &[(u32, Vec<u8>)]) -> Vec<u32> {
     attrs.iter().map(|(id, _)| *id).collect()
 }
 
+/// Whether `attribute` is manufacturer-specific: its MEI carries a non-zero
+/// vendor prefix in the upper 16 bits, where every standard attribute id has
+/// prefix 0. chip v1.4.2.0 all-clusters' `ModeSelect` serves one,
+/// `manufacturerExtension` (`0xFFF1_0001`).
+#[must_use]
+pub fn is_vendor_attribute(attribute: u32) -> bool {
+    attribute > 0xFFFF
+}
+
+/// The standard attribute ids of a sweep's results, in order: what
+/// [`attribute_ids`] returns minus vendor attributes
+/// ([`is_vendor_attribute`]), for an exact comparison with the ids the
+/// codegen knows. Which vendor attributes a device adds is its own business.
+#[must_use]
+pub fn standard_attribute_ids(attrs: &[(u32, Vec<u8>)]) -> Vec<u32> {
+    attrs
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| !is_vendor_attribute(*id))
+        .collect()
+}
+
 /// The value TLV of attribute `id` in a sweep's results.
 ///
 /// # Panics
@@ -145,16 +167,23 @@ pub fn ok<T>(r: Result<T, ClusterError>) -> Result<(), String> {
     r.map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// An attribute id the 1.4 codegen does not know (a 1.5-era chip may serve
-/// one): logged and skipped, never a failure. The callers assert the ids they
-/// do know were all read.
+/// An attribute id the 1.4 codegen does not know: a vendor attribute
+/// ([`is_vendor_attribute`]), or a standard one newer than the codegen (a
+/// 1.5-era chip may serve one). Logged as which it is and skipped, never a
+/// failure. The callers assert the ids they do know were all read.
 ///
 /// # Errors
 ///
 /// Never; the `Result` matches the decode-closure signature.
 #[allow(clippy::unnecessary_wraps)]
 pub fn newer_than_codegen(cluster: &str, attribute: u32) -> Result<(), String> {
-    eprintln!("[sweep] {cluster}: skipping attribute {attribute:#06x} unknown to the 1.4 codegen");
+    if is_vendor_attribute(attribute) {
+        eprintln!("[sweep] {cluster}: skipping vendor attribute {attribute:#010x}");
+    } else {
+        eprintln!(
+            "[sweep] {cluster}: skipping attribute {attribute:#06x} unknown to the 1.4 codegen"
+        );
+    }
     Ok(())
 }
 
@@ -164,21 +193,39 @@ pub fn newer_than_codegen(cluster: &str, attribute: u32) -> Result<(), String> {
 /// # Errors
 ///
 /// A transport error, a bare status instead of a response, or a response
-/// whose command id is not `response_command`.
+/// that is not `response_command` on `path`'s endpoint and cluster.
 pub async fn invoke_for_response(
     node: &Node,
     path: CommandPath,
     fields: Vec<u8>,
     response_command: u32,
 ) -> Result<Vec<u8>> {
-    match node.invoke_tlv(path, fields).await.context("invoke")? {
-        InvokeResult::Data { path: got, fields } if got.command == response_command => {
+    let result = node.invoke_tlv(path, fields).await.context("invoke")?;
+    response_payload(path, response_command, result)
+}
+
+/// The payload TLV of `result` when it is the response command
+/// `response_command` on the request `path`'s endpoint and cluster.
+fn response_payload(
+    path: CommandPath,
+    response_command: u32,
+    result: InvokeResult,
+) -> Result<Vec<u8>> {
+    match result {
+        InvokeResult::Data { path: got, fields }
+            if (got.endpoint, got.cluster, got.command)
+                == (path.endpoint, path.cluster, response_command) =>
+        {
             Ok(payload_tlv(&fields))
         }
         other => bail!(
-            "command {:#06x}/{:#04x}: expected response {response_command:#04x}, got {other:?}",
+            "ep{} command {:#06x}/{:#04x}: expected response {:#06x}/{response_command:#04x} \
+             on ep{}, got {other:?}",
+            path.endpoint,
             path.cluster,
-            path.command
+            path.command,
+            path.cluster,
+            path.endpoint
         ),
     }
 }
@@ -270,6 +317,7 @@ macro_rules! sweep_mode_base {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use matter_codec::Value;
 
     /// The shape of `all-clusters-app.matter`: cluster definitions first,
     /// then one block per endpoint whose clusters are indented by two.
@@ -325,6 +373,72 @@ endpoint 2 {
     #[test]
     fn the_last_endpoint_block_is_searched_too() {
         assert!(endpoint_serves(MATTER, 2, "EnergyEvseMode").unwrap());
+    }
+
+    const REQUEST: CommandPath = CommandPath {
+        endpoint: 1,
+        cluster: 0x0059,
+        command: 0x00,
+    };
+
+    fn response_at(endpoint: u16, cluster: u32, command: u32) -> InvokeResult {
+        InvokeResult::Data {
+            path: CommandPath {
+                endpoint,
+                cluster,
+                command,
+            },
+            fields: Value::Bool(true),
+        }
+    }
+
+    #[test]
+    fn the_matching_response_yields_its_payload() {
+        let got = response_payload(REQUEST, 0x01, response_at(1, 0x0059, 0x01)).unwrap();
+        assert_eq!(got, payload_tlv(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn a_response_with_another_command_id_is_refused() {
+        assert!(response_payload(REQUEST, 0x01, response_at(1, 0x0059, 0x02)).is_err());
+    }
+
+    #[test]
+    fn a_response_from_another_cluster_is_refused() {
+        let err = response_payload(REQUEST, 0x01, response_at(1, 0x0051, 0x01)).unwrap_err();
+        assert!(
+            err.to_string().contains("expected response 0x0059/0x01"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn a_response_from_another_endpoint_is_refused() {
+        let err = response_payload(REQUEST, 0x01, response_at(2, 0x0059, 0x01)).unwrap_err();
+        assert!(err.to_string().contains("on ep1"), "{err:#}");
+    }
+
+    #[test]
+    fn a_bare_status_is_refused() {
+        let r = InvokeResult::Status(ImStatus::Success);
+        assert!(response_payload(REQUEST, 0x01, r).is_err());
+    }
+
+    #[test]
+    fn a_vendor_prefixed_attribute_is_a_vendor_attribute() {
+        assert!(is_vendor_attribute(0xFFF1_0001));
+        assert!(is_vendor_attribute(0x0001_0000));
+        assert!(!is_vendor_attribute(0x0005));
+        assert!(!is_vendor_attribute(0xFFFC));
+    }
+
+    #[test]
+    fn standard_ids_leave_out_vendor_attributes() {
+        let attrs: Vec<(u32, Vec<u8>)> = [0x0000, 0x0005, 0xFFF1_0001]
+            .into_iter()
+            .map(|id| (id, Vec::new()))
+            .collect();
+        assert_eq!(standard_attribute_ids(&attrs), [0x0000, 0x0005]);
     }
 
     #[test]
