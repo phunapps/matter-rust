@@ -443,31 +443,6 @@ impl LandmarkInfoStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.landmark_tag))
-            .expect("infallible: vec writer");
-        match &self.relative_position_tag {
-            Nullable::Null => w.put_null(Tag::Context(1)).expect("infallible: vec writer"),
-            Nullable::Value(relative_position_tag) => {
-                w.put_uint(Tag::Context(1), u64::from(*relative_position_tag))
-                    .expect("infallible: vec writer");
-            }
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
 }
 
 impl LocationDescriptorStruct {
@@ -541,38 +516,6 @@ impl LocationDescriptorStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_utf8(Tag::Context(0), &self.location_name)
-            .expect("infallible: vec writer");
-        match &self.floor_number {
-            Nullable::Null => w.put_null(Tag::Context(1)).expect("infallible: vec writer"),
-            Nullable::Value(floor_number) => {
-                w.put_int(Tag::Context(1), i64::from(*floor_number))
-                    .expect("infallible: vec writer");
-            }
-        }
-        match &self.area_type {
-            Nullable::Null => w.put_null(Tag::Context(2)).expect("infallible: vec writer"),
-            Nullable::Value(area_type) => {
-                w.put_uint(Tag::Context(2), u64::from(*area_type))
-                    .expect("infallible: vec writer");
-            }
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
 }
 
 impl MapStruct {
@@ -626,26 +569,6 @@ impl MapStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.map_id))
-            .expect("infallible: vec writer");
-        w.put_utf8(Tag::Context(1), &self.name)
-            .expect("infallible: vec writer");
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 
@@ -734,44 +657,6 @@ impl ProgressStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.area_id))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(1), u64::from(self.status.to_raw()))
-            .expect("infallible: vec writer");
-        if let Some(total_operational_time) = &self.total_operational_time {
-            match total_operational_time {
-                Nullable::Null => w.put_null(Tag::Context(2)).expect("infallible: vec writer"),
-                Nullable::Value(total_operational_time) => {
-                    w.put_uint(Tag::Context(2), u64::from(*total_operational_time))
-                        .expect("infallible: vec writer");
-                }
-            }
-        }
-        if let Some(estimated_time) = &self.estimated_time {
-            match estimated_time {
-                Nullable::Null => w.put_null(Tag::Context(3)).expect("infallible: vec writer"),
-                Nullable::Value(estimated_time) => {
-                    w.put_uint(Tag::Context(3), u64::from(*estimated_time))
-                        .expect("infallible: vec writer");
-                }
-            }
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 

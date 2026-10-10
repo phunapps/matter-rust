@@ -31,3 +31,48 @@ fn all_real_clusters_generate_and_format() {
         );
     }
 }
+
+/// Every datatype struct the emitter gives `write_fields`/`encode`, as
+/// `(cluster, struct)`, sorted (M9-A3 B4 rule, `emit_codecs::struct_is_encoded`:
+/// reachable from a request command, or a scalar struct reachable from a
+/// writable attribute). A new entry is a new public encoder to review; a
+/// missing one is a breaking removal.
+const ENCODED_STRUCTS: [(&str, &str); 16] = [
+    ("AccessControl", "AccessControlExtensionStruct"),
+    ("AccessControl", "AccessControlTargetStruct"),
+    ("AccessControl", "AccessRestrictionStruct"),
+    ("AccessControl", "CommissioningAccessRestrictionEntryStruct"),
+    ("Binding", "TargetStruct"),
+    ("DoorLock", "CredentialStruct"),
+    ("GroupKeyManagement", "GroupKeyMapStruct"),
+    ("GroupKeyManagement", "GroupKeySetStruct"),
+    ("OtaSoftwareUpdateRequestor", "ProviderLocation"),
+    ("Thermostat", "PresetStruct"),
+    ("Thermostat", "ScheduleTransitionStruct"),
+    ("Thermostat", "WeeklyScheduleTransitionStruct"),
+    ("TimeSynchronization", "DSTOffsetStruct"),
+    ("TimeSynchronization", "FabricScopedTrustedTimeSourceStruct"),
+    ("TimeSynchronization", "TimeZoneStruct"),
+    ("UserLabel", "LabelStruct"),
+];
+
+#[test]
+fn encoders_exist_only_for_structs_a_client_sends() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
+        .expect("real model loads + validates");
+    let mut got: Vec<(&str, &str)> = model
+        .clusters
+        .iter()
+        .flat_map(|c| {
+            xtask::codegen::rustgen::emit_codecs::encoded_struct_names(c)
+                .into_iter()
+                .map(move |s| (c.name.as_str(), s))
+        })
+        .collect();
+    got.sort_unstable();
+    assert_eq!(got, ENCODED_STRUCTS);
+}

@@ -353,31 +353,6 @@ impl HarmonicMeasurementStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.order))
-            .expect("infallible: vec writer");
-        match &self.measurement {
-            Nullable::Null => w.put_null(Tag::Context(1)).expect("infallible: vec writer"),
-            Nullable::Value(measurement) => {
-                w.put_int(Tag::Context(1), i64::from(*measurement))
-                    .expect("infallible: vec writer");
-            }
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
 }
 
 impl MeasurementAccuracyRangeStruct {
@@ -498,50 +473,6 @@ impl MeasurementAccuracyRangeStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_int(Tag::Context(0), i64::from(self.range_min))
-            .expect("infallible: vec writer");
-        w.put_int(Tag::Context(1), i64::from(self.range_max))
-            .expect("infallible: vec writer");
-        if let Some(percent_max) = &self.percent_max {
-            w.put_uint(Tag::Context(2), u64::from(*percent_max))
-                .expect("infallible: vec writer");
-        }
-        if let Some(percent_min) = &self.percent_min {
-            w.put_uint(Tag::Context(3), u64::from(*percent_min))
-                .expect("infallible: vec writer");
-        }
-        if let Some(percent_typical) = &self.percent_typical {
-            w.put_uint(Tag::Context(4), u64::from(*percent_typical))
-                .expect("infallible: vec writer");
-        }
-        if let Some(fixed_max) = &self.fixed_max {
-            w.put_uint(Tag::Context(5), u64::from(*fixed_max))
-                .expect("infallible: vec writer");
-        }
-        if let Some(fixed_min) = &self.fixed_min {
-            w.put_uint(Tag::Context(6), u64::from(*fixed_min))
-                .expect("infallible: vec writer");
-        }
-        if let Some(fixed_typical) = &self.fixed_typical {
-            w.put_uint(Tag::Context(7), u64::from(*fixed_typical))
-                .expect("infallible: vec writer");
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 
@@ -803,60 +734,6 @@ impl MeasurementRangeStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.measurement_type.to_raw()))
-            .expect("infallible: vec writer");
-        w.put_int(Tag::Context(1), i64::from(self.min))
-            .expect("infallible: vec writer");
-        w.put_int(Tag::Context(2), i64::from(self.max))
-            .expect("infallible: vec writer");
-        if let Some(start_timestamp) = &self.start_timestamp {
-            w.put_uint(Tag::Context(3), u64::from(*start_timestamp))
-                .expect("infallible: vec writer");
-        }
-        if let Some(end_timestamp) = &self.end_timestamp {
-            w.put_uint(Tag::Context(4), u64::from(*end_timestamp))
-                .expect("infallible: vec writer");
-        }
-        if let Some(min_timestamp) = &self.min_timestamp {
-            w.put_uint(Tag::Context(5), u64::from(*min_timestamp))
-                .expect("infallible: vec writer");
-        }
-        if let Some(max_timestamp) = &self.max_timestamp {
-            w.put_uint(Tag::Context(6), u64::from(*max_timestamp))
-                .expect("infallible: vec writer");
-        }
-        if let Some(start_systime) = &self.start_systime {
-            w.put_uint(Tag::Context(7), u64::from(*start_systime))
-                .expect("infallible: vec writer");
-        }
-        if let Some(end_systime) = &self.end_systime {
-            w.put_uint(Tag::Context(8), u64::from(*end_systime))
-                .expect("infallible: vec writer");
-        }
-        if let Some(min_systime) = &self.min_systime {
-            w.put_uint(Tag::Context(9), u64::from(*min_systime))
-                .expect("infallible: vec writer");
-        }
-        if let Some(max_systime) = &self.max_systime {
-            w.put_uint(Tag::Context(10), u64::from(*max_systime))
-                .expect("infallible: vec writer");
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 

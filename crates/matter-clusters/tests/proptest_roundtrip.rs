@@ -137,13 +137,13 @@ proptest! {
     // ---- M9-A3 B2: ModeBase-derived clusters -------------------------------
 
     #[test]
-    fn mode_tag_struct_reencodes(mfg in proptest::option::of(any::<u16>()), value in any::<u16>()) {
-        // ModeTagStruct has scalar fields only, so the emitter gives it
-        // write_fields/encode as well as decode. It is #[non_exhaustive], so it
-        // is built by decoding chip-shaped bytes; decode -> encode must give the
-        // same bytes back. Covers omitting the optional MfgCode and an enum16
-        // value outside the codegen's known tags (ModeTag::Unknown). All nine
-        // ModeBase derivatives emit this struct from one template.
+    fn mode_tag_struct_decodes(mfg in proptest::option::of(any::<u16>()), value in any::<u16>()) {
+        // ModeTagStruct (an optional MfgCode and an enum16 value) as chip
+        // sends it in SupportedModes: every field decodes, the optional MfgCode
+        // omitted or present and a value outside the codegen's known tags kept
+        // (ModeTag::Unknown). All nine ModeBase derivatives emit this struct
+        // from one template. Decode-only since M9-A3 B4: nothing a client
+        // sends carries it, so it has no encoder.
         let mut bytes = Vec::new();
         {
             let mut w = TlvWriter::new(&mut bytes);
@@ -157,7 +157,6 @@ proptest! {
         let t = clusters::rvc_run_mode::ModeTagStruct::decode(&bytes).unwrap();
         prop_assert_eq!(t.mfg_code, mfg);
         prop_assert_eq!(t.value.to_raw(), value);
-        prop_assert_eq!(t.encode(), bytes);
     }
 
     // ---- M9-A3 B2: AlarmBase-derived clusters -------------------------------
@@ -185,17 +184,17 @@ proptest! {
     // ---- M9-A3 B3: OperationalState family ---------------------------------
 
     #[test]
-    fn error_state_struct_reencodes(
+    fn error_state_struct_decodes(
         id in any::<u8>(),
         label in proptest::option::of("[a-z ]{0,16}"),
         details in proptest::option::of("[a-z ]{0,16}"),
     ) {
-        // ErrorStateStruct (enum8 + two optional strings) has scalar fields
-        // only, so it is encodable as well as decodable; it is the payload of
+        // ErrorStateStruct (enum8 + two optional strings), the payload of
         // OperationalError, OperationalCommandResponse and the OperationalError
-        // event in all three OperationalState-family clusters (one template).
-        // Built by decoding (it is #[non_exhaustive]); decode -> encode must
-        // give the same bytes, an id outside the known set included.
+        // event in all three OperationalState-family clusters (one template):
+        // every field decodes, an id outside the known set included.
+        // Decode-only since M9-A3 B4: no request or writable attribute
+        // carries it.
         let mut bytes = Vec::new();
         {
             let mut w = TlvWriter::new(&mut bytes);
@@ -213,13 +212,12 @@ proptest! {
         prop_assert_eq!(e.error_state_id.to_raw(), id);
         prop_assert_eq!(&e.error_state_label, &label);
         prop_assert_eq!(&e.error_state_details, &details);
-        prop_assert_eq!(e.encode(), bytes);
     }
 
     // ---- M9-A3 B3: ServiceArea ---------------------------------------------
 
     #[test]
-    fn location_descriptor_struct_reencodes(
+    fn location_descriptor_struct_decodes(
         name in "[A-Za-z ]{0,16}",
         floor in proptest::option::of(any::<i16>()),
         area_type in proptest::option::of(any::<u8>()),
@@ -246,11 +244,10 @@ proptest! {
         prop_assert_eq!(&l.location_name, &name);
         prop_assert_eq!(l.floor_number, floor.map_or(Nullable::Null, Nullable::Value));
         prop_assert_eq!(l.area_type, area_type.map_or(Nullable::Null, Nullable::Value));
-        prop_assert_eq!(l.encode(), bytes);
     }
 
     #[test]
-    fn progress_struct_reencodes(
+    fn progress_struct_decodes(
         area in any::<u32>(),
         status in any::<u8>(),
         total in proptest::option::of(proptest::option::of(any::<u32>())),
@@ -278,7 +275,6 @@ proptest! {
         prop_assert_eq!((p.area_id, p.status.to_raw()), (area, status));
         prop_assert_eq!(p.total_operational_time, as_nullable(total));
         prop_assert_eq!(p.estimated_time, as_nullable(estimated));
-        prop_assert_eq!(p.encode(), bytes);
     }
 
     // ---- M9-A3 B4: Thermostat weekly schedule (supplemented SCH) ----------

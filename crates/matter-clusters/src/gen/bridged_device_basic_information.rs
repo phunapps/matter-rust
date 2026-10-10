@@ -89,16 +89,6 @@ bitflags::bitflags! {
     }
 }
 
-/// `CapabilityMinimaStruct` struct.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct CapabilityMinimaStruct {
-    /// Field CaseSessionsPerFabric (tag 0).
-    pub case_sessions_per_fabric: u16,
-    /// Field SubscriptionsPerFabric (tag 1).
-    pub subscriptions_per_fabric: u16,
-}
-
 /// `ColorEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColorEnum {
@@ -265,89 +255,6 @@ impl ProductFinishEnum {
     }
 }
 
-impl CapabilityMinimaStruct {
-    /// Decode the fields of an already-opened anonymous structure
-    /// (reader positioned after the struct start; consumes to its end).
-    ///
-    /// # Errors
-    /// Returns [`ClusterError`] on a malformed structure or missing required field.
-    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
-        let mut f_case_sessions_per_fabric: Option<u16> = None;
-        let mut f_subscriptions_per_fabric: Option<u16> = None;
-        loop {
-            match r.next()? {
-                Some(Element::ContainerEnd) => break,
-                Some(Element::Scalar {
-                    tag: Tag::Context(0),
-                    value: Value::Uint(v),
-                }) => {
-                    f_case_sessions_per_fabric = Some(
-                        u16::try_from(v)
-                            .map_err(|_| ClusterError::InvalidLength("CaseSessionsPerFabric"))?,
-                    )
-                }
-                Some(Element::Scalar {
-                    tag: Tag::Context(1),
-                    value: Value::Uint(v),
-                }) => {
-                    f_subscriptions_per_fabric = Some(
-                        u16::try_from(v)
-                            .map_err(|_| ClusterError::InvalidLength("SubscriptionsPerFabric"))?,
-                    )
-                }
-                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
-                Some(Element::ContainerStart { .. }) => r.skip_container()?,
-                Some(_) => {} // unknown/future scalar — skip
-            }
-        }
-        Ok(Self {
-            case_sessions_per_fabric: f_case_sessions_per_fabric
-                .ok_or(ClusterError::MissingField("CaseSessionsPerFabric"))?,
-            subscriptions_per_fabric: f_subscriptions_per_fabric
-                .ok_or(ClusterError::MissingField("SubscriptionsPerFabric"))?,
-        })
-    }
-    /// Decode from a standalone anonymous TLV structure.
-    ///
-    /// # Errors
-    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
-    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
-        let mut r = TlvReader::new(tlv);
-        match r.next()? {
-            Some(Element::ContainerStart {
-                kind: ContainerKind::Structure,
-                ..
-            }) => {}
-            _ => {
-                return Err(ClusterError::UnexpectedType {
-                    context: "CapabilityMinimaStruct",
-                })
-            }
-        }
-        Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.case_sessions_per_fabric))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(1), u64::from(self.subscriptions_per_fabric))
-            .expect("infallible: vec writer");
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
-}
-
 impl ProductAppearanceStruct {
     /// Decode the fields of an already-opened anonymous structure
     /// (reader positioned after the struct start; consumes to its end).
@@ -408,31 +315,6 @@ impl ProductAppearanceStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.finish.to_raw()))
-            .expect("infallible: vec writer");
-        match &self.primary_color {
-            Nullable::Null => w.put_null(Tag::Context(1)).expect("infallible: vec writer"),
-            Nullable::Value(primary_color) => {
-                w.put_uint(Tag::Context(1), u64::from((*primary_color).to_raw()))
-                    .expect("infallible: vec writer");
-            }
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 

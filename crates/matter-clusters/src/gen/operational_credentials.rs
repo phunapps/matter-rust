@@ -294,38 +294,6 @@ impl FabricDescriptorStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_bytes(Tag::Context(1), &self.root_public_key)
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(2), u64::from(self.vendor_id))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(3), u64::from(self.fabric_id))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(4), u64::from(self.node_id))
-            .expect("infallible: vec writer");
-        w.put_utf8(Tag::Context(5), &self.label)
-            .expect("infallible: vec writer");
-        if let Some(vid_verification_statement) = &self.vid_verification_statement {
-            w.put_bytes(Tag::Context(6), &*vid_verification_statement)
-                .expect("infallible: vec writer");
-        }
-        w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
-            .expect("infallible: vec writer");
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
 }
 
 impl NOCStruct {
@@ -396,37 +364,6 @@ impl NOCStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_bytes(Tag::Context(1), &self.noc)
-            .expect("infallible: vec writer");
-        match &self.icac {
-            Nullable::Null => w.put_null(Tag::Context(2)).expect("infallible: vec writer"),
-            Nullable::Value(icac) => {
-                w.put_bytes(Tag::Context(2), &*icac)
-                    .expect("infallible: vec writer");
-            }
-        }
-        if let Some(vvsc) = &self.vvsc {
-            w.put_bytes(Tag::Context(3), &*vvsc)
-                .expect("infallible: vec writer");
-        }
-        w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
-            .expect("infallible: vec writer");
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 

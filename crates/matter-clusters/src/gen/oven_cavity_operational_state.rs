@@ -214,32 +214,6 @@ impl ErrorStateStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.error_state_id.to_raw()))
-            .expect("infallible: vec writer");
-        if let Some(error_state_label) = &self.error_state_label {
-            w.put_utf8(Tag::Context(1), &*error_state_label)
-                .expect("infallible: vec writer");
-        }
-        if let Some(error_state_details) = &self.error_state_details {
-            w.put_utf8(Tag::Context(2), &*error_state_details)
-                .expect("infallible: vec writer");
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
 }
 
 impl OperationalStateStruct {
@@ -296,31 +270,6 @@ impl OperationalStateStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(
-            Tag::Context(0),
-            u64::from(self.operational_state_id.to_raw()),
-        )
-        .expect("infallible: vec writer");
-        if let Some(operational_state_label) = &self.operational_state_label {
-            w.put_utf8(Tag::Context(1), &*operational_state_label)
-                .expect("infallible: vec writer");
-        }
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 

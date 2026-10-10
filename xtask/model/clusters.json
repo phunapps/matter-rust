@@ -116,6 +116,12 @@
       },
       {
         "cluster": "BridgedDeviceBasicInformation",
+        "element": "CapabilityMinimaStruct",
+        "kind": "datatype",
+        "reason": "unreferenced (no generated attribute, command or event uses it)"
+      },
+      {
+        "cluster": "BridgedDeviceBasicInformation",
         "element": "Leave.FabricIndex",
         "kind": "event-field",
         "reason": "disallowed"
@@ -235,6 +241,18 @@
         "reason": "disallowed"
       },
       {
+        "cluster": "DoorLock",
+        "element": "AlarmMaskBitmap",
+        "kind": "datatype",
+        "reason": "unreferenced (no generated attribute, command or event uses it)"
+      },
+      {
+        "cluster": "DoorLock",
+        "element": "EventTypeEnum",
+        "kind": "datatype",
+        "reason": "unreferenced (no generated attribute, command or event uses it)"
+      },
+      {
         "cluster": "EnergyEvseMode",
         "element": "OnMode",
         "kind": "attribute",
@@ -311,6 +329,12 @@
         "element": "ChangeToModeResponse",
         "kind": "command",
         "reason": "disallowed"
+      },
+      {
+        "cluster": "MicrowaveOvenMode",
+        "element": "ModeChangeStatus",
+        "kind": "datatype",
+        "reason": "unreferenced (no generated attribute, command or event uses it)"
       },
       {
         "cluster": "MicrowaveOvenMode",
@@ -6863,32 +6887,6 @@
       ],
       "datatypes": [
         {
-          "name": "CapabilityMinimaStruct",
-          "base": "struct",
-          "kind": "struct",
-          "description": "This structure provides constant values related to overall global capabilities of this Node, that are not cluster-specific.",
-          "fields": [
-            {
-              "id": 0,
-              "name": "CaseSessionsPerFabric",
-              "type": "uint16",
-              "metatype": "integer",
-              "nullable": false,
-              "optional": false,
-              "description": "This field shall indicate the actual minimum number of concurrent CASE sessions that are supported per fabric.\nThis value shall NOT be smaller than the required minimum indicated in Section 4.14.2.8, \"Minimal Number of CASE Sessions\"."
-            },
-            {
-              "id": 1,
-              "name": "SubscriptionsPerFabric",
-              "type": "uint16",
-              "metatype": "integer",
-              "nullable": false,
-              "optional": false,
-              "description": "This field shall indicate the actual minimum number of concurrent subscriptions supported per fabric.\nThis value shall NOT be smaller than the required minimum indicated in Section 8.5.1, \"Subscribe Transaction\"."
-            }
-          ]
-        },
-        {
           "name": "ColorEnum",
           "base": "enum8",
           "kind": "enum",
@@ -11736,34 +11734,6 @@
       "commands": [],
       "events": [],
       "datatypes": [
-        {
-          "name": "ModeChangeStatus",
-          "base": "enum8",
-          "kind": "enum",
-          "description": null,
-          "values": [
-            {
-              "value": 0,
-              "name": "Success",
-              "description": null
-            },
-            {
-              "value": 1,
-              "name": "UnsupportedMode",
-              "description": null
-            },
-            {
-              "value": 2,
-              "name": "GenericFailure",
-              "description": null
-            },
-            {
-              "value": 3,
-              "name": "InvalidInMode",
-              "description": null
-            }
-          ]
-        },
         {
           "name": "ModeOptionStruct",
           "base": "struct",
@@ -16987,44 +16957,6 @@
           ]
         },
         {
-          "name": "AlarmMaskBitmap",
-          "base": "map16",
-          "kind": "bitmap",
-          "description": null,
-          "bits": [
-            {
-              "bit": 0,
-              "name": "LockJammed",
-              "description": null
-            },
-            {
-              "bit": 1,
-              "name": "LockFactoryReset",
-              "description": null
-            },
-            {
-              "bit": 3,
-              "name": "LockRadioPowerCycled",
-              "description": null
-            },
-            {
-              "bit": 4,
-              "name": "WrongCodeEntryLimit",
-              "description": null
-            },
-            {
-              "bit": 5,
-              "name": "FrontEscutcheonRemoved",
-              "description": null
-            },
-            {
-              "bit": 6,
-              "name": "DoorForcedOpen",
-              "description": null
-            }
-          ]
-        },
-        {
           "name": "ConfigurationRegisterBitmap",
           "base": "map16",
           "kind": "bitmap",
@@ -17287,29 +17219,6 @@
             {
               "value": 5,
               "name": "DoorAjar",
-              "description": null
-            }
-          ]
-        },
-        {
-          "name": "EventTypeEnum",
-          "base": "enum8",
-          "kind": "enum",
-          "description": null,
-          "values": [
-            {
-              "value": 0,
-              "name": "Operation",
-              "description": null
-            },
-            {
-              "value": 1,
-              "name": "Programming",
-              "description": null
-            },
-            {
-              "value": 2,
-              "name": "Alarm",
               "description": null
             }
           ]

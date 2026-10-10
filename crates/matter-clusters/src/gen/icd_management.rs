@@ -276,57 +276,6 @@ impl MonitoringRegistrationStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    ///
-    /// A device withholds this struct's fabric-sensitive fields for entries of
-    /// other fabrics, so a read result can hold entries with them `None`. Filter
-    /// a read result to your own `fabric_index` before writing it back.
-    ///
-    /// # Errors
-    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
-    /// write is `None`; nothing is written in that case.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {
-        if self.check_in_node_id.is_none() {
-            return Err(ClusterError::MissingField("CheckInNodeId"));
-        }
-        if self.monitored_subject.is_none() {
-            return Err(ClusterError::MissingField("MonitoredSubject"));
-        }
-        if self.client_type.is_none() {
-            return Err(ClusterError::MissingField("ClientType"));
-        }
-        if let Some(check_in_node_id) = &self.check_in_node_id {
-            w.put_uint(Tag::Context(1), u64::from(*check_in_node_id))
-                .expect("infallible: vec writer");
-        }
-        if let Some(monitored_subject) = &self.monitored_subject {
-            w.put_uint(Tag::Context(2), u64::from(*monitored_subject))
-                .expect("infallible: vec writer");
-        }
-        if let Some(client_type) = &self.client_type {
-            w.put_uint(Tag::Context(4), u64::from((*client_type).to_raw()))
-                .expect("infallible: vec writer");
-        }
-        w.put_uint(Tag::Context(254), u64::from(self.fabric_index))
-            .expect("infallible: vec writer");
-        Ok(())
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    ///
-    /// # Errors
-    /// [`ClusterError::MissingField`] if a fabric-sensitive field required on
-    /// write is `None` (see [`Self::write_fields`]).
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Result<Vec<u8>, ClusterError> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w)?;
-        w.end_container().expect("infallible: vec writer");
-        Ok(buf)
-    }
 }
 
 /// Decode the `IdleModeDuration` attribute value.

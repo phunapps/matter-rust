@@ -668,28 +668,6 @@ impl TrustedTimeSourceStruct {
         }
         Self::decode_from(&mut r)
     }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        w.put_uint(Tag::Context(0), u64::from(self.fabric_index))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(1), u64::from(self.node_id))
-            .expect("infallible: vec writer");
-        w.put_uint(Tag::Context(2), u64::from(self.endpoint))
-            .expect("infallible: vec writer");
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
-    }
 }
 
 /// Decode the `UtcTime` attribute value.

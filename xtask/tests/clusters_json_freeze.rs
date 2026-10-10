@@ -1314,3 +1314,67 @@ fn thermostat_weekly_schedule_uses_the_models_own_datatypes() {
         ]
     );
 }
+
+// ---- M9-A3 B4: unreferenced datatypes are pruned ----------------------------
+
+/// The datatypes the dump dropped because no generated attribute, command or
+/// event uses them (the user's pruning rule), as `(cluster, datatype)`.
+const PRUNED_DATATYPES: [(&str, &str); 4] = [
+    ("BridgedDeviceBasicInformation", "CapabilityMinimaStruct"),
+    ("DoorLock", "AlarmMaskBitmap"),
+    ("DoorLock", "EventTypeEnum"),
+    ("MicrowaveOvenMode", "ModeChangeStatus"),
+];
+
+/// Datatypes kept although no field names them (`KEEP_DATATYPES` in
+/// index.js): each gives meaning to a raw integer a generated item carries.
+const KEPT_UNREFERENCED: [(&str, &str); 4] = [
+    ("IlluminanceMeasurement", "LightSensorTypeEnum"),
+    ("OnOff", "DelayedAllOffEffectVariantEnum"),
+    ("OnOff", "DyingLightEffectVariantEnum"),
+    ("WindowCovering", "MovementStatus"),
+];
+
+#[test]
+fn unreferenced_datatypes_are_pruned_except_the_keep_list() {
+    let v = load();
+    let mut pruned: Vec<(&str, &str)> = v["meta"]["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "datatype")
+        .map(|e| {
+            assert_eq!(
+                e["reason"],
+                "unreferenced (no generated attribute, command or event uses it)"
+            );
+            (
+                e["cluster"].as_str().unwrap(),
+                e["element"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    pruned.sort_unstable();
+    assert_eq!(pruned, PRUNED_DATATYPES);
+    for (c, d) in PRUNED_DATATYPES {
+        assert!(
+            cluster(&v, c)["datatypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|x| x["name"] != d),
+            "{c}.{d} still dumped"
+        );
+    }
+    for (c, d) in KEPT_UNREFERENCED {
+        let _ = datatype(cluster(&v, c), d);
+    }
+    // Every StatusCodeEnum stays: the cluster-specific status codes no field names.
+    for c in [
+        "AdministratorCommissioning",
+        "DoorLock",
+        "TimeSynchronization",
+    ] {
+        let _ = datatype(cluster(&v, c), "StatusCodeEnum");
+    }
+}

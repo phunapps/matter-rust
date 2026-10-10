@@ -1059,35 +1059,6 @@ fn icd_registered_clients_other_fabric_entry_has_every_sensitive_field_none() {
     assert_eq!(clients[1].fabric_index, 2);
 }
 
-#[test]
-fn icd_monitoring_registration_refuses_each_missing_sensitive_field() {
-    use clusters::icd_management::MonitoringRegistrationStruct;
-    use matter_clusters::error::ClusterError;
-    let full = MonitoringRegistrationStruct::decode(&struct_of(&own_icd_entry)).unwrap();
-    assert_eq!(full.encode().unwrap(), struct_of(&own_icd_entry));
-
-    let mut e = full.clone();
-    e.check_in_node_id = None;
-    assert!(matches!(
-        e.encode(),
-        Err(ClusterError::MissingField("CheckInNodeId"))
-    ));
-
-    let mut e = full.clone();
-    e.monitored_subject = None;
-    assert!(matches!(
-        e.encode(),
-        Err(ClusterError::MissingField("MonitoredSubject"))
-    ));
-
-    let mut e = full;
-    e.client_type = None;
-    assert!(matches!(
-        e.encode(),
-        Err(ClusterError::MissingField("ClientType"))
-    ));
-}
-
 // ---- M9-A3 B1: events, scalar-field shapes ----------------------------------
 //
 // Each event payload is an anonymous structure of context-tagged fields (the

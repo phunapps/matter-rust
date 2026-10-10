@@ -256,25 +256,6 @@ impl AlarmCodeEnum {
 }
 
 bitflags::bitflags! {
-    /// `AlarmMaskBitmap` (map16).
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-    pub struct AlarmMaskBitmap: u16 {
-        /// LockJammed.
-        const LOCK_JAMMED = 1 << 0;
-        /// LockFactoryReset.
-        const LOCK_FACTORY_RESET = 1 << 1;
-        /// LockRadioPowerCycled.
-        const LOCK_RADIO_POWER_CYCLED = 1 << 3;
-        /// WrongCodeEntryLimit.
-        const WRONG_CODE_ENTRY_LIMIT = 1 << 4;
-        /// FrontEscutcheonRemoved.
-        const FRONT_ESCUTCHEON_REMOVED = 1 << 5;
-        /// DoorForcedOpen.
-        const DOOR_FORCED_OPEN = 1 << 6;
-    }
-}
-
-bitflags::bitflags! {
     /// `ConfigurationRegisterBitmap` (map16).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
     pub struct ConfigurationRegisterBitmap: u16 {
@@ -511,42 +492,6 @@ impl DoorStateEnum {
             Self::DoorForcedOpen => 3,
             Self::DoorUnspecifiedError => 4,
             Self::DoorAjar => 5,
-            Self::Unknown(v) => v,
-        }
-    }
-}
-
-/// `EventTypeEnum` (enum8).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum EventTypeEnum {
-    /// Operation = 0.
-    Operation,
-    /// Programming = 1.
-    Programming,
-    /// Alarm = 2.
-    Alarm,
-    /// A value not known to this codegen revision.
-    Unknown(u8),
-}
-
-impl EventTypeEnum {
-    /// Decode from its raw discriminant (unknown → `Unknown`).
-    #[must_use]
-    pub fn from_raw(v: u8) -> Self {
-        match v {
-            0 => Self::Operation,
-            1 => Self::Programming,
-            2 => Self::Alarm,
-            other => Self::Unknown(other),
-        }
-    }
-    /// The raw discriminant.
-    #[must_use]
-    pub fn to_raw(self) -> u8 {
-        match self {
-            Self::Operation => 0,
-            Self::Programming => 1,
-            Self::Alarm => 2,
             Self::Unknown(v) => v,
         }
     }

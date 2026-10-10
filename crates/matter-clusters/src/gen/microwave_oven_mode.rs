@@ -30,46 +30,6 @@ pub mod attribute_id {
     pub const CURRENT_MODE: u32 = 0x0001;
 }
 
-/// `ModeChangeStatus` (enum8).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ModeChangeStatus {
-    /// Success = 0.
-    Success,
-    /// UnsupportedMode = 1.
-    UnsupportedMode,
-    /// GenericFailure = 2.
-    GenericFailure,
-    /// InvalidInMode = 3.
-    InvalidInMode,
-    /// A value not known to this codegen revision.
-    Unknown(u8),
-}
-
-impl ModeChangeStatus {
-    /// Decode from its raw discriminant (unknown → `Unknown`).
-    #[must_use]
-    pub fn from_raw(v: u8) -> Self {
-        match v {
-            0 => Self::Success,
-            1 => Self::UnsupportedMode,
-            2 => Self::GenericFailure,
-            3 => Self::InvalidInMode,
-            other => Self::Unknown(other),
-        }
-    }
-    /// The raw discriminant.
-    #[must_use]
-    pub fn to_raw(self) -> u8 {
-        match self {
-            Self::Success => 0,
-            Self::UnsupportedMode => 1,
-            Self::GenericFailure => 2,
-            Self::InvalidInMode => 3,
-            Self::Unknown(v) => v,
-        }
-    }
-}
-
 /// `ModeOptionStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -299,28 +259,6 @@ impl ModeTagStruct {
             }
         }
         Self::decode_from(&mut r)
-    }
-    /// Write this struct's fields into an already-open container.
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
-        if let Some(mfg_code) = &self.mfg_code {
-            w.put_uint(Tag::Context(0), u64::from(*mfg_code))
-                .expect("infallible: vec writer");
-        }
-        w.put_uint(Tag::Context(1), u64::from(self.value.to_raw()))
-            .expect("infallible: vec writer");
-    }
-    /// Encode as a standalone anonymous TLV structure.
-    #[must_use]
-    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        let mut w = TlvWriter::new(&mut buf);
-        w.start_structure(Tag::Anonymous)
-            .expect("infallible: vec writer");
-        self.write_fields(&mut w);
-        w.end_container().expect("infallible: vec writer");
-        buf
     }
 }
 

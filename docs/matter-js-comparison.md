@@ -71,12 +71,13 @@ These are language-idiomatic differences. They do not affect interop.
 
   Writing is guarded by one rule: a withheld field is never written. The
   reason is a chip hazard: chip's ACL write path reads a missing `Subjects` as
-  null, which grants the entry to every CASE node on the fabric. Only two of
-  these structs have generated encoders, `AccessControlExtensionStruct` and
-  `MonitoringRegistrationStruct`; their `encode`/`write_fields` return
-  `ClusterError::MissingField` for a `None` in a `mandatoryOnWrite` field, and a
-  complete entry encodes byte-identically to before. `AccessControlEntryStruct`
-  and `AccessRestrictionEntryStruct` are decode-only. ACL writes go through
+  null, which grants the entry to every CASE node on the fabric. Only one of
+  these structs has a generated encoder, `AccessControlExtensionStruct`; its
+  `encode`/`write_fields` return `ClusterError::MissingField` for a `None` in a
+  `mandatoryOnWrite` field, and a complete entry encodes byte-identically to
+  before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct` and (since
+  M9-A3 B4: IcdManagement `RegisteredClients` is read-only)
+  `MonitoringRegistrationStruct` are decode-only. ACL writes go through
   matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
   with a withheld field rather than reading it as a wildcard.
 
@@ -148,6 +149,15 @@ These are language-idiomatic differences. They do not affect interop.
   SetWeeklySchedule encoder matches its `TlvSetWeeklyScheduleRequest` byte
   for byte. The legacy DoorLock PIN/RFID/user-status commands stay out: chip
   never generated them.
+
+- **Only what a client uses is generated** (M9-A3 B4). A model datatype
+  that no generated attribute, command or event uses is not generated
+  (chip's controller codegen omits them too); matter.js generates every
+  model datatype. Exceptions: a cluster's `StatusCodeEnum`, and four enums
+  that give meaning to a raw integer (`KEEP_DATATYPES` in the dump). And a
+  struct has an encoder only when a client sends it (a command request
+  field, or an all-scalar struct a writable attribute carries); matter.js's
+  TLV schemas encode and decode everything.
 
 ## CASE handshake performance (measured 2026-07-12)
 

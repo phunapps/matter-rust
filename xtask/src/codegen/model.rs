@@ -812,7 +812,12 @@ mod tests {
             ] }),
             clusters: vec![cluster(serde_json::json!({
                 "id": 0x54, "name": "RvcRunMode", "revision": 3, "features": [],
-                "attributes": [],
+                // M9-A3 B4: a scalar struct is encoded only when a writable
+                // attribute (or a request) reaches it.
+                "attributes": [
+                    { "id": 0, "name": "Scalars", "type": "list", "entryType": "ScalarStruct",
+                      "metatype": "array", "nullable": false, "optional": false, "writable": true }
+                ],
                 "commands": [
                     { "id": 0, "name": "ChangeToMode", "direction": "request", "responseId": 1,
                       "fields": [u8_field(0, "NewMode"), reach_field] },
@@ -850,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_conditional_relaxation_of_a_write_capable_struct_field() {
+    fn rejects_a_conditional_relaxation_of_a_writable_attribute_struct_field() {
         let err = validate(&relaxed_model("ScalarStruct.Label")).unwrap_err();
         assert!(
             err.contains("RvcRunMode.ScalarStruct.Label") && err.contains("encodes"),

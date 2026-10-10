@@ -1044,7 +1044,8 @@ function dumpCluster(entry) {
     datatypes,
   );
 
-  checkConditionalRelaxations(cluster.name, commands, datatypes);
+  pruneUnreferencedDatatypes(cluster.name, attributes, commands, events, datatypes);
+  checkConditionalRelaxations(cluster.name, attributes, commands, datatypes);
 
   // Deterministic ordering for a stable committed artifact.
   attributes.sort((x, y) => x.id - y.id);
@@ -1056,40 +1057,91 @@ function dumpCluster(entry) {
   return { id: cluster.id, name: cluster.name, revision: cluster.revision, features, attributes, commands, events, datatypes };
 }
 
-// Datatype struct names whose fields the Rust emitter ENCODES, mirroring
-// xtask/src/codegen/rustgen/emit_codecs.rs: a struct reachable from a request
-// command's fields (command_encode_reachable_structs), or one whose fields are
-// all scalars (struct_is_write_capable: it gets write_fields/encode).
-const SCALAR_METATYPES = new Set(['boolean', 'integer', 'float', 'string', 'bytes', 'enum', 'bitmap']);
-function encodedStructs(commands, datatypes) {
-  const structs = new Map(datatypes.filter((d) => d.kind === 'struct').map((d) => [d.name, d]));
-  const out = new Set();
-  for (const d of structs.values()) {
-    if (d.fields.every((f) => SCALAR_METATYPES.has(f.metatype))) out.add(d.name);
-  }
-  const queue = [];
-  const consider = (t) => {
-    if (t && structs.has(t)) queue.push(t);
-  };
-  for (const cmd of commands) {
-    if (cmd.direction !== 'request') continue;
-    for (const f of cmd.fields) {
-      consider(f.type);
-      consider(f.entryType);
-    }
-  }
+// The datatype names (any kind) reachable from the type names in `seeds`,
+// following struct fields and list entries.
+function reachableDatatypes(seeds, datatypes) {
+  const byName = new Map(datatypes.map((d) => [d.name, d]));
   const reached = new Set();
+  const queue = seeds.filter((t) => t && byName.has(t));
   while (queue.length > 0) {
     const name = queue.pop();
     if (reached.has(name)) continue;
     reached.add(name);
-    out.add(name);
-    for (const f of structs.get(name).fields) {
-      consider(f.type);
-      consider(f.entryType);
+    for (const f of byName.get(name).fields || []) {
+      for (const t of [f.type, f.entryType]) if (t && byName.has(t)) queue.push(t);
+    }
+  }
+  return reached;
+}
+
+const typeRefs = (el) => [el.type, el.entryType];
+
+// Datatype struct names whose fields the Rust emitter ENCODES, mirroring
+// struct_is_encoded in xtask/src/codegen/rustgen/emit_codecs.rs (M9-A3 B4): a
+// struct reachable from a request command's fields, or one reachable from a
+// writable attribute whose fields are all scalars. Nothing else is sent, so
+// nothing else gets write_fields/encode.
+const SCALAR_METATYPES = new Set(['boolean', 'integer', 'float', 'string', 'bytes', 'enum', 'bitmap']);
+function encodedStructs(attributes, commands, datatypes) {
+  const isStruct = (n) => datatypes.some((d) => d.name === n && d.kind === 'struct');
+  const requests = commands.filter((c) => c.direction === 'request').flatMap((c) => c.fields.flatMap(typeRefs));
+  const fromRequests = reachableDatatypes(requests, datatypes);
+  const writable = attributes.filter((a) => a.writable).flatMap(typeRefs);
+  const fromWritable = reachableDatatypes(writable, datatypes);
+  const out = new Set([...fromRequests].filter(isStruct));
+  for (const d of datatypes) {
+    if (d.kind === 'struct' && fromWritable.has(d.name) && d.fields.every((f) => SCALAR_METATYPES.has(f.metatype))) {
+      out.add(d.name);
     }
   }
   return out;
+}
+
+// M9-A3 B4 (the user's pruning rule): a cluster datatype is generated only when
+// a generated attribute, command (either direction) or event reaches it, it is
+// the cluster's StatusCodeEnum (the cluster-specific status codes of an IM
+// status response, which no field names), or KEEP_DATATYPES lists it. Anything
+// else is a model datatype no generated item uses: dropped, and recorded in
+// meta.excluded (kind `datatype`).
+const UNREFERENCED_REASON = 'unreferenced (no generated attribute, command or event uses it)';
+
+// Datatypes kept although no field names them: each is the meaning of a raw
+// integer a generated item carries. A key that is reachable (it no longer
+// needs keeping) or matches no datatype of an allowlisted cluster fails the
+// dump.
+const KEEP_DATATYPES = new Map([
+  ['OnOff.DelayedAllOffEffectVariantEnum', 'OffWithEffect.EffectVariant (raw enum8) when EffectIdentifier is DelayedAllOff'],
+  ['OnOff.DyingLightEffectVariantEnum', 'OffWithEffect.EffectVariant (raw enum8) when EffectIdentifier is DyingLight'],
+  ['IlluminanceMeasurement.LightSensorTypeEnum', 'the LightSensorType attribute (raw uint8)'],
+  ['WindowCovering.MovementStatus', 'each two-bit field (Global, Lift, Tilt) of OperationalStatusBitmap, which the bitmap emitter cannot name'],
+]);
+const appliedKeeps = new Set();
+
+function pruneUnreferencedDatatypes(clusterName, attributes, commands, events, datatypes) {
+  const seeds = [
+    ...attributes.flatMap(typeRefs),
+    ...commands.flatMap((c) => c.fields.flatMap(typeRefs)),
+    ...events.flatMap((e) => e.fields.flatMap(typeRefs)),
+  ];
+  const reached = reachableDatatypes(seeds, datatypes);
+  const kept = [];
+  for (const d of datatypes) {
+    const key = `${clusterName}.${d.name}`;
+    if (KEEP_DATATYPES.has(key)) {
+      if (reached.has(d.name)) fail(`KEEP_DATATYPES ${key} is reachable — it no longer needs keeping`);
+      appliedKeeps.add(key);
+      kept.push(d);
+    } else if (reached.has(d.name) || d.name === 'StatusCodeEnum' || d.kind === 'scalar') {
+      kept.push(d);
+    } else {
+      recordExclusion(clusterName, d.name, 'datatype', UNREFERENCED_REASON);
+      // A pruned struct's fabric-sensitive relaxations go with it.
+      for (let i = relaxed.length - 1; i >= 0; i--) {
+        if (relaxed[i].cluster === clusterName && relaxed[i].element.startsWith(`${d.name}.`)) relaxed.splice(i, 1);
+      }
+    }
+  }
+  datatypes.splice(0, datatypes.length, ...kept);
 }
 
 // M9-A3 (B2 review ruling, landed in B3): the §3.1 rule may relax only fields
@@ -1099,8 +1151,8 @@ function encodedStructs(commands, datatypes) {
 // review instead. Every relaxation that passes is recorded in meta.relaxed
 // with class C, so a later batch or a model upgrade that relaxes another
 // field shows up in the clusters.json diff.
-function checkConditionalRelaxations(clusterName, commands, datatypes) {
-  const encoded = encodedStructs(commands, datatypes);
+function checkConditionalRelaxations(clusterName, attributes, commands, datatypes) {
+  const encoded = encodedStructs(attributes, commands, datatypes);
   for (const r of _conditional) {
     const sent = r.role === 'request' || (r.role === 'struct' && encoded.has(r.owner));
     if (sent) {
@@ -1479,6 +1531,9 @@ const clusters = ALLOWLIST.map(dumpCluster);
 clusters.sort((x, y) => x.id - y.id);
 checkSupplementDumped(clusters);
 supplemented.sort((x, y) => x.cluster.localeCompare(y.cluster) || x.element.localeCompare(y.element));
+for (const key of KEEP_DATATYPES.keys()) {
+  if (!appliedKeeps.has(key)) fail(`KEEP_DATATYPES ${key} matched no datatype — model drift; review KEEP_DATATYPES`);
+}
 for (const key of TYPE_WIDENINGS.keys()) {
   const owner = key.split('.')[0];
   if (ALLOWLIST.some((e) => e.name === owner) && !appliedWidenings.has(key)) {

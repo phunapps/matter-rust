@@ -51,13 +51,14 @@ For `subjects` and `targets` the two layers are distinct: `None` is withheld,
 
 ### matter-clusters: Changed (breaking) — encoders refuse a withheld field
 
-`AccessControlExtensionStruct` and `MonitoringRegistrationStruct`
-`encode`/`write_fields` now return `Result` and fail with
+`AccessControlExtensionStruct` `encode`/`write_fields` now return `Result`
+and fail with
 `ClusterError::MissingField` when a fabric-sensitive field is `None`, so a
 withheld entry is never written back as if it were complete (chip reads a
 missing ACL `Subjects` as "every CASE node on the fabric"). A complete entry
-encodes byte-identically to before. `AccessControlEntryStruct` and
-`AccessRestrictionEntryStruct` remain decode-only.
+encodes byte-identically to before. `AccessControlEntryStruct`,
+`AccessRestrictionEntryStruct` and (see "Removed (breaking) — encoders
+nothing sends" below) `MonitoringRegistrationStruct` are decode-only.
 
 ### matter-clusters: Fixed (breaking) — LevelControl's `*WithOnOff` commands sent no fields
 
@@ -229,6 +230,43 @@ and checked against it:
   (nullable), `InstalledOpenLimitLift` / `Tilt`, `InstalledClosedLimitLift`
   / `Tilt`, `encode_go_to_lift_value` and `encode_go_to_tilt_value`. Matter
   1.4 marks all of them provisional, and their rustdoc says so.
+
+### matter-clusters: Removed (breaking) — unused types, and encoders nothing sends
+
+The codegen now generates only what a client can use:
+
+- **A datatype is generated only when a generated attribute, command or
+  event uses it**, or it is a cluster's `StatusCodeEnum`, or it gives
+  meaning to a raw integer (OnOff's `DelayedAllOffEffectVariantEnum` and
+  `DyingLightEffectVariantEnum` for `OffWithEffect.EffectVariant`,
+  IlluminanceMeasurement's `LightSensorTypeEnum`, WindowCovering's
+  `MovementStatus` for each field of `OperationalStatusBitmap`). Removed:
+  `bridged_device_basic_information::CapabilityMinimaStruct`,
+  `door_lock::AlarmMaskBitmap`, `door_lock::EventTypeEnum`,
+  `microwave_oven_mode::ModeChangeStatus`.
+- **`write_fields` / `encode` exist only on structs a client sends**: those a
+  command request carries, and the all-scalar ones a writable attribute
+  carries. Every decoder stays. Removed from:
+  `basic_information::{CapabilityMinimaStruct, ProductAppearanceStruct}`,
+  `bridged_device_basic_information::ProductAppearanceStruct`,
+  `descriptor::DeviceTypeStruct`, `fixed_label::LabelStruct`,
+  `occupancy_sensing::HoldTimeLimitsStruct`,
+  `operational_credentials::{FabricDescriptorStruct, NOCStruct}`,
+  `time_synchronization::TrustedTimeSourceStruct`,
+  `icd_management::MonitoringRegistrationStruct` (`RegisteredClients` is
+  read-only; registering goes through `encode_register_client`),
+  `thermostat::{PresetTypeStruct, ScheduleTypeStruct,
+  ThermostatAttributeStatusEntryStruct}`,
+  `electrical_power_measurement::{HarmonicMeasurementStruct,
+  MeasurementAccuracyRangeStruct, MeasurementRangeStruct}`,
+  `electrical_energy_measurement::{CumulativeEnergyResetStruct,
+  EnergyMeasurementStruct, MeasurementAccuracyRangeStruct}`, `ModeTagStruct`
+  in the ten ModeBase-derived clusters, `mode_select::SemanticTagStruct`,
+  `ErrorStateStruct` and `OperationalStateStruct` in the three
+  OperationalState clusters, `ReplacementProductStruct` in the three
+  resource-monitoring clusters, and
+  `service_area::{LandmarkInfoStruct, LocationDescriptorStruct, MapStruct,
+  ProgressStruct}`.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

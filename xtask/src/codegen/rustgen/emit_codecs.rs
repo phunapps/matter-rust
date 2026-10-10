@@ -28,8 +28,39 @@ pub(crate) fn command_encode_reachable_structs<'a>(
     c: &'a Cluster,
     dts: &DatatypeMap<'a>,
 ) -> HashSet<&'a str> {
+    let seeds = c
+        .commands
+        .iter()
+        .filter(|cmd| cmd.direction == "request")
+        .flat_map(|cmd| &cmd.fields)
+        .flat_map(|f| [Some(f.ty.as_str()), f.entry_type.as_deref()]);
+    reachable_structs(seeds, dts)
+}
+
+/// Struct datatype names reachable from a **writable** attribute's type or
+/// list entry type, transitively (M9-A3 B4 encoder rule): the structs a client
+/// may write back. `AccessControl` `Extension` reaches
+/// `AccessControlExtensionStruct`; `IcdManagement` `RegisteredClients` is
+/// read-only, so `MonitoringRegistrationStruct` is not reached.
+pub(crate) fn writable_attribute_reachable_structs<'a>(
+    c: &'a Cluster,
+    dts: &DatatypeMap<'a>,
+) -> HashSet<&'a str> {
+    let seeds = c
+        .attributes
+        .iter()
+        .filter(|a| a.writable)
+        .flat_map(|a| [Some(a.ty.as_str()), a.entry_type.as_deref()]);
+    reachable_structs(seeds, dts)
+}
+
+/// The struct datatypes of `dts` reachable from the type names in `seeds`,
+/// following struct fields and list-of-struct entries.
+fn reachable_structs<'a>(
+    seeds: impl Iterator<Item = Option<&'a str>>,
+    dts: &DatatypeMap<'a>,
+) -> HashSet<&'a str> {
     let mut out = HashSet::new();
-    let mut queue: Vec<&str> = Vec::new();
     let consider = |t: Option<&'a str>, q: &mut Vec<&'a str>| {
         if let Some(name) = t {
             if dts.get(name).is_some_and(|d| d.kind == "struct") {
@@ -37,14 +68,9 @@ pub(crate) fn command_encode_reachable_structs<'a>(
             }
         }
     };
-    for cmd in &c.commands {
-        if cmd.direction != "request" {
-            continue;
-        }
-        for f in &cmd.fields {
-            consider(Some(f.ty.as_str()), &mut queue);
-            consider(f.entry_type.as_deref(), &mut queue);
-        }
+    let mut queue: Vec<&str> = Vec::new();
+    for t in seeds {
+        consider(t, &mut queue);
     }
     while let Some(name) = queue.pop() {
         if !out.insert(name) {
@@ -65,9 +91,10 @@ pub fn emit_codecs(s: &mut String, c: &Cluster) {
     let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
     let encode_reachable = command_encode_reachable_structs(c, &dts);
     assert_no_write_guarded_command_structs(c, &dts, &encode_reachable);
+    let encoded = encoded_struct_names(c);
     for d in &c.datatypes {
         if d.kind == "struct" {
-            emit_struct_codec(s, d, &dts, &encode_reachable);
+            emit_struct_codec(s, d, &dts, &encoded);
         }
     }
     for a in &c.attributes {
@@ -917,36 +944,48 @@ fn struct_is_write_capable(d: &Datatype) -> bool {
 }
 
 /// True when the emitter generates `write_fields`/`encode` for the datatype
-/// struct `d`: it is [`struct_is_write_capable`], or a request command reaches
-/// it (`encode_reachable`, from [`command_encode_reachable_structs`]). The one
-/// rule both [`emit_struct_decl_and_codec`] and [`encoded_struct_names`] use.
-fn struct_is_encoded(d: &Datatype, encode_reachable: &HashSet<&str>) -> bool {
-    struct_is_write_capable(d) || encode_reachable.contains(d.name.as_str())
+/// struct `d` (M9-A3 B4 rule): a request command reaches it
+/// ([`command_encode_reachable_structs`]), or a writable attribute reaches it
+/// ([`writable_attribute_reachable_structs`]) and its fields are all scalars
+/// ([`struct_is_write_capable`]; a list field in such a struct needs the B7
+/// emitter work). A struct nothing sends is decode-only. The one rule
+/// [`encoded_struct_names`] applies, and so the emitter (whose encoder for a
+/// struct with `mandatoryOnWrite` fields is the guarded one),
+/// `model::validate`'s class-C check and the dump's mirror (`encodedStructs`
+/// in index.js) all agree.
+fn struct_is_encoded(
+    d: &Datatype,
+    command_reachable: &HashSet<&str>,
+    writable_reachable: &HashSet<&str>,
+) -> bool {
+    let name = d.name.as_str();
+    command_reachable.contains(name)
+        || (writable_reachable.contains(name) && struct_is_write_capable(d))
 }
 
-/// Names of the datatype structs of `c` whose fields the emitter **encodes**
-/// (see [`struct_is_encoded`]). `model::validate` uses it to keep a class-C
-/// `meta.relaxed` field (a conditional conformance the dump relaxed to
-/// optional) out of every encoder, from the same rule the emitter follows.
-pub(crate) fn encoded_struct_names(c: &Cluster) -> HashSet<&str> {
+/// Names of the datatype structs of `c` whose fields the emitter **encodes**:
+/// those a request command reaches, and the all-scalar ones a writable
+/// attribute reaches (M9-A3 B4; `struct_is_encoded`). `model::validate` uses
+/// it to keep a class-C `meta.relaxed` field (a conditional conformance the
+/// dump relaxed to optional) out of every encoder, from the same rule the
+/// emitter follows.
+pub fn encoded_struct_names(c: &Cluster) -> HashSet<&str> {
     let dts: DatatypeMap<'_> = c.datatypes.iter().map(|d| (d.name.as_str(), d)).collect();
-    let encode_reachable = command_encode_reachable_structs(c, &dts);
+    let command_reachable = command_encode_reachable_structs(c, &dts);
+    let writable_reachable = writable_attribute_reachable_structs(c, &dts);
     c.datatypes
         .iter()
-        .filter(|d| d.kind == "struct" && struct_is_encoded(d, &encode_reachable))
+        .filter(|d| {
+            d.kind == "struct" && struct_is_encoded(d, &command_reachable, &writable_reachable)
+        })
         .map(|d| d.name.as_str())
         .collect()
 }
 
-fn emit_struct_codec(
-    s: &mut String,
-    d: &Datatype,
-    dts: &DatatypeMap<'_>,
-    encode_reachable: &HashSet<&str>,
-) {
+fn emit_struct_codec(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>, encoded: &HashSet<&str>) {
     // Struct *decl* was already emitted by emit.rs::emit_struct; emit only the
     // codec here.
-    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encode_reachable);
+    emit_struct_decl_and_codec(s, d, /*decl=*/ false, dts, encoded);
 }
 
 /// Emit the codec for a struct `d`: `decode_from`(positioned reader) +
@@ -959,7 +998,7 @@ fn emit_struct_decl_and_codec(
     d: &Datatype,
     decl: bool,
     dts: &DatatypeMap<'_>,
-    encode_reachable: &HashSet<&str>,
+    encoded: &HashSet<&str>,
 ) {
     if decl {
         line!(s, "/// Decoded `{}` payload.", d.name);
@@ -1080,7 +1119,7 @@ fn emit_struct_decl_and_codec(
     // clusters guarantee have scalar-only fields, so write_fields compiles).
     // Response-payload structs (`decl`) are decode-only — they may carry
     // composite fields (e.g. list[struct]) that we never re-encode.
-    if !decl && struct_is_encoded(d, encode_reachable) {
+    if !decl && encoded.contains(d.name.as_str()) {
         if struct_has_write_guarded_fields(d) {
             emit_guarded_struct_write(s, d, dts);
         } else {
@@ -1518,7 +1557,7 @@ mod tests {
         );
         let mut s = String::new();
         let dts: DatatypeMap<'_> = HashMap::new();
-        emit_struct_codec(&mut s, &d, &dts, &HashSet::new());
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
         assert!(s.contains("r#type: f_type"), "construction escaped:\n{s}");
         assert!(
             !s.contains("            type: f_type"),
@@ -1553,6 +1592,11 @@ mod tests {
             fields,
             provisional: false,
         }
+    }
+
+    /// The encoded set naming only `d`: the emitter then writes its encoder.
+    fn encoded(d: &Datatype) -> HashSet<&str> {
+        std::iter::once(d.name.as_str()).collect()
     }
 
     fn cluster_with(commands: Vec<CommandDef>, datatypes: Vec<Datatype>) -> Cluster {
@@ -1774,7 +1818,7 @@ mod tests {
         let d = struct_dt("FloatStruct", vec![f]);
         assert!(struct_is_write_capable(&d));
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &HashSet::new());
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
         assert!(s.contains("w.put_float(Tag::Context(1), *value)"), "{s}");
         assert!(
             s.contains("value: Value::Float(v) }) => f_value = Some(Nullable::Value(v))"),
@@ -1854,7 +1898,8 @@ mod tests {
     #[test]
     fn write_guarded_struct_refuses_none_before_writing_anything() {
         let mut s = String::new();
-        emit_struct_codec(&mut s, &sensitive_dt(), &HashMap::new(), &HashSet::new());
+        let d = sensitive_dt();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
         assert!(
             s.contains(
                 "pub fn write_fields(&self, w: &mut TlvWriter<'_>) -> Result<(), ClusterError> {"
@@ -1899,7 +1944,7 @@ mod tests {
         );
         assert!(!struct_has_write_guarded_fields(&d));
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &HashSet::new());
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
         assert!(
             s.contains("pub fn write_fields(&self, w: &mut TlvWriter<'_>) {"),
             "{s}"
@@ -1925,7 +1970,7 @@ mod tests {
             ],
         );
         let mut s = String::new();
-        emit_struct_codec(&mut s, &d, &HashMap::new(), &HashSet::new());
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
         assert!(
             s.contains("pub fn write_fields(&self, w: &mut TlvWriter<'_>) {"),
             "{s}"
@@ -2008,5 +2053,60 @@ mod tests {
             "reachable list struct writes: {s}"
         );
         assert!(s.contains("w.start_array(Tag::Context(0))"), "{s}");
+    }
+
+    // ---- M9-A3 B4: encoders only for what a client sends ----
+
+    fn attr_of(name: &str, entry: &str, writable: bool) -> Attribute {
+        Attribute {
+            id: 0,
+            name: name.to_string(),
+            ty: "list".to_string(),
+            metatype: "array".to_string(),
+            entry_type: Some(entry.to_string()),
+            nullable: false,
+            optional: false,
+            writable,
+            provisional: false,
+        }
+    }
+
+    #[test]
+    fn encoders_follow_requests_and_writable_attributes_only() {
+        let scalar = |name: &str| struct_dt(name, vec![field(0, "X", "uint16", "integer", None)]);
+        let listy =
+            |name: &str| struct_dt(name, vec![field(0, "Ids", "list", "array", Some("uint32"))]);
+        let mut c = cluster_with(
+            vec![request_cmd(
+                "Send",
+                vec![field(0, "Arg", "SentStruct", "object", None)],
+            )],
+            vec![
+                listy("SentStruct"),
+                scalar("WrittenStruct"),
+                listy("WrittenListStruct"),
+                scalar("ReadOnlyStruct"),
+                scalar("UnusedStruct"),
+            ],
+        );
+        c.attributes = vec![
+            attr_of("Written", "WrittenStruct", true),
+            attr_of("WrittenLists", "WrittenListStruct", true),
+            attr_of("ReadOnly", "ReadOnlyStruct", false),
+        ];
+        let mut got: Vec<&str> = encoded_struct_names(&c).into_iter().collect();
+        got.sort_unstable();
+        // A request reaches SentStruct (list field and all); a writable
+        // attribute reaches the scalar WrittenStruct. WrittenListStruct (a
+        // list field: B7 emitter work), the read-only attribute's struct and
+        // an unused struct stay decode-only.
+        assert_eq!(got, ["SentStruct", "WrittenStruct"]);
+        let mut s = String::new();
+        emit_codecs(&mut s, &c);
+        assert!(
+            !s.contains("impl ReadOnlyStruct {\n    pub fn write_fields"),
+            "{s}"
+        );
+        assert_eq!(s.matches("pub fn write_fields").count(), 2, "{s}");
     }
 }
