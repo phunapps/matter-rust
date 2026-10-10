@@ -20,7 +20,8 @@ use crate::dut::DutConfig;
 /// The `TestEventTrigger` enable key every chip app is launched with by
 /// `xtask integration` (`--enable-key 00112233445566778899aabbccddeeff`).
 /// chip's default key is all zeros, which disables triggers. Must match
-/// `TEST_EVENT_ENABLE_KEY_HEX` in `xtask/src/integration.rs`.
+/// `TEST_EVENT_ENABLE_KEY_HEX` in `xtask/src/integration.rs` (a unit test
+/// below compares the two).
 pub const TEST_EVENT_ENABLE_KEY: [u8; 16] = [
     0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
 ];
@@ -245,5 +246,32 @@ mod tests {
         // The writer thread stays blocked in open() on purpose: it must not
         // keep the runtime (or this test process) from exiting.
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod enable_key_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::TEST_EVENT_ENABLE_KEY;
+
+    /// `xtask integration` launches every chip app with `--enable-key
+    /// TEST_EVENT_ENABLE_KEY_HEX`; the tests send [`TEST_EVENT_ENABLE_KEY`].
+    /// Read xtask's literal from its source (no dependency between the two
+    /// crates) so the copies cannot drift apart.
+    #[test]
+    fn enable_key_matches_the_key_xtask_launches_the_dut_with() {
+        const XTASK_SRC: &str = include_str!("../../../xtask/src/integration.rs");
+        const DECL: &str = "const TEST_EVENT_ENABLE_KEY_HEX: &str = \"";
+        let line = XTASK_SRC
+            .lines()
+            .find(|l| l.starts_with(DECL))
+            .expect("xtask/src/integration.rs declares TEST_EVENT_ENABLE_KEY_HEX");
+        let hex = line[DECL.len()..].split('"').next().expect("closing quote");
+        assert_eq!(hex.len(), 2 * TEST_EVENT_ENABLE_KEY.len(), "{hex}");
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(bytes, TEST_EVENT_ENABLE_KEY, "xtask launches with {hex}");
     }
 }

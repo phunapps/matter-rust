@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 /// The `GeneralDiagnostics.TestEventTrigger` enable key the DUT is launched
 /// with (`--enable-key`) unless its [`EventStimulus`] is `None`. chip's
 /// default key is all zeros, which disables triggers. The tests send the same
-/// bytes: `TEST_EVENT_ENABLE_KEY` in `crates/integration-tests/src/events.rs`.
+/// bytes: `TEST_EVENT_ENABLE_KEY` in `crates/integration-tests/src/events.rs`,
+/// whose unit test reads this literal from source and compares the two.
 const TEST_EVENT_ENABLE_KEY_HEX: &str = "00112233445566778899aabbccddeeff";
 
 /// File name of the app's out-of-band command FIFO under the DUT dir.

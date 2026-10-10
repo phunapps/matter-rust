@@ -360,7 +360,13 @@ async fn access_control_events_decode() {
         Some(vec![0x0000_0000_0000_BEEF]),
         None,
     ));
-    node.write_acl(&acl).await.expect("write_acl (+View entry)");
+    // `write_acl` is Ok even when the device rejects the write (the per-path
+    // status carries that), so the statuses must be checked explicitly.
+    let statuses = node.write_acl(&acl).await.expect("write_acl (+View entry)");
+    assert!(
+        !statuses.is_empty() && statuses.iter().all(|(_, s)| matches!(s, ImStatus::Success)),
+        "write_acl (+View entry) statuses: {statuses:?}"
+    );
     let changed = wait_for_event_after(
         &node,
         0,
@@ -407,7 +413,11 @@ async fn access_control_events_decode() {
     })
     .await;
     // Restore the ACL so later tests see the fixture's original entries.
-    node.write_acl(&acl_before).await.expect("restore ACL");
+    let statuses = node.write_acl(&acl_before).await.expect("restore ACL");
+    assert!(
+        !statuses.is_empty() && statuses.iter().all(|(_, s)| matches!(s, ImStatus::Success)),
+        "restore ACL statuses: {statuses:?}"
+    );
 }
 
 /// The clusters all-clusters cannot be made to emit on demand: decode what is there.
