@@ -72,7 +72,9 @@ attributes, by area:
   specification revisions), PowerTopology, WaterHeaterManagement,
   DeviceEnergyManagement, EnergyEvse (the last three with their events).
 - **Messaging** — Messages (with its events; other fabrics' `Messages`
-  entries decode with their fabric-sensitive fields `None`).
+  entries decode with their fabric-sensitive fields `None`). chip does not
+  fabric-scope `MessageStruct`: chip devices send every entry in full to
+  every fabric, with `fabric_index` `None`.
 - **Appliance modes** — ModeSelect, OvenMode, LaundryWasherMode,
   RefrigeratorAndTemperatureControlledCabinetMode, RvcRunMode, RvcCleanMode,
   DishwasherMode, MicrowaveOvenMode, EnergyEvseMode, WaterHeaterMode,
@@ -108,8 +110,10 @@ introduced: the nested `MeasurementAccuracyStruct`, the list-typed
 `MoveToLevelWithOnOff` (the inherited command fields), TemperatureControl's
 `SetTemperature` (a negative signed request field), Thermostat's
 `SetWeeklySchedule` (TLV null inside list entries), ValveConfigurationAndControl's
-`Open(null, 50)` (the first `Option<Nullable<T>>` request field), and
-ScenesManagement's `AddScene` (nested request lists). The read/write
+`Open(null, 50)` (the first `Option<Nullable<T>>` request field),
+ScenesManagement's `AddScene` (nested request lists), and Messages'
+`CancelMessagesRequest` (the first request `list<octstr>`) and
+`PresentMessagesRequest` (the first optional request list). The read/write
 actuator clusters additionally carry `decode(encode(x)) == x` roundtrips, and
 floats get both a binary32-edge roundtrip (signed zero, subnormals, infinities,
 NaN — compared by bits) and a `proptest` roundtrip drawn uniformly from the
@@ -124,6 +128,16 @@ MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's GoHome and
 its events; RvcRunMode / RvcCleanMode's refused changes) are validated the same
 way only for now: their live tests are written but have not run, because
 rvc-app and microwave-oven-app need Rosetta 2 to build on Apple silicon.
+Messages' live tests are written but have not run either (tv-app, its only
+chip host, needs Rosetta 2 to build on Apple silicon); it is validated by
+decode tests, two matter.js vectors and the chip 1.4.2 XML check only.
+EnergyPreference runs live against chip's all-clusters at master (locally)
+and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against chip
+v1.4.2.0 (the nightly); master's server is unexercised, because master's
+all-clusters no longer serves it and water-heater-app is not built.
+EnergyEvse, DeviceEnergyManagement and PowerTopology commands and events run
+live only against chip master's evse-app, locally; the nightly decodes their
+attributes on v1.4.2.0's all-clusters.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`

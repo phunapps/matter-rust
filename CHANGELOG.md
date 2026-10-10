@@ -364,8 +364,9 @@ The codegen now generates only what a client can use:
   `encode_cancel_boost`. `WaterHeaterBoostInfoStruct`'s rustdoc states its
   two rules, which the encoder does not check: at most one of `one_shot`
   and `target_reheat`, and `target_percentage` whenever `target_reheat` is
-  set. chip's server refuses a Boost that breaks either with
-  `InvalidCommand`.
+  set. chip's server with the TankPercent (TP) feature refuses a Boost
+  that breaks either with `InvalidCommand`; without TP it refuses any
+  Boost that carries `target_percentage` or `target_reheat`.
 - **DeviceEnergyManagement (0x0098)**, with its four events (`PowerAdjustEnd`
   and `Resumed` carry a cause; `PowerAdjustStart` and `Paused` are ids
   only): every attribute, including the nested `Forecast` (slots, each with
@@ -378,6 +379,8 @@ The codegen now generates only what a client can use:
   retries it as a timed interaction when the device asks. Each
   `ChargingTargetStruct` should carry at least one of `target_so_c` and
   `added_energy` (its rustdoc says so; the encoder does not check it).
+  chip's server also checks `target_so_c` against the SOC feature: with
+  SOC, `target_so_c` is required; without it, it may only be absent or 100.
 - **Messages (0x0097)**, with its three events: `Messages`,
   `ActiveMessageIDs`, `encode_present_messages_request` and
   `encode_cancel_messages_request`, both pinned against matter.js byte
@@ -386,6 +389,27 @@ The codegen now generates only what a client can use:
   `Option` (`None` = withheld). Its `fabric_index`, and the events'
   `fabric_index`, are `Option` too: chip does not fabric-scope them and its
   servers send them without FabricIndex.
+
+chip's zap and controller codegen mark WaterHeaterManagement and
+DeviceEnergyManagement provisional (at v1.4.2.0 and master), and Messages at
+v1.4.2.0 (master no longer does); the Matter 1.4.2 specification marks none
+of the three provisional, so, as with ScenesManagement, they carry no
+provisional note.
+
+EnergyPreference runs live against chip's all-clusters, both master
+(locally) and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only
+against v1.4.2.0's all-clusters, in the nightly: master's all-clusters no
+longer serves it, and master's server is unexercised (water-heater-app, its
+master host, is not built). DeviceEnergyManagement, EnergyEvse and
+PowerTopology commands and events run live only against chip master's
+evse-app, locally (evse-app does not exist at v1.4.2.0 and is not in the
+nightly); the nightly decodes their attributes, and invokes GetTargets once,
+on v1.4.2.0's all-clusters. Messages is validated by decode tests, two
+matter.js vectors and the chip 1.4.2 XML check only: its live tests are
+written but have not run, because tv-app, its only chip host, needs Rosetta
+2 to build on Apple silicon. chip's servers send every `MessageStruct` field
+to every fabric and no FabricIndex, so on a chip device every entry decodes
+in full with `fabric_index` `None`.
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

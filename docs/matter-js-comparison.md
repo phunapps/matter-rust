@@ -77,9 +77,10 @@ These are language-idiomatic differences. They do not affect interop.
   `mandatoryOnWrite` field, and a complete entry encodes byte-identically to
   before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct`, (since
   M9-A3 B4: IcdManagement `RegisteredClients` is read-only)
-  `MonitoringRegistrationStruct` and (M9-A3 B4) ScenesManagement
-  `SceneInfoStruct` are decode-only. matter.js 0.16.11 declares
-  `SceneInfoStruct`'s fabric-sensitive fields mandatory too (`TlvSceneInfo`:
+  `MonitoringRegistrationStruct`, (M9-A3 B4) ScenesManagement
+  `SceneInfoStruct` and (M9-A3 B5) Messages `MessageStruct` are
+  decode-only. matter.js 0.16.11 declares `SceneInfoStruct`'s
+  fabric-sensitive fields mandatory too (`TlvSceneInfo`:
   `currentScene: TlvField(1, …)`, `currentGroup`, `sceneValid`,
   `clusters/scenes-management.js`); we decode them as `Option`. ACL writes go through
   matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
@@ -93,13 +94,17 @@ These are language-idiomatic differences. They do not affect interop.
   (`fabricIndex: TlvField(254, TlvFabricIndex)`, `clusters/messages.js`).
   chip does not fabric-scope them: its zap `messages-cluster.xml` says "TODO:
   enable isFabricScoped", and its generated `MessageStruct` and event types
-  have `kIsFabricScoped = false` and no field 254, at v1.4.2.0 and master. So
-  chip's tv-app sends every entry in full, to every fabric, without
-  FabricIndex. We decode FabricIndex as `Option` (the dump's
-  `FIELD_RELAXATIONS`, `meta.relaxed` class P). `MessageStruct`'s six
-  mandatory fabric-sensitive fields are `Option` as well (the rule above);
-  it is decode-only, since the attribute is read-only and no request
-  carries it.
+  have `kIsFabricScoped = false` and no field 254, at v1.4.2.0 and master.
+  tv-app's delegate (`MessagesManager::HandleGetMessages`) encodes every
+  cached entry, unfiltered; no chip-SDK server can send FabricIndex, because
+  the generated types have no field 254. We decode FabricIndex as `Option`
+  (the dump's `FIELD_RELAXATIONS`, `meta.relaxed` class P). `MessageStruct`'s
+  six mandatory fabric-sensitive fields are `Option` as well (the rule
+  above). matter.js declares those six mandatory too (`TlvMessage`:
+  `messageId: TlvField(0, …)`, `priority`, `messageControl`, `startTime`,
+  `duration`, `messageText`, `clusters/messages.js`), and chip sends no
+  field 254 to tell another fabric's entry apart. `MessageStruct` is
+  decode-only, since the attribute is read-only and no request carries it.
 
 - **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
   0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and
