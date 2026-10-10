@@ -3096,7 +3096,9 @@ fn smoke_co_alarm_events_and_self_test_decode() {
             .alarm_severity_level,
         AlarmStateEnum::Warning
     );
-    // The six fieldless events are ids only (no payload struct).
+    // All eleven event ids; the six fieldless events (HardwareFault,
+    // EndOfService, SelfTestComplete, AlarmMuted, MuteEnded, AllClear) have
+    // only these ids (no payload struct).
     assert_eq!(
         [
             event_id::SMOKE_ALARM,
@@ -3170,8 +3172,9 @@ fn boolean_state_configuration_decodes_and_commands_encode() {
         encode_enable_disable_alarm(AlarmModeBitmap::all()),
         struct_of(&|w| w.put_uint(Tag::Context(0), 3).unwrap())
     );
-    // chip sends AlarmsSuppressed only with the SPRS feature
-    // (GenerateAlarmsStateChangedEvent / emitAlarmsStateChangedEvent).
+    // chip's server sends AlarmsSuppressed only with the SPRS feature (master
+    // BooleanStateConfigurationCluster::GenerateAlarmsStateChangedEvent;
+    // v1.4.2.0 emitAlarmsStateChangedEvent).
     let e = AlarmsStateChangedEvent::decode(&struct_of(&|w| {
         w.put_uint(Tag::Context(0), 3).unwrap();
         w.put_uint(Tag::Context(1), 1).unwrap();
@@ -3444,7 +3447,9 @@ fn scenes_responses_decode() {
         (0, Some(1), None)
     );
     // NotFound (0x8B): chip sets only Status, GroupId and SceneId
-    // (ScenesManagementCluster::HandleViewScene; "Status == Success" fields).
+    // (master ScenesManagementCluster::HandleViewScene; v1.4.2.0
+    // ScenesServer::HandleViewScene / ViewSceneParse; "Status == Success"
+    // fields).
     let missing = ViewSceneResponse::decode(&struct_of(&|w| {
         w.put_uint(Tag::Context(0), 0x8B).unwrap();
         w.put_uint(Tag::Context(1), 0).unwrap();

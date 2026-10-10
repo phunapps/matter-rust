@@ -287,6 +287,7 @@ async fn assert_fabric_scene_info_withheld(node_a: &Node, node_b: &Node, a_index
         (0, Some(0), Some(false)),
         "A's own entry keeps its sensitive fields: {a:?}"
     );
+    assert!(a.current_scene.is_some(), "{a:?}");
     remove_all_scenes(node_b).await;
     remove_all_scenes(node_a).await;
 }
@@ -361,8 +362,10 @@ async fn fabric_indices(node_a: &Node) -> (usize, u8, u8) {
             .unwrap_or_else(|| panic!("{who}'s fabric must be present in A's fabric list"))
             .fabric_index
     };
-    // A first: it is the fixture's fabric, so a missing A is the more
-    // fundamental failure and its message must not be masked by B's.
+    // A, then B. The tuple this replaced was already evaluated left to
+    // right, so splitting it into two lets is a readability change only: a
+    // missing A (the fixture's own fabric, the more fundamental failure) is
+    // still reported before a missing B.
     let a_index = index_of(FABRIC_A_ID, "A");
     let b_index = index_of(FABRIC_B_ID, "B");
     assert_ne!(

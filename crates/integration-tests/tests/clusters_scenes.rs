@@ -17,7 +17,9 @@
 //! Scenes use group 0 (no group): chip checks group membership only for a
 //! non-zero group (`0 != req.groupID && !HasEndpoint(...)`), so no Groups
 //! setup is needed. The scene table is fabric-scoped and persisted (KVS), so
-//! every test starts and ends with RemoveAllScenes(0), and the scene's OnOff
+//! every test that creates scenes starts and ends with RemoveAllScenes(0)
+//! (the attribute-decode test, which creates none, only starts with it), and
+//! the scene's OnOff
 //! extension field set is restored to the light's original state. Chip
 //! sources: `ScenesManagementCluster.cpp` on master, `scenes-server.cpp` at
 //! v1.4.2.0 (the same statuses, response fields and FabricSceneInfo updates

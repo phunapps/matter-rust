@@ -89,7 +89,8 @@ async fn window_covering_go_to_lift_percentage() {
 /// .matter defaults (nothing writes them). GoToLiftValue / GoToTiltValue reach chip's handler
 /// (a malformed payload would be InvalidCommand) and are refused with Failure
 /// because ABS is not set (`emberAfWindowCoveringClusterGoToLiftValueCallback`,
-/// the same at both refs), leaving the target position unchanged.
+/// the same at both refs), leaving the lift and tilt target positions
+/// unchanged.
 #[tokio::test]
 async fn window_covering_absolute_position_decodes_and_go_to_value_is_refused() {
     let cfg = integration_tests::dut_or_skip!();
@@ -132,6 +133,13 @@ async fn window_covering_absolute_position_decodes_and_go_to_value_is_refused() 
         ATTR_TARGET_POSITION_LIFT_PERCENT100THS,
     )
     .await;
+    let tilt_target_before = read_attr(
+        &node,
+        1,
+        WINDOW_COVERING,
+        a::TARGET_POSITION_TILT_PERCENT100THS,
+    )
+    .await;
     for (command, fields) in [
         (
             wc::command_id::GO_TO_LIFT_VALUE,
@@ -163,5 +171,16 @@ async fn window_covering_absolute_position_decodes_and_go_to_value_is_refused() 
         .await,
         target_before,
         "a refused GoToLiftValue moves nothing"
+    );
+    assert_eq!(
+        read_attr(
+            &node,
+            1,
+            WINDOW_COVERING,
+            a::TARGET_POSITION_TILT_PERCENT100THS
+        )
+        .await,
+        tilt_target_before,
+        "a refused GoToTiltValue moves nothing"
     );
 }
