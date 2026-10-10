@@ -1499,14 +1499,36 @@ fn unreferenced_datatypes_are_pruned_except_the_keep_list() {
     for (c, d) in KEPT_UNREFERENCED {
         let _ = datatype(cluster(&v, c), d);
     }
-    // Every StatusCodeEnum stays: the cluster-specific status codes no field names.
-    for c in [
-        "AdministratorCommissioning",
-        "DoorLock",
-        "TimeSynchronization",
-    ] {
-        let _ = datatype(cluster(&v, c), "StatusCodeEnum");
-    }
+    // Every StatusCodeEnum stays: the cluster-specific status codes no field
+    // names. A model StatusCodeEnum the prune dropped would be recorded as a
+    // `datatype` exclusion (checked above against PRUNED_DATATYPES, and here by
+    // name), and the clusters that carry one are exactly the allowlisted
+    // clusters whose @matter/model 0.17.1 cluster has one.
+    assert!(
+        pruned.iter().all(|(_, d)| *d != "StatusCodeEnum"),
+        "{pruned:?}"
+    );
+    let mut with_status_codes: Vec<&str> = clusters(&v)
+        .iter()
+        .filter(|c| {
+            c["datatypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["name"] == "StatusCodeEnum")
+        })
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    with_status_codes.sort_unstable();
+    assert_eq!(
+        with_status_codes,
+        [
+            "AdministratorCommissioning",
+            "DoorLock",
+            "TimeSynchronization",
+            "ValveConfigurationAndControl",
+        ]
+    );
 }
 
 // ---- M9-A3 B4: safety sensors ---------------------------------------------------

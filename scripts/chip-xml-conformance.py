@@ -31,7 +31,13 @@ Findings that always FAIL (never allow-listed: fix the supplement):
      that differs, a field or attribute whose type, nullability or
      optionality differs (a named enum, bitmap or struct must be the same
      name, not just the same width), an attribute whose writability differs,
-     or a request whose response (status, or which response command) differs
+     a request whose response (status, or which response command) differs,
+     a feature whose name differs, or a feature, attribute or command whose
+     provisional mark (the model's `provisional` vs a 1.4.2 conformance that
+     begins with <provisionalConform/>, directly or as the first branch of
+     <otherwiseConform>) or deprecation (the dump's `deprecated` vs a
+     <deprecateConform/>, directly or as an <otherwiseConform> branch)
+     differs
 
 Reported without failing:
   MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
@@ -210,6 +216,25 @@ def conformance_of(el):
     return None
 
 
+def conformance_marks(el):
+    """(provisional, deprecated) for an element's 1.4.2 conformance, or
+    (None, None) when it states none. Provisional: the conformance begins with
+    <provisionalConform/>, directly or as the first branch of
+    <otherwiseConform> (`P, O`), as the dump's isProvisional reads `P` and
+    `P, ...`. Deprecated: a <deprecateConform/>, directly or as any
+    <otherwiseConform> branch (`[Zigbee], D`), as the dump's
+    isDeprecatedConformance reads `D` and `..., D`."""
+    first = next((ch for ch in el if ch.tag in CONFORMANCE_TAGS), None)
+    if first is None:
+        return None, None
+    if first.tag == "otherwiseConform":
+        branches = [ch for ch in first if ch.tag in CONFORMANCE_TAGS]
+        provisional = bool(branches) and branches[0].tag == "provisionalConform"
+        deprecated = any(b.tag == "deprecateConform" for b in branches)
+        return provisional, deprecated
+    return first.tag == "provisionalConform", first.tag == "deprecateConform"
+
+
 def nullable_of(el):
     """True/False when a <quality> child is present, None when unstated."""
     q = el.find("quality")
@@ -315,6 +340,7 @@ def own_tables(root):
             # Every command, request and response, for XML-ONLY reporting.
             # Keyed by name: a derived cluster's override may omit the id or
             # direction (merged from the base like any other override).
+            provisional, deprecated = conformance_marks(c)
             t["cmd"][norm(c.get("name"))] = {
                 "name": c.get("name"),
                 "id": (parse_int(c.get("id"), f"{cname}: command id")
@@ -322,6 +348,8 @@ def own_tables(root):
                 "direction": c.get("direction"),
                 "response": c.get("response"),
                 "conf": conformance_of(c),
+                "provisional": provisional,
+                "deprecated": deprecated,
                 "fields": xml_fields(c),
             }
     feats = root.find("features")
@@ -329,18 +357,24 @@ def own_tables(root):
         for f in feats.findall("feature"):
             if not f.get("code"):
                 continue
+            provisional, deprecated = conformance_marks(f)
             t["feature"][norm(f.get("code"))] = {
                 "code": f.get("code"),
+                "name": f.get("name"),
                 "bit": (parse_int(f.get("bit"), f"{cname}: feature bit")
                         if f.get("bit") is not None else None),
                 "conf": conformance_of(f),
+                "provisional": provisional,
+                "deprecated": deprecated,
             }
     attrs = root.find("attributes")
     if attrs is not None:
         for a in attrs.findall("attribute"):
             if a.get("id") is not None:
+                provisional, deprecated = conformance_marks(a)
                 t["attr"][parse_int(a.get("id"), f"{cname}: attribute id")] = dict(
-                    xml_field(a), writable=writable_of(a))
+                    xml_field(a), writable=writable_of(a),
+                    provisional=provisional, deprecated=deprecated)
     return t
 
 
@@ -803,6 +837,18 @@ def response_mismatches(mc, xc, xt):
     return []
 
 
+def mark_mismatches(m, x):
+    """How a supplemented feature, attribute or command's provisional and
+    deprecated marks differ from its 1.4.2 conformance (an empty list when
+    they match). They drive the generated rustdoc line, so a dropped or
+    invented mark is an S finding, not a cosmetic one."""
+    out = []
+    for mark in ("provisional", "deprecated"):
+        if bool(m.get(mark)) != bool(x.get(mark)):
+            out.append(f"{mark} {bool(m.get(mark))} vs 1.4.2 {bool(x.get(mark))}")
+    return out
+
+
 def check_supplemented(rep, c, xt, zap, meta):
     """Class S: every meta.supplemented element of cluster `c` matches its
     1.4.2 counterpart exactly (the supplement is hand-transcribed, so a
@@ -820,8 +866,12 @@ def check_supplemented(rep, c, xt, zap, meta):
             xf = xt["feature"].get(norm(name))
             if mf is None or xf is None:
                 problems.append("absent from " + ("clusters.json" if mf is None else "1.4.2"))
-            elif mf["bit"] != xf.get("bit"):
-                problems.append(f"bit {mf['bit']} vs 1.4.2 {xf.get('bit')}")
+            else:
+                if mf["bit"] != xf.get("bit"):
+                    problems.append(f"bit {mf['bit']} vs 1.4.2 {xf.get('bit')}")
+                if mf["name"] != xf.get("name"):
+                    problems.append(f"name {mf['name']!r} vs 1.4.2 {xf.get('name')!r}")
+                problems += mark_mismatches(mf, xf)
         elif label == "Attribute":
             ma = next((a for a in c["attributes"] if a["name"] == name), None)
             xa = xt["attr"].get(ma["id"]) if ma is not None else None
@@ -831,6 +881,7 @@ def check_supplemented(rep, c, xt, zap, meta):
                 problems += field_mismatches(ma, xa, dts, xt, zap)
                 if ma["writable"] != bool(xa.get("writable")):
                     problems.append(f"writable {ma['writable']} vs 1.4.2 {bool(xa.get('writable'))}")
+                problems += mark_mismatches(ma, xa)
         elif label == "Command":
             mc = next((x for x in c["commands"] if x["name"] == name), None)
             xc = xt["cmd"].get(norm(name))
@@ -841,6 +892,7 @@ def check_supplemented(rep, c, xt, zap, meta):
                 if (mc["direction"], mc["id"]) != (direction, xc.get("id")):
                     problems.append(f"{mc['direction']} id {mc['id']} vs 1.4.2 {direction} id {xc.get('id')}")
                 problems += response_mismatches(mc, xc, xt)
+                problems += mark_mismatches(mc, xc)
                 xfields = xc.get("fields", {})
                 mids = sorted(f["id"] for f in mc["fields"])
                 if mids != sorted(xfields):
