@@ -57,6 +57,64 @@ fn endpoint_serves(source: &str, endpoint: u16, name: &str) -> Result<bool> {
     }))
 }
 
+/// Whether the all-clusters app built from `cfg.chip_root` serves attribute
+/// `attribute` (its `.matter` name, e.g. `unmounted`) of cluster `cluster` on
+/// `endpoint`, according to that checkout's `all-clusters-app.matter`.
+///
+/// For an attribute whose presence differs between the chip releases the
+/// harness runs against: master's all-clusters serves `SmokeCoAlarm`
+/// `unmounted` (0x000D, cluster revision 2), v1.4.2.0's does not. An
+/// exact-id sweep asks the source instead of accepting either list. Like
+/// [`all_clusters_serves`], this assumes the binary was built from that
+/// checkout.
+///
+/// # Errors
+///
+/// If the file cannot be read, has no `endpoint <endpoint> {` block, or the
+/// cluster is not served there.
+pub fn all_clusters_serves_attribute(
+    cfg: &DutConfig,
+    endpoint: u16,
+    cluster: &str,
+    attribute: &str,
+) -> Result<bool> {
+    let path = cfg.chip_root.join(ALL_CLUSTERS_MATTER);
+    let source = std::fs::read_to_string(&path)
+        .with_context(|| format!("read all-clusters endpoint config {}", path.display()))?;
+    cluster_serves_attribute(&source, endpoint, cluster, attribute)
+        .with_context(|| format!("in {}", path.display()))
+}
+
+/// Whether the `server cluster <cluster> {` block inside `.matter` `source`'s
+/// `endpoint <endpoint> {` block declares `attribute <attribute>` (any storage:
+/// `ram`, `persist`, `callback`). The cluster block ends at its own `}`,
+/// indented by two.
+fn cluster_serves_attribute(
+    source: &str,
+    endpoint: u16,
+    cluster: &str,
+    attribute: &str,
+) -> Result<bool> {
+    let header = format!("endpoint {endpoint} {{");
+    let mut lines = source.lines().skip_while(|l| l.trim_end() != header);
+    if lines.next().is_none() {
+        bail!("no `{header}` block");
+    }
+    let opening = format!("server cluster {cluster} {{");
+    let mut block = lines
+        .take_while(|l| !l.starts_with('}'))
+        .skip_while(|l| l.trim() != opening);
+    if block.next().is_none() {
+        bail!("endpoint {endpoint} serves no cluster {cluster}");
+    }
+    Ok(block.take_while(|l| l.trim() != "}").any(|l| {
+        let words: Vec<&str> = l.split_whitespace().collect();
+        words
+            .windows(2)
+            .any(|w| w[0] == "attribute" && w[1] == attribute)
+    }))
+}
+
 /// Global attribute ids (`AcceptedCommandList`, `AttributeList`, ...,
 /// 0xF000..=0xFFFE) are left out of a sweep: `gen/globals.rs` covers them for
 /// every cluster.
@@ -538,6 +596,46 @@ endpoint 2 {
             .map(|id| (id, Vec::new()))
             .collect();
         assert_eq!(standard_attribute_ids(&attrs), [0x0000, 0x0005]);
+    }
+
+    /// A `server cluster` block shaped like all-clusters' `SmokeCoAlarm`.
+    const SMOKE: &str = "\
+endpoint 1 {
+  server cluster SmokeCoAlarm {
+    emits event SmokeAlarm;
+    persist  attribute expressedState default = 0;
+    ram      attribute expiryDate default = 3976214400;
+    ram      attribute unmounted default = 0;
+  }
+  server cluster OnOff {
+    ram      attribute unmountedx default = 0;
+  }
+}
+";
+
+    #[test]
+    fn an_attribute_in_the_cluster_block_is_served() {
+        assert!(cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "unmounted").unwrap());
+        assert!(cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "expiryDate").unwrap());
+    }
+
+    #[test]
+    fn an_attribute_elsewhere_or_a_longer_name_is_not_served() {
+        // `unmountedx` is another cluster's (and a longer name); an event is not
+        // an attribute.
+        assert!(!cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "unmountedx").unwrap());
+        assert!(!cluster_serves_attribute(SMOKE, 1, "OnOff", "unmounted").unwrap());
+        assert!(!cluster_serves_attribute(SMOKE, 1, "SmokeCoAlarm", "SmokeAlarm").unwrap());
+    }
+
+    #[test]
+    fn a_cluster_not_served_on_the_endpoint_is_an_error() {
+        let err = cluster_serves_attribute(SMOKE, 1, "Thermostat", "x").unwrap_err();
+        assert!(
+            err.to_string().contains("serves no cluster Thermostat"),
+            "{err:#}"
+        );
+        assert!(cluster_serves_attribute(SMOKE, 2, "SmokeCoAlarm", "unmounted").is_err());
     }
 
     #[test]

@@ -254,7 +254,25 @@ pub async fn wait_for_event_after(
     event: u32,
     baseline: Option<u64>,
 ) -> Result<Vec<EventReportItem>> {
-    let deadline = Instant::now() + EVENT_TIMEOUT;
+    wait_for_event_within(node, endpoint, cluster, event, baseline, EVENT_TIMEOUT).await
+}
+
+/// [`wait_for_event_after`] with its own deadline, for an event the DUT
+/// emits on a timer longer than [`EVENT_TIMEOUT`] (all-clusters' `SmokeCoAlarm`
+/// self-test completes 10 s after the request: `kSelfTestingTimeoutSec`).
+///
+/// # Errors
+///
+/// A read error, or no newer event before `timeout`.
+pub async fn wait_for_event_within(
+    node: &Node,
+    endpoint: u16,
+    cluster: u32,
+    event: u32,
+    baseline: Option<u64>,
+    timeout: Duration,
+) -> Result<Vec<EventReportItem>> {
+    let deadline = Instant::now() + timeout;
     loop {
         let mut items =
             read_event_items(node, EventPath::concrete(endpoint, cluster, event)).await?;
@@ -265,7 +283,7 @@ pub async fn wait_for_event_after(
         if Instant::now() >= deadline {
             bail!(
                 "no event {cluster:#06x}/{event:#04x} on endpoint {endpoint} after event \
-                 number {baseline:?} within {EVENT_TIMEOUT:?}"
+                 number {baseline:?} within {timeout:?}"
             );
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
