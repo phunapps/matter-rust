@@ -71,6 +71,7 @@ pub mod attribute_id {
     /// `MaxPathsPerInvoke`.
     pub const MAX_PATHS_PER_INVOKE: u32 = 0x0016;
     /// `ConfigurationVersion`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
     pub const CONFIGURATION_VERSION: u32 = 0x0018;
 }
 
@@ -840,6 +841,8 @@ pub fn decode_max_paths_per_invoke(tlv: &[u8]) -> Result<u16, ClusterError> {
 }
 
 /// Decode the `ConfigurationVersion` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

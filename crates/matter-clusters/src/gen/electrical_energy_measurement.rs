@@ -59,8 +59,10 @@ bitflags::bitflags! {
         /// PeriodicEnergy (PERE).
         const PERE = 1 << 3;
         /// ApparentEnergy (APPE).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const APPE = 1 << 4;
         /// ReactiveEnergy (REAE).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const REAE = 1 << 5;
     }
 }
@@ -94,12 +96,16 @@ pub struct EnergyMeasurementStruct {
     /// Field EndSystime (tag 4).
     pub end_systime: Option<u64>,
     /// Field ApparentEnergy (tag 5).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
     pub apparent_energy: Option<i64>,
     /// Field ReactiveEnergy (tag 6).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
     pub reactive_energy: Option<i64>,
 }
 
 /// `MeasurementAccuracyRangeStruct` struct.
+///
+/// Choice group `a`: a sender includes at least one of `percent_max`, `fixed_max`. Not checked when encoding.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MeasurementAccuracyRangeStruct {

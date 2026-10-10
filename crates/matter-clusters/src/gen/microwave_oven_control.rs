@@ -42,8 +42,10 @@ pub mod attribute_id {
     /// `PowerStep`.
     pub const POWER_STEP: u32 = 0x0005;
     /// `SupportedWatts`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
     pub const SUPPORTED_WATTS: u32 = 0x0006;
     /// `SelectedWattIndex`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
     pub const SELECTED_WATT_INDEX: u32 = 0x0007;
     /// `WattRating`.
     pub const WATT_RATING: u32 = 0x0008;
@@ -56,6 +58,7 @@ bitflags::bitflags! {
         /// PowerAsNumber (PWRNUM).
         const PWRNUM = 1 << 0;
         /// PowerInWatts (WATTS).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const WATTS = 1 << 1;
         /// PowerNumberLimits (PWRLMTS).
         const PWRLMTS = 1 << 2;
@@ -166,6 +169,8 @@ pub fn decode_power_step(tlv: &[u8]) -> Result<u8, ClusterError> {
 
 /// Decode the `SupportedWatts` attribute value.
 ///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_supported_watts(tlv: &[u8]) -> Result<Vec<u16>, ClusterError> {
@@ -201,6 +206,8 @@ pub fn decode_supported_watts(tlv: &[u8]) -> Result<Vec<u16>, ClusterError> {
 
 /// Decode the `SelectedWattIndex` attribute value.
 ///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.
 pub fn decode_selected_watt_index(tlv: &[u8]) -> Result<u8, ClusterError> {
@@ -234,6 +241,8 @@ pub fn decode_watt_rating(tlv: &[u8]) -> Result<u16, ClusterError> {
 }
 
 /// Encode the `SetCookingParameters` command request payload.
+///
+/// Choice group `b`: a sender includes at least one of `cook_mode`, `cook_time`, `power_setting`, `watt_setting_index`. Not checked when encoding.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_set_cooking_parameters(

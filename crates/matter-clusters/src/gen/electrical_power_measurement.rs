@@ -98,6 +98,8 @@ pub struct HarmonicMeasurementStruct {
 }
 
 /// `MeasurementAccuracyRangeStruct` struct.
+///
+/// Choice group `a`: a sender includes at least one of `percent_max`, `fixed_max`. Not checked when encoding.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MeasurementAccuracyRangeStruct {

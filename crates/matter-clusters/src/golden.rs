@@ -29,6 +29,9 @@ pub mod command_id {
     pub const SET_LEVEL_RESPONSE: u32 = 0x02;
     /// `SetPoint` (request).
     pub const SET_POINT: u32 = 0x03;
+    /// `Pick` (request).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const PICK: u32 = 0x04;
 }
 
 /// Attribute IDs (cluster-specific).
@@ -57,6 +60,9 @@ pub mod attribute_id {
     pub const POINTS: u32 = 0x000A;
     /// `Scoped`.
     pub const SCOPED: u32 = 0x000B;
+    /// `Draft`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const DRAFT: u32 = 0x000C;
 }
 
 /// Event IDs.
@@ -65,6 +71,9 @@ pub mod event_id {
     pub const TRIPPED: u32 = 0x00;
     /// `LevelChanged` (info priority).
     pub const LEVEL_CHANGED: u32 = 0x01;
+    /// `Drafted` (info priority).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub const DRAFTED: u32 = 0x02;
 }
 
 bitflags::bitflags! {
@@ -74,6 +83,7 @@ bitflags::bitflags! {
         /// FeatureA (FA).
         const FA = 1 << 0;
         /// FeatureB (FB).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const FB = 1 << 1;
     }
 }
@@ -132,6 +142,23 @@ bitflags::bitflags! {
     }
 }
 
+/// `PickStruct` struct.
+///
+/// Generated from the Matter global type `pickdesc`.
+///
+/// Choice group `a`: a sender includes at least one of `small`, `large`. Not checked when encoding.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct PickStruct {
+    /// Field Small (tag 0).
+    pub small: Option<u8>,
+    /// Field Large (tag 1).
+    pub large: Option<u16>,
+    /// Field Draft (tag 2).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub draft: Option<u8>,
+}
+
 /// `PointStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointStruct {
@@ -161,6 +188,100 @@ pub struct ScopedEntryStruct {
     pub alias: Option<String>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,
+}
+
+impl PickStruct {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_small: Option<u8> = None;
+        let mut f_large: Option<u16> = None;
+        let mut f_draft: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_small =
+                        Some(u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Small"))?)
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_large =
+                        Some(u16::try_from(v).map_err(|_| ClusterError::InvalidLength("Large"))?)
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_draft =
+                        Some(u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Draft"))?)
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            small: f_small,
+            large: f_large,
+            draft: f_draft,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "PickStruct",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+    /// Write this struct's fields into an already-open container.
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
+        if let Some(small) = &self.small {
+            w.put_uint(Tag::Context(0), u64::from(*small))
+                .expect("infallible: vec writer");
+        }
+        if let Some(large) = &self.large {
+            w.put_uint(Tag::Context(1), u64::from(*large))
+                .expect("infallible: vec writer");
+        }
+        if let Some(draft) = &self.draft {
+            w.put_uint(Tag::Context(2), u64::from(*draft))
+                .expect("infallible: vec writer");
+        }
+    }
+    /// Encode as a standalone anonymous TLV structure.
+    #[must_use]
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        self.write_fields(&mut w);
+        w.end_container().expect("infallible: vec writer");
+        buf
+    }
 }
 
 impl PointStruct {
@@ -657,6 +778,36 @@ pub fn decode_scoped(tlv: &[u8]) -> Result<Vec<ScopedEntryStruct>, ClusterError>
     Ok(out)
 }
 
+/// Decode the `Draft` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// # Errors
+/// Returns [`ClusterError`] on a type mismatch or out-of-range value.
+pub fn decode_draft(tlv: &[u8]) -> Result<u8, ClusterError> {
+    let mut r = TlvReader::new(tlv);
+    match r.next()? {
+        Some(Element::Scalar {
+            value: Value::Uint(v),
+            ..
+        }) => Ok(u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Draft"))?),
+        _ => Err(ClusterError::UnexpectedType { context: "Draft" }),
+    }
+}
+
+/// Encode the `Draft` attribute value as a standalone TLV element.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_draft(value: u8) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.put_uint(Tag::Anonymous, u64::from(value))
+        .expect("infallible: vec writer");
+    buf
+}
+
 /// Encode the `Reset` command request payload.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
@@ -770,6 +921,30 @@ pub fn encode_set_point(point: PointStruct) -> Vec<u8> {
     buf
 }
 
+/// Encode the `Pick` command request payload.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
+///
+/// Choice group `a`: a sender includes exactly one of `small`, `large`. Not checked when encoding.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_pick(small: Option<u8>, large: Option<u16>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    if let Some(small) = small {
+        w.put_uint(Tag::Context(0), u64::from(small))
+            .expect("infallible: vec writer");
+    }
+    if let Some(large) = large {
+        w.put_uint(Tag::Context(1), u64::from(large))
+            .expect("infallible: vec writer");
+    }
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
 /// Decoded `LevelChangedEvent` payload.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -831,6 +1006,63 @@ impl LevelChangedEvent {
             _ => {
                 return Err(ClusterError::UnexpectedType {
                     context: "LevelChangedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `DraftedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DraftedEvent {
+    /// Field Value (tag 0).
+    /// Provisional in the Matter specification: a later revision may change or remove it.
+    pub value: u8,
+}
+
+impl DraftedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_value: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_value =
+                        Some(u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Value"))?)
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            value: f_value.ok_or(ClusterError::MissingField("Value"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "DraftedEvent",
                 })
             }
         }

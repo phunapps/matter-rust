@@ -181,6 +181,24 @@ decode tests and the chip 1.4.2 XML check only: their live tests are written
 but have not run, because rvc-app and microwave-oven-app need Rosetta 2 to
 build on Apple silicon.
 
+### matter-clusters: Changed — rustdoc states provisional elements and choice groups
+
+- A feature, attribute, command, event or field that Matter marks
+  provisional (conformance `P`, or `P, …`) carries "Provisional in the Matter
+  specification: a later revision may change or remove it." Today: DoorLock's
+  RID, FGP and FACE features, ElectricalEnergyMeasurement's APPE and REAE
+  features and fields, LevelControl FQ, GroupKeyManagement CS,
+  MicrowaveOvenControl WATTS with `SupportedWatts` / `SelectedWattIndex`, and
+  BasicInformation / BridgedDeviceBasicInformation `ConfigurationVersion`.
+- Fields in a choice group (`O.a+` and the like) are each an `Option`, and the
+  encoders do not check the group; the struct or encoder rustdoc now states
+  it ("a sender includes at least one of …"): MicrowaveOvenControl
+  `encode_set_cooking_parameters`, OperationalCredentials
+  `encode_set_vid_verification_statement`, both
+  `MeasurementAccuracyRangeStruct`s.
+- `service_area::LocationDescriptorStruct` says it is generated from the
+  Matter global type `locationdesc`.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

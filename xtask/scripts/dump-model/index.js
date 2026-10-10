@@ -21,7 +21,10 @@
 //                      fields?: [field] }]
 //     } ] }
 //   field = { id, name, type, metatype, entryType?, nullable, optional, description,
-//             fabricSensitive?, mandatoryOnWrite? }   (both: datatype struct fields only)
+//             fabricSensitive?, mandatoryOnWrite?,   (both: datatype struct fields only)
+//             provisional?, choice? }
+//   provisional? (true only) also on features, attributes, commands, events;
+//   globalName? on a datatype inlined from a lowercase model global.
 //
 // All exclusions are recorded in meta.excluded with a reason. Hard error
 // on: an allowlisted cluster the model doesn't expose, a missing
@@ -43,7 +46,10 @@ const OUT_PATH = join(REPO_ROOT, 'xtask', 'model', 'clusters.json');
 // v2: per-cluster `events` array (dumped for EVENT_ALLOWLIST clusters).
 // v3: `fabricSensitive` / `mandatoryOnWrite` on datatype struct fields +
 //     `meta.relaxed` (M9-A3 §5.4).
-const DUMP_SCRIPT_VERSION = 3;
+// v4: `provisional` (features, attributes, commands, events, fields),
+//     `choice` (fields) and `globalName` (datatypes), for generated rustdoc
+//     (M9-A3 B4).
+const DUMP_SCRIPT_VERSION = 4;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -382,6 +388,82 @@ function exclusionReason(el, aliroCodes, featureNames, disallowedCodes) {
   return null;
 }
 
+// --- conformance notes for generated rustdoc (M9-A3 B4) -------------------
+
+// True for an element the specification marks provisional: conformance `P`,
+// or an otherwise-form whose first branch is `P` (`P, WATTS`,
+// `P, [LF & PA_LF & ABS]`): present today, but a later revision may change or
+// remove it. chip marks the same elements in its 1.5.1 data_model XML
+// (`<provisionalConform/>`; controller-clusters.matter also says `provisional`
+// on the attributes), except GroupKeySetStruct.GroupKeyMulticastPolicy, which
+// chip has as `P, M` and the model as `O`: we follow the model, so it is not
+// marked. A bare-`P` attribute, command or event is excluded
+// (exclusionReason); a bare-`P` feature keeps its bit, so it is marked too.
+function isProvisional(el) {
+  const ast = el.effectiveConformance && el.effectiveConformance.ast;
+  if (!ast) return false;
+  if (ast.type === Conformance.Flag.Provisional) return true;
+  return (
+    ast.type === Conformance.Special.Otherwise &&
+    ast.param.length > 0 &&
+    ast.param[0].type === Conformance.Flag.Provisional
+  );
+}
+
+// The choice group of a field whose conformance is a choice (`O.a`,
+// `[PWRNUM].b+`, `[TP].a-`), at the top level or as one branch of an
+// otherwise-form (`SOC, O.a+`): { group, count, orMore, orLess }. The group
+// constrains how many of its fields a sender includes (exactly `count`, at
+// least `count` with `orMore`, at most `count` with `orLess`);
+// generated encoders take each such field as an Option and do not check it, so
+// the emitter documents it. null when the conformance has no choice.
+function choiceOf(el) {
+  const ast = el.effectiveConformance && el.effectiveConformance.ast;
+  if (!ast) return null;
+  const branches = ast.type === Conformance.Special.Otherwise ? ast.param : [ast];
+  const node = branches.find((b) => b.type === Conformance.Special.Choice);
+  if (!node) return null;
+  return { group: node.param.name, count: node.param.num, orMore: !!node.param.orMore, orLess: !!node.param.orLess };
+}
+
+// Load-time self-check of isProvisional and choiceOf over hand-written
+// conformance forms (parsed by @matter/model itself). Rows: conformance,
+// provisional, choice ('' = none, else `group/count[+]`).
+for (const [text, wantP, wantChoice] of [
+  ['P', true, ''],
+  ['P, O', true, ''],
+  ['P, WATTS', true, ''],
+  ['P, [LF & PA_LF & ABS]', true, ''],
+  ['[Zigbee], D', false, ''],
+  ['O, P', false, ''],
+  ['M', false, ''],
+  ['O.a', false, 'a/1'],
+  ['O.a+', false, 'a/1+'],
+  ['[PWRNUM].b+', false, 'b/1+'],
+  ['SOC, O.a+', false, 'a/1+'],
+  ['[TP].a-', false, 'a/1-'],
+  ['[!TP], [TP].a-', false, 'a/1-'],
+  ['O', false, ''],
+]) {
+  const el = { effectiveConformance: new Conformance(text) };
+  const c = choiceOf(el);
+  const gotChoice = c ? `${c.group}/${c.count}${c.orMore ? '+' : ''}${c.orLess ? '-' : ''}` : '';
+  if (isProvisional(el) !== wantP || gotChoice !== wantChoice) {
+    fail(`conformance-notes self-check: \`${text}\` gave provisional=${isProvisional(el)} choice='${gotChoice}', want ${wantP} '${wantChoice}'`);
+  }
+}
+
+// Add the rustdoc notes to a dumped element `out` from its model element.
+// Keys appear only when set, so elements without notes dump as before.
+function addNotes(out, el, { choice = false } = {}) {
+  if (isProvisional(el)) out.provisional = true;
+  if (choice) {
+    const c = choiceOf(el);
+    if (c) out.choice = c;
+  }
+  return out;
+}
+
 // --- element serialisers --------------------------------------------------
 
 function requireIdNameType(el, where) {
@@ -480,31 +562,38 @@ function dumpField(f, where, ctx) {
       conformance: `${f.effectiveConformance}`,
     });
   }
-  return {
-    id: f.id,
-    name: f.name,
-    type: resolveAnonStruct(f, f.name),
-    metatype: f.effectiveMetatype,
-    entryType: entryTypeOf(f),
-    nullable: !!(f.effectiveQuality && f.effectiveQuality.nullable),
-    optional: !isUnconditionallyMandatory(f),
-    description: f.details || null,
-  };
+  return addNotes(
+    {
+      id: f.id,
+      name: f.name,
+      type: resolveAnonStruct(f, f.name),
+      metatype: f.effectiveMetatype,
+      entryType: entryTypeOf(f),
+      nullable: !!(f.effectiveQuality && f.effectiveQuality.nullable),
+      optional: !isUnconditionallyMandatory(f),
+      description: f.details || null,
+    },
+    f,
+    { choice: true },
+  );
 }
 
 function dumpAttribute(a, where) {
   requireIdNameType(a, where);
-  return {
-    id: a.id,
-    name: a.name,
-    type: a.effectiveType,
-    metatype: a.effectiveMetatype,
-    entryType: entryTypeOf(a),
-    nullable: !!(a.effectiveQuality && a.effectiveQuality.nullable),
-    optional: !a.effectiveConformance.isMandatory,
-    writable: !!(a.effectiveAccess && a.effectiveAccess.writable),
-    description: a.details || null,
-  };
+  return addNotes(
+    {
+      id: a.id,
+      name: a.name,
+      type: a.effectiveType,
+      metatype: a.effectiveMetatype,
+      entryType: entryTypeOf(a),
+      nullable: !!(a.effectiveQuality && a.effectiveQuality.nullable),
+      optional: !a.effectiveConformance.isMandatory,
+      writable: !!(a.effectiveAccess && a.effectiveAccess.writable),
+      description: a.details || null,
+    },
+    a,
+  );
 }
 
 // A derived cluster (e.g. BridgedDeviceBasicInformation, whose base is
@@ -544,13 +633,16 @@ function dumpCommand(cmd, clusterName) {
       }),
     );
   });
-  return {
-    id: cmd.id,
-    name: cmd.name,
-    direction: cmd.isResponse ? 'response' : 'request',
-    responseId: cmd.responseModel ? cmd.responseModel.id : null,
-    fields,
-  };
+  return addNotes(
+    {
+      id: cmd.id,
+      name: cmd.name,
+      direction: cmd.isResponse ? 'response' : 'request',
+      responseId: cmd.responseModel ? cmd.responseModel.id : null,
+      fields,
+    },
+    cmd,
+  );
 }
 
 function dumpEvent(ev, clusterName) {
@@ -570,7 +662,7 @@ function dumpEvent(ev, clusterName) {
     }
     fields.push(dumpField(c, `${where}.${ev.name}.field[${i}]`, { element: ev.name, role: 'event' }));
   });
-  return { id: ev.id, name: ev.name, priority: ev.priority, fields };
+  return addNotes({ id: ev.id, name: ev.name, priority: ev.priority, fields }, ev);
 }
 
 function dumpDatatype(dt, where, nameOverride) {
@@ -766,6 +858,9 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
       if (err) fail(err);
     }
     const dt = dumpDatatype(node, `${clusterName}.global`, rename);
+    // The model's own name, for the generated rustdoc ("generated from the
+    // Matter global type `locationdesc`").
+    if (rename) dt.globalName = name;
     datatypes.push(dt);
     present.add(name);
     if (rename) {
@@ -825,12 +920,17 @@ function dumpCluster(entry) {
       recordExclusion(cluster.name, f.name, 'feature', 'disallowed');
       continue;
     }
-    features.push({
-      bit: f.constraint ? f.constraint.value : null,
-      code: f.name,
-      name: f.title || f.name,
-      description: f.details || null,
-    });
+    features.push(
+      addNotes(
+        {
+          bit: f.constraint ? f.constraint.value : null,
+          code: f.name,
+          name: f.title || f.name,
+          description: f.details || null,
+        },
+        f,
+      ),
+    );
   }
 
   // Attributes: drop the 6 global attributes (handled by gen/globals.rs),

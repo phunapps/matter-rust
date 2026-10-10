@@ -170,14 +170,17 @@ bitflags::bitflags! {
         /// PinCredential (PIN).
         const PIN = 1 << 0;
         /// RfidCredential (RID).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const RID = 1 << 1;
         /// FingerCredentials (FGP).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const FGP = 1 << 2;
         /// WeekDayAccessSchedules (WDSCH).
         const WDSCH = 1 << 4;
         /// DoorPositionSensor (DPS).
         const DPS = 1 << 5;
         /// FaceCredentials (FACE).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const FACE = 1 << 6;
         /// CredentialOverTheAirAccess (COTA).
         const COTA = 1 << 7;

@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 3,
+    "dumpScriptVersion": 4,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -1380,7 +1380,8 @@
           "bit": 2,
           "code": "FQ",
           "name": "Frequency",
-          "description": "> [!NOTE]\n> NOTE: The Frequency feature is provisional."
+          "description": "> [!NOTE]\n> NOTE: The Frequency feature is provisional.",
+          "provisional": true
         }
       ],
       "attributes": [
@@ -2995,7 +2996,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "This attribute shall contain the current version number for the configuration of the Node. A larger value of ConfigurationVersion shall indicate a newer configuration than a lower value."
+          "description": "This attribute shall contain the current version number for the configuration of the Node. A larger value of ConfigurationVersion shall indicate a newer configuration than a lower value.",
+          "provisional": true
         }
       ],
       "commands": [],
@@ -6668,7 +6670,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "This attribute shall contain the current version number for the configuration of the bridged device. A larger value of ConfigurationVersion shall indicate a newer configuration than a lower value.\nIf the bridge detects a change on a bridged device, which it deems as a change in the configuration of the bridged device, it shall increase this attribute (and the corresponding attribute on the bridge itself) as described in Section 9.2.11, \"Node Configuration Changes\".\nThe ability and the method used to detect such a change on a bridged device is manufacturer specific."
+          "description": "This attribute shall contain the current version number for the configuration of the bridged device. A larger value of ConfigurationVersion shall indicate a newer configuration than a lower value.\nIf the bridge detects a change on a bridged device, which it deems as a change in the configuration of the bridged device, it shall increase this attribute (and the corresponding attribute on the bridge itself) as described in Section 9.2.11, \"Node Configuration Changes\".\nThe ability and the method used to detect such a change on a bridged device is manufacturer specific.",
+          "provisional": true
         }
       ],
       "commands": [
@@ -7727,7 +7730,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 1,
@@ -7736,7 +7745,13 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 2,
@@ -7745,7 +7760,13 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             }
           ]
         },
@@ -8015,7 +8036,8 @@
           "bit": 0,
           "code": "CS",
           "name": "CacheAndSync",
-          "description": "The ability to support CacheAndSync security policy and MCSP."
+          "description": "The ability to support CacheAndSync security policy and MCSP.",
+          "provisional": true
         }
       ],
       "attributes": [
@@ -11792,7 +11814,8 @@
           "bit": 1,
           "code": "WATTS",
           "name": "PowerInWatts",
-          "description": "Power is specified in Watts"
+          "description": "Power is specified in Watts",
+          "provisional": true
         },
         {
           "bit": 2,
@@ -11871,7 +11894,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the list of power levels (in W) supported by the server."
+          "description": "Indicates the list of power levels (in W) supported by the server.",
+          "provisional": true
         },
         {
           "id": 7,
@@ -11881,7 +11905,8 @@
           "nullable": false,
           "optional": true,
           "writable": false,
-          "description": "Indicates the index into the list of SupportedWatts of the currently selected power setting.\nThe index shall be a valid index into the SupportedWatts list."
+          "description": "Indicates the index into the list of SupportedWatts of the currently selected power setting.\nThe index shall be a valid index into the SupportedWatts list.",
+          "provisional": true
         },
         {
           "id": 8,
@@ -11908,7 +11933,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the value to which the CurrentMode attribute of the Microwave Oven Mode cluster should be set. The value of this field shall be one from the list of SupportedModes from the Microwave Oven Mode cluster.\nIf this field is missing, the CurrentMode attribute shall be set to a mode having the Normal mode tag."
+              "description": "This field shall indicate the value to which the CurrentMode attribute of the Microwave Oven Mode cluster should be set. The value of this field shall be one from the list of SupportedModes from the Microwave Oven Mode cluster.\nIf this field is missing, the CurrentMode attribute shall be set to a mode having the Normal mode tag.",
+              "choice": {
+                "group": "b",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 1,
@@ -11917,7 +11948,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the CookTime associated with the operation of the device. The value of this field shall be subject to the constraints of the CookTime attribute of this cluster.\nIf this field is missing, the CookTime attribute shall be set to 30 seconds by the server."
+              "description": "This field shall indicate the CookTime associated with the operation of the device. The value of this field shall be subject to the constraints of the CookTime attribute of this cluster.\nIf this field is missing, the CookTime attribute shall be set to 30 seconds by the server.",
+              "choice": {
+                "group": "b",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 2,
@@ -11926,7 +11963,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the PowerSetting associated with the operation of the device. The value of this field shall be subject to the constraints of the PowerSetting attribute of this cluster. If the PowerSetting field does not conform to the constraints of the PowerSetting attribute, the server shall return a CONSTRAINT_ERROR status.\nIf this field is missing, the PowerSetting attribute shall be set to 100 if MaxPower is not supported by the server, otherwise it shall be set to MaxPower if the MaxPower attribute is supported by the server."
+              "description": "This field shall indicate the PowerSetting associated with the operation of the device. The value of this field shall be subject to the constraints of the PowerSetting attribute of this cluster. If the PowerSetting field does not conform to the constraints of the PowerSetting attribute, the server shall return a CONSTRAINT_ERROR status.\nIf this field is missing, the PowerSetting attribute shall be set to 100 if MaxPower is not supported by the server, otherwise it shall be set to MaxPower if the MaxPower attribute is supported by the server.",
+              "choice": {
+                "group": "b",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 3,
@@ -11935,7 +11978,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the value to which the SelectedWattIndex attribute is set. If the value of this field is greater than or equal to the length of the SupportedWatts attribute list, the server shall return a CONSTRAINT_ERROR status and the value of the SelectedWattIndex attribute shall be unchanged.\nIf this field is missing, the SelectedWattIndex attribute shall be set by the server to the index associated with the highest Watt setting for the selected CookMode."
+              "description": "This field shall indicate the value to which the SelectedWattIndex attribute is set. If the value of this field is greater than or equal to the length of the SupportedWatts attribute list, the server shall return a CONSTRAINT_ERROR status and the value of the SelectedWattIndex attribute shall be unchanged.\nIf this field is missing, the SelectedWattIndex attribute shall be set by the server to the index associated with the highest Watt setting for the selected CookMode.",
+              "choice": {
+                "group": "b",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 4,
@@ -13558,7 +13607,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the maximum +/- percentage accuracy for the associated measurement."
+              "description": "This field shall indicate the maximum +/- percentage accuracy for the associated measurement.",
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 3,
@@ -13585,7 +13640,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the maximum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+              "description": "This field shall indicate the maximum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType.",
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 6,
@@ -13919,13 +13980,15 @@
           "bit": 4,
           "code": "APPE",
           "name": "ApparentEnergy",
-          "description": "Measurements report apparent energy"
+          "description": "Measurements report apparent energy",
+          "provisional": true
         },
         {
           "bit": 5,
           "code": "REAE",
           "name": "ReactiveEnergy",
-          "description": "Measurements report reactive energy"
+          "description": "Measurements report reactive energy",
+          "provisional": true
         }
       ],
       "attributes": [
@@ -14146,7 +14209,8 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the reported apparent energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative apparent energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the apparent energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both."
+              "description": "This field shall indicate the reported apparent energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative apparent energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the apparent energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both.",
+              "provisional": true
             },
             {
               "id": 6,
@@ -14155,7 +14219,8 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall be the reported reactive energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative reactive energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the reactive energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both."
+              "description": "This field shall be the reported reactive energy.\nIf the EnergyMeasurementStruct represents cumulative energy, then this shall represent the cumulative reactive energy recorded at either the value of the EndTimestamp field or the value of the EndSystime field, or both.\nIf the EnergyMeasurementStruct represents periodic energy, then this shall represent the reactive energy recorded during the period specified by either the StartTimestamp and EndTimestamp fields, the period specified by the StartSystime and EndSystime fields, or both.",
+              "provisional": true
             }
           ]
         },
@@ -14190,7 +14255,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the maximum +/- percentage accuracy for the associated measurement."
+              "description": "This field shall indicate the maximum +/- percentage accuracy for the associated measurement.",
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 3,
@@ -14217,7 +14288,13 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": "This field shall indicate the maximum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType."
+              "description": "This field shall indicate the maximum +/- fixed accuracy for the associated measurement, in the unit indicated by MeasurementType.",
+              "choice": {
+                "group": "a",
+                "count": 1,
+                "orMore": true,
+                "orLess": false
+              }
             },
             {
               "id": 6,
@@ -15133,13 +15210,15 @@
           "bit": 1,
           "code": "RID",
           "name": "RfidCredential",
-          "description": "If the User Feature is also supported then any RFID credential stored in the lock shall be associated with a User.\nA lock may support multiple credential types so if the User feature is supported the UserType, UserStatus and Schedules are all associated with a User index and not directly with a RFID index. A User Index may have several credentials associated with it."
+          "description": "If the User Feature is also supported then any RFID credential stored in the lock shall be associated with a User.\nA lock may support multiple credential types so if the User feature is supported the UserType, UserStatus and Schedules are all associated with a User index and not directly with a RFID index. A User Index may have several credentials associated with it.",
+          "provisional": true
         },
         {
           "bit": 2,
           "code": "FGP",
           "name": "FingerCredentials",
-          "description": "Currently the cluster only defines the metadata format for notifications when a fingerprint/ finger vein credential is used to access the lock and doesn't describe how to create fingerprint/finger vein credentials. If the Users feature is also supported then the User that a fingerprint/finger vein is associated with can also have its UserType, UserStatus and Schedule modified.\nA lock may support multiple credential types so if the User feature is supported the UserType, UserStatus and Schedules are all associated with a User index and not directly with a Finger index. A User Index may have several credentials associated with it."
+          "description": "Currently the cluster only defines the metadata format for notifications when a fingerprint/ finger vein credential is used to access the lock and doesn't describe how to create fingerprint/finger vein credentials. If the Users feature is also supported then the User that a fingerprint/finger vein is associated with can also have its UserType, UserStatus and Schedule modified.\nA lock may support multiple credential types so if the User feature is supported the UserType, UserStatus and Schedules are all associated with a User index and not directly with a Finger index. A User Index may have several credentials associated with it.",
+          "provisional": true
         },
         {
           "bit": 4,
@@ -15157,7 +15236,8 @@
           "bit": 6,
           "code": "FACE",
           "name": "FaceCredentials",
-          "description": "Currently the cluster only defines the metadata format for notifications when a face recognition, iris, or retina credential is used to access the lock and doesn't describe how to create face recognition, iris, or retina credentials. If the Users feature is also supported then the User that a face recognition, iris, or retina credential is associated with can also have its UserType, UserStatus and Schedule modified.\nA lock may support multiple credential types so if the User feature is supported the UserType, UserStatus and Schedules are all associated with a User and not directly with a credential."
+          "description": "Currently the cluster only defines the metadata format for notifications when a face recognition, iris, or retina credential is used to access the lock and doesn't describe how to create face recognition, iris, or retina credentials. If the Users feature is also supported then the User that a face recognition, iris, or retina credential is associated with can also have its UserType, UserStatus and Schedule modified.\nA lock may support multiple credential types so if the User feature is supported the UserType, UserStatus and Schedules are all associated with a User and not directly with a credential.",
+          "provisional": true
         },
         {
           "bit": 7,
@@ -18602,7 +18682,8 @@
               "optional": false,
               "description": "This field shall be the ID of an area semantic tag, located within the Common Area Namespace. For example, this tag may indicate that the location refers to a bedroom.\nIf this field is NULL, that indicates that the area type information is not available.\n> [!NOTE]\n> NOTE: This field only indicates the type of the area. Multiple areas of the same type, such as bedrooms, may exist in a user's home."
             }
-          ]
+          ],
+          "globalName": "locationdesc"
         },
         {
           "name": "MapStruct",

@@ -971,6 +971,8 @@ pub fn encode_add_trusted_root_certificate(root_ca_certificate: &Vec<u8>) -> Vec
 }
 
 /// Encode the `SetVidVerificationStatement` command request payload.
+///
+/// Choice group `a`: a sender includes at least one of `vendor_id`, `vid_verification_statement`, `vvsc`. Not checked when encoding.
 #[must_use]
 #[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
 pub fn encode_set_vid_verification_statement(

@@ -56,10 +56,15 @@ pub struct Feature {
     pub code: String,
     /// Long name (e.g. `Lighting`).
     pub name: String,
+    /// Provisional in the specification (see [`FieldDef::provisional`]).
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 /// A cluster attribute.
 #[derive(Debug, Deserialize)]
+// A one-to-one serde mirror of a clusters.json attribute object (as FieldDef).
+#[allow(clippy::struct_excessive_bools)]
 pub struct Attribute {
     /// Attribute ID.
     pub id: u32,
@@ -79,6 +84,9 @@ pub struct Attribute {
     pub optional: bool,
     /// Writable (access `W`).
     pub writable: bool,
+    /// Provisional in the specification (see [`FieldDef::provisional`]).
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 /// A request or response command.
@@ -96,6 +104,9 @@ pub struct CommandDef {
     pub response_id: Option<u32>,
     /// Command fields.
     pub fields: Vec<FieldDef>,
+    /// Provisional in the specification (see [`FieldDef::provisional`]).
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 /// A cluster event.
@@ -110,6 +121,9 @@ pub struct EventDef {
     /// Event payload fields (an anonymous structure of context-tagged
     /// fields on the wire — the same shape as a response command payload).
     pub fields: Vec<FieldDef>,
+    /// Provisional in the specification (see [`FieldDef::provisional`]).
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 /// A struct or command field.
@@ -150,6 +164,33 @@ pub struct FieldDef {
     /// JSON means `false`.
     #[serde(default, rename = "mandatoryOnWrite")]
     pub mandatory_on_write: bool,
+    /// The specification marks the element provisional (conformance `P`, or
+    /// an otherwise-form starting with `P` such as `P, WATTS`): a later
+    /// revision may change or remove it. Drives a generated rustdoc line.
+    /// Absent in the JSON means `false`.
+    #[serde(default)]
+    pub provisional: bool,
+    /// The field's choice group (conformance `O.a`, `O.a+`, `[F].b+`): how
+    /// many fields of the group a sender includes. The generated encoders do
+    /// not enforce it, so it drives a generated rustdoc line.
+    #[serde(default)]
+    pub choice: Option<Choice>,
+}
+
+/// A choice-conformance group (Matter Core spec 7.3: `O.a` = exactly one field
+/// of group `a`; `O.a+` = at least one; `O.a-` = at most one).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Choice {
+    /// Group name (`a`, `b`, ...), shared by the fields of one group.
+    pub group: String,
+    /// How many fields of the group the sender includes.
+    pub count: u32,
+    /// `true`: at least `count` (`O.a+`).
+    #[serde(rename = "orMore")]
+    pub or_more: bool,
+    /// `true`: at most `count` (`O.a-`). Neither flag: exactly `count`.
+    #[serde(default, rename = "orLess")]
+    pub or_less: bool,
 }
 
 /// A cluster-local datatype.
@@ -170,6 +211,11 @@ pub struct Datatype {
     /// Struct fields (when `kind == "struct"`).
     #[serde(default)]
     pub fields: Vec<FieldDef>,
+    /// The model's own name when the dump inlined a lowercase model-global
+    /// type under a generated one (`locationdesc` as
+    /// `LocationDescriptorStruct`). Drives a generated rustdoc line.
+    #[serde(default, rename = "globalName")]
+    pub global_name: Option<String>,
 }
 
 /// An enum member.

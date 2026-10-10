@@ -299,8 +299,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_3() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 3);
+fn dump_script_version_is_4() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 4);
 }
 
 #[test]
@@ -985,4 +985,207 @@ fn service_area_location_struct_takes_chips_name_and_tags_stay_raw() {
             "{resp}: StatusText is an unconditional M"
         );
     }
+}
+
+// ---- M9-A3 B4: provisional and choice-group notes for generated rustdoc ----
+
+/// Every element the dump marks `provisional`, as `(cluster, kind, path)`:
+/// kind `feature` (path = code), `attribute`, `command`, `event` (path =
+/// name) or `field` (path = `<Owner>.<Field>`, owner a command, event or
+/// datatype). Sorted.
+fn provisional_elements(v: &Value) -> Vec<(String, &'static str, String)> {
+    let mut out = Vec::new();
+    for c in clusters(v) {
+        let cname = c["name"].as_str().unwrap().to_string();
+        for f in c["features"].as_array().unwrap() {
+            if f["provisional"] == true {
+                out.push((cname.clone(), "feature", f["code"].as_str().unwrap().into()));
+            }
+        }
+        for (key, kind) in [
+            ("attributes", "attribute"),
+            ("commands", "command"),
+            ("events", "event"),
+            ("datatypes", ""),
+        ] {
+            for e in c[key].as_array().unwrap() {
+                let name = e["name"].as_str().unwrap();
+                if !kind.is_empty() && e["provisional"] == true {
+                    out.push((cname.clone(), kind, name.into()));
+                }
+                for f in e["fields"].as_array().into_iter().flatten() {
+                    if f["provisional"] == true {
+                        let path = format!("{name}.{}", f["name"].as_str().unwrap());
+                        out.push((cname.clone(), "field", path));
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Every field the dump gives a `choice` group, as `(cluster, "<Owner>.<Field>",
+/// "<group>/<count>[+]")`. Sorted.
+fn choice_fields(v: &Value) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for c in clusters(v) {
+        let cname = c["name"].as_str().unwrap();
+        for key in ["commands", "events", "datatypes"] {
+            for e in c[key].as_array().unwrap() {
+                for f in e["fields"].as_array().into_iter().flatten() {
+                    let ch = &f["choice"];
+                    if ch.is_null() {
+                        continue;
+                    }
+                    let plus = match (ch["orMore"] == true, ch["orLess"] == true) {
+                        (true, _) => "+",
+                        (_, true) => "-",
+                        _ => "",
+                    };
+                    out.push((
+                        cname.to_string(),
+                        format!(
+                            "{}.{}",
+                            e["name"].as_str().unwrap(),
+                            f["name"].as_str().unwrap()
+                        ),
+                        format!("{}/{}{plus}", ch["group"].as_str().unwrap(), ch["count"]),
+                    ));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The provisional elements of the generated clusters: features, attributes,
+/// commands, events and fields whose conformance is `P` or starts with `P`
+/// (`P, WATTS`). Each gets a generated "Provisional" rustdoc line. A new entry
+/// (a widening, a model upgrade) is a doc change to review.
+const PROVISIONAL: [(&str, &str, &str); 14] = [
+    ("BasicInformation", "attribute", "ConfigurationVersion"),
+    (
+        "BridgedDeviceBasicInformation",
+        "attribute",
+        "ConfigurationVersion",
+    ),
+    ("DoorLock", "feature", "FACE"),
+    ("DoorLock", "feature", "FGP"),
+    ("DoorLock", "feature", "RID"),
+    ("ElectricalEnergyMeasurement", "feature", "APPE"),
+    ("ElectricalEnergyMeasurement", "feature", "REAE"),
+    (
+        "ElectricalEnergyMeasurement",
+        "field",
+        "EnergyMeasurementStruct.ApparentEnergy",
+    ),
+    (
+        "ElectricalEnergyMeasurement",
+        "field",
+        "EnergyMeasurementStruct.ReactiveEnergy",
+    ),
+    ("GroupKeyManagement", "feature", "CS"),
+    ("LevelControl", "feature", "FQ"),
+    ("MicrowaveOvenControl", "attribute", "SelectedWattIndex"),
+    ("MicrowaveOvenControl", "attribute", "SupportedWatts"),
+    ("MicrowaveOvenControl", "feature", "WATTS"),
+];
+
+/// Fields in a choice-conformance group (`O.a`, `O.a+`, `[F].b+`): the
+/// encoders take each as an `Option` and do not enforce the group, so it is
+/// documented on the generated type or encoder.
+const CHOICE: [(&str, &str, &str); 11] = [
+    (
+        "ElectricalEnergyMeasurement",
+        "MeasurementAccuracyRangeStruct.FixedMax",
+        "a/1+",
+    ),
+    (
+        "ElectricalEnergyMeasurement",
+        "MeasurementAccuracyRangeStruct.PercentMax",
+        "a/1+",
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementAccuracyRangeStruct.FixedMax",
+        "a/1+",
+    ),
+    (
+        "ElectricalPowerMeasurement",
+        "MeasurementAccuracyRangeStruct.PercentMax",
+        "a/1+",
+    ),
+    (
+        "MicrowaveOvenControl",
+        "SetCookingParameters.CookMode",
+        "b/1+",
+    ),
+    (
+        "MicrowaveOvenControl",
+        "SetCookingParameters.CookTime",
+        "b/1+",
+    ),
+    (
+        "MicrowaveOvenControl",
+        "SetCookingParameters.PowerSetting",
+        "b/1+",
+    ),
+    (
+        "MicrowaveOvenControl",
+        "SetCookingParameters.WattSettingIndex",
+        "b/1+",
+    ),
+    (
+        "OperationalCredentials",
+        "SetVidVerificationStatement.VendorId",
+        "a/1+",
+    ),
+    (
+        "OperationalCredentials",
+        "SetVidVerificationStatement.VidVerificationStatement",
+        "a/1+",
+    ),
+    (
+        "OperationalCredentials",
+        "SetVidVerificationStatement.Vvsc",
+        "a/1+",
+    ),
+];
+
+#[test]
+fn provisional_and_choice_notes_are_exactly_these() {
+    let v = load();
+    let provisional = provisional_elements(&v);
+    let got: Vec<(&str, &str, &str)> = provisional
+        .iter()
+        .map(|(c, k, p)| (c.as_str(), *k, p.as_str()))
+        .collect();
+    let mut want = PROVISIONAL.to_vec();
+    want.sort_unstable();
+    assert_eq!(got, want);
+    let choices = choice_fields(&v);
+    let got: Vec<(&str, &str, &str)> = choices
+        .iter()
+        .map(|(c, f, g)| (c.as_str(), f.as_str(), g.as_str()))
+        .collect();
+    let mut want = CHOICE.to_vec();
+    want.sort_unstable();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn service_area_location_struct_records_its_global_name() {
+    let v = load();
+    let d = datatype(cluster(&v, "ServiceArea"), "LocationDescriptorStruct");
+    assert_eq!(d["globalName"], "locationdesc");
+    let named: Vec<&str> = clusters(&v)
+        .iter()
+        .flat_map(|c| c["datatypes"].as_array().unwrap())
+        .filter(|d| !d["globalName"].is_null())
+        .map(|d| d["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, ["LocationDescriptorStruct"]);
 }

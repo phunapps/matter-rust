@@ -52,6 +52,7 @@ bitflags::bitflags! {
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
     pub struct Feature: u32 {
         /// CacheAndSync (CS).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const CS = 1 << 0;
     }
 }

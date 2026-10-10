@@ -82,6 +82,7 @@ bitflags::bitflags! {
         /// Lighting (LT).
         const LT = 1 << 1;
         /// Frequency (FQ).
+        /// Provisional in the Matter specification: a later revision may change or remove it.
         const FQ = 1 << 2;
     }
 }

@@ -62,6 +62,7 @@ pub mod attribute_id {
     /// `ProductAppearance`.
     pub const PRODUCT_APPEARANCE: u32 = 0x0014;
     /// `ConfigurationVersion`.
+    /// Provisional in the Matter specification: a later revision may change or remove it.
     pub const CONFIGURATION_VERSION: u32 = 0x0018;
 }
 
@@ -727,6 +728,8 @@ pub fn decode_product_appearance(tlv: &[u8]) -> Result<ProductAppearanceStruct, 
 }
 
 /// Decode the `ConfigurationVersion` attribute value.
+///
+/// Provisional in the Matter specification: a later revision may change or remove it.
 ///
 /// # Errors
 /// Returns [`ClusterError`] on a type mismatch or out-of-range value.

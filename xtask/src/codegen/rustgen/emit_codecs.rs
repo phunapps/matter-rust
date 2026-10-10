@@ -1,7 +1,7 @@
 //! Codec emission: struct, attribute, and command encode/decode.
 
 use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, EventDef, FieldDef};
-use crate::codegen::rustgen::emit::line;
+use crate::codegen::rustgen::emit::{choice_docs, line, PROVISIONAL_DOC};
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, snake, Position};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -411,6 +411,10 @@ fn emit_attr_decoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         Position::Attribute,
     );
     line!(s, "/// Decode the `{}` attribute value.", a.name);
+    if a.provisional {
+        line!(s, "///");
+        line!(s, "/// {PROVISIONAL_DOC}");
+    }
     line!(s, "///");
     line!(s, "/// # Errors");
     line!(
@@ -551,6 +555,10 @@ fn emit_attr_encoder(s: &mut String, a: &Attribute, dts: &DatatypeMap<'_>) {
         "/// Encode the `{}` attribute value as a standalone TLV element.",
         a.name
     );
+    if a.provisional {
+        line!(s, "///");
+        line!(s, "/// {PROVISIONAL_DOC}");
+    }
     line!(s, "#[must_use]");
     line!(s, "#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.");
     line!(
@@ -606,6 +614,14 @@ fn emit_command_encoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>)
         })
         .collect();
     line!(s, "/// Encode the `{}` command request payload.", cmd.name);
+    if cmd.provisional {
+        line!(s, "///");
+        line!(s, "/// {PROVISIONAL_DOC}");
+    }
+    for doc in choice_docs(&cmd.fields) {
+        line!(s, "///");
+        line!(s, "/// {doc}");
+    }
     line!(s, "#[must_use]");
     line!(s, "#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.");
     line!(
@@ -821,6 +837,7 @@ fn emit_response_decoder(s: &mut String, cmd: &CommandDef, dts: &DatatypeMap<'_>
         values: vec![],
         bits: vec![],
         fields: cmd.fields.iter().map(clone_field).collect(),
+        global_name: None,
     };
     // Response payloads are decode-only (the gate is `!decl`), so the reachable
     // set is never consulted here — pass an empty one.
@@ -844,6 +861,7 @@ fn emit_event_decoder(s: &mut String, ev: &EventDef, dts: &DatatypeMap<'_>) {
         values: vec![],
         bits: vec![],
         fields: ev.fields.iter().map(clone_field).collect(),
+        global_name: None,
     };
     emit_struct_decl_and_codec(s, &st, /*decl=*/ true, dts, &HashSet::new());
 }
@@ -859,6 +877,8 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         optional: f.optional,
         fabric_sensitive: f.fabric_sensitive,
         mandatory_on_write: f.mandatory_on_write,
+        provisional: f.provisional,
+        choice: f.choice.clone(),
     }
 }
 
@@ -955,6 +975,9 @@ fn emit_struct_decl_and_codec(
                 Position::Field,
             );
             line!(s, "    /// Field {} (tag {}).", f.name, f.id);
+            if f.provisional {
+                line!(s, "    /// {PROVISIONAL_DOC}");
+            }
             line!(s, "    pub {}: {},", field_ident(&f.name), ty);
         }
         line!(s, "}}\n");
@@ -1376,6 +1399,8 @@ mod tests {
             optional: false,
             fabric_sensitive: false,
             mandatory_on_write: false,
+            provisional: false,
+            choice: None,
         }
     }
 
@@ -1387,6 +1412,7 @@ mod tests {
             values: vec![],
             bits: vec![],
             fields,
+            global_name: None,
         }
     }
 
@@ -1525,6 +1551,7 @@ mod tests {
             direction: "request".to_string(),
             response_id: None,
             fields,
+            provisional: false,
         }
     }
 
@@ -1551,6 +1578,7 @@ mod tests {
                 field(0, "PreviousPosition", "uint8", "integer", None),
                 field(1, "TotalNumberOfPressesCounted", "uint8", "integer", None),
             ],
+            provisional: false,
         };
         let mut s = String::new();
         emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
@@ -1572,6 +1600,7 @@ mod tests {
             name: "ReachableChanged".to_string(),
             priority: "critical".to_string(),
             fields: vec![],
+            provisional: false,
         };
         let mut s = String::new();
         emit_event_decoder(&mut s, &ev, &DatatypeMap::new());
@@ -1675,6 +1704,7 @@ mod tests {
             nullable: false,
             optional: true,
             writable: false,
+            provisional: false,
         };
         let mut s = String::new();
         emit_attr_decoder(&mut s, &a, &HashMap::new());
@@ -1714,6 +1744,7 @@ mod tests {
             nullable: true,
             optional: true,
             writable: false,
+            provisional: false,
         };
         let mut s = String::new();
         emit_attr_decoder(&mut s, &a, &HashMap::new());
@@ -1939,6 +1970,7 @@ mod tests {
                 change,
                 field(254, "FabricIndex", "fabric-idx", "integer", None),
             ],
+            provisional: false,
         };
         let mut s = String::new();
         emit_event_decoder(&mut s, &ev, &DatatypeMap::new());

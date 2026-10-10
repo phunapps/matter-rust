@@ -93,6 +93,8 @@ pub struct LandmarkInfoStruct {
 }
 
 /// `LocationDescriptorStruct` struct.
+///
+/// Generated from the Matter global type `locationdesc`.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct LocationDescriptorStruct {

@@ -5,10 +5,54 @@
 //! is later normalized by rustfmt, so we optimise for correctness, not
 //! whitespace.
 
-use crate::codegen::model::{Cluster, Datatype};
+use crate::codegen::model::{Choice, Cluster, Datatype, FieldDef};
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, screaming, snake, Position};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+
+/// The rustdoc sentence on every generated item the specification marks
+/// provisional (`FieldDef::provisional` and its siblings; M9-A3 B4).
+pub(crate) const PROVISIONAL_DOC: &str =
+    "Provisional in the Matter specification: a later revision may change or remove it.";
+
+/// One rustdoc sentence per choice-conformance group among `fields`, in the
+/// order the groups first appear (M9-A3 B4): the generated types take every
+/// field of a group as an `Option`, so the rule "exactly one" (`O.a`) or "at
+/// least one" (`O.a+`) is stated, not enforced. Field names are the generated
+/// Rust identifiers.
+pub(crate) fn choice_docs(fields: &[FieldDef]) -> Vec<String> {
+    let mut groups: Vec<(&Choice, Vec<String>)> = Vec::new();
+    for f in fields {
+        let Some(choice) = &f.choice else { continue };
+        let name = format!("`{}`", ident(&snake(&f.name)));
+        match groups.iter_mut().find(|(c, _)| c.group == choice.group) {
+            Some((_, names)) => names.push(name),
+            None => groups.push((choice, vec![name])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(c, names)| {
+            let how = if c.or_more {
+                "at least"
+            } else if c.or_less {
+                "at most"
+            } else {
+                "exactly"
+            };
+            let count = if c.count == 1 {
+                "one".to_string()
+            } else {
+                c.count.to_string()
+            };
+            format!(
+                "Choice group `{}`: a sender includes {how} {count} of {}. Not checked when encoding.",
+                c.group,
+                names.join(", ")
+            )
+        })
+        .collect()
+}
 
 /// Emit the full Rust module source for one cluster.
 #[must_use]
@@ -143,6 +187,9 @@ fn emit_ids(s: &mut String, c: &Cluster) {
     line!(s, "pub mod command_id {{");
     for cmd in &c.commands {
         line!(s, "    /// `{}` ({}).", cmd.name, cmd.direction);
+        if cmd.provisional {
+            line!(s, "    /// {PROVISIONAL_DOC}");
+        }
         line!(
             s,
             "    pub const {}: u32 = 0x{:02X};",
@@ -156,6 +203,9 @@ fn emit_ids(s: &mut String, c: &Cluster) {
     line!(s, "pub mod attribute_id {{");
     for a in &c.attributes {
         line!(s, "    /// `{}`.", a.name);
+        if a.provisional {
+            line!(s, "    /// {PROVISIONAL_DOC}");
+        }
         line!(
             s,
             "    pub const {}: u32 = 0x{:04X};",
@@ -172,6 +222,9 @@ fn emit_ids(s: &mut String, c: &Cluster) {
         line!(s, "pub mod event_id {{");
         for ev in &c.events {
             line!(s, "    /// `{}` ({} priority).", ev.name, ev.priority);
+            if ev.provisional {
+                line!(s, "    /// {PROVISIONAL_DOC}");
+            }
             line!(
                 s,
                 "    pub const {}: u32 = 0x{:02X};",
@@ -193,6 +246,9 @@ fn emit_feature_bitflags(s: &mut String, c: &Cluster) {
     line!(s, "    pub struct Feature: u32 {{");
     for f in &c.features {
         line!(s, "        /// {} ({}).", f.name, f.code);
+        if f.provisional {
+            line!(s, "        /// {PROVISIONAL_DOC}");
+        }
         line!(s, "        const {} = 1 << {};", screaming(&f.code), f.bit);
     }
     line!(s, "    }}");
@@ -308,6 +364,14 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
 
 fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
     line!(s, "/// `{}` struct.", d.name);
+    if let Some(global) = &d.global_name {
+        line!(s, "///");
+        line!(s, "/// Generated from the Matter global type `{global}`.");
+    }
+    for doc in choice_docs(&d.fields) {
+        line!(s, "///");
+        line!(s, "/// {doc}");
+    }
     line!(s, "#[derive(Clone, Debug, PartialEq)]");
     // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
     // struct-literal construction that command-encode callers need; skip it for
@@ -326,6 +390,9 @@ fn emit_struct(s: &mut String, d: &Datatype, encode_reachable: &HashSet<&str>) {
             Position::Field,
         );
         line!(s, "    /// Field {} (tag {}).", f.name, f.id);
+        if f.provisional {
+            line!(s, "    /// {PROVISIONAL_DOC}");
+        }
         if fabric_scoped && f.fabric_sensitive {
             line!(
                 s,
@@ -362,6 +429,7 @@ mod tests {
                 .collect(),
             bits: vec![],
             fields: vec![],
+            global_name: None,
         }
     }
 
@@ -418,6 +486,8 @@ mod tests {
             optional: sensitive,
             fabric_sensitive: sensitive,
             mandatory_on_write: false,
+            provisional: false,
+            choice: None,
         };
         let d = Datatype {
             name: "ScopedStruct".to_string(),
@@ -430,6 +500,7 @@ mod tests {
                 f(2, "Plain", false),
                 f(254, "FabricIndex", false),
             ],
+            global_name: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new());
@@ -462,6 +533,7 @@ mod tests {
             values: vec![],
             bits: vec![],
             fields: vec![],
+            global_name: None,
         }
     }
 
@@ -493,6 +565,7 @@ mod tests {
             nullable: false,
             optional: false,
             writable: false,
+            provisional: false,
         };
         let mut s = String::new();
         emit_header(
@@ -511,6 +584,7 @@ mod tests {
             values: vec![],
             bits: vec![],
             fields: vec![],
+            global_name: None,
         };
         // A normal data struct keeps #[non_exhaustive].
         let mut normal = String::new();
@@ -522,5 +596,150 @@ mod tests {
         let mut enc = String::new();
         emit_struct(&mut enc, &d, &reachable);
         assert!(!enc.contains("#[non_exhaustive]"), "{enc}");
+    }
+    // ---- M9-A3 B4: provisional, choice-group and global-origin rustdoc ----
+
+    fn note_field(
+        name: &str,
+        provisional: bool,
+        choice: Option<(&str, u32, bool, bool)>,
+    ) -> FieldDef {
+        FieldDef {
+            id: 0,
+            name: name.to_string(),
+            ty: "uint8".to_string(),
+            metatype: "integer".to_string(),
+            entry_type: None,
+            nullable: false,
+            optional: true,
+            fabric_sensitive: false,
+            mandatory_on_write: false,
+            provisional,
+            choice: choice.map(|(group, count, or_more, or_less)| Choice {
+                group: group.to_string(),
+                count,
+                or_more,
+                or_less,
+            }),
+        }
+    }
+
+    #[test]
+    fn provisional_ids_and_features_carry_the_provisional_doc() {
+        use crate::codegen::model::{Attribute, CommandDef, EventDef, Feature};
+        let attr = |name: &str, provisional: bool| Attribute {
+            id: u32::from(provisional),
+            name: name.to_string(),
+            ty: "uint8".to_string(),
+            metatype: "integer".to_string(),
+            entry_type: None,
+            nullable: false,
+            optional: true,
+            writable: false,
+            provisional,
+        };
+        let mut c = cluster_with(vec![], vec![attr("Plain", false), attr("Draft", true)]);
+        c.commands = vec![CommandDef {
+            id: 0,
+            name: "GoDraft".to_string(),
+            direction: "request".to_string(),
+            response_id: None,
+            fields: vec![],
+            provisional: true,
+        }];
+        c.events = vec![EventDef {
+            id: 0,
+            name: "Drafted".to_string(),
+            priority: "info".to_string(),
+            fields: vec![],
+            provisional: true,
+        }];
+        c.features = vec![
+            Feature {
+                bit: 0,
+                code: "PL".to_string(),
+                name: "Plain".to_string(),
+                provisional: false,
+            },
+            Feature {
+                bit: 1,
+                code: "DR".to_string(),
+                name: "Draft".to_string(),
+                provisional: true,
+            },
+        ];
+        let mut s = String::new();
+        emit_ids(&mut s, &c);
+        emit_feature_bitflags(&mut s, &c);
+        // One line each: the Draft attribute, the command, the event, the DR bit.
+        assert_eq!(s.matches(PROVISIONAL_DOC).count(), 4, "{s}");
+        assert!(
+            s.contains(&format!("/// `Draft`.\n    /// {PROVISIONAL_DOC}\n")),
+            "{s}"
+        );
+        assert!(
+            !s.contains(&format!("/// `Plain`.\n    /// {PROVISIONAL_DOC}")),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn choice_groups_are_stated_once_per_group() {
+        let fields = vec![
+            note_field("ValueUnsigned8", false, Some(("a", 1, false, false))),
+            note_field("Other", false, None),
+            note_field("CookTime", false, Some(("b", 1, true, false))),
+            note_field("ValueSigned8", false, Some(("a", 1, false, false))),
+            note_field("CookMode", false, Some(("b", 2, true, false))),
+            note_field("OneShot", false, Some(("c", 1, false, true))),
+        ];
+        assert_eq!(
+            choice_docs(&fields),
+            [
+                "Choice group `a`: a sender includes exactly one of `value_unsigned8`, \
+                 `value_signed8`. Not checked when encoding.",
+                "Choice group `b`: a sender includes at least one of `cook_time`, `cook_mode`. \
+                 Not checked when encoding.",
+                "Choice group `c`: a sender includes at most one of `one_shot`. Not checked when \
+                 encoding.",
+            ]
+        );
+        assert_eq!(
+            choice_docs(&[note_field("Other", false, None)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn struct_docs_state_global_origin_choice_and_provisional_fields() {
+        let d = Datatype {
+            name: "LocationDescriptorStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![
+                note_field("A", false, Some(("a", 1, false, false))),
+                note_field("B", true, Some(("a", 1, false, false))),
+            ],
+            global_name: Some("locationdesc".to_string()),
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new());
+        assert!(
+            s.starts_with(
+                "/// `LocationDescriptorStruct` struct.\n///\n/// Generated from the Matter \
+                 global type `locationdesc`.\n///\n/// Choice group `a`: a sender includes \
+                 exactly one of `a`, `b`. Not checked when encoding.\n"
+            ),
+            "{s}"
+        );
+        assert!(
+            s.contains(&format!(
+                "/// Field B (tag 0).\n    /// {PROVISIONAL_DOC}\n"
+            )),
+            "{s}"
+        );
+        assert_eq!(s.matches(PROVISIONAL_DOC).count(), 1, "{s}");
     }
 }
