@@ -61,18 +61,6 @@
         "reason": "event dump not enabled for this cluster"
       },
       {
-        "cluster": "BasicInformation",
-        "element": "4 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
-        "cluster": "BooleanState",
-        "element": "1 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
         "cluster": "BridgedDeviceBasicInformation",
         "element": "CapabilityMinima",
         "kind": "attribute",
@@ -235,18 +223,6 @@
         "reason": "no readable type (write-only/sensitive)"
       },
       {
-        "cluster": "OccupancySensing",
-        "element": "1 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
-        "cluster": "OtaSoftwareUpdateRequestor",
-        "element": "3 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
-      },
-      {
         "cluster": "PowerSource",
         "element": "3 event(s)",
         "kind": "events",
@@ -257,12 +233,6 @@
         "element": "AlarmMask",
         "kind": "attribute",
         "reason": "deprecated"
-      },
-      {
-        "cluster": "PumpConfigurationAndControl",
-        "element": "17 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "Thermostat",
@@ -323,12 +293,6 @@
         "element": "UnoccupiedSetbackMin",
         "kind": "attribute",
         "reason": "deprecated"
-      },
-      {
-        "cluster": "TimeSynchronization",
-        "element": "5 event(s)",
-        "kind": "events",
-        "reason": "event dump not enabled for this cluster"
       },
       {
         "cluster": "WindowCovering",
@@ -2460,7 +2424,62 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "StartUp",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "SoftwareVersion",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the same value as the one available in the SoftwareVersion attribute."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ShutDown",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "Leave",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the local fabric-index of the fabric which the node is about to leave."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "ReachableChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ReachableNewValue",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the value of the Reachable attribute after it was changed."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "CapabilityMinimaStruct",
@@ -3100,7 +3119,119 @@
           ]
         }
       ],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "StateTransition",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PreviousState",
+              "type": "UpdateStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the state that preceded the transition causing this event to be generated, if such a state existed. If no previous state exists, the value shall be Unknown."
+            },
+            {
+              "id": 1,
+              "name": "NewState",
+              "type": "UpdateStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the state now in effect through the transition causing this event to be generated."
+            },
+            {
+              "id": 2,
+              "name": "Reason",
+              "type": "ChangeReasonEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the reason why this event was generated."
+            },
+            {
+              "id": 3,
+              "name": "TargetSoftwareVersion",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall be set to the target SoftwareVersion which is the subject of the operation, whenever the NewState is Downloading, Applying or RollingBack. Otherwise TargetSoftwareVersion shall be null."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "VersionApplied",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "SoftwareVersion",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the same value as the one available in the Software Version attribute of the Basic Information Cluster for the newly executing version."
+            },
+            {
+              "id": 1,
+              "name": "ProductId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the ProductID applying to the executing version, as reflected by the Basic Information Cluster. This can be used to detect a product updating its definition due to a large-scale functional update that may impact aspects of the product reflected in the DeviceModel schema of the Distributed Compliance Ledger."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "DownloadError",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "SoftwareVersion",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the value of the SoftwareVersion being downloaded, matching the SoftwareVersion field of the QueryImageResponse that caused the failing download to take place."
+            },
+            {
+              "id": 1,
+              "name": "BytesDownloaded",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the number of bytes that have been downloaded during the failing transfer that caused this event to be generated."
+            },
+            {
+              "id": 2,
+              "name": "ProgressPercent",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall be set to the nearest integer percent value reflecting how far within the transfer the failure occurred during the failing transfer that caused this event to be generated, unless the total length of the transfer is unknown, in which case it shall be null."
+            },
+            {
+              "id": 3,
+              "name": "PlatformCode",
+              "type": "int64",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field SHOULD be set to some internal product-specific error code, closest in temporal/functional proximity to the failure that caused this event to be generated. Otherwise, it shall be null. This event field may be used for debugging purposes and no uniform definition exists related to its meaning."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "AnnouncementReasonEnum",
@@ -5234,7 +5365,67 @@
           ]
         }
       ],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "DstTableEmpty",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "DstStatus",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "DstOffsetActive",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "Indicates whether the current DST offset is being applied (i.e, daylight savings time is applied, as opposed to standard time)."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "TimeZoneStatus",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Offset",
+              "type": "int32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "Current time zone offset from UTC in seconds."
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "Current time zone name. This name SHOULD use the country/city format specified by the IANA Time Zone Database."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "TimeFailure",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 4,
+          "name": "MissingTrustedTimeSource",
+          "priority": "info",
+          "fields": []
+        }
+      ],
       "datatypes": [
         {
           "name": "DSTOffsetStruct",
@@ -7484,7 +7675,24 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "StateChange",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "StateValue",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new value of the StateValue attribute."
+            }
+          ]
+        }
+      ],
       "datatypes": []
     },
     {
@@ -12324,7 +12532,110 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "SupplyVoltageLow",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "SupplyVoltageHigh",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "PowerMissingPhase",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 3,
+          "name": "SystemPressureLow",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 4,
+          "name": "SystemPressureHigh",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "DryRunning",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 6,
+          "name": "MotorTemperatureHigh",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 7,
+          "name": "PumpMotorFatalFailure",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 8,
+          "name": "ElectronicTemperatureHigh",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 9,
+          "name": "PumpBlocked",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 10,
+          "name": "SensorFailure",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 11,
+          "name": "ElectronicNonFatalFailure",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 12,
+          "name": "ElectronicFatalFailure",
+          "priority": "critical",
+          "fields": []
+        },
+        {
+          "id": 13,
+          "name": "GeneralFault",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 14,
+          "name": "Leakage",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 15,
+          "name": "AirDetection",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 16,
+          "name": "TurbineOperation",
+          "priority": "info",
+          "fields": []
+        }
+      ],
       "datatypes": [
         {
           "name": "ControlModeEnum",
@@ -16894,7 +17205,24 @@
         }
       ],
       "commands": [],
-      "events": [],
+      "events": [
+        {
+          "id": 0,
+          "name": "OccupancyChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Occupancy",
+              "type": "OccupancyBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the new value of the Occupancy attribute."
+            }
+          ]
+        }
+      ],
       "datatypes": [
         {
           "name": "HoldTimeLimitsStruct",

@@ -308,3 +308,41 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
         }
     }
 }
+
+// ---- M9-A3: event codegen roll-out -------------------------------------------
+
+/// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
+/// grown batch by batch.
+const EVENT_CLUSTERS: [&str; 7] = [
+    "Switch",
+    // M9-A3 B1, scalar-field payloads:
+    "BasicInformation",
+    "BooleanState",
+    "OccupancySensing",
+    "PumpConfigurationAndControl",
+    "TimeSynchronization",
+    "OtaSoftwareUpdateRequestor",
+];
+
+#[test]
+fn event_enabled_clusters_are_exactly_the_allowlist() {
+    let v = load();
+    let mut have: Vec<&str> = clusters(&v)
+        .iter()
+        .filter(|c| c["events"].as_array().is_some_and(|e| !e.is_empty()))
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    have.sort_unstable();
+    let mut want = EVENT_CLUSTERS.to_vec();
+    want.sort_unstable();
+    assert_eq!(have, want);
+    for e in v["meta"]["excluded"].as_array().unwrap() {
+        if e["reason"] == "event dump not enabled for this cluster" {
+            let cname = e["cluster"].as_str().unwrap();
+            assert!(
+                !EVENT_CLUSTERS.contains(&cname),
+                "{cname} has events dumped AND an 'event dump not enabled' exclusion"
+            );
+        }
+    }
+}

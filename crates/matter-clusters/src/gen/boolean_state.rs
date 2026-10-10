@@ -28,6 +28,12 @@ pub mod attribute_id {
     pub const STATE_VALUE: u32 = 0x0000;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `StateChange` (info priority).
+    pub const STATE_CHANGE: u32 = 0x00;
+}
+
 /// Decode the `StateValue` attribute value.
 ///
 /// # Errors
@@ -42,5 +48,58 @@ pub fn decode_state_value(tlv: &[u8]) -> Result<bool, ClusterError> {
         _ => Err(ClusterError::UnexpectedType {
             context: "StateValue",
         }),
+    }
+}
+
+/// Decoded `StateChangeEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StateChangeEvent {
+    /// Field StateValue (tag 0).
+    pub state_value: bool,
+}
+
+impl StateChangeEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_state_value: Option<bool> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Bool(v),
+                }) => f_state_value = Some(v),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            state_value: f_state_value.ok_or(ClusterError::MissingField("StateValue"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "StateChangeEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
     }
 }

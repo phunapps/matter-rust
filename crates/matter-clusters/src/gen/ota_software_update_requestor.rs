@@ -37,6 +37,16 @@ pub mod attribute_id {
     pub const UPDATE_STATE_PROGRESS: u32 = 0x0003;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `StateTransition` (info priority).
+    pub const STATE_TRANSITION: u32 = 0x00;
+    /// `VersionApplied` (critical priority).
+    pub const VERSION_APPLIED: u32 = 0x01;
+    /// `DownloadError` (info priority).
+    pub const DOWNLOAD_ERROR: u32 = 0x02;
+}
+
 /// `AnnouncementReasonEnum` (enum8).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AnnouncementReasonEnum {
@@ -404,4 +414,283 @@ pub fn encode_announce_ota_provider(
         .expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
+}
+
+/// Decoded `StateTransitionEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StateTransitionEvent {
+    /// Field PreviousState (tag 0).
+    pub previous_state: UpdateStateEnum,
+    /// Field NewState (tag 1).
+    pub new_state: UpdateStateEnum,
+    /// Field Reason (tag 2).
+    pub reason: ChangeReasonEnum,
+    /// Field TargetSoftwareVersion (tag 3).
+    pub target_software_version: Nullable<u32>,
+}
+
+impl StateTransitionEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_previous_state: Option<UpdateStateEnum> = None;
+        let mut f_new_state: Option<UpdateStateEnum> = None;
+        let mut f_reason: Option<ChangeReasonEnum> = None;
+        let mut f_target_software_version: Option<Nullable<u32>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_previous_state = Some(UpdateStateEnum::from_raw(
+                        u8::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("PreviousState"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_new_state = Some(UpdateStateEnum::from_raw(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("NewState"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_reason = Some(ChangeReasonEnum::from_raw(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Reason"))?,
+                    ))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Null,
+                }) => f_target_software_version = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Uint(v),
+                }) => {
+                    f_target_software_version =
+                        Some(Nullable::Value(u32::try_from(v).map_err(|_| {
+                            ClusterError::InvalidLength("TargetSoftwareVersion")
+                        })?))
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            previous_state: f_previous_state.ok_or(ClusterError::MissingField("PreviousState"))?,
+            new_state: f_new_state.ok_or(ClusterError::MissingField("NewState"))?,
+            reason: f_reason.ok_or(ClusterError::MissingField("Reason"))?,
+            target_software_version: f_target_software_version
+                .ok_or(ClusterError::MissingField("TargetSoftwareVersion"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "StateTransitionEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `VersionAppliedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct VersionAppliedEvent {
+    /// Field SoftwareVersion (tag 0).
+    pub software_version: u32,
+    /// Field ProductId (tag 1).
+    pub product_id: u16,
+}
+
+impl VersionAppliedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_software_version: Option<u32> = None;
+        let mut f_product_id: Option<u16> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_software_version = Some(
+                        u32::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("SoftwareVersion"))?,
+                    )
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_product_id = Some(
+                        u16::try_from(v).map_err(|_| ClusterError::InvalidLength("ProductId"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            software_version: f_software_version
+                .ok_or(ClusterError::MissingField("SoftwareVersion"))?,
+            product_id: f_product_id.ok_or(ClusterError::MissingField("ProductId"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "VersionAppliedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `DownloadErrorEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DownloadErrorEvent {
+    /// Field SoftwareVersion (tag 0).
+    pub software_version: u32,
+    /// Field BytesDownloaded (tag 1).
+    pub bytes_downloaded: u64,
+    /// Field ProgressPercent (tag 2).
+    pub progress_percent: Nullable<u8>,
+    /// Field PlatformCode (tag 3).
+    pub platform_code: Nullable<i64>,
+}
+
+impl DownloadErrorEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_software_version: Option<u32> = None;
+        let mut f_bytes_downloaded: Option<u64> = None;
+        let mut f_progress_percent: Option<Nullable<u8>> = None;
+        let mut f_platform_code: Option<Nullable<i64>> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_software_version = Some(
+                        u32::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("SoftwareVersion"))?,
+                    )
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Uint(v),
+                }) => {
+                    f_bytes_downloaded = Some(
+                        u64::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("BytesDownloaded"))?,
+                    )
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Null,
+                }) => f_progress_percent = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Uint(v),
+                }) => {
+                    f_progress_percent =
+                        Some(Nullable::Value(u8::try_from(v).map_err(|_| {
+                            ClusterError::InvalidLength("ProgressPercent")
+                        })?))
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Null,
+                }) => f_platform_code = Some(Nullable::Null),
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Int(v),
+                }) => {
+                    f_platform_code = Some(Nullable::Value(
+                        i64::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("PlatformCode"))?,
+                    ))
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            software_version: f_software_version
+                .ok_or(ClusterError::MissingField("SoftwareVersion"))?,
+            bytes_downloaded: f_bytes_downloaded
+                .ok_or(ClusterError::MissingField("BytesDownloaded"))?,
+            progress_percent: f_progress_percent
+                .ok_or(ClusterError::MissingField("ProgressPercent"))?,
+            platform_code: f_platform_code.ok_or(ClusterError::MissingField("PlatformCode"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "DownloadErrorEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
 }

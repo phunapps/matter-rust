@@ -74,6 +74,18 @@ pub mod attribute_id {
     pub const CONFIGURATION_VERSION: u32 = 0x0018;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `StartUp` (critical priority).
+    pub const START_UP: u32 = 0x00;
+    /// `ShutDown` (critical priority).
+    pub const SHUT_DOWN: u32 = 0x01;
+    /// `Leave` (info priority).
+    pub const LEAVE: u32 = 0x02;
+    /// `ReachableChanged` (info priority).
+    pub const REACHABLE_CHANGED: u32 = 0x03;
+}
+
 /// `CapabilityMinimaStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -841,5 +853,175 @@ pub fn decode_configuration_version(tlv: &[u8]) -> Result<u32, ClusterError> {
         _ => Err(ClusterError::UnexpectedType {
             context: "ConfigurationVersion",
         }),
+    }
+}
+
+/// Decoded `StartUpEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct StartUpEvent {
+    /// Field SoftwareVersion (tag 0).
+    pub software_version: u32,
+}
+
+impl StartUpEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_software_version: Option<u32> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_software_version = Some(
+                        u32::try_from(v)
+                            .map_err(|_| ClusterError::InvalidLength("SoftwareVersion"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            software_version: f_software_version
+                .ok_or(ClusterError::MissingField("SoftwareVersion"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "StartUpEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `LeaveEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LeaveEvent {
+    /// Field FabricIndex (tag 0).
+    pub fabric_index: u8,
+}
+
+impl LeaveEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_fabric_index: Option<u8> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_fabric_index = Some(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("FabricIndex"))?,
+                    )
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            fabric_index: f_fabric_index.ok_or(ClusterError::MissingField("FabricIndex"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "LeaveEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `ReachableChangedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ReachableChangedEvent {
+    /// Field ReachableNewValue (tag 0).
+    pub reachable_new_value: bool,
+}
+
+impl ReachableChangedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_reachable_new_value: Option<bool> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Bool(v),
+                }) => f_reachable_new_value = Some(v),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            reachable_new_value: f_reachable_new_value
+                .ok_or(ClusterError::MissingField("ReachableNewValue"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "ReachableChangedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
     }
 }

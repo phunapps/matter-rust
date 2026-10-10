@@ -65,6 +65,20 @@ pub mod attribute_id {
     pub const SUPPORTS_DNS_RESOLVE: u32 = 0x000C;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `DstTableEmpty` (info priority).
+    pub const DST_TABLE_EMPTY: u32 = 0x00;
+    /// `DstStatus` (info priority).
+    pub const DST_STATUS: u32 = 0x01;
+    /// `TimeZoneStatus` (info priority).
+    pub const TIME_ZONE_STATUS: u32 = 0x02;
+    /// `TimeFailure` (info priority).
+    pub const TIME_FAILURE: u32 = 0x03;
+    /// `MissingTrustedTimeSource` (info priority).
+    pub const MISSING_TRUSTED_TIME_SOURCE: u32 = 0x04;
+}
+
 bitflags::bitflags! {
     /// `TimeSynchronization` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -1121,4 +1135,122 @@ pub fn encode_set_default_ntp(default_ntp: Nullable<String>) -> Vec<u8> {
     }
     w.end_container().expect("infallible: vec writer");
     buf
+}
+
+/// Decoded `DstStatusEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct DstStatusEvent {
+    /// Field DstOffsetActive (tag 0).
+    pub dst_offset_active: bool,
+}
+
+impl DstStatusEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_dst_offset_active: Option<bool> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Bool(v),
+                }) => f_dst_offset_active = Some(v),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            dst_offset_active: f_dst_offset_active
+                .ok_or(ClusterError::MissingField("DstOffsetActive"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "DstStatusEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+}
+
+/// Decoded `TimeZoneStatusEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TimeZoneStatusEvent {
+    /// Field Offset (tag 0).
+    pub offset: i32,
+    /// Field Name (tag 1).
+    pub name: Option<String>,
+}
+
+impl TimeZoneStatusEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_offset: Option<i32> = None;
+        let mut f_name: Option<String> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Int(v),
+                }) => {
+                    f_offset =
+                        Some(i32::try_from(v).map_err(|_| ClusterError::InvalidLength("Offset"))?)
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(1),
+                    value: Value::Utf8(v),
+                }) => f_name = Some(v),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            offset: f_offset.ok_or(ClusterError::MissingField("Offset"))?,
+            name: f_name,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "TimeZoneStatusEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
 }

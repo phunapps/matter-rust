@@ -127,7 +127,16 @@ const ALLOWLIST = [
 // per cluster (like the cluster ALLOWLIST itself) so each batch's generated
 // surface stays reviewable; every other cluster's events remain recorded as
 // an auditable exclusion.
-const EVENT_ALLOWLIST = new Set(['Switch']);
+const EVENT_ALLOWLIST = new Set([
+  'Switch',
+  // M9-A3 B1, scalar-field payloads:
+  'BasicInformation',
+  'BooleanState',
+  'OccupancySensing',
+  'PumpConfigurationAndControl',
+  'TimeSynchronization',
+  'OtaSoftwareUpdateRequestor',
+]);
 
 const excluded = [];
 function recordExclusion(cluster, element, kind, reason) {

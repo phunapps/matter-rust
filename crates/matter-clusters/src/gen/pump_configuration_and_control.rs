@@ -72,6 +72,44 @@ pub mod attribute_id {
     pub const CONTROL_MODE: u32 = 0x0021;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `SupplyVoltageLow` (info priority).
+    pub const SUPPLY_VOLTAGE_LOW: u32 = 0x00;
+    /// `SupplyVoltageHigh` (info priority).
+    pub const SUPPLY_VOLTAGE_HIGH: u32 = 0x01;
+    /// `PowerMissingPhase` (info priority).
+    pub const POWER_MISSING_PHASE: u32 = 0x02;
+    /// `SystemPressureLow` (info priority).
+    pub const SYSTEM_PRESSURE_LOW: u32 = 0x03;
+    /// `SystemPressureHigh` (info priority).
+    pub const SYSTEM_PRESSURE_HIGH: u32 = 0x04;
+    /// `DryRunning` (critical priority).
+    pub const DRY_RUNNING: u32 = 0x05;
+    /// `MotorTemperatureHigh` (info priority).
+    pub const MOTOR_TEMPERATURE_HIGH: u32 = 0x06;
+    /// `PumpMotorFatalFailure` (critical priority).
+    pub const PUMP_MOTOR_FATAL_FAILURE: u32 = 0x07;
+    /// `ElectronicTemperatureHigh` (info priority).
+    pub const ELECTRONIC_TEMPERATURE_HIGH: u32 = 0x08;
+    /// `PumpBlocked` (critical priority).
+    pub const PUMP_BLOCKED: u32 = 0x09;
+    /// `SensorFailure` (info priority).
+    pub const SENSOR_FAILURE: u32 = 0x0A;
+    /// `ElectronicNonFatalFailure` (info priority).
+    pub const ELECTRONIC_NON_FATAL_FAILURE: u32 = 0x0B;
+    /// `ElectronicFatalFailure` (critical priority).
+    pub const ELECTRONIC_FATAL_FAILURE: u32 = 0x0C;
+    /// `GeneralFault` (info priority).
+    pub const GENERAL_FAULT: u32 = 0x0D;
+    /// `Leakage` (info priority).
+    pub const LEAKAGE: u32 = 0x0E;
+    /// `AirDetection` (info priority).
+    pub const AIR_DETECTION: u32 = 0x0F;
+    /// `TurbineOperation` (info priority).
+    pub const TURBINE_OPERATION: u32 = 0x10;
+}
+
 bitflags::bitflags! {
     /// `PumpConfigurationAndControl` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

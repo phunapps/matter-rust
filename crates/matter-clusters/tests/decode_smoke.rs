@@ -1081,3 +1081,152 @@ fn icd_monitoring_registration_refuses_each_missing_sensitive_field() {
         Err(ClusterError::MissingField("ClientType"))
     ));
 }
+
+// ---- M9-A3 B1: events, scalar-field shapes ----------------------------------
+//
+// Each event payload is an anonymous structure of context-tagged fields (the
+// same wire shape as a command response), decoded by the generated
+// `<Name>Event::decode`. Field tags and types follow the 1.4.2 event tables.
+
+#[test]
+fn basic_information_event_ids_pinned() {
+    use gen::basic_information::event_id as ev;
+    assert_eq!(ev::START_UP, 0x00);
+    assert_eq!(ev::SHUT_DOWN, 0x01);
+    assert_eq!(ev::LEAVE, 0x02);
+    assert_eq!(ev::REACHABLE_CHANGED, 0x03);
+}
+
+#[test]
+fn basic_information_events_decode() {
+    use gen::basic_information::{LeaveEvent, ReachableChangedEvent, StartUpEvent};
+    let e = StartUpEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0x0102_0304).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.software_version, 0x0102_0304);
+    let e = LeaveEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.fabric_index, 3);
+    let e = ReachableChangedEvent::decode(&struct_of(&|w| {
+        w.put_bool(Tag::Context(0), false).unwrap();
+    }))
+    .unwrap();
+    assert!(!e.reachable_new_value);
+    // A mandatory field missing is an error, never a default.
+    assert!(StartUpEvent::decode(&struct_of(&|_| {})).is_err());
+}
+
+#[test]
+fn event_payload_with_an_unknown_future_field_still_decodes() {
+    // A newer-revision device may add fields; the decoder skips unknown tags.
+    let e = gen::basic_information::StartUpEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 5).unwrap();
+        w.put_utf8(Tag::Context(9), "future").unwrap();
+        w.start_structure(Tag::Context(10)).unwrap();
+        w.put_bool(Tag::Context(0), true).unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.software_version, 5);
+}
+
+#[test]
+fn boolean_state_state_change_event_decodes() {
+    use gen::boolean_state::{event_id, StateChangeEvent};
+    assert_eq!(event_id::STATE_CHANGE, 0x00);
+    let e = StateChangeEvent::decode(&struct_of(&|w| {
+        w.put_bool(Tag::Context(0), true).unwrap();
+    }))
+    .unwrap();
+    assert!(e.state_value);
+}
+
+#[test]
+fn occupancy_changed_event_decodes() {
+    use gen::occupancy_sensing::{event_id, OccupancyBitmap, OccupancyChangedEvent};
+    assert_eq!(event_id::OCCUPANCY_CHANGED, 0x00);
+    let e = OccupancyChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.occupancy, OccupancyBitmap::from_bits_retain(1));
+}
+
+#[test]
+fn pump_configuration_event_ids_pinned() {
+    // All 17 pump events are fieldless: only their ids are generated.
+    use gen::pump_configuration_and_control::event_id as ev;
+    assert_eq!(ev::SUPPLY_VOLTAGE_LOW, 0x00);
+    assert_eq!(ev::DRY_RUNNING, 0x05);
+    assert_eq!(ev::PUMP_BLOCKED, 0x09);
+    assert_eq!(ev::TURBINE_OPERATION, 0x10);
+}
+
+#[test]
+fn time_synchronization_events_decode() {
+    use gen::time_synchronization::{event_id as ev, DstStatusEvent, TimeZoneStatusEvent};
+    assert_eq!(ev::DST_TABLE_EMPTY, 0x00);
+    assert_eq!(ev::DST_STATUS, 0x01);
+    assert_eq!(ev::TIME_ZONE_STATUS, 0x02);
+    assert_eq!(ev::TIME_FAILURE, 0x03);
+    assert_eq!(ev::MISSING_TRUSTED_TIME_SOURCE, 0x04);
+    let e = DstStatusEvent::decode(&struct_of(&|w| {
+        w.put_bool(Tag::Context(0), true).unwrap();
+    }))
+    .unwrap();
+    assert!(e.dst_offset_active);
+    // Offset is int32 (negative west of UTC); Name is optional.
+    let e = TimeZoneStatusEvent::decode(&struct_of(&|w| {
+        w.put_int(Tag::Context(0), -18_000).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.offset, -18_000);
+    assert_eq!(e.name, None);
+    let e = TimeZoneStatusEvent::decode(&struct_of(&|w| {
+        w.put_int(Tag::Context(0), 3600).unwrap();
+        w.put_utf8(Tag::Context(1), "Europe/Paris").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.name.as_deref(), Some("Europe/Paris"));
+}
+
+#[test]
+fn ota_requestor_events_decode() {
+    use gen::ota_software_update_requestor::{
+        event_id as ev, ChangeReasonEnum, DownloadErrorEvent, StateTransitionEvent,
+        UpdateStateEnum, VersionAppliedEvent,
+    };
+    assert_eq!(ev::STATE_TRANSITION, 0x00);
+    assert_eq!(ev::VERSION_APPLIED, 0x01);
+    assert_eq!(ev::DOWNLOAD_ERROR, 0x02);
+    let e = StateTransitionEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap(); // Idle
+        w.put_uint(Tag::Context(1), 4).unwrap(); // Downloading
+        w.put_uint(Tag::Context(2), 1).unwrap(); // Success
+        w.put_null(Tag::Context(3)).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.previous_state, UpdateStateEnum::from_raw(1));
+    assert_eq!(e.new_state, UpdateStateEnum::from_raw(4));
+    assert_eq!(e.reason, ChangeReasonEnum::from_raw(1));
+    assert_eq!(e.target_software_version, Nullable::Null);
+    let e = VersionAppliedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap();
+        w.put_uint(Tag::Context(1), 0x8000).unwrap();
+    }))
+    .unwrap();
+    assert_eq!((e.software_version, e.product_id), (2, 0x8000));
+    let e = DownloadErrorEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap();
+        w.put_uint(Tag::Context(1), 1_048_576).unwrap();
+        w.put_uint(Tag::Context(2), 42).unwrap();
+        w.put_int(Tag::Context(3), -7).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(e.bytes_downloaded, 1_048_576);
+    assert_eq!(e.progress_percent, Nullable::Value(42));
+    assert_eq!(e.platform_code, Nullable::Value(-7));
+}

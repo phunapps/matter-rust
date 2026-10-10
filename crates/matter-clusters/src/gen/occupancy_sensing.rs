@@ -54,6 +54,12 @@ pub mod attribute_id {
     pub const PHYSICAL_CONTACT_UNOCCUPIED_TO_OCCUPIED_THRESHOLD: u32 = 0x0032;
 }
 
+/// Event IDs.
+pub mod event_id {
+    /// `OccupancyChanged` (info priority).
+    pub const OCCUPANCY_CHANGED: u32 = 0x00;
+}
+
 bitflags::bitflags! {
     /// `OccupancySensing` feature bits (FeatureMap).
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -608,4 +614,61 @@ pub fn encode_physical_contact_unoccupied_to_occupied_threshold(value: u8) -> Ve
     w.put_uint(Tag::Anonymous, u64::from(value))
         .expect("infallible: vec writer");
     buf
+}
+
+/// Decoded `OccupancyChangedEvent` payload.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct OccupancyChangedEvent {
+    /// Field Occupancy (tag 0).
+    pub occupancy: OccupancyBitmap,
+}
+
+impl OccupancyChangedEvent {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_occupancy: Option<OccupancyBitmap> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::Scalar {
+                    tag: Tag::Context(0),
+                    value: Value::Uint(v),
+                }) => {
+                    f_occupancy = Some(OccupancyBitmap::from_bits_retain(
+                        u8::try_from(v).map_err(|_| ClusterError::InvalidLength("Occupancy"))?,
+                    ))
+                }
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            occupancy: f_occupancy.ok_or(ClusterError::MissingField("Occupancy"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "OccupancyChangedEvent",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
 }
