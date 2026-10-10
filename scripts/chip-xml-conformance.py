@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Check the codegen input (xtask/model/clusters.json) against chip's Matter
+1.4.2 spec-derived XML, for decoder strictness.
+
+Our generated decoders reject valid device data in three ways (M9-A3 spec
+section 3): a field the model calls mandatory but a 1.4 device may omit, a
+non-nullable field the device may send as null, and an integer/enum type
+narrower than what the device may send. The @matter/model input tracks Matter
+1.5.1, so it can be stricter than 1.4. This script finds those cases.
+
+Inputs (read-only):
+  * xtask/model/clusters.json (or --model <path>)
+  * <chip>/data_model/1.4.2/clusters/*.xml            (spec-derived XML)
+  * <chip>/src/app/zap-templates/zcl/data-model/chip/*.xml
+                                                       (global structs only)
+  * scripts/chip-xml-conformance.allow                 (accepted findings)
+
+Findings that FAIL the run (exit 1) unless allow-listed:
+  P  a struct/event/command-response field that is mandatory in the model
+     but optional or absent in 1.4.2
+  N  a field or attribute nullable in 1.4.2 but non-nullable in the model
+  W  a model integer/enum type whose range does not cover the 1.4.2 type's
+     range (narrower width, or unsigned in the model where 1.4.2 is signed)
+
+Reported without failing:
+  MODEL-ONLY   model elements absent from 1.4.2 (expected 1.5 additions)
+  XML-ONLY     1.4.2 elements absent from the model and not recorded as a
+               clusters.json exclusion
+  UNCHECKABLE  model elements with no 1.4.2 (or zap global) counterpart
+  STALE-ALLOW  an allow-list entry that matched no finding
+
+Python 3 standard library only. Dev-only: CI has no chip checkout, so this is
+not part of `just gate`; each batch runs it and quotes the output.
+
+Usage:
+    python3 scripts/chip-xml-conformance.py <chip-checkout> [--cluster <Name>]...
+                                            [--model <clusters.json>]
+
+Exit codes: 0 clean, 1 unresolved P/N/W findings, 2 usage or input error.
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_MODEL = os.path.join(REPO_ROOT, "xtask", "model", "clusters.json")
+ALLOW_PATH = os.path.join(REPO_ROOT, "scripts", "chip-xml-conformance.allow")
+
+# Conformance element tags (direct children of a field/attribute/event).
+CONFORMANCE_TAGS = {
+    "mandatoryConform": "M",
+    "optionalConform": "O",
+    "otherwiseConform": "cond",
+    "provisionalConform": "O",
+    "describedConform": "O",
+    "disallowConform": "X",
+    "deprecateConform": "D",
+}
+
+# Integer ranges as (signed, bits). Primitive tokens first, then the Matter
+# semantic globals (Core spec 7.19.2) at their specified widths. A token not
+# listed here is not an integer this script can range-check.
+INT_RANGES = {
+    "uint8": (False, 8), "uint16": (False, 16), "uint24": (False, 24),
+    "uint32": (False, 32), "uint40": (False, 40), "uint48": (False, 48),
+    "uint56": (False, 56), "uint64": (False, 64),
+    "int8": (True, 8), "int16": (True, 16), "int24": (True, 24),
+    "int32": (True, 32), "int40": (True, 40), "int48": (True, 48),
+    "int56": (True, 56), "int64": (True, 64),
+    "enum8": (False, 8), "enum16": (False, 16),
+    "map8": (False, 8), "map16": (False, 16), "map32": (False, 32),
+    "map64": (False, 64),
+    "percent": (False, 8), "fabric-idx": (False, 8), "action-id": (False, 8),
+    "status": (False, 8), "priority": (False, 8), "tag": (False, 8),
+    "namespace": (False, 8),
+    "percent100ths": (False, 16), "group-id": (False, 16),
+    "endpoint-no": (False, 16), "vendor-id": (False, 16),
+    "entry-idx": (False, 16),
+    "cluster-id": (False, 32), "attrib-id": (False, 32),
+    "field-id": (False, 32), "event-id": (False, 32),
+    "command-id": (False, 32), "devtype-id": (False, 32),
+    "trans-id": (False, 32), "data-ver": (False, 32), "epoch-s": (False, 32),
+    "elapsed-s": (False, 32), "utc": (False, 32),
+    "node-id": (False, 64), "epoch-us": (False, 64), "posix-ms": (False, 64),
+    "systime-us": (False, 64), "systime-ms": (False, 64),
+    "fabric-id": (False, 64), "subject-id": (False, 64),
+    "event-no": (False, 64),
+    "temperature": (True, 16),
+    "voltage-mV": (True, 64), "amperage-mA": (True, 64),
+    "power-mW": (True, 64), "power-mVA": (True, 64), "power-mVAR": (True, 64),
+    "energy-mWh": (True, 64), "energy-mVAh": (True, 64),
+    "energy-mVARh": (True, 64), "money": (True, 64),
+}
+
+# zap-template primitive type names -> 1.4.2 spellings.
+ZAP_TYPES = {
+    "int8u": "uint8", "int16u": "uint16", "int24u": "uint24",
+    "int32u": "uint32", "int40u": "uint40", "int48u": "uint48",
+    "int56u": "uint56", "int64u": "uint64",
+    "int8s": "int8", "int16s": "int16", "int24s": "int24", "int32s": "int32",
+    "int40s": "int40", "int48s": "int48", "int56s": "int56", "int64s": "int64",
+    "boolean": "bool", "char_string": "string", "long_char_string": "string",
+    "octet_string": "octstr", "long_octet_string": "octstr",
+    "bitmap8": "map8", "bitmap16": "map16", "bitmap32": "map32",
+    "bitmap64": "map64", "single": "single", "double": "double",
+    "enum8": "enum8", "enum16": "enum16",
+}
+
+# Model global type tokens whose zap-template struct has a different name.
+ZAP_STRUCT_ALIASES = {"locationdesc": "LocationDescriptorStruct"}
+
+
+def norm(name):
+    """Compare names case- and punctuation-insensitively (the XML spells
+    `AdminNodeID` where the model spells `AdminNodeId`)."""
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def die(msg):
+    print(f"chip-xml-conformance: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+# --------------------------------------------------------------- XML side ---
+
+
+def conformance_of(el):
+    """'M' only for an EMPTY <mandatoryConform/>. A feature-gated or
+    expression <mandatoryConform> is 'cond' (optional for our purposes,
+    mirroring the dump's section 3.1 rule). None when the element states no
+    conformance (a derived-cluster override that inherits the base's)."""
+    for ch in el:
+        kind = CONFORMANCE_TAGS.get(ch.tag)
+        if kind is None:
+            continue
+        if kind == "M" and len(list(ch)) > 0:
+            return "cond"
+        return kind
+    return None
+
+
+def nullable_of(el):
+    """True/False when a <quality> child is present, None when unstated."""
+    q = el.find("quality")
+    if q is None or q.get("nullable") is None:
+        return None
+    return q.get("nullable") == "true"
+
+
+def xml_field(el):
+    entry = el.find("entry")
+    return {
+        "name": el.get("name"),
+        "type": el.get("type"),
+        "entry": entry.get("type") if entry is not None else None,
+        "nullable": nullable_of(el),
+        "conf": conformance_of(el),
+    }
+
+
+def xml_fields(el):
+    out = {}
+    for f in el.findall("field"):  # direct children only: never constraint refs
+        if f.get("id") is None:
+            continue
+        out[int(f.get("id"), 0)] = xml_field(f)
+    return out
+
+
+def merge_field(base, over):
+    merged = dict(base)
+    for k, v in over.items():
+        if v is not None:
+            merged[k] = v
+    return merged
+
+
+def merge_fields(base, over):
+    out = {i: dict(f) for i, f in base.items()}
+    for i, f in over.items():
+        out[i] = merge_field(out[i], f) if i in out else dict(f)
+    return out
+
+
+def empty_tables():
+    return {"struct": {}, "event": {}, "resp": {}, "attr": {},
+            "enum": {}, "bitmap": {}, "number": {}}
+
+
+def own_tables(root):
+    """The element tables one XML <cluster> defines itself."""
+    t = empty_tables()
+    dts = root.find("dataTypes")
+    if dts is not None:
+        for s in dts.findall("struct"):
+            access = s.find("access")
+            t["struct"][norm(s.get("name"))] = {
+                "name": s.get("name"),
+                "fields": xml_fields(s),
+                "fabric_scoped": access is not None and access.get("fabricScoped") == "true",
+            }
+        for e in dts.findall("enum"):
+            vals = [int(i.get("value"), 0) for i in e.findall("item") if i.get("value")]
+            t["enum"][norm(e.get("name"))] = max(vals) if vals else 0
+        for b in dts.findall("bitmap"):
+            bits = [int(f.get("bit"), 0) for f in b.findall("bitfield") if f.get("bit")]
+            t["bitmap"][norm(b.get("name"))] = max(bits) if bits else 0
+        for n in dts.findall("number"):
+            t["number"][norm(n.get("name"))] = n.get("type")
+    evs = root.find("events")
+    if evs is not None:
+        for e in evs.findall("event"):
+            access = e.find("access")
+            t["event"][norm(e.get("name"))] = {
+                "name": e.get("name"),
+                "fields": xml_fields(e),
+                "fabric_sensitive": (
+                    access.get("fabricSensitive") == "true" if access is not None else None
+                ),
+                "conf": conformance_of(e),
+            }
+    cmds = root.find("commands")
+    if cmds is not None:
+        for c in cmds.findall("command"):
+            if c.get("direction") == "responseFromServer":
+                t["resp"][norm(c.get("name"))] = {"name": c.get("name"), "fields": xml_fields(c)}
+    attrs = root.find("attributes")
+    if attrs is not None:
+        for a in attrs.findall("attribute"):
+            if a.get("id") is not None:
+                t["attr"][int(a.get("id"), 0)] = xml_field(a)
+    return t
+
+
+def overlay(base, over):
+    """Derived-cluster overrides on top of the base cluster's elements."""
+    out = empty_tables()
+    for kind in ("enum", "bitmap", "number"):
+        out[kind] = {**base[kind], **over[kind]}
+    out["attr"] = merge_fields(base["attr"], over["attr"])
+    for kind in ("struct", "event", "resp"):
+        merged = {k: dict(v, fields=dict(v["fields"])) for k, v in base[kind].items()}
+        for k, v in over[kind].items():
+            if k in merged:
+                b = merged[k]
+                m = dict(b)
+                for key, val in v.items():
+                    if key != "fields" and val is not None:
+                        m[key] = val
+                m["fields"] = merge_fields(b["fields"], v["fields"])
+                merged[k] = m
+            else:
+                merged[k] = v
+        out[kind] = merged
+    return out
+
+
+IMPLICIT_FABRIC_INDEX = {
+    "name": "FabricIndex", "type": "fabric-idx", "entry": None,
+    "nullable": False, "conf": "M",
+}
+
+
+def add_implicit_fabric_index(t):
+    """1.4.2 leaves field 254 implicit in fabric-scoped structs and
+    fabric-sensitive events; treat it as present and mandatory."""
+    for s in t["struct"].values():
+        if s.get("fabric_scoped") and 254 not in s["fields"]:
+            s["fields"][254] = dict(IMPLICIT_FABRIC_INDEX)
+    for e in t["event"].values():
+        if e.get("fabric_sensitive") and 254 not in e["fields"]:
+            e["fields"][254] = dict(IMPLICIT_FABRIC_INDEX)
+
+
+def load_chip_xml(chip):
+    """clusterId -> merged element tables, for every 1.4.2 cluster id."""
+    pattern = os.path.join(chip, "data_model", "1.4.2", "clusters", "*.xml")
+    paths = sorted(glob.glob(pattern))
+    if not paths:
+        die(f"no XML under {pattern} (is {chip} a connectedhomeip checkout?)")
+    roots_by_name = {}
+    roots = []
+    for p in paths:
+        try:
+            root = ET.parse(p).getroot()
+        except ET.ParseError as e:
+            die(f"cannot parse {p}: {e}")
+        if root.tag != "cluster":
+            continue
+        roots.append(root)
+        # `baseCluster="Mode Base"` names the file whose cluster is
+        # "Mode Base Cluster": strip the trailing " Cluster" to resolve it.
+        roots_by_name[re.sub(r" Cluster$", "", root.get("name") or "")] = root
+
+    def tables_for(root, depth=0):
+        if depth > 4:
+            die(f"baseCluster chain too deep at {root.get('name')}")
+        own = own_tables(root)
+        cls = root.find("classification")
+        base_name = cls.get("baseCluster") if cls is not None else None
+        if base_name:
+            base = roots_by_name.get(base_name)
+            if base is None:
+                die(f"{root.get('name')}: baseCluster {base_name!r} not found")
+            return overlay(tables_for(base, depth + 1), own)
+        return own
+
+    by_id = {}
+    for root in roots:
+        ids = root.find("clusterIds")
+        if ids is None:
+            continue
+        for cid in ids.findall("clusterId"):
+            # One file can carry several ids (ConcentrationMeasurement.xml,
+            # ResourceMonitoring.xml): map by clusterId, never by file name.
+            if cid.get("id") is None:
+                continue  # an id-less base (Mode Base)
+            t = tables_for(root)
+            add_implicit_fabric_index(t)
+            by_id[int(cid.get("id"), 0)] = t
+    return by_id
+
+
+def load_zap_globals(chip):
+    """Global structs (and global response commands) from chip's
+    zap-templates, which data_model/1.4.2 does not carry."""
+    pattern = os.path.join(chip, "src", "app", "zap-templates", "zcl",
+                           "data-model", "chip", "*.xml")
+    structs, resps = {}, {}
+    for p in sorted(glob.glob(pattern)):
+        try:
+            root = ET.parse(p).getroot()
+        except ET.ParseError:
+            continue
+        for s in root.iter("struct"):
+            if s.get("cluster") is not None or s.find("cluster") is not None:
+                continue  # cluster-bound: not a global
+            fields = {}
+            for item in s.findall("item"):
+                ztype = item.get("type") or ""
+                t = ZAP_TYPES.get(ztype.lower(), ztype)
+                is_list = item.get("array") == "true"
+                fields[int(item.get("fieldId"), 0)] = {
+                    "name": item.get("name"),
+                    "type": "list" if is_list else t,
+                    "entry": t if is_list else None,
+                    "nullable": item.get("isNullable") == "true",
+                    "conf": "O" if item.get("optional") == "true" else "M",
+                }
+            if s.get("isFabricScoped") == "true" and 254 not in fields:
+                fields[254] = dict(IMPLICIT_FABRIC_INDEX)
+            structs[norm(s.get("name"))] = {"name": s.get("name"), "fields": fields}
+        for c in root.iter("command"):
+            if c.get("source") != "server" or c.find("cluster") is not None:
+                continue
+            fields = {}
+            for i, arg in enumerate(c.findall("arg")):
+                ztype = arg.get("type") or ""
+                t = ZAP_TYPES.get(ztype.lower(), ztype)
+                is_list = arg.get("array") == "true"
+                fid = int(arg.get("fieldId"), 0) if arg.get("fieldId") else i
+                fields[fid] = {
+                    "name": arg.get("name"),
+                    "type": "list" if is_list else t,
+                    "entry": t if is_list else None,
+                    "nullable": arg.get("isNullable") == "true",
+                    "conf": "O" if arg.get("optional") == "true" else "M",
+                }
+            resps[norm(c.get("name"))] = {"name": c.get("name"), "fields": fields}
+    return structs, resps
+
+
+# ------------------------------------------------------------- range check ---
+
+
+def model_range(token, dts):
+    """(signed, bits) for a model type token, resolving cluster-local
+    enum/bitmap/scalar datatypes to their base; None if not an integer."""
+    d = dts.get(token)
+    if d is not None:
+        if d["kind"] in ("enum", "bitmap", "scalar"):
+            return INT_RANGES.get(d["base"])
+        return None
+    return INT_RANGES.get(token)
+
+
+def xml_range(token, xt):
+    """(signed, bits) for a 1.4.2 type token. A named enum/bitmap carries no
+    width in 1.4.2 XML, so its width is the smallest that holds its largest
+    value / highest bit (a lower bound: a narrower model type cannot hold it)."""
+    if token in INT_RANGES:
+        return INT_RANGES[token]
+    key = norm(token)
+    if key in xt["number"]:
+        return INT_RANGES.get(xt["number"][key])
+    if key in xt["enum"]:
+        return (False, 8 if xt["enum"][key] <= 0xFF else 16)
+    if key in xt["bitmap"]:
+        top = xt["bitmap"][key]
+        return (False, 8 if top < 8 else 16 if top < 16 else 32 if top < 32 else 64)
+    return None
+
+
+def covers(model, xml):
+    """True when every value of the 1.4.2 integer type fits the model type."""
+    ms, mb = model
+    xs, xb = xml
+    if ms == xs:
+        return mb >= xb
+    if xs and not ms:
+        return False  # 1.4.2 allows negatives an unsigned model type rejects
+    return mb > xb  # signed model holds an unsigned 1.4.2 type only if wider
+
+
+# ----------------------------------------------------------------- checks ---
+
+
+class Report:
+    def __init__(self, allow):
+        self.allow = allow  # {(key, cls): justification}
+        self.used = set()
+        self.failing, self.allowed = [], []
+        self.model_only, self.xml_only, self.uncheckable = [], [], []
+
+    def finding(self, cls, key, detail):
+        line = f"{cls}  {key}: {detail}"
+        if (key, cls) in self.allow:
+            self.used.add((key, cls))
+            self.allowed.append(f"{line}  [allowed: {self.allow[(key, cls)]}]")
+        else:
+            self.failing.append(line)
+
+
+def model_type_token(f):
+    return f.get("entryType") if f["type"] == "list" else f["type"]
+
+
+def xml_type_token(x):
+    return x.get("entry") if x.get("type") == "list" else x.get("type")
+
+
+def check_width(rep, key, mf, xf, dts, xt):
+    mr = model_range(model_type_token(mf), dts)
+    xr = xml_range(xml_type_token(xf) or "", xt)
+    if mr and xr and not covers(mr, xr):
+        rep.finding("W", key, f"model {model_type_token(mf)} {mr} does not cover "
+                              f"1.4.2 {xml_type_token(xf)} {xr}")
+
+
+def check_fields(rep, cname, ename, mfields, xfields, dts, xt):
+    seen = set()
+    for mf in mfields:
+        key = f"{cname}.{ename}.{mf['name']}"
+        x = xfields.get(mf["id"])
+        if x is None:
+            rep.model_only.append(f"{key} (id {mf['id']})")
+            if not mf["optional"]:
+                rep.finding("P", key, "mandatory in model, absent in 1.4.2")
+            continue
+        seen.add(mf["id"])
+        if not mf["optional"] and x.get("conf") != "M":
+            rep.finding("P", key, f"mandatory in model, conformance {x.get('conf')} in 1.4.2")
+        if x.get("nullable") and not mf["nullable"]:
+            rep.finding("N", key, "nullable in 1.4.2, non-nullable in model")
+        check_width(rep, key, mf, x, dts, xt)
+    for fid, x in sorted(xfields.items()):
+        if fid not in seen and x.get("conf") not in ("X", "D"):
+            if not any(m["id"] == fid for m in mfields):
+                rep.xml_only.append(f"{cname}.{ename}.{x.get('name')} (id {fid})")
+
+
+def excluded_names(meta, cname):
+    """Normalised names of everything clusters.json records as excluded for
+    this cluster (attributes, commands, events, `<Element>.<Field>` fields)."""
+    names, events_off = set(), False
+    for e in meta.get("excluded", []):
+        owner = e.get("cluster", "")
+        if owner != cname and not owner.startswith(cname + "."):
+            continue
+        if e.get("reason") == "event dump not enabled for this cluster":
+            events_off = True
+        names.add(norm(e.get("element")))
+        if "." in (e.get("element") or ""):
+            names.add(norm(e["element"].split(".")[-1]))
+    return names, events_off
+
+
+def check_cluster(rep, c, xt, zap_structs, zap_resps, meta):
+    cname = c["name"]
+    dts = {d["name"]: d for d in c["datatypes"]}
+    excl, events_off = excluded_names(meta, cname)
+
+    for d in c["datatypes"]:
+        if d["kind"] != "struct":
+            continue
+        xs = xt["struct"].get(norm(d["name"]))
+        if xs is None:
+            alias = ZAP_STRUCT_ALIASES.get(d["name"], d["name"])
+            xs = zap_structs.get(norm(alias))
+        if xs is None:
+            rep.uncheckable.append(f"{cname}.{d['name']} (struct not in 1.4.2 or zap globals)")
+            continue
+        check_fields(rep, cname, d["name"], d["fields"], xs["fields"], dts, xt)
+
+    for ev in c.get("events", []):
+        xe = xt["event"].get(norm(ev["name"]))
+        if xe is None:
+            rep.model_only.append(f"{cname}.{ev['name']} (event)")
+            continue
+        check_fields(rep, cname, ev["name"], ev["fields"], xe["fields"], dts, xt)
+    if not events_off:
+        model_events = {norm(e["name"]) for e in c.get("events", [])}
+        for k, xe in sorted(xt["event"].items()):
+            if k not in model_events and k not in excl and xe.get("conf") not in ("X", "D"):
+                rep.xml_only.append(f"{cname}.{xe['name']} (event)")
+
+    for cmd in c["commands"]:
+        if cmd["direction"] != "response":
+            continue
+        xr = xt["resp"].get(norm(cmd["name"])) or zap_resps.get(norm(cmd["name"]))
+        if xr is None:
+            rep.uncheckable.append(f"{cname}.{cmd['name']} (response not in 1.4.2 or zap globals)")
+            continue
+        check_fields(rep, cname, cmd["name"], cmd["fields"], xr["fields"], dts, xt)
+
+    model_attr_ids = set()
+    for a in c["attributes"]:
+        model_attr_ids.add(a["id"])
+        key = f"{cname}.Attribute.{a['name']}"
+        xa = xt["attr"].get(a["id"])
+        if xa is None:
+            rep.model_only.append(f"{key} (id {a['id']:#06x})")
+            continue
+        if xa.get("nullable") and not a["nullable"]:
+            rep.finding("N", key, "nullable in 1.4.2, non-nullable in model")
+        check_width(rep, key, a, xa, dts, xt)
+    for aid, xa in sorted(xt["attr"].items()):
+        if aid >= 0xFFF8 or aid in model_attr_ids or xa.get("conf") in ("X", "D"):
+            continue
+        if norm(xa.get("name")) not in excl:
+            rep.xml_only.append(f"{cname}.Attribute.{xa.get('name')} (id {aid:#06x})")
+
+
+# ------------------------------------------------------------------- main ---
+
+
+def load_allow(path):
+    allow = {}
+    if not os.path.exists(path):
+        return allow
+    with open(path, encoding="utf-8") as fh:
+        for n, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 2)
+            if len(parts) < 3 or parts[1] not in ("P", "N", "W") or parts[0].count(".") != 2:
+                die(f"{path}:{n}: expected `<Cluster>.<Element>.<Field> <P|N|W> <justification>`")
+            if ".Attribute." in parts[0] and parts[1] == "P":
+                die(f"{path}:{n}: attributes take N or W only")
+            allow[(parts[0], parts[1])] = parts[2]
+    return allow
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("chip", help="connectedhomeip checkout root")
+    ap.add_argument("--cluster", action="append", default=[],
+                    help="restrict to this cluster name (repeatable)")
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help="clusters.json to check (default: xtask/model/clusters.json)")
+    args = ap.parse_args()
+
+    try:
+        with open(args.model, encoding="utf-8") as fh:
+            model = json.load(fh)
+    except (OSError, ValueError) as e:
+        die(f"cannot read {args.model}: {e}")
+    clusters = model["clusters"]
+    if args.cluster:
+        known = {c["name"] for c in clusters}
+        for name in args.cluster:
+            if name not in known:
+                die(f"--cluster {name}: not a generated cluster in {args.model}")
+        clusters = [c for c in clusters if c["name"] in args.cluster]
+
+    xml = load_chip_xml(args.chip)
+    zap_structs, zap_resps = load_zap_globals(args.chip)
+    rep = Report(load_allow(ALLOW_PATH))
+    meta = model.get("meta", {})
+    for c in clusters:
+        xt = xml.get(c["id"])
+        if xt is None:
+            rep.uncheckable.append(f"{c['name']} (cluster id {c['id']:#06x} not in 1.4.2)")
+            continue
+        check_cluster(rep, c, xt, zap_structs, zap_resps, meta)
+
+    def section(title, lines):
+        print(f"== {title} ({len(lines)})")
+        for line in lines:
+            print(f"  {line}")
+
+    section("FAIL: P/N/W findings", rep.failing)
+    section("allowed P/N/W findings", rep.allowed)
+    section("MODEL-ONLY (absent from 1.4.2)", rep.model_only)
+    section("XML-ONLY (absent from model, not excluded)", rep.xml_only)
+    section("UNCHECKABLE", rep.uncheckable)
+    stale = [f"{k} {c}" for (k, c) in rep.allow if (k, c) not in rep.used and
+             (not args.cluster or k.split(".")[0] in args.cluster)]
+    section("STALE-ALLOW (matched nothing)", stale)
+    print(f"chip-xml-conformance: {len(clusters)} clusters, "
+          f"{len(rep.failing)} failing, {len(rep.allowed)} allowed")
+    return 1 if rep.failing else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

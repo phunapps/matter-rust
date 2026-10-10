@@ -1,0 +1,16 @@
+# Accepted findings for scripts/chip-xml-conformance.py (M9-A3 spec §5.2).
+#
+# One finding per line:
+#   <Cluster>.<Struct|Event|Command>.<Field> <P|N|W> <justification>
+#   <Cluster>.Attribute.<Name> <N|W> <justification>
+#
+# A P or N finding is resolved by relaxing the field at dump time
+# (xtask/scripts/dump-model/index.js, recorded in clusters.json meta.relaxed),
+# a W finding by widening the type to 1.4.2's. "chip is equally strict" never
+# justifies keeping a P finding: chip's controller decode does not enforce
+# field presence. An entry belongs here only when chip's own generated type
+# (src/controller/data_model/controller-clusters.matter,
+# zzz_generated/app-common/clusters/<Cluster>/Structs.ipp) has the same width
+# or nullability as the model; the justification cites it.
+#
+# Empty: the existing 48 clusters show no finding (2026-10-10, chip 5cd2917a).
