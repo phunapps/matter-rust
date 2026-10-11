@@ -437,6 +437,8 @@ in full with `fabric_index` `None`.
   specification, so `DebugText` (GeneralCommissioning responses) and
   `ErrorValue` (`ConnectNetworkResponse`) are mandatory; the commissioning
   flow's own decoders accept them missing.
+- **Actions (0x0025)**: `ActionList`, `EndpointLists`, `SetupURL`, the twelve
+  action commands, and the `StateChanged` and `ActionFailed` events.
 
 chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so

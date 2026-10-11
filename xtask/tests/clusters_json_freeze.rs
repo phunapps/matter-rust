@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 93] = [
+const TARGET_CLUSTERS: [&str; 94] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -138,6 +138,8 @@ const TARGET_CLUSTERS: [&str; 93] = [
     // M9-A3 B6, commissioning (codecs only):
     "GeneralCommissioning",
     "NetworkCommissioning",
+    // M9-A3 B6, Actions:
+    "Actions",
 ];
 
 fn load() -> Value {
@@ -436,7 +438,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 29] = [
+const EVENT_CLUSTERS: [&str; 30] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -479,6 +481,8 @@ const EVENT_CLUSTERS: [&str; 29] = [
     "WiFiNetworkDiagnostics",
     // M9-A3 B6, ThreadNetworkDiagnostics:
     "ThreadNetworkDiagnostics",
+    // M9-A3 B6, Actions:
+    "Actions",
 ];
 
 #[test]
@@ -2450,4 +2454,40 @@ fn commissioning_clusters_follow_the_specification() {
     for c in [gc, nc] {
         assert_eq!(element_names(c, "events"), Vec::<&str>::new());
     }
+}
+
+#[test]
+fn actions_keeps_its_shapes() {
+    // 1.4.2 ActionsCluster.xml: twelve requests, every one an ActionID with an
+    // optional InvokeID; no responses (each answers with a status).
+    let v = load();
+    let c = cluster(&v, "Actions");
+    let commands = c["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 12);
+    for cmd in commands {
+        assert_eq!(cmd["direction"], "request");
+        assert!(cmd["responseId"].is_null(), "{}", cmd["name"]);
+        let fields = field_optionality(&cmd["fields"]);
+        assert_eq!(fields[..2], [("ActionId", false), ("InvokeId", true)]);
+    }
+    assert_eq!(element_names(c, "events"), ["StateChanged", "ActionFailed"]);
+    // The event's InvokeID is mandatory (1.4.2, chip and matter.js).
+    assert_eq!(
+        field_optionality(&c["events"][0]["fields"]),
+        [
+            ("ActionId", false),
+            ("InvokeId", false),
+            ("NewState", false)
+        ]
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "EndpointListStruct")["fields"]),
+        [
+            ("EndpointListId", false),
+            ("Name", false),
+            ("Type", false),
+            ("Endpoints", false)
+        ]
+    );
+    assert_eq!(writable_attributes(c), Vec::<&str>::new());
 }

@@ -25,12 +25,13 @@
 //!
 //! # Clusters
 //!
-//! 93 clusters are generated today. The full list is [`clusters`]; by area:
+//! 94 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
 //!   `GeneralDiagnostics`, `BridgedDeviceBasicInformation` (per-bridged-
-//!   endpoint identity behind a bridge/aggregator).
+//!   endpoint identity behind a bridge/aggregator), `Actions` (a bridge's
+//!   actions and endpoint lists, with its events).
 //! - **Lighting and actuators:** `OnOff`, `LevelControl`, `ColorControl`,
 //!   `DoorLock` (Aliro features excluded), `WindowCovering` (with the Matter
 //!   1.4 absolute position), `Thermostat` (with the Matter 1.4 weekly

@@ -242,6 +242,10 @@ const ALLOWLIST = [
   // network configuration commands. No events.
   { id: 0x0030, name: 'GeneralCommissioning' },
   { id: 0x0031, name: 'NetworkCommissioning' },
+  // M9-A3 B6, Actions (the ActionList and EndpointLists lists of structs,
+  // twelve requests of an action id with an optional invoke id and a
+  // transition time or duration; StateChanged and ActionFailed events):
+  { id: 0x0025, name: 'Actions' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -300,6 +304,9 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B6, ThreadNetworkDiagnostics (ConnectionStatus; NetworkFaultChange:
   // Current and Previous, each a list of NetworkFaultEnum):
   'ThreadNetworkDiagnostics',
+  // M9-A3 B6, Actions (StateChanged, ActionFailed: the action, the invoke id,
+  // the new state and, for ActionFailed, the error):
+  'Actions',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

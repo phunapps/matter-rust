@@ -5134,3 +5134,139 @@ fn network_commissioning_attributes_requests_and_responses_decode() {
         (NetworkCommissioningStatusEnum::Success, Nullable::Null)
     );
 }
+
+// ---- M9-A3 B6: Actions ------------------------------------------------------
+//
+// 1.4.2 ActionsCluster.xml. The ActionList entry, the EndpointLists entry and
+// SetupURL are what all-clusters serves on endpoint 1 (the action and endpoint
+// lists in all-clusters-common/include/bridged-actions-stub.h, the SetupURL
+// default "https://example.com" in all-clusters-app.matter; the same values at
+// v1.4.2.0 and master), except SupportedCommands: the stub serves 0 for every
+// action, so 0b11 here is synthetic, to exercise the bitmap. The requests and
+// both events are synthetic: all-clusters' stub answers every command
+// NotFound and never emits either event.
+
+#[test]
+fn actions_lists_and_requests_decode() {
+    use clusters::actions::{
+        command_id, decode_action_list, decode_endpoint_lists, decode_setup_url,
+        encode_instant_action, encode_instant_action_with_transition, ActionStateEnum,
+        ActionTypeEnum, CommandBits, EndpointListTypeEnum,
+    };
+    let actions = decode_action_list(&list_of(&[&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_utf8(Tag::Context(1), "TurnOnLight").unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_uint(Tag::Context(3), 0).unwrap();
+        w.put_uint(Tag::Context(4), 0b11).unwrap();
+        w.put_uint(Tag::Context(5), 0).unwrap();
+    }]))
+    .unwrap();
+    let a = &actions[0];
+    assert_eq!(
+        (
+            a.action_id,
+            a.name.as_str(),
+            a.r#type,
+            a.endpoint_list_id,
+            a.state
+        ),
+        (
+            0,
+            "TurnOnLight",
+            ActionTypeEnum::Scene,
+            0,
+            ActionStateEnum::Inactive
+        )
+    );
+    assert_eq!(
+        a.supported_commands,
+        CommandBits::INSTANT_ACTION | CommandBits::INSTANT_ACTION_WITH_TRANSITION
+    );
+    let lists = decode_endpoint_lists(&list_of(&[&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap();
+        w.put_utf8(Tag::Context(1), "Toggle").unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.start_array(Tag::Context(3)).unwrap();
+        for ep in [1, 2, 3] {
+            w.put_uint(Tag::Anonymous, ep).unwrap();
+        }
+        w.end_container().unwrap();
+    }]))
+    .unwrap();
+    assert_eq!(
+        (
+            lists[0].endpoint_list_id,
+            lists[0].r#type,
+            lists[0].endpoints.clone()
+        ),
+        (2, EndpointListTypeEnum::Other, vec![1, 2, 3])
+    );
+    assert_eq!(
+        decode_setup_url(&str_attr("https://example.com")).unwrap(),
+        "https://example.com"
+    );
+    // InvokeId is optional; TransitionTime keeps its own tag.
+    assert_eq!(
+        encode_instant_action(7, None),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 7).unwrap())
+    );
+    assert_eq!(
+        encode_instant_action_with_transition(1, None, 50),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 1).unwrap();
+            w.put_uint(Tag::Context(2), 50).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_instant_action_with_transition(1, Some(9), 50),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 1).unwrap();
+            w.put_uint(Tag::Context(1), 9).unwrap();
+            w.put_uint(Tag::Context(2), 50).unwrap();
+        })
+    );
+    assert_eq!(
+        (
+            command_id::INSTANT_ACTION,
+            command_id::DISABLE_ACTION_WITH_DURATION
+        ),
+        (0x00, 0x0B)
+    );
+}
+
+#[test]
+fn actions_events_decode() {
+    use clusters::actions::{
+        event_id, ActionErrorEnum, ActionFailedEvent, ActionStateEnum, StateChangedEvent,
+    };
+    let changed = StateChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 9).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (changed.action_id, changed.invoke_id, changed.new_state),
+        (1, 9, ActionStateEnum::Active)
+    );
+    let failed = ActionFailedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 9).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.put_uint(Tag::Context(3), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(failed.error, ActionErrorEnum::Interrupted);
+    // ActionErrorEnum has a member named Unknown (0): an unknown value is
+    // `Unrecognized`.
+    assert_eq!(ActionErrorEnum::from_raw(0), ActionErrorEnum::Unknown);
+    assert_eq!(
+        ActionErrorEnum::from_raw(5),
+        ActionErrorEnum::Unrecognized(5)
+    );
+    assert_eq!(
+        [event_id::STATE_CHANGED, event_id::ACTION_FAILED],
+        [0x00, 0x01]
+    );
+}

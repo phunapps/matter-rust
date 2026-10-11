@@ -89,7 +89,7 @@ Everything the original roadmap deferred past v1.0 has since landed:
 - **ICD** (intermittently-connected devices), TimeSync, Binding.
 - **Full Interaction Model** — events, chunked reads, subscriptions with
   chip-faithful auto-resubscribe.
-- **93 generated clusters**, up from the initial ten (the list is in the
+- **94 generated clusters**, up from the initial ten (the list is in the
   [matter-clusters README](crates/matter-clusters/README.md#clusters)).
 
 Still deferred: `no_std` (see
