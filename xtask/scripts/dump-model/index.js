@@ -1110,8 +1110,8 @@ const appliedGlobalRenames = new Set();
 // Why a GLOBAL_DATATYPE_NAMES rename of global `name` (metatype `meta`) to
 // `rename` cannot be applied in `clusterName`, or null when it can. `taken`
 // holds the datatype names already in the cluster (its own, plus globals
-// inlined so far); `renameIsGlobal` is whether the model has a global datatype
-// named `rename` itself. Three ways a rename would go silently wrong:
+// inlined so far); `renameIsGlobal` is whether a model root element (a global
+// datatype, but also a cluster, a device type or a namespace) is named `rename`. Three ways a rename would go silently wrong:
 // - only a struct may be renamed: dumpDatatype records a renamed datatype's
 //   base as `struct` (the anonymous-struct convention), so a renamed enum or
 //   bitmap would lose its enum8 / enum16 / map8.. base, and the emitter, which
@@ -1133,7 +1133,7 @@ function globalRenameError(clusterName, name, rename, meta, taken, renameIsGloba
     return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global \`${name}\` to \`${rename}\`, which is already a datatype of the cluster`;
   }
   if (renameIsGlobal) {
-    return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global \`${name}\` to \`${rename}\`, which is the name of another model global datatype`;
+    return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global \`${name}\` to \`${rename}\`, which is the name of a model root element`;
   }
   return null;
 }

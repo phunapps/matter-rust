@@ -122,7 +122,7 @@ pub struct ReverseOpenCommissioningWindow {
     /// Field CommissioningTimeout (tag 0).
     pub commissioning_timeout: u16,
     /// Field PakePasscodeVerifier (tag 1).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub pake_passcode_verifier: Vec<u8>,
     /// Field Discriminator (tag 2).
     pub discriminator: u16,

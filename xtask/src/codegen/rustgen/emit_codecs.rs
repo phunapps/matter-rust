@@ -1686,6 +1686,7 @@ mod tests {
             "{s}"
         );
         assert!(s.contains(".field(\"passphrase\", &\"<redacted>\")"), "{s}");
+        assert!(!s.contains("&self.passphrase"), "{s}");
         assert!(s.contains(&format!("    /// {SECRET_DOC}\n")), "{s}");
     }
 

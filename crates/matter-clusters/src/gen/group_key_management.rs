@@ -157,17 +157,17 @@ pub struct GroupKeySetStruct {
     /// Field GroupKeySecurityPolicy (tag 1).
     pub group_key_security_policy: GroupKeySecurityPolicyEnum,
     /// Field EpochKey0 (tag 2).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub epoch_key0: Nullable<Vec<u8>>,
     /// Field EpochStartTime0 (tag 3).
     pub epoch_start_time0: Nullable<u64>,
     /// Field EpochKey1 (tag 4).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub epoch_key1: Nullable<Vec<u8>>,
     /// Field EpochStartTime1 (tag 5).
     pub epoch_start_time1: Nullable<u64>,
     /// Field EpochKey2 (tag 6).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub epoch_key2: Nullable<Vec<u8>>,
     /// Field EpochStartTime2 (tag 7).
     pub epoch_start_time2: Nullable<u64>,

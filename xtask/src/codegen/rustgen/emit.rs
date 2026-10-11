@@ -31,7 +31,8 @@ pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable a
 
 /// The rustdoc line on a field that carries a secret (`FieldDef::secret`,
 /// M9-A3 B6): its struct's `Debug` output shows a placeholder instead.
-pub const SECRET_DOC: &str = "Secret: this struct's `Debug` output shows `<redacted>` instead.";
+pub const SECRET_DOC: &str =
+    "Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.";
 
 /// The one rustdoc note of a generated feature, attribute or command item, or
 /// `None` (M9-A3 B4). An element added from the Matter 1.4 supplement
@@ -261,15 +262,14 @@ pub(crate) fn emit_redacting_debug(s: &mut String, name: &str, fields: &[FieldDe
     );
     line!(s, "        f.debug_struct(\"{name}\")");
     for field in fields {
-        let shown = snake(&field.name);
+        // The derive prints the field's identifier without a raw prefix:
+        // `r#type` as `type`, but `self_` and `_4v5` as they are.
+        let id = ident(&snake(&field.name));
+        let shown = id.trim_start_matches("r#");
         if field.secret {
             line!(s, "            .field(\"{shown}\", &\"<redacted>\")");
         } else {
-            line!(
-                s,
-                "            .field(\"{shown}\", &self.{})",
-                ident(&shown)
-            );
+            line!(s, "            .field(\"{shown}\", &self.{id})");
         }
     }
     line!(s, "            .finish()");
@@ -1272,6 +1272,30 @@ mod tests {
         assert!(s.contains(".field(\"type\", &self.r#type)"), "{s}");
         assert!(s.contains(".field(\"epoch_key0\", &\"<redacted>\")"), "{s}");
         assert!(!s.contains("&self.epoch_key0"), "{s}");
+    }
+
+    #[test]
+    fn redacting_debug_prints_each_field_under_its_derived_name() {
+        // `ident` suffixes `self` and prefixes a leading digit, and the derive
+        // prints those identifiers as they are; only `r#` is stripped.
+        let key = FieldDef {
+            ty: "octstr".to_string(),
+            metatype: "bytes".to_string(),
+            secret: true,
+            ..note_field("Self", false, None)
+        };
+        let fields = vec![
+            key,
+            note_field("4V5", false, None),
+            note_field("Crate", false, None),
+            note_field("Type", false, None),
+        ];
+        let mut s = String::new();
+        emit_redacting_debug(&mut s, "OddNames", &fields);
+        assert!(s.contains(".field(\"self_\", &\"<redacted>\")"), "{s}");
+        assert!(s.contains(".field(\"_4_v5\", &self._4_v5)"), "{s}");
+        assert!(s.contains(".field(\"crate_\", &self.crate_)"), "{s}");
+        assert!(s.contains(".field(\"type\", &self.r#type)"), "{s}");
     }
 
     #[test]

@@ -267,7 +267,7 @@ pub fn encode_get_operational_dataset(extended_pan_id: &Vec<u8>) -> Vec<u8> {
 #[non_exhaustive]
 pub struct OperationalDatasetResponse {
     /// Field OperationalDataset (tag 0).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub operational_dataset: Vec<u8>,
 }
 

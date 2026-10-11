@@ -199,7 +199,7 @@ pub fn encode_get_pending_dataset_request() -> Vec<u8> {
 #[non_exhaustive]
 pub struct DatasetResponse {
     /// Field Dataset (tag 0).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub dataset: Vec<u8>,
 }
 

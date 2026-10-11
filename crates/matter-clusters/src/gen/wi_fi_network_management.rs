@@ -92,7 +92,7 @@ pub fn encode_network_passphrase_request() -> Vec<u8> {
 #[non_exhaustive]
 pub struct NetworkPassphraseResponse {
     /// Field Passphrase (tag 0).
-    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.
     pub passphrase: Vec<u8>,
 }
 
