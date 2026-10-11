@@ -32,7 +32,11 @@ const WRITE_CHUNK_BUDGET: usize = 800;
 pub const TIMED_DEFAULT_MS: u16 = 10_000;
 
 /// Outcome of [`Node::invoke`].
-#[derive(Clone, Debug, PartialEq)]
+///
+/// `Debug` is written by hand, not derived: it prints every byte string in
+/// `fields` as its length, because some responses carry credentials there
+/// (see the impl). Read `fields` directly to use the bytes.
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum InvokeResult {
     /// The device returned a response command with (anonymous-tagged) fields.
@@ -40,10 +44,97 @@ pub enum InvokeResult {
         /// The response command path.
         path: CommandPath,
         /// The decoded response fields.
+        ///
+        /// Plaintext: some responses carry credentials in a byte string
+        /// (a Wi-Fi passphrase, a Thread dataset). This `InvokeResult`'s
+        /// `Debug` output shows each byte string's length only.
         fields: Value,
     },
     /// The device returned a bare status (e.g. `Success`).
     Status(ImStatus),
+}
+
+/// Hand-written so the response fields' byte strings stay out of logs.
+///
+/// A `Data` result is the decoded response command, and some responses
+/// carry credentials in octet strings: Wi-Fi Network Management
+/// `NetworkPassphraseResponse` returns the Wi-Fi passphrase, and Thread
+/// Border Router Management `DatasetResponse` and Thread Network Directory
+/// `OperationalDatasetResponse` return an operational dataset, network key
+/// included. So `fields` prints with its `Value` tree intact
+/// (variant names, tags, integers, strings, nesting) but every byte-string
+/// leaf as its length: `Bytes("<N bytes>")`. Everything else prints exactly
+/// as a derive would. Read `fields` directly to use the bytes.
+impl std::fmt::Debug for InvokeResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Data { path, fields } => f
+                .debug_struct("Data")
+                .field("path", path)
+                .field("fields", &RedactedValue(fields))
+                .finish(),
+            Self::Status(status) => f.debug_tuple("Status").field(status).finish(),
+        }
+    }
+}
+
+/// `Debug` view of a [`Value`] that prints each byte-string leaf as its
+/// length and everything else as `Value`'s derived `Debug` does.
+///
+/// Containers are walked here, so a byte string at any depth is caught.
+/// Scalars (`Bool`, `Uint`, `Int`, `Float`, `Double`, `Utf8`, `Null`) go to
+/// `Value`'s own `Debug`. `Value` is `#[non_exhaustive]`, so a variant added
+/// to matter-codec later also falls through to its own `Debug`: if it can
+/// hold bytes, add an arm here.
+struct RedactedValue<'a>(&'a Value);
+
+impl std::fmt::Debug for RedactedValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Value::Bytes(bytes) => f
+                .debug_tuple("Bytes")
+                .field(&format!("<{} bytes>", bytes.len()))
+                .finish(),
+            Value::Structure(members) => f
+                .debug_tuple("Structure")
+                .field(&RedactedMembers(members))
+                .finish(),
+            Value::List(members) => f
+                .debug_tuple("List")
+                .field(&RedactedMembers(members))
+                .finish(),
+            Value::Array(items) => f.debug_tuple("Array").field(&RedactedItems(items)).finish(),
+            scalar => std::fmt::Debug::fmt(scalar, f),
+        }
+    }
+}
+
+/// The `(Tag, Value)` members of a structure or list, printed as the derive
+/// prints a `Vec<(Tag, Value)>` but with each value redacted.
+struct RedactedMembers<'a>(&'a [(Tag, Value)]);
+
+impl std::fmt::Debug for RedactedMembers<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(
+                self.0
+                    .iter()
+                    .map(|(tag, value)| (tag, RedactedValue(value))),
+            )
+            .finish()
+    }
+}
+
+/// The elements of an array, printed as the derive prints a `Vec<Value>`
+/// but with each element redacted.
+struct RedactedItems<'a>(&'a [Value]);
+
+impl std::fmt::Debug for RedactedItems<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(RedactedValue))
+            .finish()
+    }
 }
 
 /// `TimeSynchronization.Granularity` (Matter Core §11.17) — how precise the time

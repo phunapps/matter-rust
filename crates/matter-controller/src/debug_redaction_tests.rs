@@ -13,6 +13,11 @@
 //! is open. All three print as `<redacted>`; the discriminator, iterations
 //! and salt (public, advertised or sent in the clear) still print.
 //!
+//! [`InvokeResult`](crate::node::InvokeResult)'s `Data` carries the decoded
+//! response fields, which for some commands hold a Wi-Fi passphrase or a
+//! Thread dataset in a byte string. Its `Debug` keeps the `Value` tree's
+//! shape and prints each byte string as `Bytes("<N bytes>")`.
+//!
 //! No assertion here prints a `{:?}` rendering, a key or a code on failure: a
 //! failing redaction would print the very value it failed to hide. Hence
 //! `assert!` with static messages throughout, never `assert_eq!`, and a leak
@@ -20,9 +25,13 @@
 //! same as matter-transport's (`debug_redaction_tests` there); each crate
 //! keeps its own copy so the crates stay independent.
 
+use matter_codec::{Tag, Value};
+use matter_interaction::{CommandPath, ImStatus};
+
 use crate::admin::CommissioningWindow;
 use crate::group::GroupKeySet;
 use crate::icd::IcdRegistration;
+use crate::node::InvokeResult;
 use crate::state::GroupKeySetConfig;
 
 /// Sixteen distinct bytes starting at `first` (`first..first + 16`). With
@@ -332,4 +341,161 @@ fn commissioning_window_without_a_qr_code_prints_none() {
     for shown in renderings(&window) {
         assert_window_codes_hidden(&shown);
     }
+}
+
+// ---- `InvokeResult`: response byte strings stay out of `Debug` ------------
+
+/// The old derive, kept as a mirror so the tests can check that the
+/// hand-written impl prints everything except byte strings exactly as it
+/// did. Same variant and field names as `InvokeResult`; the enum's own name
+/// never appears in a `Debug` rendering.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "a Debug mirror: its fields are only ever read by the derived Debug"
+)]
+enum DerivedInvokeResult {
+    Data { path: CommandPath, fields: Value },
+    Status(ImStatus),
+}
+
+fn passphrase_path() -> CommandPath {
+    // WiFiNetworkManagement (0x0451) NetworkPassphraseResponse (0x01).
+    CommandPath {
+        endpoint: 1,
+        cluster: 0x0451,
+        command: 0x01,
+    }
+}
+
+/// A response tree with a secret byte string at depth 2 (inside a nested
+/// structure), another inside an array inside a list, and every scalar kind
+/// beside them, so the walk is checked at each container type.
+fn nested_fields(secret: &[u8], other: &[u8]) -> Value {
+    Value::Structure(vec![
+        (Tag::Context(0), Value::Uint(7)),
+        (
+            Tag::Context(1),
+            Value::Structure(vec![
+                (Tag::Context(0), Value::Bytes(secret.to_vec())),
+                (Tag::Context(1), Value::Utf8("ssid-label".to_string())),
+            ]),
+        ),
+        (
+            Tag::Context(2),
+            Value::List(vec![(
+                Tag::Anonymous,
+                Value::Array(vec![Value::Bytes(other.to_vec()), Value::Null]),
+            )]),
+        ),
+        (Tag::Context(3), Value::Bool(true)),
+        (Tag::Context(4), Value::Int(-3)),
+        (Tag::Context(5), Value::Double(1.5)),
+    ])
+}
+
+/// The same shape with each byte string replaced by a scalar, so the tree
+/// holds no bytes and must print exactly as the derive printed it.
+fn nested_fields_without_bytes() -> Value {
+    Value::Structure(vec![
+        (Tag::Context(0), Value::Uint(7)),
+        (
+            Tag::Context(1),
+            Value::Structure(vec![
+                (Tag::Context(0), Value::Null),
+                (Tag::Context(1), Value::Utf8("ssid-label".to_string())),
+            ]),
+        ),
+        (
+            Tag::Context(2),
+            Value::List(vec![(
+                Tag::Anonymous,
+                Value::Array(vec![Value::Null, Value::Float(0.25)]),
+            )]),
+        ),
+        (Tag::Context(3), Value::Bool(true)),
+        (Tag::Context(4), Value::Int(-3)),
+        (Tag::Context(5), Value::Double(1.5)),
+    ])
+}
+
+#[test]
+fn invoke_result_debug_prints_byte_strings_as_their_length() {
+    let secret = synthetic_bytes(0xC0);
+    let other = synthetic_bytes(0xE0);
+    let result = InvokeResult::Data {
+        path: passphrase_path(),
+        fields: nested_fields(&secret, &other),
+    };
+
+    assert!(
+        format!("{result:?}")
+            == "Data { path: CommandPath { endpoint: 1, cluster: 1105, command: 1 }, \
+                fields: Structure([(Context(0), Uint(7)), (Context(1), Structure([\
+                (Context(0), Bytes(\"<16 bytes>\")), (Context(1), Utf8(\"ssid-label\"))])), \
+                (Context(2), List([(Anonymous, Array([Bytes(\"<16 bytes>\"), Null]))])), \
+                (Context(3), Bool(true)), (Context(4), Int(-3)), (Context(5), Double(1.5))]) }",
+        "unexpected InvokeResult rendering"
+    );
+    for shown in renderings(&result) {
+        assert!(
+            shown.contains("\"<16 bytes>\""),
+            "the placeholder is missing"
+        );
+        assert_hidden(&shown, &secret);
+        assert_hidden(&shown, &other);
+    }
+    // A caller logging an `Option` or `Vec` of results goes through it too.
+    let wrapped = Some(vec![result.clone()]);
+    for shown in renderings(&wrapped) {
+        assert_hidden(&shown, &secret);
+        assert_hidden(&shown, &other);
+    }
+    // The value itself is untouched: only its rendering is hidden.
+    assert!(
+        result
+            == InvokeResult::Data {
+                path: passphrase_path(),
+                fields: nested_fields(&secret, &other),
+            },
+        "the response fields were altered"
+    );
+}
+
+#[test]
+fn invoke_result_debug_matches_the_derive_without_byte_strings() {
+    // With no byte string in the tree, every flavour must print exactly as
+    // the old derive did: same names, tags, nesting and pretty layout.
+    let fields = nested_fields_without_bytes();
+    let ours = InvokeResult::Data {
+        path: passphrase_path(),
+        fields: fields.clone(),
+    };
+    let derived = DerivedInvokeResult::Data {
+        path: passphrase_path(),
+        fields,
+    };
+    assert!(
+        renderings(&ours) == renderings(&derived),
+        "a byte-free Data result no longer prints as the derive did"
+    );
+
+    let ours = InvokeResult::Status(ImStatus::Failure(0x87));
+    let derived = DerivedInvokeResult::Status(ImStatus::Failure(0x87));
+    assert!(
+        renderings(&ours) == renderings(&derived),
+        "a Status result no longer prints as the derive did"
+    );
+}
+
+#[test]
+fn an_empty_byte_string_still_prints_its_length() {
+    let result = InvokeResult::Data {
+        path: passphrase_path(),
+        fields: Value::Bytes(Vec::new()),
+    };
+    assert!(
+        format!("{result:?}").ends_with("fields: Bytes(\"<0 bytes>\") }"),
+        "an empty byte string should print as <0 bytes>"
+    );
 }

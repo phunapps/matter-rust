@@ -91,6 +91,32 @@ breaking change.
   the `open_window` example does. The trait set (`Clone`, `Debug`) and the
   fields are unchanged.
 
+### matter-controller: Fixed (security) — byte strings in invoke responses stay out of `Debug` output
+
+- `InvokeResult` (the result of `Node::invoke` and `Node::invoke_timed`)
+  derived `Debug`, and `InvokeResult::Data` carries the decoded response
+  fields as a `Value`. So a `{:?}` printed every byte string in the response
+  in full. Some responses carry credentials there: WiFiNetworkManagement
+  `NetworkPassphraseResponse` returns the Wi-Fi passphrase, and Thread
+  Border Router Management `DatasetResponse` and Thread Network Directory
+  `OperationalDatasetResponse` return an operational dataset, network key
+  included. Leaked this way in every published release, `0.1.0` through
+  `0.18.1`.
+- `fields` now prints with its `Value` tree intact (variant names, tags,
+  integers, strings and nesting, exactly as before), except that each byte
+  string at any depth prints as its length, `Bytes("<N bytes>")`. `path`
+  and the `Status` variant print as before. `Value`'s own `Debug` in
+  `matter-codec` is unchanged, so TLV debugging elsewhere still shows bytes.
+- `InvokeResult` keeps `Clone`, `Debug` and `PartialEq` (`Debug` is now
+  written by hand), and its variants and fields are unchanged.
+- Known remaining exposure: the `Value`s in read and event reports
+  (`matter-interaction`'s `AttributeReportItem` in `read.rs` and
+  `EventReportItem` in `event.rs`, and this crate's `AttributeReport` in
+  `subscription.rs`) and `CheckIn`'s `app_data` still print their bytes in
+  `Debug`. Readable attributes and events carry
+  no credentials under the spec, and Check-In application data is
+  vendor-defined.
+
 ### matter-controller: Fixed (security) — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a
