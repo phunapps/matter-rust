@@ -82,6 +82,7 @@ pub mod temperature_control;
 pub mod temperature_measurement;
 pub mod thermostat;
 pub mod thermostat_user_interface_configuration;
+pub mod thread_network_diagnostics;
 pub mod time_format_localization;
 pub mod time_synchronization;
 pub mod total_volatile_organic_compounds_concentration_measurement;

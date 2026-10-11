@@ -22,6 +22,7 @@
       "DiagnosticLogs",
       "GeneralDiagnostics",
       "SoftwareDiagnostics",
+      "ThreadNetworkDiagnostics",
       "WiFiNetworkDiagnostics",
       "EthernetNetworkDiagnostics",
       "TimeSynchronization",
@@ -6665,6 +6666,1213 @@
               "nullable": false,
               "optional": true,
               "description": "The StackSize field shall indicate the amount of stack memory, in bytes, that has been allocated for use by the respective thread."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "name": "ThreadNetworkDiagnostics",
+      "revision": 3,
+      "features": [
+        {
+          "bit": 0,
+          "code": "PKTCNT",
+          "name": "PacketCounts",
+          "description": "Server supports the counts for the number of received and transmitted packets on the Thread interface."
+        },
+        {
+          "bit": 1,
+          "code": "ERRCNT",
+          "name": "ErrorCounts",
+          "description": "Server supports the counts for the number of errors that have occurred during the reception and transmission of packets on the Thread interface."
+        },
+        {
+          "bit": 2,
+          "code": "MLECNT",
+          "name": "MleCounts",
+          "description": "Server supports the counts for various MLE layer happenings."
+        },
+        {
+          "bit": 3,
+          "code": "MACCNT",
+          "name": "MacCounts",
+          "description": "Server supports the counts for various MAC layer happenings."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Channel",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the 802.15.4 channel number configured on the Node's Thread interface (that is, the Active Operational Dataset's current Channel value). A value of null shall indicate that the Thread interface is not currently configured or operational."
+        },
+        {
+          "id": 1,
+          "name": "RoutingRole",
+          "type": "RoutingRoleEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the role that this Node has within the routing of messages through the Thread network, as defined by RoutingRoleEnum. The potential roles are defined in the following table. A value of null shall indicate that the Thread interface is not currently configured or operational."
+        },
+        {
+          "id": 2,
+          "name": "NetworkName",
+          "type": "string",
+          "metatype": "string",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a human-readable (displayable) name for the Thread network that the Node has been configured to join to. A value of null shall indicate that the Thread interface is not currently configured or operational."
+        },
+        {
+          "id": 3,
+          "name": "PanId",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the 16-bit identifier of the Node on the Thread network. A value of null shall indicate that the Thread interface is not currently configured or operational."
+        },
+        {
+          "id": 4,
+          "name": "ExtendedPanId",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the unique 64-bit identifier of the Node on the Thread network. A value of null shall indicate that the Thread interface is not currently configured or operational."
+        },
+        {
+          "id": 5,
+          "name": "MeshLocalPrefix",
+          "type": "ipv6pre",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the mesh-local IPv6 prefix for the Thread network that the Node has been configured to join to. A value of null shall indicate that the Thread interface is not currently configured or operational."
+        },
+        {
+          "id": 6,
+          "name": "OverrunCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of packets dropped either at ingress or egress, due to lack of buffer memory to retain all packets on the ethernet network interface. The OverrunCount attribute shall be reset to 0 upon a reboot of the Node."
+        },
+        {
+          "id": 7,
+          "name": "NeighborTable",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NeighborTableStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current list of Nodes that comprise the neighbor table on the Node."
+        },
+        {
+          "id": 8,
+          "name": "RouteTable",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "RouteTableStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current list of router capable Nodes for which routes have been established."
+        },
+        {
+          "id": 9,
+          "name": "PartitionId",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the Thread Leader Partition Id for the Thread network to which the Node is joined. Null if not attached to a Thread network."
+        },
+        {
+          "id": 10,
+          "name": "Weighting",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the Thread Leader Weight used when operating in the Leader role. Null if not attached to a Thread network."
+        },
+        {
+          "id": 11,
+          "name": "DataVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the full Network Data Version the Node currently uses. Null if not attached to a Thread network."
+        },
+        {
+          "id": 12,
+          "name": "StableDataVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the Network Data Version for the stable subset of data the Node currently uses. Null if not attached to a Thread network."
+        },
+        {
+          "id": 13,
+          "name": "LeaderRouterId",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the 8-bit LeaderRouterId the Node shall attempt to utilize upon becoming a router or leader on the Thread network. Null if not attached to a Thread network."
+        },
+        {
+          "id": 14,
+          "name": "DetachedRoleCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times the Node entered the OT_DEVICE_ROLE_DETACHED role as specified within the Thread specification. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 15,
+          "name": "ChildRoleCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times the Node entered the OT_DEVICE_ROLE_CHILD role as specified within the Thread specification. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 16,
+          "name": "RouterRoleCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times the Node entered the OT_DEVICE_ROLE_ROUTER role as specified within the Thread specification. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 17,
+          "name": "LeaderRoleCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times the Node entered the OT_DEVICE_ROLE_LEADER role as specified within the Thread specification. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 18,
+          "name": "AttachAttemptCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of attempts that have been made to attach to a Thread network while the Node was detached from all Thread networks. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 19,
+          "name": "PartitionIdChangeCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times that the Thread network that the Node is connected to has changed its Partition ID. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 20,
+          "name": "BetterPartitionAttachAttemptCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times a Node has attempted to attach to a different Thread partition that it has determined is better than the partition it is currently attached to. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 21,
+          "name": "ParentChangeCount",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of times a Node has changed its parent. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 22,
+          "name": "TxTotalCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC frame transmission requests. The attribute shall only be incremented by 1 for each MAC transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 23,
+          "name": "TxUnicastCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique unicast MAC frame transmission requests. The attribute shall only be incremented by 1 for each unicast MAC transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 24,
+          "name": "TxBroadcastCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique broadcast MAC frame transmission requests. The attribute shall only be incremented by 1 for each broadcast MAC transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 25,
+          "name": "TxAckRequestedCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC frame transmission requests with requested acknowledgment. The attribute shall only be incremented by 1 for each MAC transmission request with requested acknowledgment regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 26,
+          "name": "TxAckedCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC frame transmission requests that were acked. The attribute shall only be incremented by 1 for each MAC transmission request that is acked regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 27,
+          "name": "TxNoAckRequestedCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC frame transmission requests without requested acknowledgment. The attribute shall only be incremented by 1 for each MAC transmission request that is does not request acknowledgement regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions."
+        },
+        {
+          "id": 28,
+          "name": "TxDataCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC Data frame transmission requests. The attribute shall only be incremented by 1 for each MAC Data frame transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 29,
+          "name": "TxDataPollCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC Data Poll frame transmission requests. The attribute shall only be incremented by 1 for each MAC Data Poll frame transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 30,
+          "name": "TxBeaconCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC Beacon frame transmission requests. The attribute shall only be incremented by 1 for each MAC Beacon frame transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions."
+        },
+        {
+          "id": 31,
+          "name": "TxBeaconRequestCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC Beacon Request frame transmission requests. The attribute shall only be incremented by 1 for each MAC Beacon Request frame transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 32,
+          "name": "TxOtherCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC frame transmission requests that are not counted by any other attribute. The attribute shall only be incremented by 1 for each MAC frame transmission request regardless of the amount of CCA failures, CSMA-CA attempts, or retransmissions. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 33,
+          "name": "TxRetryCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of MAC retransmission attempts. The attribute shall only be incremented by 1 for each retransmission attempt that may be triggered by lack of acknowledgement, CSMA/CA failure, or other type of transmission error. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 34,
+          "name": "TxDirectMaxRetryExpiryCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC transmission packets that meet maximal retry limit for direct packets. The attribute shall only be incremented by 1 for each unique MAC transmission packets that meets the maximal retry limit for direct packets. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 35,
+          "name": "TxIndirectMaxRetryExpiryCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC transmission packets that meet maximal retry limit for indirect packets. The attribute shall only be incremented by 1 for each unique MAC transmission packets that meets the maximal retry limit for indirect packets. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 36,
+          "name": "TxErrCcaCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of CCA failures. The TxErrCcaCount attribute shall only be incremented by 1 for each instance of a CCA failure. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 37,
+          "name": "TxErrAbortCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC transmission request failures caused by an abort error. The attribute shall only be incremented by 1 for each unique MAC transmission request failure caused by an abort error."
+        },
+        {
+          "id": 38,
+          "name": "TxErrBusyChannelCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of unique MAC transmission request failures caused by an error as the result of a busy channel (a CSMA/CA fail). The attribute shall only be incremented by 1 for each unique MAC transmission request failure caused by a busy channel such as a CSMA/CA failure."
+        },
+        {
+          "id": 39,
+          "name": "RxTotalCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 40,
+          "name": "RxUnicastCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique unicast MAC frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 41,
+          "name": "RxBroadcastCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique broadcast MAC frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 42,
+          "name": "RxDataCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC Data frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 43,
+          "name": "RxDataPollCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC Data Poll frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 44,
+          "name": "RxBeaconCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC Beacon frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 45,
+          "name": "RxBeaconRequestCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC Beacon Request frames. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 46,
+          "name": "RxOtherCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that are not counted by any other attribute. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 47,
+          "name": "RxAddressFilteredCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of MAC filtering. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 48,
+          "name": "RxDestAddrFilteredCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of a destination address check. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 49,
+          "name": "RxDuplicatedCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received MAC frame requests that have been dropped as a result of being a duplicate of a previously received MAC frame request. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 50,
+          "name": "RxErrNoFrameCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of missing or malformed frame contents. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 51,
+          "name": "RxErrUnknownNeighborCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of originating from an unknown neighbor device. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 52,
+          "name": "RxErrInvalidSrcAddrCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of containing an invalid source address. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 53,
+          "name": "RxErrSecCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of an error with the security of the received frame. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 54,
+          "name": "RxErrFcsCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of an error with the FCS of the received frame. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 55,
+          "name": "RxErrOtherCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the total number of received unique MAC frame requests that have been dropped as a result of an error that is not counted by any other attribute. This value shall only be reset upon a Node reboot."
+        },
+        {
+          "id": 56,
+          "name": "ActiveTimestamp",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Null when there is no dataset configured."
+        },
+        {
+          "id": 57,
+          "name": "PendingTimestamp",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Null when there is no dataset configured."
+        },
+        {
+          "id": 58,
+          "name": "Delay",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Null when there is no dataset configured."
+        },
+        {
+          "id": 59,
+          "name": "SecurityPolicy",
+          "type": "SecurityPolicy",
+          "metatype": "object",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current security policies for the Thread partition to which a Node is connected. Null when there is no dataset configured."
+        },
+        {
+          "id": 60,
+          "name": "ChannelPage0Mask",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the channels within channel page 0, in the 2.4GHz ISM band. The channels are represented in most significant bit order, with bit value 1 meaning selected, bit value 0 meaning unselected. For example, the most significant bit of the left-most byte indicates channel 0. If channel 0 and channel 10 are selected, the mask would be: 80 20 00 00. Null when there is no dataset configured."
+        },
+        {
+          "id": 61,
+          "name": "OperationalDatasetComponents",
+          "type": "OperationalDatasetComponents",
+          "metatype": "object",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a collection of flags to indicate the presence of various operationally acquired values."
+        },
+        {
+          "id": 62,
+          "name": "ActiveNetworkFaultsList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NetworkFaultEnum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": null
+        },
+        {
+          "id": 63,
+          "name": "ExtAddress",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the IEEE 802.15.4 extended address for the Node. A value of null shall indicate that the extended address is not yet known. The uint64 value is composed by taking the 8 octets of the extended address EUI-64 and treating them as a big-endian integer. For example, octet string (in hexadecimal, from first octet to last) 00112233AABBCCDD would lead to a value of 0x00112233AABBCCDD.",
+          "provisional": true
+        },
+        {
+          "id": 64,
+          "name": "Rloc16",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the RLOC16 of the Node. A value of null shall indicate that the Thread interface is not currently configured or operational. The uint16 value is composed by taking the two RLOC16 and treating the octet string as if it was encoding a big-endian integer. For example, octet string (in hexadecimal, from first octet to last) 44AA would lead to a value of 0x44AA.",
+          "provisional": true
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetCounts",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "ConnectionStatus",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ConnectionStatus",
+              "type": "ConnectionStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "NetworkFaultChange",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Current",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "NetworkFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults currently detected, as per Section 11.14.5.1, \"NetworkFaultEnum Type\"."
+            },
+            {
+              "id": 1,
+              "name": "Previous",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "NetworkFaultEnum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the set of faults detected prior to this change event, as per Section 11.14.5.1, \"NetworkFaultEnum Type\"."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "ConnectionStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Connected",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "NotConnected",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NeighborTableStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ExtAddress",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the IEEE 802.15.4 extended address for the neighboring Node. The uint64 value is composed by taking the 8 octets of the extended address EUI-64 and treating them as a big-endian integer. For example, octet string (in hexadecimal, from first octet to last) 00112233AABBCCDD would lead to a value of 0x00112233AABBCCDD."
+            },
+            {
+              "id": 1,
+              "name": "Age",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the duration of time, in seconds, since a frame has been received from the neighboring Node."
+            },
+            {
+              "id": 2,
+              "name": "Rloc16",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the RLOC16 of the neighboring Node. The uint16 value is composed by taking the two RLOC16 and treating the octet string as if it was encoding a big-endian integer. For example, octet string (in hexadecimal, from first octet to last) 44AA would lead to a value of 0x44AA."
+            },
+            {
+              "id": 3,
+              "name": "LinkFrameCounter",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the number of link layer frames that have been received from the neighboring node. This field shall be reset to 0 upon a reboot of the Node."
+            },
+            {
+              "id": 4,
+              "name": "MleFrameCounter",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the number of Mesh Link Establishment frames that have been received from the neighboring node. This field shall be reset to 0 upon a reboot of the Node."
+            },
+            {
+              "id": 5,
+              "name": "Lqi",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the implementation specific mix of IEEE 802.15.4 PDU receive quality indicators, scaled from 0 to 255."
+            },
+            {
+              "id": 6,
+              "name": "AverageRssi",
+              "type": "int8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field SHOULD specify the average RSSI across all received frames from the neighboring Node since the receiving Node's last reboot. If there is no known received frames this field SHOULD have the value of null. This field shall have the units of dBm, having the range -128 dBm to 0 dBm."
+            },
+            {
+              "id": 7,
+              "name": "LastRssi",
+              "type": "int8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall specify the RSSI of the most recently received frame from the neighboring Node. If there is no known last received frame the LastRssi field SHOULD have the value of null. This field shall have the units of dBm, having the range -128 dBm to 0 dBm."
+            },
+            {
+              "id": 8,
+              "name": "FrameErrorRate",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the percentage of received frames from the neighboring Node that have resulted in errors."
+            },
+            {
+              "id": 9,
+              "name": "MessageErrorRate",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the percentage of received messages from the neighboring Node that have resulted in errors."
+            },
+            {
+              "id": 10,
+              "name": "RxOnWhenIdle",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify if the neighboring Node is capable of receiving frames while the Node is in an idle state."
+            },
+            {
+              "id": 11,
+              "name": "FullThreadDevice",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify if the neighboring Node is a full Thread device."
+            },
+            {
+              "id": 12,
+              "name": "FullNetworkData",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify if the neighboring Node requires the full Network Data. If set to False, the neighboring Node only requires the stable Network Data."
+            },
+            {
+              "id": 13,
+              "name": "IsChild",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify if the neighboring Node is a direct child of the Node reporting the NeighborTable attribute."
+            }
+          ]
+        },
+        {
+          "name": "NetworkFaultEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "LinkDown",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "HardwareFailure",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "NetworkJammed",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "OperationalDatasetComponents",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ActiveTimestampPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has an active timestamp present, else False."
+            },
+            {
+              "id": 1,
+              "name": "PendingTimestampPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has a pending timestamp is present, else False."
+            },
+            {
+              "id": 2,
+              "name": "MasterKeyPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has the Thread master key, else False."
+            },
+            {
+              "id": 3,
+              "name": "NetworkNamePresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has the Thread network's name, else False."
+            },
+            {
+              "id": 4,
+              "name": "ExtendedPanIdPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has an extended Pan ID, else False."
+            },
+            {
+              "id": 5,
+              "name": "MeshLocalPrefixPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has the mesh local prefix, else False."
+            },
+            {
+              "id": 6,
+              "name": "DelayPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has the Thread network delay set, else False."
+            },
+            {
+              "id": 7,
+              "name": "PanIdPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has a Pan ID, else False."
+            },
+            {
+              "id": 8,
+              "name": "ChannelPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has configured an operational channel for the Thread network, else False."
+            },
+            {
+              "id": 9,
+              "name": "PskcPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has been configured with the Thread network Pskc, else False."
+            },
+            {
+              "id": 10,
+              "name": "SecurityPolicyPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has been configured with the Thread network security policies, else False."
+            },
+            {
+              "id": 11,
+              "name": "ChannelMaskPresent",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be True if the Node has available a mask of available channels, else False."
+            }
+          ]
+        },
+        {
+          "name": "RouteTableStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ExtAddress",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the IEEE 802.15.4 extended address for the Node for which this route table entry corresponds. The uint64 value is composed by taking the 8 octets of the extended address EUI-64 and treating them as a big-endian integer. For example, octet string (in hexadecimal, from first octet to last) 00112233AABBCCDD would lead to a value of 0x00112233AABBCCDD."
+            },
+            {
+              "id": 1,
+              "name": "Rloc16",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the RLOC16 for the Node for which this route table entry corresponds. The uint16 value is composed by taking the two RLOC16 and treating the octet string as if it was encoding a big-endian integer. For example, octet string (in hexadecimal, from first octet to last) 44AA would lead to a value of 0x44AA."
+            },
+            {
+              "id": 2,
+              "name": "RouterId",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the Router ID for the Node for which this route table entry corresponds."
+            },
+            {
+              "id": 3,
+              "name": "NextHop",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the Router ID for the next hop in the route to the Node for which this route table entry corresponds."
+            },
+            {
+              "id": 4,
+              "name": "PathCost",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This Field shall specify the cost of the route to the Node for which this route table entry corresponds."
+            },
+            {
+              "id": 5,
+              "name": "LqiIn",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the implementation specific mix of IEEE 802.15.4 PDU receive quality indicators, scaled from 0 to 255, from the perspective of the Node reporting the neighbor table."
+            },
+            {
+              "id": 6,
+              "name": "LqiOut",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the implementation specific mix of IEEE 802.15.4 PDU receive quality indicators, scaled from 0 to 255, from the perspective of the Node specified within the NextHop field."
+            },
+            {
+              "id": 7,
+              "name": "Age",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the duration of time, in seconds, since a frame has been received from the Node for which this route table entry corresponds."
+            },
+            {
+              "id": 8,
+              "name": "Allocated",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify if the router ID as defined within the RouterId field has been allocated."
+            },
+            {
+              "id": 9,
+              "name": "LinkEstablished",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify if a link has been established to the Node for which this route table entry corresponds."
+            }
+          ]
+        },
+        {
+          "name": "RoutingRoleEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Unassigned",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "SleepyEndDevice",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "EndDevice",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Reed",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Router",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Leader",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SecurityPolicy",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "RotationTime",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the interval of time, in hours, that Thread security keys are rotated. Null when there is no dataset configured."
+            },
+            {
+              "id": 1,
+              "name": "Flags",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the flags as specified in Thread 1.3.0 section 8.10.1.15. Null when there is no dataset configured."
             }
           ]
         }

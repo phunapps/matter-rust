@@ -230,6 +230,11 @@ const ALLOWLIST = [
   { id: 0x0034, name: 'SoftwareDiagnostics' },
   { id: 0x0036, name: 'WiFiNetworkDiagnostics' },
   { id: 0x0037, name: 'EthernetNetworkDiagnostics' },
+  // M9-A3 B6, ThreadNetworkDiagnostics (65 attributes: the neighbor and route
+  // tables, SecurityPolicy and OperationalDatasetComponents structs, the
+  // `ipv6pre` MeshLocalPrefix; two events, NetworkFaultChange with two lists
+  // of NetworkFaultEnum):
+  { id: 0x0035, name: 'ThreadNetworkDiagnostics' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -285,6 +290,9 @@ const EVENT_ALLOWLIST = new Set([
   // AssociationFailure, ConnectionStatus: scalar fields):
   'SoftwareDiagnostics',
   'WiFiNetworkDiagnostics',
+  // M9-A3 B6, ThreadNetworkDiagnostics (ConnectionStatus; NetworkFaultChange:
+  // Current and Previous, each a list of NetworkFaultEnum):
+  'ThreadNetworkDiagnostics',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

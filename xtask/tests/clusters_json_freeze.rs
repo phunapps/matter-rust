@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 90] = [
+const TARGET_CLUSTERS: [&str; 91] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -133,6 +133,8 @@ const TARGET_CLUSTERS: [&str; 90] = [
     "SoftwareDiagnostics",
     "WiFiNetworkDiagnostics",
     "EthernetNetworkDiagnostics",
+    // M9-A3 B6, ThreadNetworkDiagnostics:
+    "ThreadNetworkDiagnostics",
 ];
 
 fn load() -> Value {
@@ -431,7 +433,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 28] = [
+const EVENT_CLUSTERS: [&str; 29] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -472,6 +474,8 @@ const EVENT_CLUSTERS: [&str; 28] = [
     // M9-A3 B6, flat diagnostics:
     "SoftwareDiagnostics",
     "WiFiNetworkDiagnostics",
+    // M9-A3 B6, ThreadNetworkDiagnostics:
+    "ThreadNetworkDiagnostics",
 ];
 
 #[test]
@@ -1122,7 +1126,7 @@ fn choice_fields(v: &Value) -> Vec<(String, String, String)> {
 /// commands, events and fields whose conformance is `P` or starts with `P`
 /// (`P, WATTS`). Each gets a generated "Provisional" rustdoc line. A new entry
 /// (a widening, a model upgrade) is a doc change to review.
-const PROVISIONAL: [(&str, &str, &str); 25] = [
+const PROVISIONAL: [(&str, &str, &str); 27] = [
     ("BasicInformation", "attribute", "ConfigurationVersion"),
     (
         "BridgedDeviceBasicInformation",
@@ -1149,6 +1153,10 @@ const PROVISIONAL: [(&str, &str, &str); 25] = [
     ("MicrowaveOvenControl", "attribute", "SelectedWattIndex"),
     ("MicrowaveOvenControl", "attribute", "SupportedWatts"),
     ("MicrowaveOvenControl", "feature", "WATTS"),
+    // M9-A3 B6 (provisional in 1.4.2 too: DiagnosticsThread.xml
+    // `<otherwiseConform><provisionalConform/>...`):
+    ("ThreadNetworkDiagnostics", "attribute", "ExtAddress"),
+    ("ThreadNetworkDiagnostics", "attribute", "Rloc16"),
     // M9-A3 B4, WindowCovering ABS (supplemented; provisional in 1.4.2):
     ("WindowCovering", "attribute", "CurrentPositionLift"),
     ("WindowCovering", "attribute", "CurrentPositionTilt"),
@@ -2321,4 +2329,53 @@ fn flat_diagnostics_and_diagnostic_logs_keep_their_shapes() {
     for c in [sw, wifi, eth, logs] {
         assert_eq!(writable_attributes(c), Vec::<&str>::new());
     }
+}
+
+#[test]
+fn thread_network_diagnostics_keeps_its_shapes() {
+    // 1.4.2 DiagnosticsThread.xml, cluster revision 3.
+    let v = load();
+    let c = cluster(&v, "ThreadNetworkDiagnostics");
+    assert_eq!(c["revision"], 3);
+    let attributes = c["attributes"].as_array().unwrap();
+    assert_eq!(attributes.len(), 65);
+    assert_eq!(attributes[0]["name"], "Channel");
+    assert_eq!(attributes[64]["name"], "Rloc16");
+    // MeshLocalPrefix keeps the model's `ipv6pre` token (a byte string).
+    let prefix = attributes
+        .iter()
+        .find(|a| a["name"] == "MeshLocalPrefix")
+        .unwrap();
+    assert_eq!(
+        (&prefix["type"], &prefix["metatype"], &prefix["nullable"]),
+        (
+            &Value::from("ipv6pre"),
+            &Value::from("bytes"),
+            &Value::from(true)
+        )
+    );
+    assert_eq!(element_names(c, "commands"), ["ResetCounts"]);
+    assert_eq!(
+        element_names(c, "events"),
+        ["ConnectionStatus", "NetworkFaultChange"]
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "SecurityPolicy")["fields"]),
+        [("RotationTime", false), ("Flags", false)]
+    );
+    // Every neighbor and route table field is mandatory; two RSSIs are
+    // nullable.
+    for name in ["NeighborTableStruct", "RouteTableStruct"] {
+        let fields = datatype(c, name)["fields"].as_array().unwrap();
+        assert!(fields.iter().all(|f| f["optional"] == false), "{name}");
+    }
+    let nullable: Vec<&str> = datatype(c, "NeighborTableStruct")["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["nullable"] == true)
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(nullable, ["AverageRssi", "LastRssi"]);
+    assert_eq!(writable_attributes(c), Vec::<&str>::new());
 }

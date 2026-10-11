@@ -4807,3 +4807,151 @@ fn diagnostic_logs_request_and_response_round_trip() {
         Err(ClusterError::MissingField("LogContent"))
     ));
 }
+
+// ---- M9-A3 B6: ThreadNetworkDiagnostics -------------------------------------
+//
+// 1.4.2 DiagnosticsThread.xml (cluster revision 3). On a node without Thread
+// (all-clusters on macOS: CHIP_DEVICE_CONFIG_ENABLE_THREAD is 0), chip
+// master's provider serves the nullable attributes null, the three lists
+// empty and every counter 0; at v1.4.2.0 the same build fails those reads
+// (its provider returns CHIP_ERROR_NOT_IMPLEMENTED). Only the feature map
+// below is all-clusters' own (0x0F at both refs); every other value is
+// synthetic, and the table entries are hand-built with every field.
+
+#[test]
+fn thread_network_diagnostics_tables_and_structs_decode() {
+    use clusters::thread_network_diagnostics::{
+        decode_active_network_faults_list, decode_mesh_local_prefix, decode_neighbor_table,
+        decode_operational_dataset_components, decode_route_table, decode_routing_role,
+        decode_security_policy, Feature, NetworkFaultEnum, RoutingRoleEnum,
+    };
+    assert_eq!(
+        (Feature::PKTCNT | Feature::ERRCNT | Feature::MLECNT | Feature::MACCNT).bits(),
+        0x0F,
+        "all-clusters' features"
+    );
+    let neighbors = decode_neighbor_table(&list_of(&[&|w| {
+        w.put_uint(Tag::Context(0), 0x1122_3344_5566_7788).unwrap();
+        w.put_uint(Tag::Context(1), 12).unwrap();
+        w.put_uint(Tag::Context(2), 0x4400).unwrap();
+        w.put_uint(Tag::Context(3), 100).unwrap();
+        w.put_uint(Tag::Context(4), 200).unwrap();
+        w.put_uint(Tag::Context(5), 3).unwrap();
+        w.put_int(Tag::Context(6), -60).unwrap();
+        w.put_null(Tag::Context(7)).unwrap();
+        w.put_uint(Tag::Context(8), 0).unwrap();
+        w.put_uint(Tag::Context(9), 1).unwrap();
+        w.put_bool(Tag::Context(10), true).unwrap();
+        w.put_bool(Tag::Context(11), true).unwrap();
+        w.put_bool(Tag::Context(12), false).unwrap();
+        w.put_bool(Tag::Context(13), false).unwrap();
+    }]))
+    .unwrap();
+    let n = &neighbors[0];
+    assert_eq!(
+        (n.ext_address, n.rloc16, n.lqi, n.average_rssi, n.last_rssi),
+        (
+            0x1122_3344_5566_7788,
+            0x4400,
+            3,
+            Nullable::Value(-60),
+            Nullable::Null
+        )
+    );
+    assert!(n.rx_on_when_idle && n.full_thread_device && !n.is_child);
+    let routes = decode_route_table(&list_of(&[&|w| {
+        w.put_uint(Tag::Context(0), 0x0102_0304_0506_0708).unwrap();
+        w.put_uint(Tag::Context(1), 0x0400).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+        w.put_uint(Tag::Context(3), 63).unwrap();
+        w.put_uint(Tag::Context(4), 0).unwrap();
+        w.put_uint(Tag::Context(5), 3).unwrap();
+        w.put_uint(Tag::Context(6), 3).unwrap();
+        w.put_uint(Tag::Context(7), 5).unwrap();
+        w.put_bool(Tag::Context(8), true).unwrap();
+        w.put_bool(Tag::Context(9), true).unwrap();
+    }]))
+    .unwrap();
+    assert_eq!(
+        (routes[0].router_id, routes[0].next_hop, routes[0].allocated),
+        (1, 63, true)
+    );
+    // MeshLocalPrefix is an `ipv6pre`: carried as its raw bytes. This is the
+    // 9-byte shape chip's OpenThread provider sends (both refs): the prefix
+    // length in bits (0x40), then the 8 prefix bytes (here fd00:db8::/64).
+    let prefix = [0x40, 0xfd, 0x00, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00];
+    assert_eq!(
+        decode_mesh_local_prefix(&bytes_attr(&prefix)).unwrap(),
+        Nullable::Value(prefix.to_vec())
+    );
+    assert_eq!(
+        decode_mesh_local_prefix(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        decode_routing_role(&uint_attr(6)).unwrap(),
+        Nullable::Value(RoutingRoleEnum::Leader)
+    );
+    let Nullable::Value(policy) = decode_security_policy(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 672).unwrap();
+        w.put_uint(Tag::Context(1), 0x00F7).unwrap();
+    }))
+    .unwrap() else {
+        panic!("SecurityPolicy is not null");
+    };
+    assert_eq!((policy.rotation_time, policy.flags), (672, 0x00F7));
+    let Nullable::Value(components) = decode_operational_dataset_components(&struct_of(&|w| {
+        for tag in 0..=11 {
+            w.put_bool(Tag::Context(tag), tag % 2 == 0).unwrap();
+        }
+    }))
+    .unwrap() else {
+        panic!("OperationalDatasetComponents is not null");
+    };
+    assert!(components.active_timestamp_present && !components.pending_timestamp_present);
+    assert!(!components.channel_mask_present);
+    assert_eq!(
+        decode_active_network_faults_list(&uint_array_attr(&[1, 3])).unwrap(),
+        [NetworkFaultEnum::LinkDown, NetworkFaultEnum::NetworkJammed]
+    );
+    assert_eq!(
+        decode_neighbor_table(&uint_array_attr(&[])).unwrap(),
+        Vec::new()
+    );
+}
+
+#[test]
+fn thread_network_diagnostics_events_decode() {
+    use clusters::thread_network_diagnostics::{
+        event_id, ConnectionStatusEnum, ConnectionStatusEvent, NetworkFaultChangeEvent,
+        NetworkFaultEnum,
+    };
+    let status = ConnectionStatusEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(status.connection_status, ConnectionStatusEnum::Connected);
+    let change = NetworkFaultChangeEvent::decode(&struct_of(&|w| {
+        w.start_array(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Anonymous, 1).unwrap();
+        w.put_uint(Tag::Anonymous, 2).unwrap();
+        w.end_container().unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (change.current, change.previous),
+        (
+            vec![
+                NetworkFaultEnum::LinkDown,
+                NetworkFaultEnum::HardwareFailure
+            ],
+            vec![]
+        )
+    );
+    assert_eq!(
+        [event_id::CONNECTION_STATUS, event_id::NETWORK_FAULT_CHANGE],
+        [0x00, 0x01]
+    );
+}

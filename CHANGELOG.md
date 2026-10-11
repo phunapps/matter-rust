@@ -423,6 +423,12 @@ in full with `fabric_index` `None`.
   and `ConnectionStatus` events.
 - **DiagnosticLogs (0x0032)**: `RetrieveLogsRequest` and its response. Codecs
   only: a BDX log transfer is not implemented.
+- **ThreadNetworkDiagnostics (0x0035)**: all 65 attributes (the neighbor and
+  route tables, `SecurityPolicy`, `OperationalDatasetComponents`, and
+  `MeshLocalPrefix`, an IPv6 prefix carried as its raw bytes: chip's
+  OpenThread provider sends nine, the prefix length in bits and then the
+  eight prefix bytes), `ResetCounts`, and the `ConnectionStatus` and
+  `NetworkFaultChange` events. `ExtAddress` and `Rloc16` are provisional.
 
 chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so
