@@ -760,7 +760,8 @@ async fn capture_loopback_events() -> Captured {
 /// and opcode, but neither they nor the driver's other debug events record the
 /// plaintext bytes. Checked two ways: the IPK that `AddNOC` carries appears in
 /// no field of any event, and no event records a payload-dump field at all
-/// (which also covers the inbound direction, whose payloads hold no marker).
+/// (which also covers the inbound direction, whose payloads hold no marker,
+/// and the raw packet head the unsecured receive loop used to dump).
 #[cfg(all(feature = "tracing", not(feature = "wiretrace")))]
 #[tokio::test]
 async fn tracing_without_wiretrace_logs_no_payload_bytes() {
@@ -791,7 +792,10 @@ async fn tracing_without_wiretrace_logs_no_payload_bytes() {
                 "event on {target} leaked the IPK in field {name}"
             );
             assert!(
-                !matches!(name.as_str(), "payload" | "wire" | "report_data_tlv"),
+                !matches!(
+                    name.as_str(),
+                    "payload" | "wire" | "report_data_tlv" | "head"
+                ),
                 "event on {target} recorded a payload dump in field {name}"
             );
         }

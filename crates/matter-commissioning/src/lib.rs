@@ -76,9 +76,7 @@
 //! exchange ids, protocol, opcode and length, but **no message payload
 //! bytes**. The only bytes the crate's debug events dump are public or
 //! encrypted: the attestation certificates and the RCAC being installed,
-//! the CASE Sigma2 messages (whose secret parts are ciphertext), and the
-//! first 24 bytes, mostly header, of each packet received during PASE or
-//! CASE.
+//! and the CASE Sigma2 messages (whose secret parts are ciphertext).
 //!
 //! ## Optional `wiretrace` feature: debugging only
 //!

@@ -922,7 +922,7 @@ impl UnsecuredExchange {
                     #[cfg(feature = "tracing")]
                     tracing::debug!(
                         len = packet.len(),
-                        head = %crate::hexdump::hex(&packet[..packet.len().min(24)]),
+                        head = crate::hexdump::payload(&packet[..packet.len().min(24)]),
                         "unsecured recv"
                     );
                     // Secured-session stragglers (session id ≠ 0 at header

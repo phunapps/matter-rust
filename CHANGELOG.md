@@ -204,17 +204,17 @@ published release, `0.1.0` through `0.18.1`.
   feature's documentation promised only spans. Leaked this way in every
   published release, `0.1.0` through `0.10.0`, whenever `tracing` was on.
   `matter-controller` does not enable it.
-- Those payload fields are now recorded only under the `wiretrace` feature.
-  Under plain `tracing` the events keep their direction, session id,
+- Those payload fields, and the first 24 bytes of each packet that the
+  unsecured receive loop dumped, are now recorded only under the `wiretrace`
+  feature. Under plain `tracing` the events keep their direction, session id,
   exchange id, protocol, opcode and (where it has one) length, and record no
   payload bytes. `wiretrace` implies `tracing`, so `JsonlLayer` and
   `cargo xtask trace-diff` work as before, and its documentation now says
   plainly that it logs the IPK, the Wi-Fi passphrase and the Thread dataset
   and is for debugging only, never production.
 - Still dumped under `tracing`, because the bytes are public or encrypted:
-  the attestation certificates, the RCAC being installed, the CASE Sigma2 /
-  Sigma2_Resume messages and the first 24 bytes of each packet received
-  during PASE or CASE.
+  the attestation certificates, the RCAC being installed and the CASE
+  Sigma2 / Sigma2_Resume messages.
 - Features are additive and no public item changed, so this is a patch.
 
 ### matter-interaction: Fixed (security) — command and attribute payloads stay out of `Debug` output
