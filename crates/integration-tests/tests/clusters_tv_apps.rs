@@ -133,8 +133,9 @@ async fn status(
 ) -> ImStatus {
     match invoke(node, endpoint, cluster, command, fields).await {
         InvokeResult::Status(s) => s,
-        // The path only, never the fields: a response's strings are not
-        // redacted, and ContentControl's ResetPinResponse carries a PIN.
+        // The path only, never the fields: `InvokeResult`'s Debug hides
+        // strings only in the responses it knows carry a PIN, so an
+        // unexpected response's strings would print.
         InvokeResult::Data { path, .. } => panic!(
             "{cluster:#06x}/{command:#04x}: expected a status, got response {:#04x} ({path:?})",
             path.command

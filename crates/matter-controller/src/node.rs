@@ -114,9 +114,10 @@ impl std::fmt::Debug for InvokeResult {
 /// clusters.
 ///
 /// Both ids are checked against connectedhomeip's
-/// `data_model/1.4.2/clusters/*.xml` (identical at `v1.4.2.0` and master)
-/// and its zap `account-login-cluster.xml` / `content-control-cluster.xml`,
-/// and against the generated `matter-clusters` constants.
+/// `data_model/1.4.2/clusters/AccountLogin.xml` and `ContentControl.xml`
+/// (each identical at `v1.4.2.0` and master), its zap
+/// `account-login-cluster.xml` / `content-control-cluster.xml`, and the
+/// generated `matter-clusters` constants.
 const STRING_SECRET_RESPONSES: [(u32, u32); 2] = [
     // AccountLogin (0x050E) GetSetupPINResponse (0x01): field 0 `SetupPIN`,
     // the setup PIN for PASE with the Commissionee. Generated as
