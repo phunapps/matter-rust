@@ -130,7 +130,6 @@ const HKDF_INFO_SESSION_KEYS: &[u8] = b"SessionKeys";
 /// `Poisoned` is a sentinel used during `std::mem::replace` transitions;
 /// it is never observable to callers (all methods replace it immediately
 /// with either the next real state or an error return).
-#[derive(Debug)]
 enum State {
     /// Initial state: `handle_sigma1()` has not been called yet.
     ///
@@ -245,6 +244,25 @@ enum State {
 
     /// Sentinel during `std::mem::replace` transitions.
     Poisoned,
+}
+
+/// Names the variant only. The operational signing key, the IPK, the ephemeral
+/// secret, the ECDH shared secret and the session keys live in these variants'
+/// fields; nothing needs them in a log, so none are printed. Written by hand,
+/// not derived, so that a `Debug` added to the public state machine later
+/// cannot print them either.
+impl core::fmt::Debug for State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AwaitingSigma1 { .. } => "AwaitingSigma1",
+            Self::ReadyToSendSigma2 { .. } => "ReadyToSendSigma2",
+            Self::AwaitingSigma3 { .. } => "AwaitingSigma3",
+            Self::AwaitingResumptionDecision { .. } => "AwaitingResumptionDecision",
+            Self::ReadyToSendSigma2Resume { .. } => "ReadyToSendSigma2Resume",
+            Self::Complete { .. } => "Complete",
+            Self::Poisoned => "Poisoned",
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2003,5 +2021,46 @@ mod tests {
             next_record.id.0, sigma2_resume.resumption_id,
             "CaseSessionOutput resumption_record.id must match Sigma2_Resume resumption_id"
         );
+    }
+
+    // ─── `State`'s Debug names the variant only ───────────────────────────
+    //
+    // Most `State` variants hold secrets (the operational signing key, the IPK,
+    // the ephemeral secret, the ECDH shared secret, session keys). Nothing
+    // formats `State` today, but a future `#[derive(Debug)]` on the public state
+    // machine would print it, so `State`'s own `Debug` prints the variant name
+    // and nothing else. Every check compares the whole rendering against the
+    // bare name, so no field can be present. Static messages only: a failing
+    // assertion never prints the state.
+
+    /// Every `Debug` flavour of `state` is exactly `name`.
+    fn assert_state_shows_only(state: &State, name: &str) {
+        for shown in [
+            format!("{state:?}"),
+            format!("{state:#?}"),
+            format!("{state:x?}"),
+            format!("{state:X?}"),
+            format!("{state:#x?}"),
+            format!("{state:#X?}"),
+        ] {
+            assert!(
+                shown == name,
+                "State's Debug prints more than its variant name"
+            );
+        }
+    }
+
+    #[test]
+    fn state_debug_names_the_variant_only() {
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let responder = CaseResponder::new(
+            creds,
+            empty_roots(),
+            0x0002,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+        assert_state_shows_only(&responder.state, "AwaitingSigma1");
+        assert_state_shows_only(&State::Poisoned, "Poisoned");
     }
 }

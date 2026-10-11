@@ -93,7 +93,6 @@ use zeroize::Zeroize;
 /// either `PBKDFParamRequest` (negotiation path) or `Pake1` (known-params
 /// path) as its first inbound message. The caller does not need to know which
 /// path the commissioner will choose.
-#[derive(Debug)]
 enum State {
     /// Waiting for the first inbound message.
     ///
@@ -166,6 +165,24 @@ enum State {
     /// an error before storing it. If somehow reached, all methods return
     /// [`Error::HandshakeIncomplete`].
     Poisoned,
+}
+
+/// Names the variant only. `w0`, `L`, the ephemeral scalar `y`, the confirmation
+/// tags and the session keys live in these variants'
+/// fields; nothing needs them in a log, so none are printed. Written by hand,
+/// not derived, so that a `Debug` added to the public state machine later
+/// cannot print them either.
+impl core::fmt::Debug for State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AwaitingFirstMessage { .. } => "AwaitingFirstMessage",
+            Self::ReadyToSendPbkdfResponse { .. } => "ReadyToSendPbkdfResponse",
+            Self::AwaitingPake1 { .. } => "AwaitingPake1",
+            Self::ReadyToSendPake2 { .. } => "ReadyToSendPake2",
+            Self::Complete { .. } => "Complete",
+            Self::Poisoned => "Poisoned",
+        })
+    }
 }
 
 // =============================================================================
@@ -1079,5 +1096,39 @@ mod tests {
             "Y must have SEC1 uncompressed prefix 0x04"
         );
         assert_eq!(decoded.verifier.len(), 32);
+    }
+
+    // ─── `State`'s Debug names the variant only ───────────────────────────
+    //
+    // Most `State` variants hold secrets (`w0`, `L`, the ephemeral scalar `y`,
+    // confirmation tags, session keys). Nothing formats `State` today, but a
+    // future `#[derive(Debug)]` on the public state machine would print it, so
+    // `State`'s own `Debug` prints the variant name and nothing else. Every
+    // check compares the whole rendering against the bare name, so no field can
+    // be present. Static messages only: a failing assertion never prints the
+    // state.
+
+    /// Every `Debug` flavour of `state` is exactly `name`.
+    fn assert_state_shows_only(state: &State, name: &str) {
+        for shown in [
+            format!("{state:?}"),
+            format!("{state:#?}"),
+            format!("{state:x?}"),
+            format!("{state:X?}"),
+            format!("{state:#x?}"),
+            format!("{state:#X?}"),
+        ] {
+            assert!(
+                shown == name,
+                "State's Debug prints more than its variant name"
+            );
+        }
+    }
+
+    #[test]
+    fn state_debug_names_the_variant_only() {
+        let verifier = PaseVerifier::new_from_pin(TEST_PIN, test_params(), 0x0033).unwrap();
+        assert_state_shows_only(&verifier.state, "AwaitingFirstMessage");
+        assert_state_shows_only(&State::Poisoned, "Poisoned");
     }
 }

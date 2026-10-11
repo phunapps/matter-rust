@@ -170,7 +170,6 @@ const HKDF_INFO_SESSION_KEYS: &[u8] = b"SessionKeys";
 /// `Poisoned` is a sentinel used during `std::mem::replace` transitions;
 /// it is never observable to callers (all methods replace it immediately
 /// with either the next real state or an error return).
-#[derive(Debug)]
 enum State {
     /// Initial state: `start()` has not been called yet.
     ///
@@ -237,6 +236,23 @@ enum State {
 
     /// Sentinel during `std::mem::replace` transitions.
     Poisoned,
+}
+
+/// Names the variant only. The operational signing key, the IPK, the ephemeral
+/// secret, the session keys and resumption secrets live in these variants'
+/// fields; nothing needs them in a log, so none are printed. Written by hand,
+/// not derived, so that a `Debug` added to the public state machine later
+/// cannot print them either.
+impl core::fmt::Debug for State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AwaitingStart { .. } => "AwaitingStart",
+            Self::AwaitingSigma2 { .. } => "AwaitingSigma2",
+            Self::ReadyToSendSigma3 { .. } => "ReadyToSendSigma3",
+            Self::Complete { .. } => "Complete",
+            Self::Poisoned => "Poisoned",
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1898,5 +1914,48 @@ mod tests {
             ),
             "Receiving Sigma2_Resume without having attempted resumption must fail"
         );
+    }
+
+    // ─── `State`'s Debug names the variant only ───────────────────────────
+    //
+    // Most `State` variants hold secrets (the operational signing key, the IPK,
+    // the ephemeral secret, session keys, resumption secrets). Nothing formats
+    // `State` today, but a future `#[derive(Debug)]` on the public state machine
+    // would print it, so `State`'s own `Debug` prints the variant name and
+    // nothing else. Every check compares the whole rendering against the bare
+    // name, so no field can be present. Static messages only: a failing
+    // assertion never prints the state.
+
+    /// Every `Debug` flavour of `state` is exactly `name`.
+    fn assert_state_shows_only(state: &State, name: &str) {
+        for shown in [
+            format!("{state:?}"),
+            format!("{state:#?}"),
+            format!("{state:x?}"),
+            format!("{state:X?}"),
+            format!("{state:#x?}"),
+            format!("{state:#X?}"),
+        ] {
+            assert!(
+                shown == name,
+                "State's Debug prints more than its variant name"
+            );
+        }
+    }
+
+    #[test]
+    fn state_debug_names_the_variant_only() {
+        let creds = make_test_credentials(0x1234, 0x5678, [0xAB; 16], dummy_rcac_pub());
+        let initiator = CaseInitiator::new(
+            creds,
+            empty_roots(),
+            0x1234,
+            0x5678,
+            0x0001,
+            MatterTime::from_unix_secs(2_000_000_000),
+        )
+        .unwrap();
+        assert_state_shows_only(&initiator.state, "AwaitingStart");
+        assert_state_shows_only(&State::Poisoned, "Poisoned");
     }
 }

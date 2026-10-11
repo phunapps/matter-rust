@@ -71,7 +71,6 @@ use zeroize::Zeroize;
 /// Each variant corresponds to a point in the protocol flow defined in
 /// Matter Core Spec §3.10.5. Named for the *next action* the state machine
 /// expects or is ready to perform.
-#[derive(Debug)]
 enum State {
     /// `start()` has not been called yet — negotiation path.
     ///
@@ -141,6 +140,26 @@ enum State {
     /// an error before storing it. If somehow reached, all methods return
     /// `Error::HandshakeIncomplete`.
     Poisoned,
+}
+
+/// Names the variant only. The PIN, `w0`/`w1`, the ephemeral scalar `x`, and the
+/// session keys live in these variants'
+/// fields; nothing needs them in a log, so none are printed. Written by hand,
+/// not derived, so that a `Debug` added to the public state machine later
+/// cannot print them either.
+impl core::fmt::Debug for State {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::AwaitingStartNegotiation { .. } => "AwaitingStartNegotiation",
+            Self::AwaitingStartKnownParams { .. } => "AwaitingStartKnownParams",
+            Self::AwaitingPbkdfResponse { .. } => "AwaitingPbkdfResponse",
+            Self::ReadyToSendPake1 { .. } => "ReadyToSendPake1",
+            Self::AwaitingPake2 { .. } => "AwaitingPake2",
+            Self::ReadyToSendPake3 { .. } => "ReadyToSendPake3",
+            Self::Complete { .. } => "Complete",
+            Self::Poisoned => "Poisoned",
+        })
+    }
 }
 
 // =============================================================================
@@ -939,5 +958,47 @@ mod tests {
         assert_eq!(decoded_req.initiator_session_id, 0x0011);
 
         assert_eq!(prover.responder_session_id(), None);
+    }
+
+    // ─── `State`'s Debug names the variant only ───────────────────────────
+    //
+    // Most `State` variants hold secrets (the PIN, `w0`/`w1`, the ephemeral
+    // scalar `x`, session keys). Nothing formats `State` today, but a future
+    // `#[derive(Debug)]` on the public state machine would print it, so
+    // `State`'s own `Debug` prints the variant name and nothing else. Every
+    // check compares the whole rendering against the bare name, so no field can
+    // be present. Static messages only: a failing assertion never prints the
+    // state.
+
+    /// Every `Debug` flavour of `state` is exactly `name`.
+    fn assert_state_shows_only(state: &State, name: &str) {
+        for shown in [
+            format!("{state:?}"),
+            format!("{state:#?}"),
+            format!("{state:x?}"),
+            format!("{state:X?}"),
+            format!("{state:#x?}"),
+            format!("{state:#X?}"),
+        ] {
+            assert!(
+                shown == name,
+                "State's Debug prints more than its variant name"
+            );
+        }
+    }
+
+    #[test]
+    fn state_debug_names_the_variant_only() {
+        let prover = PaseProver::new_with_negotiation(20_202_021, 0x0001).unwrap();
+        assert_state_shows_only(&prover.state, "AwaitingStartNegotiation");
+
+        let params = PasePbkdfParams {
+            iterations: 1_000,
+            salt: vec![0x42u8; 16],
+        };
+        let prover = PaseProver::new_with_known_params(20_202_021, params, 0x0001).unwrap();
+        assert_state_shows_only(&prover.state, "AwaitingStartKnownParams");
+
+        assert_state_shows_only(&State::Poisoned, "Poisoned");
     }
 }
