@@ -6620,6 +6620,21 @@ fn get_program_guide_keeps_absent_and_null_page_tokens_apart() {
             w.put_null(Tag::Context(3)).unwrap();
         })
     );
+    // A null PageToken and a null RecordingFlag (tag 5, the specification's
+    // id): the bytes matter.js 0.16.11's TlvGetProgramGuideRequest writes for
+    // the same request.
+    assert_eq!(
+        encode_get_program_guide(
+            0,
+            3600,
+            None,
+            Some(Nullable::Null),
+            Some(Nullable::Null),
+            None,
+            None
+        ),
+        [0x15, 0x24, 0x00, 0x00, 0x25, 0x01, 0x10, 0x0e, 0x34, 0x03, 0x34, 0x05, 0x18]
+    );
 }
 
 #[test]
