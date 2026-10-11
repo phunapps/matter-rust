@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 96] = [
+const TARGET_CLUSTERS: [&str; 99] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -143,6 +143,10 @@ const TARGET_CLUSTERS: [&str; 96] = [
     // M9-A3 B6, Fabric Synchronization:
     "EcosystemInformation",
     "CommissionerControl",
+    // M9-A3 B6, network infrastructure:
+    "WiFiNetworkManagement",
+    "ThreadBorderRouterManagement",
+    "ThreadNetworkDirectory",
 ];
 
 fn load() -> Value {
@@ -2604,4 +2608,43 @@ fn fabric_synchronization_clusters_keep_their_shapes() {
     let payload = cc["events"][0]["fields"].as_array().unwrap();
     assert!(payload.iter().all(|f| f["fabricSensitive"].is_null()));
     assert!(payload.iter().all(|f| f["optional"] == false));
+}
+
+#[test]
+fn network_infrastructure_clusters_keep_their_shapes() {
+    // 1.4.2 WiFiNetworkManagement.xml, ThreadBorderRouterManagement.xml,
+    // ThreadNetworkDirectory.xml. No events in any of them.
+    let v = load();
+    let wifi = cluster(&v, "WiFiNetworkManagement");
+    assert_eq!(
+        element_names(wifi, "commands"),
+        ["NetworkPassphraseRequest", "NetworkPassphraseResponse"]
+    );
+    let tbrm = cluster(&v, "ThreadBorderRouterManagement");
+    // Both Get*DatasetRequest commands answer with DatasetResponse (0x02).
+    for request in ["GetActiveDatasetRequest", "GetPendingDatasetRequest"] {
+        assert_eq!(command(tbrm, request)["responseId"], 2, "{request}");
+    }
+    assert_eq!(
+        field_optionality(&command(tbrm, "SetActiveDatasetRequest")["fields"]),
+        [("ActiveDataset", false), ("Breadcrumb", true)]
+    );
+    let tnd = cluster(&v, "ThreadNetworkDirectory");
+    assert_eq!(writable_attributes(tnd), ["PreferredExtendedPanId"]);
+    assert_eq!(command(tnd, "GetOperationalDataset")["responseId"], 3);
+    assert_eq!(
+        field_optionality(&datatype(tnd, "ThreadNetworkStruct")["fields"]),
+        [
+            ("ExtendedPanId", false),
+            ("NetworkName", false),
+            ("Channel", false),
+            ("ActiveTimestamp", false)
+        ]
+    );
+    for c in [wifi, tbrm, tnd] {
+        assert_eq!(element_names(c, "events"), Vec::<&str>::new());
+    }
+    for c in [wifi, tbrm] {
+        assert_eq!(writable_attributes(c), Vec::<&str>::new());
+    }
 }

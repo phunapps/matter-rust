@@ -19,7 +19,7 @@ matter-clusters = "0.5"
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  96 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  99 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -27,7 +27,7 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 96 listed below. More
+- It is **not** the full Matter cluster set — only the 99 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -46,7 +46,7 @@ may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-96 clusters are generated today, covering their **mandatory and optional**
+99 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
@@ -61,6 +61,12 @@ attributes, by area:
   EcosystemInformation's directories (fabric-bridge-app adds the cluster,
   empty, to its bridged-device endpoints): it is checked by decode smoke and
   `chip-xml-conformance.py` only.
+- **Network infrastructure** — ThreadBorderRouterManagement,
+  ThreadNetworkDirectory, WiFiNetworkManagement (codecs only: no dataset or
+  credential handling). network-manager-app, chip's only example app that
+  hosts all three (and the only one with ThreadNetworkDirectory or
+  WiFiNetworkManagement), is not built by the integration harness: they are
+  checked by decode smoke and `chip-xml-conformance.py` only.
 - **Lighting and actuators** — OnOff, LevelControl, ColorControl, DoorLock
   (Aliro features excluded), WindowCovering (with the Matter 1.4 absolute
   position, provisional in Matter 1.4, removed in 1.5), Thermostat (with the

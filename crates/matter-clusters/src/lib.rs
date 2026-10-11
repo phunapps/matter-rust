@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 96 clusters are generated today. The full list is [`clusters`]; by area:
+//! 99 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -38,6 +38,9 @@
 //!   as `ecosystem_information::LocationDescriptorStruct`),
 //!   `CommissionerControl` (with its event; the approval flow itself is not
 //!   implemented).
+//! - **Network infrastructure:** `ThreadBorderRouterManagement`,
+//!   `ThreadNetworkDirectory`, `WiFiNetworkManagement` (codecs only: no
+//!   dataset or credential handling).
 //! - **Lighting and actuators:** `OnOff`, `LevelControl`, `ColorControl`,
 //!   `DoorLock` (Aliro features excluded), `WindowCovering` (with the Matter
 //!   1.4 absolute position), `Thermostat` (with the Matter 1.4 weekly

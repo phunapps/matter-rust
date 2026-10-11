@@ -254,6 +254,14 @@ const ALLOWLIST = [
   // event):
   { id: 0x0750, name: 'EcosystemInformation' },
   { id: 0x0751, name: 'CommissionerControl' },
+  // M9-A3 B6, network infrastructure (network-manager-app's clusters): Thread
+  // border router management (dataset requests and responses, timed
+  // invokes), the Thread network directory (a list of networks, a writable
+  // nullable preferred Extended PAN ID) and Wi-Fi network management (the
+  // SSID and a passphrase request). No events.
+  { id: 0x0451, name: 'WiFiNetworkManagement' },
+  { id: 0x0452, name: 'ThreadBorderRouterManagement' },
+  { id: 0x0453, name: 'ThreadNetworkDirectory' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

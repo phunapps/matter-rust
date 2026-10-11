@@ -5460,3 +5460,150 @@ fn commissioner_control_requests_response_and_event_decode() {
     );
     assert_eq!(event_id::COMMISSIONING_REQUEST_RESULT, 0x00);
 }
+
+// ---- M9-A3 B6: network infrastructure ---------------------------------------
+//
+// 1.4.2 WiFiNetworkManagement.xml, ThreadBorderRouterManagement.xml,
+// ThreadNetworkDirectory.xml. network-manager-app is chip's only host of all
+// three and is not built here (it needs ZAP at build time), so these values
+// are hand-built to the 1.4.2 shapes. The passphrase and the datasets are
+// secrets on a real network: the values here are synthetic, and they are
+// compared with `assert!(a == b)` so a failure never prints them.
+
+#[test]
+#[allow(clippy::manual_assert_eq)] // assert_eq! would print secret bytes on failure.
+fn wifi_network_management_attributes_and_passphrase_response_decode() {
+    use clusters::wi_fi_network_management::{
+        command_id, decode_passphrase_surrogate, decode_ssid, encode_network_passphrase_request,
+        NetworkPassphraseResponse,
+    };
+    assert_eq!(decode_ssid(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_ssid(&bytes_attr(b"home")).unwrap(),
+        Nullable::Value(b"home".to_vec())
+    );
+    assert_eq!(
+        decode_passphrase_surrogate(&uint_attr(17)).unwrap(),
+        Nullable::Value(17)
+    );
+    assert_eq!(encode_network_passphrase_request(), struct_of(&|_| {}));
+    assert_eq!(
+        (
+            command_id::NETWORK_PASSPHRASE_REQUEST,
+            command_id::NETWORK_PASSPHRASE_RESPONSE
+        ),
+        (0x00, 0x01)
+    );
+    let response = NetworkPassphraseResponse::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), b"correct horse").unwrap();
+    }))
+    .unwrap();
+    assert!(response.passphrase == b"correct horse");
+}
+
+#[test]
+#[allow(clippy::manual_assert_eq)] // assert_eq! would print secret bytes on failure.
+fn thread_border_router_management_requests_and_dataset_response_decode() {
+    use clusters::thread_border_router_management::{
+        command_id, decode_active_dataset_timestamp, decode_border_agent_id,
+        decode_border_router_name, encode_get_active_dataset_request,
+        encode_set_active_dataset_request, encode_set_pending_dataset_request, DatasetResponse,
+        Feature,
+    };
+    assert_eq!(Feature::PC.bits(), 1);
+    assert_eq!(
+        decode_border_router_name(&str_attr("network-manager")).unwrap(),
+        "network-manager"
+    );
+    assert_eq!(
+        decode_border_agent_id(&bytes_attr(&[0x11; 16])).unwrap(),
+        vec![0x11; 16]
+    );
+    assert_eq!(
+        decode_active_dataset_timestamp(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    // GetActiveDatasetRequest and GetPendingDatasetRequest both answer with
+    // DatasetResponse (0x02).
+    assert_eq!(encode_get_active_dataset_request(), struct_of(&|_| {}));
+    assert_eq!(command_id::DATASET_RESPONSE, 0x02);
+    let dataset = vec![0x0e, 0x08, 0, 0, 0, 0, 0, 1, 0, 0];
+    assert!(
+        encode_set_active_dataset_request(&dataset, Some(9))
+            == struct_of(&|w| {
+                w.put_bytes(Tag::Context(0), &dataset).unwrap();
+                w.put_uint(Tag::Context(1), 9).unwrap();
+            })
+    );
+    assert!(
+        encode_set_pending_dataset_request(&dataset)
+            == struct_of(&|w| w.put_bytes(Tag::Context(0), &dataset).unwrap())
+    );
+    let response = DatasetResponse::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &dataset).unwrap();
+    }))
+    .unwrap();
+    assert!(response.dataset == dataset);
+}
+
+#[test]
+#[allow(clippy::manual_assert_eq)] // assert_eq! would print secret bytes on failure.
+fn thread_network_directory_networks_requests_and_response_decode() {
+    use clusters::thread_network_directory::{
+        command_id, decode_preferred_extended_pan_id, decode_thread_network_table_size,
+        decode_thread_networks, encode_add_network, encode_get_operational_dataset,
+        encode_preferred_extended_pan_id, OperationalDatasetResponse,
+    };
+    let networks = decode_thread_networks(&list_of(&[&|w| {
+        w.put_bytes(Tag::Context(0), &[0xDE, 0xAD, 0, 0xBE, 0xEF, 0, 0xCA, 0xFE])
+            .unwrap();
+        w.put_utf8(Tag::Context(1), "MyHome").unwrap();
+        w.put_uint(Tag::Context(2), 15).unwrap();
+        w.put_uint(Tag::Context(3), 1).unwrap();
+    }]))
+    .unwrap();
+    let n = &networks[0];
+    assert_eq!(
+        (n.network_name.as_str(), n.channel, n.active_timestamp),
+        ("MyHome", 15, 1)
+    );
+    assert_eq!(n.extended_pan_id.len(), 8);
+    assert_eq!(
+        decode_thread_network_table_size(&uint_attr(10)).unwrap(),
+        10
+    );
+    // PreferredExtendedPanID is writable and nullable.
+    assert_eq!(
+        encode_preferred_extended_pan_id(Nullable::Null),
+        null_attr()
+    );
+    let xpan = vec![0xDE, 0xAD, 0, 0xBE, 0xEF, 0, 0xCA, 0xFE];
+    assert_eq!(
+        decode_preferred_extended_pan_id(&encode_preferred_extended_pan_id(Nullable::Value(
+            xpan.clone()
+        )))
+        .unwrap(),
+        Nullable::Value(xpan.clone())
+    );
+    // AddNetwork carries an operational dataset (a secret on a real network).
+    assert!(
+        encode_add_network(&vec![0x0e, 0x08])
+            == struct_of(&|w| w.put_bytes(Tag::Context(0), &[0x0e, 0x08]).unwrap())
+    );
+    assert_eq!(
+        encode_get_operational_dataset(&xpan),
+        struct_of(&|w| w.put_bytes(Tag::Context(0), &xpan).unwrap())
+    );
+    assert_eq!(
+        (
+            command_id::GET_OPERATIONAL_DATASET,
+            command_id::OPERATIONAL_DATASET_RESPONSE
+        ),
+        (0x02, 0x03)
+    );
+    let response = OperationalDatasetResponse::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &[0x0e, 0x08]).unwrap();
+    }))
+    .unwrap();
+    assert!(response.operational_dataset == [0x0e, 0x08]);
+}

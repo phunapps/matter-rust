@@ -451,6 +451,9 @@ in full with `fabric_index` `None`.
   `ReverseOpenCommissioningWindow` response, and the
   `CommissioningRequestResult` event. Codecs only: the approval flow is not
   implemented.
+- **WiFiNetworkManagement (0x0451)**, **ThreadBorderRouterManagement
+  (0x0452)** and **ThreadNetworkDirectory (0x0453)**: every attribute,
+  command and response. Codecs only.
 
 chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so

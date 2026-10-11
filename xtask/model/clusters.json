@@ -98,6 +98,9 @@
       "Pm10ConcentrationMeasurement",
       "TotalVolatileOrganicCompoundsConcentrationMeasurement",
       "RadonConcentrationMeasurement",
+      "WiFiNetworkManagement",
+      "ThreadBorderRouterManagement",
+      "ThreadNetworkDirectory",
       "EcosystemInformation",
       "CommissionerControl"
     ],
@@ -36247,6 +36250,371 @@
               "value": 7,
               "name": "Bqm3",
               "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1105,
+      "name": "WiFiNetworkManagement",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Ssid",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the SSID of the primary Wi-Fi network provided by this device.\nA value of null shall indicate that no primary Wi-Fi network is available (e.g. because the Wi-Fi network has not yet been configured by the user).\n> [!NOTE]\n> NOTE: The SSID in Wi-Fi is a collection of 1-32 bytes, the text encoding of which is not   specified. Implementations must be careful to support transferring these byte strings without requiring a particular encoding. The most common encoding is UTF-8, however this is just a   convention. Some configurations may use Latin-1 or other character sets."
+        },
+        {
+          "id": 1,
+          "name": "PassphraseSurrogate",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain an arbitrary numeric value; this value shall increase whenever the passphrase or PSK associated with the primary Wi-Fi network provided by this device changes.\nA value of null shall indicate that no primary Wi-Fi network is available.\nClients can subscribe to this attribute or compare its value to a locally cached copy to detect if a cached passphrase value has become stale.\nIt is recommended that servers implement this attribute as either a timestamp or a counter. When implemented as a counter it SHOULD be initialized with a random value.\n> [!NOTE]\n> NOTE: The passphrase itself is not exposed as an attribute to avoid its unintentional retrieval or caching by clients that use wildcard reads or otherwise routinely read all available attributes. It can be retrieved using the NetworkPassphraseRequest command."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "NetworkPassphraseRequest",
+          "direction": "request",
+          "responseId": 1,
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "NetworkPassphraseResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Passphrase",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the current WPA-Personal passphrase or PSK associated with the primary Wi-Fi network provided by this device, in one of the following formats:\n  - 8..63 bytes: WPA/WPA2/WPA3 passphrase.\n  - 64 bytes: WPA/WPA2/WPA3 raw hex PSK. Each byte shall be a ASCII hexadecimal digit.\nThis matches the formats defined for WPA networks by the Credentials field in the Network Commissioning cluster (see [[MatterCore]](#ref_MatterCore)).\n> [!NOTE]\n> NOTE: WPA3-Personal permits passphrases shorter than 8 or longer than 63 characters, however the Network Commissioning cluster does not currently support configuring Matter devices to connect to operational networks utilizing such a passphrase."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": []
+    },
+    {
+      "id": 1106,
+      "name": "ThreadBorderRouterManagement",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "PC",
+          "name": "PanChange",
+          "description": "This feature shall indicate the ability of the Border Router to change its already configured PAN to another, by setting a pending dataset.\n> [!NOTE]\n> NOTE: This feature flag can be used to protect an already-configured network from accidental configuration change, e.g. when the Thread Border Router serves non-Matter devices that do not support PAN change for an implementation-specific reason."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "BorderRouterName",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a user-friendly name identifying the device model or product of the Border Router in MeshCOP (DNS-SD service name) as defined in the Thread specification, and has the following recommended format: <VendorName> <ProductName>._meshcop._udp. An example name would be ACME Border Router (74be)._meshcop._udp."
+        },
+        {
+          "id": 1,
+          "name": "BorderAgentId",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a 16-byte globally unique ID for a Thread Border Router device. This ID is manufacturer-specific, and it is created and managed by the border router's implementation."
+        },
+        {
+          "id": 2,
+          "name": "ThreadVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the Thread version supported by the Thread interface configured by the cluster instance.\nThe format shall match the value mapping defined in the \"Version TLV\" section of the Thread specification. For example, Thread 1.3.0 would have ThreadVersion set to 4."
+        },
+        {
+          "id": 3,
+          "name": "InterfaceEnabled",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether the associated IEEE 802.15.4 Thread interface is enabled or disabled."
+        },
+        {
+          "id": 4,
+          "name": "ActiveDatasetTimestamp",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Null if the Thread Border Router has no dataset configured, otherwise it shall be the timestamp value extracted from the Active Dataset value configured by the Thread Node to which the border router is connected. This attribute shall be updated when a new Active dataset is configured on the Thread network to which the border router is connected."
+        },
+        {
+          "id": 5,
+          "name": "PendingDatasetTimestamp",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Null if the Thread Border Router has no Pending dataset configured, otherwise it shall be the timestamp value extracted from the Pending Dataset value configured by the Thread Node to which the border router is connected. This attribute shall be updated when a new Pending dataset is configured on the Thread network to which the border router is connected."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "GetActiveDatasetRequest",
+          "direction": "request",
+          "responseId": 2,
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "GetPendingDatasetRequest",
+          "direction": "request",
+          "responseId": 2,
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "DatasetResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Dataset",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "If no dataset (active or pending as requested) is configured, this field shall be set to empty.\nOtherwise, this field shall contain the active or pending dataset of the Thread network to which the Border Router is connected as an octet string containing the raw Thread TLV value of the dataset, as defined in the Thread specification."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "SetActiveDatasetRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ActiveDataset",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the active dataset to set of the Thread network to configure in the Border Router as an octet string containing the raw Thread TLV value of the dataset, as defined in the Thread specification."
+            },
+            {
+              "id": 1,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "See Breadcrumb Attribute section of General Commissioning Cluster in [[MatterCore]](#ref_MatterCore) for usage."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "SetPendingDatasetRequest",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PendingDataset",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": []
+    },
+    {
+      "id": 1107,
+      "name": "ThreadNetworkDirectory",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "PreferredExtendedPanId",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the Thread Extended PAN ID value for the Thread network designated by the user to be their preferred network for commissioning of Thread devices. If not null, the value of this attribute shall match the ExtendedPanID of a network in the ThreadNetworks attribute. A write operation with a non-null value that does not match any network in the ThreadNetworks list shall be rejected with a status of CONSTRAINT_ERROR.\nThe purpose of designating one Thread network as preferred is to help a commissioner to select a Thread network when a Thread device is within suitable range of more than one Thread network which appears in the ThreadNetworks list. A value of null indicates that there is no current preferred network: All networks may be treated as equally preferred by a commissioner with access to this cluster.\nThis attribute may be automatically set to the ExtendedPanID of the first Thread network added to the ThreadNetworks list.\nA client shall obtain user consent before changing the value of this attribute from a non-null value.\nOn a factory reset this attribute shall be reset to null."
+        },
+        {
+          "id": 1,
+          "name": "ThreadNetworks",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ThreadNetworkStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the list of Thread Networks known about by this cluster. If the node hosting this cluster includes a Thread Border Router, then an entry for its Thread Network shall be included in this list.\nThe list can be modified via the AddNetwork and RemoveNetwork commands.\nFor each entry in the list, the cluster server also stores a Thread Operational Dataset. Clients use the GetOperationalDataset command to obtain the Operational Dataset for an entry in this list.\nOn a factory reset this list shall be cleared, and any Thread Operational datasets previously stored shall be removed from the Node."
+        },
+        {
+          "id": 2,
+          "name": "ThreadNetworkTableSize",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the maximum number of entries that can be held in the ThreadNetworks list; it shall be at least 2 times the number of SupportedFabrics advertised in the Operational Credentials Cluster on the root endpoint of this node."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "AddNetwork",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "OperationalDataset",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the Operational Dataset for the network, using the encoding defined in the Thread specification. It shall contain at least the following sub-TLVs: Active Timestamp, Channel, Channel Mask, Extended PAN ID, Network Key, Network Mesh-Local Prefix, Network Name, PAN ID, PSKc, and Security Policy."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "RemoveNetwork",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ExtendedPanId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "GetOperationalDataset",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ExtendedPanId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "OperationalDatasetResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "OperationalDataset",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "ThreadNetworkStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "Represents the data associated with a Thread Network.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ExtendedPanId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Extended PAN ID from the OperationalDataset for the given Thread network."
+            },
+            {
+              "id": 1,
+              "name": "NetworkName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Network Name from the OperationalDataset for the given Thread network."
+            },
+            {
+              "id": 2,
+              "name": "Channel",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Channel from the OperationalDataset for the given Thread network."
+            },
+            {
+              "id": 3,
+              "name": "ActiveTimestamp",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Active Timestamp from the OperationalDataset for the given Thread network."
             }
           ]
         }
