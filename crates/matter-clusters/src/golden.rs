@@ -185,8 +185,8 @@ pub struct ScopedEntryStruct {
     /// Field Note (tag 3).
     pub note: Option<String>,
     /// Field Alias (tag 4).
-    /// Fabric-sensitive: `None` when the device withheld it because the entry
-    /// belongs to another fabric (unfiltered read).
+    /// Fabric-sensitive: `None` when not sent (optional), including when
+    /// withheld for another fabric's entry.
     pub alias: Option<String>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: u8,

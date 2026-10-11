@@ -65,7 +65,9 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 //     generated rustdoc (M9-A3 B4 fix wave).
 // v7: `provisional` on clusters (PROVISIONAL_CLUSTERS) and `requiredWhen` on
 //     datatype struct fields (M9-A3 B5).
-const DUMP_SCRIPT_VERSION = 7;
+// v8: `relaxedReason` on each FIELD_RELAXATIONS field, for generated rustdoc
+//     (M9-A3 B5 fix wave).
+const DUMP_SCRIPT_VERSION = 8;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -333,7 +335,10 @@ const appliedWidenings = new Set();
 // is allowlisted matches no field, when the field is already optional (the
 // model changed: review the entry), or when the field is one we send (a
 // request field, or a field of a struct the emitter encodes): relaxing it
-// would let an encoder omit a mandatory field.
+// would let an encoder omit a mandatory field. Each value is `{ reason, doc }`:
+// `reason` is the audit text recorded in meta.relaxed; `doc` is the short
+// clause dumped on the field as `relaxedReason`, which the emitter renders as
+// "Optional: <doc>." in the field's rustdoc.
 //
 // Messages: chip does not fabric-scope MessageStruct or the three Messages
 // events (zap messages-cluster.xml: "TODO: enable isFabricScoped"; the
@@ -343,11 +348,19 @@ const appliedWidenings = new Set();
 // mandatory (docs/matter-js-comparison.md).
 const MESSAGES_FABRIC_INDEX_REASON =
   'chip does not fabric-scope it (zap messages-cluster.xml "TODO: enable isFabricScoped"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex';
+const MESSAGES_STRUCT_FABRIC_INDEX = {
+  reason: MESSAGES_FABRIC_INDEX_REASON,
+  doc: "chip's servers do not send it (the struct is not fabric-scoped in chip)",
+};
+const MESSAGES_EVENT_FABRIC_INDEX = {
+  reason: MESSAGES_FABRIC_INDEX_REASON,
+  doc: "chip's servers do not send it (the event is not fabric-scoped in chip)",
+};
 const FIELD_RELAXATIONS = new Map([
-  ['Messages.MessageStruct.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
-  ['Messages.MessageQueued.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
-  ['Messages.MessagePresented.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
-  ['Messages.MessageComplete.FabricIndex', MESSAGES_FABRIC_INDEX_REASON],
+  ['Messages.MessageStruct.FabricIndex', MESSAGES_STRUCT_FABRIC_INDEX],
+  ['Messages.MessageQueued.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
+  ['Messages.MessagePresented.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
+  ['Messages.MessageComplete.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
 ]);
 const appliedFieldRelaxations = new Set();
 
@@ -781,13 +794,14 @@ function dumpField(f, where, ctx) {
   );
   const cluster = where.split('.')[0];
   const relaxKey = `${cluster}.${ctx.element}.${f.name}`;
-  const reason = FIELD_RELAXATIONS.get(relaxKey);
-  if (reason) {
+  const relaxation = FIELD_RELAXATIONS.get(relaxKey);
+  if (relaxation) {
     if (ctx.role === 'request') fail(`FIELD_RELAXATIONS ${relaxKey} is a request field — we send it, so it cannot be relaxed`);
     if (out.optional) fail(`FIELD_RELAXATIONS ${relaxKey} is already optional — model drift; review the entry`);
     out.optional = true;
+    out.relaxedReason = relaxation.doc;
     appliedFieldRelaxations.add(relaxKey);
-    _fieldRelaxed.push({ element: `${ctx.element}.${f.name}`, role: ctx.role, owner: ctx.element, reason });
+    _fieldRelaxed.push({ element: `${ctx.element}.${f.name}`, role: ctx.role, owner: ctx.element, reason: relaxation.reason });
   }
   return out;
 }
@@ -1380,6 +1394,13 @@ function pruneUnreferencedDatatypes(clusterName, attributes, commands, events, d
     } else if (reached.has(d.name) || d.name === 'StatusCodeEnum' || d.kind === 'scalar') {
       kept.push(d);
     } else {
+      // A FIELD_RELAXATIONS entry on a pruned struct relaxes nothing that is
+      // generated: it is stale, so say so instead of letting the generic
+      // pruned-record self-check (checkNoRecordNamesAPrunedDatatype) fire.
+      const stale = _fieldRelaxed.find((r) => r.role === 'struct' && r.owner === d.name);
+      if (stale) {
+        fail(`FIELD_RELAXATIONS ${clusterName}.${stale.element} names ${d.name}, which is pruned (unreferenced) — remove the entry`);
+      }
       recordExclusion(clusterName, d.name, 'datatype', UNREFERENCED_REASON);
       // A pruned struct's fabric-sensitive relaxations go with it.
       for (let i = relaxed.length - 1; i >= 0; i--) {

@@ -970,6 +970,7 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         provisional: f.provisional,
         choice: f.choice.clone(),
         required_when: f.required_when.clone(),
+        relaxed_reason: f.relaxed_reason.clone(),
     }
 }
 
@@ -1086,6 +1087,9 @@ fn emit_struct_decl_and_codec(
             line!(s, "    /// Field {} (tag {}).", f.name, f.id);
             if f.provisional {
                 line!(s, "    /// {PROVISIONAL_DOC}");
+            }
+            if let Some(reason) = &f.relaxed_reason {
+                line!(s, "    /// {}", super::emit::relaxed_reason_doc(reason));
             }
             line!(s, "    pub {}: {},", field_ident(&f.name), ty);
         }
@@ -1513,6 +1517,7 @@ mod tests {
             provisional: false,
             choice: None,
             required_when: None,
+            relaxed_reason: None,
         }
     }
 

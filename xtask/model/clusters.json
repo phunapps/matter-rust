@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 7,
+    "dumpScriptVersion": 8,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -16883,7 +16883,8 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "relaxedReason": "chip's servers do not send it (the event is not fabric-scoped in chip)"
             }
           ]
         },
@@ -16908,7 +16909,8 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "relaxedReason": "chip's servers do not send it (the event is not fabric-scoped in chip)"
             }
           ]
         },
@@ -16960,7 +16962,8 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "relaxedReason": "chip's servers do not send it (the event is not fabric-scoped in chip)"
             }
           ]
         }
@@ -17182,7 +17185,8 @@
               "metatype": "integer",
               "nullable": false,
               "optional": true,
-              "description": null
+              "description": null,
+              "relaxedReason": "chip's servers do not send it (the struct is not fabric-scoped in chip)"
             }
           ]
         }

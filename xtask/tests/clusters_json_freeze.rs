@@ -328,8 +328,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_7() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 7);
+fn dump_script_version_is_8() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 8);
 }
 
 #[test]
@@ -2101,6 +2101,67 @@ fn fields_chip_omits_are_optional_and_recorded() {
     for e in c["events"].as_array().unwrap() {
         assert!(fabric_index(&e["fields"]), "{}", e["name"]);
     }
+}
+
+/// The per-field `relaxedReason` of every `FIELD_RELAXATIONS` field, as
+/// `(cluster, owner, field, relaxedReason)`, sorted (M9-A3 B5 fix wave, T7
+/// M3): the emitter renders it as "Optional: <reason>." on the field. No
+/// other field carries one.
+const RELAXED_REASONS: [(&str, &str, &str, &str); 4] = [
+    (
+        "Messages",
+        "MessageComplete",
+        "FabricIndex",
+        "chip's servers do not send it (the event is not fabric-scoped in chip)",
+    ),
+    (
+        "Messages",
+        "MessagePresented",
+        "FabricIndex",
+        "chip's servers do not send it (the event is not fabric-scoped in chip)",
+    ),
+    (
+        "Messages",
+        "MessageQueued",
+        "FabricIndex",
+        "chip's servers do not send it (the event is not fabric-scoped in chip)",
+    ),
+    (
+        "Messages",
+        "MessageStruct",
+        "FabricIndex",
+        "chip's servers do not send it (the struct is not fabric-scoped in chip)",
+    ),
+];
+
+#[test]
+fn fields_chip_omits_carry_a_relaxed_reason() {
+    let v = load();
+    let mut got: Vec<(&str, &str, &str, &str)> = Vec::new();
+    for c in clusters(&v) {
+        let cname = c["name"].as_str().unwrap();
+        let owners = c["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(c["events"].as_array().unwrap())
+            .chain(c["datatypes"].as_array().unwrap());
+        for o in owners {
+            for f in o["fields"].as_array().into_iter().flatten() {
+                if let Some(reason) = f.get("relaxedReason") {
+                    assert_eq!(f["optional"], true, "{cname}.{}.{}", o["name"], f["name"]);
+                    got.push((
+                        cname,
+                        o["name"].as_str().unwrap(),
+                        f["name"].as_str().unwrap(),
+                        reason.as_str().unwrap(),
+                    ));
+                }
+            }
+        }
+    }
+    got.sort_unstable();
+    assert_eq!(got, RELAXED_REASONS);
 }
 
 #[test]

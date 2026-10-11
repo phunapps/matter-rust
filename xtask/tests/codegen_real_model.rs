@@ -155,3 +155,36 @@ fn writable_attribute_only_encoded_structs_say_they_are_not_constructible() {
         .collect();
     assert_eq!(got, want);
 }
+
+/// The generated fields that carry a `relaxedReason` line, as `(cluster,
+/// line, next line)` (M9-A3 B5 fix wave, T7 M3): the four Messages
+/// `fabric_index` fields, which chip's servers do not send.
+#[test]
+fn fields_chip_omits_say_why_they_are_optional() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let model = xtask::codegen::model::load(&root.join("xtask/model/clusters.json"))
+        .expect("real model loads + validates");
+    let mut got = Vec::new();
+    for c in &model.clusters {
+        let src = xtask::codegen::rustgen::emit::generate_cluster(c);
+        let lines: Vec<&str> = src.lines().map(str::trim).collect();
+        for (i, l) in lines.iter().enumerate() {
+            if l.starts_with("/// Optional: ") {
+                got.push((c.name.as_str(), (*l).to_string(), lines[i + 1].to_string()));
+            }
+        }
+    }
+    let field = "pub fabric_index: Option<u8>,";
+    let event =
+        "/// Optional: chip's servers do not send it (the event is not fabric-scoped in chip).";
+    let strukt =
+        "/// Optional: chip's servers do not send it (the struct is not fabric-scoped in chip).";
+    let want: Vec<(&str, String, String)> = [strukt, event, event, event]
+        .into_iter()
+        .map(|doc| ("Messages", doc.to_string(), field.to_string()))
+        .collect();
+    assert_eq!(got, want);
+}

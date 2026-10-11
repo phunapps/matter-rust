@@ -199,10 +199,11 @@ pub struct MessageStruct {
     /// belongs to another fabric (unfiltered read).
     pub message_text: Option<String>,
     /// Field Responses (tag 6).
-    /// Fabric-sensitive: `None` when the device withheld it because the entry
-    /// belongs to another fabric (unfiltered read).
+    /// Fabric-sensitive: `None` when not sent (optional), including when
+    /// withheld for another fabric's entry.
     pub responses: Option<Vec<MessageResponseOptionStruct>>,
     /// Field FabricIndex (tag 254).
+    /// Optional: chip's servers do not send it (the struct is not fabric-scoped in chip).
     pub fabric_index: Option<u8>,
 }
 
@@ -569,6 +570,7 @@ pub struct MessageQueuedEvent {
     /// Field MessageId (tag 0).
     pub message_id: Vec<u8>,
     /// Field FabricIndex (tag 254).
+    /// Optional: chip's servers do not send it (the event is not fabric-scoped in chip).
     pub fabric_index: Option<u8>,
 }
 
@@ -634,6 +636,7 @@ pub struct MessagePresentedEvent {
     /// Field MessageId (tag 0).
     pub message_id: Vec<u8>,
     /// Field FabricIndex (tag 254).
+    /// Optional: chip's servers do not send it (the event is not fabric-scoped in chip).
     pub fabric_index: Option<u8>,
 }
 
@@ -705,6 +708,7 @@ pub struct MessageCompleteEvent {
     /// Field FutureMessagesPreference (tag 3).
     pub future_messages_preference: Nullable<FutureMessagePreferenceEnum>,
     /// Field FabricIndex (tag 254).
+    /// Optional: chip's servers do not send it (the event is not fabric-scoped in chip).
     pub fabric_index: Option<u8>,
 }
 

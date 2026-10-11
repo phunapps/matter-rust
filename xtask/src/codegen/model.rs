@@ -232,6 +232,12 @@ pub struct FieldDef {
     /// generated rustdoc line.
     #[serde(default, rename = "requiredWhen")]
     pub required_when: Option<RequiredWhen>,
+    /// Why the dump made this mandatory field optional, for a
+    /// `FIELD_RELAXATIONS` entry (M9-A3 B5: a field chip's servers do not
+    /// send): a short clause the emitter renders as `Optional: <clause>.` in
+    /// the field's rustdoc. Only on an `optional` field.
+    #[serde(default, rename = "relaxedReason")]
+    pub relaxed_reason: Option<String>,
 }
 
 /// A presence dependency between two fields of one struct (M9-A3 B5): the
@@ -394,6 +400,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                     &datatype_names,
                 )?;
                 reject_payload_write_marker(&c.name, &cmd.name, f, "a command")?;
+                check_relaxed_reason(&c.name, &cmd.name, f)?;
             }
         }
 
@@ -412,6 +419,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                     &datatype_names,
                 )?;
                 reject_payload_write_marker(&c.name, &ev.name, f, "an event")?;
+                check_relaxed_reason(&c.name, &ev.name, f)?;
             }
         }
 
@@ -450,6 +458,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 )?;
                 check_struct_write_marker(&c.name, d, f)?;
                 check_required_when(&c.name, d, f)?;
+                check_relaxed_reason(&c.name, &d.name, f)?;
             }
         }
         check_supplemented(c)?;
@@ -516,6 +525,26 @@ fn check_required_when(cluster: &str, d: &Datatype, f: &FieldDef) -> Result<(), 
         "{cluster}.{}.{}: requiredWhen names `{}`, not another field of the struct",
         d.name, f.name, dep.field
     ))
+}
+
+/// A `relaxedReason` documents why a mandatory field was dumped optional, so it
+/// may sit only on an `optional` field, and never next to `mandatoryOnWrite`
+/// (a §5.4 field already carries its own "withheld" rustdoc): either would
+/// make the generated "Optional: …" line contradict the field.
+fn check_relaxed_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(), String> {
+    if f.relaxed_reason.is_none() {
+        return Ok(());
+    }
+    let at = format!("{cluster}.{owner}.{}", f.name);
+    if !f.optional {
+        return Err(format!(
+            "{at}: relaxedReason on a field that is not optional"
+        ));
+    }
+    if f.mandatory_on_write {
+        return Err(format!("{at}: relaxedReason on a mandatoryOnWrite field"));
+    }
+    Ok(())
 }
 
 /// A class-C relaxation (a field whose conformance is conditional, which the
@@ -1232,6 +1261,40 @@ mod tests {
             .unwrap(),
         );
         assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn relaxed_reason_sits_only_on_an_optional_field_without_mandatory_on_write() {
+        // M9-A3 B5 fix wave, T7 M3: the "Optional: …" rustdoc must not
+        // contradict the field.
+        let mut m = chip_omits_model("ReadStruct.Label");
+        let read = &mut m.clusters[0].datatypes[2];
+        assert_eq!(read.name, "ReadStruct");
+        read.fields[0].relaxed_reason = Some("chip's servers do not send it".to_string());
+        assert_eq!(validate(&m), Ok(()));
+        m.clusters[0].datatypes[2].fields[0].optional = false;
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ReadStruct.Label") && err.contains("not optional"),
+            "got: {err}"
+        );
+
+        // Beside mandatoryOnWrite (a legal §5.4 field otherwise).
+        let mut m = chip_omits_model("ScalarStruct.Label");
+        let scalar = &mut m.clusters[0].datatypes[0];
+        scalar.fields[0].fabric_sensitive = true;
+        scalar.fields[0].mandatory_on_write = true;
+        scalar.fields[0].relaxed_reason = Some("chip's servers do not send it".to_string());
+        scalar.fields.push(
+            serde_json::from_value(serde_json::json!({ "id": 254, "name": "FabricIndex",
+                "type": "fabric-idx", "metatype": "integer", "nullable": false, "optional": false }))
+            .unwrap(),
+        );
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ScalarStruct.Label") && err.contains("mandatoryOnWrite field"),
+            "got: {err}"
+        );
     }
 
     #[test]

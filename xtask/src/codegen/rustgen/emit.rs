@@ -112,6 +112,13 @@ pub(crate) fn required_when_doc(dep: &RequiredWhen) -> String {
     }
 }
 
+/// The rustdoc line on a field the dump made optional because chip's servers
+/// do not send it (`FieldDef::relaxed_reason`, a `FIELD_RELAXATIONS` entry;
+/// M9-A3 B5 fix wave): `Optional: <reason>.`.
+pub(crate) fn relaxed_reason_doc(reason: &str) -> String {
+    format!("Optional: {reason}.")
+}
+
 /// One rustdoc sentence per choice-conformance group among `fields`, in the
 /// order the groups first appear (M9-A3 B4): the generated types take every
 /// field of a group as an `Option`, so the rule "exactly one" (`O.a`) or "at
@@ -530,12 +537,27 @@ fn emit_struct(
         if let Some(dep) = &f.required_when {
             line!(s, "    /// {}", required_when_doc(dep));
         }
+        if let Some(reason) = &f.relaxed_reason {
+            line!(s, "    /// {}", relaxed_reason_doc(reason));
+        }
         if fabric_scoped && f.fabric_sensitive {
-            line!(
-                s,
-                "    /// Fabric-sensitive: `None` when the device withheld it because the entry"
-            );
-            line!(s, "    /// belongs to another fabric (unfiltered read).");
+            if f.mandatory_on_write {
+                // Mandatory in the model, relaxed for decode only: `None`
+                // means withheld, and nothing else.
+                line!(
+                    s,
+                    "    /// Fabric-sensitive: `None` when the device withheld it because the entry"
+                );
+                line!(s, "    /// belongs to another fabric (unfiltered read).");
+            } else {
+                // Optional in the model itself (Messages `Responses`): `None`
+                // also means the sender left it out.
+                line!(
+                    s,
+                    "    /// Fabric-sensitive: `None` when not sent (optional), including when"
+                );
+                line!(s, "    /// withheld for another fabric's entry.");
+            }
         }
         // Escape reserved-word field names (`Type` -> `r#type`); see field_ident
         // in emit_codecs (the codec pass uses the same rule).
@@ -614,7 +636,10 @@ mod tests {
     #[test]
     fn fabric_sensitive_field_doc_says_none_means_withheld() {
         use crate::codegen::model::FieldDef;
-        let f = |id: u32, name: &str, sensitive: bool| FieldDef {
+        // `relaxed_for_decode`: mandatory in the model, dumped optional with
+        // mandatoryOnWrite (§5.4); otherwise a sensitive field is optional in
+        // the model itself.
+        let f = |id: u32, name: &str, sensitive: bool, relaxed_for_decode: bool| FieldDef {
             id,
             name: name.to_string(),
             ty: "uint16".to_string(),
@@ -623,10 +648,11 @@ mod tests {
             nullable: false,
             optional: sensitive,
             fabric_sensitive: sensitive,
-            mandatory_on_write: false,
+            mandatory_on_write: relaxed_for_decode,
             provisional: false,
             choice: None,
             required_when: None,
+            relaxed_reason: None,
         };
         let d = Datatype {
             name: "ScopedStruct".to_string(),
@@ -635,18 +661,86 @@ mod tests {
             values: vec![],
             bits: vec![],
             fields: vec![
-                f(1, "Secret", true),
-                f(2, "Plain", false),
-                f(254, "FabricIndex", false),
+                f(1, "Secret", true, true),
+                f(2, "Note", true, false),
+                f(3, "Plain", false, false),
+                f(254, "FabricIndex", false, false),
             ],
             global_name: None,
             kept_for: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
-        assert_eq!(s.matches("Fabric-sensitive: `None`").count(), 1, "{s}");
+        assert_eq!(s.matches("Fabric-sensitive: `None`").count(), 2, "{s}");
+        // A field relaxed for decode only: None means withheld, nothing else.
+        assert!(
+            s.contains(
+                "    /// Field Secret (tag 1).\n    /// Fabric-sensitive: `None` when the device withheld it because the entry\n"
+            ),
+            "{s}"
+        );
+        // A field optional in the model (M9-A3 B5 fix wave, T7 M2): None also
+        // means the sender left it out.
+        assert!(
+            s.contains(
+                "    /// Field Note (tag 2).\n    /// Fabric-sensitive: `None` when not sent (optional), including when\n    /// withheld for another fabric's entry.\n"
+            ),
+            "{s}"
+        );
         assert!(s.contains("pub secret: Option<u16>,"), "{s}");
+        assert!(s.contains("pub note: Option<u16>,"), "{s}");
         assert!(s.contains("pub plain: u16,"), "{s}");
+    }
+
+    #[test]
+    fn a_relaxed_field_states_why_it_is_optional() {
+        // M9-A3 B5 fix wave, T7 M3: a FIELD_RELAXATIONS field (Messages'
+        // FabricIndex) carries its relaxedReason, on a datatype struct and on
+        // an event payload alike.
+        use crate::codegen::model::FieldDef;
+        let field = |reason: Option<&str>| FieldDef {
+            id: 254,
+            name: "FabricIndex".to_string(),
+            ty: "fabric-idx".to_string(),
+            metatype: "integer".to_string(),
+            entry_type: None,
+            nullable: false,
+            optional: true,
+            fabric_sensitive: false,
+            mandatory_on_write: false,
+            provisional: false,
+            choice: None,
+            required_when: None,
+            relaxed_reason: reason.map(str::to_string),
+        };
+        let want = "    /// Field FabricIndex (tag 254).\n    /// Optional: chip's servers do not send it.\n    pub fabric_index: Option<u8>,";
+        let d = Datatype {
+            fields: vec![field(Some("chip's servers do not send it"))],
+            ..struct_dt("MessageStruct")
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
+        assert!(s.contains(want), "{s}");
+        let c = Cluster {
+            events: vec![crate::codegen::model::EventDef {
+                id: 0,
+                name: "MessageQueued".to_string(),
+                priority: "info".to_string(),
+                fields: vec![field(Some("chip's servers do not send it"))],
+                provisional: false,
+            }],
+            ..cluster_with(vec![], vec![])
+        };
+        let src = generate_cluster(&c);
+        assert!(src.contains(want), "{src}");
+        // Without a reason, no line.
+        let d = Datatype {
+            fields: vec![field(None)],
+            ..struct_dt("MessageStruct")
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
+        assert!(!s.contains("Optional:"), "{s}");
     }
 
     fn cluster_with(
@@ -780,6 +874,7 @@ mod tests {
                 or_less,
             }),
             required_when: None,
+            relaxed_reason: None,
         }
     }
 
