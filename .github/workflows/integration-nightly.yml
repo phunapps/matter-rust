@@ -1,8 +1,11 @@
-# Nightly integration sweep against connectedhomeip's all-clusters-app.
+# Nightly integration sweeps against four connectedhomeip example apps, all
+# built at CHIP_REF (v1.4.2.0): all-clusters-app (`just integration`),
+# lit-icd-app (`just integration-icd`), ota-requestor-app
+# (`just integration-ota`) and tv-app (`just integration-tv`).
 #
 # NOT a per-PR check (by design — the connectedhomeip build is multi-GB and
 # multi-minute; the per-PR gate stays fast). Runs on a nightly schedule and on
-# manual dispatch. Drives the same `just integration` recipe as the local
+# manual dispatch. Drives the same `just integration*` recipes as the local
 # harness, so CI and local cannot drift.
 #
 # Validated on a GitHub Ubuntu runner 2026-07-03 (run 28670513815): full build +
@@ -34,7 +37,7 @@ env:
 
 jobs:
   integration:
-    name: all-clusters-app integration sweep
+    name: chip example-app integration sweeps (v1.4.2.0)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -96,7 +99,24 @@ jobs:
       - name: Run integration sweep (just integration)
         env:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
-        run: just integration
+        run: rm -f target/integration-dut/app.log && just integration
+
+      # Each sweep uploads its own DUT log, straight after it: every sweep's
+      # `spawn_dut` truncates target/integration-dut/app.log, so a later sweep
+      # would overwrite an earlier failure's log. Each sweep step deletes the
+      # log first, so a sweep that fails before launching its DUT (a build
+      # failure) uploads nothing rather than the previous sweep's log.
+      # `!cancelled()` (not `failure()`): a log is uploaded whether its sweep
+      # passed or failed. No sweep has `continue-on-error`, so any failing
+      # sweep fails the job; `!cancelled()` on the later sweeps still runs
+      # them. The logs hold the chip example apps' public test setup codes.
+      - name: Upload DUT log (all-clusters)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dut-app-log-all-clusters
+          path: target/integration-dut/app.log
+          if-no-files-found: ignore
 
       # ICD Check-In flow vs lit-icd-app (built `-platform-mdns`, mediated by
       # the avahi-daemon started above so the device can resolve the
@@ -106,7 +126,15 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
-        run: just integration-icd
+        run: rm -f target/integration-dut/app.log && just integration-icd
+
+      - name: Upload DUT log (ICD)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dut-app-log-icd
+          path: target/integration-dut/app.log
+          if-no-files-found: ignore
 
       # OTA provider flow vs ota-requestor-app (also `-platform-mdns`: the
       # requestor resolves the controller's provider advertisement, the same
@@ -116,28 +144,32 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
-        run: just integration-ota
+        run: rm -f target/integration-dut/app.log && just integration-ota
+
+      - name: Upload DUT log (OTA)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dut-app-log-ota
+          path: target/integration-dut/app.log
+          if-no-files-found: ignore
 
       # Media, TV-platform and Messages clusters vs tv-app (M9-A3 B5/B7):
-      # of the chip example apps the harness drives, only tv-app serves them
-      # (all-clusters also serves WakeOnLan and LowPower), and it does not
-      # build on Apple silicon without Rosetta 2, so this is the tv-app
-      # tests' only regular run at v1.4.2.0. tv-app runs chip's interactive
-      # shell on stdin; the harness keeps the DUT's stdin open.
+      # tv-app serves all of them; all-clusters also serves WakeOnLan and
+      # LowPower. tv-app does not build on Apple silicon without Rosetta 2, so
+      # this is the tv-app tests' only regular run at v1.4.2.0. tv-app runs
+      # chip's interactive shell on stdin; the harness keeps the DUT's stdin
+      # open.
       - name: Run tv-app sweep (just integration-tv)
         if: ${{ !cancelled() }}
         env:
           CHIP_ROOT: ${{ github.workspace }}/connectedhomeip
-        run: just integration-tv
+        run: rm -f target/integration-dut/app.log && just integration-tv
 
-      # `!cancelled()` (not `failure()`): the informational ICD step does not
-      # mark the job failed, but its DUT log is exactly what the next iteration
-      # needs to inspect.
-      # The log holds the chip example apps' public test setup codes.
-      - name: Upload DUT log
+      - name: Upload DUT log (tv-app)
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: dut-app-log
+          name: dut-app-log-tv
           path: target/integration-dut/app.log
           if-no-files-found: ignore
