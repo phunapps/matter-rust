@@ -86,6 +86,7 @@ pub struct SetupPayload {
     pub discriminator: Discriminator,
 
     /// 27-bit passcode.
+    /// Secret: [`Passcode`]'s `Debug` output shows `<redacted>` instead.
     pub passcode: Passcode,
 }
 
@@ -224,8 +225,22 @@ pub const MAX_PASSCODE: u32 = 99_999_998;
 /// Constructors enforce the 27-bit range and exclude the disallowed-trivial
 /// values from spec §5.1.7.1. The standard test passcode `20_202_021` is
 /// permitted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `Debug` is written by hand and prints `Passcode("<redacted>")`: anyone
+/// holding the passcode can commission the device while it is
+/// commissionable, so it must never reach a log through a stray `{:?}`
+/// (including a `{:?}` of a whole [`SetupPayload`]). Read the value with
+/// [`Self::as_u32`] when you mean to show it.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Passcode(u32);
+
+impl core::fmt::Debug for Passcode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same tuple-struct shape as the derive this replaces; the value is
+        // withheld.
+        f.debug_tuple("Passcode").field(&"<redacted>").finish()
+    }
+}
 
 impl Passcode {
     /// Construct a setup passcode, enforcing Matter Core Spec §5.1.7.1: the

@@ -75,6 +75,8 @@
 
 pub mod attestation;
 pub mod clusters;
+#[cfg(test)]
+mod debug_redaction_tests;
 #[cfg(feature = "driver")]
 pub mod driver;
 pub mod error;

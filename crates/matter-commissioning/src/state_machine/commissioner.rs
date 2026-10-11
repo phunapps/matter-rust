@@ -92,6 +92,11 @@ pub enum NetworkCredentials {
 /// accepted for a pre-1.0 unpublished crate. `#[non_exhaustive]` stays on
 /// [`Action`], [`Expectation`], [`Stage`], and [`CommissioningError`] —
 /// those are read by callers, not constructed by them.
+// Do not derive `Debug`: `ipk_epoch_key` is the fabric's Identity Protection
+// Key, `pase_attestation_challenge` is derived from the PASE session keys,
+// and `setup_payload` holds the device's passcode (`Passcode` redacts its own
+// `Debug`, but the IPK and challenge are plain arrays a derive would print).
+// If `Debug` is ever needed, write it by hand and redact them.
 pub struct CommissionerConfig<'a> {
     /// 16-byte attestation challenge derived from the active PASE
     /// session. Matter Core Spec §3.6.4: bytes `[32..48]` of the

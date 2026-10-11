@@ -23,11 +23,18 @@ pub enum SessionContext {
 /// Returned by [`super::Commissioner::poll`]. The state machine is
 /// idempotent: calling `poll` twice without an intervening `on_response`
 /// returns the same `Action`.
+///
+/// `Debug` is written by hand so that every [`Action::Invoke`]'s `payload`
+/// prints as its length only (`"<N bytes>"`): it is a command's plaintext,
+/// and `AddNOC` carries the IPK, `AddOrUpdateWiFiNetwork` the Wi-Fi
+/// passphrase and `AddOrUpdateThreadNetwork` the Thread dataset. Every
+/// `Invoke` is treated the same way, with no allow-list of "safe" commands,
+/// so a new command can never be forgotten.
 // `Done(CommissionedFabric)` is intentionally large (~130 B) but is emitted
 // exactly once per successful commission — boxing it would force an alloc on
 // the happy path with no real benefit.
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum Action {
     /// Invoke a cluster command. The caller frames `payload` into an
@@ -45,6 +52,7 @@ pub enum Action {
         /// Cluster command ID.
         command: u32,
         /// TLV-encoded command payload.
+        /// Plaintext: this enum's `Debug` output shows only its length.
         payload: Vec<u8>,
         /// The response type the state machine expects next.
         expect: Expectation,
@@ -110,6 +118,70 @@ pub enum Action {
         /// Pre-rendered description of the failure cause.
         reason: String,
     },
+}
+
+impl core::fmt::Debug for Action {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same variant names, fields, order and shapes as the derive this
+        // replaces; only an `Invoke`'s payload bytes are withheld.
+        match self {
+            Self::Invoke {
+                session,
+                endpoint,
+                cluster,
+                command,
+                payload,
+                expect,
+            } => f
+                .debug_struct("Invoke")
+                .field("session", session)
+                .field("endpoint", endpoint)
+                .field("cluster", cluster)
+                .field("command", command)
+                .field("payload", &format!("<{} bytes>", payload.len()))
+                .field("expect", expect)
+                .finish(),
+            Self::ReadAttribute {
+                session,
+                endpoint,
+                cluster,
+                attributes,
+                expect,
+            } => f
+                .debug_struct("ReadAttribute")
+                .field("session", session)
+                .field("endpoint", endpoint)
+                .field("cluster", cluster)
+                .field("attributes", attributes)
+                .field("expect", expect)
+                .finish(),
+            Self::EvictCase {
+                fabric_id,
+                peer_node_id,
+            } => f
+                .debug_struct("EvictCase")
+                .field("fabric_id", fabric_id)
+                .field("peer_node_id", peer_node_id)
+                .finish(),
+            Self::EstablishCase {
+                fabric_id,
+                peer_node_id,
+            } => f
+                .debug_struct("EstablishCase")
+                .field("fabric_id", fabric_id)
+                .field("peer_node_id", peer_node_id)
+                .finish(),
+            Self::Done(fabric) => f.debug_tuple("Done").field(fabric).finish(),
+            Self::Abort {
+                send_disarm_failsafe,
+                reason,
+            } => f
+                .debug_struct("Abort")
+                .field("send_disarm_failsafe", send_disarm_failsafe)
+                .field("reason", reason)
+                .finish(),
+        }
+    }
 }
 
 /// The response type the state machine expects after an

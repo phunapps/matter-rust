@@ -112,7 +112,10 @@ mod attr_id {
 ///
 /// Either the device replied with a response-command payload (`Command`), or
 /// it returned a bare IM status with no payload (`Status`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `Command`'s bytes print as their length
+/// only (`"<N bytes>"`): they are the device's decrypted response fields.
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum InvokeOutcome {
     /// Device returned a response command; `Vec<u8>` is the re-anonymised
     /// `CommandFields` TLV blob (anonymous-tagged struct, ready for the state
@@ -120,6 +123,20 @@ pub(crate) enum InvokeOutcome {
     Command(Vec<u8>),
     /// Device returned a bare IM status (no response-command payload).
     Status(ImStatus),
+}
+
+impl core::fmt::Debug for InvokeOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same tuple-variant shapes as the derive this replaces; only the
+        // response fields' bytes are withheld.
+        match self {
+            Self::Command(fields) => f
+                .debug_tuple("Command")
+                .field(&format!("<{} bytes>", fields.len()))
+                .finish(),
+            Self::Status(status) => f.debug_tuple("Status").field(status).finish(),
+        }
+    }
 }
 
 /// Send a single `InvokeRequest` over an already-established secured session
@@ -403,6 +420,10 @@ const RESOLVE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 
 /// Inputs for one commissioning run. Borrows the commissioner config pieces
 /// (fabric, trust stores, setup payload) for the run's duration.
+// Do not derive `Debug`: `passcode` is the device's setup PIN,
+// `commissioner_signer_pkcs8` is the commissioner's operational private key
+// and `commissioner` carries the IPK, and a derive would print all three in
+// full. If `Debug` is ever needed, write it by hand and redact them.
 pub struct DriverConfig<'a> {
     /// The sans-IO commissioner configuration (fabric, trust stores, node ids,
     /// wifi creds, rng, etc.). Built by the caller (M6.6.5 example / M8).
@@ -606,6 +627,10 @@ pub(crate) async fn establish_case_session<T: AsyncDatagram, D: Discovery>(
 /// controller layer before `commission_ble` is called), so a commissionable
 /// address is never needed. Reuses the same `CommissionerConfig` and persistent
 /// commissioner-identity types as `commission()`.
+// Do not derive `Debug`, for the same reason as `DriverConfig`: `passcode`,
+// `commissioner_signer_pkcs8` (the operational private key) and the IPK
+// inside `commissioner` would all print in full. Write it by hand and redact
+// them if it is ever needed.
 pub struct BleDriverConfig<'a> {
     /// The sans-IO commissioner configuration (fabric, trust stores, node ids,
     /// network creds, rng, etc.). Its `network` **must** be
@@ -2736,5 +2761,36 @@ mod tests {
                 .expect("decode_basic_commissioning_info should accept the extracted payload");
         assert_eq!(info.failsafe_expiry_length_seconds, 120);
         assert_eq!(info.max_cumulative_failsafe_seconds, 900);
+    }
+
+    // ---- `InvokeOutcome` keeps response fields out of `Debug` -------------
+
+    /// `InvokeOutcome::Command` holds the device's decrypted response fields.
+    /// Crate-private, but the same class as the public payload carriers, so
+    /// it prints the length only. Static messages: a failure never prints the
+    /// bytes.
+    #[test]
+    fn invoke_outcome_debug_shows_only_the_fields_length() {
+        use crate::debug_redaction_tests::{assert_hidden, renderings, synthetic_bytes};
+
+        let fields = synthetic_bytes(0xC0);
+        let outcome = InvokeOutcome::Command(fields.to_vec());
+        // Same tuple-variant shape as the old derive; only the bytes change.
+        assert!(
+            format!("{outcome:?}") == "Command(\"<16 bytes>\")",
+            "unexpected InvokeOutcome::Command rendering"
+        );
+        for shown in renderings(&outcome) {
+            assert!(
+                shown.contains("\"<16 bytes>\""),
+                "the placeholder is missing"
+            );
+            assert_hidden(&shown, &fields);
+        }
+        assert!(
+            format!("{:?}", InvokeOutcome::Status(ImStatus::Failure(0x88)))
+                == "Status(Failure(136))",
+            "unexpected InvokeOutcome::Status rendering"
+        );
     }
 }

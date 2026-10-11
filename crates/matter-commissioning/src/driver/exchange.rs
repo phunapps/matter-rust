@@ -18,12 +18,28 @@ use crate::driver::datagram::AsyncDatagram;
 use crate::driver::error::DriverError;
 
 /// The application response decoded from a completed secured round-trip.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `payload` prints as its length only
+/// (`"<N bytes>"`): it is the device's decrypted response, which can carry a
+/// secret, so it must never reach a log through a stray `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SecuredResponse {
     /// The exchange id the request/response pair ran on.
     pub exchange_id: u16,
     /// The decoded application payload (post-protocol-header bytes).
+    /// Plaintext: this struct's `Debug` output shows only its length.
     pub payload: Vec<u8>,
+}
+
+impl core::fmt::Debug for SecuredResponse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same name, fields and order as the derive this replaces; only the
+        // payload's bytes are withheld.
+        f.debug_struct("SecuredResponse")
+            .field("exchange_id", &self.exchange_id)
+            .field("payload", &format!("<{} bytes>", self.payload.len()))
+            .finish()
+    }
 }
 
 /// Sentinel sleep when no MRP deadline is pending: the recv arm of the
