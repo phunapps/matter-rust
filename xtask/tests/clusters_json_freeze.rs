@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 105] = [
+const TARGET_CLUSTERS: [&str; 109] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -154,6 +154,11 @@ const TARGET_CLUSTERS: [&str; 105] = [
     "LowPower",
     "KeypadInput",
     "AudioOutput",
+    // M9-A3 B7, the Content App platform:
+    "ApplicationLauncher",
+    "ApplicationBasic",
+    "AccountLogin",
+    "ContentAppObserver",
 ];
 
 fn load() -> Value {
@@ -485,7 +490,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 32] = [
+const EVENT_CLUSTERS: [&str; 33] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -534,6 +539,8 @@ const EVENT_CLUSTERS: [&str; 32] = [
     "CommissionerControl",
     // M9-A3 B7, TargetNavigator:
     "TargetNavigator",
+    // M9-A3 B7, AccountLogin:
+    "AccountLogin",
 ];
 
 #[test]
@@ -2711,7 +2718,8 @@ fn network_infrastructure_clusters_keep_their_shapes() {
 /// The fields the dump marks `secret` (`SECRET_FIELDS`), as `(cluster,
 /// "<Owner>.<Field>")`: their structs keep them out of the generated `Debug`
 /// output. A new one (a widening, a model upgrade) is a review item.
-const SECRET: [(&str, &str); 7] = [
+const SECRET: [(&str, &str); 8] = [
+    ("AccountLogin", "GetSetupPinResponse.SetupPin"),
     (
         "CommissionerControl",
         "ReverseOpenCommissioningWindow.PakePasscodeVerifier",
@@ -2853,5 +2861,59 @@ fn media_basics_keep_their_shapes() {
     assert_eq!(
         field_optionality(&command(tn, "NavigateTargetResponse")["fields"]),
         [("Status", false), ("Data", true)]
+    );
+}
+
+#[test]
+fn content_app_platform_keeps_its_shapes() {
+    // 1.4.2 ApplicationBasic.xml, ApplicationLauncher.xml, AccountLogin.xml,
+    // ContentAppObserver.xml.
+    let v = load();
+    let ab = cluster(&v, "ApplicationBasic");
+    assert_eq!(
+        element_names(ab, "attributes"),
+        [
+            "VendorName",
+            "VendorId",
+            "ApplicationName",
+            "ProductId",
+            "Application",
+            "Status",
+            "ApplicationVersion",
+            "AllowedVendorList"
+        ]
+    );
+    assert_eq!(element_names(ab, "commands"), Vec::<&str>::new());
+    let al = cluster(&v, "ApplicationLauncher");
+    for name in ["LaunchApp", "StopApp", "HideApp"] {
+        let cmd = command(al, name);
+        assert_eq!(cmd["responseId"], 3, "{name} answers LauncherResponse");
+        assert_eq!(
+            field_optionality(&cmd["fields"])[0],
+            ("Application", true),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        field_optionality(&datatype(al, "ApplicationEPStruct")["fields"]),
+        [("Application", false), ("Endpoint", true)]
+    );
+    let login = cluster(&v, "AccountLogin");
+    assert_eq!(
+        element_names(login, "commands"),
+        ["GetSetupPin", "GetSetupPinResponse", "Login", "Logout"]
+    );
+    assert_eq!(element_names(login, "events"), ["LoggedOut"]);
+    // The model leaves out LoggedOut's implicit FabricIndex (chip-xml-
+    // conformance.ack); only Node.
+    assert_eq!(
+        field_optionality(&login["events"][0]["fields"]),
+        [("Node", true)]
+    );
+    assert_eq!(
+        field_optionality(
+            &command(cluster(&v, "ContentAppObserver"), "ContentAppMessage")["fields"]
+        ),
+        [("Data", false), ("EncodingHint", true)]
     );
 }

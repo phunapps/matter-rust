@@ -752,6 +752,17 @@ How each of these clusters was validated:
   `TargetUpdated` event. chip's zap XML and controller codegen mark
   WakeOnLan's `LinkLocalAddress` provisional (v1.4.2.0 and master); the 1.4.2
   spec XML and the model do not, so it carries no provisional note.
+- **ApplicationBasic (0x050D)**, **ApplicationLauncher (0x050C)**,
+  **AccountLogin (0x050E)** and **ContentAppObserver (0x0510)**: every
+  attribute, command and response, and AccountLogin's `LoggedOut` event.
+  `GetSetupPinResponse`'s setup PIN is a secret: its `Debug` output shows
+  `<redacted>`, like the secrets in the `Debug` fix below. The model leaves
+  out `LoggedOut`'s implicit FabricIndex (so does matter.js); the decoder
+  skips it. ContentAppObserver's `ContentAppMessage` follows the
+  specification (`Data` mandatory, `EncodingHint` optional), where chip's
+  codegen has the opposite. At v1.4.2.0 only, chip's zap XML and controller
+  codegen mark ContentAppObserver provisional; master and the 1.4.2 spec XML
+  at both refs do not, so it carries no provisional note.
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 

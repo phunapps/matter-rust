@@ -107,6 +107,10 @@
       "LowPower",
       "KeypadInput",
       "AudioOutput",
+      "ApplicationLauncher",
+      "ApplicationBasic",
+      "AccountLogin",
+      "ContentAppObserver",
       "EcosystemInformation",
       "CommissionerControl"
     ],
@@ -37734,6 +37738,576 @@
             {
               "value": 5,
               "name": "Other",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1292,
+      "name": "ApplicationLauncher",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "AP",
+          "name": "ApplicationPlatform",
+          "description": "Support for attributes and commands required for endpoint to support launching any application within the supported application catalogs"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "CatalogList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "uint16",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall specify the list of supported application catalogs, where each entry in the list is the Connectivity Standards Alliance-issued vendor ID for the catalog. The DIAL registry (see [DIAL Registry]) shall use value 0x0000.\nIt is expected that Content App Platform providers will have their own catalog vendor ID (set to their own Vendor ID) and will assign an ApplicationID to each Content App."
+        },
+        {
+          "id": 1,
+          "name": "CurrentApp",
+          "type": "ApplicationEPStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall specify the current in-focus application, identified using an Application ID, catalog vendor ID and the corresponding endpoint number when the application is represented by a Content App endpoint. A null shall be used to indicate there is no current in-focus application."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "LaunchApp",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Application",
+              "type": "ApplicationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the Application to launch."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify optional app-specific data to be sent to the app.\n> [!NOTE]\n> NOTE: This format and meaning of this value is proprietary and outside the specification. It provides a transition path for device makers that use other protocols (like DIAL) which allow for proprietary data. Apps that are not yet Matter aware can be launched via Matter, while retaining the existing ability to launch with proprietary data."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "StopApp",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Application",
+              "type": "ApplicationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the Application to stop."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "HideApp",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Application",
+              "type": "ApplicationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the Application to hide."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "LauncherResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the status of the command which resulted in this response."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify Optional app-specific data."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "ApplicationEPStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This specifies an app along with its corresponding endpoint.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Application",
+              "type": "ApplicationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "Endpoint",
+              "type": "endpoint-no",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ApplicationStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This indicates a global identifier for an Application given a catalog.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "CatalogVendorId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Connectivity Standards Alliance-issued vendor ID for the catalog. The DIAL registry shall use value 0x0000.\nContent App Platform providers will have their own catalog vendor ID (set to their own Vendor ID) and will assign an ApplicationID to each Content App."
+            },
+            {
+              "id": 1,
+              "name": "ApplicationId",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the application identifier, expressed as a string, such as \"PruneVideo\" or \"Company X\". This field shall be unique within a catalog.\nFor the DIAL registry catalog, this value shall be the DIAL prefix (see [DIAL Registry])."
+            }
+          ]
+        },
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "AppNotAvailable",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "SystemBusy",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "PendingUserApproval",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Downloading",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Installing",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1293,
+      "name": "ApplicationBasic",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "VendorName",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall specify a human readable (displayable) name of the vendor for the Content App."
+        },
+        {
+          "id": 1,
+          "name": "VendorId",
+          "type": "vendor-id",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute, if present, shall specify the Connectivity Standards Alliance assigned Vendor ID for the Content App."
+        },
+        {
+          "id": 2,
+          "name": "ApplicationName",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall specify a human readable (displayable) name of the Content App assigned by the vendor. For example, \"NPR On Demand\"."
+        },
+        {
+          "id": 3,
+          "name": "ProductId",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute, if present, shall specify a numeric ID assigned by the vendor to identify a specific Content App made by them. If the Content App is certified by the Connectivity Standards Alliance, then this would be the Product ID as specified by the vendor for the certification."
+        },
+        {
+          "id": 4,
+          "name": "Application",
+          "type": "ApplicationStruct",
+          "metatype": "object",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall specify a Content App which consists of an Application ID using a specified catalog."
+        },
+        {
+          "id": 5,
+          "name": "Status",
+          "type": "ApplicationStatusEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall specify the current running status of the application."
+        },
+        {
+          "id": 6,
+          "name": "ApplicationVersion",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall specify a human readable (displayable) version of the Content App assigned by the vendor."
+        },
+        {
+          "id": 7,
+          "name": "AllowedVendorList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "vendor-id",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute is a list of vendor IDs. Each entry is a vendor-id."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "ApplicationStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Stopped",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "ActiveVisibleFocus",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "ActiveHidden",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "ActiveVisibleNotFocus",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ApplicationStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This indicates a global identifier for an Application given a catalog.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "CatalogVendorId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Connectivity Standards Alliance issued vendor ID for the catalog. The DIAL registry shall use value 0x0000.\nIt is assumed that Content App Platform providers (see Video Player Architecture section in [[MatterDevLib]](#ref_MatterDevLib)) will have their own catalog vendor ID (set to their own Vendor ID) and will assign an ApplicationID to each Content App."
+            },
+            {
+              "id": 1,
+              "name": "ApplicationId",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the application identifier, expressed as a string, such as \"123456-5433\", \"PruneVideo\" or \"Company X\". This field shall be unique within a catalog.\nFor the DIAL registry catalog, this value shall be the DIAL prefix."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1294,
+      "name": "AccountLogin",
+      "revision": 2,
+      "features": [],
+      "attributes": [],
+      "commands": [
+        {
+          "id": 0,
+          "name": "GetSetupPin",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TempAccountIdentifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the client's Temporary Account Identifier. The length of this field shall be at least 16 characters to protect the account holder against password guessing attacks."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "GetSetupPinResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "SetupPin",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the Setup PIN as a text string at least 8 characters in length or empty string to indicate that the accounts do not match.\n> [!NOTE]\n> NOTE: Newer cluster clients should be aware that AccountLogin cluster version 1 specified an 11 digit minimum length.",
+              "secret": true
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "Login",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TempAccountIdentifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the client's temporary account identifier."
+            },
+            {
+              "id": 1,
+              "name": "SetupPin",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall provide the Setup PIN as a text string at least 8 characters in length.\n> [!NOTE]\n> NOTE: Newer cluster clients should be aware that AccountLogin cluster revision 1 specified an 11 digit minimum length."
+            },
+            {
+              "id": 2,
+              "name": "Node",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This optional field shall provide the Node ID of the Client. This field can be used by the Content App to keep track of Nodes which currently have access to it."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Logout",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Node",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This optional field shall provide the Node ID of the Client. This field can be used by the Content App to keep track of Nodes which currently have access to it."
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "LoggedOut",
+          "priority": "critical",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Node",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall provide the Node ID corresponding to the user account that has logged out, if that Node ID is available. If it is NOT available, this field shall NOT be present in the event."
+            }
+          ]
+        }
+      ],
+      "datatypes": []
+    },
+    {
+      "id": 1296,
+      "name": "ContentAppObserver",
+      "revision": 1,
+      "features": [],
+      "attributes": [],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ContentAppMessage",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate content app-specific data."
+            },
+            {
+              "id": 1,
+              "name": "EncodingHint",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This optional field shall indicate a content app-specific hint to the encoding of the data."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ContentAppMessageResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the status of the command which resulted in this response."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This optional field shall indicate content app-specific data."
+            },
+            {
+              "id": 2,
+              "name": "EncodingHint",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This optional field shall indicate a content app-specific hint to the encoding of the data."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "UnexpectedData",
               "description": null
             }
           ]

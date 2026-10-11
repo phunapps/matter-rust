@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 105 clusters are generated today. The full list is [`clusters`]; by area:
+//! 109 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -100,6 +100,9 @@
 //!   response; the BDX transfer is not implemented).
 //! - **Media:** `WakeOnLan`, `LowPower`, `KeypadInput`, `MediaInput`,
 //!   `AudioOutput`, `TargetNavigator` (with its event).
+//! - **Content apps:** `ApplicationBasic`, `ApplicationLauncher`,
+//!   `AccountLogin` (with its event; the setup PIN is redacted in `Debug`),
+//!   `ContentAppObserver`.
 //!
 //! Note that this crate holds **codecs only**. For the administration
 //! clusters in particular, encoding a command is not the same as running the

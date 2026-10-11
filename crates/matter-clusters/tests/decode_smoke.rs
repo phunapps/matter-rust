@@ -5949,3 +5949,189 @@ fn target_navigator_list_response_and_event_decode() {
         (None, None, None)
     );
 }
+
+// ---- M9-A3 B7: the Content App platform ------------------------------------
+//
+// ApplicationBasic, ApplicationLauncher, AccountLogin and ContentAppObserver
+// (1.4.2 ApplicationBasic.xml, ApplicationLauncher.xml, AccountLogin.xml,
+// ContentAppObserver.xml). ApplicationBasic's names, ids, Application and
+// AllowedVendorList are what tv-app's static Content App endpoint 3 serves
+// (ApplicationBasicManager's defaults, master 5cd2917a and v1.4.2.0), and
+// Status 0 is chip's server delegate's initial value; Status 3 is synthetic.
+// The CatalogList is ApplicationLauncherManager's (both refs). The setup PIN
+// is Vendor3's in tv-app (AppTv.cpp, both refs). Everything else is
+// synthetic.
+
+#[test]
+fn application_basic_attributes_decode() {
+    use clusters::application_basic::{self as ab, ApplicationStatusEnum};
+    assert_eq!(
+        ab::decode_vendor_name(&str_attr("exampleVendorName1")).unwrap(),
+        "exampleVendorName1"
+    );
+    assert_eq!(ab::decode_vendor_id(&uint_attr(1)).unwrap(), 1);
+    assert_eq!(ab::decode_product_id(&uint_attr(1)).unwrap(), 1);
+    let app = ab::decode_application(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 123).unwrap();
+        w.put_utf8(Tag::Context(1), "applicationId").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (app.catalog_vendor_id, app.application_id.as_str()),
+        (123, "applicationId")
+    );
+    assert_eq!(
+        ab::decode_status(&uint_attr(0)).unwrap(),
+        ApplicationStatusEnum::Stopped
+    );
+    assert_eq!(
+        ab::decode_status(&uint_attr(3)).unwrap(),
+        ApplicationStatusEnum::ActiveVisibleNotFocus
+    );
+    assert_eq!(
+        ab::decode_allowed_vendor_list(&uint_array_attr(&[1, 456])).unwrap(),
+        [1, 456]
+    );
+    // ApplicationStruct's ApplicationId is mandatory.
+    assert!(
+        ab::decode_application(&struct_of(&|w| w.put_uint(Tag::Context(0), 123).unwrap())).is_err()
+    );
+}
+
+#[test]
+fn application_launcher_current_app_requests_and_response() {
+    use clusters::application_launcher::{
+        self as al, ApplicationStruct, LauncherResponse, StatusEnum,
+    };
+    assert_eq!(
+        al::decode_catalog_list(&uint_array_attr(&[123, 456])).unwrap(),
+        [123, 456]
+    );
+    assert_eq!(
+        al::decode_current_app(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    // CurrentApp nests ApplicationStruct in ApplicationEPStruct; Endpoint is
+    // optional.
+    let Nullable::Value(current) = al::decode_current_app(&struct_of(&|w| {
+        w.start_structure(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(0), 9050).unwrap();
+        w.put_utf8(Tag::Context(1), "App3").unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(1), 6).unwrap();
+    }))
+    .unwrap() else {
+        panic!("CurrentApp decoded as null");
+    };
+    assert_eq!(
+        (
+            current.application.catalog_vendor_id,
+            current.application.application_id.as_str(),
+            current.endpoint
+        ),
+        (9050, "App3", Some(6))
+    );
+    let app = ApplicationStruct {
+        catalog_vendor_id: 123,
+        application_id: "exampleid".to_string(),
+    };
+    assert_eq!(
+        al::encode_launch_app(Some(app.clone()), Some(b"data".to_vec())),
+        struct_of(&|w| {
+            w.start_structure(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(0), 123).unwrap();
+            w.put_utf8(Tag::Context(1), "exampleid").unwrap();
+            w.end_container().unwrap();
+            w.put_bytes(Tag::Context(1), b"data").unwrap();
+        })
+    );
+    // Application is optional (a Content App endpoint launches itself).
+    assert_eq!(al::encode_stop_app(None), struct_of(&|_| {}));
+    let launched = LauncherResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_bytes(Tag::Context(1), b"data").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (launched.status, launched.data.as_deref()),
+        (StatusEnum::PendingUserApproval, Some(&b"data"[..]))
+    );
+}
+
+#[test]
+fn account_login_requests_secret_response_and_event() {
+    use clusters::account_login::{self as alog, GetSetupPinResponse, LoggedOutEvent};
+    assert_eq!(
+        alog::encode_get_setup_pin(&"AAAABBBBCCCCDDDD".to_string()),
+        struct_of(&|w| w.put_utf8(Tag::Context(0), "AAAABBBBCCCCDDDD").unwrap())
+    );
+    assert_eq!(
+        alog::encode_login(
+            &"AAAABBBBCCCCDDDD".to_string(),
+            &"20202021".to_string(),
+            Some(0x1122)
+        ),
+        struct_of(&|w| {
+            w.put_utf8(Tag::Context(0), "AAAABBBBCCCCDDDD").unwrap();
+            w.put_utf8(Tag::Context(1), "20202021").unwrap();
+            w.put_uint(Tag::Context(2), 0x1122).unwrap();
+        })
+    );
+    assert_eq!(alog::encode_logout(None), struct_of(&|_| {}));
+    let pin = GetSetupPinResponse::decode(&struct_of(&|w| {
+        w.put_utf8(Tag::Context(0), "20202021").unwrap();
+    }))
+    .unwrap();
+    // assert! rather than assert_eq!: a failure must not print the PIN.
+    #[allow(clippy::manual_assert_eq)]
+    {
+        assert!(pin.setup_pin == "20202021");
+    }
+    assert_redacted(&format!("{pin:?}"), b"20202021");
+    // LoggedOut: Node optional. chip's codegen adds the implicit FabricIndex
+    // (tag 254) of a fabric-sensitive event; the model has no such field, so
+    // the decoder skips it.
+    let ev = LoggedOutEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0x0102_0304_0506_0708).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(ev.node, Some(0x0102_0304_0506_0708));
+    assert_eq!(
+        LoggedOutEvent::decode(&struct_of(&|_| {})).unwrap().node,
+        None
+    );
+}
+
+#[test]
+fn content_app_observer_message_and_response() {
+    use clusters::content_app_observer::{self as cao, ContentAppMessageResponse, StatusEnum};
+    // The specification makes Data mandatory and EncodingHint optional; chip's
+    // codegen has them the other way round (both refs), and its generated
+    // decoder checks neither field's presence, so the encoding below suits
+    // both.
+    assert_eq!(
+        cao::encode_content_app_message(&"hello".to_string(), None),
+        struct_of(&|w| w.put_utf8(Tag::Context(0), "hello").unwrap())
+    );
+    assert_eq!(
+        cao::encode_content_app_message(&"hello".to_string(), Some("text/plain".to_string())),
+        struct_of(&|w| {
+            w.put_utf8(Tag::Context(0), "hello").unwrap();
+            w.put_utf8(Tag::Context(1), "text/plain").unwrap();
+        })
+    );
+    let response = ContentAppMessageResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_utf8(Tag::Context(1), "exampleData").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            response.status,
+            response.data.as_deref(),
+            response.encoding_hint
+        ),
+        (StatusEnum::UnexpectedData, Some("exampleData"), None)
+    );
+}

@@ -282,6 +282,16 @@ const ALLOWLIST = [
   { id: 0x0508, name: 'LowPower' },
   { id: 0x0509, name: 'KeypadInput' },
   { id: 0x050b, name: 'AudioOutput' },
+  // M9-A3 B7, the Content App platform: ApplicationBasic (an app's identity
+  // and status), ApplicationLauncher (Launch/Stop/HideApp, each with an
+  // optional ApplicationStruct, and their LauncherResponse; CurrentApp nests
+  // ApplicationStruct in ApplicationEPStruct), AccountLogin (GetSetupPIN and
+  // its secret response, Login, Logout, the LoggedOut event) and
+  // ContentAppObserver (ContentAppMessage and its response).
+  { id: 0x050c, name: 'ApplicationLauncher' },
+  { id: 0x050d, name: 'ApplicationBasic' },
+  { id: 0x050e, name: 'AccountLogin' },
+  { id: 0x0510, name: 'ContentAppObserver' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -349,6 +359,8 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B7, TargetNavigator (TargetUpdated: TargetList, CurrentTarget and
   // Data, all three optional):
   'TargetNavigator',
+  // M9-A3 B7, AccountLogin (LoggedOut: an optional Node):
+  'AccountLogin',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's
@@ -473,6 +485,7 @@ const SECRET_FIELDS = new Map([
   ['ThreadBorderRouterManagement.DatasetResponse.Dataset', 'a Thread operational dataset, network key included'],
   ['ThreadNetworkDirectory.OperationalDatasetResponse.OperationalDataset', 'a Thread operational dataset, network key included'],
   ['WiFiNetworkManagement.NetworkPassphraseResponse.Passphrase', 'the Wi-Fi network passphrase'],
+  ['AccountLogin.GetSetupPinResponse.SetupPin', 'the setup PIN that commissions the Content App'],
 ]);
 const appliedSecretFields = new Set();
 
