@@ -137,8 +137,8 @@ attributes, by area:
   its event; the setup PIN is redacted in `Debug`), ContentAppObserver. Of
   chip's example apps only tv-casting-app serves ContentAppObserver (tv-app's
   static Content App endpoint 3 is its client), and the harness does not
-  drive it,
-  so it is checked by decode smoke and `chip-xml-conformance.py` only.
+  drive it, so it is checked by decode smoke and `chip-xml-conformance.py`
+  only.
 
 Verification varies by cluster, and the level is deliberate rather than
 accidental. Every cluster has decode-smoke coverage. matter.js 0.16.11

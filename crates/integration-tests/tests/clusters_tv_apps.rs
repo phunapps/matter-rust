@@ -9,9 +9,10 @@
 )]
 
 //! M9-A3 B7 TV-platform clusters on a live tv-app: Channel, ApplicationLauncher
-//! and ContentControl on the video-player endpoint 1, and ApplicationBasic and
-//! AccountLogin on the Content App endpoints: the static endpoint 3, and the
-//! four dynamic endpoints tv-app adds at start-up for its sample apps
+//! and ContentControl on the video-player endpoint 1, ApplicationBasic on the
+//! Content App endpoints, and AccountLogin on the Vendor3 one. The Content App
+//! endpoints are the static endpoint 3 and the four dynamic endpoints tv-app
+//! adds at start-up for its sample apps
 //! (`ApplicationInit` in linux/main.cpp calls
 //! `ContentAppFactoryImpl::InstallContentApp` in tv-common/src/AppTv.cpp).
 //! tv-app serves all five at master 5cd2917a and v1.4.2.0, and it is the one
@@ -133,7 +134,7 @@ async fn status(
     match invoke(node, endpoint, cluster, command, fields).await {
         InvokeResult::Status(s) => s,
         // The path only, never the fields: a response's strings are not
-        // redacted, and AccountLogin's carry a setup PIN.
+        // redacted, and ContentControl's ResetPinResponse carries a PIN.
         InvokeResult::Data { path, .. } => panic!(
             "{cluster:#06x}/{command:#04x}: expected a status, got response {:#04x} ({path:?})",
             path.command
