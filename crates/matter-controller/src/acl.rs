@@ -147,19 +147,15 @@ pub struct AclEntry {
     /// Subject list: `None` ⇒ wildcard (applies to all subjects). `Some(v)` ⇒
     /// specific node IDs, CAT IDs, or group IDs.
     ///
-    /// Unlike the generated
-    /// [`AccessControlEntryStruct`](matter_clusters::gen::access_control::AccessControlEntryStruct)
-    /// (where `None` = withheld by the device and `Some(Nullable::Null)` =
-    /// wildcard), `None` here is always a wildcard: an entry whose Subjects
-    /// field was withheld is never returned.
+    /// `None` means the device sent Subjects as null (wildcard). An entry
+    /// whose Subjects field was absent, i.e. withheld by the device for
+    /// another fabric's entry, is never returned.
     pub subjects: Option<Vec<u64>>,
     /// Target list: `None` ⇒ wildcard (all targets). `Some(v)` ⇒ specific targets.
     ///
-    /// Unlike the generated
-    /// [`AccessControlEntryStruct`](matter_clusters::gen::access_control::AccessControlEntryStruct)
-    /// (where `None` = withheld by the device and `Some(Nullable::Null)` =
-    /// wildcard), `None` here is always a wildcard: an entry whose Targets
-    /// field was withheld is never returned.
+    /// `None` means the device sent Targets as null (wildcard). An entry
+    /// whose Targets field was absent, i.e. withheld by the device for
+    /// another fabric's entry, is never returned.
     pub targets: Option<Vec<AclTarget>>,
     /// Fabric index assigned by the device. `None` on write (the device fills
     /// this in for the accessing fabric); always `Some` on read.

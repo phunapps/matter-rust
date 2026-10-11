@@ -124,7 +124,8 @@ wildcard; written back by `write_acl`, such an entry would grant its privilege
 to every CASE node on the fabric. An entry missing either field is now
 dropped, as entries missing Privilege or AuthMode already were. Present-null
 still means wildcard. Conforming devices always send both fields for the
-reader's own fabric, so their results do not change.
+reader's own fabric, so their results do not change. Affected: every
+published release, `0.1.0` through `0.18.1`.
 
 ### matter-transport: Fixed (security) — session keys stay out of `Debug` output
 
