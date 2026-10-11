@@ -158,10 +158,13 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
         },
         // M9-A3 B5: Messages, which only tv-app serves among chip's example
         // apps; M9-A3 B7: the media clusters on tv-app's endpoint 1
-        // (all-clusters serves only WakeOnLan and LowPower of them).
+        // (all-clusters serves only WakeOnLan and LowPower of them), and
+        // Channel, ApplicationLauncher, ContentControl and the Content App
+        // endpoints' ApplicationBasic and AccountLogin (clusters_tv_apps).
         // Nothing is stimulated: chip's Messages server logs no events, the
-        // media tests use no event trigger (TargetUpdated and StateChanged
-        // have no stimulus that reaches the log), and
+        // media and TV-platform tests use no event trigger (none of their
+        // events has a stimulus that reaches the log; chip's server never
+        // logs LoggedOut), and
         // tv-app takes no --app-pipe, so
         // it gets neither --enable-key nor --app-pipe. tv-app does run chip's
         // interactive shell on stdin (`chip_build_libshell = true` in its
@@ -173,7 +176,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "tv-app",
             binary: "chip-tv-app",
             fixed_qr: None,
-            tests: &["clusters_messages", "clusters_media"],
+            tests: &["clusters_messages", "clusters_media", "clusters_tv_apps"],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -998,7 +1001,10 @@ mod tests {
             (spec.name, spec.target_suffix, spec.binary),
             ("tv", "tv-app", "chip-tv-app")
         );
-        assert_eq!(spec.tests, ["clusters_messages", "clusters_media"]);
+        assert_eq!(
+            spec.tests,
+            ["clusters_messages", "clusters_media", "clusters_tv_apps"]
+        );
         assert_eq!(spec.fixed_qr, None);
         assert_eq!(spec.events, EventStimulus::None);
         assert!(!spec.needs_ota_image && !spec.linux_platform_mdns);

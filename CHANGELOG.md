@@ -810,6 +810,32 @@ How each of these clusters was validated:
   matches the specification. The generated encoders always send `OldPIN`
   and `BonusTime`, which either decoder accepts.
 
+How each of these clusters was validated:
+
+- **Live against chip's tv-app**, built at master 5cd2917a and at v1.4.2.0
+  for Linux arm64 and run on a Raspberry Pi (`just integration-tv`; tv-app
+  does not build on Apple silicon without Rosetta 2, and is not in the
+  nightly): WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
+  TargetNavigator, MediaPlayback, ContentLauncher, Channel,
+  ApplicationLauncher and ContentControl on its endpoint 1, and
+  ApplicationBasic and AccountLogin on its five Content App endpoints. Every
+  test passed at both refs, as did B5's Messages tests in the same suite.
+- **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
+  locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
+  nightly at v1.4.2.0 (linux-x64) from its next run.
+- **Not run live; decode smoke and `chip-xml-conformance.py` only:**
+  ContentAppObserver. Of chip's example apps only tv-casting-app serves it,
+  and the harness does not drive tv-casting-app.
+- **Events:** none has a stimulus that reaches tv-app's event log.
+  TargetUpdated and StateChanged are logged on endpoint 0 only, and only
+  when an ember attribute changes; chip's server never logs LoggedOut (it
+  leaves out the FabricIndex, so `LogEvent` refuses it) or any ContentControl
+  event. They are covered by decode smoke only.
+
+The live tests pace each exchange: chip master's tv-app has 15 packet
+buffers, and matter-rust ACKs a response only on its 200 ms standalone-ACK
+timer.
+
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 
 - GroupKeyManagement `GroupKeySetStruct`'s derived `Debug` printed its three

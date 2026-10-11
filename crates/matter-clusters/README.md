@@ -173,13 +173,9 @@ its events; RvcRunMode / RvcCleanMode's refused changes) run live against
 chip master 5cd2917a's rvc-app (8 of 8 tests) and microwave-oven-app (3 of 3),
 built for Linux arm64 and run on a Raspberry Pi; they are not in the nightly
 and do not run on the Mac, because rvc-app and microwave-oven-app need
-Rosetta 2 to build on Apple silicon. Messages has run live once, against chip
-master 5cd2917a's tv-app (its only chip host) on the same Pi: one of its two
-tests passes; `messages_refuse_malformed_requests` times out in the suite and
-passes when run alone, because master's tv-app runs on a 15-buffer
-PacketBuffer pool that responses the previous test left unACKed exhaust.
-Beyond that run, Messages is validated by decode tests, two matter.js vectors
-and the chip 1.4.2 XML check.
+Rosetta 2 to build on Apple silicon. Messages runs live against chip's
+tv-app (its only chip host) with the media clusters, below; beyond that, it is
+validated by decode tests, two matter.js vectors and the chip 1.4.2 XML check.
 EnergyPreference runs live against chip's all-clusters at master (locally)
 and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against chip
 v1.4.2.0 (the nightly); master's server is unexercised, because master's
@@ -198,6 +194,18 @@ EcosystemInformation, CommissionerControl (hosted by fabric-bridge-app and
 fabric-sync), ThreadBorderRouterManagement, ThreadNetworkDirectory and
 WiFiNetworkManagement (hosted by network-manager-app) have not run live: they
 are validated by decode smoke and `chip-xml-conformance.py` only.
+The media and TV-platform clusters, and Messages, run live against chip's
+tv-app built at master 5cd2917a and at v1.4.2.0 for Linux arm64 on a
+Raspberry Pi (`just integration-tv`; not in the nightly, and not on the Mac,
+because tv-app needs Rosetta 2 to build on Apple silicon). Every test passes
+at both refs; each exchange is paced, because master's tv-app runs on a
+15-buffer PacketBuffer pool. WakeOnLan and LowPower also run against chip's
+all-clusters, locally at master and on the Pi at v1.4.2.0, and in the nightly
+at v1.4.2.0 from its next run. ContentAppObserver has not run live (of chip's
+example apps only tv-casting-app serves it, which the harness does not
+drive): decode smoke and `chip-xml-conformance.py` only. None of these
+clusters' events has a stimulus that reaches tv-app's log, so they are decode
+tests only.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`
