@@ -429,6 +429,14 @@ in full with `fabric_index` `None`.
   OpenThread provider sends nine, the prefix length in bits and then the
   eight prefix bytes), `ResetCounts`, and the `ConnectionStatus` and
   `NetworkFaultChange` events. `ExtAddress` and `Rloc16` are provisional.
+- **GeneralCommissioning (0x0030)** and **NetworkCommissioning (0x0031)**:
+  every attribute, command and response. Codecs only, for use outside
+  commissioning: `matter-commissioning` keeps driving commissioning with its
+  hand-written subset, and a new test there pins that the two encode every
+  command it sends identically. The generated response decoders follow the
+  specification, so `DebugText` (GeneralCommissioning responses) and
+  `ErrorValue` (`ConnectNetworkResponse`) are mandatory; the commissioning
+  flow's own decoders accept them missing.
 
 chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so

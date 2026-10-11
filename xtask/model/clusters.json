@@ -19,6 +19,8 @@
       "UnitLocalization",
       "PowerSourceConfiguration",
       "PowerSource",
+      "GeneralCommissioning",
+      "NetworkCommissioning",
       "DiagnosticLogs",
       "GeneralDiagnostics",
       "SoftwareDiagnostics",
@@ -5729,6 +5731,1254 @@
             {
               "value": 2,
               "name": "UnderVoltage",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 48,
+      "name": "GeneralCommissioning",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "TC",
+          "name": "TermsAndConditions",
+          "description": "Supports Terms & Conditions acknowledgement"
+        },
+        {
+          "bit": 1,
+          "code": "NR",
+          "name": "NetworkRecovery",
+          "description": "Supports Network Recovery",
+          "provisional": true
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Breadcrumb",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "This attribute allows for the storage of a client-provided small payload which Administrators and Commissioners may write and then subsequently read, to keep track of their own progress. This may be used by the Commissioner to avoid repeating already-executed actions upon re-establishing a commissioning link after an error.\nOn start/restart of the server, such as when a device is power-cycled, this attribute shall be reset to zero.\nSome commands related to commissioning also have a side-effect of updating or resetting this attribute and this is specified in their respective functional descriptions.\nThe format of the value within this attribute is unspecified and its value is not otherwise used by the functioning of any cluster, other than being set as a side-effect of commands where this behavior is described."
+        },
+        {
+          "id": 1,
+          "name": "BasicCommissioningInfo",
+          "type": "BasicCommissioningInfo",
+          "metatype": "object",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall describe critical parameters needed at the beginning of commissioning flow. See Section 11.10.5.4, \"BasicCommissioningInfo\" for more information."
+        },
+        {
+          "id": 2,
+          "name": "RegulatoryConfig",
+          "type": "RegulatoryLocationTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the regulatory configuration for the product.\nNote that the country code is part of Section 11.1, \"Basic Information Cluster\" and therefore NOT listed on the RegulatoryConfig attribute."
+        },
+        {
+          "id": 3,
+          "name": "LocationCapability",
+          "type": "RegulatoryLocationTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "LocationCapability is statically set by the manufacturer and indicates if this Node needs to be told an exact RegulatoryLocation. For example a Node which is \"Indoor Only\" would not be certified for outdoor use at all, and thus there is no need for a commissioner to set or ask the user about whether the device will be used inside or outside. However a device which states its capability is \"Indoor/Outdoor\" means it would like clarification if possible.\nFor Nodes without radio network interfaces (e.g. Ethernet-only devices), the value IndoorOutdoor shall always be used.\nThe default value of the RegulatoryConfig attribute is the value of LocationCapability attribute. This means devices always have a safe default value, and Commissioners which choose to implement smarter handling can."
+        },
+        {
+          "id": 4,
+          "name": "SupportsConcurrentConnection",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether this device supports \"concurrent connection flow\" commissioning mode (see Section 5.5, \"Commissioning Flows\"). If false, the device only supports \"non-concurrent connection flow\" mode."
+        },
+        {
+          "id": 5,
+          "name": "TcAcceptedVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the last version of the T&Cs for which the device received user acknowledgements. On factory reset this field shall be reset to 0.\nWhen Custom Commissioning Flow is used to obtain user consent (e. g. because the Commissioner does not support the TC feature), the manufacturer-provided means for obtaining user consent shall ensure that this attribute is set to a value which is greater than or equal to TCMinRequiredVersion before returning the user back to the originating Commissioner (see Section 5.7.4, \"Enhanced Setup Flow (ESF)\")."
+        },
+        {
+          "id": 6,
+          "name": "TcMinRequiredVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the minimum version of the texts presented by the Enhanced Setup Flow that need to be accepted by the user for this device. This attribute may change as the result of an OTA update.\nIf an event such as a software update causes TCAcceptedVersion to become less than TCMinRequiredVersion, then the device shall update TCAcknowledgementsRequired to True so that an administrator can detect that a newer version of the texts needs to be presented to the user."
+        },
+        {
+          "id": 7,
+          "name": "TcAcknowledgements",
+          "type": "map16",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the user’s response to the presented terms. Each bit position corresponds to a user response for the associated index of matching text, such that bit 0 (bit value 1) is for text index 0. Bit 15 (bit value 0x8000) is for text index 15. A bit value of 1 indicates acceptance and a value of 0 indicates non-acceptance. For example, if there are two texts that were presented where the first (bit 0, value 1) was declined and the second accepted (bit 1, value 2), we would expect the resulting value of the map to be 2.\nWhenever a user provides responses to newly presented terms and conditions, this attribute shall be updated with the latest responses. This may happen in response to updated terms that were presented to the user. On a factory reset this field shall be reset with all bits set to 0."
+        },
+        {
+          "id": 8,
+          "name": "TcAcknowledgementsRequired",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether SetTCAcknowledgements is currently required to be called with the inclusion of mandatory terms accepted.\nThis attribute may be present and False in the case where no terms and conditions are currently mandatory to accept for CommissioningComplete command to succeed.\nThis attribute may appear, or become True after commissioning (e.g. due to a firmware update) to indicate that new Terms & Conditions are available that the user must accept.\nUpon Factory Data Reset, this attribute shall be set to a value of True.\nWhen Section 5.7.3, \"Custom Commissioning Flow\" is used to obtain user consent (e.g. because the Commissioner does not support the TC feature), the manufacturer-provided means for obtaining user consent shall ensure that this attribute is set to False before returning the user back to the original Commissioner (see Section 5.7.4, \"Enhanced Setup Flow (ESF)\")."
+        },
+        {
+          "id": 9,
+          "name": "TcUpdateDeadline",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the System Time in seconds when any functionality limitations will begin due to a lack of acceptance of updated Terms and Conditions, as described in Section 5.7.4.6, \"Presenting Updated Terms and Conditions\".\nA null value indicates that there is no pending deadline for updated TC acceptance."
+        },
+        {
+          "id": 10,
+          "name": "RecoveryIdentifier",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain the identifier to be included in the advertisements used during the Network Recovery Flow. This identifier is intended to be advertised over the air and used by an Administrator to establish a Node's identity without revealing its Node ID.\nThe attribute shall contain a random 64-bit value, that value shall be reset on factory reset and shall remain unchanged until a next factory reset. It is important that this value be selected at random from a 64-bit number space to ensure a high likelihood of uniqueness from values selected by other Nodes. This value SHOULD be obtained through Crypto_DRBG(len = 64).",
+          "provisional": true
+        },
+        {
+          "id": 11,
+          "name": "NetworkRecoveryReason",
+          "type": "NetworkRecoveryReasonEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain the primary reason that triggered the Network Recovery flow and its associated advertisements. Null when the Node is not undergoing a Network Recovery flow.",
+          "provisional": true
+        },
+        {
+          "id": 12,
+          "name": "IsCommissioningWithoutPower",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "The server shall set this attribute to true if and only if is currently operating on the commissioning channel but cannot operate on the operational channel because it is not powered.\nThis may happen during NFC-based commissioning, when the commissioning channel is NFC Transport Layer (NTL), because it can harvest energy from NFC to operate. However, such a Commissionee must be powered on to switch to the operational channel.\nThis attribute is used by the Commissioner as described in step 18 of Section 5.5, \"Commissioning Flows\". This attribute is linked to the Commissionee behavior after reception of the ConnectNetwork Command.",
+          "provisional": true
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ArmFailSafe",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ExpiryLengthSeconds",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ArmFailSafeResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ErrorCode",
+              "type": "CommissioningErrorEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the result of the operation, based on the behavior specified in the functional description of the ArmFailSafe command."
+            },
+            {
+              "id": 1,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "See Section 11.10.7.1, \"Common fields in General Commissioning cluster responses\"."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "SetRegulatoryConfig",
+          "direction": "request",
+          "responseId": 3,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NewRegulatoryConfig",
+              "type": "RegulatoryLocationTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "CountryCode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "SetRegulatoryConfigResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ErrorCode",
+              "type": "CommissioningErrorEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the result of the operation, based on the behavior specified in the functional description of the SetRegulatoryConfig command."
+            },
+            {
+              "id": 1,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "See Section 11.10.7.1, \"Common fields in General Commissioning cluster responses\"."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "CommissioningComplete",
+          "direction": "request",
+          "responseId": 5,
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "CommissioningCompleteResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ErrorCode",
+              "type": "CommissioningErrorEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the result of the operation, based on the behavior specified in the functional description of the CommissioningComplete command."
+            },
+            {
+              "id": 1,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "See Section 11.10.7.1, \"Common fields in General Commissioning cluster responses\"."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "SetTcAcknowledgements",
+          "direction": "request",
+          "responseId": 7,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TcVersion",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the version of the Enhanced Setup Flow Terms & Conditions that were presented to the user."
+            },
+            {
+              "id": 1,
+              "name": "TcUserResponse",
+              "type": "map16",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the user responses to the Enhanced Setup Flow Terms & Conditions as a map where each bit set in the bitmap corresponds to an accepted term in the file located at Section 11.23.6.22, \"EnhancedSetupFlowTCUrl\"."
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "name": "SetTcAcknowledgementsResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ErrorCode",
+              "type": "CommissioningErrorEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the result of the operation, based on the behavior specified in the functional description of the SetTCAcknowledgements command."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "BasicCommissioningInfo",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure provides some constant values that may be of use to all commissioners.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "FailSafeExpiryLengthSeconds",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain a conservative initial duration (in seconds) to set in the FailSafe for the commissioning flow to complete successfully. This may vary depending on the speed or sleepiness of the Commissionee. This value, if used in the Section 11.10.7.2, \"ArmFailSafe\" command's ExpiryLengthSeconds field SHOULD allow a Commissioner to proceed with a nominal commissioning without having to-rearm the fail-safe, with some margin."
+            },
+            {
+              "id": 1,
+              "name": "MaxCumulativeFailsafeSeconds",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain a conservative value in seconds denoting the maximum total duration for which a fail safe timer can be re-armed. See Section 11.10.7.2.1, \"Fail Safe Context\".\nThe value of this field shall be greater than or equal to the FailSafeExpiryLengthSeconds. Absent additional guidelines, it is recommended that the value of this field be aligned with the initial Section 5.4.2.3, \"Announcement Duration\" and default to 900 seconds."
+            }
+          ]
+        },
+        {
+          "name": "CommissioningErrorEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "This enumeration is used by several response commands in this cluster to indicate particular errors.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Ok",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "ValueOutsideRange",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "InvalidAuthentication",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "NoFailSafe",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "BusyWithOtherAdmin",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "RequiredTcNotAccepted",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "TcAcknowledgementsNotReceived",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "TcMinVersionNotMet",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NetworkRecoveryReasonEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "This data type is derived from enum8, however, the maximum value of the enumeration shall be less than 15.\nThis enumeration is used by the NetworkRecoveryReason attribute and may be embedded in the beacons advertising the need for Network Recovery.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Auth",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Visibility",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "RegulatoryLocationTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "This enumeration is used by the RegulatoryConfig and LocationCapability attributes to indicate possible radio usage.",
+          "values": [
+            {
+              "value": 0,
+              "name": "Indoor",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Outdoor",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "IndoorOutdoor",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 49,
+      "name": "NetworkCommissioning",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "WI",
+          "name": "WiFiNetworkInterface",
+          "description": "Wi-Fi related features"
+        },
+        {
+          "bit": 1,
+          "code": "TH",
+          "name": "ThreadNetworkInterface",
+          "description": "Thread related features"
+        },
+        {
+          "bit": 2,
+          "code": "ET",
+          "name": "EthernetNetworkInterface",
+          "description": "Ethernet related features"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MaxNetworks",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This shall indicate the maximum number of network configuration entries that can be added, based on available device resources. The length of the Networks attribute shall be less than or equal to this value."
+        },
+        {
+          "id": 1,
+          "name": "Networks",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "NetworkInfoStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the network configurations that are usable on the network interface represented by this cluster server instance.\nThe order of configurations in the list reflects precedence. That is, any time the Node attempts to connect to the network it shall attempt to do so using the configurations in Networks Attribute in the order as they appear in the list.\nThe order of list items shall only be modified by the AddOrUpdateThreadNetwork, AddOrUpdateWiFiNetwork and ReorderNetwork commands. In other words, the list shall be stable over time, unless mutated externally.\nEthernet networks shall be automatically populated by the cluster server. Ethernet Network Commissioning Cluster instances shall always have exactly one NetworkInfoStruct instance in their Networks attribute. There shall be no way to add, update or remove Ethernet network configurations to those Cluster instances."
+        },
+        {
+          "id": 2,
+          "name": "ScanMaxTimeSeconds",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum duration taken, in seconds, by the network interface on this cluster server instance to provide scan results.\nSee Section 11.9.7.1, \"ScanNetworks Command\" for usage."
+        },
+        {
+          "id": 3,
+          "name": "ConnectMaxTimeSeconds",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum duration taken, in seconds, by the network interface on this cluster server instance to report a successful or failed network connection indication. This maximum time shall account for all operations needed until a successful network connection is deemed to have occurred, including, for example, obtaining IP addresses, or the execution of necessary internal retries."
+        },
+        {
+          "id": 4,
+          "name": "InterfaceEnabled",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates whether the associated network interface is enabled or not. By default all network interfaces SHOULD be enabled during initial commissioning (InterfaceEnabled set to true).\nIt is undefined what happens if InterfaceEnabled is written to false on the same interface as that which is used to write the value. In that case, it is possible that the Administrator would have to await expiry of the fail-safe, and associated recovery of network configuration to prior safe values, before being able to communicate with the node again (see Section 11.10.7.2, \"ArmFailSafe\").\nIt may be possible to disable Ethernet interfaces but it is implementation-defined. If not supported, a write to this attribute with a value of false shall fail with a status of INVALID_ACTION. When disabled, an Ethernet interface would longer employ media detection. That is, a simple unplug and replug of the cable shall NOT re-enable the interface.\nOn Ethernet-only Nodes, there shall always be at least one of the Network Commissioning server cluster instances with InterfaceEnabled set to true."
+        },
+        {
+          "id": 5,
+          "name": "LastNetworkingStatus",
+          "type": "NetworkCommissioningStatusEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the status of the last attempt either scan or connect to an operational network, using this interface, whether by invocation of the ConnectNetwork command or by autonomous connection after loss of connectivity or during initial establishment. If no such attempt was made, or no network configurations exist in the Networks attribute, then this attribute shall be set to null.\nThis attribute is present to assist with error recovery during Network commissioning and to assist in non-concurrent networking commissioning flows."
+        },
+        {
+          "id": 6,
+          "name": "LastNetworkId",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the NetworkID used in the last attempt to connect to an operational network, using this interface, whether by invocation of the ConnectNetwork command or by autonomous connection after loss of connectivity or during initial establishment. If no such attempt was made, or no network configurations exist in the Networks attribute, then this attribute shall be set to null.\nIf a network configuration is removed from the Networks attribute using the RemoveNetwork command after a connection attempt, this field may indicate a NetworkID that is no longer configured on the Node.\nThis attribute is present to assist with error recovery during Network commissioning and to assist in non-concurrent networking commissioning flows."
+        },
+        {
+          "id": 7,
+          "name": "LastConnectErrorValue",
+          "type": "int32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the ErrorValue used in the last failed attempt to connect to an operational network, using this interface, whether by invocation of the ConnectNetwork command or by autonomous connection after loss of connectivity or during initial establishment. If no such attempt was made, or no network configurations exist in the Networks attribute, then this attribute shall be set to null.\nIf the last connection succeeded, as indicated by a value of Success in the LastNetworkingStatus attribute, then this field shall be set to null.\nThis attribute is present to assist with error recovery during Network commissioning and to assist in non-concurrent networking commissioning flows."
+        },
+        {
+          "id": 8,
+          "name": "SupportedWiFiBands",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "WiFiBandEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates all the frequency bands supported by the Wi-Fi interface configured by the cluster instance."
+        },
+        {
+          "id": 9,
+          "name": "SupportedThreadFeatures",
+          "type": "ThreadCapabilitiesBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates all of the Thread features supported by the Thread interface configured by the cluster instance.\nThis attribute is primarily used to determine the most important general capabilities of the Thread interface associated with the cluster instance, as opposed to the current runtime dynamic configuration. Note that most run-time details of the actual Thread interface are found in the Thread Network Diagnostics cluster, if supported."
+        },
+        {
+          "id": 10,
+          "name": "ThreadVersion",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the Thread version supported by the Thread interface configured by the cluster instance.\nThe format shall match the value mapping found in the \"Version TLV\" section of Thread specification. For example, Thread 1.3.0 would have ThreadVersion set to 4."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ScanNetworks",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Ssid",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": true,
+              "optional": true,
+              "description": "This field, if present, shall contain the SSID for a directed scan of that particular Wi-Fi SSID. Otherwise, if the field is absent, or if it is null, this shall indicate scanning of all BSSID in range. This field shall be ignored for ScanNetworks invocations on non-Wi-Fi server instances."
+            },
+            {
+              "id": 1,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "The Breadcrumb field, if present, shall be used to atomically set the Breadcrumb attribute in the General Commissioning cluster on success of the associated command. If the command fails, the Breadcrumb attribute in the General Commissioning cluster shall be left unchanged."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ScanNetworksResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkingStatus",
+              "type": "NetworkCommissioningStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The NetworkingStatus field shall indicate the status of the last scan operation, taking one of these values:\n  - Success: Scanning succeeded.\n  - NetworkNotFound: No instance of an explicitly-provided network identifier was found during the     scan. This error cannot occur if no network identifier was provided, such as when scanning for all available networks.\n  - OutOfRange: Network identifier was invalid (e.g. empty, too long, etc).\n  - RegulatoryError: Could not scan on any bands due to lack of regulatory configuration.\n  - UnknownError: An internal error occurred during scanning."
+            },
+            {
+              "id": 1,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present and non-empty, may contain error information which may be communicated to the user in case the NetworkingStatus was not Success. Its purpose is to help developers in troubleshooting errors and may go into logs or crash reports."
+            },
+            {
+              "id": 2,
+              "name": "WiFiScanResults",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "WiFiInterfaceScanResultStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "If NetworkingStatus was Success, this field shall contain the Wi-Fi network scan results. The list may be empty if none were found in range on the bands supported by the interface, or if directed scanning had been used and the desired SSID was not found in range.\nThe maximum number of results present in the result list supported may depend on memory and may contain a subset of possibilities, to avoid memory exhaustion on the cluster server and avoid crossing the maximum command response size supported (see Section 4.4.4, \"Message Size Requirements\").\nThe order in which results are reported is implementation-specific. Results SHOULD be reported in decreasing RSSI order, even if RSSI is not reported in the response, to maximize the likelihood that most likely to be reachable elements are included within the size limits of the response."
+            },
+            {
+              "id": 3,
+              "name": "ThreadScanResults",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ThreadInterfaceScanResultStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "If NetworkingStatus was Success, this field shall contain the Thread network scan results. The list may be empty if none were found in range on the bands supported by the interface.\nThe maximum number of results present in the result list supported may depend on memory and may contain a subset of possibilities, to avoid memory exhaustion on the cluster server and avoid crossing the maximum command response size supported (see Section 4.4.4, \"Message Size Requirements\").\nThe order in which results are reported is implementation-specific. Results SHOULD be reported in decreasing LQI order, to maximize the likelihood that most likely to be reachable elements are included within the size limits of the response."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "AddOrUpdateWiFiNetwork",
+          "direction": "request",
+          "responseId": 5,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Ssid",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the SSID to which to attempt connection. Specific BSSID selection is not supported by this cluster."
+            },
+            {
+              "id": 1,
+              "name": "Credentials",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "Credentials is the passphrase or PSK for the network (if any is needed).\nSecurity type, cipher and credential format (passphrase or PSK) shall be contextually auto-selected during execution of the ConnectNetwork command and during subsequent operational state network connections, based on the most secure Wi-Fi security type available within beacons and probe responses for the set of all discovered BSSIDs for the configured SSID. The type of PSK or passphrase used shall be inferred based on the length and contents of the Credentials field provided, matching the security type chosen.\nValid Credentials length are:\n  - 0 bytes: Unsecured (open) connection\n  - 5 bytes: WEP-64 passphrase\n  - 10 hexadecimal ASCII characters: WEP-64 40-bit hex raw PSK\n  - 13 bytes: WEP-128 passphrase\n  - 26 hexadecimal ASCII characters: WEP-128 104-bit hex raw PSK\n  - 8..63 bytes: WPA/WPA2/WPA3 passphrase\n  - 64 bytes: WPA/WPA2/WPA3 raw hex PSK These lengths shall be contextually interpreted based on the security type of the BSSID where connection will occur.\nWhen the length of Credentials and available set of BSSID admits more than one option, such as the presence of both WPA2 and WPA security type within the result set, WPA2 shall be considered more secure.\nNote that it may occur that a station cannot connect to a particular access point with higher security and selects a lower security connectivity type if the link quality is deemed to be too low to achieve successful operation, or if all retry attempts fail."
+            },
+            {
+              "id": 2,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.1.2, \"Breadcrumb Field\" for usage."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "AddOrUpdateThreadNetwork",
+          "direction": "request",
+          "responseId": 5,
+          "fields": [
+            {
+              "id": 0,
+              "name": "OperationalDataset",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "The OperationalDataset field shall contain the Thread Network Parameters, including channel, PAN ID, and Extended PAN ID.\nThe encoding for the OperationalDataset field is defined in the Thread specification.\nThe client shall pass the OperationalDataset as an opaque octet string."
+            },
+            {
+              "id": 1,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.1.2, \"Breadcrumb Field\" for usage."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "RemoveNetwork",
+          "direction": "request",
+          "responseId": 5,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the NetworkID for the entry to remove: the SSID for Wi-Fi and XPAN ID for Thread."
+            },
+            {
+              "id": 1,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.1.2, \"Breadcrumb Field\" for usage."
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "NetworkConfigResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkingStatus",
+              "type": "NetworkCommissioningStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The NetworkingStatus field shall indicate the status of the last operation attempting to modify the Networks attribute configuration, taking one of these values:\n  - Success: Operation succeeded.\n  - OutOfRange: Network identifier was invalid (e.g. empty, too long, etc).\n  - BoundsExceeded: Adding this network configuration would exceed the limit defined by MaxNetworks.\n  - NetworkIdNotFound: The network identifier was expected to be found, but was not found among the added network configurations in Networks attribute.\n  - UnknownError: An internal error occurred during the operation."
+            },
+            {
+              "id": 1,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.2.2, \"DebugText Field\" for usage."
+            },
+            {
+              "id": 2,
+              "name": "NetworkIndex",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall contain the 0-based index of the entry in the Networks attribute that was last added, updated or removed successfully by the associated request command."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "ConnectNetwork",
+          "direction": "request",
+          "responseId": 7,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the NetworkID for the entry used to configure the connection: the SSID for Wi-Fi and XPAN ID for Thread."
+            },
+            {
+              "id": 1,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.1.2, \"Breadcrumb Field\" for usage."
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "name": "ConnectNetworkResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkingStatus",
+              "type": "NetworkCommissioningStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The NetworkingStatus field shall indicate the status of the last connection attempt, taking one of these values:\n  - Success: Connection succeeded.\n  - NetworkNotFound: No instance of an explicitly-provided network identifier was found during the attempt to join the network.\n  - OutOfRange: Network identifier was invalid (e.g. empty, too long, etc).\n  - NetworkIdNotFound: The network identifier was not found among the added network configurations in Networks attribute.\n  - RegulatoryError: Could not connect to a network due to lack of regulatory configuration.\n  - UnknownError: An internal error occurred during the operation.\n  - Association errors (see also description of errors in NetworkCommissioningStatusEnum): AuthFailure, UnsupportedSecurity, OtherConnectionFailure, IPV6Failed, IPBindFailed"
+            },
+            {
+              "id": 1,
+              "name": "DebugText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.2.2, \"DebugText Field\" for usage."
+            },
+            {
+              "id": 2,
+              "name": "ErrorValue",
+              "type": "int32",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "  - ErrorValue interpretation for Wi-Fi association errors:\n  - On any association failure during enabling of a network, the ErrorValue field shall be set to the Status Code value that was present in the last frame related to association where Status Code was not equal to zero and which caused the failure of a final retry attempt, if this final failure was due to one of the following Management frames:\n  - Association Response (Type 0, Subtype 1)\n  - Reassociation Response (Type 0, Subtype 3)\n  - Authentication (Type 0, Subtype 11)\n  - Table 9-50 \"Status Codes\" in IEEE 802.11-2020 contains a description of all values possible, which can unambiguously be used to determine the cause, such as an invalid security type, unsupported rate, etc.\n  - Otherwise, the ErrorValue field shall contain an implementation-dependent value which may be used by a reader of the structure to record, report or diagnose the failure."
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "name": "ReorderNetwork",
+          "direction": "request",
+          "responseId": 5,
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the NetworkID for the entry to reorder: the SSID for Wi-Fi and XPAN ID for Thread."
+            },
+            {
+              "id": 1,
+              "name": "NetworkIndex",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the 0-based index of the new desired position of the entry in the Networks attribute."
+            },
+            {
+              "id": 2,
+              "name": "Breadcrumb",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "See Section 11.9.7.1.2, \"Breadcrumb Field\" for usage."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "NetworkCommissioningStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "OutOfRange",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "BoundsExceeded",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "NetworkIdNotFound",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "DuplicateNetworkId",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "NetworkNotFound",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "RegulatoryError",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "AuthFailure",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "UnsupportedSecurity",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "OtherConnectionFailure",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Ipv6Failed",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "IpBindFailed",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "UnknownError",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "NetworkInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "NetworkInfoStruct struct describes an existing network configuration, as provided in the Networks attribute.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "NetworkId",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "Every network is uniquely identified (for purposes of commissioning) by a NetworkID mapping to the following technology-specific properties:\n  - SSID for Wi-Fi\n  - Extended PAN ID for Thread\n  - Network interface instance name at operating system (or equivalent unique name) for Ethernet.\nThe semantics of the NetworkID field therefore varies between network types accordingly. It contains SSID for Wi-Fi networks, Extended PAN ID (XPAN ID) for Thread networks and netif name for Ethernet networks.\n> [!NOTE]\n> NOTE: SSID in Wi-Fi is a collection of 1-32 bytes, the text encoding of which is not specified. Implementations must be careful to support reporting byte strings without requiring a particular encoding for transfer. Only the commissioner should try to potentially decode the bytes. The most common encoding is UTF-8, however this is just a convention. Some configurations may use Latin-1 or other character sets. A commissioner may decode using UTF-8, replacing encoding errors with \"?\" at the application level while retaining the underlying representation.\nXPAN ID is a big-endian 64-bit unsigned number, represented on the first 8 octets of the octet string."
+            },
+            {
+              "id": 1,
+              "name": "Connected",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the connected status of the associated network, where \"connected\" means currently linked to the network technology (e.g. Associated for a Wi-Fi network, media connected for an Ethernet network)."
+            }
+          ]
+        },
+        {
+          "name": "ThreadCapabilitiesBitmap",
+          "base": "map16",
+          "kind": "bitmap",
+          "description": "The ThreadCapabilitiesBitmap encodes the supported Thread features and capabilities of a Thread-enabled network interface.\n> [!NOTE]\n> NOTE: The valid combinations of capabilities are restricted and dependent on Thread version.",
+          "bits": [
+            {
+              "bit": 0,
+              "name": "IsBorderRouterCapable",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "IsRouterCapable",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "IsSleepyEndDeviceCapable",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "IsFullThreadDevice",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "IsSynchronizedSleepyEndDeviceCapable",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ThreadInterfaceScanResultStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "ThreadInterfaceScanResultStruct represents a single Thread network scan result.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PanId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ExtendedPanId",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "NetworkName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "Channel",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 4,
+              "name": "Version",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 5,
+              "name": "ExtendedAddress",
+              "type": "hwadr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "ExtendedAddress stands for an IEEE 802.15.4 Extended Address."
+            },
+            {
+              "id": 6,
+              "name": "Rssi",
+              "type": "int8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 7,
+              "name": "Lqi",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "WiFiBandEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "WiFiBandEnum encodes a supported Wi-Fi frequency band present in the WiFiBand field of the WiFiInterfaceScanResultStruct.",
+          "values": [
+            {
+              "value": 0,
+              "name": "2G4",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "3G65",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "5G",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "6G",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "60G",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "1G",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "WiFiInterfaceScanResultStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "WiFiInterfaceScanResultStruct represents a single Wi-Fi network scan result.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Security",
+              "type": "WiFiSecurityBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "Ssid",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Bssid",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "Channel",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 4,
+              "name": "WiFiBand",
+              "type": "WiFiBandEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, may be used to differentiate overlapping channel number values across different Wi-Fi frequency bands."
+            },
+            {
+              "id": 5,
+              "name": "Rssi",
+              "type": "int8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall denote the signal strength in dBm of the associated scan result."
+            }
+          ]
+        },
+        {
+          "name": "WiFiSecurityBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": "WiFiSecurityBitmap encodes the supported Wi-Fi security types present in the Security field of the WiFiInterfaceScanResultStruct.",
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Unencrypted",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "Wep",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "WpaPersonal",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "Wpa2Personal",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "Wpa3Personal",
               "description": null
             }
           ]

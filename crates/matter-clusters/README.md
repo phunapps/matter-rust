@@ -19,7 +19,7 @@ matter-clusters = "0.5"
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  91 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  93 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -27,7 +27,7 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 91 listed below. More
+- It is **not** the full Matter cluster set — only the 93 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -46,7 +46,7 @@ may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-91 clusters are generated today, covering their **mandatory and optional**
+93 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
@@ -99,7 +99,13 @@ attributes, by area:
   decode with their fabric-sensitive fields `None`).
 - **Administration** — AccessControl, GroupKeyManagement,
   AdministratorCommissioning, OperationalCredentials, IcdManagement,
-  TimeSynchronization, OtaSoftwareUpdateRequestor, OtaSoftwareUpdateProvider.
+  TimeSynchronization, OtaSoftwareUpdateRequestor, OtaSoftwareUpdateProvider,
+  GeneralCommissioning, NetworkCommissioning. The last two are codecs for use
+  outside commissioning: `matter-commissioning` drives commissioning with its
+  own hand-written subset of their commands, which encodes byte for byte the
+  same for the same values (its `tests/generated_codec_parity.rs`). Its response decoders accept a
+  missing `DebugText` or `ErrorValue`; the generated ones follow the
+  specification, where both are mandatory.
 - **Node configuration** — LocalizationConfiguration, TimeFormatLocalization,
   UnitLocalization, PowerSourceConfiguration.
 - **Diagnostics** — SoftwareDiagnostics, WiFiNetworkDiagnostics,

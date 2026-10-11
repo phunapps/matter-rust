@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 91] = [
+const TARGET_CLUSTERS: [&str; 93] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -135,6 +135,9 @@ const TARGET_CLUSTERS: [&str; 91] = [
     "EthernetNetworkDiagnostics",
     // M9-A3 B6, ThreadNetworkDiagnostics:
     "ThreadNetworkDiagnostics",
+    // M9-A3 B6, commissioning (codecs only):
+    "GeneralCommissioning",
+    "NetworkCommissioning",
 ];
 
 fn load() -> Value {
@@ -1126,7 +1129,7 @@ fn choice_fields(v: &Value) -> Vec<(String, String, String)> {
 /// commands, events and fields whose conformance is `P` or starts with `P`
 /// (`P, WATTS`). Each gets a generated "Provisional" rustdoc line. A new entry
 /// (a widening, a model upgrade) is a doc change to review.
-const PROVISIONAL: [(&str, &str, &str); 27] = [
+const PROVISIONAL: [(&str, &str, &str); 31] = [
     ("BasicInformation", "attribute", "ConfigurationVersion"),
     (
         "BridgedDeviceBasicInformation",
@@ -1148,6 +1151,15 @@ const PROVISIONAL: [(&str, &str, &str); 27] = [
         "field",
         "EnergyMeasurementStruct.ReactiveEnergy",
     ),
+    // M9-A3 B6: Matter 1.5's network recovery (model-only, absent from 1.4.2).
+    (
+        "GeneralCommissioning",
+        "attribute",
+        "IsCommissioningWithoutPower",
+    ),
+    ("GeneralCommissioning", "attribute", "NetworkRecoveryReason"),
+    ("GeneralCommissioning", "attribute", "RecoveryIdentifier"),
+    ("GeneralCommissioning", "feature", "NR"),
     ("GroupKeyManagement", "feature", "CS"),
     ("LevelControl", "feature", "FQ"),
     ("MicrowaveOvenControl", "attribute", "SelectedWattIndex"),
@@ -2378,4 +2390,64 @@ fn thread_network_diagnostics_keeps_its_shapes() {
         .collect();
     assert_eq!(nullable, ["AverageRssi", "LastRssi"]);
     assert_eq!(writable_attributes(c), Vec::<&str>::new());
+}
+
+#[test]
+fn commissioning_clusters_follow_the_specification() {
+    // 1.4.2 GeneralCommissioningCluster.xml, NetworkCommissioningCluster.xml.
+    // matter-commissioning's hand-written decoders are more lenient (DebugText
+    // and ErrorValue optional); these follow the specification, chip's
+    // controller codegen and matter.js.
+    let v = load();
+    let gc = cluster(&v, "GeneralCommissioning");
+    for response in [
+        "ArmFailSafeResponse",
+        "SetRegulatoryConfigResponse",
+        "CommissioningCompleteResponse",
+    ] {
+        assert_eq!(
+            field_optionality(&command(gc, response)["fields"]),
+            [("ErrorCode", false), ("DebugText", false)],
+            "{response}"
+        );
+    }
+    // Breadcrumb is mandatory in GeneralCommissioning's requests ...
+    assert_eq!(
+        field_optionality(&command(gc, "ArmFailSafe")["fields"]),
+        [("ExpiryLengthSeconds", false), ("Breadcrumb", false)]
+    );
+    assert_eq!(writable_attributes(gc), ["Breadcrumb"]);
+    let nc = cluster(&v, "NetworkCommissioning");
+    // ... and optional in NetworkCommissioning's.
+    assert_eq!(
+        field_optionality(&command(nc, "ConnectNetwork")["fields"]),
+        [("NetworkId", false), ("Breadcrumb", true)]
+    );
+    let connect = command(nc, "ConnectNetworkResponse")["fields"]
+        .as_array()
+        .unwrap();
+    let error_value = connect.iter().find(|f| f["name"] == "ErrorValue").unwrap();
+    assert_eq!(
+        (&error_value["optional"], &error_value["nullable"]),
+        (&Value::from(false), &Value::from(true))
+    );
+    // ScanNetworks' Ssid is optional and nullable ([WI], nullable).
+    let ssid = &command(nc, "ScanNetworks")["fields"][0];
+    assert_eq!(
+        (&ssid["name"], &ssid["optional"], &ssid["nullable"]),
+        (&Value::from("Ssid"), &Value::from(true), &Value::from(true))
+    );
+    // The scan result fields are feature-gated (WI / TH), so every one is
+    // optional on decode.
+    for name in [
+        "WiFiInterfaceScanResultStruct",
+        "ThreadInterfaceScanResultStruct",
+    ] {
+        let fields = datatype(nc, name)["fields"].as_array().unwrap();
+        assert!(fields.iter().all(|f| f["optional"] == true), "{name}");
+    }
+    assert_eq!(writable_attributes(nc), ["InterfaceEnabled"]);
+    for c in [gc, nc] {
+        assert_eq!(element_names(c, "events"), Vec::<&str>::new());
+    }
 }

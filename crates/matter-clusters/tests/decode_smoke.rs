@@ -4955,3 +4955,182 @@ fn thread_network_diagnostics_events_decode() {
         [0x00, 0x01]
     );
 }
+
+// ---- M9-A3 B6: GeneralCommissioning and NetworkCommissioning ---------------
+//
+// Codecs only (spec §2): matter-commissioning drives commissioning with its
+// own hand-written subset of these commands; its
+// tests/generated_codec_parity.rs pins that the two encode identically.
+// BasicCommissioningInfo 60 / 900 is what chip all-clusters serves (the
+// CHIPDeviceConfig.h defaults), and the one-entry Networks list has the shape
+// of its macOS Ethernet driver's (the host's interface name; "en3" is one
+// host's). Every other value is synthetic.
+
+#[test]
+fn general_commissioning_attributes_and_responses_decode() {
+    use clusters::general_commissioning::{
+        decode_basic_commissioning_info, decode_breadcrumb, decode_location_capability,
+        encode_arm_fail_safe, encode_breadcrumb, encode_set_regulatory_config, ArmFailSafeResponse,
+        CommissioningCompleteResponse, CommissioningErrorEnum, Feature, RegulatoryLocationTypeEnum,
+        SetRegulatoryConfigResponse,
+    };
+    use matter_clusters::error::ClusterError;
+    assert_eq!((Feature::TC.bits(), Feature::NR.bits()), (1, 2));
+    let info = decode_basic_commissioning_info(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 60).unwrap();
+        w.put_uint(Tag::Context(1), 900).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            info.fail_safe_expiry_length_seconds,
+            info.max_cumulative_failsafe_seconds
+        ),
+        (60, 900)
+    );
+    assert_eq!(decode_breadcrumb(&encode_breadcrumb(7)).unwrap(), 7);
+    assert_eq!(
+        decode_location_capability(&uint_attr(0)).unwrap(),
+        RegulatoryLocationTypeEnum::Indoor
+    );
+    assert_eq!(
+        encode_arm_fail_safe(60, 7),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 60).unwrap();
+            w.put_uint(Tag::Context(1), 7).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_set_regulatory_config(RegulatoryLocationTypeEnum::Outdoor, &"XX".to_string(), 0),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 1).unwrap();
+            w.put_utf8(Tag::Context(1), "XX").unwrap();
+            w.put_uint(Tag::Context(2), 0).unwrap();
+        })
+    );
+    // chip's server sends DebugText (always empty) in each of these three
+    // responses; the "no fail-safe" text below is synthetic.
+    let arm = ArmFailSafeResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_utf8(Tag::Context(1), "").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (arm.error_code, arm.debug_text.as_str()),
+        (CommissioningErrorEnum::Ok, "")
+    );
+    let config = SetRegulatoryConfigResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_utf8(Tag::Context(1), "").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(config.error_code, CommissioningErrorEnum::ValueOutsideRange);
+    let complete = CommissioningCompleteResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+        w.put_utf8(Tag::Context(1), "no fail-safe").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(complete.error_code, CommissioningErrorEnum::NoFailSafe);
+    // DebugText is mandatory in the specification (and in chip and matter.js).
+    assert!(matches!(
+        ArmFailSafeResponse::decode(&struct_of(&|w| w.put_uint(Tag::Context(0), 0).unwrap())),
+        Err(ClusterError::MissingField("DebugText"))
+    ));
+}
+
+#[test]
+fn network_commissioning_attributes_requests_and_responses_decode() {
+    use clusters::network_commissioning::{
+        decode_last_connect_error_value, decode_last_network_id, decode_last_networking_status,
+        decode_networks, decode_supported_thread_features, decode_supported_wi_fi_bands,
+        encode_scan_networks, ConnectNetworkResponse, Feature, NetworkCommissioningStatusEnum,
+        ScanNetworksResponse, ThreadCapabilitiesBitmap, WiFiBandEnum, WiFiSecurityBitmap,
+    };
+    assert_eq!(
+        (Feature::WI.bits(), Feature::TH.bits(), Feature::ET.bits()),
+        (1, 2, 4)
+    );
+    // all-clusters' Ethernet network: the interface name, not connected.
+    let networks = decode_networks(&list_of(&[&|w| {
+        w.put_bytes(Tag::Context(0), b"en3").unwrap();
+        w.put_bool(Tag::Context(1), false).unwrap();
+    }]))
+    .unwrap();
+    assert_eq!(
+        (networks[0].network_id.as_slice(), networks[0].connected),
+        (&b"en3"[..], false)
+    );
+    assert_eq!(
+        decode_last_networking_status(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        decode_last_networking_status(&uint_attr(7)).unwrap(),
+        Nullable::Value(NetworkCommissioningStatusEnum::AuthFailure)
+    );
+    assert_eq!(
+        decode_last_network_id(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    assert_eq!(
+        decode_last_connect_error_value(&int_attr(-2)).unwrap(),
+        Nullable::Value(-2)
+    );
+    assert_eq!(
+        decode_supported_wi_fi_bands(&uint_array_attr(&[0, 2])).unwrap(),
+        [WiFiBandEnum::_2G4, WiFiBandEnum::_5G]
+    );
+    assert_eq!(
+        decode_supported_thread_features(&uint_attr(0b1010)).unwrap(),
+        ThreadCapabilitiesBitmap::IS_ROUTER_CAPABLE
+            | ThreadCapabilitiesBitmap::IS_FULL_THREAD_DEVICE
+    );
+    // ScanNetworks' Ssid is optional and nullable: absent, null and a value
+    // are three different requests.
+    assert_eq!(encode_scan_networks(None, None), struct_of(&|_| {}));
+    assert_eq!(
+        encode_scan_networks(Some(Nullable::Null), Some(1)),
+        struct_of(&|w| {
+            w.put_null(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(1), 1).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_scan_networks(Some(Nullable::Value(b"home".to_vec())), None),
+        struct_of(&|w| w.put_bytes(Tag::Context(0), b"home").unwrap())
+    );
+    let scan = ScanNetworksResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_uint(Tag::Context(0), 0b1000).unwrap();
+        w.put_bytes(Tag::Context(1), b"home").unwrap();
+        w.put_bytes(Tag::Context(2), &[2, 0, 0, 0, 0, 1]).unwrap();
+        w.put_uint(Tag::Context(3), 36).unwrap();
+        w.put_uint(Tag::Context(4), 2).unwrap();
+        w.put_int(Tag::Context(5), -40).unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    let wifi = &scan.wi_fi_scan_results.as_ref().unwrap()[0];
+    assert_eq!(
+        (wifi.security, wifi.channel, wifi.wi_fi_band, wifi.rssi),
+        (
+            Some(WiFiSecurityBitmap::WPA2_PERSONAL),
+            Some(36),
+            Some(WiFiBandEnum::_5G),
+            Some(-40)
+        )
+    );
+    assert_eq!(scan.thread_scan_results, None);
+    let connect = ConnectNetworkResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_null(Tag::Context(2)).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (connect.networking_status, connect.error_value),
+        (NetworkCommissioningStatusEnum::Success, Nullable::Null)
+    );
+}

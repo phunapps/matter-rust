@@ -235,6 +235,13 @@ const ALLOWLIST = [
   // `ipv6pre` MeshLocalPrefix; two events, NetworkFaultChange with two lists
   // of NetworkFaultEnum):
   { id: 0x0035, name: 'ThreadNetworkDiagnostics' },
+  // M9-A3 B6, commissioning (codecs only: matter-commissioning drives
+  // commissioning with its own hand-written subset of these commands, spec §2):
+  // ArmFailSafe / SetRegulatoryConfig / CommissioningComplete and their
+  // responses, BasicCommissioningInfo; the network list, scan results and the
+  // network configuration commands. No events.
+  { id: 0x0030, name: 'GeneralCommissioning' },
+  { id: 0x0031, name: 'NetworkCommissioning' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

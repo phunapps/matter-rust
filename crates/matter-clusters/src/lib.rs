@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 91 clusters are generated today. The full list is [`clusters`]; by area:
+//! 93 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -74,7 +74,10 @@
 //! - **Administration:** `AccessControl`, `GroupKeyManagement`,
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,
-//!   `OtaSoftwareUpdateProvider`.
+//!   `OtaSoftwareUpdateProvider`, `GeneralCommissioning`,
+//!   `NetworkCommissioning` (codecs for use outside commissioning:
+//!   `matter-commissioning` drives commissioning with its own hand-written
+//!   subset of these commands, which encodes the same values identically).
 //! - **Node configuration:** `LocalizationConfiguration`,
 //!   `TimeFormatLocalization`, `UnitLocalization`, `PowerSourceConfiguration`.
 //! - **Diagnostics:** `SoftwareDiagnostics`, `WiFiNetworkDiagnostics`,
