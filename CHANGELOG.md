@@ -43,11 +43,17 @@ they can ship ahead of the 0.6.0 release below. `matter-transport`,
 all. `matter-controller` uses only `matter_clusters::gen` paths that exist in
 0.5.0. `matter-commissioning` uses `matter-clusters` only as a dev-dependency.
 
-`matter-controller` 0.18.2 should raise its requirements to
-`matter-transport` 0.7.4, `matter-commissioning` 0.10.1 and
-`matter-interaction` 0.4.3. Otherwise an application that upgrades only the
-controller keeps the leaking `Session`, `Action` and payload `Debug` impls
-from its lockfile.
+Dependency floors to raise at release (no `Cargo.toml` changes yet):
+
+- `matter-controller` 0.18.2 requires `matter-transport` 0.7.4,
+  `matter-commissioning` 0.10.1 and `matter-interaction` 0.4.3. Raise
+  `matter-commissioning` in both `[dependencies]` and `[dev-dependencies]`.
+- `matter-commissioning` 0.10.1 requires `matter-interaction` 0.4.3,
+  because it re-exports `InvokeResponse` and the whole crate (as `im`).
+
+Otherwise an application that upgrades only the controller, or only
+commissioning, keeps the leaking `Session`, `Action` and payload `Debug`
+impls from its lockfile.
 
 Every `Debug` change below follows one pattern. The type drops `Debug` from
 its derive and gains a hand-written impl. That impl prints the same type name,
