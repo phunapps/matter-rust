@@ -101,3 +101,127 @@ fn refused_write_fields_writes_nothing() {
     }
     assert!(buf.is_empty(), "refused write_fields wrote {buf:02x?}");
 }
+
+// ---- M9-A3 B7: nested structs and guarded lists in an encoded struct --------
+//
+// The fixture's `NestStruct` (reached by the `Nest` request) carries a nested
+// struct in each guard form (mandatory, optional, nullable), a list of structs
+// that is optional and nullable, an optional list of integers, a nullable list
+// of enums and a `double`: the shapes ContentLauncher's request structs need.
+
+use crate::golden::{NestStruct, PointStruct};
+use matter_codec::Tag;
+
+fn point(x: u16, y: u16) -> PointStruct {
+    PointStruct { x, y }
+}
+
+/// Every optional field present and every nullable field a value.
+fn full_nest() -> NestStruct {
+    NestStruct {
+        point: point(1, 2),
+        maybe_point: Some(point(3, 4)),
+        null_point: Nullable::Value(point(5, 6)),
+        points: Some(Nullable::Value(vec![point(7, 8), point(9, 10)])),
+        ids: Some(vec![11, 12]),
+        modes: Nullable::Value(vec![ModeEnum::Auto, ModeEnum::Manual]),
+        scale: 1.5,
+    }
+}
+
+/// The same struct with every optional field absent and every nullable one
+/// null.
+fn sparse_nest() -> NestStruct {
+    NestStruct {
+        point: point(1, 2),
+        maybe_point: None,
+        null_point: Nullable::Null,
+        points: None,
+        ids: None,
+        modes: Nullable::Null,
+        scale: -0.25,
+    }
+}
+
+/// `PointStruct { x, y }` written by hand at `tag`.
+fn write_point(w: &mut TlvWriter<'_>, tag: Tag, x: u64, y: u64) {
+    w.start_structure(tag).unwrap();
+    w.put_uint(Tag::Context(0), x).unwrap();
+    w.put_uint(Tag::Context(1), y).unwrap();
+    w.end_container().unwrap();
+}
+
+#[test]
+fn nested_struct_fields_and_guarded_lists_encode_field_by_field() {
+    // Built element by element, independently of the generated writer: each
+    // nested struct is a sub-structure at its context tag, each list an array
+    // of anonymous elements, and `scale` a FLOAT64.
+    let mut want = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut want);
+        w.start_structure(Tag::Anonymous).unwrap();
+        write_point(&mut w, Tag::Context(0), 1, 2);
+        write_point(&mut w, Tag::Context(1), 3, 4);
+        write_point(&mut w, Tag::Context(2), 5, 6);
+        w.start_array(Tag::Context(3)).unwrap();
+        write_point(&mut w, Tag::Anonymous, 7, 8);
+        write_point(&mut w, Tag::Anonymous, 9, 10);
+        w.end_container().unwrap();
+        w.start_array(Tag::Context(4)).unwrap();
+        w.put_uint(Tag::Anonymous, 11).unwrap();
+        w.put_uint(Tag::Anonymous, 12).unwrap();
+        w.end_container().unwrap();
+        w.start_array(Tag::Context(5)).unwrap();
+        w.put_uint(Tag::Anonymous, 0).unwrap();
+        w.put_uint(Tag::Anonymous, 1).unwrap();
+        w.end_container().unwrap();
+        w.put_double(Tag::Context(6), 1.5).unwrap();
+        w.end_container().unwrap();
+    }
+    assert_eq!(full_nest().encode(), want);
+    assert_eq!(NestStruct::decode(&want).unwrap(), full_nest());
+}
+
+#[test]
+fn absent_and_null_composite_fields_encode_differently() {
+    // An absent optional field is left out; a null one is a TLV null at its
+    // tag. Here MaybePoint, Points and Ids are absent, NullPoint and Modes
+    // null.
+    let mut want = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut want);
+        w.start_structure(Tag::Anonymous).unwrap();
+        write_point(&mut w, Tag::Context(0), 1, 2);
+        w.put_null(Tag::Context(2)).unwrap();
+        w.put_null(Tag::Context(5)).unwrap();
+        w.put_double(Tag::Context(6), -0.25).unwrap();
+        w.end_container().unwrap();
+    }
+    assert_eq!(sparse_nest().encode(), want);
+    assert_eq!(NestStruct::decode(&want).unwrap(), sparse_nest());
+    // A null list of structs is not an absent one.
+    let null_points = NestStruct {
+        points: Some(Nullable::Null),
+        ..sparse_nest()
+    };
+    let bytes = null_points.encode();
+    assert_ne!(bytes, want);
+    assert_eq!(NestStruct::decode(&bytes).unwrap(), null_points);
+}
+
+#[test]
+fn the_nest_request_carries_the_struct_at_its_context_tag() {
+    // The command encoder opens the request field as a sub-structure and the
+    // nested writes follow (the generated `encode_nest`).
+    let bytes = crate::golden::encode_nest(full_nest());
+    let mut want = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut want);
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.start_structure(Tag::Context(0)).unwrap();
+        full_nest().write_fields(&mut w);
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }
+    assert_eq!(bytes, want);
+}

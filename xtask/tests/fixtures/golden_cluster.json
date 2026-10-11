@@ -64,6 +64,11 @@
               "nullable": false, "optional": true, "choice": { "group": "a", "count": 1, "orMore": false } },
             { "id": 1, "name": "Large", "type": "uint16", "metatype": "integer",
               "nullable": false, "optional": true, "choice": { "group": "a", "count": 1, "orMore": false } }
+          ] },
+        { "id": 5, "name": "Nest", "direction": "request", "responseId": null,
+          "fields": [
+            { "id": 0, "name": "Nest", "type": "NestStruct", "metatype": "object",
+              "nullable": false, "optional": false }
           ] }
       ],
       "events": [
@@ -106,6 +111,23 @@
               "nullable": false, "optional": true, "choice": { "group": "a", "count": 1, "orMore": true } },
             { "id": 2, "name": "Draft", "type": "uint8", "metatype": "integer",
               "nullable": false, "optional": true, "provisional": true }
+          ] },
+        { "name": "NestStruct", "base": "struct", "kind": "struct", "description": null,
+          "fields": [
+            { "id": 0, "name": "Point", "type": "PointStruct", "metatype": "object",
+              "nullable": false, "optional": false },
+            { "id": 1, "name": "MaybePoint", "type": "PointStruct", "metatype": "object",
+              "nullable": false, "optional": true },
+            { "id": 2, "name": "NullPoint", "type": "PointStruct", "metatype": "object",
+              "nullable": true, "optional": false },
+            { "id": 3, "name": "Points", "type": "list", "entryType": "PointStruct", "metatype": "array",
+              "nullable": true, "optional": true },
+            { "id": 4, "name": "Ids", "type": "list", "entryType": "uint32", "metatype": "array",
+              "nullable": false, "optional": true },
+            { "id": 5, "name": "Modes", "type": "list", "entryType": "ModeEnum", "metatype": "array",
+              "nullable": true, "optional": false },
+            { "id": 6, "name": "Scale", "type": "double", "metatype": "float",
+              "nullable": false, "optional": false }
           ] },
         { "name": "PointStruct", "base": "struct", "kind": "struct", "description": null,
           "fields": [

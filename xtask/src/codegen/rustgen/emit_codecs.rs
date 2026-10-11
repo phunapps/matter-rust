@@ -999,12 +999,14 @@ pub(crate) fn struct_has_write_guarded_fields(d: &Datatype) -> bool {
     struct_is_fabric_scoped(d) && d.fields.iter().any(|f| f.mandatory_on_write)
 }
 
-/// A generated datatype struct is write-capable iff every field is a scalar
-/// (the only shape `write_fields`/`emit_field_write_self` can encode). Structs
-/// with a composite field (`object`/`array`) — e.g. `MeasurementAccuracyStruct`,
-/// whose `AccuracyRanges` is a list-of-struct — are emitted **decode-only**,
-/// like response-payload structs. (Composite-field *encode* is YAGNI until a
-/// future batch has a writable composite attribute.)
+/// True when every field of `d` is a scalar: the rule for a struct a
+/// **writable attribute** reaches. Such a struct with a composite field
+/// (`object`/`array`) — e.g. `MeasurementAccuracyStruct`, whose
+/// `AccuracyRanges` is a list-of-struct — stays **decode-only**, like a
+/// response payload: no Matter 1.4 writable attribute carries one, so it has
+/// had no review. A struct a request command reaches is encoded whatever its
+/// fields (`emit_composite_field_write_self` writes nested structs and
+/// lists, M9-A3 B7).
 fn struct_is_write_capable(d: &Datatype) -> bool {
     d.fields.iter().all(|f| {
         matches!(
@@ -1018,8 +1020,8 @@ fn struct_is_write_capable(d: &Datatype) -> bool {
 /// struct `d` (M9-A3 B4 rule): a request command reaches it
 /// ([`command_encode_reachable_structs`]), or a writable attribute reaches it
 /// ([`writable_attribute_reachable_structs`]) and its fields are all scalars
-/// ([`struct_is_write_capable`]; a list field in such a struct needs the B7
-/// emitter work). A struct nothing sends is decode-only. The one rule
+/// ([`struct_is_write_capable`]: a list or nested-struct field keeps it
+/// decode-only). A struct nothing sends is decode-only. The one rule
 /// [`encoded_struct_names`] applies, and so the emitter (whose encoder for a
 /// struct with `mandatoryOnWrite` fields is the guarded one),
 /// `model::validate`'s class-C check and the dump's mirror (`encodedStructs`
@@ -1343,58 +1345,19 @@ fn emit_guarded_struct_write(s: &mut String, d: &Datatype, dts: &DatatypeMap<'_>
 }
 
 /// Emit a `write_fields` line for struct field `f`, reading `self.<field>`.
-/// (Struct datatypes in scope have only scalar/enum/bitmap fields.)
+///
+/// Scalars are written inline. A nested struct (`object`) or a list (`array`)
+/// field is written through [`emit_composite_field_write_self`]; only a
+/// request command reaches a struct with such a field (a writable attribute's
+/// encoded struct is all-scalar, [`struct_is_write_capable`]).
 fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
     // `field_ident` covers both the `self.<field>` access and the local pattern
     // bindings (`Nullable::Value(<var>)`), so a keyword field name is escaped
     // uniformly.
     let var = field_ident(&f.name);
     let tag = format!("Tag::Context({})", f.id);
-    // List (array) fields: open an array at the context tag, write each element
-    // at an anonymous tag — a scalar (list_scalar_element_write: Copy scalars by
-    // value, byte strings and strings by reference), or a nested struct via
-    // write_fields.
-    // (Only reached for command-encode-reachable structs; scalar-only structs
-    // have no array fields. Nullable/optional list fields on an encoded struct
-    // are YAGNI — none in A2.5 — so a guarded list is a compile_error.) Inside
-    // `write_fields(&self, w: &mut TlvWriter)` the writer `w` is already `&mut`.
-    if f.metatype == "array" {
-        if f.nullable || f.optional {
-            line!(
-                s,
-                "        compile_error!(\"nullable/optional list field {} in an encoded struct\");",
-                f.name
-            );
-            return;
-        }
-        let entry = f.entry_type.as_deref().unwrap_or("octstr");
-        let entry_meta = entry_metatype(entry, dts);
-        line!(
-            s,
-            "        w.start_array({tag}).expect(\"infallible: vec writer\");"
-        );
-        if entry_meta == "object" {
-            line!(s, "        for el in &self.{var} {{");
-            line!(
-                s,
-                "            w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
-            );
-            line!(s, "            el.write_fields(w);");
-            line!(
-                s,
-                "            w.end_container().expect(\"infallible: vec writer\");"
-            );
-            line!(s, "        }}");
-        } else {
-            let (iter, put) = list_scalar_element_write(entry_meta, entry, dts);
-            line!(s, "        for el in self.{var}.{iter} {{");
-            line!(s, "            {put}");
-            line!(s, "        }}");
-        }
-        line!(
-            s,
-            "        w.end_container().expect(\"infallible: vec writer\");"
-        );
+    if f.metatype == "object" || f.metatype == "array" {
+        emit_composite_field_write_self(s, f, &var, &tag, dts);
         return;
     }
     let inner =
@@ -1438,6 +1401,105 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
                 "                Nullable::Value({var}) => {{ {} }}",
                 inner(&deref)
             );
+            line!(s, "            }}");
+            line!(s, "        }}");
+        }
+    }
+}
+
+/// The `write_fields` lines for a nested struct or list field `f` of an
+/// encoded struct, bound as `self.<var>`, with its optional (`Option`, absent
+/// = left out) and nullable (`Nullable::Null` = a TLV null) guards (M9-A3 B7).
+/// Inside `write_fields(&self, w: &mut TlvWriter)` the writer `w` is already
+/// `&mut`.
+///
+/// - A nested struct is a sub-structure at the context tag, written by its own
+///   `write_fields` (`ContentLauncher` `StyleInformationStruct.Size`,
+///   `PlaybackPreferencesStruct.TextTrack`). It is infallible: a write-guarded
+///   struct is never reachable from a request command
+///   ([`assert_no_write_guarded_command_structs`]).
+/// - A list is an array at the context tag, each element at an anonymous tag:
+///   a nested struct via its `write_fields`, or a scalar
+///   ([`list_scalar_element_write`]: Copy scalars by value, byte strings and
+///   strings by reference). `ContentLauncher` `ParameterStruct.ExternalIdList`
+///   is optional; `PlaybackPreferencesStruct.AudioTracks` and
+///   `TrackPreferenceStruct.Characteristics` are optional and nullable.
+///
+/// An unguarded list keeps the form the emitter has always produced
+/// (`for el in &self.<var>` / `for el in self.<var>.<iter>`).
+fn emit_composite_field_write_self(
+    s: &mut String,
+    f: &FieldDef,
+    var: &str,
+    tag: &str,
+    dts: &DatatypeMap<'_>,
+) {
+    // `by_ref` iterates a list of structs; `owner` is the value itself (a
+    // nested struct, or a list of scalars, which appends its iterator call).
+    let write = |s: &mut String, by_ref: &str, owner: &str| {
+        if f.metatype == "object" {
+            line!(
+                s,
+                "        w.start_structure({tag}).expect(\"infallible: vec writer\");"
+            );
+            line!(s, "        {owner}.write_fields(w);");
+            line!(
+                s,
+                "        w.end_container().expect(\"infallible: vec writer\");"
+            );
+            return;
+        }
+        let entry = f.entry_type.as_deref().unwrap_or("octstr");
+        let entry_meta = entry_metatype(entry, dts);
+        line!(
+            s,
+            "        w.start_array({tag}).expect(\"infallible: vec writer\");"
+        );
+        if entry_meta == "object" {
+            line!(s, "        for el in {by_ref} {{");
+            line!(
+                s,
+                "            w.start_structure(Tag::Anonymous).expect(\"infallible: vec writer\");"
+            );
+            line!(s, "            el.write_fields(w);");
+            line!(
+                s,
+                "            w.end_container().expect(\"infallible: vec writer\");"
+            );
+            line!(s, "        }}");
+        } else {
+            let (iter, put) = list_scalar_element_write(entry_meta, entry, dts);
+            line!(s, "        for el in {owner}.{iter} {{");
+            line!(s, "            {put}");
+            line!(s, "        }}");
+        }
+        line!(
+            s,
+            "        w.end_container().expect(\"infallible: vec writer\");"
+        );
+    };
+    match (f.optional, f.nullable) {
+        (false, false) => write(s, &format!("&self.{var}"), &format!("self.{var}")),
+        (false, true) => {
+            line!(s, "        match &self.{var} {{");
+            line!(s, "            Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),");
+            line!(s, "            Nullable::Value({var}) => {{");
+            write(s, var, var);
+            line!(s, "            }}");
+            line!(s, "        }}");
+        }
+        (true, false) => {
+            line!(s, "        if let Some({var}) = &self.{var} {{");
+            write(s, var, var);
+            line!(s, "        }}");
+        }
+        (true, true) => {
+            line!(s, "        if let Some({var}) = &self.{var} {{");
+            line!(s, "            match {var} {{");
+            line!(s, "                Nullable::Null => w.put_null({tag}).expect(\"infallible: vec writer\"),");
+            line!(s, "                Nullable::Value({var}) => {{");
+            write(s, var, var);
+            line!(s, "                }}");
             line!(s, "            }}");
             line!(s, "        }}");
         }
@@ -1661,6 +1723,129 @@ mod tests {
         assert!(s.contains("for el in self.tokens.iter() {"), "{s}");
         assert!(s.contains("w.put_bytes(Tag::Anonymous, el)"), "{s}");
         assert!(!s.contains(".copied()"), "{s}");
+    }
+
+    #[test]
+    fn nested_struct_fields_of_an_encoded_struct_write_sub_structures() {
+        // M9-A3 B7: ContentLauncher StyleInformationStruct.Size (optional),
+        // PlaybackPreferencesStruct.TextTrack (optional, nullable). Before B7
+        // the scalar writer panicked on metatype `object` here.
+        let mut maybe = field(1, "Size", "DimensionStruct", "object", None);
+        maybe.optional = true;
+        let mut both = field(2, "TextTrack", "TrackPreferenceStruct", "object", None);
+        both.optional = true;
+        both.nullable = true;
+        let mut null = field(3, "Pinned", "DimensionStruct", "object", None);
+        null.nullable = true;
+        let d = struct_dt(
+            "OuterStruct",
+            vec![
+                field(0, "Inner", "DimensionStruct", "object", None),
+                maybe,
+                both,
+                null,
+            ],
+        );
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &HashMap::new(), &encoded(&d));
+        for want in [
+            "        w.start_structure(Tag::Context(0)).expect(\"infallible: vec writer\");\n        self.inner.write_fields(w);\n",
+            "        if let Some(size) = &self.size {\n        w.start_structure(Tag::Context(1)).expect(\"infallible: vec writer\");\n        size.write_fields(w);\n",
+            "        if let Some(text_track) = &self.text_track {\n            match text_track {\n                Nullable::Null => w.put_null(Tag::Context(2))",
+            "                Nullable::Value(text_track) => {\n        w.start_structure(Tag::Context(2))",
+            "        match &self.pinned {\n            Nullable::Null => w.put_null(Tag::Context(3))",
+            "        pinned.write_fields(w);\n",
+        ] {
+            assert!(s.contains(want), "missing {want:?} in:\n{s}");
+        }
+        assert!(!s.contains("compile_error!"), "{s}");
+    }
+
+    #[test]
+    fn optional_and_nullable_list_fields_of_an_encoded_struct_are_guarded() {
+        // M9-A3 B7: ContentLauncher ParameterStruct.ExternalIdList (optional
+        // list of structs), PlaybackPreferencesStruct.AudioTracks (optional,
+        // nullable list of structs), TrackPreferenceStruct.Characteristics
+        // (optional, nullable list of enums). Before B7 these were a
+        // compile_error!.
+        let mut ids = field(
+            2,
+            "ExternalIdList",
+            "list",
+            "array",
+            Some("AdditionalInfoStruct"),
+        );
+        ids.optional = true;
+        let mut tracks = field(
+            3,
+            "AudioTracks",
+            "list",
+            "array",
+            Some("TrackPreferenceStruct"),
+        );
+        tracks.optional = true;
+        tracks.nullable = true;
+        let mut chars = field(
+            4,
+            "Characteristics",
+            "list",
+            "array",
+            Some("CharacteristicEnum"),
+        );
+        chars.optional = true;
+        chars.nullable = true;
+        let mut nums = field(5, "Numbers", "list", "array", Some("uint16"));
+        nums.nullable = true;
+        let info = struct_dt("AdditionalInfoStruct", vec![]);
+        let track = struct_dt("TrackPreferenceStruct", vec![]);
+        let characteristic = Datatype {
+            base: "enum8".to_string(),
+            kind: "enum".to_string(),
+            ..struct_dt("CharacteristicEnum", vec![])
+        };
+        let dts: DatatypeMap<'_> = [&info, &track, &characteristic]
+            .into_iter()
+            .map(|d| (d.name.as_str(), d))
+            .collect();
+        let d = struct_dt("PrefsStruct", vec![ids, tracks, chars, nums]);
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        for want in [
+            "        if let Some(external_id_list) = &self.external_id_list {\n        w.start_array(Tag::Context(2))",
+            "        for el in external_id_list {\n",
+            "        if let Some(audio_tracks) = &self.audio_tracks {\n            match audio_tracks {\n                Nullable::Null => w.put_null(Tag::Context(3))",
+            "        for el in audio_tracks {\n",
+            "                Nullable::Null => w.put_null(Tag::Context(4))",
+            "        for el in characteristics.iter().copied() {\n            w.put_uint(Tag::Anonymous, u64::from(el.to_raw()))",
+            "        match &self.numbers {\n            Nullable::Null => w.put_null(Tag::Context(5))",
+            "        for el in numbers.iter().copied() {\n",
+        ] {
+            assert!(s.contains(want), "missing {want:?} in:\n{s}");
+        }
+        assert!(!s.contains("compile_error!"), "{s}");
+    }
+
+    #[test]
+    fn an_unguarded_list_field_keeps_its_original_form() {
+        // The B7 guards leave the existing (mandatory, non-nullable) list
+        // writes byte-identical: EnergyEvse, DeviceEnergyManagement and
+        // ScenesManagement encode such lists today.
+        let info = struct_dt("PointStruct", vec![]);
+        let dts: DatatypeMap<'_> = std::iter::once(("PointStruct", &info)).collect();
+        let d = struct_dt(
+            "ListsStruct",
+            vec![
+                field(0, "Points", "list", "array", Some("PointStruct")),
+                field(1, "Ids", "list", "array", Some("uint32")),
+            ],
+        );
+        let mut s = String::new();
+        emit_struct_codec(&mut s, &d, &dts, &encoded(&d));
+        assert!(s.contains("        for el in &self.points {\n"), "{s}");
+        assert!(
+            s.contains("        for el in self.ids.iter().copied() {\n"),
+            "{s}"
+        );
     }
 
     #[test]
@@ -2280,8 +2465,8 @@ mod tests {
         got.sort_unstable();
         // A request reaches SentStruct (list field and all); a writable
         // attribute reaches the scalar WrittenStruct. WrittenListStruct (a
-        // list field: B7 emitter work), the read-only attribute's struct and
-        // an unused struct stay decode-only.
+        // writable attribute's struct with a list field), the read-only
+        // attribute's struct and an unused struct stay decode-only.
         assert_eq!(got, ["SentStruct", "WrittenStruct"]);
         let mut s = String::new();
         emit_codecs(&mut s, &c);

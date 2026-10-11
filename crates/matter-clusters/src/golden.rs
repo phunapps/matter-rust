@@ -32,6 +32,8 @@ pub mod command_id {
     /// `Pick` (request).
     /// Provisional in Matter 1.5.1, the codegen model's revision: a later revision may change or remove it.
     pub const PICK: u32 = 0x04;
+    /// `Nest` (request).
+    pub const NEST: u32 = 0x05;
 }
 
 /// Attribute IDs (cluster-specific).
@@ -159,6 +161,25 @@ pub struct PickStruct {
     pub draft: Option<u8>,
 }
 
+/// `NestStruct` struct.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NestStruct {
+    /// Field Point (tag 0).
+    pub point: PointStruct,
+    /// Field MaybePoint (tag 1).
+    pub maybe_point: Option<PointStruct>,
+    /// Field NullPoint (tag 2).
+    pub null_point: Nullable<PointStruct>,
+    /// Field Points (tag 3).
+    pub points: Option<Nullable<Vec<PointStruct>>>,
+    /// Field Ids (tag 4).
+    pub ids: Option<Vec<u32>>,
+    /// Field Modes (tag 5).
+    pub modes: Nullable<Vec<ModeEnum>>,
+    /// Field Scale (tag 6).
+    pub scale: f64,
+}
+
 /// `PointStruct` struct.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PointStruct {
@@ -255,6 +276,241 @@ impl PickStruct {
             }
         }
         Self::decode_from(&mut r)
+    }
+}
+
+impl NestStruct {
+    /// Decode the fields of an already-opened anonymous structure
+    /// (reader positioned after the struct start; consumes to its end).
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] on a malformed structure or missing required field.
+    pub fn decode_from(r: &mut TlvReader<'_>) -> Result<Self, ClusterError> {
+        let mut f_point: Option<PointStruct> = None;
+        let mut f_maybe_point: Option<PointStruct> = None;
+        let mut f_null_point: Option<Nullable<PointStruct>> = None;
+        let mut f_points: Option<Nullable<Vec<PointStruct>>> = None;
+        let mut f_ids: Option<Vec<u32>> = None;
+        let mut f_modes: Option<Nullable<Vec<ModeEnum>>> = None;
+        let mut f_scale: Option<f64> = None;
+        loop {
+            match r.next()? {
+                Some(Element::ContainerEnd) => break,
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(0),
+                    kind: ContainerKind::Structure,
+                }) => f_point = Some(PointStruct::decode_from(r)?),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(1),
+                    kind: ContainerKind::Structure,
+                }) => f_maybe_point = Some(PointStruct::decode_from(r)?),
+                Some(Element::Scalar {
+                    tag: Tag::Context(2),
+                    value: Value::Null,
+                }) => f_null_point = Some(Nullable::Null),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(2),
+                    kind: ContainerKind::Structure,
+                }) => f_null_point = Some(Nullable::Value(PointStruct::decode_from(r)?)),
+                Some(Element::Scalar {
+                    tag: Tag::Context(3),
+                    value: Value::Null,
+                }) => f_points = Some(Nullable::Null),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(3),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::ContainerStart {
+                                kind: ContainerKind::Structure,
+                                ..
+                            }) => {
+                                out.push(PointStruct::decode_from(r)?);
+                            }
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_points = Some(Nullable::Value(out));
+                }
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(4),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(
+                                u32::try_from(v).map_err(|_| ClusterError::InvalidLength("Ids"))?,
+                            ),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_ids = Some(out);
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(5),
+                    value: Value::Null,
+                }) => f_modes = Some(Nullable::Null),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(5),
+                    kind: ContainerKind::Array,
+                }) => {
+                    let mut out = Vec::new();
+                    loop {
+                        match r.next()? {
+                            Some(Element::ContainerEnd) => break,
+                            Some(Element::Scalar {
+                                value: Value::Uint(v),
+                                ..
+                            }) => out.push(ModeEnum::from_raw(
+                                u8::try_from(v)
+                                    .map_err(|_| ClusterError::InvalidLength("Modes"))?,
+                            )),
+                            None => {
+                                return Err(ClusterError::Tlv(
+                                    matter_codec::Error::UnclosedContainer,
+                                ))
+                            }
+                            Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                            Some(_) => {} // skip unknown scalar
+                        }
+                    }
+                    f_modes = Some(Nullable::Value(out));
+                }
+                Some(Element::Scalar {
+                    tag: Tag::Context(6),
+                    value: Value::Double(v),
+                }) => f_scale = Some(v),
+                Some(Element::Scalar {
+                    tag: Tag::Context(6),
+                    value: Value::Float(v),
+                }) => f_scale = Some(f64::from(v)),
+                None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
+                Some(Element::ContainerStart { .. }) => r.skip_container()?,
+                Some(_) => {} // unknown/future scalar — skip
+            }
+        }
+        Ok(Self {
+            point: f_point.ok_or(ClusterError::MissingField("Point"))?,
+            maybe_point: f_maybe_point,
+            null_point: f_null_point.ok_or(ClusterError::MissingField("NullPoint"))?,
+            points: f_points,
+            ids: f_ids,
+            modes: f_modes.ok_or(ClusterError::MissingField("Modes"))?,
+            scale: f_scale.ok_or(ClusterError::MissingField("Scale"))?,
+        })
+    }
+    /// Decode from a standalone anonymous TLV structure.
+    ///
+    /// # Errors
+    /// Returns [`ClusterError`] if the bytes are not an anonymous structure or a field is malformed.
+    pub fn decode(tlv: &[u8]) -> Result<Self, ClusterError> {
+        let mut r = TlvReader::new(tlv);
+        match r.next()? {
+            Some(Element::ContainerStart {
+                kind: ContainerKind::Structure,
+                ..
+            }) => {}
+            _ => {
+                return Err(ClusterError::UnexpectedType {
+                    context: "NestStruct",
+                })
+            }
+        }
+        Self::decode_from(&mut r)
+    }
+    /// Write this struct's fields into an already-open container.
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn write_fields(&self, w: &mut TlvWriter<'_>) {
+        w.start_structure(Tag::Context(0))
+            .expect("infallible: vec writer");
+        self.point.write_fields(w);
+        w.end_container().expect("infallible: vec writer");
+        if let Some(maybe_point) = &self.maybe_point {
+            w.start_structure(Tag::Context(1))
+                .expect("infallible: vec writer");
+            maybe_point.write_fields(w);
+            w.end_container().expect("infallible: vec writer");
+        }
+        match &self.null_point {
+            Nullable::Null => w.put_null(Tag::Context(2)).expect("infallible: vec writer"),
+            Nullable::Value(null_point) => {
+                w.start_structure(Tag::Context(2))
+                    .expect("infallible: vec writer");
+                null_point.write_fields(w);
+                w.end_container().expect("infallible: vec writer");
+            }
+        }
+        if let Some(points) = &self.points {
+            match points {
+                Nullable::Null => w.put_null(Tag::Context(3)).expect("infallible: vec writer"),
+                Nullable::Value(points) => {
+                    w.start_array(Tag::Context(3))
+                        .expect("infallible: vec writer");
+                    for el in points {
+                        w.start_structure(Tag::Anonymous)
+                            .expect("infallible: vec writer");
+                        el.write_fields(w);
+                        w.end_container().expect("infallible: vec writer");
+                    }
+                    w.end_container().expect("infallible: vec writer");
+                }
+            }
+        }
+        if let Some(ids) = &self.ids {
+            w.start_array(Tag::Context(4))
+                .expect("infallible: vec writer");
+            for el in ids.iter().copied() {
+                w.put_uint(Tag::Anonymous, u64::from(el))
+                    .expect("infallible: vec writer");
+            }
+            w.end_container().expect("infallible: vec writer");
+        }
+        match &self.modes {
+            Nullable::Null => w.put_null(Tag::Context(5)).expect("infallible: vec writer"),
+            Nullable::Value(modes) => {
+                w.start_array(Tag::Context(5))
+                    .expect("infallible: vec writer");
+                for el in modes.iter().copied() {
+                    w.put_uint(Tag::Anonymous, u64::from(el.to_raw()))
+                        .expect("infallible: vec writer");
+                }
+                w.end_container().expect("infallible: vec writer");
+            }
+        }
+        w.put_double(Tag::Context(6), self.scale)
+            .expect("infallible: vec writer");
+    }
+    /// Encode as a standalone anonymous TLV structure.
+    #[must_use]
+    #[allow(clippy::expect_used)] // Vec-backed TlvWriter is infallible.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous)
+            .expect("infallible: vec writer");
+        self.write_fields(&mut w);
+        w.end_container().expect("infallible: vec writer");
+        buf
     }
 }
 
@@ -915,6 +1171,22 @@ pub fn encode_pick(small: Option<u8>, large: Option<u16>) -> Vec<u8> {
         w.put_uint(Tag::Context(1), u64::from(large))
             .expect("infallible: vec writer");
     }
+    w.end_container().expect("infallible: vec writer");
+    buf
+}
+
+/// Encode the `Nest` command request payload.
+#[must_use]
+#[allow(clippy::expect_used, clippy::missing_panics_doc)] // Vec-backed TlvWriter is infallible.
+pub fn encode_nest(nest: NestStruct) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut w = TlvWriter::new(&mut buf);
+    w.start_structure(Tag::Anonymous)
+        .expect("infallible: vec writer");
+    w.start_structure(Tag::Context(0))
+        .expect("infallible: vec writer");
+    nest.write_fields(&mut w);
+    w.end_container().expect("infallible: vec writer");
     w.end_container().expect("infallible: vec writer");
     buf
 }
