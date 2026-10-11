@@ -352,7 +352,7 @@ pub struct Relaxation {
     pub cluster: String,
     /// `<Owner>.<Field>`: the owning command, event or struct, then the field.
     pub element: String,
-    /// Relaxation class (`P`, `W` or `C`).
+    /// Relaxation class (`P`, `N`, `W` or `C`).
     pub class: String,
 }
 

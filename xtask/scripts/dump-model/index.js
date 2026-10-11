@@ -1346,7 +1346,7 @@ function copiedFieldProblem(ref, owner, cluster, node) {
         return `\`${ref}\`: field ${m.name} has the qualified type ${t}, which a copy does not follow — extend the dump first`;
       }
       if (ownerNames.has(t)) {
-        return `\`${ref}\`: field ${m.name} has ${owner}'s own type ${t}, which a copy cannot resolve — extend the dump first`;
+        return `\`${ref}\`: field ${m.name} has ${cluster.name}'s own type ${t}, which a copy cannot resolve — extend the dump first`;
       }
     }
   }
