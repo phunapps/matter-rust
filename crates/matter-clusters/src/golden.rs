@@ -178,6 +178,8 @@ pub struct NestStruct {
     pub modes: Nullable<Vec<ModeEnum>>,
     /// Field Scale (tag 6).
     pub scale: f64,
+    /// Field Track (tag 7).
+    pub track: Option<Nullable<PointStruct>>,
 }
 
 /// `PointStruct` struct.
@@ -293,6 +295,7 @@ impl NestStruct {
         let mut f_ids: Option<Vec<u32>> = None;
         let mut f_modes: Option<Nullable<Vec<ModeEnum>>> = None;
         let mut f_scale: Option<f64> = None;
+        let mut f_track: Option<Nullable<PointStruct>> = None;
         loop {
             match r.next()? {
                 Some(Element::ContainerEnd) => break,
@@ -404,6 +407,14 @@ impl NestStruct {
                     tag: Tag::Context(6),
                     value: Value::Float(v),
                 }) => f_scale = Some(f64::from(v)),
+                Some(Element::Scalar {
+                    tag: Tag::Context(7),
+                    value: Value::Null,
+                }) => f_track = Some(Nullable::Null),
+                Some(Element::ContainerStart {
+                    tag: Tag::Context(7),
+                    kind: ContainerKind::Structure,
+                }) => f_track = Some(Nullable::Value(PointStruct::decode_from(r)?)),
                 None => return Err(ClusterError::Tlv(matter_codec::Error::UnclosedContainer)),
                 Some(Element::ContainerStart { .. }) => r.skip_container()?,
                 Some(_) => {} // unknown/future scalar — skip
@@ -417,6 +428,7 @@ impl NestStruct {
             ids: f_ids,
             modes: f_modes.ok_or(ClusterError::MissingField("Modes"))?,
             scale: f_scale.ok_or(ClusterError::MissingField("Scale"))?,
+            track: f_track,
         })
     }
     /// Decode from a standalone anonymous TLV structure.
@@ -499,6 +511,17 @@ impl NestStruct {
         }
         w.put_double(Tag::Context(6), self.scale)
             .expect("infallible: vec writer");
+        if let Some(track) = &self.track {
+            match track {
+                Nullable::Null => w.put_null(Tag::Context(7)).expect("infallible: vec writer"),
+                Nullable::Value(track) => {
+                    w.start_structure(Tag::Context(7))
+                        .expect("infallible: vec writer");
+                    track.write_fields(w);
+                    w.end_container().expect("infallible: vec writer");
+                }
+            }
+        }
     }
     /// Encode as a standalone anonymous TLV structure.
     #[must_use]

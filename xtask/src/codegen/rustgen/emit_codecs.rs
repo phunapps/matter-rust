@@ -1001,12 +1001,14 @@ pub(crate) fn struct_has_write_guarded_fields(d: &Datatype) -> bool {
 
 /// True when every field of `d` is a scalar: the rule for a struct a
 /// **writable attribute** reaches. Such a struct with a composite field
-/// (`object`/`array`) — e.g. `MeasurementAccuracyStruct`, whose
-/// `AccuracyRanges` is a list-of-struct — stays **decode-only**, like a
-/// response payload: no Matter 1.4 writable attribute carries one, so it has
-/// had no review. A struct a request command reaches is encoded whatever its
-/// fields (`emit_composite_field_write_self` writes nested structs and
-/// lists, M9-A3 B7).
+/// (`object`/`array`) stays **decode-only**, like a response payload. In the
+/// Matter 1.4 model this rule keeps two structs decode-only:
+/// `AccessControlEntryStruct` (reached by `AccessControl` `ACL`; `Subjects`
+/// and `Targets` are lists), which `matter-controller` writes with its own
+/// encoder (`acl.rs`), and `ScheduleStruct` (reached by `Thermostat`
+/// `Schedules`; `Transitions` is a list). A struct a request command reaches
+/// is encoded whatever its fields (`emit_composite_field_write_self` writes
+/// nested structs and lists, M9-A3 B7).
 fn struct_is_write_capable(d: &Datatype) -> bool {
     d.fields.iter().all(|f| {
         matches!(
@@ -1201,10 +1203,13 @@ fn emit_struct_decl_and_codec(
     line!(s, "        Self::decode_from(&mut r)");
     line!(s, "    }}");
 
-    // write_fields + encode: ONLY for real datatype structs (which the 10
-    // clusters guarantee have scalar-only fields, so write_fields compiles).
-    // Response-payload structs (`decl`) are decode-only — they may carry
-    // composite fields (e.g. list[struct]) that we never re-encode.
+    // write_fields + encode: ONLY for the datatype structs in `encoded`
+    // (`struct_is_encoded`): one a request command reaches, whatever its
+    // fields (nested structs and guarded lists go through
+    // `emit_composite_field_write_self`), or an all-scalar one a writable
+    // attribute reaches. Response-payload structs (`decl`) are decode-only —
+    // they may carry composite fields (e.g. list[struct]) that we never
+    // re-encode.
     if !decl && encoded.contains(d.name.as_str()) {
         if struct_has_write_guarded_fields(d) {
             emit_guarded_struct_write(s, d, dts);

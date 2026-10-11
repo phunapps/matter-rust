@@ -127,7 +127,9 @@
             { "id": 5, "name": "Modes", "type": "list", "entryType": "ModeEnum", "metatype": "array",
               "nullable": true, "optional": false },
             { "id": 6, "name": "Scale", "type": "double", "metatype": "float",
-              "nullable": false, "optional": false }
+              "nullable": false, "optional": false },
+            { "id": 7, "name": "Track", "type": "PointStruct", "metatype": "object",
+              "nullable": true, "optional": true }
           ] },
         { "name": "PointStruct", "base": "struct", "kind": "struct", "description": null,
           "fields": [
