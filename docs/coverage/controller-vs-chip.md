@@ -2,10 +2,11 @@
 
 Tracks which `matter-controller` operations are exercised **live** against
 connectedhomeip's example apps by the `just integration` harness
-(`crates/integration-tests/`): `all-clusters-app` (locally and in the
-nightly), `lock-app` and `evse-app` (local only), `tv-app` (in the nightly at
-v1.4.2.0 from its next run, and on a Raspberry Pi locally), and `rvc-app` and
-`microwave-oven-app` (on a Raspberry Pi, local only). Status legend:
+(`crates/integration-tests/`): `all-clusters-app`, `lit-icd-app` and
+`ota-requestor-app` (locally and in the nightly), `lock-app` and `evse-app`
+(local only), `tv-app` (in the nightly at v1.4.2.0 from its next run, and on a
+Raspberry Pi locally), and `rvc-app` and `microwave-oven-app` (on a Raspberry
+Pi, local only). Status legend:
 
 - ✓-live — a gated integration test drives this against the live DUT and asserts behavior.
 - ✓-nightly — the `Integration (nightly)` workflow has run that test green
