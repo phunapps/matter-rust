@@ -196,20 +196,20 @@ fabric-sync), ThreadBorderRouterManagement, ThreadNetworkDirectory and
 WiFiNetworkManagement (hosted by network-manager-app) have not run live: they
 are validated by decode smoke and `chip-xml-conformance.py` only.
 The media and TV-platform clusters, and Messages, run live against chip's
-tv-app built at master 5cd2917a and at v1.4.2.0 for Linux arm64 on a
-Raspberry Pi (`just integration-tv`; in the nightly at v1.4.2.0, on
-linux-x64, from its next run; not on the Mac, because tv-app needs Rosetta 2
+tv-app built at master 5cd2917a and at v1.4.2.0 for Linux arm64 on a Raspberry
+Pi (`just integration-tv`; in the nightly at v1.4.2.0 on linux-x64, green in
+nightly 38175373715 on 2245a81; not on the Mac, because tv-app needs Rosetta 2
 to build on Apple silicon). Every test passes at both refs; each exchange is
-paced, because master's tv-app runs on a 15-buffer PacketBuffer pool.
-tv-app's ContentControl delegate is a stub: the two rating lists fail to read
-and the block-list commands are unsupported, so the live test covers
-attributes 0, 2 and 4–7 and the status answers only. WakeOnLan and LowPower
-also run against chip's all-clusters, locally at master and on the Pi at
-v1.4.2.0, and in the nightly at v1.4.2.0 from its next run.
-ContentAppObserver has not run live (of chip's example apps only
-tv-casting-app serves it, which the harness does not drive): decode smoke and
-`chip-xml-conformance.py` only. None of these clusters' events has a stimulus
-that reaches tv-app's log, so they are decode tests only.
+paced, because master's tv-app runs on a 15-buffer PacketBuffer pool. tv-app's
+ContentControl delegate is a stub: the two rating lists fail to read and the
+block-list commands are unsupported, so the live test covers attributes 0, 2
+and 4–7 and the status answers only. WakeOnLan and LowPower also run against
+chip's all-clusters, locally at master and on the Pi at v1.4.2.0, and in the
+nightly at v1.4.2.0 (nightly 38175373715 on 2245a81). ContentAppObserver has
+not run live (of chip's example apps only tv-casting-app serves it, which the
+harness does not drive): decode smoke and `chip-xml-conformance.py` only. None
+of these clusters' events has a stimulus that reaches tv-app's log, so they
+are decode tests only.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`

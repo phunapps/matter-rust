@@ -637,29 +637,28 @@ v1.4.2.0 (master no longer does); the Matter 1.4.2 specification marks none
 of the three provisional, so, as with ScenesManagement, they carry no
 provisional note.
 
-EnergyPreference runs live against chip's all-clusters, both master
-(locally) and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only
-against v1.4.2.0's all-clusters, in the nightly: master's all-clusters no
-longer serves it, and master's server is unexercised (water-heater-app, its
-master host, is not built). DeviceEnergyManagement, EnergyEvse and
-PowerTopology commands and events run live only against chip master's
-evse-app, locally (evse-app does not exist at v1.4.2.0 and is not in the
-nightly); the nightly decodes their attributes, and invokes GetTargets once,
-on v1.4.2.0's all-clusters. Messages runs live against chip's tv-app (its
-only chip host), built at master 5cd2917a and at v1.4.2.0 for Linux arm64
-and run on a Raspberry Pi: both tests,
-`messages_present_and_cancel_round_trip` and
+EnergyPreference runs live against chip's all-clusters, both master (locally)
+and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against
+v1.4.2.0's all-clusters, in the nightly: master's all-clusters no longer
+serves it, and master's server is unexercised (water-heater-app, its master
+host, is not built). DeviceEnergyManagement, EnergyEvse and PowerTopology
+commands and events run live only against chip master's evse-app, locally
+(evse-app does not exist at v1.4.2.0 and is not in the nightly); the nightly
+decodes their attributes, and invokes GetTargets once, on v1.4.2.0's
+all-clusters. Messages runs live against chip's tv-app (its only chip host),
+built at master 5cd2917a and at v1.4.2.0 for Linux arm64 and run on a
+Raspberry Pi: both tests, `messages_present_and_cancel_round_trip` and
 `messages_refuse_malformed_requests`, pass at both refs, with each exchange
 paced (`fixture::settle_acks`, added in M9-A3 B7). Unpaced, master's tv-app
-ACKed a request in `messages_refuse_malformed_requests` and never answered
-it: it gets a 15-buffer PacketBuffer pool (its `CHIPProjectAppConfig.h` sets
-500 inside `#ifndef CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always
-defined), and responses the previous test's controller left unACKed when it
-was dropped exhaust it. At v1.4.2.0 both tests pass unpaced too. With M9-A3
-B7 the nightly runs them at v1.4.2.0 (linux-x64), from its next run; they do
-not run on the Mac (tv-app needs Rosetta 2 to build on Apple silicon).
-Beyond those runs, Messages is validated by decode tests, two matter.js
-vectors and the chip 1.4.2 XML check. chip's servers send every
+ACKed a request in `messages_refuse_malformed_requests` and never answered it:
+it gets a 15-buffer PacketBuffer pool (its `CHIPProjectAppConfig.h` sets 500
+inside `#ifndef CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined),
+and responses the previous test's controller left unACKed when it was dropped
+exhaust it. At v1.4.2.0 both tests pass unpaced too. With M9-A3 B7 the nightly
+runs them at v1.4.2.0 (linux-x64), and both passed in nightly 38175373715 on
+2245a81; they do not run on the Mac (tv-app needs Rosetta 2 to build on Apple
+silicon). Beyond those runs, Messages is validated by decode tests, two
+matter.js vectors and the chip 1.4.2 XML check. chip's servers send every
 `MessageStruct` field to every fabric and no FabricIndex, so on a chip device
 every entry decodes in full with `fabric_index` `None`.
 
@@ -833,18 +832,19 @@ How each of these clusters was validated:
 - **Live against chip's tv-app**, built at master 5cd2917a and at v1.4.2.0
   for Linux arm64 and run on a Raspberry Pi (`just integration-tv`; tv-app
   does not build on Apple silicon without Rosetta 2; the nightly runs these
-  tests at v1.4.2.0 (linux-x64) from its next run): WakeOnLan, LowPower,
-  KeypadInput, MediaInput, AudioOutput, TargetNavigator, MediaPlayback,
-  ContentLauncher, Channel, ApplicationLauncher and ContentControl on its
-  endpoint 1 (tv-app's ContentControl delegate is a stub: the two rating
-  lists fail to read and the block-list commands are unsupported, so the
-  live test covers attributes 0, 2 and 4–7 and the status answers only),
-  ApplicationBasic on its five Content App endpoints, and AccountLogin on
-  its Vendor3 Content App. Every test passed at both refs, as did B5's
-  Messages tests in the same suite.
+  tests at v1.4.2.0 (linux-x64), green in nightly 38175373715 on 2245a81):
+  WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
+  TargetNavigator, MediaPlayback, ContentLauncher, Channel,
+  ApplicationLauncher and ContentControl on its endpoint 1 (tv-app's
+  ContentControl delegate is a stub: the two rating lists fail to read and
+  the block-list commands are unsupported, so the live test covers
+  attributes 0, 2 and 4–7 and the status answers only), ApplicationBasic on
+  its five Content App endpoints, and AccountLogin on its Vendor3 Content
+  App. Every test passed at both refs, as did B5's Messages tests in the
+  same suite.
 - **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
   locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
-  nightly at v1.4.2.0 (linux-x64) from its next run.
+  nightly at v1.4.2.0 (linux-x64), green in nightly 38175373715 on 2245a81.
 - **Not run live; decode smoke and `chip-xml-conformance.py` only:**
   ContentAppObserver. Of chip's example apps only tv-casting-app serves it,
   and the harness does not drive tv-casting-app.
