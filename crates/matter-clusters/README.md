@@ -197,8 +197,9 @@ WiFiNetworkManagement (hosted by network-manager-app) have not run live: they
 are validated by decode smoke and `chip-xml-conformance.py` only.
 The media and TV-platform clusters, and Messages, run live against chip's
 tv-app built at master 5cd2917a and at v1.4.2.0 for Linux arm64 on a
-Raspberry Pi (`just integration-tv`; not in the nightly, and not on the Mac,
-because tv-app needs Rosetta 2 to build on Apple silicon). Every test passes
+Raspberry Pi (`just integration-tv`; in the nightly at v1.4.2.0, on
+linux-x64, from its next run; not on the Mac, because tv-app needs Rosetta 2
+to build on Apple silicon). Every test passes
 at both refs; each exchange is paced, because master's tv-app runs on a
 15-buffer PacketBuffer pool. WakeOnLan and LowPower also run against chip's
 all-clusters, locally at master and on the Pi at v1.4.2.0, and in the nightly

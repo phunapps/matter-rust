@@ -642,10 +642,11 @@ Raspberry Pi: `messages_present_and_cancel_round_trip` passes;
 run alone. Master's tv-app gets a 15-buffer PacketBuffer pool (its
 `CHIPProjectAppConfig.h` sets 500 inside `#ifndef
 CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
-previous test's controller left unACKed when it was dropped exhaust it. It is
-not in the nightly and does not run on the Mac (tv-app needs Rosetta 2 to
-build on Apple silicon); beyond that run, Messages is validated by decode
-tests, two matter.js vectors and the chip 1.4.2 XML check. chip's servers
+previous test's controller left unACKed when it was dropped exhaust it. With
+M9-A3 B7 the nightly runs it at v1.4.2.0 (linux-x64), from its next run; it
+does not run on the Mac (tv-app needs Rosetta 2 to build on Apple silicon);
+beyond that run, Messages is validated by decode tests, two matter.js vectors
+and the chip 1.4.2 XML check. chip's servers
 send every `MessageStruct` field to every fabric and no FabricIndex, so on a
 chip device every entry decodes in full with `fabric_index` `None`.
 
@@ -814,10 +815,11 @@ How each of these clusters was validated:
 
 - **Live against chip's tv-app**, built at master 5cd2917a and at v1.4.2.0
   for Linux arm64 and run on a Raspberry Pi (`just integration-tv`; tv-app
-  does not build on Apple silicon without Rosetta 2, and is not in the
-  nightly): WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
-  TargetNavigator, MediaPlayback, ContentLauncher, Channel,
-  ApplicationLauncher and ContentControl on its endpoint 1, ApplicationBasic
+  does not build on Apple silicon without Rosetta 2; the nightly runs these
+  tests at v1.4.2.0 (linux-x64) from its next run): WakeOnLan, LowPower,
+  KeypadInput, MediaInput, AudioOutput, TargetNavigator, MediaPlayback,
+  ContentLauncher, Channel, ApplicationLauncher and ContentControl on its
+  endpoint 1, ApplicationBasic
   on its five Content App endpoints, and AccountLogin on its Vendor3 Content
   App. Every test passed at both refs, as did B5's Messages tests in the same
   suite.
