@@ -385,8 +385,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_10() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 10);
+fn dump_script_version_is_11() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 11);
 }
 
 #[test]

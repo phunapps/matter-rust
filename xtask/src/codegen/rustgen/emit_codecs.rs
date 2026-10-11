@@ -976,6 +976,7 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         choice: f.choice.clone(),
         required_when: f.required_when.clone(),
         relaxed_reason: f.relaxed_reason.clone(),
+        nullable_reason: f.nullable_reason.clone(),
         secret: f.secret,
     }
 }
@@ -1100,6 +1101,9 @@ fn emit_struct_decl_and_codec(
             }
             if let Some(reason) = &f.relaxed_reason {
                 line!(s, "    /// {}", super::emit::relaxed_reason_doc(reason));
+            }
+            if let Some(reason) = &f.nullable_reason {
+                line!(s, "    /// {}", super::emit::nullable_reason_doc(reason));
             }
             if f.secret {
                 line!(s, "    /// {SECRET_DOC}");
@@ -1595,6 +1599,7 @@ mod tests {
             choice: None,
             required_when: None,
             relaxed_reason: None,
+            nullable_reason: None,
             secret: false,
         }
     }

@@ -24,7 +24,8 @@
 //   field = { id, name, type, metatype, entryType?, nullable, optional, description,
 //             fabricSensitive?, mandatoryOnWrite?, requiredWhen?,
 //                                     (all three: datatype struct fields only)
-//             provisional?, choice?, secret? (SECRET_FIELDS) }
+//             provisional?, choice?, secret? (SECRET_FIELDS),
+//             relaxedReason? / nullableReason? (FIELD_RELAXATIONS, class P / N) }
 //   provisional? (true only) also on clusters (PROVISIONAL_CLUSTERS), features,
 //   attributes, commands, events;
 //   supplemented? { from, removedIn, removedInRevision, feature, conformance }
@@ -73,7 +74,9 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 //     (M9-A3 B6).
 // v10: `copiedFrom` on a datatype copied from the cluster that owns it, for a
 //     qualified cross-cluster reference (M9-A3 B7).
-const DUMP_SCRIPT_VERSION = 10;
+// v11: `nullableReason` on a field a class-N FIELD_RELAXATIONS entry made
+//     nullable, for generated rustdoc (M9-A3 B7).
+const DUMP_SCRIPT_VERSION = 11;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -394,17 +397,21 @@ const TYPE_WIDENINGS = new Map([
 const appliedWidenings = new Set();
 
 // M9-A3 spec §5.1 step 3: a datatype struct or event field that a real 1.4
-// server leaves out although the model (and the 1.4.2 XML) makes it
-// mandatory. Each is dumped optional and recorded in meta.relaxed with class
-// P and its reason. Keys use the checker's spelling,
+// server sends in a shape the model (and the 1.4.2 XML) does not allow. Class
+// P: the server leaves out a field the model makes mandatory, so it is dumped
+// optional. Class N (M9-A3 B7): the server sends null in a field the model
+// makes non-nullable, so it is dumped nullable. Each is recorded in
+// meta.relaxed with its class and reason. Keys use the checker's spelling,
 // `<Cluster>.<Struct|Event>.<Field>`. The dump fails when a key whose cluster
-// is allowlisted matches no field, when the field is already optional (the
-// model changed: review the entry), or when the field is one we send (a
-// request field, or a field of a struct the emitter encodes): relaxing it
-// would let an encoder omit a mandatory field. Each value is `{ reason, doc }`:
-// `reason` is the audit text recorded in meta.relaxed; `doc` is the short
-// clause dumped on the field as `relaxedReason`, which the emitter renders as
-// "Optional: <doc>." in the field's rustdoc.
+// is allowlisted matches no field, when the field is already optional (P) or
+// nullable (N) (the model changed: review the entry), or when the field is
+// one we send (a request field, or a field of a struct the emitter encodes):
+// relaxing it would let an encoder omit a mandatory field or send a null the
+// model forbids. Each value is `{ class, reason, doc }`: `class` is 'P' or
+// 'N'; `reason` is the audit text recorded in meta.relaxed; `doc` is the short
+// clause dumped on the field as `relaxedReason` (P) or `nullableReason` (N),
+// which the emitter renders as "Optional: <doc>." or "Nullable: <doc>." in
+// the field's rustdoc.
 //
 // Messages: chip does not fabric-scope MessageStruct or the three Messages
 // events (zap messages-cluster.xml: "TODO: enable isFabricScoped"; the
@@ -415,10 +422,12 @@ const appliedWidenings = new Set();
 const MESSAGES_FABRIC_INDEX_REASON =
   'chip does not fabric-scope it (zap messages-cluster.xml "TODO: enable isFabricScoped"; kIsFabricScoped = false, no field 254, at v1.4.2.0 and master), so chip servers send it without FabricIndex';
 const MESSAGES_STRUCT_FABRIC_INDEX = {
+  class: 'P',
   reason: MESSAGES_FABRIC_INDEX_REASON,
   doc: "chip's servers do not send it (the struct is not fabric-scoped in chip)",
 };
 const MESSAGES_EVENT_FABRIC_INDEX = {
+  class: 'P',
   reason: MESSAGES_FABRIC_INDEX_REASON,
   doc: "chip's servers do not send it (the event is not fabric-scoped in chip)",
 };
@@ -428,6 +437,9 @@ const FIELD_RELAXATIONS = new Map([
   ['Messages.MessagePresented.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
   ['Messages.MessageComplete.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
 ]);
+for (const [key, r] of FIELD_RELAXATIONS) {
+  if (r.class !== 'P' && r.class !== 'N') fail(`FIELD_RELAXATIONS ${key}: class must be 'P' or 'N', got ${JSON.stringify(r.class)}`);
+}
 const appliedFieldRelaxations = new Set();
 
 // M9-A3 B6: fields that carry a secret. The dump marks each `secret: true` and
@@ -891,11 +903,23 @@ function dumpField(f, where, ctx) {
   const relaxation = FIELD_RELAXATIONS.get(relaxKey);
   if (relaxation) {
     if (ctx.role === 'request') fail(`FIELD_RELAXATIONS ${relaxKey} is a request field — we send it, so it cannot be relaxed`);
-    if (out.optional) fail(`FIELD_RELAXATIONS ${relaxKey} is already optional — model drift; review the entry`);
-    out.optional = true;
-    out.relaxedReason = relaxation.doc;
+    if (relaxation.class === 'N') {
+      if (out.nullable) fail(`FIELD_RELAXATIONS ${relaxKey} is already nullable — model drift; review the entry`);
+      out.nullable = true;
+      out.nullableReason = relaxation.doc;
+    } else {
+      if (out.optional) fail(`FIELD_RELAXATIONS ${relaxKey} is already optional — model drift; review the entry`);
+      out.optional = true;
+      out.relaxedReason = relaxation.doc;
+    }
     appliedFieldRelaxations.add(relaxKey);
-    _fieldRelaxed.push({ element: `${ctx.element}.${f.name}`, role: ctx.role, owner: ctx.element, reason: relaxation.reason });
+    _fieldRelaxed.push({
+      element: `${ctx.element}.${f.name}`,
+      role: ctx.role,
+      owner: ctx.element,
+      class: relaxation.class,
+      reason: relaxation.reason,
+    });
   }
   return out;
 }
@@ -1261,10 +1285,14 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
 // owner or the datatype does not resolve, the datatype is not a struct, enum
 // or bitmap (a qualified scalar typedef, such as Matter 1.5's
 // `CameraAvStreamManagement.VideoStreamID`, would need its base resolved
-// instead), its name is also a model global's (inlineGlobalDatatypes would
-// take the copy for the global, and bind the cluster's references to that
-// global to the copy), or one of its fields cannot be copied alone
-// (copiedFieldProblem). Nested dependencies are refused, never copied.
+// instead), its base is not one the emitter maps directly
+// (copiedBaseProblem), its name is also a model global's
+// (inlineGlobalDatatypes would take the copy for the global, and bind the
+// cluster's references to that global to the copy), an owner-keyed per-field
+// table (SECRET_FIELDS, FIELD_RELAXATIONS) has an entry on it, which the copy
+// would not inherit (ownerKeyedEntryProblem), or one of its fields cannot be
+// copied alone (copiedFieldProblem). Nested dependencies are refused, never
+// copied.
 function foreignDatatype(ref) {
   const parts = ref.split('.');
   if (parts.length !== 2) return { problem: `\`${ref}\` is not of the form Cluster.Datatype` };
@@ -1277,9 +1305,13 @@ function foreignDatatype(ref) {
   if (meta !== 'object' && meta !== 'enum' && meta !== 'bitmap') {
     return { problem: `\`${ref}\` has metatype ${meta}; only a struct, enum or bitmap is copied — extend the dump first` };
   }
+  const baseProblem = copiedBaseProblem(ref, meta, node.effectiveType);
+  if (baseProblem) return { problem: baseProblem };
   if (globalDatatypeNode(name) !== null) {
     return { problem: `\`${ref}\`: ${name} is also the name of a model global, which a copy would shadow — extend the dump first` };
   }
+  const tableProblem = ownerKeyedEntryProblem(ref);
+  if (tableProblem) return { problem: tableProblem };
   const problem = copiedFieldProblem(ref, owner, cluster, node);
   if (problem) return { problem };
   return { owner, name, node };
@@ -1324,6 +1356,7 @@ function copiedFieldProblem(ref, owner, cluster, node) {
 // `copies` maps each bare name to its foreignDatatype result; `rewrites` lists
 // each `[element, key, bare name]` reference to rewrite. Refused: a reference
 // foreignDatatype refuses, a bare name the cluster already has as a datatype,
+// a copy with a field type the cluster also defines (shadowedFieldProblem),
 // and two owners' datatypes that share a bare name.
 function planForeignCopies(elements, taken) {
   const copies = new Map();
@@ -1339,6 +1372,8 @@ function planForeignCopies(elements, taken) {
         if (taken.has(f.name)) {
           return { problem: `\`${ref}\` would be copied as ${f.name}, which is already a datatype of the cluster` };
         }
+        const shadowed = shadowedFieldProblem(ref, f, taken);
+        if (shadowed) return { problem: shadowed };
         copies.set(f.name, f);
       } else if (seen.owner !== f.owner) {
         return { problem: `\`${ref}\` and \`${seen.owner}.${f.name}\` would both be copied as ${f.name}` };
@@ -1347,6 +1382,72 @@ function planForeignCopies(elements, taken) {
     }
   }
   return { copies, rewrites };
+}
+
+// Why the copy `f` (a foreignDatatype result) would bind a field to a
+// datatype of the referencing cluster, or null: a field or list-entry type
+// that resolves in the owner to a model global (owner-local types are already
+// refused by copiedFieldProblem) but that the referencing cluster defines
+// itself, as ElectricalEnergyMeasurement and ElectricalPowerMeasurement define
+// their own MeasurementTypeEnum. inlineGlobalDatatypes and the scalar
+// de-aliasing would see the cluster's own datatype first.
+function shadowedFieldProblem(ref, f, taken) {
+  for (const m of f.node.members) {
+    for (const el of [m, m.listEntry]) {
+      if (!el) continue;
+      const t = el.effectiveType;
+      if (taken.has(t)) {
+        return `\`${ref}\`: field ${m.name} has the type ${t}, which the cluster also defines, so the copy would bind to the cluster's own ${t} — extend the dump first`;
+      }
+    }
+  }
+  return null;
+}
+
+// The bases a copied datatype may have, by metatype: exactly the ones the
+// emitter maps to a Rust backing directly (enum_backing and emit_bitmap fall
+// back to u8 for anything else, which would narrow an alias of an enum16 or a
+// map64). Every cluster enum and bitmap in the model has one of these; only
+// the derived clusters' ModeOptionStructs have an alias base (ModeBase's).
+const COPIED_BASES = new Map([
+  ['enum', ['enum8', 'enum16']],
+  ['bitmap', ['map8', 'map16', 'map32']],
+  ['object', ['struct']],
+]);
+
+// Why a datatype of metatype `meta` and base `base` (its effectiveType, which
+// dumpDatatype records as `base`) cannot be copied, or null. Takes the values
+// rather than a node so the self-check can pass synthetic ones.
+function copiedBaseProblem(ref, meta, base) {
+  const allowed = COPIED_BASES.get(meta) || [];
+  if (allowed.includes(base)) return null;
+  const list = allowed.length > 1 ? `${allowed.slice(0, -1).join(', ')} or ${allowed[allowed.length - 1]}` : allowed[0];
+  return `\`${ref}\` has base ${base}; a copied ${meta} must have base ${list}, which the emitter maps directly — extend the dump first`;
+}
+
+// The per-field tables keyed by the owning cluster
+// (`<Cluster>.<Struct>.<Field>`). dumpField builds the key from the cluster
+// being dumped, so a copy would not inherit an entry: a SECRET_FIELDS field
+// would lose its redaction (its secret would print in `Debug`), a
+// FIELD_RELAXATIONS field its relaxation.
+const OWNER_KEYED_FIELD_TABLES = [
+  ['SECRET_FIELDS', SECRET_FIELDS],
+  ['FIELD_RELAXATIONS', FIELD_RELAXATIONS],
+];
+
+// Why `ref` (`Owner.Name`) cannot be copied because one of `tables` has an
+// entry on one of its fields, or null. Refused rather than re-keyed: a copy
+// never carries owner-keyed state. Takes the tables so the self-check can
+// pass a synthetic one.
+function ownerKeyedEntryProblem(ref, tables = OWNER_KEYED_FIELD_TABLES) {
+  for (const [table, entries] of tables) {
+    for (const key of entries.keys()) {
+      if (key.startsWith(`${ref}.`)) {
+        return `\`${ref}\`: ${table} has ${key}, which is keyed by the owning cluster and would not follow a copy — extend the dump first`;
+      }
+    }
+  }
+  return null;
 }
 
 // Load-time self-check against the real model (and, where the model has no
@@ -1374,9 +1475,37 @@ function planForeignCopies(elements, taken) {
     // references in the referencing cluster would bind to the copy.
     ['ElectricalEnergyMeasurement.MeasurementTypeEnum', 'MeasurementTypeEnum is also the name of a model global'],
     ['AdditionalInfoStruct', 'is not of the form Cluster.Datatype'],
+    // A derived cluster's ModeOptionStruct has ModeBase's struct as its base,
+    // not `struct` (the only alias bases in the model).
+    ['RvcRunMode.ModeOptionStruct', 'has base ModeOptionStruct; a copied object must have base struct'],
+    // Owner-keyed per-field tables, which a copy would not inherit: the epoch
+    // keys would lose their redaction, MessageStruct its relaxation.
+    ['GroupKeyManagement.GroupKeySetStruct', 'SECRET_FIELDS has GroupKeyManagement.GroupKeySetStruct.EpochKey0'],
+    ['Messages.MessageStruct', 'FIELD_RELAXATIONS has Messages.MessageStruct.FabricIndex'],
   ]) {
     expect(`foreignDatatype(\`${ref}\`)`, foreignDatatype(ref).problem, want);
   }
+  // Every enum and bitmap in the model has a builtin base: synthetic bases,
+  // an alias (qualified, as a copy could name) and map64 (the emitter has no
+  // 64-bit bitmap backing and would narrow it to u8), beside accepted ones.
+  for (const [meta, base, want] of [
+    ['enum', 'Other.SomeEnum16', 'has base Other.SomeEnum16; a copied enum must have base enum8 or enum16'],
+    ['bitmap', 'map64', 'has base map64; a copied bitmap must have base map8, map16 or map32'],
+    ['enum', 'enum16', null],
+    ['bitmap', 'map32', null],
+    ['object', 'struct', null],
+  ]) {
+    expect(`copiedBaseProblem (${meta} ${base})`, copiedBaseProblem('Synthetic.Datatype', meta, base), want);
+  }
+  // A synthetic entry on the real datatype ContentLauncher copies into
+  // Channel: the copy would drop it, so it is refused.
+  expect(
+    'ownerKeyedEntryProblem (synthetic SECRET_FIELDS entry)',
+    ownerKeyedEntryProblem('ContentLauncher.AdditionalInfoStruct', [
+      ['SECRET_FIELDS', new Map([['ContentLauncher.AdditionalInfoStruct.Value', 'synthetic']])],
+    ]),
+    'SECRET_FIELDS has ContentLauncher.AdditionalInfoStruct.Value',
+  );
   // No model datatype has an anonymous-struct field: synthetic nodes, as a
   // field and as a list entry.
   for (const [what, member] of [
@@ -1391,6 +1520,12 @@ function planForeignCopies(elements, taken) {
     ['one owner referenced twice', [{ type: 'ContentLauncher.AdditionalInfoStruct' }, { entryType: 'ContentLauncher.AdditionalInfoStruct' }], new Set(), null],
     ['a name the cluster already has', [{ type: 'ColorControl.MoveModeEnum' }], levelControlNames, 'would be copied as MoveModeEnum, which is already a datatype of the cluster'],
     ['two owners for one name', [{ type: 'ColorControl.MoveModeEnum' }, { entryType: 'LevelControl.MoveModeEnum' }], new Set(), 'and `ColorControl.MoveModeEnum` would both be copied as MoveModeEnum'],
+    // Speed is the model global ThreeLevelAutoEnum. A cluster that defines its
+    // own datatype of that name (as ElectricalEnergyMeasurement and
+    // ElectricalPowerMeasurement define their own MeasurementTypeEnum, which
+    // lacks the global's value 17) would bind the copy's field to it.
+    ['a field type the cluster defines itself', [{ type: 'ClosureDimension.DimensionStateStruct' }], new Set(['ThreeLevelAutoEnum']), 'field Speed has the type ThreeLevelAutoEnum, which the cluster also defines'],
+    ['a global field type the cluster does not define', [{ type: 'ClosureDimension.DimensionStateStruct' }], levelControlNames, null],
   ]) {
     expect(`planForeignCopies (${what})`, planForeignCopies(elements, taken).problem, want);
   }
@@ -1754,9 +1889,9 @@ function checkConditionalRelaxations(clusterName, attributes, commands, datatype
   }
   for (const r of _fieldRelaxed) {
     if (r.role === 'struct' && encoded.has(r.owner)) {
-      fail(`FIELD_RELAXATIONS ${clusterName}.${r.element}: ${r.owner} is encoded, so relaxing it would let its encoder omit a mandatory field`);
+      fail(`FIELD_RELAXATIONS ${clusterName}.${r.element}: ${r.owner} is encoded, so relaxing it would let its encoder omit a mandatory field or send a forbidden null`);
     }
-    recordRelaxation(clusterName, r.element, 'P', r.reason);
+    recordRelaxation(clusterName, r.element, r.class, r.reason);
   }
 }
 

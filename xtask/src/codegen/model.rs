@@ -238,6 +238,13 @@ pub struct FieldDef {
     /// the field's rustdoc. Only on an `optional` field.
     #[serde(default, rename = "relaxedReason")]
     pub relaxed_reason: Option<String>,
+    /// Why the dump made this non-nullable field nullable, for a class-N
+    /// `FIELD_RELAXATIONS` entry (M9-A3 B7: a field chip's servers send null,
+    /// `MediaPlayback` `TrackStruct.TrackAttributes`): a short clause the
+    /// emitter renders as `Nullable: <clause>.` in the field's rustdoc. Only on
+    /// a `nullable` field.
+    #[serde(default, rename = "nullableReason")]
+    pub nullable_reason: Option<String>,
     /// The field carries a secret (a key, a Thread dataset, a passphrase, a
     /// PAKE verifier; the dump's `SECRET_FIELDS`, M9-A3 B6). The generated
     /// struct keeps it out of its `Debug` output, like the hand-written
@@ -413,6 +420,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 )?;
                 reject_payload_write_marker(&c.name, &cmd.name, f, "a command")?;
                 check_relaxed_reason(&c.name, &cmd.name, f)?;
+                check_nullable_reason(&c.name, &cmd.name, f)?;
             }
         }
 
@@ -432,6 +440,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 )?;
                 reject_payload_write_marker(&c.name, &ev.name, f, "an event")?;
                 check_relaxed_reason(&c.name, &ev.name, f)?;
+                check_nullable_reason(&c.name, &ev.name, f)?;
             }
         }
 
@@ -471,6 +480,7 @@ pub fn validate(model: &Model) -> Result<(), String> {
                 check_struct_write_marker(&c.name, d, f)?;
                 check_required_when(&c.name, d, f)?;
                 check_relaxed_reason(&c.name, &d.name, f)?;
+                check_nullable_reason(&c.name, &d.name, f)?;
             }
         }
         check_supplemented(c)?;
@@ -559,6 +569,20 @@ fn check_relaxed_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(), 
     Ok(())
 }
 
+/// A `nullableReason` documents why a non-nullable field was dumped nullable
+/// (a class-N `FIELD_RELAXATIONS` entry, M9-A3 B7), so it may sit only on a
+/// `nullable` field: elsewhere the generated "Nullable: …" line would
+/// contradict the field's type.
+fn check_nullable_reason(cluster: &str, owner: &str, f: &FieldDef) -> Result<(), String> {
+    if f.nullable_reason.is_some() && !f.nullable {
+        return Err(format!(
+            "{cluster}.{owner}.{}: nullableReason on a field that is not nullable",
+            f.name
+        ));
+    }
+    Ok(())
+}
+
 /// A class-C relaxation (a field whose conformance is conditional, which the
 /// §3.1 rule dumps optional) is safe only on a field we **decode**: a field we
 /// send would make its encoder take an `Option` and could silently omit a
@@ -636,10 +660,11 @@ fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
 
 /// A class-P relaxation whose field does not carry `mandatoryOnWrite` is a
 /// `FIELD_RELAXATIONS` entry (M9-A3 B5: a field chip's servers do not send,
-/// such as Messages' `FabricIndex`), not a §5.4 fabric-sensitive one. No
-/// encoder guard backs it, so, like class C, it is safe only on a field we
-/// **decode**: a request command field, or a field of a struct the emitter
-/// encodes ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names)),
+/// such as Messages' `FabricIndex`), not a §5.4 fabric-sensitive one; every
+/// class-N relaxation is one too (M9-A3 B7: a field chip's servers send null,
+/// `MediaPlayback` `TrackStruct.TrackAttributes`). No encoder guard backs
+/// them, so, like class C, they are safe only on a field we **decode**: a
+/// request command field, or a field of a struct the emitter encodes ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names)),
 /// would let an encoder silently omit a field the model makes mandatory. The
 /// dump refuses the same on regeneration (`dumpField`,
 /// `checkConditionalRelaxations`); this is the Rust-side twin, run on every
@@ -647,27 +672,30 @@ fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
 /// a stale entry cannot disable the check. A §5.4 entry (its field carries
 /// `mandatoryOnWrite`) is checked by [`check_struct_write_marker`] instead.
 fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
-    const FIX_AT: &str = "class-P entries without mandatoryOnWrite come from FIELD_RELAXATIONS in \
-        xtask/scripts/dump-model/index.js: remove or fix the entry there and regenerate, not clusters.json";
+    const FIX_AT: &str =
+        "class-N entries, and class-P entries without mandatoryOnWrite, come from \
+        FIELD_RELAXATIONS in xtask/scripts/dump-model/index.js: remove or fix the entry there and \
+        regenerate, not clusters.json";
     let relaxed: Vec<Relaxation> = match model.meta.get("relaxed") {
         None => Vec::new(),
         Some(v) => serde_json::from_value(v.clone())
             .map_err(|e| format!("meta.relaxed: malformed entry: {e}"))?,
     };
-    for r in relaxed.iter().filter(|r| r.class == "P") {
+    for r in relaxed.iter().filter(|r| r.class == "P" || r.class == "N") {
         let at = format!("{}.{}", r.cluster, r.element);
+        let class = &r.class;
         let c = model
             .clusters
             .iter()
             .find(|c| c.name == r.cluster)
             .ok_or_else(|| {
                 format!(
-                    "{at}: class-P meta.relaxed entry names {}, not a generated cluster; {FIX_AT}",
+                    "{at}: class-{class} meta.relaxed entry names {}, not a generated cluster; {FIX_AT}",
                     r.cluster
                 )
             })?;
         let (owner, field) = r.element.split_once('.').ok_or_else(|| {
-            format!("{at}: class-P meta.relaxed element is not <Owner>.<Field>; {FIX_AT}")
+            format!("{at}: class-{class} meta.relaxed element is not <Owner>.<Field>; {FIX_AT}")
         })?;
         // `Some(mandatory_on_write)` when `fields` has the named field.
         let find = |fields: &[FieldDef]| {
@@ -706,7 +734,7 @@ fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
         }
         if found.is_empty() {
             return Err(format!(
-                "{at}: class-P meta.relaxed entry names no command, event or struct field of {}; {FIX_AT}",
+                "{at}: class-{class} meta.relaxed entry names no command, event or struct field of {}; {FIX_AT}",
                 c.name
             ));
         }
@@ -715,10 +743,17 @@ fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
                 continue; // §5.4: encoders refuse None (check_struct_write_marker).
             }
             if let Some(sent) = sent {
-                return Err(format!(
-                    "{at}: class-P relaxation without mandatoryOnWrite (a field chip does not send, dumped optional) \
-                     of {sent}; its encoder could omit a field the model makes mandatory — review it; {FIX_AT}"
-                ));
+                return Err(if class == "N" {
+                    format!(
+                        "{at}: class-N relaxation (a field chip sends null, dumped nullable) of {sent}; \
+                         its encoder could send a null the model forbids — review it; {FIX_AT}"
+                    )
+                } else {
+                    format!(
+                        "{at}: class-P relaxation without mandatoryOnWrite (a field chip does not send, dumped optional) \
+                         of {sent}; its encoder could omit a field the model makes mandatory — review it; {FIX_AT}"
+                    )
+                });
             }
         }
     }
@@ -1247,6 +1282,58 @@ mod tests {
         ] {
             assert_eq!(validate(&chip_omits_model(element)), Ok(()), "{element}");
         }
+    }
+
+    fn chip_nulls_model(element: &str) -> Model {
+        let mut m = relaxed_model(element);
+        m.meta["relaxed"][0]["class"] = serde_json::json!("N");
+        m
+    }
+
+    #[test]
+    fn a_class_n_relaxation_sits_only_on_a_decoded_field() {
+        // M9-A3 B7: MediaPlayback TrackStruct.TrackAttributes. Like class P
+        // without mandatoryOnWrite, nothing guards an encoder, so a field we
+        // send is refused.
+        let err = validate(&chip_nulls_model("ScalarStruct.Label")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ScalarStruct.Label")
+                && err.contains("class-N")
+                && err.contains("null the model forbids"),
+            "got: {err}"
+        );
+        let err = validate(&chip_nulls_model("ChangeToMode.NewMode")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ChangeToMode.NewMode") && err.contains("request command"),
+            "got: {err}"
+        );
+        let err = validate(&chip_nulls_model("ReadStruct.NoSuchField")).unwrap_err();
+        assert!(
+            err.contains("class-N") && err.contains("names no"),
+            "got: {err}"
+        );
+        for element in [
+            "ChangeToModeResponse.StatusText",
+            "ModeChanged.NewMode",
+            "ReadStruct.Label",
+        ] {
+            assert_eq!(validate(&chip_nulls_model(element)), Ok(()), "{element}");
+        }
+    }
+
+    #[test]
+    fn nullable_reason_sits_only_on_a_nullable_field() {
+        let mut m = relaxed_model("ReadStruct.Label");
+        m.meta["relaxed"] = serde_json::json!([]);
+        let read = &mut m.clusters[0].datatypes[2];
+        read.fields[0].nullable_reason = Some("chip's servers may send it null".to_string());
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ReadStruct.Label") && err.contains("not nullable"),
+            "got: {err}"
+        );
+        m.clusters[0].datatypes[2].fields[0].nullable = true;
+        assert_eq!(validate(&m), Ok(()));
     }
 
     #[test]

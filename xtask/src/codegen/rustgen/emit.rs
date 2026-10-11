@@ -134,6 +134,13 @@ pub(crate) fn relaxed_reason_doc(reason: &str) -> String {
     format!("Optional: {reason}.")
 }
 
+/// The rustdoc line on a field the dump made nullable because chip's servers
+/// send it null (`FieldDef::nullable_reason`, a class-N `FIELD_RELAXATIONS`
+/// entry; M9-A3 B7): `Nullable: <reason>.`.
+pub(crate) fn nullable_reason_doc(reason: &str) -> String {
+    format!("Nullable: {reason}.")
+}
+
 /// One rustdoc sentence per choice-conformance group among `fields`, in the
 /// order the groups first appear (M9-A3 B4): the generated types take every
 /// field of a group as an `Option`, so the rule "exactly one" (`O.a`) or "at
@@ -612,6 +619,9 @@ fn emit_struct(
         if let Some(reason) = &f.relaxed_reason {
             line!(s, "    /// {}", relaxed_reason_doc(reason));
         }
+        if let Some(reason) = &f.nullable_reason {
+            line!(s, "    /// {}", nullable_reason_doc(reason));
+        }
         if fabric_scoped && f.fabric_sensitive {
             if f.mandatory_on_write {
                 // Mandatory in the model, relaxed for decode only: `None`
@@ -730,6 +740,7 @@ mod tests {
             choice: None,
             required_when: None,
             relaxed_reason: None,
+            nullable_reason: None,
             secret: false,
         };
         let d = Datatype {
@@ -791,6 +802,7 @@ mod tests {
             choice: None,
             required_when: None,
             relaxed_reason: reason.map(str::to_string),
+            nullable_reason: None,
             secret: false,
         };
         let want = "    /// Field FabricIndex (tag 254).\n    /// Optional: chip's servers do not send it.\n    pub fabric_index: Option<u8>,";
@@ -957,6 +969,7 @@ mod tests {
             }),
             required_when: None,
             relaxed_reason: None,
+            nullable_reason: None,
             secret: false,
         }
     }
@@ -1232,6 +1245,31 @@ mod tests {
         let mut s = String::new();
         emit_enum(&mut s, &enum_dt("OwnEnum", "enum8", &[(0, "A")]));
         assert!(!s.contains("A copy of"), "{s}");
+    }
+
+    #[test]
+    fn a_field_relaxed_to_nullable_states_why() {
+        // M9-A3 B7: MediaPlayback TrackStruct.TrackAttributes, a class-N
+        // FIELD_RELAXATIONS entry.
+        let mut f = note_field("TrackAttributes", false, None);
+        f.ty = "TrackAttributesStruct".to_string();
+        f.metatype = "object".to_string();
+        f.optional = false;
+        f.nullable = true;
+        f.nullable_reason = Some("chip's servers may send it null".to_string());
+        let d = Datatype {
+            fields: vec![f],
+            ..struct_dt("TrackStruct")
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
+        assert!(
+            s.contains(
+                "    /// Field TrackAttributes (tag 0).\n    /// Nullable: chip's servers may send it null.\n    pub track_attributes: Nullable<TrackAttributesStruct>,"
+            ),
+            "{s}"
+        );
+        assert!(!s.contains("Optional:"), "{s}");
     }
 
     // ---- M9-A3 B5: provisional clusters and presence dependencies ----------
