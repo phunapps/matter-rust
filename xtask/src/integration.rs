@@ -157,8 +157,12 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             events: EventStimulus::None,
         },
         // M9-A3 B5: Messages, which only tv-app serves among chip's example
-        // apps (B7 adds the media clusters). Nothing is stimulated: chip's
-        // Messages server logs no events, and tv-app takes no --app-pipe, so
+        // apps; M9-A3 B7: the media and TV-platform clusters, which tv-app
+        // serves (all-clusters serves only WakeOnLan and LowPower of them).
+        // Nothing is stimulated: chip's Messages server logs no events, the
+        // B7 tests use no event trigger (chip's AccountLogin server fails to
+        // log LoggedOut, and the other B7 events have no stimulus), and
+        // tv-app takes no --app-pipe, so
         // it gets neither --enable-key nor --app-pipe. tv-app does run chip's
         // interactive shell on stdin (`chip_build_libshell = true` in its
         // linux/args.gni, at v1.4.2.0 and master), which exits the app on
@@ -169,7 +173,7 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             target_suffix: "tv-app",
             binary: "chip-tv-app",
             fixed_qr: None,
-            tests: &["clusters_messages"],
+            tests: &["clusters_messages", "clusters_media"],
             extra_args: &[],
             needs_ota_image: false,
             linux_platform_mdns: false,
@@ -994,7 +998,7 @@ mod tests {
             (spec.name, spec.target_suffix, spec.binary),
             ("tv", "tv-app", "chip-tv-app")
         );
-        assert_eq!(spec.tests, ["clusters_messages"]);
+        assert_eq!(spec.tests, ["clusters_messages", "clusters_media"]);
         assert_eq!(spec.fixed_qr, None);
         assert_eq!(spec.events, EventStimulus::None);
         assert!(!spec.needs_ota_image && !spec.linux_platform_mdns);

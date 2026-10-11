@@ -15,13 +15,10 @@
 //! `list<octstr>`) run through tv-app's message list; chip's server refuses
 //! malformed requests.
 //!
-//! Run live on a Linux arm64 Pi (chip master 5cd2917a): tv-app needs Rosetta 2
-//! to build on Apple silicon (chip's ZAP ships x86_64-only for macOS). There,
-//! `messages_present_and_cancel_round_trip` passes; run after it in the same
-//! tv-app process, `messages_refuse_malformed_requests` times out because
-//! master tv-app's 15-buffer PacketBuffer pool fills with responses this
-//! controller has not yet ACKed (it passes run alone). Every expected value
-//! below is also read from chip source. Line numbers are chip master 5cd2917a:
+//! Run live on a Linux arm64 Pi against tv-app built at chip master 5cd2917a
+//! and at v1.4.2.0: tv-app needs Rosetta 2 to build on Apple silicon (chip's
+//! ZAP ships x86_64-only for macOS). Every expected value below is also read
+//! from chip source. Line numbers are chip master 5cd2917a:
 //!
 //! - examples/tv-app/tv-common/tv-app.matter:4100, :4123-4137: Messages on
 //!   endpoint 1 only, attributes 0 and 1 (plus globals), both commands;
@@ -54,8 +51,17 @@
 //! The tests run single-threaded (`--test-threads=1`, xtask `run_tests`)
 //! against one tv-app booted with a fresh KVS. tv-app's message list lives in
 //! memory only, and each test first cancels whatever is in it.
+//!
+//! Every exchange is followed by `settle_acks` (M9-A3 B7): chip master's
+//! tv-app has only 15 packet buffers (chip c37efec9db), and the responses
+//! matter-rust has not ACKed yet (it ACKs on a 200 ms timer, and not at all
+//! once the controller is dropped) ran it dry: unpaced, the device ACKed a
+//! request in `messages_refuse_malformed_requests` but never answered it.
+//! Paced, both tests pass at master; v1.4.2.0's tv-app allocates buffers from
+//! the heap, and both pass there unpaced too.
 
 use integration_tests::dut::DutConfig;
+use integration_tests::fixture::settle_acks;
 use integration_tests::sweep::{
     assert_exact_attribute_ids, attribute_tlv, decode_every_attribute, invoke_for_status,
     newer_than_codegen, ok, read_cluster_attributes,
@@ -90,13 +96,14 @@ async fn connect_tv() -> Option<(MatterController, u64)> {
     let (controller, node_id) = integration_tests::fixture::connect(&cfg)
         .await
         .expect("connect/commission DUT");
+    settle_acks().await;
     Some((controller, node_id))
 }
 
 /// Invoke a Messages command on [`EP`] and return the bare status it answers
 /// (neither command has a response command).
 async fn status_of(node: &Node, command: u32, fields: Vec<u8>) -> ImStatus {
-    invoke_for_status(
+    let status = invoke_for_status(
         node,
         CommandPath {
             endpoint: EP,
@@ -106,7 +113,9 @@ async fn status_of(node: &Node, command: u32, fields: Vec<u8>) -> ImStatus {
         fields,
     )
     .await
-    .unwrap()
+    .unwrap();
+    settle_acks().await;
+    status
 }
 
 /// `CancelMessagesRequest(ids)`.
@@ -125,6 +134,7 @@ async fn messages(node: &Node) -> (Vec<msg::MessageStruct>, Vec<Vec<u8>>) {
     let attrs = read_cluster_attributes(node, EP, msg::CLUSTER_ID)
         .await
         .unwrap();
+    settle_acks().await;
     (
         msg::decode_messages(attribute_tlv(&attrs, msg::attribute_id::MESSAGES)).unwrap(),
         msg::decode_active_message_i_ds(attribute_tlv(
@@ -191,6 +201,7 @@ async fn messages_present_and_cancel_round_trip() {
         other => newer_than_codegen("Messages", other),
     })
     .await;
+    settle_acks().await;
     assert_exact_attribute_ids("Messages", &attrs, &[0, 1]);
     assert_eq!(
         feature_map(&node).await,
@@ -345,5 +356,6 @@ async fn feature_map(node: &Node) -> u32 {
         .into_iter()
         .find(|(p, _)| p.attribute == FEATURE_MAP)
         .unwrap();
+    settle_acks().await;
     decode_u32(&payload_tlv(&value)).unwrap()
 }

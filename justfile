@@ -206,7 +206,8 @@ integration-microwave-oven:
     cargo run -p xtask -- integration microwave-oven
 
 # Local only, not in the nightly workflow; like integration-rvc, the build
-# needs Rosetta 2 on Apple Silicon (chip's ZAP ships x86_64-only for macOS).
-# Build + launch tv-app and run the Messages tests (M9-A3 B5; B7 adds media).
+# needs Rosetta 2 on Apple Silicon (chip's ZAP ships x86_64-only for macOS), so
+# it runs on a Linux host. Build + launch tv-app and run the Messages tests
+# (M9-A3 B5) and the media and TV-platform tests (M9-A3 B7).
 integration-tv:
     cargo run -p xtask -- integration tv

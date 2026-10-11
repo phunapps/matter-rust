@@ -4,7 +4,7 @@
 //! `xtask integration` clears at the start of every run.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use matter_controller::{
@@ -69,6 +69,29 @@ pub async fn connect(cfg: &DutConfig) -> Result<(MatterController, u64)> {
         .node_id;
     std::fs::write(cfg.node_sidecar(), node_id.to_string()).context("writing node-id sidecar")?;
     Ok((controller, node_id))
+}
+
+/// How long [`settle_acks`] waits: past matter-rust's 200 ms MRP
+/// standalone-ACK timeout (`MrpConfig::standalone_ack_deadline`), with margin.
+pub const ACK_SETTLE: Duration = Duration::from_millis(300);
+
+/// Wait until the standalone ACK for the last response received has gone out
+/// (M9-A3 B7).
+///
+/// matter-rust ACKs a response on its 200 ms standalone-ACK timer, not when
+/// the exchange closes (chip flushes the ACK at once), and drops the pending
+/// ACK if the controller is dropped first. Until the ACK arrives the device
+/// keeps the response in a buffer and retransmits it. chip master's tv-app
+/// has only 15 packet buffers (chip c37efec9db: `#ifndef
+/// CHIP_DEVICE_LAYER_TARGET_DARWIN` leaves the pool at its default on Linux,
+/// where chip's `src/platform/BUILD.gn` defines that macro as 0),
+/// so a burst of exchanges, or a controller dropped right after one, runs the
+/// pool dry and the device drops a response (seen live against tv-app built at
+/// master 5cd2917a). Calling this after each exchange keeps at most one
+/// response unACKed. It waits on our own timer, not on the device, so there is
+/// no condition to poll.
+pub async fn settle_acks() {
+    tokio::time::sleep(ACK_SETTLE).await;
 }
 
 /// IM status `INVALID_IN_STATE` (0xCB).
