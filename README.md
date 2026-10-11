@@ -151,8 +151,10 @@ of the spec. For every protocol layer:
 We also use:
 
 - `connectedhomeip` (the C++ reference) as a second source, both for test vectors
-  and as a live peer — `just integration` runs the suite against chip's
-  `all-clusters-app`, `lock-app`, and `evse-app`,
+  and as a live peer — `just integration` and its sibling recipes run the suite
+  against chip's `all-clusters-app`, `lock-app`, `evse-app`, `tv-app` (in the
+  nightly at v1.4.2.0 from its next run, and on a Raspberry Pi locally), and
+  `rvc-app` and `microwave-oven-app` (on a Raspberry Pi, local only),
 - official spec test vectors where they exist (notably PASE/SPAKE2+ in spec §3.10),
 - [`proptest`](https://docs.rs/proptest) for roundtrip properties,
 - [`cargo-fuzz`](https://rust-fuzz.github.io/book/) for parsers,
