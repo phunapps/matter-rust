@@ -78,11 +78,18 @@ These are language-idiomatic differences. They do not affect interop.
   before. `AccessControlEntryStruct`, `AccessRestrictionEntryStruct`, (since
   M9-A3 B4: IcdManagement `RegisteredClients` is read-only)
   `MonitoringRegistrationStruct`, (M9-A3 B4) ScenesManagement
-  `SceneInfoStruct` and (M9-A3 B5) Messages `MessageStruct` are
-  decode-only. matter.js 0.16.11 declares `SceneInfoStruct`'s
+  `SceneInfoStruct`, (M9-A3 B5) Messages `MessageStruct` and (M9-A3 B6)
+  EcosystemInformation `EcosystemDeviceStruct` and `EcosystemLocationStruct`
+  are decode-only. matter.js 0.16.11 declares `SceneInfoStruct`'s
   fabric-sensitive fields mandatory too (`TlvSceneInfo`:
   `currentScene: TlvField(1, …)`, `currentGroup`, `sceneValid`,
-  `clusters/scenes-management.js`); we decode them as `Option`. ACL writes go through
+  `clusters/scenes-management.js`), and EcosystemInformation's six as well
+  (`TlvEcosystemDevice`: `deviceTypes: TlvField(4, …)`,
+  `uniqueLocationIDs: TlvField(5, …)`, `uniqueLocationIDsLastEdit:
+  TlvField(6, …)`; `TlvEcosystemLocation`: `uniqueLocationId: TlvField(0, …)`,
+  `locationDescriptor: TlvField(1, …)`, `locationDescriptorLastEdit:
+  TlvField(2, …)`; `clusters/ecosystem-information.js`); we decode them as
+  `Option`. ACL writes go through
   matter-controller's hand-written `acl.rs`, whose `read_acl` drops any entry
   with a withheld field rather than reading it as a wildcard.
 
@@ -153,8 +160,9 @@ These are language-idiomatic differences. They do not affect interop.
   `0xFFFF` decodes there and is an error here.
 - **The global location descriptor is `LocationDescriptorStruct`**
   (`matter-clusters` 0.6.0, M9-A3 B3). The specification's lowercase
-  `locationdesc` struct, used by ServiceArea's `AreaInfoStruct.LocationInfo`,
-  takes chip's name (`global-structs.xml`, `controller-clusters.matter`);
+  `locationdesc` struct, used by ServiceArea's `AreaInfoStruct.LocationInfo`
+  and (M9-A3 B6) EcosystemInformation's
+  `EcosystemLocationStruct.LocationDescriptor`, takes chip's name (`global-structs.xml`, `controller-clusters.matter`);
   matter.js 0.16.11 calls it `TlvLocationdesc` (`globals`). The wire format is
   the same. Each cluster that uses it gets its own copy of the struct, as with
   `MeasurementAccuracyStruct`.

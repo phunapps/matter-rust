@@ -179,10 +179,11 @@ payload struct (Switch already had its seven):
 
 ServiceArea, MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's
 GoHome and its events; RvcRunMode / RvcCleanMode's refused changes, while
-all-clusters covers their attributes and ChangeToMode live) are validated by
-decode tests and the chip 1.4.2 XML check only: their live tests are written
-but have not run, because rvc-app and microwave-oven-app need Rosetta 2 to
-build on Apple silicon.
+all-clusters covers their attributes and ChangeToMode live) run live against
+chip master 5cd2917a's rvc-app (8 of 8 tests) and microwave-oven-app (3 of
+3), built for Linux arm64 and run on a Raspberry Pi. They are not in the
+nightly, and they do not run on the Mac: rvc-app and microwave-oven-app need
+Rosetta 2 to build on Apple silicon.
 
 ### matter-clusters: Changed — rustdoc states provisional elements and choice groups
 
@@ -387,8 +388,10 @@ The codegen now generates only what a client can use:
   vectors. `Messages` is fabric-scoped: another fabric's entry arrives
   without its fabric-sensitive fields, so `MessageStruct`'s fields are
   `Option` (`None` = withheld). Its `fabric_index`, and the events'
-  `fabric_index`, are `Option` too: chip does not fabric-scope them and its
-  servers send them without FabricIndex.
+  `fabric_index`, are `Option` too: chip does not fabric-scope them. chip's
+  SDK servers and tv-app's delegate do not filter entries by fabric, and no
+  chip-SDK server can send FabricIndex (the generated types have no field
+  254).
 
 chip's zap and controller codegen mark WaterHeaterManagement and
 DeviceEnergyManagement provisional (at v1.4.2.0 and master), and Messages at
@@ -404,12 +407,19 @@ master host, is not built). DeviceEnergyManagement, EnergyEvse and
 PowerTopology commands and events run live only against chip master's
 evse-app, locally (evse-app does not exist at v1.4.2.0 and is not in the
 nightly); the nightly decodes their attributes, and invokes GetTargets once,
-on v1.4.2.0's all-clusters. Messages is validated by decode tests, two
-matter.js vectors and the chip 1.4.2 XML check only: its live tests are
-written but have not run, because tv-app, its only chip host, needs Rosetta
-2 to build on Apple silicon. chip's servers send every `MessageStruct` field
-to every fabric and no FabricIndex, so on a chip device every entry decodes
-in full with `fabric_index` `None`.
+on v1.4.2.0's all-clusters. Messages has run live once, against chip master
+5cd2917a's tv-app (its only chip host), built for Linux arm64 and run on a
+Raspberry Pi: `messages_present_and_cancel_round_trip` passes;
+`messages_refuse_malformed_requests` times out in the suite and passes when
+run alone. Master's tv-app gets a 15-buffer PacketBuffer pool (its
+`CHIPProjectAppConfig.h` sets 500 inside `#ifndef
+CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
+previous test's controller left unACKed when it was dropped exhaust it. It is
+not in the nightly and does not run on the Mac (tv-app needs Rosetta 2 to
+build on Apple silicon); beyond that run, Messages is validated by decode
+tests, two matter.js vectors and the chip 1.4.2 XML check. chip's servers
+send every `MessageStruct` field to every fabric and no FabricIndex, so on a
+chip device every entry decodes in full with `fabric_index` `None`.
 
 ### matter-clusters: Added — diagnostics and infrastructure clusters
 
@@ -434,9 +444,20 @@ in full with `fabric_index` `None`.
   commissioning: `matter-commissioning` keeps driving commissioning with its
   hand-written subset, and a new test there pins that the two encode every
   command it sends identically. The generated response decoders follow the
-  specification, so `DebugText` (GeneralCommissioning responses) and
-  `ErrorValue` (`ConnectNetworkResponse`) are mandatory; the commissioning
-  flow's own decoders accept them missing.
+  specification, so `DebugText` (the ArmFailSafe, SetRegulatoryConfig and
+  CommissioningComplete responses), `ErrorValue` (`ConnectNetworkResponse`)
+  and `BasicCommissioningInfo`'s `MaxCumulativeFailsafeSeconds` are
+  mandatory; `matter-commissioning`'s response decoders, which the
+  commissioning flow uses, accept them missing. GeneralCommissioning's
+  NetworkRecovery (NR) feature and its three attributes
+  (`RecoveryIdentifier`, `NetworkRecoveryReason` and
+  `IsCommissioningWithoutPower`) come from the model only, where they are
+  provisional; the 1.4.2 XML does not have them. chip's Per-Device
+  Credentials elements of NetworkCommissioning (the PDC feature,
+  `QueryIdentity` and its response, and the `NetworkIdentity`,
+  `ClientIdentifier` and `PossessionNonce` fields), which chip's zap and
+  controller codegen carry at both refs, are not generated: the 1.4.2, 1.5
+  and 1.5.1 specification XML and the model do not have them.
 - **Actions (0x0025)**: `ActionList`, `EndpointLists`, `SetupURL`, the twelve
   action commands, and the `StateChanged` and `ActionFailed` events.
 - **EcosystemInformation (0x0750)**: `DeviceDirectory` and
@@ -444,8 +465,9 @@ in full with `fabric_index` `None`.
   entries decode with their fabric-sensitive fields `None` (spec §5.4). The
   global location struct is generated as
   `ecosystem_information::LocationDescriptorStruct`. No chip example app
-  fills its directories (fabric-bridge-app adds the cluster, empty, to its
-  bridged-device endpoints), so it is checked by decode smoke only.
+  fills its directories (fabric-bridge-app and fabric-sync add the cluster,
+  empty, to their bridged-device endpoints), so it is checked by decode
+  smoke and `chip-xml-conformance.py` only.
 - **CommissionerControl (0x0751)**: `SupportedDeviceCategories`,
   `RequestCommissioningApproval`, `CommissionNode` and its
   `ReverseOpenCommissioningWindow` response, and the
@@ -466,6 +488,34 @@ only, chip's zap XML marks the EcosystemInformation cluster and its
 both refs do not, so it carries no provisional note either (CommissionerControl
 is marked provisional at neither ref).
 
+chip's zap XML marks GeneralCommissioning's TermsAndConditions (TC) feature,
+its five TC attributes and `SetTCAcknowledgements` (with its response)
+provisional at both refs, and its controller codegen marks the TC
+attributes; v1.4.2.0's zap and controller codegen also mark
+NetworkCommissioning's `SupportedWiFiBands`, `SupportedThreadFeatures` and
+`ThreadVersion`. The 1.4.2 XML and the model do not, so none of them carries
+a provisional note.
+
+How each of these clusters was validated:
+
+- **Live against chip's all-clusters**, at local master 5cd2917a and at
+  v1.4.2.0 in the nightly (run 38120287902 on 9fe51d8, linux-x64):
+  LocalizationConfiguration, TimeFormatLocalization, UnitLocalization,
+  PowerSourceConfiguration, Actions (refusals only: all-clusters' stub has
+  no real actions and emits no events), GeneralCommissioning,
+  NetworkCommissioning (Ethernet, reads only), DiagnosticLogs, and the
+  Software, Wi-Fi, Thread and Ethernet diagnostics clusters. The four tests
+  of the diagnostics clusters and DiagnosticLogs also passed against
+  v1.4.2.0's all-clusters built for Linux arm64 and run on a Raspberry Pi.
+- **Not run live; decode smoke and `chip-xml-conformance.py` only:**
+  EcosystemInformation (fabric-bridge-app and fabric-sync serve it with
+  empty directories), CommissionerControl (hosted by fabric-bridge-app and
+  fabric-sync; fabric-bridge-app builds on a Linux arm64 Pi at chip master
+  5cd2917a, but no test has run against it), and ThreadBorderRouterManagement,
+  ThreadNetworkDirectory and WiFiNetworkManagement (hosted by
+  network-manager-app; ThreadBorderRouterManagement also by thread-br-app and
+  others).
+
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 
 - GroupKeyManagement `GroupKeySetStruct`'s derived `Debug` printed its three
@@ -474,7 +524,9 @@ is marked provisional at neither ref).
   set leaked the group keys. It now prints `<redacted>` for each key. Not a
   breaking change: the struct still implements `Clone`, `Debug` and
   `PartialEq` (`Debug` is now written by hand instead of derived), and its
-  fields, types and wire bytes are unchanged.
+  fields, types and wire bytes are unchanged. `KeySetReadResponse`'s `{:?}`
+  output changes too: it holds a `GroupKeySetStruct`, and its derived
+  `Debug` prints it through the redacting one.
 - The same applies to the structs this release adds that carry a secret:
   ThreadBorderRouterManagement `DatasetResponse` and ThreadNetworkDirectory
   `OperationalDatasetResponse` (Thread datasets, network key included),

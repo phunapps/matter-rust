@@ -58,9 +58,9 @@ attributes, by area:
   `DeviceDirectory` and `LocationDirectory` entries decode with their
   fabric-sensitive fields `None`), CommissionerControl (with its event; the
   approval flow itself is not implemented). No chip example app fills
-  EcosystemInformation's directories (fabric-bridge-app adds the cluster,
-  empty, to its bridged-device endpoints): it is checked by decode smoke and
-  `chip-xml-conformance.py` only.
+  EcosystemInformation's directories (fabric-bridge-app and fabric-sync add
+  the cluster, empty, to their bridged-device endpoints): it is checked by
+  decode smoke and `chip-xml-conformance.py` only.
 - **Network infrastructure** — ThreadBorderRouterManagement,
   ThreadNetworkDirectory, WiFiNetworkManagement (codecs only: no dataset or
   credential handling). network-manager-app, chip's only example app that
@@ -117,15 +117,16 @@ attributes, by area:
   GeneralCommissioning, NetworkCommissioning. The last two are codecs for use
   outside commissioning: `matter-commissioning` drives commissioning with its
   own hand-written subset of their commands, which encodes byte for byte the
-  same for the same values (its `tests/generated_codec_parity.rs`). Its response decoders accept a
-  missing `DebugText` or `ErrorValue`; the generated ones follow the
-  specification, where both are mandatory.
+  same for the same values (its `tests/generated_codec_parity.rs`).
+  `matter-commissioning`'s response decoders accept a missing `DebugText`,
+  `ErrorValue` or `MaxCumulativeFailsafeSeconds`; the generated ones follow
+  the specification, where all three are mandatory.
 - **Node configuration** — LocalizationConfiguration, TimeFormatLocalization,
   UnitLocalization, PowerSourceConfiguration.
 - **Diagnostics** — SoftwareDiagnostics, WiFiNetworkDiagnostics,
   ThreadNetworkDiagnostics (with their events), EthernetNetworkDiagnostics,
-  DiagnosticLogs (the request and its
-  response; the BDX transfer is not implemented).
+  DiagnosticLogs (the request and its response; the BDX transfer is not
+  implemented).
 
 Verification varies by cluster, and the level is deliberate rather than
 accidental. Every cluster has decode-smoke coverage. matter.js 0.16.11
@@ -153,19 +154,35 @@ app the harness drives serves Thermostat's Matter 1.4 weekly schedule (SCH, at
 v1.4.2.0 or master), so it is validated by decode tests, the matter.js vector
 and the chip 1.4.2 XML check only. ServiceArea,
 MicrowaveOvenControl and the rvc-app paths (RvcOperationalState's GoHome and
-its events; RvcRunMode / RvcCleanMode's refused changes) are validated the same
-way only for now: their live tests are written but have not run, because
-rvc-app and microwave-oven-app need Rosetta 2 to build on Apple silicon.
-Messages' live tests are written but have not run either (tv-app, its only
-chip host, needs Rosetta 2 to build on Apple silicon); it is validated by
-decode tests, two matter.js vectors and the chip 1.4.2 XML check only.
+its events; RvcRunMode / RvcCleanMode's refused changes) run live against
+chip master 5cd2917a's rvc-app (8 of 8 tests) and microwave-oven-app (3 of 3),
+built for Linux arm64 and run on a Raspberry Pi; they are not in the nightly
+and do not run on the Mac, because rvc-app and microwave-oven-app need
+Rosetta 2 to build on Apple silicon. Messages has run live once, against chip
+master 5cd2917a's tv-app (its only chip host) on the same Pi: one of its two
+tests passes; `messages_refuse_malformed_requests` times out in the suite and
+passes when run alone, because master's tv-app runs on a 15-buffer
+PacketBuffer pool that responses the previous test left unACKed exhaust.
+Beyond that run, Messages is validated by decode tests, two matter.js vectors
+and the chip 1.4.2 XML check.
 EnergyPreference runs live against chip's all-clusters at master (locally)
 and v1.4.2.0 (the nightly). WaterHeaterManagement runs live only against chip
 v1.4.2.0 (the nightly); master's server is unexercised, because master's
 all-clusters no longer serves it and water-heater-app is not built.
 EnergyEvse, DeviceEnergyManagement and PowerTopology commands and events run
 live only against chip master's evse-app, locally; the nightly decodes their
-attributes on v1.4.2.0's all-clusters.
+attributes on v1.4.2.0's all-clusters. The node configuration clusters,
+Actions (refusals only: all-clusters' stub has no real actions and emits no
+events), GeneralCommissioning, NetworkCommissioning (Ethernet, reads only),
+DiagnosticLogs and the Software, Wi-Fi, Thread and Ethernet diagnostics
+clusters run live against chip's all-clusters at master 5cd2917a (locally)
+and v1.4.2.0 (the nightly, run 38120287902); the four tests of the
+diagnostics clusters and DiagnosticLogs also passed against v1.4.2.0 built
+for Linux arm64 on a Raspberry Pi.
+EcosystemInformation, CommissionerControl (hosted by fabric-bridge-app and
+fabric-sync), ThreadBorderRouterManagement, ThreadNetworkDirectory and
+WiFiNetworkManagement (hosted by network-manager-app) have not run live: they
+are validated by decode smoke and `chip-xml-conformance.py` only.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`

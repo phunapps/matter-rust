@@ -88,12 +88,16 @@
 //!   `NetworkCommissioning` (codecs for use outside commissioning:
 //!   `matter-commissioning` drives commissioning with its own hand-written
 //!   subset of these commands, which encodes the same values identically).
+//!   The generated response decoders follow the specification, so they are
+//!   stricter than `matter-commissioning`'s, which the commissioning flow
+//!   uses: `DebugText`, `ErrorValue` and `MaxCumulativeFailsafeSeconds` are
+//!   required here and may be missing there.
 //! - **Node configuration:** `LocalizationConfiguration`,
 //!   `TimeFormatLocalization`, `UnitLocalization`, `PowerSourceConfiguration`.
 //! - **Diagnostics:** `SoftwareDiagnostics`, `WiFiNetworkDiagnostics`,
 //!   `ThreadNetworkDiagnostics` (with their events),
-//!   `EthernetNetworkDiagnostics`, `DiagnosticLogs` (the
-//!   request and its response; the BDX transfer is not implemented).
+//!   `EthernetNetworkDiagnostics`, `DiagnosticLogs` (the request and its
+//!   response; the BDX transfer is not implemented).
 //!
 //! Note that this crate holds **codecs only**. For the administration
 //! clusters in particular, encoding a command is not the same as running the
