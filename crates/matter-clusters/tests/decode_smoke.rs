@@ -5143,8 +5143,12 @@ fn network_commissioning_attributes_requests_and_responses_decode() {
 // default "https://example.com" in all-clusters-app.matter; the same values at
 // v1.4.2.0 and master), except SupportedCommands: the stub serves 0 for every
 // action, so 0b11 here is synthetic, to exercise the bitmap. The requests and
-// both events are synthetic: all-clusters' stub answers every command
-// NotFound and never emits either event.
+// both events are synthetic: chip's server refuses every command before the
+// stub's delegate runs (InvalidCommand on a served action, whose
+// SupportedCommands is 0; NotFound on an unknown action id; v1.4.2.0
+// actions-server.cpp HandleCommand, master ActionsCluster.cpp
+// ValidateActionExists / ValidateCommandSupported), and the stub never emits
+// either event.
 
 #[test]
 fn actions_lists_and_requests_decode() {
