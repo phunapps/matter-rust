@@ -39,8 +39,11 @@ fn scalar_rust(ty: &str) -> Option<&'static str> {
         "single" => "f32",
         "double" => "f64",
         "string" => "String",
-        // byte strings: generic + hardware/IP address octet-string semantics
-        "octstr" | "hwadr" | "ipadr" | "ipv4adr" | "ipv6adr" => "Vec<u8>",
+        // byte strings: generic + hardware/IP address octet-string semantics.
+        // `ipv6pre` is the IPv6 Prefix data type (Core spec §7.19.2: an octstr
+        // of 1 to 17 bytes; ThreadNetworkDiagnostics MeshLocalPrefix, M9-A3
+        // B6), carried as its raw bytes like `ipv6adr`.
+        "octstr" | "hwadr" | "ipadr" | "ipv4adr" | "ipv6adr" | "ipv6pre" => "Vec<u8>",
         // u32: primitive + semantic globals
         "uint24" | "uint32" | "cluster-id" | "attrib-id" | "command-id" | "event-id"
         | "devtype-id" | "epoch-s" | "elapsed-s" | "map32" => "u32",
@@ -327,6 +330,20 @@ mod tests {
             "Nullable<u8>"
         );
         assert_eq!(base_type("list", Some("tag")), "Vec<u8>");
+    }
+
+    #[test]
+    fn ipv6_prefix_is_a_byte_string() {
+        // `ipv6pre` (Core spec §7.19.2, an octstr of 1 to 17 bytes) is
+        // ThreadNetworkDiagnostics MeshLocalPrefix's type. codegen stopped with
+        // "unknown type `ipv6pre`" before it was mapped (M9-A3 B6).
+        assert!(is_known_type("ipv6pre"));
+        assert_eq!(base_type("ipv6pre", None), "Vec<u8>");
+        assert_eq!(
+            rust_type("ipv6pre", None, true, false, Position::Attribute),
+            "Nullable<Vec<u8>>"
+        );
+        assert_eq!(base_type("list", Some("ipv6pre")), "Vec<Vec<u8>>");
     }
 
     #[test]

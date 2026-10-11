@@ -1010,13 +1010,18 @@ const RUST_HANDLED_TYPE_TOKENS = new Set([
 // controller-clusters.matter: `struct LocationDescriptorStruct`), so
 // scripts/chip-xml-conformance.py finds it among chip's zap global structs and
 // checks its fields. A lowercase global composite with no entry here fails the
-// dump (inlineGlobalDatatypes), so no such name can reach the emitter.
+// dump (inlineGlobalDatatypes), so no such name can reach the emitter. An entry
+// that no allowlisted cluster inlines fails the dump too (M9-A3 B6), like a
+// stale KEEP_DATATYPES key: a model rename of the global must not leave a dead
+// entry behind. ServiceArea (B3) and EcosystemInformation (B6) inline it.
 const GLOBAL_DATATYPE_NAMES = new Map([['locationdesc', 'LocationDescriptorStruct']]);
+const appliedGlobalRenames = new Set();
 
 // Why a GLOBAL_DATATYPE_NAMES rename of global `name` (metatype `meta`) to
 // `rename` cannot be applied in `clusterName`, or null when it can. `taken`
 // holds the datatype names already in the cluster (its own, plus globals
-// inlined so far). Two ways a rename would go silently wrong:
+// inlined so far); `renameIsGlobal` is whether the model has a global datatype
+// named `rename` itself. Three ways a rename would go silently wrong:
 // - only a struct may be renamed: dumpDatatype records a renamed datatype's
 //   base as `struct` (the anonymous-struct convention), so a renamed enum or
 //   bitmap would lose its enum8 / enum16 / map8.. base, and the emitter, which
@@ -1024,30 +1029,40 @@ const GLOBAL_DATATYPE_NAMES = new Map([['locationdesc', 'LocationDescriptorStruc
 //   would narrow an enum16, map16 or map32 to u8;
 // - the new name must be free in the cluster: a cluster-local datatype (or an
 //   earlier inlined global) of that name would leave the cluster with two
-//   datatypes under one name, and references to it ambiguous.
-function globalRenameError(clusterName, name, rename, meta, taken) {
+//   datatypes under one name, and references to it ambiguous;
+// - the new name must not be a model global's own name (M9-A3 B6). `taken`
+//   only knows the globals inlined so far, so the check above depends on
+//   inlining order: a global of that name inlined AFTER the rename would be
+//   skipped as already present (inlineGlobalDatatypes), and every reference
+//   to it would silently resolve to the renamed struct.
+function globalRenameError(clusterName, name, rename, meta, taken, renameIsGlobal) {
   if (meta !== 'object') {
     return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global ${meta} \`${name}\` — only a struct may be renamed (a renamed ${meta} would get base \`struct\` and a u8 backing)`;
   }
   if (taken.has(rename)) {
     return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global \`${name}\` to \`${rename}\`, which is already a datatype of the cluster`;
   }
+  if (renameIsGlobal) {
+    return `${clusterName}: GLOBAL_DATATYPE_NAMES renames global \`${name}\` to \`${rename}\`, which is the name of another model global datatype`;
+  }
   return null;
 }
 
 // Load-time self-check of globalRenameError (the only rename in the model
-// today is a struct with a free name, so neither refusal would otherwise run
-// on regeneration). Each row: metatype, names already taken, whether refused.
-for (const [meta, taken, refused] of [
-  ['object', [], false],
-  ['object', ['AreaStruct'], false],
-  ['object', ['LocationDescriptorStruct'], true],
-  ['enum', [], true],
-  ['bitmap', [], true],
+// today is a struct with a free name, so no refusal would otherwise run on
+// regeneration). Each row: metatype, names already taken, whether the new name
+// is a model global's, whether refused.
+for (const [meta, taken, renameIsGlobal, refused] of [
+  ['object', [], false, false],
+  ['object', ['AreaStruct'], false, false],
+  ['object', ['LocationDescriptorStruct'], false, true],
+  ['object', [], true, true],
+  ['enum', [], false, true],
+  ['bitmap', [], false, true],
 ]) {
-  const err = globalRenameError('SelfCheck', 'locationdesc', 'LocationDescriptorStruct', meta, new Set(taken));
+  const err = globalRenameError('SelfCheck', 'locationdesc', 'LocationDescriptorStruct', meta, new Set(taken), renameIsGlobal);
   if ((err !== null) !== refused) {
-    fail(`globalRenameError self-check: renaming a global of metatype ${meta} with [${taken}] taken should ${refused ? '' : 'not '}be refused`);
+    fail(`globalRenameError self-check: renaming a global of metatype ${meta} with [${taken}] taken (new name a model global: ${renameIsGlobal}) should ${refused ? '' : 'not '}be refused`);
   }
 }
 
@@ -1099,8 +1114,9 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
       fail(`${clusterName}: global ${meta} \`${name}\` is lowercase — add it to GLOBAL_DATATYPE_NAMES (or RUST_HANDLED_TYPE_TOKENS)`);
     }
     if (rename) {
-      const err = globalRenameError(clusterName, name, rename, meta, present);
+      const err = globalRenameError(clusterName, name, rename, meta, present, globalDatatypeNode(rename) !== null);
       if (err) fail(err);
+      appliedGlobalRenames.add(name);
     }
     const dt = dumpDatatype(node, `${clusterName}.global`, rename);
     // The model's own name, for the generated rustdoc ("generated from the
@@ -1939,6 +1955,11 @@ for (const name of PROVISIONAL_CLUSTERS.keys()) {
 }
 for (const key of KEEP_DATATYPES.keys()) {
   if (!appliedKeeps.has(key)) fail(`KEEP_DATATYPES ${key} matched no datatype — model drift; review KEEP_DATATYPES`);
+}
+for (const name of GLOBAL_DATATYPE_NAMES.keys()) {
+  if (!appliedGlobalRenames.has(name)) {
+    fail(`GLOBAL_DATATYPE_NAMES ${name} matched no inlined global — model drift; review GLOBAL_DATATYPE_NAMES`);
+  }
 }
 checkNoRecordNamesAPrunedDatatype();
 for (const key of FIELD_RELAXATIONS.keys()) {
