@@ -97,7 +97,7 @@ breaking change.
   the `open_window` example does. The trait set (`Clone`, `Debug`) and the
   fields are unchanged.
 
-### matter-controller: Fixed (security) — byte strings in invoke responses stay out of `Debug` output
+### matter-controller: Fixed (security) — byte strings and string PINs in invoke responses stay out of `Debug` output
 
 - `InvokeResult` (the result of `Node::invoke` and `Node::invoke_timed`)
   derived `Debug`, and `InvokeResult::Data` carries the decoded response
@@ -114,9 +114,14 @@ breaking change.
   responses carry a PIN in a character string, AccountLogin
   `GetSetupPINResponse` (a setup PIN for PASE with the Commissionee) and
   ContentControl `ResetPINResponse`, so in those two every string at any
-  depth also prints as `Utf8("<redacted>")`. `path` and the `Status`
-  variant print as before. `Value`'s own `Debug` in
-  `matter-codec` is unchanged, so TLV debugging elsewhere still shows bytes.
+  depth also prints as `Utf8("<redacted>")`. Those PINs leaked the same way
+  in every published release, `0.1.0` through `0.18.1`: since `0.1.0`,
+  `Node::invoke` and `Node::invoke_timed` take any command path and decode
+  response strings as `Value::Utf8`, so a `{:?}` of a GetSetupPIN or
+  ResetPIN result, sent with hand-built fields, printed the PIN, even though
+  `matter-clusters` generates neither cluster before 0.6.0. `path` and the
+  `Status` variant print as before. `Value`'s own `Debug` in `matter-codec`
+  is unchanged, so TLV debugging elsewhere still shows bytes.
 - `InvokeResult` keeps `Clone`, `Debug` and `PartialEq` (`Debug` is now
   written by hand), and its variants and fields are unchanged.
 - Known remaining exposure: the strings in every other invoke response
@@ -814,7 +819,7 @@ How each of these clusters was validated:
   change between specification revisions; such a change is still a breaking
   `matter-clusters` release. Every attribute, command and response, and both
   events. `ResetPinResponse`'s PIN is redacted in its `Debug`, and in a raw
-  `InvokeResult`'s from `matter-controller` 0.18.2. chip's zap XML and
+  `InvokeResult` from `matter-controller` 0.18.2. chip's zap XML and
   controller codegen mark the cluster provisional too (both refs). chip
   v1.4.2.0's codegen has an older shape of the cluster (five features,
   attributes 0 to 7, no block lists or block-list commands, one event (no
