@@ -34,8 +34,15 @@ lint:
 # so the gate pairs this with `doctest`.
 
 # Unit + integration tests via nextest (CI: test job).
+#
+# The second line re-runs matter-commissioning's loopback tests with
+# `tracing` on but `wiretrace` off. `--all-features` turns on `wiretrace`,
+# which compiles out `tracing_without_wiretrace_logs_no_payload_bytes` (the
+# guard that plain `tracing` logs no message payload bytes, IPK and Wi-Fi
+# passphrase included), so without this line that test would never run.
 test:
     cargo nextest run --workspace --all-features --no-fail-fast
+    cargo nextest run -p matter-commissioning --features driver,tracing --test commission_loopback --no-fail-fast
 
 # Run only tests matching a filter, e.g. `just test-one byte_parity`.
 test-one PATTERN:
