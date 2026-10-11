@@ -1314,7 +1314,10 @@ function foreignDatatype(ref) {
   if (tableProblem) return { problem: tableProblem };
   const problem = copiedFieldProblem(ref, owner, cluster, node);
   if (problem) return { problem };
-  return { owner, name, node };
+  // The resolved cluster's canonical name, not the reference's spelling:
+  // Matter.clusters() also resolves a camelCase owner, and `copiedFrom` and
+  // the two-owners check must see one owner per cluster.
+  return { owner: cluster.name, name, node };
 }
 
 // Why a field (or list entry) of `node`, a datatype of the owning `cluster`,
@@ -1534,8 +1537,17 @@ function ownerKeyedEntryProblem(ref, datatype, tables = OWNER_KEYED_FIELD_TABLES
     // The list-entry half: Endpoints is a list of the global endpoint-no; the
     // taken set naming it is synthetic (no cluster defines its own).
     ['a list-entry type the cluster defines itself', [{ type: 'GroupKeyManagement.GroupInfoMapStruct' }], new Set(['endpoint-no']), 'field Endpoints has the type endpoint-no, which the cluster also defines'],
+    // Matter.clusters() also resolves a camelCase owner: both spellings name
+    // one owner, not two.
+    ['one owner in two spellings', [{ type: 'contentLauncher.AdditionalInfoStruct' }, { entryType: 'ContentLauncher.AdditionalInfoStruct' }], new Set(), null],
   ]) {
     expect(`planForeignCopies (${what})`, planForeignCopies(elements, taken).problem, want);
+  }
+  // The owner (and so `copiedFrom`) is the resolved cluster's canonical name,
+  // whatever the reference's spelling.
+  const camelOwner = foreignDatatype('contentLauncher.AdditionalInfoStruct').owner;
+  if (camelOwner !== 'ContentLauncher') {
+    mismatches.push(`foreignDatatype(\`contentLauncher.AdditionalInfoStruct\`).owner: want ContentLauncher, got ${camelOwner}`);
   }
   if (mismatches.length > 0) fail(`foreignDatatype self-check:\n  ${mismatches.join('\n  ')}`);
 }
