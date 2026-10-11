@@ -665,12 +665,14 @@ fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
 /// `MediaPlayback` `TrackStruct.TrackAttributes`). No encoder guard backs
 /// them, so, like class C, they are safe only on a field we **decode**: a
 /// request command field, or a field of a struct the emitter encodes ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names)),
-/// would let an encoder silently omit a field the model makes mandatory. The
-/// dump refuses the same on regeneration (`dumpField`,
-/// `checkConditionalRelaxations`); this is the Rust-side twin, run on every
-/// `codegen --check`. An entry naming no generated field is an error too, so
-/// a stale entry cannot disable the check. A §5.4 entry (its field carries
-/// `mandatoryOnWrite`) is checked by [`check_struct_write_marker`] instead.
+/// would let an encoder silently omit a field the model makes mandatory, or
+/// send a null the model forbids. The dump refuses the same on regeneration
+/// (`dumpField`, `checkConditionalRelaxations`); this is the Rust-side twin,
+/// run on every `codegen --check`. An entry naming no generated field is an
+/// error too, so a stale entry cannot disable the check. A class-P §5.4 entry
+/// (its field carries `mandatoryOnWrite`) is checked by
+/// [`check_struct_write_marker`] instead; the marker's encoder guard refuses
+/// `None`, not `Null`, so it never excuses a class-N entry.
 fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
     const FIX_AT: &str =
         "class-N entries, and class-P entries without mandatoryOnWrite, come from \
@@ -739,8 +741,10 @@ fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
             ));
         }
         for (mandatory_on_write, sent) in found {
-            if mandatory_on_write {
-                continue; // §5.4: encoders refuse None (check_struct_write_marker).
+            if mandatory_on_write && class == "P" {
+                // §5.4: encoders refuse None (check_struct_write_marker). They
+                // do not refuse Null, so a class-N entry is checked below.
+                continue;
             }
             if let Some(sent) = sent {
                 return Err(if class == "N" {
@@ -1334,6 +1338,65 @@ mod tests {
         );
         m.clusters[0].datatypes[2].fields[0].nullable = true;
         assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn nullable_reason_is_checked_on_response_and_event_fields() {
+        // The command and event loops run check_nullable_reason too, not only
+        // the datatype loop.
+        let reason = Some("chip's servers may send it null".to_string());
+        let mut m = relaxed_model("ReadStruct.Label");
+        m.meta["relaxed"] = serde_json::json!([]);
+        let response = &mut m.clusters[0].commands[1];
+        assert_eq!(response.name, "ChangeToModeResponse");
+        response.fields[1].nullable_reason.clone_from(&reason);
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ChangeToModeResponse.StatusText")
+                && err.contains("not nullable"),
+            "got: {err}"
+        );
+        m.clusters[0].commands[1].fields[1].nullable = true;
+        assert_eq!(validate(&m), Ok(()));
+
+        let mut m = relaxed_model("ReadStruct.Label");
+        m.meta["relaxed"] = serde_json::json!([]);
+        m.clusters[0].events[0].fields[0].nullable_reason = reason;
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ModeChanged.NewMode") && err.contains("not nullable"),
+            "got: {err}"
+        );
+        m.clusters[0].events[0].fields[0].nullable = true;
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    #[test]
+    fn rejects_a_class_n_relaxation_of_a_guarded_encoded_struct_field() {
+        // M9-A3 B7 review I1, the shape of AccessControlExtensionStruct.Data:
+        // a §5.4 field (mandatoryOnWrite) of an encoded fabric-scoped struct.
+        // The marker's encoder guard refuses `None`, not `Null`, so unlike
+        // class P it does not make a class-N relaxation safe; the dump refuses
+        // it (checkConditionalRelaxations), and so must this twin.
+        let mut m = chip_nulls_model("ScalarStruct.Label");
+        let scalar = &mut m.clusters[0].datatypes[0];
+        assert_eq!(scalar.name, "ScalarStruct");
+        scalar.fields[0].fabric_sensitive = true;
+        scalar.fields[0].mandatory_on_write = true;
+        scalar.fields[0].nullable = true;
+        scalar.fields[0].nullable_reason = Some("chip's servers may send it null".to_string());
+        scalar.fields.push(
+            serde_json::from_value(serde_json::json!({ "id": 254, "name": "FabricIndex",
+                "type": "fabric-idx", "metatype": "integer", "nullable": false, "optional": false }))
+            .unwrap(),
+        );
+        let err = validate(&m).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ScalarStruct.Label")
+                && err.contains("class-N")
+                && err.contains("null the model forbids"),
+            "got: {err}"
+        );
     }
 
     #[test]

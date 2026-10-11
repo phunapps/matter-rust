@@ -1310,7 +1310,7 @@ function foreignDatatype(ref) {
   if (globalDatatypeNode(name) !== null) {
     return { problem: `\`${ref}\`: ${name} is also the name of a model global, which a copy would shadow — extend the dump first` };
   }
-  const tableProblem = ownerKeyedEntryProblem(ref);
+  const tableProblem = ownerKeyedEntryProblem(ref, `${cluster.name}.${node.name}`);
   if (tableProblem) return { problem: tableProblem };
   const problem = copiedFieldProblem(ref, owner, cluster, node);
   if (problem) return { problem };
@@ -1435,14 +1435,16 @@ const OWNER_KEYED_FIELD_TABLES = [
   ['FIELD_RELAXATIONS', FIELD_RELAXATIONS],
 ];
 
-// Why `ref` (`Owner.Name`) cannot be copied because one of `tables` has an
-// entry on one of its fields, or null. Refused rather than re-keyed: a copy
-// never carries owner-keyed state. Takes the tables so the self-check can
-// pass a synthetic one.
-function ownerKeyedEntryProblem(ref, tables = OWNER_KEYED_FIELD_TABLES) {
+// Why `ref` cannot be copied because one of `tables` has an entry on one of
+// the fields of `datatype`, the canonical `Owner.Name` it resolved to (built
+// from the resolved cluster's name: Matter.clusters() also resolves a
+// camelCase owner, and the tables use the canonical spelling), or null.
+// Refused rather than re-keyed: a copy never carries owner-keyed state. Takes
+// the tables so the self-check can pass a synthetic one.
+function ownerKeyedEntryProblem(ref, datatype, tables = OWNER_KEYED_FIELD_TABLES) {
   for (const [table, entries] of tables) {
     for (const key of entries.keys()) {
-      if (key.startsWith(`${ref}.`)) {
+      if (key.startsWith(`${datatype}.`)) {
         return `\`${ref}\`: ${table} has ${key}, which is keyed by the owning cluster and would not follow a copy — extend the dump first`;
       }
     }
@@ -1482,6 +1484,9 @@ function ownerKeyedEntryProblem(ref, tables = OWNER_KEYED_FIELD_TABLES) {
     // keys would lose their redaction, MessageStruct its relaxation.
     ['GroupKeyManagement.GroupKeySetStruct', 'SECRET_FIELDS has GroupKeyManagement.GroupKeySetStruct.EpochKey0'],
     ['Messages.MessageStruct', 'FIELD_RELAXATIONS has Messages.MessageStruct.FabricIndex'],
+    // Matter.clusters() also resolves a camelCase owner; the tables are keyed
+    // by the canonical name, so the check must use the resolved one.
+    ['groupKeyManagement.GroupKeySetStruct', 'SECRET_FIELDS has GroupKeyManagement.GroupKeySetStruct.EpochKey0'],
   ]) {
     expect(`foreignDatatype(\`${ref}\`)`, foreignDatatype(ref).problem, want);
   }
@@ -1501,7 +1506,7 @@ function ownerKeyedEntryProblem(ref, tables = OWNER_KEYED_FIELD_TABLES) {
   // Channel: the copy would drop it, so it is refused.
   expect(
     'ownerKeyedEntryProblem (synthetic SECRET_FIELDS entry)',
-    ownerKeyedEntryProblem('ContentLauncher.AdditionalInfoStruct', [
+    ownerKeyedEntryProblem('ContentLauncher.AdditionalInfoStruct', 'ContentLauncher.AdditionalInfoStruct', [
       ['SECRET_FIELDS', new Map([['ContentLauncher.AdditionalInfoStruct.Value', 'synthetic']])],
     ]),
     'SECRET_FIELDS has ContentLauncher.AdditionalInfoStruct.Value',
@@ -1526,6 +1531,9 @@ function ownerKeyedEntryProblem(ref, tables = OWNER_KEYED_FIELD_TABLES) {
     // lacks the global's value 17) would bind the copy's field to it.
     ['a field type the cluster defines itself', [{ type: 'ClosureDimension.DimensionStateStruct' }], new Set(['ThreeLevelAutoEnum']), 'field Speed has the type ThreeLevelAutoEnum, which the cluster also defines'],
     ['a global field type the cluster does not define', [{ type: 'ClosureDimension.DimensionStateStruct' }], levelControlNames, null],
+    // The list-entry half: Endpoints is a list of the global endpoint-no; the
+    // taken set naming it is synthetic (no cluster defines its own).
+    ['a list-entry type the cluster defines itself', [{ type: 'GroupKeyManagement.GroupInfoMapStruct' }], new Set(['endpoint-no']), 'field Endpoints has the type endpoint-no, which the cluster also defines'],
   ]) {
     expect(`planForeignCopies (${what})`, planForeignCopies(elements, taken).problem, want);
   }

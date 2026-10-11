@@ -1272,6 +1272,48 @@ mod tests {
         assert!(!s.contains("Optional:"), "{s}");
     }
 
+    #[test]
+    fn a_response_or_event_field_relaxed_to_nullable_states_why() {
+        // M9-A3 B7: responses and events are declared by
+        // emit_struct_decl_and_codec, which renders nullableReason too.
+        use crate::codegen::model::{CommandDef, EventDef};
+        let field = |name: &str| FieldDef {
+            nullable: true,
+            optional: false,
+            nullable_reason: Some("synthetic reason".to_string()),
+            ..note_field(name, false, None)
+        };
+        let command = |id: u32, name: &str, direction: &str, fields: Vec<FieldDef>| CommandDef {
+            id,
+            name: name.to_string(),
+            direction: direction.to_string(),
+            response_id: (direction == "request").then_some(1),
+            fields,
+            provisional: false,
+            deprecated: false,
+            supplemented: None,
+        };
+        let mut c = cluster_with(vec![], vec![]);
+        c.commands = vec![
+            command(0, "GetStatus", "request", vec![]),
+            command(1, "GetStatusResponse", "response", vec![field("Status")]),
+        ];
+        c.events = vec![EventDef {
+            id: 0,
+            name: "StatusChanged".to_string(),
+            priority: "info".to_string(),
+            fields: vec![field("NewStatus")],
+            provisional: false,
+        }];
+        let src = generate_cluster(&c);
+        for (name, ident) in [("Status", "status"), ("NewStatus", "new_status")] {
+            let want = format!(
+                "    /// Field {name} (tag 0).\n    /// Nullable: synthetic reason.\n    pub {ident}: Nullable<u8>,"
+            );
+            assert!(src.contains(&want), "{want}\n---\n{src}");
+        }
+    }
+
     // ---- M9-A3 B5: provisional clusters and presence dependencies ----------
 
     #[test]
