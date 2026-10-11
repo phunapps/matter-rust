@@ -228,13 +228,18 @@ reader's own fabric, so their results do not change.
 ### matter-crypto: Fixed (security) — PASE/CASE handshake state prints its variant name only
 
 - The private `State` enums inside `PaseProver`, `PaseVerifier`,
-  `CaseInitiator` and `CaseResponder` derived `Debug` over the handshake's
-  secrets: the PIN, `w0`/`w1` and `L`, the ephemeral scalars, the operational
-  signing key and IPK, the ECDH shared secret and the session keys. Nothing
-  formats them, and none of the four public machines implements `Debug`, so
-  this never leaked. But a `Debug` added to one of those machines later would
-  have printed every secret of an in-flight handshake. `State` now prints its
-  variant name alone (for example `AwaitingSigma1`).
+  `CaseInitiator` and `CaseResponder` derived `Debug` over handshake
+  secrets. What a derive would actually have printed: the PIN, `w0`/`w1`
+  and the ephemeral `x`/`y` scalars (p256's `Scalar` prints as
+  `Scalar(0x…)`), `L`, the verifier's `cB` and expected `cA`, and the CASE
+  responder's ECDH `shared_secret`. The operational signing key, the IPK,
+  the session keys and the resumption record already printed redacted, and
+  the CASE ephemeral secret prints opaquely, so the CASE initiator's derive
+  exposed essentially nothing secret. Nothing formats these enums, and none
+  of the four public machines implements `Debug`, so this never leaked. But
+  a `Debug` added to one of those machines later would have printed those
+  values for an in-flight handshake. `State` now prints its variant name
+  alone (for example `AwaitingSigma1`).
 - Latent hardening of private types: no public item changes, and nothing
   observable does either, so this release is optional.
 

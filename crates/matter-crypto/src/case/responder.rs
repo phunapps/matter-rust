@@ -246,11 +246,14 @@ enum State {
     Poisoned,
 }
 
-/// Names the variant only. The operational signing key, the IPK, the ephemeral
-/// secret, the ECDH shared secret and the session keys live in these variants'
-/// fields; nothing needs them in a log, so none are printed. Written by hand,
-/// not derived, so that a `Debug` added to the public state machine later
-/// cannot print them either.
+/// Names the variant only. The ECDH `shared_secret` lives in these variants'
+/// fields, and a derived `Debug` would print it byte for byte
+/// (`Zeroizing<[u8; 32]>` forwards to the array). The operational signing
+/// key, the IPK, the session keys and the resumption record already print
+/// redacted, and the ephemeral secret prints opaquely. Nothing needs any of
+/// them in a log, so none are printed. Written by hand, not derived, so that
+/// a `Debug` added to the public state machine later cannot print them
+/// either.
 impl core::fmt::Debug for State {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {

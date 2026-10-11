@@ -142,11 +142,12 @@ enum State {
     Poisoned,
 }
 
-/// Names the variant only. The PIN, `w0`/`w1`, the ephemeral scalar `x`, and the
-/// session keys live in these variants'
-/// fields; nothing needs them in a log, so none are printed. Written by hand,
-/// not derived, so that a `Debug` added to the public state machine later
-/// cannot print them either.
+/// Names the variant only. The PIN, `w0`/`w1` and the ephemeral scalar `x`
+/// live in these variants' fields, and a derived `Debug` would print all of
+/// them (p256's `Scalar` prints as `Scalar(0x…)`). The session keys
+/// already print redacted. Nothing needs any of them in a log, so none are
+/// printed. Written by hand, not derived, so that a `Debug` added to the
+/// public state machine later cannot print them either.
 impl core::fmt::Debug for State {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {

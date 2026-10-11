@@ -238,11 +238,14 @@ enum State {
     Poisoned,
 }
 
-/// Names the variant only. The operational signing key, the IPK, the ephemeral
-/// secret, the session keys and resumption secrets live in these variants'
-/// fields; nothing needs them in a log, so none are printed. Written by hand,
-/// not derived, so that a `Debug` added to the public state machine later
-/// cannot print them either.
+/// Names the variant only. The operational signing key, the IPK, the
+/// ephemeral secret, the session keys and the resumption record live in
+/// these variants' fields, but each of those already prints redacted or
+/// opaquely, so a derived `Debug` would have exposed essentially nothing
+/// secret here. Printing the variant name alone keeps it that way whatever
+/// field is added later, and matches the other three handshake machines.
+/// Written by hand, not derived, so that a `Debug` added to the public state
+/// machine later cannot print a secret either.
 impl core::fmt::Debug for State {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
