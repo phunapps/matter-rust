@@ -223,6 +223,13 @@ const ALLOWLIST = [
   { id: 0x002c, name: 'TimeFormatLocalization' },
   { id: 0x002d, name: 'UnitLocalization' },
   { id: 0x002e, name: 'PowerSourceConfiguration' },
+  // M9-A3 B6, flat diagnostics (scalar and nullable counters, a fieldless
+  // reset command, scalar-field events) and DiagnosticLogs (one request with
+  // an optional string, one response with an octet string):
+  { id: 0x0032, name: 'DiagnosticLogs' },
+  { id: 0x0034, name: 'SoftwareDiagnostics' },
+  { id: 0x0036, name: 'WiFiNetworkDiagnostics' },
+  { id: 0x0037, name: 'EthernetNetworkDiagnostics' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -273,6 +280,11 @@ const EVENT_ALLOWLIST = new Set([
   'EnergyEvse',
   // M9-A3 B5, Messages (MessageQueued, MessagePresented, MessageComplete):
   'Messages',
+  // M9-A3 B6, SoftwareDiagnostics (SoftwareFault: ID, optional Name and
+  // FaultRecording) and WiFiNetworkDiagnostics (Disconnection,
+  // AssociationFailure, ConnectionStatus: scalar fields):
+  'SoftwareDiagnostics',
+  'WiFiNetworkDiagnostics',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

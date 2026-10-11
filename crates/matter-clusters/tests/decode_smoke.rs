@@ -4553,3 +4553,257 @@ fn power_source_configuration_sources_decode() {
         Vec::<u16>::new()
     );
 }
+
+// ---- M9-A3 B6: flat diagnostics and DiagnosticLogs -------------------------
+//
+// 1.4.2 DiagnosticsSoftware.xml, DiagnosticsWiFi.xml, DiagnosticsEthernet.xml,
+// DiagnosticLogsCluster.xml. The trigger event payloads are the ones chip's
+// all-clusters test-event triggers emit (software-diagnostics-stub.cpp,
+// wifi-diagnostics-stub.cpp; the same values at v1.4.2.0 and master): the
+// Wi-Fi values are the stub's own; the SoftwareFault process id and time
+// are an example run's. The bare SoftwareFault and the Unknown-cause
+// AssociationFailure are synthetic.
+
+/// Encode a single anonymous-tagged octet string (an `octstr` value).
+fn bytes_attr(v: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    TlvWriter::new(&mut buf)
+        .put_bytes(Tag::Anonymous, v)
+        .unwrap();
+    buf
+}
+
+#[test]
+fn software_diagnostics_attributes_and_fault_event_decode() {
+    use clusters::software_diagnostics::{
+        decode_current_heap_high_watermark, decode_thread_metrics, encode_reset_watermarks,
+        event_id, Feature, SoftwareFaultEvent,
+    };
+    use matter_clusters::error::ClusterError;
+    assert_eq!(Feature::WTRMRK.bits(), 1);
+    // A thread with every field, and one with only its mandatory Id.
+    let metrics = decode_thread_metrics(&list_of(&[
+        &|w| {
+            w.put_uint(Tag::Context(0), 7).unwrap();
+            w.put_utf8(Tag::Context(1), "chip").unwrap();
+            w.put_uint(Tag::Context(2), 1024).unwrap();
+            w.put_uint(Tag::Context(3), 512).unwrap();
+            w.put_uint(Tag::Context(4), 8192).unwrap();
+        },
+        &|w| w.put_uint(Tag::Context(0), 8).unwrap(),
+    ]))
+    .unwrap();
+    assert_eq!(
+        (
+            metrics[0].id,
+            metrics[0].name.as_deref(),
+            metrics[0].stack_free_current,
+            metrics[0].stack_free_minimum,
+            metrics[0].stack_size
+        ),
+        (7, Some("chip"), Some(1024), Some(512), Some(8192))
+    );
+    assert_eq!((metrics[1].id, metrics[1].name.as_deref()), (8, None));
+    assert!(matches!(
+        decode_thread_metrics(&list_of(&[&|w| w
+            .put_utf8(Tag::Context(1), "no id")
+            .unwrap()])),
+        Err(ClusterError::MissingField("Id"))
+    ));
+    assert_eq!(
+        decode_current_heap_high_watermark(&uint_attr(4096)).unwrap(),
+        4096
+    );
+    // ResetWatermarks carries no fields.
+    assert_eq!(encode_reset_watermarks(), struct_of(&|_| {}));
+    // all-clusters' trigger: the process id as Id and as Name, the time as
+    // the recording.
+    let fault = SoftwareFaultEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 84977).unwrap();
+        w.put_utf8(Tag::Context(1), "84977").unwrap();
+        w.put_bytes(Tag::Context(2), b"Sun Oct 11 10:46:21 2026")
+            .unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            fault.id,
+            fault.name.as_deref(),
+            fault.fault_recording.as_deref()
+        ),
+        (84977, Some("84977"), Some(&b"Sun Oct 11 10:46:21 2026"[..]))
+    );
+    let bare = SoftwareFaultEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!((bare.name, bare.fault_recording), (None, None));
+    assert_eq!(event_id::SOFTWARE_FAULT, 0x00);
+}
+
+#[test]
+fn wifi_network_diagnostics_attributes_and_events_decode() {
+    use clusters::wi_fi_network_diagnostics::{
+        decode_bssid, decode_rssi, decode_security_type, decode_wi_fi_version, event_id,
+        AssociationFailureCauseEnum, AssociationFailureEvent, ConnectionStatusEnum,
+        ConnectionStatusEvent, DisconnectionEvent, Feature, SecurityTypeEnum, WiFiVersionEnum,
+    };
+    assert_eq!((Feature::PKTCNT | Feature::ERRCNT).bits(), 3);
+    // A node not on Wi-Fi serves every attribute null (chip all-clusters on
+    // macOS); a connected one serves values.
+    assert_eq!(decode_bssid(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_bssid(&bytes_attr(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55])).unwrap(),
+        Nullable::Value(vec![0x02, 0x11, 0x22, 0x33, 0x44, 0x55])
+    );
+    assert_eq!(
+        decode_security_type(&uint_attr(1)).unwrap(),
+        Nullable::Value(SecurityTypeEnum::None)
+    );
+    assert_eq!(
+        decode_wi_fi_version(&uint_attr(5)).unwrap(),
+        Nullable::Value(WiFiVersionEnum::Ax)
+    );
+    assert_eq!(decode_rssi(&int_attr(-61)).unwrap(), Nullable::Value(-61));
+    // The three events as all-clusters' triggers emit them.
+    let disconnection = DisconnectionEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 3).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(disconnection.reason_code, 3);
+    let failure = AssociationFailureEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap();
+        w.put_uint(Tag::Context(1), 4).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (failure.association_failure_cause, failure.status),
+        (AssociationFailureCauseEnum::AuthenticationFailed, 4)
+    );
+    // AssociationFailureCauseEnum has a member named Unknown (0), so a value
+    // this revision does not know is `Unrecognized`.
+    let unknown = AssociationFailureEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 0).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        unknown.association_failure_cause,
+        AssociationFailureCauseEnum::Unknown
+    );
+    assert_eq!(
+        AssociationFailureCauseEnum::from_raw(9),
+        AssociationFailureCauseEnum::Unrecognized(9)
+    );
+    let status = ConnectionStatusEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(status.connection_status, ConnectionStatusEnum::NotConnected);
+    assert_eq!(
+        [
+            event_id::DISCONNECTION,
+            event_id::ASSOCIATION_FAILURE,
+            event_id::CONNECTION_STATUS
+        ],
+        [0x00, 0x01, 0x02]
+    );
+}
+
+#[test]
+fn ethernet_network_diagnostics_attributes_decode() {
+    use clusters::ethernet_network_diagnostics::{
+        decode_carrier_detect, decode_full_duplex, decode_packet_rx_count, decode_phy_rate,
+        encode_reset_counts, Feature, PHYRateEnum,
+    };
+    assert_eq!((Feature::PKTCNT | Feature::ERRCNT).bits(), 3);
+    assert_eq!(decode_phy_rate(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_phy_rate(&uint_attr(2)).unwrap(),
+        Nullable::Value(PHYRateEnum::Rate1G)
+    );
+    // 3 is 2.5 Gbit/s; the model names it Rate25G.
+    assert_eq!(PHYRateEnum::from_raw(3), PHYRateEnum::Rate25G);
+    assert_eq!(
+        decode_full_duplex(&bool_attr(true)).unwrap(),
+        Nullable::Value(true)
+    );
+    assert_eq!(decode_carrier_detect(&null_attr()).unwrap(), Nullable::Null);
+    assert_eq!(
+        decode_packet_rx_count(&uint_attr(u64::MAX)).unwrap(),
+        u64::MAX
+    );
+    assert_eq!(encode_reset_counts(), struct_of(&|_| {}));
+}
+
+#[test]
+fn diagnostic_logs_request_and_response_round_trip() {
+    use clusters::diagnostic_logs::{
+        command_id, encode_retrieve_logs_request, IntentEnum, RetrieveLogsResponse, StatusEnum,
+        TransferProtocolEnum,
+    };
+    use matter_clusters::error::ClusterError;
+    assert_eq!(
+        (
+            command_id::RETRIEVE_LOGS_REQUEST,
+            command_id::RETRIEVE_LOGS_RESPONSE
+        ),
+        (0x00, 0x01)
+    );
+    // ResponsePayload needs no designator; BDX carries one.
+    assert_eq!(
+        encode_retrieve_logs_request(
+            IntentEnum::EndUserSupport,
+            TransferProtocolEnum::ResponsePayload,
+            None
+        ),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0).unwrap();
+            w.put_uint(Tag::Context(1), 0).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_retrieve_logs_request(
+            IntentEnum::CrashLogs,
+            TransferProtocolEnum::Bdx,
+            Some("crash.log".to_string())
+        ),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 2).unwrap();
+            w.put_uint(Tag::Context(1), 1).unwrap();
+            w.put_utf8(Tag::Context(2), "crash.log").unwrap();
+        })
+    );
+    // chip's server with no logs answers NoLogs with an empty LogContent and
+    // no timestamps.
+    let none = RetrieveLogsResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap();
+        w.put_bytes(Tag::Context(1), &[]).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            none.status,
+            none.log_content,
+            none.utc_time_stamp,
+            none.time_since_boot
+        ),
+        (StatusEnum::NoLogs, vec![], None, None)
+    );
+    let some = RetrieveLogsResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_bytes(Tag::Context(1), b"log").unwrap();
+        w.put_uint(Tag::Context(2), 1_700_000_000_000_000).unwrap();
+        w.put_uint(Tag::Context(3), 42).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (some.status, some.utc_time_stamp, some.time_since_boot),
+        (StatusEnum::Success, Some(1_700_000_000_000_000), Some(42))
+    );
+    // LogContent is mandatory.
+    assert!(matches!(
+        RetrieveLogsResponse::decode(&struct_of(&|w| w.put_uint(Tag::Context(0), 2).unwrap())),
+        Err(ClusterError::MissingField("LogContent"))
+    ));
+}

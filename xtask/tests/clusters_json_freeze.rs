@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 86] = [
+const TARGET_CLUSTERS: [&str; 90] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -128,6 +128,11 @@ const TARGET_CLUSTERS: [&str; 86] = [
     "TimeFormatLocalization",
     "UnitLocalization",
     "PowerSourceConfiguration",
+    // M9-A3 B6, flat diagnostics and DiagnosticLogs:
+    "DiagnosticLogs",
+    "SoftwareDiagnostics",
+    "WiFiNetworkDiagnostics",
+    "EthernetNetworkDiagnostics",
 ];
 
 fn load() -> Value {
@@ -426,7 +431,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 26] = [
+const EVENT_CLUSTERS: [&str; 28] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -464,6 +469,9 @@ const EVENT_CLUSTERS: [&str; 26] = [
     "EnergyEvse",
     // M9-A3 B5, Messages:
     "Messages",
+    // M9-A3 B6, flat diagnostics:
+    "SoftwareDiagnostics",
+    "WiFiNetworkDiagnostics",
 ];
 
 #[test]
@@ -2256,4 +2264,61 @@ fn localization_and_power_source_configuration_are_attribute_only() {
         enum_values(datatype(tf, "CalendarTypeEnum")),
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0xFF]
     );
+}
+
+#[test]
+fn flat_diagnostics_and_diagnostic_logs_keep_their_shapes() {
+    // 1.4.2 DiagnosticsSoftware.xml, DiagnosticsWiFi.xml,
+    // DiagnosticsEthernet.xml, DiagnosticLogsCluster.xml.
+    let v = load();
+    let sw = cluster(&v, "SoftwareDiagnostics");
+    assert_eq!(element_names(sw, "commands"), ["ResetWatermarks"]);
+    assert_eq!(element_names(sw, "events"), ["SoftwareFault"]);
+    assert_eq!(
+        field_optionality(&datatype(sw, "ThreadMetricsStruct")["fields"]),
+        [
+            ("Id", false),
+            ("Name", true),
+            ("StackFreeCurrent", true),
+            ("StackFreeMinimum", true),
+            ("StackSize", true)
+        ]
+    );
+    let wifi = cluster(&v, "WiFiNetworkDiagnostics");
+    assert_eq!(element_names(wifi, "commands"), ["ResetCounts"]);
+    assert_eq!(
+        element_names(wifi, "events"),
+        ["Disconnection", "AssociationFailure", "ConnectionStatus"]
+    );
+    // Every Wi-Fi attribute is nullable (null when not connected).
+    assert!(wifi["attributes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["nullable"] == true));
+    let eth = cluster(&v, "EthernetNetworkDiagnostics");
+    assert_eq!(element_names(eth, "commands"), ["ResetCounts"]);
+    assert_eq!(element_names(eth, "events"), Vec::<&str>::new());
+    let logs = cluster(&v, "DiagnosticLogs");
+    assert_eq!(element_names(logs, "attributes"), Vec::<&str>::new());
+    assert_eq!(
+        field_optionality(&command(logs, "RetrieveLogsRequest")["fields"]),
+        [
+            ("Intent", false),
+            ("RequestedProtocol", false),
+            ("TransferFileDesignator", true)
+        ]
+    );
+    assert_eq!(
+        field_optionality(&command(logs, "RetrieveLogsResponse")["fields"]),
+        [
+            ("Status", false),
+            ("LogContent", false),
+            ("UtcTimeStamp", true),
+            ("TimeSinceBoot", true)
+        ]
+    );
+    for c in [sw, wifi, eth, logs] {
+        assert_eq!(writable_attributes(c), Vec::<&str>::new());
+    }
 }

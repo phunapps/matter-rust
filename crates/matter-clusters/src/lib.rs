@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 86 clusters are generated today. The full list is [`clusters`]; by area:
+//! 90 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -77,6 +77,9 @@
 //!   `OtaSoftwareUpdateProvider`.
 //! - **Node configuration:** `LocalizationConfiguration`,
 //!   `TimeFormatLocalization`, `UnitLocalization`, `PowerSourceConfiguration`.
+//! - **Diagnostics:** `SoftwareDiagnostics`, `WiFiNetworkDiagnostics` (with
+//!   their events), `EthernetNetworkDiagnostics`, `DiagnosticLogs` (the
+//!   request and its response; the BDX transfer is not implemented).
 //!
 //! Note that this crate holds **codecs only**. For the administration
 //! clusters in particular, encoding a command is not the same as running the

@@ -417,6 +417,12 @@ in full with `fabric_index` `None`.
   (0x002C)**, **UnitLocalization (0x002D)** and **PowerSourceConfiguration
   (0x002E)**: every attribute, and the writers for `ActiveLocale`,
   `HourFormat`, `ActiveCalendarType` and `TemperatureUnit`. Attributes only.
+- **SoftwareDiagnostics (0x0034)**, **WiFiNetworkDiagnostics (0x0036)** and
+  **EthernetNetworkDiagnostics (0x0037)**: every attribute, the reset
+  commands, and the `SoftwareFault`, `Disconnection`, `AssociationFailure`
+  and `ConnectionStatus` events.
+- **DiagnosticLogs (0x0032)**: `RetrieveLogsRequest` and its response. Codecs
+  only: a BDX log transfer is not implemented.
 
 chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so

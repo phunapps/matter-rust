@@ -19,7 +19,11 @@
       "UnitLocalization",
       "PowerSourceConfiguration",
       "PowerSource",
+      "DiagnosticLogs",
       "GeneralDiagnostics",
+      "SoftwareDiagnostics",
+      "WiFiNetworkDiagnostics",
+      "EthernetNetworkDiagnostics",
       "TimeSynchronization",
       "BridgedDeviceBasicInformation",
       "Switch",
@@ -5731,6 +5735,171 @@
       ]
     },
     {
+      "id": 50,
+      "name": "DiagnosticLogs",
+      "revision": 1,
+      "features": [],
+      "attributes": [],
+      "commands": [
+        {
+          "id": 0,
+          "name": "RetrieveLogsRequest",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Intent",
+              "type": "IntentEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate why the diagnostic logs are being retrieved from the Node. A Node may utilize this field to selectively determine the logs to transfer."
+            },
+            {
+              "id": 1,
+              "name": "RequestedProtocol",
+              "type": "TransferProtocolEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be used to indicate how the log transfer is to be realized. If the field is set to BDX, then if the receiving Node supports BDX it shall attempt to use BDX to transfer any potential diagnostic logs; if the receiving Node does not support BDX then the Node shall follow the requirements defined for a TransferProtocolEnum of ResponsePayload. If this field is set to ResponsePayload the receiving Node shall only utilize the LogContent field of the RetrieveLogsResponse command to transfer diagnostic log information."
+            },
+            {
+              "id": 2,
+              "name": "TransferFileDesignator",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be present if the RequestedProtocol is BDX. The TransferFileDesignator shall be set as the File Designator of the BDX transfer if initiated."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "RetrieveLogsResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the result of an attempt to retrieve diagnostic logs."
+            },
+            {
+              "id": 1,
+              "name": "LogContent",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be included in the command if the Status field has a value of Success or Exhausted. A Node SHOULD utilize this field to transfer the newest diagnostic log entries. This field shall be empty if BDX is requested and the Status field has a value of Success."
+            },
+            {
+              "id": 2,
+              "name": "UtcTimeStamp",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field SHOULD be included in the command if the Status field has a value of Success and the Node maintains a wall clock. When included, the UTCTimeStamp field shall contain the value of the oldest log entry in the diagnostic logs that are being transferred."
+            },
+            {
+              "id": 3,
+              "name": "TimeSinceBoot",
+              "type": "systime-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field SHOULD be included in the command if the Status field has a value of Success. When included, the TimeSinceBoot field shall contain the time of the oldest log entry in the diagnostic logs that are being transferred represented by the number of microseconds since the last time the Node went through a reboot."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "IntentEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "EndUserSupport",
+              "description": "shall indicate that the purpose of the log request is to retrieve logs for the intention of providing support to an end-user."
+            },
+            {
+              "value": 1,
+              "name": "NetworkDiag",
+              "description": "shall indicate that the purpose of the log request is to diagnose the network(s) for which the Node is currently commissioned (and/or connected) or has previously been commissioned (and/or connected)."
+            },
+            {
+              "value": 2,
+              "name": "CrashLogs",
+              "description": "shall indicate that the purpose of the log request is to retrieve any crash logs that may be present on a Node."
+            }
+          ]
+        },
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": "shall be used if diagnostic logs will be or are being transferred."
+            },
+            {
+              "value": 1,
+              "name": "Exhausted",
+              "description": "shall be used when a BDX session is requested, however, all available logs were provided in a LogContent field."
+            },
+            {
+              "value": 2,
+              "name": "NoLogs",
+              "description": "shall be used if the Node does not currently have any diagnostic logs of the requested type (Intent) to transfer."
+            },
+            {
+              "value": 3,
+              "name": "Busy",
+              "description": "shall be used if the Node is unable to handle the request (e.g. in the process of another transfer) and the Client SHOULD re-attempt the request later."
+            },
+            {
+              "value": 4,
+              "name": "Denied",
+              "description": "shall be used if the Node is denying the current transfer of diagnostic logs for any reason."
+            }
+          ]
+        },
+        {
+          "name": "TransferProtocolEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "ResponsePayload",
+              "description": "shall be used by a Client to request that logs are transferred using the LogContent attribute of the response"
+            },
+            {
+              "value": 1,
+              "name": "Bdx",
+              "description": "shall be used by a Client to request that logs are transferred using BDX as defined in BDX Protocol"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": 51,
       "name": "GeneralDiagnostics",
       "revision": 2,
@@ -6339,6 +6508,691 @@
             {
               "value": 6,
               "name": "EthernetFault",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "name": "SoftwareDiagnostics",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "WTRMRK",
+          "name": "Watermarks",
+          "description": "Node makes available the metrics for high watermark related to memory consumption."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "ThreadMetrics",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ThreadMetricsStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall be a list of ThreadMetricsStruct structs. Each active thread on the Node shall be represented by a single entry within the ThreadMetrics attribute."
+        },
+        {
+          "id": 1,
+          "name": "CurrentHeapFree",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current amount of heap memory, in bytes, that are free for allocation. The effective amount may be smaller due to heap fragmentation or other reasons."
+        },
+        {
+          "id": 2,
+          "name": "CurrentHeapUsed",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current amount of heap memory, in bytes, that is being used."
+        },
+        {
+          "id": 3,
+          "name": "CurrentHeapHighWatermark",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the maximum amount of heap memory, in bytes, that has been used by the Node. This value shall only be reset upon a Node reboot or upon receiving of the ResetWatermarks command."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetWatermarks",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "SoftwareFault",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Id",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall be set to the ID of the software thread in which the last software fault occurred."
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be set to a manufacturer-specified name or prefix of the software thread in which the last software fault occurred."
+            },
+            {
+              "id": 2,
+              "name": "FaultRecording",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be a manufacturer-specified payload intended to convey information to assist in further diagnosing or debugging a software fault. The FaultRecording field may be used to convey information such as, but not limited to, thread backtraces or register contents."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "ThreadMetricsStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Id",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The Id field shall be a server-assigned per-thread unique ID that is constant for the duration of the thread. Efforts SHOULD be made to avoid reusing ID values when possible."
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "The Name field shall be set to a vendor defined name or prefix of the software thread that is static for the duration of the thread."
+            },
+            {
+              "id": 2,
+              "name": "StackFreeCurrent",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "The StackFreeCurrent field shall indicate the current amount of stack memory, in bytes, that are not being utilized on the respective thread."
+            },
+            {
+              "id": 3,
+              "name": "StackFreeMinimum",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "The StackFreeMinimum field shall indicate the minimum amount of stack memory, in bytes, that has been available at any point between the current time and this attribute being reset or initialized on the respective thread. This value shall only be reset upon a Node reboot or upon receiving of the ResetWatermarks command."
+            },
+            {
+              "id": 4,
+              "name": "StackSize",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "The StackSize field shall indicate the amount of stack memory, in bytes, that has been allocated for use by the respective thread."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 54,
+      "name": "WiFiNetworkDiagnostics",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "PKTCNT",
+          "name": "PacketCounts",
+          "description": "Node makes available the counts for the number of received and transmitted packets on the Wi-Fi interface."
+        },
+        {
+          "bit": 1,
+          "code": "ERRCNT",
+          "name": "ErrorCounts",
+          "description": "Node makes available the counts for the number of errors that have occurred during the reception and transmission of packets on the Wi-Fi interface."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Bssid",
+          "type": "octstr",
+          "metatype": "bytes",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the BSSID for which the Wi-Fi network the Node is currently connected."
+        },
+        {
+          "id": 1,
+          "name": "SecurityType",
+          "type": "SecurityTypeEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current type of Wi-Fi security used."
+        },
+        {
+          "id": 2,
+          "name": "WiFiVersion",
+          "type": "WiFiVersionEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current IEEE 802.11 standard version in use by the Node, per the table below."
+        },
+        {
+          "id": 3,
+          "name": "ChannelNumber",
+          "type": "uint16",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the channel that Wi-Fi communication is currently operating on."
+        },
+        {
+          "id": 4,
+          "name": "Rssi",
+          "type": "int8",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current RSSI of the Node's Wi-Fi radio in dBm."
+        },
+        {
+          "id": 5,
+          "name": "BeaconLostCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the count of the number of missed beacons the Node has detected. If the Node does not have an ability to count beacons expected and not received, this value may remain set to zero."
+        },
+        {
+          "id": 6,
+          "name": "BeaconRxCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the count of the number of received beacons. The total number of expected beacons that could have been received during the interval since association SHOULD match the sum of BeaconRxCount and BeaconLostCount. If the Node does not have an ability to report count of beacons received, this value may remain set to zero."
+        },
+        {
+          "id": 7,
+          "name": "PacketMulticastRxCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of multicast packets received by the Node."
+        },
+        {
+          "id": 8,
+          "name": "PacketMulticastTxCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of multicast packets transmitted by the Node."
+        },
+        {
+          "id": 9,
+          "name": "PacketUnicastRxCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of unicast packets received by the Node."
+        },
+        {
+          "id": 10,
+          "name": "PacketUnicastTxCount",
+          "type": "uint32",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of unicast packets transmitted by the Node."
+        },
+        {
+          "id": 11,
+          "name": "CurrentMaxRate",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current maximum PHY rate of transfer of data in bits-per-second."
+        },
+        {
+          "id": 12,
+          "name": "OverrunCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of packets dropped either at ingress or egress, due to lack of buffer memory to retain all packets on the network interface. The attribute shall be reset to 0 upon a reboot of the Node."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetCounts",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "Disconnection",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ReasonCode",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain the Reason Code field value for the Disassociation or Deauthentication event that caused the disconnection and the value shall align with Table 9-49 \"Reason codes\" of IEEE 802.11-2020."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "AssociationFailure",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "AssociationFailureCause",
+              "type": "AssociationFailureCauseEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "The Status field shall be set to a value from the AssociationFailureCauseEnum."
+            },
+            {
+              "id": 1,
+              "name": "Status",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "The Status field shall be set to the Status Code value that was present in the last frame related to association where Status Code was not equal to zero and which caused the failure of a last trial attempt, if this last failure was due to one of the following Management frames:\n  - Association Response (Type 0, Subtype 1)\n  - Reassociation Response (Type 0, Subtype 3)\n  - Authentication (Type 0, Subtype 11)\nTable 9-50 \"Status codes\" of IEEE 802.11-2020 contains a description of all values possible."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "ConnectionStatus",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ConnectionStatus",
+              "type": "ConnectionStatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AssociationFailureCauseEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unknown",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "AssociationFailed",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "AuthenticationFailed",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "SsidNotFound",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ConnectionStatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Connected",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "NotConnected",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SecurityTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Unspecified",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "None",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Wep",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Wpa",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Wpa2",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Wpa3",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "WiFiVersionEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "A",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "B",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "G",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "N",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Ac",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Ax",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Ah",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 55,
+      "name": "EthernetNetworkDiagnostics",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "PKTCNT",
+          "name": "PacketCounts",
+          "description": "Node makes available the counts for the number of received and transmitted packets on the ethernet interface."
+        },
+        {
+          "bit": 1,
+          "code": "ERRCNT",
+          "name": "ErrorCounts",
+          "description": "Node makes available the counts for the number of errors that have occurred during the reception and transmission of packets on the ethernet interface."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "PhyRate",
+          "type": "PHYRateEnum",
+          "metatype": "enum",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current nominal, usable speed at the top of the physical layer of the Node. A value of null shall indicate that the interface is not currently configured or operational."
+        },
+        {
+          "id": 1,
+          "name": "FullDuplex",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates if the Node is currently utilizing the full-duplex operating mode. A value of null shall indicate that the interface is not currently configured or operational."
+        },
+        {
+          "id": 2,
+          "name": "PacketRxCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of packets that have been received on the ethernet network interface. The attribute shall be reset to 0 upon a reboot of the Node."
+        },
+        {
+          "id": 3,
+          "name": "PacketTxCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of packets that have been successfully transferred on the ethernet network interface. The attribute shall be reset to 0 upon a reboot of the Node."
+        },
+        {
+          "id": 4,
+          "name": "TxErrCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of failed packet transmissions that have occurred on the ethernet network interface. The attribute shall be reset to 0 upon a reboot of the Node."
+        },
+        {
+          "id": 5,
+          "name": "CollisionCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of collisions that have occurred while attempting to transmit a packet on the ethernet network interface. The attribute shall be reset to 0 upon a reboot of the Node."
+        },
+        {
+          "id": 6,
+          "name": "OverrunCount",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the number of packets dropped either at ingress or egress, due to lack of buffer memory to retain all packets on the ethernet network interface. The attribute shall be reset to 0 upon a reboot of the Node."
+        },
+        {
+          "id": 7,
+          "name": "CarrierDetect",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the value of the Carrier Detect control signal present on the ethernet network interface. A value of null shall indicate that the interface is not currently configured or operational."
+        },
+        {
+          "id": 8,
+          "name": "TimeSinceReset",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the duration of time, in minutes, that it has been since the ethernet network interface has reset for any reason."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ResetCounts",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "PHYRateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Rate10M",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Rate100M",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Rate1G",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Rate25G",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Rate5G",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Rate10G",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Rate40G",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Rate100G",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Rate200G",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Rate400G",
               "description": null
             }
           ]
