@@ -1261,9 +1261,10 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
 // owner or the datatype does not resolve, the datatype is not a struct, enum
 // or bitmap (a qualified scalar typedef, such as Matter 1.5's
 // `CameraAvStreamManagement.VideoStreamID`, would need its base resolved
-// instead), or a struct field has a composite type of the owning cluster
-// (copied alone it would resolve in the referencing cluster, to the wrong
-// datatype or none).
+// instead), its name is also a model global's (inlineGlobalDatatypes would
+// take the copy for the global, and bind the cluster's references to that
+// global to the copy), or one of its fields cannot be copied alone
+// (copiedFieldProblem). Nested dependencies are refused, never copied.
 function foreignDatatype(ref) {
   const parts = ref.split('.');
   if (parts.length !== 2) return { problem: `\`${ref}\` is not of the form Cluster.Datatype` };
@@ -1274,64 +1275,140 @@ function foreignDatatype(ref) {
   if (!node) return { problem: `\`${ref}\`: ${owner} has no datatype ${name}` };
   const meta = node.effectiveMetatype;
   if (meta !== 'object' && meta !== 'enum' && meta !== 'bitmap') {
-    return { problem: `\`${ref}\` is a ${meta} datatype; only a struct, enum or bitmap is copied — extend the dump first` };
+    return { problem: `\`${ref}\` has metatype ${meta}; only a struct, enum or bitmap is copied — extend the dump first` };
   }
+  if (globalDatatypeNode(name) !== null) {
+    return { problem: `\`${ref}\`: ${name} is also the name of a model global, which a copy would shadow — extend the dump first` };
+  }
+  const problem = copiedFieldProblem(ref, owner, cluster, node);
+  if (problem) return { problem };
+  return { owner, name, node };
+}
+
+// Why a field (or list entry) of `node`, a datatype of the owning `cluster`,
+// cannot be copied alone into another cluster, or null. Each case would
+// leave the copy naming something the referencing cluster does not define:
+//   - an anonymous struct: resolveAnonStruct's synthesized datatypes are
+//     merged before the copy runs, so the name would dangle;
+//   - a qualified type (`TlsCertificateManagement.TLSCAID`): the copy's own
+//     fields are never scanned for qualified references;
+//   - any datatype of the owning cluster, composite or scalar typedef: it
+//     would resolve in the referencing cluster to the wrong datatype (one of
+//     the same name) or none (the scalar de-aliasing knows only the
+//     referencing cluster's typedefs).
+// Takes the nodes rather than a reference so the self-check can also pass
+// synthetic ones.
+function copiedFieldProblem(ref, owner, cluster, node) {
+  const ownerNames = new Set([...cluster.datatypes].map((d) => d.name));
   for (const m of node.members) {
     for (const el of [m, m.listEntry]) {
       if (!el) continue;
       const t = el.effectiveType;
-      const local = [...cluster.datatypes].some((d) => d.name === t && ['object', 'enum', 'bitmap'].includes(d.effectiveMetatype));
-      if (local) return { problem: `\`${ref}\`: field ${m.name} has ${owner}'s own type ${t}, which a copy cannot resolve — extend the dump first` };
+      if (el.effectiveMetatype === 'object' && t === 'struct') {
+        return `\`${ref}\`: field ${m.name} is an anonymous struct, which a copy cannot synthesize — extend the dump first`;
+      }
+      if (typeof t === 'string' && t.includes('.')) {
+        return `\`${ref}\`: field ${m.name} has the qualified type ${t}, which a copy does not follow — extend the dump first`;
+      }
+      if (ownerNames.has(t)) {
+        return `\`${ref}\`: field ${m.name} has ${owner}'s own type ${t}, which a copy cannot resolve — extend the dump first`;
+      }
     }
   }
-  return { owner, name, node };
+  return null;
 }
 
-// Load-time self-check of foreignDatatype against the real model: each row
-// must resolve (or be refused) as stated.
-for (const [ref, want] of [
-  ['ContentLauncher.AdditionalInfoStruct', true],
-  ['MediaPlayback.CharacteristicEnum', true],
-  ['ContentLauncher.NoSuchStruct', false],
-  ['NoSuchCluster.AdditionalInfoStruct', false],
-  ['CameraAvStreamManagement.VideoStreamID', false], // a scalar typedef
-  ['ContentLauncher.BrandingInformationStruct', false], // fields of ContentLauncher's own StyleInformationStruct
-  ['AdditionalInfoStruct', false],
-]) {
-  const got = foreignDatatype(ref);
-  if ((got.problem === undefined) !== want) {
-    fail(`foreignDatatype self-check: \`${ref}\` should ${want ? '' : 'not '}resolve (${got.problem ?? 'resolved'})`);
-  }
-}
-
-// Copy every datatype a qualified reference in `elements` (dumped attributes
-// and fields, read for `type` / `entryType`) names into `datatypes`, and
-// rewrite each reference to the bare name. The dump stops when a reference
-// cannot be copied (foreignDatatype), when the bare name is already a datatype
-// of the cluster, or when two owners' datatypes share a name.
-function copyForeignDatatypes(clusterName, elements, datatypes) {
-  const copied = new Map(); // bare name -> owner
+// The copies a cluster needs, without side effects: `{ copies, rewrites }`,
+// or `{ problem }`. `elements` are the dumped attributes and fields, read for
+// `type` / `entryType`; `taken` is the set of the cluster's datatype names.
+// `copies` maps each bare name to its foreignDatatype result; `rewrites` lists
+// each `[element, key, bare name]` reference to rewrite. Refused: a reference
+// foreignDatatype refuses, a bare name the cluster already has as a datatype,
+// and two owners' datatypes that share a bare name.
+function planForeignCopies(elements, taken) {
+  const copies = new Map();
+  const rewrites = [];
   for (const el of elements) {
     for (const key of ['type', 'entryType']) {
       const ref = el[key];
       if (typeof ref !== 'string' || !ref.includes('.')) continue;
       const f = foreignDatatype(ref);
-      if (f.problem) fail(`${clusterName}: ${f.problem}`);
-      const seen = copied.get(f.name);
+      if (f.problem) return { problem: f.problem };
+      const seen = copies.get(f.name);
       if (seen === undefined) {
-        if (datatypes.some((d) => d.name === f.name)) {
-          fail(`${clusterName}: \`${ref}\` would be copied as ${f.name}, which is already a datatype of the cluster`);
+        if (taken.has(f.name)) {
+          return { problem: `\`${ref}\` would be copied as ${f.name}, which is already a datatype of the cluster` };
         }
-        const dt = dumpDatatype(f.node, `${clusterName}.copy`);
-        dt.copiedFrom = f.owner;
-        datatypes.push(dt);
-        copied.set(f.name, f.owner);
-      } else if (seen !== f.owner) {
-        fail(`${clusterName}: \`${ref}\` and \`${seen}.${f.name}\` would both be copied as ${f.name}`);
+        copies.set(f.name, f);
+      } else if (seen.owner !== f.owner) {
+        return { problem: `\`${ref}\` and \`${seen.owner}.${f.name}\` would both be copied as ${f.name}` };
       }
-      el[key] = f.name;
+      rewrites.push([el, key, f.name]);
     }
   }
+  return { copies, rewrites };
+}
+
+// Load-time self-check against the real model (and, where the model has no
+// example, synthetic nodes): each row must resolve (`null`) or be refused
+// with a problem containing the stated text. Every mismatch is reported.
+{
+  const mismatches = [];
+  const expect = (what, problem, want) => {
+    const ok = want === null ? problem === undefined || problem === null : typeof problem === 'string' && problem.includes(want);
+    if (!ok) mismatches.push(`${what}: want ${want === null ? 'no problem' : `a problem containing "${want}"`}, got ${problem ? `"${problem}"` : 'no problem'}`);
+  };
+  for (const [ref, want] of [
+    ['ContentLauncher.AdditionalInfoStruct', null],
+    ['MediaPlayback.CharacteristicEnum', null],
+    ['ContentLauncher.NoSuchStruct', 'ContentLauncher has no datatype NoSuchStruct'],
+    ['NoSuchCluster.AdditionalInfoStruct', 'no cluster NoSuchCluster in the model'],
+    ['CameraAvStreamManagement.VideoStreamID', 'has metatype integer; only a struct, enum or bitmap is copied'],
+    ['ContentLauncher.BrandingInformationStruct', "field Background has ContentLauncher's own type StyleInformationStruct"],
+    // Matter 1.5 (not in chip 1.4.2): Id is the owner's integer typedef
+    // WebRTCSessionID, which the referencing cluster cannot de-alias.
+    ['WebRtcTransportDefinitions.WebRTCSessionStruct', "field Id has WebRtcTransportDefinitions's own type WebRTCSessionID"],
+    // Matter 1.5: a qualified reference inside the copy, which is never scanned.
+    ['WebRtcTransportDefinitions.ICEServerStruct', 'field Caid has the qualified type TlsCertificateManagement.TLSCAID'],
+    // Also a model global (and ElectricalPowerMeasurement's): global
+    // references in the referencing cluster would bind to the copy.
+    ['ElectricalEnergyMeasurement.MeasurementTypeEnum', 'MeasurementTypeEnum is also the name of a model global'],
+    ['AdditionalInfoStruct', 'is not of the form Cluster.Datatype'],
+  ]) {
+    expect(`foreignDatatype(\`${ref}\`)`, foreignDatatype(ref).problem, want);
+  }
+  // No model datatype has an anonymous-struct field: synthetic nodes, as a
+  // field and as a list entry.
+  for (const [what, member] of [
+    ['field', { name: 'Anon', effectiveType: 'struct', effectiveMetatype: 'object' }],
+    ['list entry', { name: 'Anons', effectiveType: 'list', effectiveMetatype: 'array', listEntry: { effectiveType: 'struct', effectiveMetatype: 'object' } }],
+  ]) {
+    const problem = copiedFieldProblem('Synthetic.HolderStruct', 'Synthetic', { datatypes: [] }, { members: [member] });
+    expect(`copiedFieldProblem (anonymous-struct ${what})`, problem, `field ${member.name} is an anonymous struct`);
+  }
+  const levelControlNames = new Set([...Matter.clusters('LevelControl').datatypes].map((d) => d.name));
+  for (const [what, elements, taken, want] of [
+    ['one owner referenced twice', [{ type: 'ContentLauncher.AdditionalInfoStruct' }, { entryType: 'ContentLauncher.AdditionalInfoStruct' }], new Set(), null],
+    ['a name the cluster already has', [{ type: 'ColorControl.MoveModeEnum' }], levelControlNames, 'would be copied as MoveModeEnum, which is already a datatype of the cluster'],
+    ['two owners for one name', [{ type: 'ColorControl.MoveModeEnum' }, { entryType: 'LevelControl.MoveModeEnum' }], new Set(), 'and `ColorControl.MoveModeEnum` would both be copied as MoveModeEnum'],
+  ]) {
+    expect(`planForeignCopies (${what})`, planForeignCopies(elements, taken).problem, want);
+  }
+  if (mismatches.length > 0) fail(`foreignDatatype self-check:\n  ${mismatches.join('\n  ')}`);
+}
+
+// Copy every datatype a qualified reference in `elements` names into
+// `datatypes` (planForeignCopies), and rewrite each reference to the bare
+// name. The dump stops at anything planForeignCopies refuses.
+function copyForeignDatatypes(clusterName, elements, datatypes) {
+  const plan = planForeignCopies(elements, new Set(datatypes.map((d) => d.name)));
+  if (plan.problem) fail(`${clusterName}: ${plan.problem}`);
+  for (const f of plan.copies.values()) {
+    const dt = dumpDatatype(f.node, `${clusterName}.copy`);
+    dt.copiedFrom = f.owner;
+    datatypes.push(dt);
+  }
+  for (const [el, key, name] of plan.rewrites) el[key] = name;
 }
 
 // --- cluster walk ---------------------------------------------------------
