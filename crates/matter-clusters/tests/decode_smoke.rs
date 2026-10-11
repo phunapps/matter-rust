@@ -5804,6 +5804,12 @@ fn wake_on_lan_low_power_and_keypad_input_codecs() {
         CecKeyCodeEnum::from_raw(0x0E),
         CecKeyCodeEnum::Unknown(0x0E)
     );
+    // 0x4F is `Reserved` in the 1.4.2 spec XML and chip's zap XML, not a key;
+    // the model (like matter.js) has no variant for it.
+    assert_eq!(
+        CecKeyCodeEnum::from_raw(0x4F),
+        CecKeyCodeEnum::Unknown(0x4F)
+    );
     let response = |status| struct_of(&|w| w.put_uint(Tag::Context(0), status).unwrap());
     assert_eq!(
         SendKeyResponse::decode(&response(1)).unwrap().status,

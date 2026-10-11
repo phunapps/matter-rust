@@ -2781,6 +2781,16 @@ fn every_generated_cluster_with_events_has_them_dumped() {
         .map(|e| e["cluster"].as_str().unwrap())
         .collect();
     assert_eq!(off, Vec::<&str>::new());
+    // The structural marker too: only the "events not enabled" branch of the
+    // dump records `kind: "events"`, so a reworded reason cannot hide one.
+    let whole_cluster: Vec<&str> = v["meta"]["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "events")
+        .map(|e| e["cluster"].as_str().unwrap())
+        .collect();
+    assert_eq!(whole_cluster, Vec::<&str>::new());
 }
 
 #[test]
