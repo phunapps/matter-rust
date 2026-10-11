@@ -12,8 +12,9 @@
 //! (`just integration-microwave-oven`), endpoint 1 (M9-A3 B3). No other chip
 //! example app serves it, at master or v1.4.2.0.
 //!
-//! NOT YET RUN LIVE: microwave-oven-app needs Rosetta 2 to build on Apple
-//! silicon. Every expected value below is read from chip source instead.
+//! Live on a Linux arm64 Pi (chip master 5cd2917a; 3 passed): microwave-oven-app
+//! needs Rosetta 2 to build on Apple silicon, so it runs there, not on the Mac.
+//! Every expected value below is also read from chip source.
 //! Line numbers are chip master 5cd2917a:
 //!
 //! - examples/microwave-oven-app/microwave-oven-common/include/

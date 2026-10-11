@@ -15,9 +15,13 @@
 //! `list<octstr>`) run through tv-app's message list; chip's server refuses
 //! malformed requests.
 //!
-//! NOT YET RUN LIVE: tv-app needs Rosetta 2 to build on Apple silicon
-//! (chip's ZAP ships x86_64-only for macOS). Every expected value below is
-//! read from chip source instead. Line numbers are chip master 5cd2917a:
+//! Run live on a Linux arm64 Pi (chip master 5cd2917a): tv-app needs Rosetta 2
+//! to build on Apple silicon (chip's ZAP ships x86_64-only for macOS). There,
+//! `messages_present_and_cancel_round_trip` passes; run after it in the same
+//! tv-app process, `messages_refuse_malformed_requests` times out because
+//! master tv-app's 15-buffer PacketBuffer pool fills with responses this
+//! controller has not yet ACKed (it passes run alone). Every expected value
+//! below is also read from chip source. Line numbers are chip master 5cd2917a:
 //!
 //! - examples/tv-app/tv-common/tv-app.matter:4100, :4123-4137: Messages on
 //!   endpoint 1 only, attributes 0 and 1 (plus globals), both commands;
