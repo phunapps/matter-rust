@@ -334,7 +334,9 @@ async fn water_heater_management_boosts_and_cancels() {
 
 /// chip's server checks WaterHeaterBoostInfoStruct's two rules before its
 /// delegate runs (water-heater-management-server.cpp `HandleBoost`, v1.4.2.0;
-/// the same in master's WaterHeaterManagementCluster.cpp): a TargetReheat
+/// the same in master's WaterHeaterManagementCluster.cpp), with the
+/// TankPercent feature (TP is set on all-clusters v1.4.2.0: WhmMain.cpp; without
+/// TP it refuses any TargetPercentage or TargetReheat): a TargetReheat
 /// without TargetPercentage, and a TargetReheat with OneShot, are each
 /// refused with InvalidCommand, and BoostState stays Inactive. The generated
 /// encoder sends both as asked (the rules are documented, not enforced).
@@ -381,7 +383,10 @@ async fn water_heater_boost_refuses_a_reheat_that_breaks_its_rules() {
 /// attributes), EnergyEvse (the 17 attributes its `.matter` lists for PREF and
 /// RFID; GetTargets answers GetTargetsResponse) and PowerTopology (both lists,
 /// empty: the stub delegate has no endpoints). Every attribute decodes.
-/// v1.4.2.0 only.
+/// v1.4.2.0's server answers GetTargets with GetTargetsResponse followed by a
+/// Success status for the same path (energy-evse-server.cpp:487-488; master
+/// sends only the response); `invoke_for_response` reads the first
+/// InvokeResponseIB. v1.4.2.0 only.
 #[tokio::test]
 async fn energy_clusters_decode_on_all_clusters() {
     let Some((cfg, controller, node_id)) = connect_all_clusters().await else {
@@ -400,15 +405,19 @@ async fn energy_clusters_decode_on_all_clusters() {
     })
     .await;
     assert_exact_attribute_ids("PowerTopology", &attrs, &[0, 1]);
-    for id in [
-        topo::attribute_id::AVAILABLE_ENDPOINTS,
-        topo::attribute_id::ACTIVE_ENDPOINTS,
-    ] {
-        assert_eq!(
-            topo::decode_available_endpoints(attribute_tlv(&attrs, id)).unwrap(),
-            Vec::<u16>::new()
-        );
-    }
+    assert_eq!(
+        topo::decode_available_endpoints(attribute_tlv(
+            &attrs,
+            topo::attribute_id::AVAILABLE_ENDPOINTS
+        ))
+        .unwrap(),
+        Vec::<u16>::new()
+    );
+    assert_eq!(
+        topo::decode_active_endpoints(attribute_tlv(&attrs, topo::attribute_id::ACTIVE_ENDPOINTS))
+            .unwrap(),
+        Vec::<u16>::new()
+    );
 }
 
 async fn decode_device_energy_management(node: &Node) {

@@ -857,7 +857,8 @@ async fn forecast_update_reason(node: &Node) -> dem::ForecastUpdateReasonEnum {
 
 /// evse-app's PowerTopology has the NODE feature only, so it serves neither
 /// AvailableEndpoints (SET) nor ActiveEndpoints (DYPF): a wildcard read
-/// returns no attribute beyond the globals.
+/// returns no attribute beyond the globals, and AttributeList names exactly
+/// the five globals evse-app.matter lists for it (no EventList).
 #[tokio::test]
 async fn power_topology_serves_node_topology_only() {
     let Some((controller, node_id)) = connect_evse().await else {
@@ -872,4 +873,34 @@ async fn power_topology_serves_node_topology_only() {
         .await
         .unwrap();
     assert_exact_attribute_ids("PowerTopology", &attrs, &[]);
+
+    use matter_clusters::clusters::globals::ATTRIBUTE_LIST;
+    let report = node
+        .read(&[ReadPath::concrete(
+            EP,
+            power_topology::CLUSTER_ID,
+            ATTRIBUTE_LIST,
+        )])
+        .await
+        .unwrap();
+    let (_, list) = report
+        .into_iter()
+        .find(|(p, _)| p.attribute == ATTRIBUTE_LIST)
+        .unwrap();
+    let matter_codec::Value::Array(entries) = list else {
+        panic!("AttributeList is not a list: {list:?}");
+    };
+    let mut ids: Vec<u64> = entries
+        .iter()
+        .map(|e| match e {
+            matter_codec::Value::Uint(id) => *id,
+            other => panic!("AttributeList entry is not an unsigned int: {other:?}"),
+        })
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        [0xFFF8, 0xFFF9, 0xFFFB, 0xFFFC, 0xFFFD],
+        "PowerTopology AttributeList"
+    );
 }

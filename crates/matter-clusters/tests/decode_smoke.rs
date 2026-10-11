@@ -3639,9 +3639,10 @@ fn power_topology_attributes_decode() {
 // ---- M9-A3 B5: WaterHeaterManagement ---------------------------------------
 //
 // 1.4.2 WaterHeaterManagement.xml. Boost takes a WaterHeaterBoostInfoStruct,
-// which BoostStarted carries back; BoostEnded has no fields. Values are
-// all-clusters v1.4.2.0's (WhmManufacturer::Init: ImmersionElement1;
-// features EM | TP); master's all-clusters no longer serves the cluster.
+// which BoostStarted carries back; BoostEnded has no fields. Only HeaterTypes
+// (WhmManufacturer::Init: ImmersionElement1) and the feature bits (EM | TP)
+// are all-clusters v1.4.2.0's; the other values are illustrative. Master's
+// all-clusters no longer serves the cluster.
 
 #[test]
 fn water_heater_management_attributes_decode() {
@@ -3756,7 +3757,7 @@ fn device_energy_management_attributes_and_capability_decode() {
         (Feature::PA | Feature::PFR | Feature::STA | Feature::PAU | Feature::FA | Feature::CON)
             .bits(),
         0x7B,
-        "evse-app's features"
+        "evse-app (master) / energy-management-app (v1.4.2.0) features"
     );
     assert_eq!(decode_esa_type(&uint_attr(0)).unwrap(), ESATypeEnum::Evse);
     assert_eq!(
@@ -4107,7 +4108,11 @@ fn energy_evse_commands_encode_and_targets_decode() {
         })
     );
     // Weekdays: 80 % by 07:30; Saturday: 25 kWh by 10:00. Each target carries
-    // one of TargetSoC / AddedEnergy (choice group a: at least one).
+    // one of TargetSoC / AddedEnergy (choice group a: at least one). These
+    // vectors are wire-only: chip's server applies its SOC rule (with SOC,
+    // TargetSoC is required; without SOC, it may only be absent or 100), so
+    // it would refuse them live (the Saturday target with SOC, the weekday
+    // one without).
     let schedules = vec![
         ChargingTargetScheduleStruct {
             day_of_week_for_sequence: TargetDayOfWeekBitmap::MONDAY
@@ -4412,5 +4417,35 @@ fn messages_ids_and_events_decode() {
             event_id::MESSAGE_COMPLETE
         ],
         [0x00, 0x01, 0x02]
+    );
+}
+
+#[test]
+fn present_messages_request_without_responses_omits_tag_6() {
+    // Responses is optional (RESP-gated): `None` leaves tag 6 out entirely,
+    // rather than sending an empty list. The matter.js vector
+    // (byte_parity) covers the `Some` case.
+    use clusters::messages::{
+        encode_present_messages_request, MessageControlBitmap, MessagePriorityEnum,
+    };
+    let got = encode_present_messages_request(
+        &vec![0x22; 16],
+        MessagePriorityEnum::Low,
+        MessageControlBitmap::empty(),
+        Nullable::Null,
+        Nullable::Value(60_000),
+        &"Hello".to_string(),
+        None,
+    );
+    assert_eq!(
+        got,
+        struct_of(&|w| {
+            w.put_bytes(Tag::Context(0), &[0x22; 16]).unwrap();
+            w.put_uint(Tag::Context(1), 0).unwrap(); // Low
+            w.put_uint(Tag::Context(2), 0).unwrap();
+            w.put_null(Tag::Context(3)).unwrap();
+            w.put_uint(Tag::Context(4), 60_000).unwrap();
+            w.put_utf8(Tag::Context(5), "Hello").unwrap();
+        })
     );
 }

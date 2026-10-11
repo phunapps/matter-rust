@@ -179,6 +179,8 @@ async fn messages_present_and_cancel_round_trip() {
     };
     let node = controller.node(node_id);
     clear_messages(&node).await;
+    // The sweep runs on empty lists (just cleared); populated entries are
+    // decoded by `messages()` below.
     let attrs = decode_every_attribute(&node, EP, msg::CLUSTER_ID, |id, t| match id {
         msg::attribute_id::MESSAGES => ok(msg::decode_messages(t)),
         msg::attribute_id::ACTIVE_MESSAGE_I_DS => ok(msg::decode_active_message_i_ds(t)),
