@@ -468,9 +468,9 @@ impl<'a> TlvReader<'a> {
 
     /// Raw byte walk: control byte → tag skip → body skip. Nothing is
     /// materialised and string payloads are advanced over without UTF-8
-    /// validation (deliberate: skipped data is unobserved; 2026-08-09
-    /// perf spec §4.1). Structural validation (tag forms, element types,
-    /// bounds, nesting depth) is identical to `next()`.
+    /// validation (deliberate: skipped data is unobserved, and validating
+    /// it cost time on every skip). Structural validation (tag forms,
+    /// element types, bounds, nesting depth) is identical to `next()`.
     fn skip_container_body(&mut self) -> Result<()> {
         let mut depth = 1usize;
         while depth > 0 {
@@ -1852,8 +1852,8 @@ mod tests {
             r.next().unwrap(),
             Some(Element::ContainerStart { .. })
         ));
-        // Skipped (unobserved) data is NOT UTF-8 validated — deliberate loosening,
-        // 2026-08-09 perf spec §4.1 (same class as §3.1's non-charged skip).
+        // Skipped (unobserved) data is NOT UTF-8 validated — a deliberate
+        // loosening, like the skip that charges no element budget.
         r.skip_container().unwrap();
         assert!(matches!(
             r.next().unwrap(),

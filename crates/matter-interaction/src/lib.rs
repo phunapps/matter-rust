@@ -187,7 +187,8 @@ pub fn read_container_value(
 /// depth) but never decoded — string payloads in skipped data are not
 /// UTF-8 validated — and it does not charge the codec's tree-builder
 /// element budget; a discarded payload is bounded by its input size only.
-/// (Deliberate: see the 2026-08-09 performance-remediation spec §3.1.)
+/// (Deliberate: skipped data is never observed, so checking it would only
+/// cost time.)
 ///
 /// # Errors
 ///

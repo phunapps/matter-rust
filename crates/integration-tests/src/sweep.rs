@@ -1,4 +1,4 @@
-//! Helpers for the per-batch cluster sweeps (M9-A3 spec §6.3): read every
+//! Helpers for the per-batch cluster sweeps: read every
 //! attribute of a cluster with one wildcard read and decode each with the
 //! generated `matter-clusters` decoder, and invoke a command and decode its
 //! response.
@@ -360,7 +360,7 @@ pub async fn invoke_for_status(
 /// `ChangeToMode(CurrentMode)` is the safe command: chip answers `Success`
 /// before it consults the app's delegate and changes nothing
 /// (`ModeBaseCluster.cpp` `HandleChangeToMode`), and it leaves `StatusText`
-/// out of that reply, which the server builds itself (spec §3.1); the macro
+/// out of that reply, which the server builds itself; the macro
 /// asserts both. `$m` is the generated
 /// module, in scope at the call site (`use matter_clusters::clusters::rvc_run_mode;`).
 ///

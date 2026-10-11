@@ -1,4 +1,4 @@
-//! Unsecured (session-id 0) message framing for the PASE handshake (M6.6 §5).
+//! Unsecured (session-id 0) message framing for the PASE handshake.
 //!
 //! `matter-transport`'s `SessionManager` only handles *encrypted* sessions —
 //! it always encrypts and explicitly skips session id 0. The PASE handshake

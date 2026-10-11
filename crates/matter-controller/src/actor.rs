@@ -717,7 +717,7 @@ struct PendingResubscribe {
     tx: ReportSink,
 }
 
-/// Why one subscribe attempt failed (spec 2026-10-02 §4.2).
+/// Why one subscribe attempt failed.
 ///
 /// Every failure of an attempt whose `SubscribeRequest` is out — an answer on
 /// its exchange that is malformed, a rejection or unexpected, and for a
@@ -4662,7 +4662,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
-    /// The resubscribe watch's re-query cadence (spec 2026-10-04 §3.2), run by
+    /// The resubscribe watch's re-query cadence, run by
     /// [`Self::reconcile_resubscribe_watch`] while an episode needs the watch
     /// and the subtype browse is held for the sole fabric.
     ///
@@ -11692,7 +11692,7 @@ mod tests {
     /// re-primed report, then returns.
     ///
     /// The liveness retry runs on a fresh CASE session (the controller drops
-    /// the timed-out subscription's route, spec 2026-10-02 §4.6), so the device
+    /// the timed-out subscription's route), so the device
     /// accepts a second handshake — with `second_life`, since credentials
     /// cannot be cloned — and answers on that session. Reacts only to `Sigma1`
     /// and `SubscribeRequest` (opcode 0x03); drains acks and other frames.
@@ -13911,8 +13911,8 @@ mod tests {
             device_node_id,
         } = loopback_harness();
 
-        // The liveness retry runs a fresh CASE handshake (spec 2026-10-02
-        // §4.6); the device needs a second set of credentials for it.
+        // The liveness retry runs a fresh CASE handshake; the device needs a
+        // second set of credentials for it.
         let state = crate::snapshot::deserialize(&store.load().unwrap().unwrap()).unwrap();
         let second_life = mint_device_creds(&state, device_node_id);
         let device = tokio::spawn(run_resubscribe_device(
@@ -21034,7 +21034,7 @@ mod tests {
         assert!(actor.cache.contains_key(&(fabric_id, 0x42)));
     }
 
-    /// Review focus 5 / spec §6: without a sole fabric the pull still resets
+    /// Without a sole fabric the pull still resets
     /// and pulls; route eviction is skipped.
     #[tokio::test]
     async fn a_pull_without_a_sole_fabric_still_resets_and_skips_eviction() {
@@ -21749,7 +21749,7 @@ mod tests {
     /// `LIVENESS_GRACE`). Then it loses power: it forgets the session and,
     /// until `power_back` fires, answers nothing at all — it reads and drops
     /// every frame, so a handshake attempted meanwhile (the liveness retry's
-    /// fresh CASE, spec 2026-10-02 §4.6) fails as against a real dead device
+    /// fresh CASE) fails as against a real dead device
     /// and no stale `Sigma1` is left queued for the second life. Second life:
     /// accept the controller's next CASE handshake and answer that session's
     /// `SubscribeRequest` (max interval 60, so the test ends before liveness
@@ -21876,8 +21876,8 @@ mod tests {
             "liveness must time out (got {lost:?})"
         );
 
-        // 2. The immediate retry runs a fresh CASE handshake (spec 2026-10-02
-        //    §4.6), which the powered-off device never answers, and comes back
+        // 2. The immediate retry runs a fresh CASE handshake, which the
+        //    powered-off device never answers, and comes back
         //    to the queue. Push it 10 minutes out at retry 10, as if several
         //    attempts had failed.
         let backed_off = tokio::time::timeout(Duration::from_secs(30), async {
@@ -23316,7 +23316,7 @@ mod tests {
         assert!(reports.try_recv().is_err(), "no consumer sees it");
     }
 
-    /// Spec §4.2 / §5: only Interaction Model reports are acted on; a non-IM
+    /// Only Interaction Model reports are acted on; a non-IM
     /// message with opcode 0x05 is not answered.
     #[tokio::test]
     async fn a_non_im_report_opcode_is_not_answered() {

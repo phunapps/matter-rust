@@ -1,4 +1,4 @@
-//! The `AsyncDatagram` transport seam (M6.6 §4) and its two implementations.
+//! The `AsyncDatagram` transport seam and its two implementations.
 //!
 //! The seam is deliberately datagram-only — no MRP, no framing. All
 //! reliability and framing live one layer up (`exchange.rs` /

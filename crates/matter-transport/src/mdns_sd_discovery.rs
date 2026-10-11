@@ -286,7 +286,7 @@ struct BrowseState {
     /// daemon holds. A `ServiceFound` for a name already here re-delivers a
     /// PTR the daemon already held — mdns-sd replays every cached PTR to a
     /// re-issued browse — so it is not buffered for
-    /// [`Discovery::poll_found`] (spec 2026-10-04 §3.1).
+    /// [`Discovery::poll_found`].
     ///
     /// Keyed exactly like `surfaced` ([`instance_name_from_fullname`]) and
     /// **verbatim, not lowercased**: mdns-sd compares PTR aliases
@@ -337,7 +337,7 @@ impl BrowseState {
     /// (and `surfaced`), found events into `found`.
     ///
     /// While a requery is in progress (`retiring` is `Some`), the order is
-    /// what makes the swap lossless (spec 2026-10-04 §3.1, review B1).
+    /// what makes the swap lossless.
     /// mdns-sd sends `SearchStarted` to a new listener first, in the same
     /// daemon step that installs it as the querier's listener
     /// (`exec_command_browse`, mdns-sd 0.21.3 `service_daemon.rs` 3857 then
@@ -2051,7 +2051,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Replay suppression (`present`, spec 2026-10-04 §3.1).
+    // Replay suppression (`present`).
     // ---------------------------------------------------------------------
 
     /// Spec 2026-10-04 test 1: a found instance is reported once; a second
@@ -2144,7 +2144,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Requery: the lossless receiver swap (spec 2026-10-04 §3.1, review B1).
+    // Requery: the lossless receiver swap.
     //
     // The switch-over is driven on a `BrowseState` fed by scripted channels
     // (`EventSource::Scripted`), so a test decides exactly what the "daemon"

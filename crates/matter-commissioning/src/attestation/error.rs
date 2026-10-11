@@ -171,8 +171,8 @@ pub enum AttestationError {
     /// over `attestation_elements || attestation_challenge` did not
     /// succeed against the DAC public key.
     ///
-    /// **Deliberately coarse.** Per the M6.2 design (§Error handling —
-    /// information leakage table), this variant does NOT distinguish
+    /// **Deliberately coarse**, so that the error does not leak
+    /// information: this variant does NOT distinguish
     /// between
     ///
     /// - signature bytes corrupted in transit,
@@ -190,9 +190,8 @@ pub enum AttestationError {
 
 /// Map a [`webpki::Error`] kind to our typed [`AttestationError`].
 ///
-/// Spec-mandated mapping (see the M6.2 design doc, §Error type —
-/// "Well-known [`webpki::Error`] kinds"), adapted to `webpki 0.103`'s
-/// actual variant set:
+/// The mapping of the well-known [`webpki::Error`] kinds, adapted to
+/// `webpki 0.103`'s actual variant set:
 ///
 /// | [`webpki::Error`] kind                                                              | [`AttestationError`]          |
 /// |-------------------------------------------------------------------------------------|-------------------------------|
@@ -299,10 +298,9 @@ mod tests {
     #[test]
     fn bad_response_signature_variant_exists() {
         // Construction smoke test: this variant must be a unit variant so
-        // it carries no information beyond "verification failed" — see
-        // M6.2 design §Error handling: the single coarse variant prevents
-        // the error channel from leaking which secret (key, challenge,
-        // elements, or signature) was off.
+        // it carries no information beyond "verification failed": the
+        // single coarse variant prevents the error channel from leaking
+        // which secret (key, challenge, elements, or signature) was off.
         let err = AttestationError::BadResponseSignature;
         assert!(matches!(err, AttestationError::BadResponseSignature));
         // Display string covers what the operator will see; assert on its

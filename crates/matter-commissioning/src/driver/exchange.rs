@@ -1,4 +1,4 @@
-//! Secured-exchange round-trip over `SessionManager` + MRP (M6.6 §5).
+//! Secured-exchange round-trip over `SessionManager` + MRP.
 //!
 //! This is the single place where async IO and MRP retransmit timers meet for
 //! *encrypted* exchanges. The sans-IO `SessionManager` produces wire bytes and

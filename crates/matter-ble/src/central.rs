@@ -11,7 +11,7 @@
 //! from a user-initiated commissioning flow — never at library init — and see
 //! `docs/runbooks/ble-commissioning.md`.
 //!
-//! btleplug specifics relied on here are pinned against 0.12.0 (spec §D8):
+//! btleplug specifics relied on here are pinned against 0.12.0:
 //! service-data advertisements arrive on the `events()` stream (never the stale
 //! `PeripheralProperties`), a service-UUID `ScanFilter` is unusable because it
 //! blinds the `BlueZ` backend (so scans are unfiltered — see
@@ -654,7 +654,7 @@ impl BleCentral {
 
         // Adapter event stream, used by the pump to observe DeviceDisconnected
         // for this peripheral (the notification stream alone does not reliably
-        // close on link loss — spec §D8).
+        // close on link loss).
         let events = self
             .adapter
             .events()

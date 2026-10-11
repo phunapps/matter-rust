@@ -2,7 +2,8 @@
 //!
 //! `codegen_golden` proves the generator's output matches and compiles; these
 //! tests prove what that output *does*. They pin the fabric-sensitive encode
-//! rule (M9-A3 spec §5.4) on the fixture's `ScopedEntryStruct`: `Secret` and
+//! rule (a fabric-sensitive field is `Option`, and an encoder refuses a
+//! withheld one) on the fixture's `ScopedEntryStruct`: `Secret` and
 //! `Kind` are fabric-sensitive fields the dump relaxed for decoding only
 //! (`mandatoryOnWrite`), `Alias` is fabric-sensitive but optional in the model
 //! itself, and `Note` is an ordinary optional field.

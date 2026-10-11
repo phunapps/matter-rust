@@ -704,7 +704,7 @@ every entry decodes in full with `fabric_index` `None`.
   action commands, and the `StateChanged` and `ActionFailed` events.
 - **EcosystemInformation (0x0750)**: `DeviceDirectory` and
   `LocationDirectory`. Both are fabric-scoped lists, so other fabrics'
-  entries decode with their fabric-sensitive fields `None` (spec §5.4). The
+  entries decode with their fabric-sensitive fields `None`. The
   global location struct is generated as
   `ecosystem_information::LocationDescriptorStruct`. No chip example app
   fills its directories (fabric-bridge-app and fabric-sync add the cluster,
@@ -3297,7 +3297,7 @@ with zero subscriptions went from 239 (the old fixed 250 ms tick) to 0.
 
 - `skip_container` is now an allocation-free raw walk instead of building and
   discarding an owned `Value` tree. **Skipped (unobserved) string data is no
-  longer UTF-8 validated** — a deliberate loosening (perf spec §4.1); this is
+  longer UTF-8 validated** — a deliberate loosening for speed; this is
   intentional and future differential tests must not flag it as a
   divergence.
 - The writer now batches element headers into a stack buffer and reserves
