@@ -27,8 +27,8 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 113 listed below. More
-  are generated as they are needed.
+- It covers every Matter 1.4 cluster except the two provisional JointFabric
+  clusters (0x0752, 0x0753); Matter 1.5-only clusters are not generated.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
   publishes is the Interaction Model layer / high-level controller (see *Reading
@@ -199,15 +199,17 @@ The media and TV-platform clusters, and Messages, run live against chip's
 tv-app built at master 5cd2917a and at v1.4.2.0 for Linux arm64 on a
 Raspberry Pi (`just integration-tv`; in the nightly at v1.4.2.0, on
 linux-x64, from its next run; not on the Mac, because tv-app needs Rosetta 2
-to build on Apple silicon). Every test passes
-at both refs; each exchange is paced, because master's tv-app runs on a
-15-buffer PacketBuffer pool. WakeOnLan and LowPower also run against chip's
-all-clusters, locally at master and on the Pi at v1.4.2.0, and in the nightly
-at v1.4.2.0 from its next run. ContentAppObserver has not run live (of chip's
-example apps only tv-casting-app serves it, which the harness does not
-drive): decode smoke and `chip-xml-conformance.py` only. None of these
-clusters' events has a stimulus that reaches tv-app's log, so they are decode
-tests only.
+to build on Apple silicon). Every test passes at both refs; each exchange is
+paced, because master's tv-app runs on a 15-buffer PacketBuffer pool.
+tv-app's ContentControl delegate is a stub: the two rating lists fail to read
+and the block-list commands are unsupported, so the live test covers
+attributes 0, 2 and 4–7 and the status answers only. WakeOnLan and LowPower
+also run against chip's all-clusters, locally at master and on the Pi at
+v1.4.2.0, and in the nightly at v1.4.2.0 from its next run.
+ContentAppObserver has not run live (of chip's example apps only
+tv-casting-app serves it, which the harness does not drive): decode smoke and
+`chip-xml-conformance.py` only. None of these clusters' events has a stimulus
+that reaches tv-app's log, so they are decode tests only.
 
 For any attribute not covered by these typed codecs — manufacturer-specific, or
 a cluster not in this list — the generic `Value` path in `matter-controller`

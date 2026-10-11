@@ -781,15 +781,17 @@ How each of these clusters was validated:
   `TrackAttributesStruct.DisplayName` at tag 1, where the specification has
   `Characteristics`, so a display-name string a chip device sends there is
   skipped (`DisplayName` reads as `None`), and a null one reads as a null
-  `Characteristics`; tv-app always sends a string. `ActivateAudioTrack`'s `AudioOutputIndex` is nullable in
-  the specification, and optional here as in matter.js (its conformance is
-  the AudioTracks feature); chip's codegen makes it a plain `uint8`, so
-  chip's server refuses a null one with InvalidCommand.
+  `Characteristics`; tv-app always sends a string. `ActivateAudioTrack`'s
+  `AudioOutputIndex` is nullable in the specification, and optional here as
+  in matter.js (its conformance is the AudioTracks feature); chip's codegen
+  makes it a plain `uint8`, so chip's server refuses a null one with
+  InvalidCommand.
 - **ContentLauncher (0x050A)**: every attribute, command and response. Its
   requests are the first whose structs nest structs (three deep in
   `LaunchURL`'s `BrandingInformation`), carry optional and nullable lists,
-  and a `double` (`DimensionStruct`); both are pinned byte for byte against
-  matter.js. `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
+  and a `double` (`DimensionStruct`); its two requests, `LaunchURL` and
+  `LaunchContent`, are pinned byte for byte against matter.js (four
+  vectors). `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
   `CharacteristicEnum`, which the module carries as its own copy. chip's
   codegen makes `PlaybackPosition`, `TextTrack` and `AudioOutputIndex`
   mandatory and none of the preferences nullable, so chip's server refuses a
@@ -829,10 +831,12 @@ How each of these clusters was validated:
   tests at v1.4.2.0 (linux-x64) from its next run): WakeOnLan, LowPower,
   KeypadInput, MediaInput, AudioOutput, TargetNavigator, MediaPlayback,
   ContentLauncher, Channel, ApplicationLauncher and ContentControl on its
-  endpoint 1, ApplicationBasic
-  on its five Content App endpoints, and AccountLogin on its Vendor3 Content
-  App. Every test passed at both refs, as did B5's Messages tests in the same
-  suite.
+  endpoint 1 (tv-app's ContentControl delegate is a stub: the two rating
+  lists fail to read and the block-list commands are unsupported, so the
+  live test covers attributes 0, 2 and 4–7 and the status answers only),
+  ApplicationBasic on its five Content App endpoints, and AccountLogin on
+  its Vendor3 Content App. Every test passed at both refs, as did B5's
+  Messages tests in the same suite.
 - **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
   locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
   nightly at v1.4.2.0 (linux-x64) from its next run.
