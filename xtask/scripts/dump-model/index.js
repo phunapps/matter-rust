@@ -307,6 +307,12 @@ const ALLOWLIST = [
   // nested program structs; ExternalIdList fields are lists of
   // ContentLauncher's AdditionalInfoStruct, copied in by copyForeignDatatypes):
   { id: 0x0504, name: 'Channel' },
+  // M9-A3 B7, ContentControl (provisional, PROVISIONAL_CLUSTERS): parental
+  // controls with PIN requests (ResetPINResponse's PIN is a SECRET_FIELDS
+  // entry), lists of block-channel, block-application and time-window structs
+  // (TimeWindowStruct nests a list of TimePeriodStruct), and two fieldless
+  // events.
+  { id: 0x050f, name: 'ContentControl' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -379,6 +385,9 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B7, MediaPlayback (StateChanged: CurrentState and eight optional
   // fields, SampledPosition a struct):
   'MediaPlayback',
+  // M9-A3 B7, ContentControl (RemainingScreenTimeExpired and
+  // EnteringBlockContentTimeWindow, both fieldless):
+  'ContentControl',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's
@@ -393,6 +402,7 @@ const EVENT_ALLOWLIST = new Set([
 // not allowlisted fails the dump.
 const PROVISIONAL_CLUSTERS = new Map([
   ['EnergyPreference', 'chip data_model/1.4.2/clusters/EnergyPreference.xml: <clusterId id="0x009B"> carries <provisionalConform/> (also 1.5, 1.5.1)'],
+  ['ContentControl', 'chip data_model/1.4.2/clusters/ContentControl.xml: <clusterId id="0x050F"> carries <provisionalConform/> (also 1.5, 1.5.1)'],
 ]);
 
 const excluded = [];
@@ -519,6 +529,7 @@ const SECRET_FIELDS = new Map([
   ['ThreadNetworkDirectory.OperationalDatasetResponse.OperationalDataset', 'a Thread operational dataset, network key included'],
   ['WiFiNetworkManagement.NetworkPassphraseResponse.Passphrase', 'the Wi-Fi network passphrase'],
   ['AccountLogin.GetSetupPinResponse.SetupPin', 'the setup PIN for PASE with the Commissionee'],
+  ['ContentControl.ResetPinResponse.PinCode', 'the new content-control PIN'],
 ]);
 const appliedSecretFields = new Set();
 

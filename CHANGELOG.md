@@ -797,6 +797,16 @@ How each of these clusters was validated:
   non-nullable, so chip's server refuses a null one (InvalidCommand). chip's
   zap XML marks `ProgramGuideResponse` provisional (both refs); the 1.4.2
   spec XML and the model do not, so it carries no provisional note.
+- **ContentControl (0x050F)**, **provisional**: the specification marks the
+  whole cluster provisional (Matter 1.4.2, and still 1.5.1), so its shape may
+  change between specification revisions; such a change is still a breaking
+  `matter-clusters` release. Every attribute, command and response, and both
+  events. `ResetPinResponse`'s PIN is redacted in `Debug`. chip's zap XML and
+  controller codegen mark the cluster provisional too (both refs). chip
+  v1.4.2.0's codegen has an older shape of the cluster (five features,
+  attributes 0 to 7, no block lists, `UpdatePIN.OldPIN` and
+  `AddBonusTime.BonusTime` optional); master's matches the specification.
+  The generated encoders always send both, which either decoder accepts.
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 
@@ -812,8 +822,10 @@ How each of these clusters was validated:
 - The same applies to the structs this release adds that carry a secret:
   ThreadBorderRouterManagement `DatasetResponse` and ThreadNetworkDirectory
   `OperationalDatasetResponse` (Thread datasets, network key included),
-  WiFiNetworkManagement `NetworkPassphraseResponse` (the Wi-Fi passphrase)
-  and CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier.
+  WiFiNetworkManagement `NetworkPassphraseResponse` (the Wi-Fi passphrase),
+  CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier,
+  AccountLogin `GetSetupPinResponse` (the Content App's setup PIN) and
+  ContentControl `ResetPinResponse` (the new content-control PIN).
   Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
   rendering differs (it was never a stable format).
 

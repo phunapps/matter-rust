@@ -113,6 +113,7 @@
       "ApplicationLauncher",
       "ApplicationBasic",
       "AccountLogin",
+      "ContentControl",
       "ContentAppObserver",
       "EcosystemInformation",
       "CommissionerControl"
@@ -40562,6 +40563,737 @@
         }
       ],
       "datatypes": []
+    },
+    {
+      "id": 1295,
+      "name": "ContentControl",
+      "revision": 1,
+      "provisional": true,
+      "features": [
+        {
+          "bit": 0,
+          "code": "ST",
+          "name": "ScreenTime",
+          "description": "Supports managing screen time limits."
+        },
+        {
+          "bit": 1,
+          "code": "PM",
+          "name": "PinManagement",
+          "description": "Supports managing a PIN code which is used for restricting access to configuration of this feature."
+        },
+        {
+          "bit": 2,
+          "code": "BU",
+          "name": "BlockUnrated",
+          "description": "Supports managing content controls for unrated content."
+        },
+        {
+          "bit": 3,
+          "code": "OCR",
+          "name": "OnDemandContentRating",
+          "description": "Supports managing content controls based upon rating threshold for on demand content."
+        },
+        {
+          "bit": 4,
+          "code": "SCR",
+          "name": "ScheduledContentRating",
+          "description": "Supports managing content controls based upon rating threshold for scheduled content."
+        },
+        {
+          "bit": 5,
+          "code": "BC",
+          "name": "BlockChannels",
+          "description": "Supports managing a set of channels that are prohibited."
+        },
+        {
+          "bit": 6,
+          "code": "BA",
+          "name": "BlockApplications",
+          "description": "Supports managing a set of applications that are prohibited."
+        },
+        {
+          "bit": 7,
+          "code": "BTW",
+          "name": "BlockContentTimeWindow",
+          "description": "Supports managing content controls based upon setting time window in which all contents and applications SHALL be blocked."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Enabled",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates whether the Content Control feature implemented on a media device is turned off (FALSE) or turned on (TRUE)."
+        },
+        {
+          "id": 1,
+          "name": "OnDemandRatings",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "RatingNameStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall provide the collection of ratings that are currently valid for this media device. The items should honor the metadata of the on-demand content (e.g. Movie) rating system for one country or region where the media device has been provisioned. For example, for the MPAA system, RatingName may be one value out of \"G\", \"PG\", \"PG-13\", \"R\", \"NC-17\".\nThe media device shall have a way to determine which rating system applies for the on-demand content and then populate this attribute. For example, it can do it through examining the Location attribute in the Basic Information cluster, and then determining which rating system applies.\nThe ratings in this collection shall be in order from a rating for the youngest viewers to the one for the oldest viewers. Each rating in the list shall be unique."
+        },
+        {
+          "id": 2,
+          "name": "OnDemandRatingThreshold",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a threshold rating as a content filter which is compared with the rating for on-demand content. For example, if the on-demand content rating is greater than or equal to OnDemandRatingThreshold, for a rating system that is ordered from lower viewer age to higher viewer age, then on-demand content is not appropriate for the User and the Node shall prevent the playback of content.\nThis attribute shall be set to one of the values present in the OnDemandRatings attribute.\nWhen this attribute changes, the device SHOULD make the user aware of any limits of this feature. For example, if the feature does not control content within apps, then the device should make this clear to the user when the attribute changes."
+        },
+        {
+          "id": 3,
+          "name": "ScheduledContentRatings",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "RatingNameStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a collection of ratings which ScheduledContentRatingThreshold can be set to. The items should honor metadata of the scheduled content rating system for the country or region where the media device has been provisioned.\nThe media device shall have a way to determine which scheduled content rating system applies and then populate this attribute. For example, this can be done by examining the Location attribute in Basic Information cluster, and then determining which rating system applies.\nThe ratings in this collection shall be in order from a rating for the youngest viewers to the one for the oldest viewers. Each rating in the list shall be unique."
+        },
+        {
+          "id": 4,
+          "name": "ScheduledContentRatingThreshold",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a threshold rating as a content filter which is used to compare with the rating for scheduled content. For example, if the scheduled content rating is greater than or equal to ScheduledContentRatingThreshold for a rating system that is ordered from lower viewer age to higher viewer age, then the scheduled content is not appropriate for the User and shall be blocked.\nThis attribute shall be set to one of the values present in the ScheduledContentRatings attribute.\nWhen this attribute changes, the device SHOULD make the user aware of any limits of this feature. For example, if the feature does not control content within apps, then the device should make this clear to the user when the attribute changes."
+        },
+        {
+          "id": 5,
+          "name": "ScreenDailyTime",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the amount of time (in seconds) which the User is allowed to spend watching TV within one day when the Content Control feature is activated."
+        },
+        {
+          "id": 6,
+          "name": "RemainingScreenTime",
+          "type": "elapsed-s",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the remaining screen time (in seconds) which the User is allowed to spend watching TV for the current day when the Content Control feature is activated. When this value equals 0, the media device shall terminate the playback of content.\nThis attribute shall be updated when the AddBonusTime command is received and processed successfully (with the correct PIN)."
+        },
+        {
+          "id": 7,
+          "name": "BlockUnrated",
+          "type": "bool",
+          "metatype": "boolean",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates whether the playback of unrated content is allowed when the Content Control feature is activated. If this attribute equals FALSE, then playback of unrated content shall be permitted. Otherwise, the media device shall prevent the playback of unrated content.\nWhen this attribute changes, the device SHOULD make the user aware of any limits of this feature. For example, if the feature does not control content within apps, then the device should make this clear to the user when the attribute changes."
+        },
+        {
+          "id": 8,
+          "name": "BlockChannelList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "BlockChannelStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a set of channels that shall be blocked when the Content Control feature is activated."
+        },
+        {
+          "id": 9,
+          "name": "BlockApplicationList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "AppInfoStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a set of applications that shall be blocked when the Content Control feature is activated."
+        },
+        {
+          "id": 10,
+          "name": "BlockContentTimeWindow",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TimeWindowStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a set of periods during which the playback of content on media device shall be blocked when the Content Control feature is activated. The media device shall reject any request to play content during one period of this attribute. If it is entering any one period of this attribute, the media device shall block content which is playing and generate an event EnteringBlockContentTimeWindow. There shall NOT be multiple entries in this attribute list for the same day of week."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "UpdatePin",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "OldPin",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify the original PIN. Once the UpdatePIN command is performed successfully, it shall be invalid."
+            },
+            {
+              "id": 1,
+              "name": "NewPin",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a new PIN for the Content Control feature."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ResetPin",
+          "direction": "request",
+          "responseId": 2,
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "ResetPinResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PinCode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a new PIN of the Content Control feature.",
+              "secret": true
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "Enable",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 4,
+          "name": "Disable",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "AddBonusTime",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "PinCode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the PIN.\nThis field shall be optional for clients with Manage or greater privilege but shall be mandatory for clients with Operate privilege. The PIN provided in this field shall be used to guarantee that a client with Operate permission is allowed to invoke this command only if the PIN passed in this command is equal to the current PIN value."
+            },
+            {
+              "id": 1,
+              "name": "BonusTime",
+              "type": "elapsed-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the amount of extra time (in seconds) to increase RemainingScreenTime. This field shall NOT exceed the remaining time of this day."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "SetScreenDailyTime",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ScreenTime",
+              "type": "elapsed-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the time (in seconds) which the User is allowed to spend watching TV on this media device within one day."
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "name": "BlockUnratedContent",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 8,
+          "name": "UnblockUnratedContent",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 9,
+          "name": "SetOnDemandRatingThreshold",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Rating",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field indicates a threshold rating for filtering on-demand content. This field shall be set to one of the values present in the OnDemandRatings attribute"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "name": "SetScheduledContentRatingThreshold",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Rating",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field indicates a threshold rating for filtering scheduled content. This field shall be set to one of the values present in the ScheduledContentRatings attribute."
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "name": "AddBlockChannels",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Channels",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "BlockChannelStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field indicates a set of channels that shall be blocked when the Content Control feature is activated. This field shall be set to values present in ChannelList attribute in the Channel cluster. The BlockChannelIndex field passed in this command shall be NULL."
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "name": "RemoveBlockChannels",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ChannelIndexes",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "uint16",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a set of indexes indicating Which channels shall be removed from the BlockChannelList attribute."
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "name": "AddBlockApplications",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Applications",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AppInfoStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field indicates a set of applications that shall be blocked when the Content Control feature is activated."
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "name": "RemoveBlockApplications",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Applications",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AppInfoStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field indicates a set of applications which shall be removed from BlockApplicationList attribute."
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "name": "SetBlockContentTimeWindow",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TimeWindow",
+              "type": "TimeWindowStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a time window requested to set to the BlockContentTimeWindow attribute."
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "name": "RemoveBlockContentTimeWindow",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TimeWindowIndexes",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "uint16",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall specify a set of time window indexes indicating which time windows will be removed from the BlockContentTimeWindow attribute."
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "RemainingScreenTimeExpired",
+          "priority": "info",
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "EnteringBlockContentTimeWindow",
+          "priority": "info",
+          "fields": []
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "AppInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CatalogVendorId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Connectivity Standards Alliance-issued vendor ID for the catalog. The DIAL registry shall use value 0x0000.\nContent App Platform providers will have their own catalog vendor ID (set to their own Vendor ID) and will assign an ApplicationID to each Content App."
+            },
+            {
+              "id": 1,
+              "name": "ApplicationId",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the application identifier, expressed as a string, such as \"PruneVideo\" or \"Company X\". This field shall be unique within a catalog."
+            }
+          ]
+        },
+        {
+          "name": "BlockChannelStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "BlockChannelIndex",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate a unique index value for a blocked channel. This value may be used to indicate one selected channel which will be removed from BlockChannelList attribute."
+            },
+            {
+              "id": 1,
+              "name": "MajorNumber",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel major number value (for example, using ATSC format). When the channel number is expressed as a string, such as \"13.1\" or \"256\", the major number would be 13 or 256, respectively. This field is required but shall be set to 0 for channels such as over-the-top channels that are not represented by a major or minor number."
+            },
+            {
+              "id": 2,
+              "name": "MinorNumber",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel minor number value (for example, using ATSC format). When the channel number is expressed as a string, such as \"13.1\" or \"256\", the minor number would be 1 or 0, respectively. This field is required but shall be set to 0 for channels such as over-the-top channels that are not represented by a major or minor number."
+            },
+            {
+              "id": 3,
+              "name": "Identifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the unique identifier for a specific channel. This field is optional, but SHOULD be provided when MajorNumber and MinorNumber are not available."
+            }
+          ]
+        },
+        {
+          "name": "DayOfWeekBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Sunday",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "Monday",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "Tuesday",
+              "description": null
+            },
+            {
+              "bit": 3,
+              "name": "Wednesday",
+              "description": null
+            },
+            {
+              "bit": 4,
+              "name": "Thursday",
+              "description": null
+            },
+            {
+              "bit": 5,
+              "name": "Friday",
+              "description": null
+            },
+            {
+              "bit": 6,
+              "name": "Saturday",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "RatingNameStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "RatingName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of the rating level of the applied rating system. The applied rating system is dependent upon the region or country where the Node has been provisioned, and may vary from one country to another."
+            },
+            {
+              "id": 1,
+              "name": "RatingNameDesc",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify a human readable (displayable) description for RatingName."
+            }
+          ]
+        },
+        {
+          "name": "StatusCodeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 2,
+              "name": "InvalidPinCode",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "InvalidRating",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "InvalidChannel",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "ChannelAlreadyExist",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "ChannelNotExist",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "UnidentifiableApplication",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "ApplicationAlreadyExist",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "ApplicationNotExist",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "TimeWindowAlreadyExist",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "TimeWindowNotExist",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TimePeriodStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "StartHour",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the starting hour."
+            },
+            {
+              "id": 1,
+              "name": "StartMinute",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the starting minute."
+            },
+            {
+              "id": 2,
+              "name": "EndHour",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the ending hour. EndHour shall be equal to or greater than StartHour"
+            },
+            {
+              "id": 3,
+              "name": "EndMinute",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the ending minute. If EndHour is equal to StartHour then EndMinute shall be greater than StartMinute. If the EndHour is equal to 23 and the EndMinute is equal to 59, all contents shall be blocked until 23:59:59."
+            }
+          ]
+        },
+        {
+          "name": "TimeWindowStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TimeWindowIndex",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate a unique index of a specific time window. This value may be used to indicate a selected time window which will be removed from the BlockContentTimeWindow attribute."
+            },
+            {
+              "id": 1,
+              "name": "DayOfWeek",
+              "type": "DayOfWeekBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a day of week."
+            },
+            {
+              "id": 2,
+              "name": "TimePeriod",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "TimePeriodStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate one or more discrete time periods."
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 1296,

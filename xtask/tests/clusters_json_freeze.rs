@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 112] = [
+const TARGET_CLUSTERS: [&str; 113] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -165,6 +165,8 @@ const TARGET_CLUSTERS: [&str; 112] = [
     "ContentLauncher",
     // M9-A3 B7, Channel:
     "Channel",
+    // M9-A3 B7, ContentControl (provisional):
+    "ContentControl",
 ];
 
 fn load() -> Value {
@@ -496,7 +498,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 34] = [
+const EVENT_CLUSTERS: [&str; 35] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -549,6 +551,8 @@ const EVENT_CLUSTERS: [&str; 34] = [
     "AccountLogin",
     // M9-A3 B7, MediaPlayback:
     "MediaPlayback",
+    // M9-A3 B7, ContentControl:
+    "ContentControl",
 ];
 
 #[test]
@@ -1762,6 +1766,7 @@ fn unreferenced_datatypes_are_pruned_except_the_keep_list() {
         with_status_codes,
         [
             "AdministratorCommissioning",
+            "ContentControl",
             "DoorLock",
             "TimeSynchronization",
             "ValveConfigurationAndControl",
@@ -1884,7 +1889,7 @@ fn scenes_management_shape_follows_1_4() {
 /// the dump's `PROVISIONAL_CLUSTERS`. Each gets a module rustdoc paragraph;
 /// `scripts/chip-xml-conformance.py` checks the marking against chip's 1.4.2
 /// XML both ways (class V).
-const PROVISIONAL_CLUSTERS: [&str; 1] = ["EnergyPreference"];
+const PROVISIONAL_CLUSTERS: [&str; 2] = ["EnergyPreference", "ContentControl"];
 
 /// Datatype struct fields whose presence depends on a sibling field
 /// (`requiredWhen`), as `(cluster, "<Struct>.<Field>", sibling, present,
@@ -2761,12 +2766,13 @@ fn network_infrastructure_clusters_keep_their_shapes() {
 /// The fields the dump marks `secret` (`SECRET_FIELDS`), as `(cluster,
 /// "<Owner>.<Field>")`: their structs keep them out of the generated `Debug`
 /// output. A new one (a widening, a model upgrade) is a review item.
-const SECRET: [(&str, &str); 8] = [
+const SECRET: [(&str, &str); 9] = [
     ("AccountLogin", "GetSetupPinResponse.SetupPin"),
     (
         "CommissionerControl",
         "ReverseOpenCommissioningWindow.PakePasscodeVerifier",
     ),
+    ("ContentControl", "ResetPinResponse.PinCode"),
     ("GroupKeyManagement", "GroupKeySetStruct.EpochKey0"),
     ("GroupKeyManagement", "GroupKeySetStruct.EpochKey1"),
     ("GroupKeyManagement", "GroupKeySetStruct.EpochKey2"),
@@ -3151,5 +3157,42 @@ fn channel_keeps_the_specifications_field_ids_and_copies_additional_info() {
     assert_eq!(
         field_optionality(&command(c, "ProgramGuideResponse")["fields"]),
         [("Paging", false), ("ProgramList", false)]
+    );
+}
+
+#[test]
+fn content_control_is_provisional_and_keeps_its_shapes() {
+    // 1.4.2 ContentControl.xml: the cluster id carries <provisionalConform/>
+    // (PROVISIONAL_CLUSTERS; class V checks it against the XML). No element is
+    // provisional on its own.
+    let v = load();
+    let c = cluster(&v, "ContentControl");
+    assert_eq!(c["provisional"], true);
+    assert_eq!(c["features"].as_array().unwrap().len(), 8);
+    assert_eq!(
+        element_names(c, "events"),
+        [
+            "RemainingScreenTimeExpired",
+            "EnteringBlockContentTimeWindow"
+        ]
+    );
+    for e in c["events"].as_array().unwrap() {
+        assert_eq!(e["fields"].as_array().unwrap().len(), 0, "{}", e["name"]);
+    }
+    assert_eq!(
+        field_optionality(&command(c, "UpdatePin")["fields"]),
+        [("OldPin", false), ("NewPin", false)]
+    );
+    assert_eq!(
+        field_optionality(&command(c, "AddBonusTime")["fields"]),
+        [("PinCode", true), ("BonusTime", false)]
+    );
+    let window = datatype(c, "TimeWindowStruct");
+    assert_eq!(window["fields"][0]["nullable"], true);
+    assert_eq!(window["fields"][2]["entryType"], "TimePeriodStruct");
+    // ContentControl's own cluster-specific status codes (2-11) are kept.
+    assert_eq!(
+        enum_values(datatype(c, "StatusCodeEnum")),
+        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
 }

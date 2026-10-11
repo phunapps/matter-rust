@@ -6658,3 +6658,167 @@ fn channel_additional_info_copy_matches_content_launchers() {
     );
     assert_eq!(Original::decode(&copy.encode()).unwrap(), original);
 }
+
+// ---- M9-A3 B7: ContentControl (provisional) ---------------------------------
+//
+// 1.4.2 ContentControl.xml, where the whole cluster is provisional. tv-app's
+// delegate is a stub, and chip's server registers no attribute-access handler,
+// so tv-app's callback rating lists have no reader (master 5cd2917a and
+// v1.4.2.0): every list value here is synthetic. The FeatureMap is tv-app's
+// (0x1C: BU, OCR, SCR; its `ram` default 28, master 5cd2917a and v1.4.2.0).
+
+#[test]
+fn content_control_attributes_decode() {
+    use clusters::content_control::{self as cc, DayOfWeekBitmap, Feature};
+    assert_eq!((Feature::BU | Feature::OCR | Feature::SCR).bits(), 0x1C);
+    assert!(!cc::decode_enabled(&bool_attr(false)).unwrap());
+    let rating = |name: &'static str, desc: Option<&'static str>| {
+        move |w: &mut TlvWriter<'_>| {
+            w.put_utf8(Tag::Context(0), name).unwrap();
+            if let Some(d) = desc {
+                w.put_utf8(Tag::Context(1), d).unwrap();
+            }
+        }
+    };
+    let ratings = cc::decode_on_demand_ratings(&list_of(&[
+        &rating("G", Some("General")),
+        &rating("PG", None),
+    ]))
+    .unwrap();
+    let got: Vec<(&str, Option<&str>)> = ratings
+        .iter()
+        .map(|r| (r.rating_name.as_str(), r.rating_name_desc.as_deref()))
+        .collect();
+    assert_eq!(got, [("G", Some("General")), ("PG", None)]);
+    assert_eq!(
+        cc::decode_screen_daily_time(&uint_attr(3600)).unwrap(),
+        3600
+    );
+    // A time window nests a list of time periods; its index is null until the
+    // device assigns one.
+    let windows = cc::decode_block_content_time_window(&list_of(&[&|w: &mut TlvWriter<'_>| {
+        w.put_uint(Tag::Context(0), 7).unwrap();
+        w.put_uint(Tag::Context(1), 0b0100_0001).unwrap();
+        w.start_array(Tag::Context(2)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        for (tag, v) in [(0, 22), (1, 0), (2, 23), (3, 59)] {
+            w.put_uint(Tag::Context(tag), v).unwrap();
+        }
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }]))
+    .unwrap();
+    assert_eq!(windows[0].time_window_index, Nullable::Value(7));
+    assert_eq!(
+        windows[0].day_of_week,
+        DayOfWeekBitmap::SUNDAY | DayOfWeekBitmap::SATURDAY
+    );
+    assert_eq!(
+        (
+            windows[0].time_period[0].start_hour,
+            windows[0].time_period[0].end_minute
+        ),
+        (22, 59)
+    );
+    let channels = cc::decode_block_channel_list(&list_of(&[&|w: &mut TlvWriter<'_>| {
+        w.put_null(Tag::Context(0)).unwrap();
+        w.put_uint(Tag::Context(1), 9).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+    }]))
+    .unwrap();
+    assert_eq!(
+        (
+            channels[0].block_channel_index,
+            channels[0].major_number,
+            channels[0].identifier.clone()
+        ),
+        (Nullable::Null, 9, None)
+    );
+}
+
+#[test]
+#[allow(clippy::manual_assert_eq)] // assert_eq! would print a content-control PIN on failure.
+fn content_control_requests_encode_and_pin_response_is_secret() {
+    use clusters::content_control::{
+        self as cc, BlockChannelStruct, DayOfWeekBitmap, ResetPinResponse, TimePeriodStruct,
+        TimeWindowStruct,
+    };
+    // UpdatePIN's payload carries two PINs, so it is compared with assert!.
+    assert!(
+        cc::encode_update_pin(&"1234".to_string(), &"5678".to_string())
+            == struct_of(&|w| {
+                w.put_utf8(Tag::Context(0), "1234").unwrap();
+                w.put_utf8(Tag::Context(1), "5678").unwrap();
+            }),
+        "unexpected UpdatePIN payload"
+    );
+    // PINCode is optional; BonusTime is mandatory.
+    assert_eq!(
+        cc::encode_add_bonus_time(None, 60),
+        struct_of(&|w| w.put_uint(Tag::Context(1), 60).unwrap())
+    );
+    // With a PIN the payload is compared with assert! too.
+    assert!(
+        cc::encode_add_bonus_time(Some("1234".to_string()), 60)
+            == struct_of(&|w| {
+                w.put_utf8(Tag::Context(0), "1234").unwrap();
+                w.put_uint(Tag::Context(1), 60).unwrap();
+            }),
+        "unexpected AddBonusTime payload"
+    );
+    let channel = BlockChannelStruct {
+        block_channel_index: Nullable::Null,
+        major_number: 9,
+        minor_number: 1,
+        identifier: Some("PBS".to_string()),
+    };
+    assert_eq!(
+        cc::encode_add_block_channels(&vec![channel]),
+        struct_of(&|w| {
+            w.start_array(Tag::Context(0)).unwrap();
+            w.start_structure(Tag::Anonymous).unwrap();
+            w.put_null(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Context(1), 9).unwrap();
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.put_utf8(Tag::Context(3), "PBS").unwrap();
+            w.end_container().unwrap();
+            w.end_container().unwrap();
+        })
+    );
+    let window = TimeWindowStruct {
+        time_window_index: Nullable::Null,
+        day_of_week: DayOfWeekBitmap::MONDAY,
+        time_period: vec![TimePeriodStruct {
+            start_hour: 8,
+            start_minute: 30,
+            end_hour: 9,
+            end_minute: 0,
+        }],
+    };
+    assert_eq!(TimeWindowStruct::decode(&window.encode()).unwrap(), window);
+    assert_eq!(
+        cc::encode_remove_block_content_time_window(&vec![3, 4]),
+        struct_of(&|w| {
+            w.start_array(Tag::Context(0)).unwrap();
+            w.put_uint(Tag::Anonymous, 3).unwrap();
+            w.put_uint(Tag::Anonymous, 4).unwrap();
+            w.end_container().unwrap();
+        })
+    );
+    let reset = ResetPinResponse::decode(&struct_of(&|w| {
+        w.put_utf8(Tag::Context(0), "424242").unwrap();
+    }))
+    .unwrap();
+    // assert! rather than assert_eq!: a failure must not print the PIN.
+    assert!(reset.pin_code == "424242");
+    // The whole rendering is pinned: a one-field struct prints nothing else.
+    let shown = format!("{reset:?}");
+    assert!(
+        shown == "ResetPinResponse { pin_code: \"<redacted>\" }",
+        "unexpected ResetPinResponse rendering"
+    );
+    assert_redacted(&shown, b"424242");
+    // `{:#?}` and `{:x?}` go through the same impl.
+    assert_redacted(&format!("{reset:#?}"), b"424242");
+    assert_redacted(&format!("{reset:x?}"), b"424242");
+}

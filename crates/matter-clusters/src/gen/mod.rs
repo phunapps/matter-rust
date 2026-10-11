@@ -22,6 +22,7 @@ pub mod channel;
 pub mod color_control;
 pub mod commissioner_control;
 pub mod content_app_observer;
+pub mod content_control;
 pub mod content_launcher;
 pub mod descriptor;
 pub mod device_energy_management;
