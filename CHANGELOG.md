@@ -635,20 +635,23 @@ master host, is not built). DeviceEnergyManagement, EnergyEvse and
 PowerTopology commands and events run live only against chip master's
 evse-app, locally (evse-app does not exist at v1.4.2.0 and is not in the
 nightly); the nightly decodes their attributes, and invokes GetTargets once,
-on v1.4.2.0's all-clusters. Messages has run live once, against chip master
-5cd2917a's tv-app (its only chip host), built for Linux arm64 and run on a
-Raspberry Pi: `messages_present_and_cancel_round_trip` passes;
-`messages_refuse_malformed_requests` times out in the suite and passes when
-run alone. Master's tv-app gets a 15-buffer PacketBuffer pool (its
-`CHIPProjectAppConfig.h` sets 500 inside `#ifndef
-CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always defined), and responses the
-previous test's controller left unACKed when it was dropped exhaust it. With
-M9-A3 B7 the nightly runs it at v1.4.2.0 (linux-x64), from its next run; it
-does not run on the Mac (tv-app needs Rosetta 2 to build on Apple silicon);
-beyond that run, Messages is validated by decode tests, two matter.js vectors
-and the chip 1.4.2 XML check. chip's servers
-send every `MessageStruct` field to every fabric and no FabricIndex, so on a
-chip device every entry decodes in full with `fabric_index` `None`.
+on v1.4.2.0's all-clusters. Messages runs live against chip's tv-app (its
+only chip host), built at master 5cd2917a and at v1.4.2.0 for Linux arm64
+and run on a Raspberry Pi: both tests,
+`messages_present_and_cancel_round_trip` and
+`messages_refuse_malformed_requests`, pass at both refs, with each exchange
+paced (`fixture::settle_acks`, added in M9-A3 B7). Unpaced, master's tv-app
+ACKed a request in `messages_refuse_malformed_requests` and never answered
+it: it gets a 15-buffer PacketBuffer pool (its `CHIPProjectAppConfig.h` sets
+500 inside `#ifndef CHIP_DEVICE_LAYER_TARGET_DARWIN`, which is always
+defined), and responses the previous test's controller left unACKed when it
+was dropped exhaust it. At v1.4.2.0 both tests pass unpaced too. With M9-A3
+B7 the nightly runs them at v1.4.2.0 (linux-x64), from its next run; they do
+not run on the Mac (tv-app needs Rosetta 2 to build on Apple silicon).
+Beyond those runs, Messages is validated by decode tests, two matter.js
+vectors and the chip 1.4.2 XML check. chip's servers send every
+`MessageStruct` field to every fabric and no FabricIndex, so on a chip device
+every entry decodes in full with `fabric_index` `None`.
 
 ### matter-clusters: Added — diagnostics and infrastructure clusters
 
