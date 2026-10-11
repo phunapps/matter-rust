@@ -403,7 +403,8 @@ pub(crate) async fn dispatch_read<T: AsyncDatagram>(
     .await?;
     #[cfg(feature = "tracing")]
     tracing::debug!(
-        report_data_tlv = %crate::hexdump::hex(&resp.payload),
+        len = resp.payload.len(),
+        report_data_tlv = crate::hexdump::payload(&resp.payload),
         "ReportData received"
     );
     let report = crate::im::parse_report_data(&resp.payload)?;

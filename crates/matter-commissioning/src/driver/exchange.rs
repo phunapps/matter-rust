@@ -103,7 +103,7 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
         exchange_id = u64::from(our_exchange),
         protocol = u64::from(protocol_id.protocol),
         opcode = u64::from(opcode),
-        payload = %crate::hexdump::hex(app_payload),
+        payload = crate::hexdump::payload(app_payload),
         "wire"
     );
 
@@ -158,7 +158,7 @@ pub async fn secured_round_trip<T: AsyncDatagram>(
                             exchange_id = u64::from(exchange_id),
                             protocol = u64::from(msg_protocol_id.protocol),
                             opcode = u64::from(msg_opcode),
-                            payload = %crate::hexdump::hex(&payload),
+                            payload = crate::hexdump::payload(&payload),
                             "wire"
                         );
                         #[cfg(not(feature = "tracing"))]

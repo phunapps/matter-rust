@@ -20,7 +20,11 @@ default = []
 ## do not depend on". Never enable in production builds.
 __test_shortcuts = []
 ## Enable `tracing` instrumentation spans on `Commissioner`'s public
-## methods (`poll`, `on_response`, `on_case_established`).
+## methods (`poll`, `on_response`, `on_case_established`), plus the driver's
+## debug events. Those events record directions, session and exchange ids,
+## protocols, opcodes and lengths, but no message payload bytes. (Public
+## certificates, CASE Sigma2 messages and the header bytes of PASE/CASE
+## packets received are still dumped; see the crate docs.)
 ## Off by default; opt-in per Matter-rust's zero-cost-when-unused policy.
 tracing = ["dep:tracing"]
 ## Async Tokio commissioning driver — the IO layer that runs the state
@@ -37,6 +41,10 @@ driver = ["dep:tokio"]
 test-support = []
 ## JSON-lines wire-trace capture (`JsonlLayer`) for cross-verification
 ## against matter.js. Implies `tracing`. Tooling-grade, not wire-format code.
+## DEBUGGING ONLY, NEVER IN PRODUCTION: with this on, the driver's
+## `matter_wire` debug events record the full decrypted plaintext of every
+## commissioning exchange as hex, INCLUDING the IPK (`AddNOC`), the Wi-Fi
+## passphrase and the Thread operational dataset, network key included.
 wiretrace = ["tracing", "dep:tracing-subscriber", "dep:serde_json"]
 
 [lints]

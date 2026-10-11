@@ -529,6 +529,52 @@ async fn run_loopback_commission_with_icac() {
     );
 }
 
+/// Install, once per process, a trivial global subscriber that reports
+/// `Sometimes` interest for every callsite, so a test's thread-local
+/// `set_default` subscriber receives events. See the note on
+/// `loopback_commission_emits_wire_trace` for why this is needed.
+#[cfg(feature = "tracing")]
+fn prime_callsite_interest() {
+    use std::sync::OnceLock;
+
+    // Install a trivial global subscriber that reports `Sometimes` interest
+    // for all callsites. This primes `tracing-core`'s callsite-interest cache
+    // so that events flow through `get_default` (which dispatches to the
+    // test's thread-local subscriber). Without this, thread-local-only subscribers
+    // do not participate in the global `DISPATCHERS` registry, causing all
+    // callsite interests to be permanently cached as `Never` at first use.
+    static GLOBAL_INIT: OnceLock<()> = OnceLock::new();
+    GLOBAL_INIT.get_or_init(|| {
+        // A minimal `Subscriber` that tells every callsite it's `Sometimes`
+        // interesting. The actual per-thread dispatch goes to whatever
+        // `set_default` subscriber is active on that thread.
+        struct AlwaysSometimes;
+        impl tracing::Subscriber for AlwaysSometimes {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+            fn register_callsite(
+                &self,
+                _: &'static tracing::Metadata<'static>,
+            ) -> tracing::subscriber::Interest {
+                tracing::subscriber::Interest::sometimes()
+            }
+        }
+        // Ignore error: if another test already installed a global subscriber
+        // (not expected in this binary, but possible in theory), the existing
+        // subscriber is fine as long as it reports `Sometimes` interest.
+        let _ = tracing::subscriber::set_global_default(AlwaysSometimes);
+    });
+}
+
 // ── Wire-trace capture test ────────────────────────────────────────────────────
 
 /// M6 cross-verification: the same loopback run, captured through
@@ -566,7 +612,7 @@ async fn run_loopback_commission_with_icac() {
 #[cfg(all(feature = "tracing", feature = "wiretrace"))]
 #[tokio::test]
 async fn loopback_commission_emits_wire_trace() {
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
 
     use matter_commissioning::wiretrace::JsonlLayer;
     use tracing_subscriber::layer::SubscriberExt as _;
@@ -583,42 +629,7 @@ async fn loopback_commission_emits_wire_trace() {
         }
     }
 
-    // Install a trivial global subscriber that reports `Sometimes` interest
-    // for all callsites. This primes `tracing-core`'s callsite-interest cache
-    // so that events flow through `get_default` (which dispatches to our
-    // thread-local `JsonlLayer`). Without this, thread-local-only subscribers
-    // do not participate in the global `DISPATCHERS` registry, causing all
-    // callsite interests to be permanently cached as `Never` at first use.
-    static GLOBAL_INIT: OnceLock<()> = OnceLock::new();
-    GLOBAL_INIT.get_or_init(|| {
-        // A minimal `Subscriber` that tells every callsite it's `Sometimes`
-        // interesting. The actual per-thread dispatch goes to whatever
-        // `set_default` subscriber is active on that thread.
-        struct AlwaysSometimes;
-        impl tracing::Subscriber for AlwaysSometimes {
-            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-                true
-            }
-            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-                tracing::span::Id::from_u64(1)
-            }
-            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-            fn event(&self, _: &tracing::Event<'_>) {}
-            fn enter(&self, _: &tracing::span::Id) {}
-            fn exit(&self, _: &tracing::span::Id) {}
-            fn register_callsite(
-                &self,
-                _: &'static tracing::Metadata<'static>,
-            ) -> tracing::subscriber::Interest {
-                tracing::subscriber::Interest::sometimes()
-            }
-        }
-        // Ignore error: if another test already installed a global subscriber
-        // (not expected in this binary, but possible in theory), the existing
-        // subscriber is fine as long as it reports `Sometimes` interest.
-        let _ = tracing::subscriber::set_global_default(AlwaysSometimes);
-    });
+    prime_callsite_interest();
 
     let buf = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(JsonlLayer::new(SharedBuf(buf.clone())));
@@ -689,5 +700,120 @@ async fn loopback_commission_emits_wire_trace() {
     assert!(
         secured_sessions.len() >= 2,
         "expected PASE + CASE secured sessions, got {secured_sessions:?}"
+    );
+}
+
+// ── No payload bytes under plain `tracing` ────────────────────────────────────
+
+/// The loopback run's IPK epoch key (`[0x42; 16]`, see
+/// `run_loopback_commission`) as the lowercase hex the driver's dumps use.
+/// `AddNOC` carries it in plaintext inside the PASE session, so it appears in
+/// a wire dump exactly when that dump records the command's payload.
+#[cfg(feature = "tracing")]
+const IPK_HEX: &str = "42424242424242424242424242424242";
+
+/// Every event the run emits, as `(target, [(field, rendered value)])`.
+#[cfg(feature = "tracing")]
+type Captured = Vec<(String, Vec<(String, String)>)>;
+
+/// Runs the loopback commission under a thread-local subscriber that records
+/// every field of every event, from any target, at any level.
+#[cfg(feature = "tracing")]
+async fn capture_loopback_events() -> Captured {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::layer::{Context, SubscriberExt as _};
+    use tracing_subscriber::Layer;
+
+    struct Fields(Vec<(String, String)>);
+    impl Visit for Fields {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.0.push((field.name().to_owned(), format!("{value:?}")));
+        }
+    }
+
+    struct CaptureAll(Arc<Mutex<Captured>>);
+    impl<S: tracing::Subscriber> Layer<S> for CaptureAll {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            let mut fields = Fields(Vec::new());
+            event.record(&mut fields);
+            self.0
+                .lock()
+                .unwrap()
+                .push((event.metadata().target().to_owned(), fields.0));
+        }
+    }
+
+    prime_callsite_interest();
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(CaptureAll(events.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+    run_loopback_commission().await;
+    drop(guard);
+    let captured = events.lock().unwrap().clone();
+    captured
+}
+
+/// With `tracing` on and `wiretrace` off, no event carries a message payload:
+/// the `matter_wire` events keep their direction, session, exchange, protocol
+/// and opcode, but neither they nor the driver's other debug events record the
+/// plaintext bytes. Checked two ways: the IPK that `AddNOC` carries appears in
+/// no field of any event, and no event records a payload-dump field at all
+/// (which also covers the inbound direction, whose payloads hold no marker).
+#[cfg(all(feature = "tracing", not(feature = "wiretrace")))]
+#[tokio::test]
+async fn tracing_without_wiretrace_logs_no_payload_bytes() {
+    let events = capture_loopback_events().await;
+
+    let wire: Vec<&Vec<(String, String)>> = events
+        .iter()
+        .filter(|(target, _)| target == "matter_wire")
+        .map(|(_, fields)| fields)
+        .collect();
+    assert!(
+        !wire.is_empty(),
+        "no matter_wire events captured — has the interest priming regressed?"
+    );
+    for fields in &wire {
+        for name in ["dir", "session_id", "exchange_id", "protocol", "opcode"] {
+            assert!(
+                fields.iter().any(|(n, _)| n == name),
+                "a matter_wire event lost its {name} field"
+            );
+        }
+    }
+
+    for (target, fields) in &events {
+        for (name, value) in fields {
+            assert!(
+                !value.contains(IPK_HEX),
+                "event on {target} leaked the IPK in field {name}"
+            );
+            assert!(
+                !matches!(name.as_str(), "payload" | "wire" | "report_data_tlv"),
+                "event on {target} recorded a payload dump in field {name}"
+            );
+        }
+    }
+}
+
+/// Positive control for the test above: with `wiretrace` on, the same capture
+/// DOES see the IPK in a `matter_wire` payload. This proves the capture reaches
+/// the driver's events and the marker is really on the wire path, so the
+/// absence check above cannot pass vacuously. It also pins that `wiretrace`
+/// still records full payloads for `JsonlLayer` / `cargo xtask trace-diff`.
+#[cfg(feature = "wiretrace")]
+#[tokio::test]
+async fn wiretrace_logs_the_payload_bytes() {
+    let events = capture_loopback_events().await;
+    assert!(
+        events.iter().any(|(target, fields)| {
+            target == "matter_wire"
+                && fields
+                    .iter()
+                    .any(|(n, v)| n == "payload" && v.contains(IPK_HEX))
+        }),
+        "wiretrace should record the AddNOC payload, IPK included"
     );
 }

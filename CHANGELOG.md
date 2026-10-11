@@ -24,8 +24,9 @@ APIs have had no outside users yet and are expected to move.
 
 ## Unreleased — security patches
 
-**Not released.** These fixes stop secrets reaching logs through `{:?}`, and
-stop a withheld ACL field from being read as a wildcard. None of them changes a
+**Not released.** These fixes stop secrets reaching logs through `{:?}` and
+through `matter-commissioning`'s `tracing` feature, and stop a withheld ACL
+field from being read as a wildcard. None of them changes a
 public API, so each affected crate needs only a patch release:
 
 | Crate | Current | Patch |
@@ -156,6 +157,32 @@ reader's own fabric, so their results do not change.
 - `CommissionerConfig`, `DriverConfig` and `BleDriverConfig` hold the IPK, the
   passcode and the commissioner's operational PKCS#8 key. They implement no
   `Debug`, and each now carries a comment saying not to derive one, and why.
+
+### matter-commissioning: Fixed (security) — the `tracing` feature no longer logs message payloads
+
+- With the `tracing` and `driver` features on, the driver's debug events
+  hex-dumped the full decrypted plaintext of every commissioning exchange:
+  each `matter_wire` event carried the message `payload`, the unsecured-send
+  event the whole message, and the `ReportData received` event the report.
+  So an application that turned on `matter-commissioning/tracing` for its
+  spans and logged at `debug` level wrote the IPK (`AddNOC`), the Wi-Fi
+  passphrase (`AddOrUpdateWiFiNetwork`) and the Thread operational dataset,
+  network key included (`AddOrUpdateThreadNetwork`), to its logs. The
+  feature's documentation promised only spans. Leaked this way in every
+  published release, `0.1.0` through `0.10.0`, whenever `tracing` was on.
+  `matter-controller` does not enable it.
+- Those payload fields are now recorded only under the `wiretrace` feature.
+  Under plain `tracing` the events keep their direction, session id,
+  exchange id, protocol, opcode and (where it has one) length, and record no
+  payload bytes. `wiretrace` implies `tracing`, so `JsonlLayer` and
+  `cargo xtask trace-diff` work as before, and its documentation now says
+  plainly that it logs the IPK, the Wi-Fi passphrase and the Thread dataset
+  and is for debugging only, never production.
+- Still dumped under `tracing`, because the bytes are public or encrypted:
+  the attestation certificates, the RCAC being installed, the CASE Sigma2 /
+  Sigma2_Resume messages and the first 24 bytes of each packet received
+  during PASE or CASE.
+- Features are additive and no public item changed, so this is a patch.
 
 ### matter-interaction: Fixed (security) — command and attribute payloads stay out of `Debug` output
 

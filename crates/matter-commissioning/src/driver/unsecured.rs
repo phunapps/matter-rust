@@ -755,7 +755,7 @@ impl UnsecuredExchange {
             exchange_id = u64::from(self.exchange_id),
             protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
             opcode = u64::from(OPCODE_MRP_STANDALONE_ACK),
-            payload = "",
+            payload = crate::hexdump::payload(&[]),
             "wire"
         );
         Ok(())
@@ -866,7 +866,8 @@ impl UnsecuredExchange {
         tracing::debug!(
             opcode = format_args!("{opcode:#04x}"),
             exchange_id = self.exchange_id,
-            wire = %crate::hexdump::hex(&wire),
+            len = wire.len(),
+            wire = crate::hexdump::payload(&wire),
             "unsecured send"
         );
         // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
@@ -878,7 +879,7 @@ impl UnsecuredExchange {
             exchange_id = u64::from(self.exchange_id),
             protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
             opcode = u64::from(opcode),
-            payload = %crate::hexdump::hex(app_payload),
+            payload = crate::hexdump::payload(app_payload),
             "wire"
         );
         let mut attempts: u8 = 0;
@@ -1004,7 +1005,7 @@ impl UnsecuredExchange {
                         exchange_id = u64::from(msg.exchange_id),
                         protocol = u64::from(msg.protocol_id.protocol),
                         opcode = u64::from(msg.opcode),
-                        payload = %crate::hexdump::hex(&msg.payload),
+                        payload = crate::hexdump::payload(&msg.payload),
                         "wire"
                     );
                     return Ok(msg);

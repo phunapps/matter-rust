@@ -14,6 +14,17 @@
 //! infrastructure: write errors are silently dropped rather than
 //! propagated, because a trace capture must never abort a live
 //! commissioning run.
+//!
+//! # Debugging only: never enable `wiretrace` in production
+//!
+//! The `payload` of each event is the **full decrypted plaintext** of the
+//! message. During commissioning that includes the IPK (`AddNOC`), the
+//! Wi-Fi passphrase (`AddOrUpdateWiFiNetwork`) and the Thread operational
+//! dataset, network key included (`AddOrUpdateThreadNetwork`). With
+//! `wiretrace` on, every subscriber that accepts `matter_wire` debug events
+//! sees those bytes, not just this layer: a `fmt` layer at `debug` level
+//! prints them too. Under plain `tracing` (without `wiretrace`) the events
+//! carry no `payload` field at all.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};

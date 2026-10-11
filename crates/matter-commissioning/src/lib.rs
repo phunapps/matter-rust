@@ -70,6 +70,26 @@
 //! `expectation`) align best-effort with matter.js's log-event format
 //! so operators can grep across both implementations. Compatibility
 //! is not guaranteed across matter.js minor versions.
+//!
+//! With `driver` also on, `tracing` adds debug events for each message the
+//! driver sends or receives. They record the direction, session and
+//! exchange ids, protocol, opcode and length, but **no message payload
+//! bytes**. The only bytes the crate's debug events dump are public or
+//! encrypted: the attestation certificates and the RCAC being installed,
+//! the CASE Sigma2 messages (whose secret parts are ciphertext), and the
+//! first 24 bytes, mostly header, of each packet received during PASE or
+//! CASE.
+//!
+//! ## Optional `wiretrace` feature: debugging only
+//!
+//! `wiretrace` implies `tracing` and adds `wiretrace::JsonlLayer`, which
+//! captures the `matter_wire` events for `cargo xtask trace-diff`. With it
+//! on, those events also record **the full decrypted plaintext of every
+//! commissioning exchange** as hex. That includes the IPK in `AddNOC`, the
+//! Wi-Fi passphrase in `AddOrUpdateWiFiNetwork` and the Thread operational
+//! dataset (network key included) in `AddOrUpdateThreadNetwork`. Enable it
+//! only to debug or cross-verify against matter.js, on a test network, and
+//! never in production.
 
 #![forbid(unsafe_code)]
 
@@ -94,6 +114,36 @@ pub(crate) mod hexdump {
                 let _ = write!(out, "{b:02x}");
                 out
             })
+    }
+
+    /// A message-payload field for a driver debug event: the bytes as hex
+    /// under `wiretrace`, and nothing at all under plain `tracing`.
+    ///
+    /// Message payloads are the decrypted plaintext of the commissioning
+    /// exchanges, and `AddNOC`, `AddOrUpdateWiFiNetwork` and
+    /// `AddOrUpdateThreadNetwork` carry the IPK, the Wi-Fi passphrase and
+    /// the Thread dataset. So the hex is recorded only when the caller opted
+    /// into `wiretrace`, the debugging-only capture for
+    /// `cargo xtask trace-diff`.
+    ///
+    /// Use it as `payload = hexdump::payload(bytes)`, without a `%` sigil.
+    /// `tracing` records an `Option` field only when it is `Some`, so under
+    /// plain `tracing` the field is never recorded and the hex is never
+    /// computed: no subscriber, formatter or layer can see the bytes.
+    #[cfg(feature = "wiretrace")]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "same signature as the non-wiretrace variant, which returns None"
+    )]
+    pub(crate) fn payload(bytes: &[u8]) -> Option<tracing::field::DisplayValue<String>> {
+        Some(tracing::field::display(hex(bytes)))
+    }
+
+    /// See the `wiretrace` variant: without that feature the field is
+    /// always `None`, so it is never recorded.
+    #[cfg(not(feature = "wiretrace"))]
+    pub(crate) fn payload(_bytes: &[u8]) -> Option<tracing::field::DisplayValue<String>> {
+        None
     }
 }
 /// Interaction Model message framing — re-exported from [`matter_interaction`],

@@ -475,6 +475,16 @@ Span field names (`stage`, `expectation`) align best-effort with
 matter.js's log-event format so operators can grep across both
 implementations.
 
+With `driver` on as well, `tracing` also emits a debug event per message
+sent or received. These record direction, ids, protocol, opcode and length,
+but no message payload bytes.
+
+The separate `wiretrace` feature (which implies `tracing`) is **for
+debugging only, never production**: it makes those events record the full
+decrypted plaintext of every commissioning exchange, including the IPK, the
+Wi-Fi passphrase and the Thread dataset, so that `cargo xtask trace-diff`
+can compare a run against matter.js.
+
 ## Byte parity
 
 Every fixture in `test-vectors/commissioning/setup/` is captured from
