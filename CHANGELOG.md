@@ -817,9 +817,10 @@ How each of these clusters was validated:
   does not build on Apple silicon without Rosetta 2, and is not in the
   nightly): WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
   TargetNavigator, MediaPlayback, ContentLauncher, Channel,
-  ApplicationLauncher and ContentControl on its endpoint 1, and
-  ApplicationBasic and AccountLogin on its five Content App endpoints. Every
-  test passed at both refs, as did B5's Messages tests in the same suite.
+  ApplicationLauncher and ContentControl on its endpoint 1, ApplicationBasic
+  on its five Content App endpoints, and AccountLogin on its Vendor3 Content
+  App. Every test passed at both refs, as did B5's Messages tests in the same
+  suite.
 - **Live against chip's all-clusters** as well: WakeOnLan and LowPower,
   locally at master 5cd2917a on macOS and at v1.4.2.0 on the Pi, and in the
   nightly at v1.4.2.0 (linux-x64) from its next run.

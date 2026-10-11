@@ -132,7 +132,13 @@ async fn status(
 ) -> ImStatus {
     match invoke(node, endpoint, cluster, command, fields).await {
         InvokeResult::Status(s) => s,
-        other => panic!("{cluster:#06x}/{command:#04x}: expected a status, got {other:?}"),
+        // The path only, never the fields: a response's strings are not
+        // redacted, and AccountLogin's carry a setup PIN.
+        InvokeResult::Data { path, .. } => panic!(
+            "{cluster:#06x}/{command:#04x}: expected a status, got response {:#04x} ({path:?})",
+            path.command
+        ),
+        _ => panic!("{cluster:#06x}/{command:#04x}: expected a status, got another result"),
     }
 }
 
@@ -147,8 +153,17 @@ async fn response(
 ) -> Vec<u8> {
     match invoke(node, endpoint, cluster, command, fields).await {
         InvokeResult::Data { path, fields } if path.command == response => payload_tlv(&fields),
-        other => panic!(
-            "{cluster:#06x}/{command:#04x}: expected response {response:#04x}, got {other:?}"
+        // The path only, never the fields: a response's strings are not
+        // redacted, and GetSetupPinResponse carries a setup PIN.
+        InvokeResult::Data { path, .. } => panic!(
+            "{cluster:#06x}/{command:#04x}: expected response {response:#04x}, got response {:#04x} ({path:?})",
+            path.command
+        ),
+        InvokeResult::Status(s) => panic!(
+            "{cluster:#06x}/{command:#04x}: expected response {response:#04x}, got status {s:?}"
+        ),
+        _ => panic!(
+            "{cluster:#06x}/{command:#04x}: expected response {response:#04x}, got another result"
         ),
     }
 }
@@ -207,8 +222,10 @@ fn assert_tv_app_channels(attrs: &[(u32, Vec<u8>)]) {
 /// "major.minor": "PBS" is one channel, "KCTS" (three affiliates) is
 /// MultipleMatches, an unknown match NoMatches. ChangeChannelByNumber moves to
 /// an existing channel and answers Failure for an unknown one (the delegate
-/// returns false); SkipChannel wraps around the list. The test ends on ABC,
-/// where it started.
+/// returns false). SkipChannel moves `count` places modulo the list length
+/// (ChannelManager `HandleSkipChannel`, both refs): one past World Channel
+/// wraps to ABC, and one back from ABC wraps to World Channel. The test ends
+/// on ABC, where it started.
 #[tokio::test]
 async fn channel_lists_and_changes_channels() {
     let Some((controller, node_id)) = connect_tv().await else {
@@ -290,16 +307,29 @@ async fn channel_lists_and_changes_channels() {
         ImStatus::Success
     );
     assert_eq!(current().await, (9, 3));
+    // (3 + 1) % 4 = 0: past the end of the list, back to ABC.
     assert_eq!(
-        st(c::SKIP_CHANNEL, ch::encode_skip_channel(-3)).await,
+        st(c::SKIP_CHANNEL, ch::encode_skip_channel(1)).await,
+        ImStatus::Success
+    );
+    assert_eq!(current().await, (6, 0));
+    // (0 - 1) % 4 = -1, and the delegate adds 4: back past the start.
+    assert_eq!(
+        st(c::SKIP_CHANNEL, ch::encode_skip_channel(-1)).await,
+        ImStatus::Success
+    );
+    assert_eq!(current().await, (9, 3));
+    assert_eq!(
+        st(c::SKIP_CHANNEL, ch::encode_skip_channel(1)).await,
         ImStatus::Success
     );
     assert_eq!(current().await, (6, 0));
 }
 
-/// GetProgramGuide: tv-app's four programs (ChannelManager), filtered by time
-/// window and channel list; the response carries an empty paging struct and
-/// nested ChannelInfoStruct per program. chip's server does not check the EPG
+/// GetProgramGuide: tv-app's four programs (ChannelManager), all in the window
+/// 0-3600 and filtered by a narrower start or end time and by a channel list;
+/// the response carries an empty paging struct and nested ChannelInfoStruct
+/// per program. chip's server does not check the EPG
 /// feature, which tv-app's FeatureMap (3) lacks. chip numbers the request's
 /// RecordingFlag, ExternalIDList and Data 4, 5 and 6 where the specification
 /// (and matter.js) has 5, 6 and 7 (controller-clusters.matter, both refs), so
@@ -383,6 +413,25 @@ async fn channel_program_guide_filters_and_chips_field_numbering() {
         .map(|p| p.identifier.as_str())
         .collect();
     assert_eq!(ids, ["progid-pbs1"]);
+    // The delegate keeps a program only if it starts at or after StartTime
+    // and ends at or before EndTime: abc1 and pbs1 run 0-1800, abc2
+    // 1800-3600, abc3 0-3600.
+    let window = |start, end| {
+        let guide = &guide;
+        async move {
+            let r = guide(ch::encode_get_program_guide(
+                start, end, None, None, None, None, None,
+            ))
+            .await
+            .unwrap();
+            r.program_list
+                .into_iter()
+                .map(|p| p.identifier)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(window(1800, 3600).await, ["progid-abc2"]);
+    assert_eq!(window(0, 1800).await, ["progid-abc1", "progid-pbs1"]);
     let flag = Some(Nullable::Value(ch::RecordingFlagBitmap::SCHEDULED));
     assert_eq!(
         guide(ch::encode_get_program_guide(
@@ -474,14 +523,21 @@ async fn application_launcher_launches_hides_and_stops() {
 /// external-attribute callback, which answers FAILURE for endpoint 1
 /// (ContentAppPlatform.cpp; seen in tv-app's log at both refs). The
 /// wildcard read leaves the two out, and the delegate's rating getters are
-/// never called. chip's server passes each command tv-app handles to the
-/// delegate, whose handlers are empty, and answers Success. Enable and
-/// Disable are timed at master only (`timed command` in master's
-/// controller-clusters.matter), so there the controller retries them as timed
-/// invokes. ResetPIN's handler never calls its responder, so chip's server
-/// answers Failure instead of a ResetPinResponse (timed at master too).
-/// tv-app does not handle AddBlockChannels (v1.4.2.0's codegen has no such
-/// command), so it answers UnsupportedCommand.
+/// never called. The commands sent, and their answers:
+/// - SetScreenDailyTime, BlockUnratedContent, UnblockUnratedContent,
+///   SetOnDemandRatingThreshold, AddBonusTime, Enable and Disable: Success.
+///   chip's server passes each to the delegate, whose handler is empty, and
+///   answers Success itself. Enable and Disable are timed at master only
+///   (`timed command` in master's controller-clusters.matter), so there the
+///   controller retries them as timed invokes.
+/// - ResetPIN: Failure. Its handler never calls its responder, so chip's
+///   server answers Failure instead of a ResetPinResponse (timed at master
+///   too).
+/// - AddBlockChannels: UnsupportedCommand. tv-app does not handle it, and
+///   v1.4.2.0's codegen has no such command.
+///
+/// UpdatePIN and SetScheduledContentRatingThreshold are not sent (chip's
+/// server would answer both with Success, like the first group).
 #[tokio::test]
 async fn content_control_stub_answers_its_commands() {
     let Some((controller, node_id)) = connect_tv().await else {

@@ -136,7 +136,8 @@ attributes, by area:
 - **Content apps** — ApplicationBasic, ApplicationLauncher, AccountLogin (with
   its event; the setup PIN is redacted in `Debug`), ContentAppObserver. Of
   chip's example apps only tv-casting-app serves ContentAppObserver (tv-app's
-  Content App endpoints are its clients), and the harness does not drive it,
+  static Content App endpoint 3 is its client), and the harness does not
+  drive it,
   so it is checked by decode smoke and `chip-xml-conformance.py` only.
 
 Verification varies by cluster, and the level is deliberate rather than
