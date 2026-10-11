@@ -297,6 +297,11 @@ const ALLOWLIST = [
   // StateChanged event; TrackStruct.TrackAttributes is nullable because chip
   // sends it null, FIELD_RELAXATIONS class N):
   { id: 0x0506, name: 'MediaPlayback' },
+  // M9-A3 B7, ContentLauncher (LaunchContent and LaunchURL take structs that
+  // nest structs three deep, optional and nullable lists, and DimensionStruct's
+  // two doubles; TrackPreferenceStruct.Characteristics is a list of
+  // MediaPlayback's CharacteristicEnum, copied in by copyForeignDatatypes):
+  { id: 0x050a, name: 'ContentLauncher' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

@@ -430,3 +430,105 @@ fn present_messages_request_encodes_an_optional_list() {
         cmd("messages/cmd_present_messages_request.json")
     );
 }
+
+#[test]
+fn launch_url_encodes_nested_structs_and_doubles() {
+    // M9-A3 B7: BrandingInformationStruct nests StyleInformationStruct, which
+    // nests DimensionStruct: the first request struct with struct fields
+    // (spec §10), and its Width / Height the first `double` (TLV FLOAT64),
+    // against matter.js's own TlvLaunchUrlRequest.
+    use clusters::content_launcher::{
+        encode_launch_url, BrandingInformationStruct, DimensionStruct, MetricTypeEnum,
+        StyleInformationStruct,
+    };
+    let style = |image_url: Option<&str>, color: Option<&str>, size| StyleInformationStruct {
+        image_url: image_url.map(str::to_string),
+        color: color.map(str::to_string),
+        size: Some(size),
+    };
+    let branding = BrandingInformationStruct {
+        provider_name: "Example".to_string(),
+        background: Some(style(
+            Some("https://example.com/bg.png"),
+            Some("#000000"),
+            DimensionStruct {
+                width: 1920.5,
+                height: 1080.25,
+                metric: MetricTypeEnum::Pixels,
+            },
+        )),
+        logo: Some(style(
+            None,
+            None,
+            DimensionStruct {
+                width: 12.5,
+                height: 7.25,
+                metric: MetricTypeEnum::Percentage,
+            },
+        )),
+        progress_bar: None,
+        splash: None,
+        watermark: None,
+    };
+    assert_eq!(
+        encode_launch_url(
+            &"https://example.com/watch".to_string(),
+            Some("Now playing".to_string()),
+            Some(branding),
+            None,
+        ),
+        cmd("content_launcher/cmd_launch_url.json")
+    );
+}
+
+#[test]
+fn launch_content_encodes_optional_and_nullable_lists_in_structs() {
+    // M9-A3 B7: ParameterStruct.ExternalIdList (an optional list, present and
+    // absent), PlaybackPreferencesStruct's null PlaybackPosition, its TextTrack
+    // with a null Characteristics list, and an AudioTracks list whose entry
+    // carries a Characteristics list of two enums: optional and nullable lists
+    // inside request structs (spec §10), against matter.js's own
+    // TlvLaunchContentRequest.
+    use clusters::content_launcher::{
+        encode_launch_content, AdditionalInfoStruct, CharacteristicEnum, ContentSearchStruct,
+        ParameterEnum, ParameterStruct, PlaybackPreferencesStruct, TrackPreferenceStruct,
+    };
+    let info = |name: &str, value: &str| AdditionalInfoStruct {
+        name: name.to_string(),
+        value: value.to_string(),
+    };
+    let search = ContentSearchStruct {
+        parameter_list: vec![
+            ParameterStruct {
+                r#type: ParameterEnum::Actor,
+                value: "Gaby sHoffman".to_string(),
+                external_id_list: Some(vec![info("imdb", "nm0001"), info("tmdb", "42")]),
+            },
+            ParameterStruct {
+                r#type: ParameterEnum::Genre,
+                value: "Horror".to_string(),
+                external_id_list: None,
+            },
+        ],
+    };
+    let prefs = PlaybackPreferencesStruct {
+        playback_position: Some(Nullable::Null),
+        text_track: Some(Nullable::Value(TrackPreferenceStruct {
+            language_code: "en".to_string(),
+            characteristics: Some(Nullable::Null),
+            audio_output_index: None,
+        })),
+        audio_tracks: Some(Nullable::Value(vec![TrackPreferenceStruct {
+            language_code: "fr".to_string(),
+            characteristics: Some(Nullable::Value(vec![
+                CharacteristicEnum::ForcedSubtitles,
+                CharacteristicEnum::Karaoke,
+            ])),
+            audio_output_index: Some(Nullable::Value(1)),
+        }])),
+    };
+    assert_eq!(
+        encode_launch_content(search, true, None, Some(prefs), Some(false)),
+        cmd("content_launcher/cmd_launch_content.json")
+    );
+}

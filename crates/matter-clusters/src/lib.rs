@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 110 clusters are generated today. The full list is [`clusters`]; by area:
+//! 111 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -100,7 +100,7 @@
 //!   response; the BDX transfer is not implemented).
 //! - **Media:** `WakeOnLan`, `LowPower`, `KeypadInput`, `MediaInput`,
 //!   `AudioOutput`, `TargetNavigator` and `MediaPlayback` (with their
-//!   events).
+//!   events), `ContentLauncher`.
 //! - **Content apps:** `ApplicationBasic`, `ApplicationLauncher`,
 //!   `AccountLogin` (with its event; the setup PIN is redacted in `Debug`),
 //!   `ContentAppObserver`.

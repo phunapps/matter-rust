@@ -47,6 +47,11 @@ import { ScenesManagement } from '@matter/types/clusters/scenes-management';
 // of byte strings, and the first optional request list.
 import { Messages } from '@matter/types/clusters/messages';
 
+// matter.js's own ContentLauncher request schemas (M9-A3 B7): the first
+// request structs that nest structs (three deep in LaunchURL), carry optional
+// and nullable lists, and a `double` (DimensionStruct).
+import { ContentLauncher } from '@matter/types/clusters/content-launcher';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -534,5 +539,75 @@ attr('carbon_dioxide_concentration_measurement', 'attr_uncertainty.json',
     type: 'single', writable: false,
     note: 'non-nullable float32 (single)' },
   TlvFloat.encode(0.25));
+
+// ---------------------------------------------------------------------------
+// ContentLauncher (0x050A) — M9-A3 B7. LaunchURL (0x01): BrandingInformation
+// nests StyleInformationStruct, which nests DimensionStruct, whose Width and
+// Height are the first `double` on the wire (TLV FLOAT64, control byte 0x0B);
+// the values are exactly representable in binary64. LaunchContent (0x00):
+// ContentSearchStruct's list of ParameterStruct, one with its optional
+// ExternalIdList present and one without; PlaybackPreferences with a null
+// PlaybackPosition, a TextTrack whose Characteristics list is null, and an
+// AudioTracks list whose entry carries a Characteristics list of two values.
+// Encoded with matter.js's own TlvLaunchUrlRequest / TlvLaunchContentRequest;
+// matter.js 0.16.11 and @matter/model 0.17.1 agree on every field used.
+// ---------------------------------------------------------------------------
+
+cmd('content_launcher', 'cmd_launch_url.json',
+  { cluster: 'ContentLauncher', cluster_id: 0x050a, command: 'LaunchURL', command_id: 0x01,
+    fields: [
+      { name: 'ContentURL', id: 0, value: 'https://example.com/watch' },
+      { name: 'DisplayString', id: 1, value: 'Now playing' },
+      { name: 'BrandingInformation', id: 2,
+        value: { providerName: 'Example', background: { imageUrl: 'https://example.com/bg.png', color: '#000000', size: { width: 1920.5, height: 1080.25, metric: 0 } }, logo: { size: { width: 12.5, height: 7.25, metric: 1 } } } },
+    ],
+    note: 'request struct nesting structs three deep, with two doubles per DimensionStruct (encoded with matter.js TlvLaunchUrlRequest)' },
+  ContentLauncher.TlvLaunchUrlRequest.encode({
+    contentUrl: 'https://example.com/watch',
+    displayString: 'Now playing',
+    brandingInformation: {
+      providerName: 'Example',
+      background: {
+        imageUrl: 'https://example.com/bg.png',
+        color: '#000000',
+        size: { width: 1920.5, height: 1080.25, metric: ContentLauncher.MetricType.Pixels },
+      },
+      logo: { size: { width: 12.5, height: 7.25, metric: ContentLauncher.MetricType.Percentage } },
+    },
+  }));
+
+cmd('content_launcher', 'cmd_launch_content.json',
+  { cluster: 'ContentLauncher', cluster_id: 0x050a, command: 'LaunchContent', command_id: 0x00,
+    fields: [
+      { name: 'Search', id: 0,
+        value: { parameterList: [
+          { type: 0, value: 'Gaby sHoffman', externalIdList: [{ name: 'imdb', value: 'nm0001' }, { name: 'tmdb', value: '42' }] },
+          { type: 6, value: 'Horror' },
+        ] } },
+      { name: 'AutoPlay', id: 1, value: true },
+      { name: 'PlaybackPreferences', id: 3,
+        value: { playbackPosition: null, textTrack: { languageCode: 'en', characteristics: null }, audioTracks: [{ languageCode: 'fr', characteristics: [0, 17], audioOutputIndex: 1 }] } },
+      { name: 'UseCurrentContext', id: 4, value: false },
+    ],
+    note: 'request list of structs with an optional list present and absent; nullable struct, nullable lists and an enum list nested in an optional struct (encoded with matter.js TlvLaunchContentRequest)' },
+  ContentLauncher.TlvLaunchContentRequest.encode({
+    search: {
+      parameterList: [
+        {
+          type: ContentLauncher.Parameter.Actor,
+          value: 'Gaby sHoffman',
+          externalIdList: [{ name: 'imdb', value: 'nm0001' }, { name: 'tmdb', value: '42' }],
+        },
+        { type: ContentLauncher.Parameter.Genre, value: 'Horror' },
+      ],
+    },
+    autoPlay: true,
+    playbackPreferences: {
+      playbackPosition: null,
+      textTrack: { languageCode: 'en', characteristics: null },
+      audioTracks: [{ languageCode: 'fr', characteristics: [0, 17], audioOutputIndex: 1 }],
+    },
+    useCurrentContext: false,
+  }));
 
 console.log('capture-clusters: all vectors written.');

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 110] = [
+const TARGET_CLUSTERS: [&str; 111] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -161,6 +161,8 @@ const TARGET_CLUSTERS: [&str; 110] = [
     "ContentAppObserver",
     // M9-A3 B7, MediaPlayback:
     "MediaPlayback",
+    // M9-A3 B7, ContentLauncher:
+    "ContentLauncher",
 ];
 
 fn load() -> Value {
@@ -3025,4 +3027,47 @@ fn media_playback_keeps_its_shapes() {
         ]
     );
     assert_eq!(element_names(c, "events"), ["StateChanged"]);
+}
+
+#[test]
+fn content_launcher_keeps_its_shapes_and_copies_characteristic_enum() {
+    // 1.4.2 ContentLauncher.xml. TrackPreferenceStruct.Characteristics is a
+    // list of MediaPlayback's CharacteristicEnum: the dump copies the enum in
+    // (`copiedFrom`) and the reference names the copy.
+    let v = load();
+    let c = cluster(&v, "ContentLauncher");
+    let copied = datatype(c, "CharacteristicEnum");
+    assert_eq!(copied["copiedFrom"], "MediaPlayback");
+    assert_eq!(
+        enum_values(copied),
+        enum_values(datatype(cluster(&v, "MediaPlayback"), "CharacteristicEnum"))
+    );
+    let characteristics = &datatype(c, "TrackPreferenceStruct")["fields"][1];
+    assert_eq!(characteristics["entryType"], "CharacteristicEnum");
+    // No datatype the cluster owns carries copiedFrom.
+    for d in c["datatypes"].as_array().unwrap() {
+        assert_eq!(
+            d.get("copiedFrom").is_some(),
+            d["name"] == "CharacteristicEnum",
+            "{}",
+            d["name"]
+        );
+    }
+    assert_eq!(
+        field_optionality(&datatype(c, "PlaybackPreferencesStruct")["fields"]),
+        [
+            ("PlaybackPosition", true),
+            ("TextTrack", true),
+            ("AudioTracks", true)
+        ]
+    );
+    let dimension = datatype(c, "DimensionStruct")["fields"].as_array().unwrap();
+    assert_eq!(
+        (dimension[0]["type"].as_str(), dimension[1]["type"].as_str()),
+        (Some("double"), Some("double"))
+    );
+    assert_eq!(
+        element_names(c, "commands"),
+        ["LaunchContent", "LaunchUrl", "LauncherResponse"]
+    );
 }

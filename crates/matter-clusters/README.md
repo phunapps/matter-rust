@@ -19,7 +19,7 @@ matter-clusters = "0.5"
 ## What this crate does
 
 - Provides encode/decode functions for the attributes, commands, and structs of
-  110 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
+  111 Matter clusters (mandatory **and** optional attributes), as Matter TLV.
 - Models cluster enums with an `Unknown(n)` variant (forward-compatible decode),
   feature maps as `bitflags`, and nullable fields as `Nullable<T>` (distinct
   from `Option<T>`).
@@ -27,7 +27,7 @@ matter-clusters = "0.5"
 
 ## What this crate does not do
 
-- It is **not** the full Matter cluster set — only the 110 listed below. More
+- It is **not** the full Matter cluster set — only the 111 listed below. More
   are generated as they are needed.
 - It does **not** provide generic or wildcard attribute access, or
   manufacturer-specific typed codecs. Reading arbitrary attributes a device
@@ -46,7 +46,7 @@ may break API — and adding clusters is a routine minor bump.
 
 ## Clusters
 
-110 clusters are generated today, covering their **mandatory and optional**
+111 clusters are generated today, covering their **mandatory and optional**
 attributes, by area:
 
 - **Core / identity** — BasicInformation, Descriptor, Identify, Groups, Binding,
@@ -128,7 +128,7 @@ attributes, by area:
   DiagnosticLogs (the request and its response; the BDX transfer is not
   implemented).
 - **Media** — WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput,
-  TargetNavigator and MediaPlayback (with their events).
+  TargetNavigator and MediaPlayback (with their events), ContentLauncher.
 - **Content apps** — ApplicationBasic, ApplicationLauncher, AccountLogin (with
   its event; the setup PIN is redacted in `Debug`), ContentAppObserver. Of
   chip's example apps only tv-casting-app serves ContentAppObserver (tv-app's
@@ -149,7 +149,10 @@ introduced: the nested `MeasurementAccuracyStruct`, the list-typed
 `Open(null, 50)` (the first `Option<Nullable<T>>` request field),
 ScenesManagement's `AddScene` (nested request lists), and Messages'
 `CancelMessagesRequest` (the first request `list<octstr>`) and
-`PresentMessagesRequest` (the first optional request list). The read/write
+`PresentMessagesRequest` (the first optional request list), and
+ContentLauncher's `LaunchURL` (request structs nesting structs, and the first
+`double`) and `LaunchContent` (optional and nullable lists inside request
+structs). The read/write
 actuator clusters additionally carry `decode(encode(x)) == x` roundtrips, and
 floats get both a binary32-edge roundtrip (signed zero, subnormals, infinities,
 NaN — compared by bits) and a `proptest` roundtrip drawn uniformly from the

@@ -6352,3 +6352,121 @@ fn media_playback_attributes_requests_responses_and_event() {
         "CurrentState is mandatory"
     );
 }
+
+// ---- M9-A3 B7: ContentLauncher -----------------------------------------------
+//
+// 1.4.2 ContentLauncher.xml. AcceptHeader is tv-app's video-player endpoint's
+// (two "example" entries; master 5cd2917a and v1.4.2.0); the rest is
+// synthetic. The request encoders' wire bytes are pinned against matter.js in
+// byte_parity.rs.
+
+#[test]
+fn content_launcher_attributes_response_and_copied_enum() {
+    use clusters::content_launcher::{
+        self as cl, CharacteristicEnum, LauncherResponse, StatusEnum, SupportedProtocolsBitmap,
+    };
+    use clusters::media_playback::CharacteristicEnum as Original;
+    assert_eq!(
+        cl::decode_accept_header(&str_array_attr(&["example", "example"])).unwrap(),
+        ["example", "example"]
+    );
+    assert_eq!(
+        cl::decode_supported_streaming_protocols(&uint_attr(3)).unwrap(),
+        SupportedProtocolsBitmap::DASH | SupportedProtocolsBitmap::HLS
+    );
+    let refused = LauncherResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 2).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (refused.status, refused.data),
+        (StatusEnum::AuthFailed, None)
+    );
+    // ContentLauncher's copy of MediaPlayback's CharacteristicEnum has the same
+    // values as the original.
+    for raw in 0..=18 {
+        assert_eq!(
+            CharacteristicEnum::from_raw(raw).to_raw(),
+            Original::from_raw(raw).to_raw()
+        );
+    }
+    assert_eq!(
+        CharacteristicEnum::from_raw(17),
+        CharacteristicEnum::Karaoke
+    );
+    assert_eq!(
+        CharacteristicEnum::from_raw(18),
+        CharacteristicEnum::Unknown(18)
+    );
+}
+
+#[test]
+fn content_launcher_request_structs_decode_what_they_encode() {
+    use clusters::content_launcher::{
+        CharacteristicEnum, DimensionStruct, MetricTypeEnum, PlaybackPreferencesStruct,
+        StyleInformationStruct, TrackPreferenceStruct,
+    };
+    // A DimensionStruct's doubles are TLV FLOAT64, and a FLOAT32 on the wire
+    // is widened like chip's TLVReader::Get(double&).
+    let style = StyleInformationStruct {
+        image_url: None,
+        color: Some("#FFFFFF".to_string()),
+        size: Some(DimensionStruct {
+            width: 0.5,
+            height: 2.0,
+            metric: MetricTypeEnum::Percentage,
+        }),
+    };
+    let bytes = style.encode();
+    assert_eq!(
+        bytes,
+        struct_of(&|w| {
+            w.put_utf8(Tag::Context(1), "#FFFFFF").unwrap();
+            w.start_structure(Tag::Context(2)).unwrap();
+            w.put_double(Tag::Context(0), 0.5).unwrap();
+            w.put_double(Tag::Context(1), 2.0).unwrap();
+            w.put_uint(Tag::Context(2), 1).unwrap();
+            w.end_container().unwrap();
+        })
+    );
+    assert_eq!(StyleInformationStruct::decode(&bytes).unwrap(), style);
+    let narrowed = DimensionStruct::decode(&struct_of(&|w| {
+        w.put_float(Tag::Context(0), 0.5).unwrap();
+        w.put_double(Tag::Context(1), 2.0).unwrap();
+        w.put_uint(Tag::Context(2), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(narrowed, style.size.clone().unwrap());
+    // Absent, null and present preferences are three different structs.
+    let track = TrackPreferenceStruct {
+        language_code: "en".to_string(),
+        characteristics: Some(Nullable::Null),
+        audio_output_index: None,
+    };
+    for prefs in [
+        PlaybackPreferencesStruct {
+            playback_position: None,
+            text_track: None,
+            audio_tracks: None,
+        },
+        PlaybackPreferencesStruct {
+            playback_position: Some(Nullable::Null),
+            text_track: Some(Nullable::Null),
+            audio_tracks: Some(Nullable::Null),
+        },
+        PlaybackPreferencesStruct {
+            playback_position: Some(Nullable::Value(42)),
+            text_track: Some(Nullable::Value(track.clone())),
+            audio_tracks: Some(Nullable::Value(vec![TrackPreferenceStruct {
+                characteristics: Some(Nullable::Value(vec![CharacteristicEnum::Caption])),
+                audio_output_index: Some(Nullable::Value(1)),
+                ..track.clone()
+            }])),
+        },
+    ] {
+        assert_eq!(
+            PlaybackPreferencesStruct::decode(&prefs.encode()).unwrap(),
+            prefs
+        );
+    }
+}

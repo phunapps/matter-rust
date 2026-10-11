@@ -21,6 +21,7 @@ pub mod carbon_monoxide_concentration_measurement;
 pub mod color_control;
 pub mod commissioner_control;
 pub mod content_app_observer;
+pub mod content_launcher;
 pub mod descriptor;
 pub mod device_energy_management;
 pub mod device_energy_management_mode;

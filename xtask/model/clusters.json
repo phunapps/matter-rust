@@ -107,6 +107,7 @@
       "MediaInput",
       "LowPower",
       "KeypadInput",
+      "ContentLauncher",
       "AudioOutput",
       "ApplicationLauncher",
       "ApplicationBasic",
@@ -38290,6 +38291,739 @@
               "value": 2,
               "name": "InvalidKeyInCurrentState",
               "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1290,
+      "name": "ContentLauncher",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CS",
+          "name": "ContentSearch",
+          "description": "Device supports content search (non-app specific)"
+        },
+        {
+          "bit": 1,
+          "code": "UP",
+          "name": "UrlPlayback",
+          "description": "Device supports basic URL-based file playback"
+        },
+        {
+          "bit": 2,
+          "code": "AS",
+          "name": "AdvancedSeek",
+          "description": "Enables clients to implement more advanced media seeking behavior in their user interface, such as for example a \"seek bar\"."
+        },
+        {
+          "bit": 3,
+          "code": "TT",
+          "name": "TextTracks",
+          "description": "Device or app supports Text Tracks."
+        },
+        {
+          "bit": 4,
+          "code": "AT",
+          "name": "AudioTracks",
+          "description": "Device or app supports Audio Tracks."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "AcceptHeader",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall provide a list of content types supported by the Video Player or Content App in the form of entries in the HTTP \"Accept\" request header."
+        },
+        {
+          "id": 1,
+          "name": "SupportedStreamingProtocols",
+          "type": "SupportedProtocolsBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall provide information about supported streaming protocols."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "LaunchContent",
+          "direction": "request",
+          "responseId": 2,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Search",
+              "type": "ContentSearchStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the content to launch."
+            },
+            {
+              "id": 1,
+              "name": "AutoPlay",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate whether to automatically start playing content, where:\n  - TRUE means best match should start playing automatically.\n  - FALSE means matches should be displayed on screen for user selection."
+            },
+            {
+              "id": 2,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate app-specific data."
+            },
+            {
+              "id": 3,
+              "name": "PlaybackPreferences",
+              "type": "PlaybackPreferencesStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate the user's preferred Text/AudioTracks and playbackPosition for the media, sent from the client to the server. If the server does not find an available track for the title being played exactly matching a Track requested here, in the list of available tracks, it may default to picking another track that closely matches the requested track. Alternately, it may go with user preferences set on the server side (it will use this option if these PlaybackPreferences are not specified). In the case of text tracks, that may mean that the subtitle text is not displayed at all. In the cases where the preferred Text/AudioTracks are not available, the server shall return the TextTrackNotAvailable and/or AudioTrackNotAvailable Status(es) in the LauncherResponse."
+            },
+            {
+              "id": 4,
+              "name": "UseCurrentContext",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate whether to consider the context of current ongoing activity on the receiver to fulfill the request. For example if the request only includes data in ContentSearch that specifies an Episode number, and UseCurrentContent is set to TRUE, if there is a TV series on going, the request refers to the specific episode of the ongoing season of the TV series. TRUE means current activity context may be considered FALSE means current activity context shall NOT be considered"
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "LaunchUrl",
+          "direction": "request",
+          "responseId": 2,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ContentUrl",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the URL of content to launch. The syntax of this field shall follow the syntax as specified in RFC 1738 and shall use the https scheme."
+            },
+            {
+              "id": 1,
+              "name": "DisplayString",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall provide a string that may be used to describe the content being accessed at the given URL."
+            },
+            {
+              "id": 2,
+              "name": "BrandingInformation",
+              "type": "BrandingInformationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate the branding information that may be displayed when playing back the given content."
+            },
+            {
+              "id": 3,
+              "name": "PlaybackPreferences",
+              "type": "PlaybackPreferencesStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate the user's preferred Text/AudioTracks and playbackPosition for the media, sent from the client to the server. If the server does not find an available track for the title being played exactly matching a Track requested here, in the list of available tracks, it may default to picking another track that closely matches the requested track. Alternately, it may go with user preferences set on the server side (it will use this option if these PlaybackPreferences are not specified). In the case of text tracks, that may mean that the subtitle text is not displayed at all. In the cases where the preferred Text/AudioTracks are not available, the server shall return the TextTrackNotAvailable and/or AudioTrackNotAvailable Status(es) in the LauncherResponse."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "LauncherResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the status of the command which resulted in this response."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "AdditionalInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines additional name=value pairs that can be used for identifying content.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of external id, ex. \"musicbrainz\"."
+            },
+            {
+              "id": 1,
+              "name": "Value",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the value for external id, ex. \"ST0000000666661\"."
+            }
+          ]
+        },
+        {
+          "name": "BrandingInformationStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines Branding Information which can be provided by the client in order to customize the skin of the Video Player during playback.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ProviderName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate name of the provider for the given content."
+            },
+            {
+              "id": 1,
+              "name": "Background",
+              "type": "StyleInformationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate background of the Video Player while content launch request is being processed by it. This background information may also be used by the Video Player when it is in idle state."
+            },
+            {
+              "id": 2,
+              "name": "Logo",
+              "type": "StyleInformationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the logo shown when the Video Player is launching. This is also used when the Video Player is in the idle state and Splash field is not available."
+            },
+            {
+              "id": 3,
+              "name": "ProgressBar",
+              "type": "StyleInformationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the style of progress bar for media playback."
+            },
+            {
+              "id": 4,
+              "name": "Splash",
+              "type": "StyleInformationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the screen shown when the Video Player is in an idle state. If this property is not populated, the Video Player shall default to logo or the provider name."
+            },
+            {
+              "id": 5,
+              "name": "Watermark",
+              "type": "StyleInformationStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate watermark shown when the media is playing."
+            }
+          ]
+        },
+        {
+          "name": "CharacteristicEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "ForcedSubtitles",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "DescribesVideo",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "EasyToRead",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "FrameBased",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "MainProgram",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "OriginalContent",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "VoiceOverTranslation",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Caption",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Subtitle",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Alternate",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Supplementary",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Commentary",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "DubbedTranslation",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "Description",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "Metadata",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "EnhancedAudioIntelligibility",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "Emergency",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "Karaoke",
+              "description": null
+            }
+          ],
+          "copiedFrom": "MediaPlayback"
+        },
+        {
+          "name": "ContentSearchStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines inputs to a search for content for display or playback.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ParameterList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ParameterStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the list of parameters comprising the search. If multiple parameters are provided, the search parameters shall be joined with 'AND' logic. e.g. action movies with Tom Cruise will be represented as [{Actor: 'Tom Cruise'}, {Type: 'Movie'}, {Genre: 'Action'}]"
+            }
+          ]
+        },
+        {
+          "name": "DimensionStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines dimension which can be used for defining Size of background images.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Width",
+              "type": "double",
+              "metatype": "float",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the width using the metric defined in Metric"
+            },
+            {
+              "id": 1,
+              "name": "Height",
+              "type": "double",
+              "metatype": "float",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the height using the metric defined in Metric"
+            },
+            {
+              "id": 2,
+              "name": "Metric",
+              "type": "MetricTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate metric used for defining Height/Width."
+            }
+          ]
+        },
+        {
+          "name": "MetricTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Pixels",
+              "description": "This value is used for dimensions defined in a number of Pixels."
+            },
+            {
+              "value": 1,
+              "name": "Percentage",
+              "description": "This value is for dimensions defined as a percentage of the overall display dimensions. For example, if using a Percentage Metric type for a Width measurement of 50.0, against a display width of 1920 pixels, then the resulting value used would be 960 pixels (50.0% of 1920) for that dimension. Whenever a measurement uses this Metric type, the resulting values shall be rounded (\"floored\") towards 0 if the measurement requires an integer final value."
+            }
+          ]
+        },
+        {
+          "name": "ParameterEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Actor",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Channel",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Character",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Director",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Event",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Franchise",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Genre",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "League",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Popularity",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Provider",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Sport",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "SportsTeam",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "Type",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "Video",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "Season",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "Episode",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "Any",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "ParameterStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines inputs to a search for content for display or playback.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Type",
+              "type": "ParameterEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the entity type."
+            },
+            {
+              "id": 1,
+              "name": "Value",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the entity value, which is a search string, ex. “Manchester by the Sea”."
+            },
+            {
+              "id": 2,
+              "name": "ExternalIdList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AdditionalInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the list of additional external content identifiers."
+            }
+          ]
+        },
+        {
+          "name": "PlaybackPreferencesStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "PlaybackPreferencesStruct defines the preferences sent by the client to the receiver in the ContentLauncher LaunchURL or LaunchContent commands.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PlaybackPosition",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the preferred position (in milliseconds) in the media to launch playback from. In case the position falls in the middle of a frame, the server shall set the position to the beginning of that frame and set the SampledPosition attribute on the MediaPlayback cluster accordingly. A value of null shall indicate that playback position is not applicable for the current state of the media playback. (For example : Live media with no known duration and where seek is not supported)."
+            },
+            {
+              "id": 1,
+              "name": "TextTrack",
+              "type": "TrackPreferenceStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the user's preferred Text Track. A value of null shall indicate that the user did not specify a preferred Text Track on the client. In such a case, the decision to display and select a Text Track is up to the server."
+            },
+            {
+              "id": 2,
+              "name": "AudioTracks",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "TrackPreferenceStruct",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the list of the user's preferred Audio Tracks. If the list contains multiple values, each AudioTrack must also specify a unique audioOutputIndex to play the track on. A value of null shall indicate that the user did not specify a preferred Audio Track on the client. In such a case, the decision to play and select an Audio Track is up to the server."
+            }
+          ]
+        },
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "UrlNotAvailable",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "AuthFailed",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "TextTrackNotAvailable",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "AudioTrackNotAvailable",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "StyleInformationStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines style information which can be used by content providers to change the Media Player's style related properties.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "ImageUrl",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the URL of image used for Styling different Video Player sections like Logo, Watermark etc. The syntax of this field shall follow the syntax as specified in RFC 1738 and shall use the https scheme."
+            },
+            {
+              "id": 1,
+              "name": "Color",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the color, in RGB or RGBA, used for styling different Video Player sections like Logo, Watermark, etc. The value shall conform to the 6-digit or 8-digit format defined for CSS sRGB hexadecimal color notation. Examples:\n  - #76DE19 for R=0x76, G=0xDE, B=0x19, A absent\n  - #76DE1980 for R=0x76, G=0xDE, B=0x19, A=0x80"
+            },
+            {
+              "id": 2,
+              "name": "Size",
+              "type": "DimensionStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the size of the image used for Styling different Video Player sections like Logo, Watermark etc."
+            }
+          ]
+        },
+        {
+          "name": "SupportedProtocolsBitmap",
+          "base": "map32",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Dash",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "Hls",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TrackPreferenceStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure defines Text/Audio Track preferences.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LanguageCode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain one of the standard Tags for Identifying Languages RFC 5646, which identifies the primary language used in the Track."
+            },
+            {
+              "id": 1,
+              "name": "Characteristics",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "CharacteristicEnum",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall contain a list of enumerated CharacteristicEnum values that indicate a purpose, trait or feature associated with the Track. A value of null shall indicate that there are no Characteristics corresponding to the Track."
+            },
+            {
+              "id": 2,
+              "name": "AudioOutputIndex",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This field if present shall indicate the index of the OutputInfoStruct from the OutputList attribute (from the AudioOutput cluster) and indicates which audio output the Audio Track should be played on.\nThis field shall NOT be present if the track is not an audio track.\nIf the track is an audio track, this field shall be present. A value of null shall indicate that the server can choose the audio output(s) to play the Audio Track on."
             }
           ]
         }

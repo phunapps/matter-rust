@@ -775,6 +775,16 @@ How each of these clusters was validated:
   the specification, and optional here as in matter.js (its conformance is
   the AudioTracks feature); chip's codegen makes it a plain `uint8`, so
   chip's server refuses a null one with InvalidCommand.
+- **ContentLauncher (0x050A)**: every attribute, command and response. Its
+  requests are the first whose structs nest structs (three deep in
+  `LaunchURL`'s `BrandingInformation`), carry optional and nullable lists,
+  and a `double` (`DimensionStruct`); both are pinned byte for byte against
+  matter.js. `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
+  `CharacteristicEnum`, which the module carries as its own copy. chip's
+  codegen makes `PlaybackPosition`, `TextTrack` and `AudioOutputIndex`
+  mandatory and none of the preferences nullable, so chip's server refuses a
+  null in them in `LaunchContent` (InvalidCommand). chip's `LaunchURL` has no
+  `PlaybackPreferences` field, so its server skips one sent there.
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 

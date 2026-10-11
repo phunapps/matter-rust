@@ -422,4 +422,97 @@ proptest! {
         prop_assert_eq!(&back, &schedule);
         prop_assert_eq!(back.encode(), bytes);
     }
+
+    // ---- M9-A3 B7: ContentLauncher -----------------------------------------
+
+    #[test]
+    fn playback_preferences_reencode(
+        position in proptest::option::of(proptest::option::of(any::<u64>())),
+        text in proptest::option::of(proptest::option::of((
+            "[a-z]{2}",
+            proptest::option::of(proptest::option::of(proptest::collection::vec(0u8..=20, 0..4))),
+            proptest::option::of(proptest::option::of(any::<u8>())),
+        ))),
+        audio in proptest::option::of(proptest::option::of(proptest::collection::vec("[a-z]{2}", 0..3))),
+    ) {
+        // PlaybackPreferencesStruct: a nested nullable struct (TextTrack) and a
+        // nullable list of structs (AudioTracks), each optional, whose
+        // TrackPreferenceStruct holds an optional nullable enum list: the B7
+        // encoder paths. LaunchContent and LaunchURL send it: encode -> decode
+        // gives the same struct, absent and null kept apart. (`None` inside an
+        // `Option` stands for null.)
+        use clusters::content_launcher::{
+            CharacteristicEnum, PlaybackPreferencesStruct, TrackPreferenceStruct,
+        };
+        fn nullable<T>(v: Option<T>) -> Nullable<T> {
+            v.map_or(Nullable::Null, Nullable::Value)
+        }
+        let prefs = PlaybackPreferencesStruct {
+            playback_position: position.map(nullable),
+            text_track: text.map(|t| {
+                nullable(t.map(|(language, chars, index)| TrackPreferenceStruct {
+                    language_code: language,
+                    characteristics: chars.map(|c| {
+                        nullable(c.map(|v| v.into_iter().map(CharacteristicEnum::from_raw).collect()))
+                    }),
+                    audio_output_index: index.map(nullable),
+                }))
+            }),
+            audio_tracks: audio.map(|a| {
+                nullable(a.map(|ls| {
+                    ls.into_iter()
+                        .map(|language| TrackPreferenceStruct {
+                            language_code: language,
+                            characteristics: None,
+                            audio_output_index: None,
+                        })
+                        .collect()
+                }))
+            }),
+        };
+        let bytes = prefs.encode();
+        let back = PlaybackPreferencesStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(&back, &prefs);
+        prop_assert_eq!(back.encode(), bytes);
+    }
+
+    #[test]
+    fn branding_information_reencodes(
+        provider in "[A-Za-z ]{0,12}",
+        sizes in proptest::collection::vec(
+            proptest::option::of((-1.0e9f64..1.0e9, -1.0e9f64..1.0e9, 0u8..=2)),
+            5,
+        ),
+    ) {
+        // BrandingInformationStruct: five optional StyleInformationStructs,
+        // each with an optional DimensionStruct of two doubles (finite here:
+        // NaN is not equal to itself) and an enum: three levels of struct
+        // fields. LaunchURL sends it.
+        use clusters::content_launcher::{
+            BrandingInformationStruct, DimensionStruct, MetricTypeEnum, StyleInformationStruct,
+        };
+        let style = |s: &Option<(f64, f64, u8)>| {
+            s.map(|(width, height, metric)| StyleInformationStruct {
+                image_url: None,
+                color: Some("#123456".to_string()),
+                size: Some(DimensionStruct {
+                    width,
+                    height,
+                    metric: MetricTypeEnum::from_raw(metric),
+                }),
+            })
+        };
+        let branding = BrandingInformationStruct {
+            provider_name: provider,
+            background: style(&sizes[0]),
+            logo: style(&sizes[1]),
+            progress_bar: style(&sizes[2]),
+            splash: style(&sizes[3]),
+            watermark: style(&sizes[4]),
+        };
+        let bytes = branding.encode();
+        let back = BrandingInformationStruct::decode(&bytes).unwrap();
+        prop_assert_eq!(&back, &branding);
+        prop_assert_eq!(back.encode(), bytes);
+    }
 }
