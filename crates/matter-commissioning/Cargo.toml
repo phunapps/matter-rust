@@ -22,7 +22,7 @@ __test_shortcuts = []
 ## Enable `tracing` instrumentation spans on `Commissioner`'s public
 ## methods (`poll`, `on_response`, `on_case_established`), plus the driver's
 ## debug events. Those events record directions, session and exchange ids,
-## protocols, opcodes and lengths, but no message payload bytes. (Public
+## protocols and opcodes (some also lengths), but no message payload bytes. (Public
 ## certificates and CASE Sigma2 messages are still dumped; see the crate
 ## docs.)
 ## Off by default; opt-in per Matter-rust's zero-cost-when-unused policy.

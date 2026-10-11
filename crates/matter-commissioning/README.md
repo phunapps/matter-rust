@@ -476,8 +476,10 @@ matter.js's log-event format so operators can grep across both
 implementations.
 
 With `driver` on as well, `tracing` also emits a debug event per message
-sent or received. These record direction, ids, protocol, opcode and length,
-but no message payload bytes.
+sent or received. These record direction, ids, protocol and opcode (some
+also a length), but no message payload bytes. The only bytes they dump are
+public or encrypted: the attestation certificates, the RCAC being installed,
+and the CASE Sigma2 messages (whose secret parts are ciphertext).
 
 The separate `wiretrace` feature (which implies `tracing`) is **for
 debugging only, never production**: it makes those events record the full

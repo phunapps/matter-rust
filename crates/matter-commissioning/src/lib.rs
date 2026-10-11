@@ -73,8 +73,8 @@
 //!
 //! With `driver` also on, `tracing` adds debug events for each message the
 //! driver sends or receives. They record the direction, session and
-//! exchange ids, protocol, opcode and length, but **no message payload
-//! bytes**. The only bytes the crate's debug events dump are public or
+//! exchange ids, protocol and opcode (some also a length), but **no message
+//! payload bytes**. The only bytes the crate's debug events dump are public or
 //! encrypted: the attestation certificates and the RCAC being installed,
 //! and the CASE Sigma2 messages (whose secret parts are ciphertext).
 //!
@@ -128,7 +128,7 @@ pub(crate) mod hexdump {
     /// `tracing` records an `Option` field only when it is `Some`, so under
     /// plain `tracing` the field is never recorded and the hex is never
     /// computed: no subscriber, formatter or layer can see the bytes.
-    #[cfg(feature = "wiretrace")]
+    #[cfg(all(feature = "driver", feature = "wiretrace"))]
     #[allow(
         clippy::unnecessary_wraps,
         reason = "same signature as the non-wiretrace variant, which returns None"
@@ -139,7 +139,7 @@ pub(crate) mod hexdump {
 
     /// See the `wiretrace` variant: without that feature the field is
     /// always `None`, so it is never recorded.
-    #[cfg(not(feature = "wiretrace"))]
+    #[cfg(all(feature = "driver", not(feature = "wiretrace")))]
     pub(crate) fn payload(_bytes: &[u8]) -> Option<tracing::field::DisplayValue<String>> {
         None
     }
