@@ -110,18 +110,23 @@ breaking change.
   `0.18.1`.
 - `fields` now prints with its `Value` tree intact (variant names, tags,
   integers, strings and nesting, exactly as before), except that each byte
-  string at any depth prints as its length, `Bytes("<N bytes>")`. `path`
-  and the `Status` variant print as before. `Value`'s own `Debug` in
+  string at any depth prints as its length, `Bytes("<N bytes>")`. Two
+  responses carry a PIN in a character string, AccountLogin
+  `GetSetupPINResponse` (a setup PIN for PASE with the Commissionee) and
+  ContentControl `ResetPINResponse`, so in those two every string at any
+  depth also prints as `Utf8("<redacted>")`. `path` and the `Status`
+  variant print as before. `Value`'s own `Debug` in
   `matter-codec` is unchanged, so TLV debugging elsewhere still shows bytes.
 - `InvokeResult` keeps `Clone`, `Debug` and `PartialEq` (`Debug` is now
   written by hand), and its variants and fields are unchanged.
-- Known remaining exposure: the `Value`s in read and event reports
+- Known remaining exposure: the strings in every other invoke response
+  still print in `Debug` (the two PIN responses are the only string secrets
+  `matter-clusters` marks). The `Value`s in read and event reports
   (`matter-interaction`'s `AttributeReportItem` in `read.rs` and
   `EventReportItem` in `event.rs`, and this crate's `AttributeReport` in
-  `subscription.rs`) and `CheckIn`'s `app_data` still print their bytes in
-  `Debug`. Readable attributes and events carry
-  no credentials under the spec, and Check-In application data is
-  vendor-defined.
+  `subscription.rs`) and `CheckIn`'s `app_data` still print in full in
+  `Debug`. Readable attributes and events carry no credentials under the
+  spec, and Check-In application data is vendor-defined.
 
 ### matter-controller: Fixed (security) — a withheld ACL Subjects/Targets is never read as a wildcard
 
@@ -760,7 +765,8 @@ How each of these clusters was validated:
   **AccountLogin (0x050E)** and **ContentAppObserver (0x0510)**: every
   attribute, command and response, and AccountLogin's `LoggedOut` event.
   `GetSetupPinResponse`'s setup PIN is a secret: its `Debug` output shows
-  `<redacted>`, like the secrets in the `Debug` fix below. The model leaves
+  `<redacted>`, like the secrets in the `Debug` fix below, and a raw
+  `InvokeResult` hides it from `matter-controller` 0.18.2. The model leaves
   out `LoggedOut`'s implicit FabricIndex (so does matter.js); the decoder
   skips it. ContentAppObserver's `ContentAppMessage` follows the
   specification (`Data` mandatory, `EncodingHint` optional), where chip's
@@ -805,7 +811,8 @@ How each of these clusters was validated:
   whole cluster provisional (Matter 1.4.2, and still 1.5.1), so its shape may
   change between specification revisions; such a change is still a breaking
   `matter-clusters` release. Every attribute, command and response, and both
-  events. `ResetPinResponse`'s PIN is redacted in `Debug`. chip's zap XML and
+  events. `ResetPinResponse`'s PIN is redacted in its `Debug`, and in a raw
+  `InvokeResult`'s from `matter-controller` 0.18.2. chip's zap XML and
   controller codegen mark the cluster provisional too (both refs). chip
   v1.4.2.0's codegen has an older shape of the cluster (five features,
   attributes 0 to 7, no block lists or block-list commands, one event (no

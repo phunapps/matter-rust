@@ -34,8 +34,9 @@ pub const TIMED_DEFAULT_MS: u16 = 10_000;
 /// Outcome of [`Node::invoke`].
 ///
 /// `Debug` is written by hand, not derived: it prints every byte string in
-/// `fields` as its length, because some responses carry credentials there
-/// (see the impl). Read `fields` directly to use the bytes.
+/// `fields` as its length, and every string in the two responses known to
+/// carry a PIN as a placeholder, because those hold credentials (see the
+/// impl). Read `fields` directly to use the values.
 #[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum InvokeResult {
@@ -47,14 +48,17 @@ pub enum InvokeResult {
         ///
         /// Plaintext: some responses carry credentials in a byte string
         /// (a Wi-Fi passphrase, a Thread dataset). This `InvokeResult`'s
-        /// `Debug` output shows each byte string's length only.
+        /// `Debug` output shows each byte string's length only, and hides
+        /// every string in the two responses that carry a PIN as a string
+        /// (`AccountLogin` `GetSetupPINResponse`, `ContentControl`
+        /// `ResetPINResponse`).
         fields: Value,
     },
     /// The device returned a bare status (e.g. `Success`).
     Status(ImStatus),
 }
 
-/// Hand-written so the response fields' byte strings stay out of logs.
+/// Hand-written so the response fields' secrets stay out of logs.
 ///
 /// A `Data` result is the decoded response command, and some responses
 /// carry credentials in octet strings: Wi-Fi Network Management
@@ -63,76 +67,150 @@ pub enum InvokeResult {
 /// `OperationalDatasetResponse` return an operational dataset, network key
 /// included. So `fields` prints with its `Value` tree intact
 /// (variant names, tags, integers, strings, nesting) but every byte-string
-/// leaf as its length: `Bytes("<N bytes>")`. Everything else prints exactly
-/// as a derive would. Read `fields` directly to use the bytes.
+/// leaf as its length: `Bytes("<N bytes>")`.
+///
+/// Two responses carry a PIN in a character string instead (the private
+/// `STRING_SECRET_RESPONSES` table): `AccountLogin` `GetSetupPINResponse` and
+/// `ContentControl` `ResetPINResponse`. In those, every string leaf also
+/// prints as `Utf8("<redacted>")`. Everything else prints exactly as a
+/// derive would. Read `fields` directly to use the values.
 impl std::fmt::Debug for InvokeResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Data { path, fields } => f
                 .debug_struct("Data")
                 .field("path", path)
-                .field("fields", &RedactedValue(fields))
+                .field(
+                    "fields",
+                    &RedactedValue {
+                        value: fields,
+                        hide_strings: carries_string_secret(path),
+                    },
+                )
                 .finish(),
             Self::Status(status) => f.debug_tuple("Status").field(status).finish(),
         }
     }
 }
 
-/// `Debug` view of a [`Value`] that prints each byte-string leaf as its
-/// length and everything else as `Value`'s derived `Debug` does.
+/// The response commands that carry a secret in a character string, as
+/// `(cluster id, response command id)`. [`InvokeResult`]'s `Debug` prints
+/// every string in these responses' fields as `"<redacted>"`.
 ///
-/// Containers are walked here, so a byte string at any depth is caught.
-/// Scalars (`Bool`, `Uint`, `Int`, `Float`, `Double`, `Utf8`, `Null`) go to
-/// `Value`'s own `Debug`. `Value` is `#[non_exhaustive]`, so a variant added
-/// to matter-codec later also falls through to its own `Debug`: if it can
-/// hold bytes, add an arm here.
-struct RedactedValue<'a>(&'a Value);
+/// Why a table of paths: a byte string can be hidden by its type alone,
+/// because general-purpose payload bytes are worth little in a log. A
+/// string cannot: names, labels and URLs are strings too, and hiding every
+/// string would blind every invoke log. Nothing in a raw `Value` marks a
+/// string as secret, so the only way to find one is by the response it
+/// arrived in.
+///
+/// Add a response here whenever a new one carries a secret in a string.
+/// The source list is the cluster dump's `SECRET_FIELDS`
+/// (`xtask/scripts/dump-model/index.js`), which marks the fields whose
+/// generated `matter-clusters` types redact: every string-typed entry there
+/// needs a row here. The ids are written out rather than taken from
+/// `matter-clusters` so this table builds against every `matter-clusters`
+/// release the controller supports, including ones that predate these
+/// clusters.
+///
+/// Both ids are checked against connectedhomeip's
+/// `data_model/1.4.2/clusters/*.xml` (identical at `v1.4.2.0` and master)
+/// and its zap `account-login-cluster.xml` / `content-control-cluster.xml`,
+/// and against the generated `matter-clusters` constants.
+const STRING_SECRET_RESPONSES: [(u32, u32); 2] = [
+    // AccountLogin (0x050E) GetSetupPINResponse (0x01): field 0 `SetupPIN`,
+    // the setup PIN for PASE with the Commissionee. Generated as
+    // `account_login::CLUSTER_ID` / `command_id::GET_SETUP_PIN_RESPONSE`.
+    (0x050E, 0x01),
+    // ContentControl (0x050F) ResetPINResponse (0x02): field 0 `PINCode`,
+    // the new content-control PIN. Generated as
+    // `content_control::CLUSTER_ID` / `command_id::RESET_PIN_RESPONSE`.
+    (0x050F, 0x02),
+];
+
+/// Whether `path` is a response listed in [`STRING_SECRET_RESPONSES`]. The
+/// endpoint plays no part: the same response carries the same secret on
+/// any endpoint.
+fn carries_string_secret(path: &CommandPath) -> bool {
+    STRING_SECRET_RESPONSES.contains(&(path.cluster, path.command))
+}
+
+/// `Debug` view of a [`Value`] that prints each byte-string leaf as its
+/// length, each string leaf as `"<redacted>"` when `hide_strings` is set,
+/// and everything else as `Value`'s derived `Debug` does.
+///
+/// Containers are walked here, so a byte string or a hidden string at any
+/// depth is caught. Scalars (`Bool`, `Uint`, `Int`, `Float`, `Double`,
+/// `Null`, and `Utf8` when strings are shown) go to `Value`'s own `Debug`.
+/// `Value` is `#[non_exhaustive]`, so a variant added to matter-codec later
+/// also falls through to its own `Debug`: if it can hold bytes or text, add
+/// an arm here.
+struct RedactedValue<'a> {
+    /// The value to print.
+    value: &'a Value,
+    /// Print every `Utf8` leaf as `"<redacted>"` (the response is in
+    /// [`STRING_SECRET_RESPONSES`]).
+    hide_strings: bool,
+}
+
+impl RedactedValue<'_> {
+    /// The same view of a member of this value: `hide_strings` carries down.
+    fn child<'b>(&self, value: &'b Value) -> RedactedValue<'b> {
+        RedactedValue {
+            value,
+            hide_strings: self.hide_strings,
+        }
+    }
+}
 
 impl std::fmt::Debug for RedactedValue<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
+        match self.value {
             Value::Bytes(bytes) => f
                 .debug_tuple("Bytes")
                 .field(&format!("<{} bytes>", bytes.len()))
                 .finish(),
+            Value::Utf8(_) if self.hide_strings => {
+                f.debug_tuple("Utf8").field(&"<redacted>").finish()
+            }
             Value::Structure(members) => f
                 .debug_tuple("Structure")
-                .field(&RedactedMembers(members))
+                .field(&RedactedMembers(self, members))
                 .finish(),
             Value::List(members) => f
                 .debug_tuple("List")
-                .field(&RedactedMembers(members))
+                .field(&RedactedMembers(self, members))
                 .finish(),
-            Value::Array(items) => f.debug_tuple("Array").field(&RedactedItems(items)).finish(),
+            Value::Array(items) => f
+                .debug_tuple("Array")
+                .field(&RedactedItems(self, items))
+                .finish(),
             scalar => std::fmt::Debug::fmt(scalar, f),
         }
     }
 }
 
 /// The `(Tag, Value)` members of a structure or list, printed as the derive
-/// prints a `Vec<(Tag, Value)>` but with each value redacted.
-struct RedactedMembers<'a>(&'a [(Tag, Value)]);
+/// prints a `Vec<(Tag, Value)>` but with each value redacted as its parent
+/// (the first field) is.
+struct RedactedMembers<'a, 'p>(&'p RedactedValue<'a>, &'a [(Tag, Value)]);
 
-impl std::fmt::Debug for RedactedMembers<'_> {
+impl std::fmt::Debug for RedactedMembers<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list()
-            .entries(
-                self.0
-                    .iter()
-                    .map(|(tag, value)| (tag, RedactedValue(value))),
-            )
+            .entries(self.1.iter().map(|(tag, value)| (tag, self.0.child(value))))
             .finish()
     }
 }
 
 /// The elements of an array, printed as the derive prints a `Vec<Value>`
-/// but with each element redacted.
-struct RedactedItems<'a>(&'a [Value]);
+/// but with each element redacted as its parent (the first field) is.
+struct RedactedItems<'a, 'p>(&'p RedactedValue<'a>, &'a [Value]);
 
-impl std::fmt::Debug for RedactedItems<'_> {
+impl std::fmt::Debug for RedactedItems<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_list()
-            .entries(self.0.iter().map(RedactedValue))
+            .entries(self.1.iter().map(|value| self.0.child(value)))
             .finish()
     }
 }

@@ -16,7 +16,10 @@
 //! [`InvokeResult`](crate::node::InvokeResult)'s `Data` carries the decoded
 //! response fields, which for some commands hold a Wi-Fi passphrase or a
 //! Thread dataset in a byte string. Its `Debug` keeps the `Value` tree's
-//! shape and prints each byte string as `Bytes("<N bytes>")`.
+//! shape and prints each byte string as `Bytes("<N bytes>")`. Two responses
+//! carry a PIN in a character string (`AccountLogin` `GetSetupPINResponse`,
+//! `ContentControl` `ResetPINResponse`); in those, every string also prints
+//! as `Utf8("<redacted>")`, and every other response keeps its strings.
 //!
 //! No assertion here prints a `{:?}` rendering, a key or a code on failure: a
 //! failing redaction would print the very value it failed to hide. Hence
@@ -498,4 +501,167 @@ fn an_empty_byte_string_still_prints_its_length() {
         format!("{result:?}").ends_with("fields: Bytes(\"<0 bytes>\") }"),
         "an empty byte string should print as <0 bytes>"
     );
+}
+
+// ---- `InvokeResult`: the two string-PIN responses hide every string -------
+
+/// A PIN that nothing else in these trees prints, in any rendering: no
+/// integer, tag, path or placeholder contains these digits.
+const STRING_PIN: &str = "73914628";
+
+/// `AccountLogin` (0x050E) `GetSetupPINResponse` (0x01) on tv-app's Content
+/// App endpoint.
+fn setup_pin_path() -> CommandPath {
+    CommandPath {
+        endpoint: 3,
+        cluster: 0x050E,
+        command: 0x01,
+    }
+}
+
+/// `ContentControl` (0x050F) `ResetPINResponse` (0x02).
+fn reset_pin_path() -> CommandPath {
+    CommandPath {
+        endpoint: 1,
+        cluster: 0x050F,
+        command: 0x02,
+    }
+}
+
+/// The response as it arrives: one string field, the PIN, at context tag 0.
+fn pin_response(pin: &str) -> Value {
+    Value::Structure(vec![(Tag::Context(0), Value::Utf8(pin.to_string()))])
+}
+
+/// The PIN at every container depth (top level, a nested structure, an array
+/// inside a list) beside a byte string and a scalar, so the walk is checked
+/// at each container type in string-redacting mode.
+fn nested_pin_fields(pin: &str, secret: &[u8]) -> Value {
+    Value::Structure(vec![
+        (Tag::Context(0), Value::Utf8(pin.to_string())),
+        (
+            Tag::Context(1),
+            Value::Structure(vec![
+                (Tag::Context(0), Value::Utf8(pin.to_string())),
+                (Tag::Context(1), Value::Uint(7)),
+            ]),
+        ),
+        (
+            Tag::Context(2),
+            Value::List(vec![(
+                Tag::Anonymous,
+                Value::Array(vec![
+                    Value::Utf8(pin.to_string()),
+                    Value::Bytes(secret.to_vec()),
+                ]),
+            )]),
+        ),
+    ])
+}
+
+#[test]
+#[allow(
+    clippy::manual_assert_eq,
+    reason = "assert_eq! would print the PIN on failure"
+)]
+fn string_pin_responses_print_every_string_redacted() {
+    let secret = synthetic_bytes(0xC0);
+    for (path, expected) in [
+        (
+            setup_pin_path(),
+            "Data { path: CommandPath { endpoint: 3, cluster: 1294, command: 1 }, \
+             fields: Structure([(Context(0), Utf8(\"<redacted>\"))]) }",
+        ),
+        (
+            reset_pin_path(),
+            "Data { path: CommandPath { endpoint: 1, cluster: 1295, command: 2 }, \
+             fields: Structure([(Context(0), Utf8(\"<redacted>\"))]) }",
+        ),
+    ] {
+        // The real shape: the tree prints intact, the PIN as a placeholder.
+        let result = InvokeResult::Data {
+            path,
+            fields: pin_response(STRING_PIN),
+        };
+        assert!(
+            format!("{result:?}") == expected,
+            "unexpected PIN response rendering"
+        );
+        for shown in renderings(&result) {
+            assert!(
+                shown.contains("\"<redacted>\""),
+                "the placeholder is missing"
+            );
+            assert!(!shown.contains(STRING_PIN), "the PIN leaked");
+        }
+
+        // Every string at every depth is hidden; byte strings keep their
+        // length placeholder and the scalars still print.
+        let result = InvokeResult::Data {
+            path,
+            fields: nested_pin_fields(STRING_PIN, &secret),
+        };
+        assert!(
+            format!("{result:?}").ends_with(
+                "fields: Structure([(Context(0), Utf8(\"<redacted>\")), \
+                 (Context(1), Structure([(Context(0), Utf8(\"<redacted>\")), \
+                 (Context(1), Uint(7))])), (Context(2), List([(Anonymous, \
+                 Array([Utf8(\"<redacted>\"), Bytes(\"<16 bytes>\")]))]))]) }"
+            ),
+            "unexpected nested PIN response rendering"
+        );
+        for shown in renderings(&result) {
+            assert!(!shown.contains(STRING_PIN), "a nested PIN leaked");
+            assert!(
+                shown.contains("\"<16 bytes>\""),
+                "the byte-string placeholder is missing"
+            );
+            assert_hidden(&shown, &secret);
+        }
+        // A caller logging an `Option` or `Vec` of results goes through it.
+        for shown in renderings(&Some(vec![result.clone()])) {
+            assert!(!shown.contains(STRING_PIN), "a wrapped PIN leaked");
+        }
+        // The value itself is untouched: only its rendering is hidden.
+        assert!(
+            result
+                == InvokeResult::Data {
+                    path,
+                    fields: nested_pin_fields(STRING_PIN, &secret),
+                },
+            "the response fields were altered"
+        );
+    }
+}
+
+#[test]
+fn other_responses_still_print_their_strings() {
+    // Only the exact (cluster, response command) pairs hide strings. Each
+    // near miss (the other table entry's command, a neighbouring cluster
+    // with the same command, the request the response answers) prints
+    // exactly as the old derive did, string included.
+    for (cluster, command) in [
+        (0x050E, 0x02), // AccountLogin, ContentControl's response id (Login)
+        (0x050F, 0x01), // ContentControl, AccountLogin's response id (ResetPIN)
+        (0x050E, 0x00), // AccountLogin GetSetupPIN, the request
+        (0x050D, 0x01), // the cluster before AccountLogin
+        (0x0510, 0x02), // the cluster after ContentControl
+        (0x0451, 0x01), // WiFiNetworkManagement NetworkPassphraseResponse
+    ] {
+        let path = CommandPath {
+            endpoint: 1,
+            cluster,
+            command,
+        };
+        let fields = pin_response("ssid-label");
+        let ours = InvokeResult::Data {
+            path,
+            fields: fields.clone(),
+        };
+        let derived = DerivedInvokeResult::Data { path, fields };
+        assert!(
+            renderings(&ours) == renderings(&derived),
+            "a response outside the table no longer prints its strings"
+        );
+    }
 }
