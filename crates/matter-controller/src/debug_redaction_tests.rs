@@ -1,4 +1,4 @@
-//! Key material stays out of `Debug` output.
+//! Key material and setup codes stay out of `Debug` output.
 //!
 //! [`GroupKeySet`](crate::group::GroupKeySet),
 //! [`GroupKeySetConfig`](crate::state::GroupKeySetConfig) and
@@ -7,75 +7,187 @@
 //! one must not leak it, so their `Debug` prints `<redacted>` for the key and
 //! everything else exactly as the old derive did.
 //!
-//! No assertion here prints a `{:?}` rendering or a key on failure: a failing
-//! redaction would print the very bytes it failed to hide. Hence `assert!`
-//! with static messages throughout, never `assert_eq!`.
+//! [`CommissioningWindow`](crate::admin::CommissioningWindow) holds a freshly
+//! generated setup passcode and the manual and QR codes that encode it:
+//! anyone holding any of the three can commission the device while the window
+//! is open. All three print as `<redacted>`; the discriminator, iterations
+//! and salt (public, advertised or sent in the clear) still print.
+//!
+//! No assertion here prints a `{:?}` rendering, a key or a code on failure: a
+//! failing redaction would print the very value it failed to hide. Hence
+//! `assert!` with static messages throughout, never `assert_eq!`, and a leak
+//! detector that names only *which* rendering leaked. The byte detector is the
+//! same as matter-transport's (`debug_redaction_tests` there); each crate
+//! keeps its own copy so the crates stay independent.
 
+use crate::admin::CommissioningWindow;
 use crate::group::GroupKeySet;
 use crate::icd::IcdRegistration;
 use crate::state::GroupKeySetConfig;
+
+/// Sixteen distinct bytes starting at `first` (`first..first + 16`). With
+/// `first >= 0xC0` every byte renders as a three-digit decimal or a
+/// `c0`..`ff` hex pair, which nothing else in these structs prints.
+fn synthetic_bytes(first: u8) -> [u8; 16] {
+    core::array::from_fn(|i| {
+        // `i < 16` and every `first` used is at most 0xE0, so the cast is
+        // lossless and the sum cannot overflow.
+        #[allow(clippy::cast_possible_truncation)]
+        let offset = i as u8;
+        first + offset
+    })
+}
+
+/// Every way `Debug` can print one byte: decimal (`{:?}`), hex (`{:x?}`,
+/// `{:X?}`) and prefixed hex (`{:#x?}`, `{:#X?}`).
+fn byte_tokens(b: u8) -> [String; 5] {
+    [
+        format!("{b}"),
+        format!("{b:x}"),
+        format!("{b:X}"),
+        format!("{b:#x}"),
+        format!("{b:#X}"),
+    ]
+}
+
+/// Which rendering of `secret` appears in `shown`, if any.
+///
+/// Returns a static description, never the bytes, so a caller can put it in
+/// a panic message. Three checks:
+///
+/// 1. **Byte lists, whitespace-insensitive.** `shown` and each list are
+///    compared with all whitespace removed, so the compact layout
+///    (`192, 193`) and the pretty one (`192,\n    193`) both match.
+/// 2. **Hex runs.** The bytes as one run of hex digits, either case.
+/// 3. **A lone byte.** `{:#?}` prints each list element on its own line.
+///    Any line that is nothing but one of `secret`'s byte tokens (and an
+///    optional trailing comma) is a leak, even if only one byte got out.
+///    Matching whole lines, not substrings, is what keeps this free of false
+///    positives: a named numeric field prints as `name: 200,`, never as a
+///    bare `200,`, so a random exchange id or timestamp elsewhere in the
+///    struct cannot trip it.
+fn leak(shown: &str, secret: &[u8]) -> Option<&'static str> {
+    use core::fmt::Write as _;
+
+    let squeezed: String = shown.chars().filter(|c| !c.is_whitespace()).collect();
+    for which in 0..5 {
+        let list = secret
+            .iter()
+            .map(|&b| byte_tokens(b)[which].clone())
+            .collect::<Vec<_>>()
+            .join(",");
+        if squeezed.contains(&list) {
+            return Some("a secret's Debug byte list leaked");
+        }
+    }
+
+    let run = secret.iter().fold(String::new(), |mut run, b| {
+        // Writing into a `String` cannot fail, so the `fmt::Result` is moot.
+        let _ = write!(run, "{b:02x}");
+        run
+    });
+    if shown.contains(&run) || shown.contains(&run.to_uppercase()) {
+        return Some("a secret leaked as a run of hex digits");
+    }
+
+    for line in shown.lines() {
+        let line = line.trim();
+        let line = line.strip_suffix(',').unwrap_or(line);
+        if secret
+            .iter()
+            .any(|&b| byte_tokens(b).iter().any(|t| t == line))
+        {
+            return Some("a secret byte leaked on its own line");
+        }
+    }
+    None
+}
+
+/// Panic (with a static message) if `shown` carries any rendering of
+/// `secret`. Never prints `shown` or `secret`.
+fn assert_hidden(shown: &str, secret: &[u8]) {
+    if let Some(what) = leak(shown, secret) {
+        panic!("{what}");
+    }
+}
+
+/// Every `Debug` flavour of `value`: plain, pretty, and the four hex-integer
+/// flag combinations, which a derive pushes down into a byte list.
+fn renderings<T: core::fmt::Debug>(value: &T) -> [String; 6] {
+    [
+        format!("{value:?}"),
+        format!("{value:#?}"),
+        format!("{value:x?}"),
+        format!("{value:X?}"),
+        format!("{value:#x?}"),
+        format!("{value:#X?}"),
+    ]
+}
+
+#[test]
+fn leak_detector_catches_every_layout() {
+    // The detector is only worth something if it fires. Feed it the raw
+    // secret in every layout `Debug` has, and check it notices each one.
+    let secret = synthetic_bytes(0xC0);
+    for shown in renderings(&secret)
+        .iter()
+        .chain(&renderings(&secret.to_vec()))
+    {
+        assert!(leak(shown, &secret).is_some(), "a layout went unnoticed");
+    }
+
+    // The gap this detector closes: the pretty layout puts every element on
+    // its own line, so a plain substring search for `192, 193` misses it.
+    let pretty = format!("{secret:#?}");
+    assert!(!pretty.contains("192, 193"), "the pretty layout changed");
+    assert!(leak(&pretty, &secret).is_some(), "the pretty layout leaked");
+
+    // A single escaped byte is still a leak.
+    let one = format!("{:#?}", vec![secret[5]]);
+    assert!(leak(&one, &secret).is_some(), "a lone byte went unnoticed");
+    let one_hex = format!("{:#x?}", vec![secret[5]]);
+    assert!(leak(&one_hex, &secret).is_some(), "a lone hex byte");
+
+    // No false positives from a length placeholder or a named field that
+    // happens to hold one of the byte values.
+    assert!(
+        leak("payload: \"<16 bytes>\"", &secret).is_none(),
+        "placeholder"
+    );
+    assert!(
+        leak("Foo {\n    exchange_id: 192,\n}", &secret).is_none(),
+        "a named field is not a leaked byte"
+    );
+}
 
 /// A synthetic 16-byte key whose renderings cannot occur by accident: the
 /// bytes are `0xC0..=0xCF`, so the decimal list is `192, 193, …, 207` and the
 /// hex list is `c0, c1, …, cf`. Nothing else in these structs prints like that.
 fn synthetic_key() -> [u8; 16] {
-    core::array::from_fn(|i| {
-        // `i < 16`, so the cast is lossless and the sum stays below 0xD0.
-        #[allow(clippy::cast_possible_truncation)]
-        let offset = i as u8;
-        0xC0 + offset
-    })
+    synthetic_bytes(0xC0)
 }
 
 /// Assert that `shown` (a `{:?}`-family rendering) carries the `"<redacted>"`
-/// placeholder and none of `key`'s renderings: its `Debug` byte list (decimal,
-/// as `[u8]` prints), that list in hex (`{:x?}`, both cases), and the bytes as
-/// one run of hex digits (both cases). Never prints `shown` or `key`.
+/// placeholder and none of `key`'s renderings: its byte list in either the
+/// compact or the pretty (`{:#?}`) layout and in any integer format, the
+/// bytes as one run of hex digits, or any one byte alone on a line. Never
+/// prints `shown` or `key`.
 fn assert_redacted(shown: &str, key: &[u8]) {
-    use core::fmt::Write as _;
-
     assert!(
         shown.contains("\"<redacted>\""),
         "the placeholder is missing"
     );
-
-    let decimal = format!("{key:?}");
-    let decimal = decimal.trim_start_matches('[').trim_end_matches(']');
-    assert!(!shown.contains(decimal), "the key's Debug byte list leaked");
-
-    let hex_lower = format!("{key:x?}");
-    let hex_lower = hex_lower.trim_start_matches('[').trim_end_matches(']');
-    assert!(
-        !shown.contains(hex_lower),
-        "the key's {{:x?}} byte list leaked"
-    );
-    let hex_upper = format!("{key:X?}");
-    let hex_upper = hex_upper.trim_start_matches('[').trim_end_matches(']');
-    assert!(
-        !shown.contains(hex_upper),
-        "the key's {{:X?}} byte list leaked"
-    );
-
-    let run = key.iter().fold(String::new(), |mut run, b| {
-        // Writing into a `String` cannot fail, so the `fmt::Result` is moot.
-        let _ = write!(run, "{b:02x}");
-        run
-    });
-    assert!(!shown.contains(&run), "the key leaked as lowercase hex");
-    assert!(
-        !shown.contains(&run.to_uppercase()),
-        "the key leaked as uppercase hex"
-    );
+    assert_hidden(shown, key);
 }
 
 /// Check every `Debug` flavour of `value`: plain, alternate (`{:#?}`) and the
-/// hex-integer flags (`{:x?}` / `{:X?}`), which the derive would have pushed
-/// down into the key's byte list.
+/// four hex-integer flag combinations (`{:x?}`, `{:X?}`, `{:#x?}`,
+/// `{:#X?}`), which the derive would have pushed down into the key's byte
+/// list.
 fn assert_all_renderings_redacted<T: core::fmt::Debug>(value: &T, key: &[u8]) {
-    assert_redacted(&format!("{value:?}"), key);
-    assert_redacted(&format!("{value:#?}"), key);
-    assert_redacted(&format!("{value:x?}"), key);
-    assert_redacted(&format!("{value:X?}"), key);
+    for shown in renderings(value) {
+        assert_redacted(&shown, key);
+    }
 }
 
 #[test]
@@ -137,4 +249,87 @@ fn redaction_reaches_through_containers() {
     assert_all_renderings_redacted(&configs, &key);
     let registrations = vec![IcdRegistration::new(1, 2, 3, key, 0)];
     assert_all_renderings_redacted(&registrations, &key);
+}
+
+// ---- `CommissioningWindow`: the setup codes stay out of `Debug` ----------
+
+/// A valid setup passcode, distinctive in every rendering (`34567891`, hex
+/// `20f76d3`), and the codes that would carry it.
+const WINDOW_PASSCODE: u32 = 34_567_891;
+const WINDOW_MANUAL_CODE: &str = "34970112332";
+const WINDOW_QR_CODE: &str = "MT:Y.K9042C00KA0648G00";
+
+fn window(qr_code: Option<String>) -> CommissioningWindow {
+    CommissioningWindow {
+        passcode: WINDOW_PASSCODE,
+        discriminator: 0x0F00,
+        iterations: 1000,
+        salt: b"SPAKE2P Key Salt".to_vec(),
+        manual_code: WINDOW_MANUAL_CODE.to_string(),
+        qr_code,
+    }
+}
+
+/// Panic (with a static message) if `shown` carries the passcode (decimal or
+/// either hex case), the manual code, or the QR code (whole, or its payload
+/// after `MT:`). Never prints `shown`.
+fn assert_window_codes_hidden(shown: &str) {
+    for rendering in [
+        format!("{WINDOW_PASSCODE}"),
+        format!("{WINDOW_PASSCODE:x}"),
+        format!("{WINDOW_PASSCODE:X}"),
+    ] {
+        assert!(!shown.contains(&rendering), "the passcode leaked");
+    }
+    assert!(
+        !shown.contains(WINDOW_MANUAL_CODE),
+        "the manual code leaked"
+    );
+    assert!(
+        !shown.contains(WINDOW_QR_CODE.trim_start_matches("MT:")),
+        "the QR code leaked"
+    );
+}
+
+#[test]
+fn commissioning_window_debug_redacts_the_setup_codes() {
+    let window = window(Some(WINDOW_QR_CODE.to_string()));
+
+    // Same struct name, field names and field order as the old derive; the
+    // three codes become placeholders, `qr_code` keeps its `Option` shape,
+    // and the public PBKDF parameters still print.
+    assert!(
+        format!("{window:?}")
+            == "CommissioningWindow { passcode: \"<redacted>\", discriminator: 3840, \
+                iterations: 1000, salt: [83, 80, 65, 75, 69, 50, 80, 32, 75, 101, 121, \
+                32, 83, 97, 108, 116], manual_code: \"<redacted>\", \
+                qr_code: Some(\"<redacted>\") }",
+        "unexpected CommissioningWindow rendering"
+    );
+    for shown in renderings(&window) {
+        assert!(
+            shown.contains("\"<redacted>\""),
+            "the placeholder is missing"
+        );
+        assert_window_codes_hidden(&shown);
+    }
+    // The values themselves are untouched: callers still read the fields.
+    assert!(
+        window.passcode == WINDOW_PASSCODE
+            && window.manual_code == WINDOW_MANUAL_CODE
+            && window.qr_code.as_deref() == Some(WINDOW_QR_CODE),
+        "a setup code was altered"
+    );
+}
+
+#[test]
+fn commissioning_window_without_a_qr_code_prints_none() {
+    let window = window(None);
+    assert!(
+        format!("{window:?}").ends_with(", manual_code: \"<redacted>\", qr_code: None }"),
+        "a missing QR code should print as None"
+    );
+    for shown in renderings(&window) {
+        assert_window_codes_hidden(&shown);
+    }
 }

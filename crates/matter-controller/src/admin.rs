@@ -53,10 +53,17 @@ impl Default for OpenWindowOpts {
 
 /// The result of opening an enhanced commissioning window — everything a second
 /// commissioner needs to onboard the device onto its own fabric.
-#[derive(Clone, Debug)]
+///
+/// `Debug` is written by hand so that `passcode`, `manual_code` and `qr_code`
+/// print as `<redacted>` (`qr_code` keeps its `Option` shape): each one is
+/// enough to commission the device while the window is open, so none may
+/// reach a log through a stray `{:?}`. Read the fields directly to show the
+/// codes to the person who will use them.
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct CommissioningWindow {
     /// The freshly generated 27-bit setup passcode.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub passcode: u32,
     /// The full 12-bit discriminator advertised while the window is open.
     ///
@@ -76,9 +83,31 @@ pub struct CommissioningWindow {
     /// back through `matter_commissioning::setup::parse_manual_code` does
     /// **not** return [`Self::discriminator`]. That is inherent to the
     /// format (Matter Core Spec §5.1.4), not a limitation of this crate.
+    ///
+    /// Secret (it encodes the passcode): this struct's `Debug` output shows
+    /// `<redacted>` instead.
     pub manual_code: String,
     /// `MT:` QR string — `Some` only when `vendor_id`/`product_id` were supplied.
+    ///
+    /// Secret (it encodes the passcode): this struct's `Debug` output shows
+    /// `Some("<redacted>")` or `None` instead.
     pub qr_code: Option<String>,
+}
+
+impl std::fmt::Debug for CommissioningWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Same name, fields and order as the derive this replaces. The three
+        // values that carry the passcode are withheld; `qr_code` still shows
+        // whether a QR code was produced.
+        f.debug_struct("CommissioningWindow")
+            .field("passcode", &"<redacted>")
+            .field("discriminator", &self.discriminator)
+            .field("iterations", &self.iterations)
+            .field("salt", &self.salt)
+            .field("manual_code", &"<redacted>")
+            .field("qr_code", &self.qr_code.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Decoded `WindowStatus` enum8.
