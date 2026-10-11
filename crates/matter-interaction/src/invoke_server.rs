@@ -11,7 +11,12 @@ use crate::{expect_message_struct, skip_container, IM_REVISION};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// One command parsed out of an inbound `InvokeRequestMessage`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `fields_tlv` prints as its length only
+/// (`"<N bytes>"`): it is the requester's decrypted command, which for some
+/// commands carries a secret, so it must never reach a log through a stray
+/// `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct InvokedCommand {
     /// `(endpoint, cluster, command)` the requester invoked.
     pub path: CommandPath,
@@ -33,9 +38,23 @@ pub struct InvokedCommand {
     ///   through as-is and fails in your decoder with `NonAnonymousArrayTag`;
     ///   the older decode-then-re-encode path silently normalised those tags
     ///   away.
+    ///
+    /// Plaintext: this struct's `Debug` output shows only its length.
     pub fields_tlv: Vec<u8>,
     /// The `CommandRef` (`CommandDataIB` tag 2), present only in batched invokes.
     pub command_ref: Option<u16>,
+}
+
+impl core::fmt::Debug for InvokedCommand {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same name, fields and order as the derive this replaces; only the
+        // command fields' bytes are withheld.
+        f.debug_struct("InvokedCommand")
+            .field("path", &self.path)
+            .field("fields_tlv", &format!("<{} bytes>", self.fields_tlv.len()))
+            .field("command_ref", &self.command_ref)
+            .finish()
+    }
 }
 
 /// A parsed inbound `InvokeRequestMessage`.

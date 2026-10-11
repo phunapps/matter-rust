@@ -37,6 +37,8 @@
 #![forbid(unsafe_code)]
 
 mod accumulator;
+#[cfg(test)]
+mod debug_redaction_tests;
 pub mod error;
 pub mod event;
 pub mod invoke;

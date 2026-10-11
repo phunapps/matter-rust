@@ -11,13 +11,30 @@ use crate::{expect_message_struct, skip_container, IM_REVISION};
 use matter_codec::{ContainerKind, Element, Tag, TlvReader, TlvWriter, Value};
 
 /// One attribute write: a concrete path plus the pre-encoded data value.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `value_tlv` prints as its length only
+/// (`"<N bytes>"`): the value being written can be a secret (a group key, a
+/// credential), so it must never reach a log through a stray `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct AttributeWriteRequest {
     /// Concrete attribute path to write.
     pub path: AttributePath,
     /// The attribute value as a standalone anonymous-tagged TLV element
     /// (e.g. the output of a `matter-clusters` attribute encoder).
+    ///
+    /// Plaintext: this struct's `Debug` output shows only its length.
     pub value_tlv: Vec<u8>,
+}
+
+impl core::fmt::Debug for AttributeWriteRequest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same name, fields and order as the derive this replaces; only the
+        // value's bytes are withheld.
+        f.debug_struct("AttributeWriteRequest")
+            .field("path", &self.path)
+            .field("value_tlv", &format!("<{} bytes>", self.value_tlv.len()))
+            .finish()
+    }
 }
 
 /// Build a `WriteRequestMessage` for one or more concrete attribute writes.

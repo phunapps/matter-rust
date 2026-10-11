@@ -147,7 +147,12 @@ pub fn build_invoke_request_batch(commands: &[(CommandPath, &[u8])]) -> Vec<u8> 
 }
 
 /// Outcome of parsing a single-command `InvokeResponseMessage`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that a `Command`'s `fields_tlv` prints as
+/// its length only (`"<N bytes>"`): it is the device's decrypted response,
+/// which for some commands carries a secret (a Wi-Fi passphrase, a Thread
+/// dataset), so it must never reach a log through a stray `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub enum InvokeResponse {
     /// The device returned a response command. `fields_tlv` is the
     /// re-anonymised `CommandFields` struct, ready to hand to
@@ -172,10 +177,27 @@ pub enum InvokeResponse {
         ///   copied through as-is and fails in your decoder with
         ///   `NonAnonymousArrayTag`; the older decode-then-re-encode path
         ///   silently normalised those tags away.
+        ///
+        /// Plaintext: this enum's `Debug` output shows only its length.
         fields_tlv: Vec<u8>,
     },
     /// The device returned a bare status (no response command payload).
     Status(ImStatus),
+}
+
+impl core::fmt::Debug for InvokeResponse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same variant names, fields and order as the derive this replaces;
+        // only the command fields' bytes are withheld.
+        match self {
+            Self::Command { path, fields_tlv } => f
+                .debug_struct("Command")
+                .field("path", path)
+                .field("fields_tlv", &format!("<{} bytes>", fields_tlv.len()))
+                .finish(),
+            Self::Status(status) => f.debug_tuple("Status").field(status).finish(),
+        }
+    }
 }
 
 /// One parsed `InvokeResponseIB` from a batched response, with its `CommandRef`
