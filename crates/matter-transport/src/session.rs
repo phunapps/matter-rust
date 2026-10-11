@@ -309,7 +309,11 @@ pub struct EncodeOutboundOutput {
 /// message, a standalone-ack-only inbound, and a duplicate-reliable inbound
 /// for which the manager has already pre-built a standalone-ack packet to
 /// re-send.
-#[derive(Debug)]
+///
+/// `Debug` is written by hand so that an `AppMessage`'s decrypted `payload`
+/// prints as its length only (`"<N bytes>"`): it is whatever plaintext the
+/// peer sent, which can be a Wi-Fi passphrase, a Thread dataset or key
+/// material, so it must never reach a log through a stray `{:?}`.
 #[non_exhaustive]
 pub enum DecodeInboundOutput {
     /// A new application message arrived. `payload` is the bytes AFTER the
@@ -326,6 +330,7 @@ pub enum DecodeInboundOutput {
         /// Protocol opcode from the decoded protocol header.
         opcode: u8,
         /// Decrypted application payload (post-header).
+        /// Plaintext: this enum's `Debug` output shows only its length.
         payload: Vec<u8>,
     },
     /// The inbound was a standalone-ack-only message; no application bytes
@@ -351,6 +356,52 @@ pub enum DecodeInboundOutput {
         /// Fully-encrypted standalone-ack packet ready to send.
         ack_packet: Vec<u8>,
     },
+}
+
+impl core::fmt::Debug for DecodeInboundOutput {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same variant names, fields and order as the derive this replaces;
+        // only the decrypted payload's bytes are withheld. The ack packet is
+        // ciphertext, so it still prints in full.
+        match self {
+            Self::AppMessage {
+                session_id,
+                exchange_id,
+                is_initiator,
+                protocol_id,
+                opcode,
+                payload,
+            } => f
+                .debug_struct("AppMessage")
+                .field("session_id", session_id)
+                .field("exchange_id", exchange_id)
+                .field("is_initiator", is_initiator)
+                .field("protocol_id", protocol_id)
+                .field("opcode", opcode)
+                .field("payload", &format!("<{} bytes>", payload.len()))
+                .finish(),
+            Self::AckOnly {
+                session_id,
+                exchange_id,
+                acked_counter,
+            } => f
+                .debug_struct("AckOnly")
+                .field("session_id", session_id)
+                .field("exchange_id", exchange_id)
+                .field("acked_counter", acked_counter)
+                .finish(),
+            Self::DuplicateReliableAckResent {
+                session_id,
+                exchange_id,
+                ack_packet,
+            } => f
+                .debug_struct("DuplicateReliableAckResent")
+                .field("session_id", session_id)
+                .field("exchange_id", exchange_id)
+                .field("ack_packet", ack_packet)
+                .finish(),
+        }
+    }
 }
 
 /// Default cap on the number of concurrently-registered secured sessions.
@@ -1615,63 +1666,30 @@ mod tests {
     // assertion below prints a rendering or a key on failure: a failing
     // redaction would print the very bytes it failed to hide.
 
+    use crate::debug_redaction_tests::{assert_hidden, renderings, synthetic_bytes};
+
     /// Sixteen distinct bytes starting at `first`, so each key's decimal and
     /// hex renderings are unique within a `Session`'s `Debug` output.
     fn synthetic_key(first: u8) -> [u8; 16] {
-        core::array::from_fn(|i| {
-            // `i < 16` and every `first` used below is at most 0xE0, so the
-            // cast is lossless and the sum cannot overflow.
-            #[allow(clippy::cast_possible_truncation)]
-            let offset = i as u8;
-            first + offset
-        })
+        synthetic_bytes(first)
     }
 
     /// Assert that `shown` carries `"<redacted>"` and none of `key`'s
-    /// renderings: the decimal `Debug` byte list, the `{:x?}`/`{:X?}` lists,
-    /// and the bytes as one run of hex digits. Never prints `shown` or `key`.
+    /// renderings (see `debug_redaction_tests::leak`: byte lists in either
+    /// layout, hex runs, and lone bytes on their own `{:#?}` line). Never
+    /// prints `shown` or `key`.
     fn assert_key_absent(shown: &str, key: &[u8]) {
-        use core::fmt::Write as _;
-
         assert!(
             shown.contains("\"<redacted>\""),
             "the placeholder is missing"
         );
-        let decimal = format!("{key:?}");
-        let decimal = decimal.trim_start_matches('[').trim_end_matches(']');
-        assert!(!shown.contains(decimal), "a key's Debug byte list leaked");
-        let hex_lower = format!("{key:x?}");
-        let hex_lower = hex_lower.trim_start_matches('[').trim_end_matches(']');
-        assert!(
-            !shown.contains(hex_lower),
-            "a key's {{:x?}} byte list leaked"
-        );
-        let hex_upper = format!("{key:X?}");
-        let hex_upper = hex_upper.trim_start_matches('[').trim_end_matches(']');
-        assert!(
-            !shown.contains(hex_upper),
-            "a key's {{:X?}} byte list leaked"
-        );
-        let run = key.iter().fold(String::new(), |mut run, b| {
-            // Writing into a `String` cannot fail, so the `fmt::Result` is moot.
-            let _ = write!(run, "{b:02x}");
-            run
-        });
-        assert!(!shown.contains(&run), "a key leaked as lowercase hex");
-        assert!(
-            !shown.contains(&run.to_uppercase()),
-            "a key leaked as uppercase hex"
-        );
+        assert_hidden(shown, key);
     }
 
-    /// Every `Debug` flavour of `value` hides all three keys.
+    /// Every `Debug` flavour of `value` (plain, pretty and the four hex
+    /// flag combinations) hides all three keys.
     fn assert_keys_absent<T: core::fmt::Debug>(value: &T, keys: &[[u8; 16]; 3]) {
-        for shown in [
-            format!("{value:?}"),
-            format!("{value:#?}"),
-            format!("{value:x?}"),
-            format!("{value:X?}"),
-        ] {
+        for shown in renderings(value) {
             for key in keys {
                 assert_key_absent(&shown, key);
             }
@@ -1739,5 +1757,16 @@ mod tests {
             "Session does not print its keys through the redacting Debug"
         );
         assert_keys_absent(session, &keys);
+
+        // The manager derives `Debug` and prints its whole session table, so
+        // a `{:?}` of the manager reached the same keys.
+        assert!(
+            format!("{mgr:?}").contains(
+                "keys: SessionKeys { i2r_key: \"<redacted>\", \
+                 r2i_key: \"<redacted>\", attestation_key: \"<redacted>\" }"
+            ),
+            "SessionManager does not print its sessions through the redacting Debug"
+        );
+        assert_keys_absent(&mgr, &keys);
     }
 }

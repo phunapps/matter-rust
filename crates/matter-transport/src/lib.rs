@@ -52,6 +52,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod debug_redaction_tests;
 pub mod discovery;
 pub mod error;
 pub mod framing;

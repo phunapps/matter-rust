@@ -394,7 +394,11 @@ pub enum MrpEvent {
 }
 
 /// Outcome of processing an inbound decrypted payload through MRP.
-#[derive(Debug)]
+///
+/// `Debug` is written by hand so that an `AppMessage`'s decrypted `payload`
+/// prints as its length only (`"<N bytes>"`): it is whatever plaintext the
+/// peer sent, which can be a Wi-Fi passphrase, a Thread dataset or key
+/// material, so it must never reach a log through a stray `{:?}`.
 #[non_exhaustive]
 pub enum InboundOutcome {
     /// A new application message was received. `payload` is the bytes
@@ -409,6 +413,7 @@ pub enum InboundOutcome {
         /// Protocol opcode from the decoded protocol header.
         opcode: u8,
         /// Decrypted application payload (post-header).
+        /// Plaintext: this enum's `Debug` output shows only its length.
         payload: Vec<u8>,
     },
     /// The inbound message was an ack-only standalone (no app payload).
@@ -428,6 +433,47 @@ pub enum InboundOutcome {
         /// Whether the local side originated the exchange.
         is_local_initiator: bool,
     },
+}
+
+impl core::fmt::Debug for InboundOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same variant names, fields and order as the derive this replaces;
+        // only the decrypted payload's bytes are withheld.
+        match self {
+            Self::AppMessage {
+                exchange_id,
+                is_initiator,
+                protocol_id,
+                opcode,
+                payload,
+            } => f
+                .debug_struct("AppMessage")
+                .field("exchange_id", exchange_id)
+                .field("is_initiator", is_initiator)
+                .field("protocol_id", protocol_id)
+                .field("opcode", opcode)
+                .field("payload", &format!("<{} bytes>", payload.len()))
+                .finish(),
+            Self::AckOnly {
+                exchange_id,
+                acked_counter,
+            } => f
+                .debug_struct("AckOnly")
+                .field("exchange_id", exchange_id)
+                .field("acked_counter", acked_counter)
+                .finish(),
+            Self::DuplicateReliable {
+                exchange_id,
+                peer_counter,
+                is_local_initiator,
+            } => f
+                .debug_struct("DuplicateReliable")
+                .field("exchange_id", exchange_id)
+                .field("peer_counter", peer_counter)
+                .field("is_local_initiator", is_local_initiator)
+                .finish(),
+        }
+    }
 }
 
 /// Output of [`MrpState::prepare_outbound`]: the encoded wire payload
