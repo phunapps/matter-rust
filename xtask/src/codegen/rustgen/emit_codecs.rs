@@ -384,12 +384,18 @@ fn entry_metatype(entry: &str, dts: &DatatypeMap<'_>) -> &'static str {
     if rust == "f32" || rust == "f64" {
         return "float";
     }
+    // list<boolean> elements are TLV Bool (put_bool / Value::Bool), not an
+    // unsigned integer. No list<boolean> exists in the model today.
+    if rust == "bool" {
+        return "boolean";
+    }
     "integer"
 }
 
-/// How a list's scalar elements are written: the iterator call on the list
-/// (`iter_call`, appended to the list expression as `list.<iter_call>`) and the
-/// `put` statement for one element bound to `el`, at an anonymous tag.
+/// How a list's scalar elements are written, as `(iter, put)`: the iterator
+/// call on the list (`iter`, appended to the list expression as
+/// `list.<iter>`) and the `put` statement for one element bound to `el`, at an
+/// anonymous tag.
 ///
 /// Integers, enums, bitmaps, booleans and floats are `Copy`, so the list is
 /// iterated by value (`iter().copied()`) and `el` is the value itself. A byte
@@ -789,8 +795,9 @@ fn emit_field_write(s: &mut String, f: &FieldDef, var: &str, dts: &DatatypeMap<'
 /// Emit the write for a list-typed command request field (e.g.
 /// `AtomicRequest.AttributeRequests = list<attrib-id>`, or
 /// `ReviewFabricRestrictions.Arl = list<struct>`): open an array container at
-/// the context tag, write each element at an anonymous tag — a Copy scalar
-/// inline, or a nested struct via its (recursive) `write_fields` — then close.
+/// the context tag, write each element at an anonymous tag — a scalar inline
+/// ([`list_scalar_element_write`]), or a nested struct via its (recursive)
+/// `write_fields` — then close.
 fn emit_list_field_write(
     s: &mut String,
     f: &FieldDef,
@@ -801,8 +808,9 @@ fn emit_list_field_write(
     let entry = f.entry_type.as_deref().unwrap_or("octstr");
     let entry_meta = entry_metatype(entry, dts);
     // Per-element emission differs for struct vs scalar entries: a struct is
-    // written as an anonymous container via its (recursive) write_fields; a Copy
-    // scalar is written inline. Iterate structs by reference, scalars by value.
+    // written as an anonymous container via its (recursive) write_fields; a
+    // scalar is written inline. Structs, byte strings and strings are iterated
+    // by reference; Copy scalars by value (list_scalar_element_write).
     // Here the writer is `let mut w` (command-encode body), so calls take `&mut w`.
     let open = |s: &mut String, expr: &str| {
         line!(
@@ -1329,7 +1337,9 @@ fn emit_field_write_self(s: &mut String, f: &FieldDef, dts: &DatatypeMap<'_>) {
     let var = field_ident(&f.name);
     let tag = format!("Tag::Context({})", f.id);
     // List (array) fields: open an array at the context tag, write each element
-    // at an anonymous tag — a Copy scalar, or a nested struct via write_fields.
+    // at an anonymous tag — a scalar (list_scalar_element_write: Copy scalars by
+    // value, byte strings and strings by reference), or a nested struct via
+    // write_fields.
     // (Only reached for command-encode-reachable structs; scalar-only structs
     // have no array fields. Nullable/optional list fields on an encoded struct
     // are YAGNI — none in A2.5 — so a guarded list is a compile_error.) Inside
@@ -1931,6 +1941,21 @@ mod tests {
         assert!(
             s.contains("value: Value::Float(v) }) => f_value = Some(Nullable::Value(v))"),
             "{s}"
+        );
+    }
+
+    #[test]
+    fn entry_metatype_classifies_boolean_elements() {
+        // A list<boolean> element is a TLV Bool, not an unsigned integer
+        // (M9-A3 B5 Task 1 minor: without this arm a future list<boolean>
+        // would encode each element with put_uint).
+        let dts: DatatypeMap<'_> = HashMap::new();
+        assert_eq!(entry_metatype("bool", &dts), "boolean");
+        let (iter, put) = list_scalar_element_write("boolean", "bool", &dts);
+        assert_eq!(iter, "iter().copied()");
+        assert_eq!(
+            put,
+            "w.put_bool(Tag::Anonymous, el).expect(\"infallible: vec writer\");"
         );
     }
 

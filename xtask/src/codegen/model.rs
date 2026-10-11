@@ -5,8 +5,9 @@
 //! skip. The semantic checks here (unknown type strings, duplicate IDs,
 //! dangling response IDs, dangling type references, and `mandatoryOnWrite`
 //! appearing anywhere but an optional fabric-sensitive field of a
-//! fabric-scoped struct, a class-C `meta.relaxed` entry on a field we
-//! encode, and a `requiredWhen` naming no sibling field) are the Rust-side
+//! fabric-scoped struct, a class-C `meta.relaxed` entry or a class-P one
+//! without `mandatoryOnWrite` (`FIELD_RELAXATIONS`) on a field we encode, and
+//! a `requiredWhen` naming no sibling field) are the Rust-side
 //! half of the contract the dump script enforces on the JS side.
 
 use serde::Deserialize;
@@ -453,7 +454,8 @@ pub fn validate(model: &Model) -> Result<(), String> {
         }
         check_supplemented(c)?;
     }
-    check_conditional_relaxations(model)
+    check_conditional_relaxations(model)?;
+    check_chip_omits_relaxations(model)
 }
 
 /// Every supplemented element ([`Supplemented`]) must belong to a feature of
@@ -586,6 +588,97 @@ fn check_conditional_relaxations(model: &Model) -> Result<(), String> {
                 "{at}: class-C meta.relaxed entry names no command, event or struct field of {}; {FIX_AT}",
                 c.name
             ));
+        }
+    }
+    Ok(())
+}
+
+/// A class-P relaxation whose field does not carry `mandatoryOnWrite` is a
+/// `FIELD_RELAXATIONS` entry (M9-A3 B5: a field chip's servers do not send,
+/// such as Messages' `FabricIndex`), not a §5.4 fabric-sensitive one. No
+/// encoder guard backs it, so, like class C, it is safe only on a field we
+/// **decode**: a request command field, or a field of a struct the emitter
+/// encodes ([`encoded_struct_names`](crate::codegen::rustgen::emit_codecs::encoded_struct_names)),
+/// would let an encoder silently omit a field the model makes mandatory. The
+/// dump refuses the same on regeneration (`dumpField`,
+/// `checkConditionalRelaxations`); this is the Rust-side twin, run on every
+/// `codegen --check`. An entry naming no generated field is an error too, so
+/// a stale entry cannot disable the check. A §5.4 entry (its field carries
+/// `mandatoryOnWrite`) is checked by [`check_struct_write_marker`] instead.
+fn check_chip_omits_relaxations(model: &Model) -> Result<(), String> {
+    const FIX_AT: &str = "class-P entries without mandatoryOnWrite come from FIELD_RELAXATIONS in \
+        xtask/scripts/dump-model/index.js: remove or fix the entry there and regenerate, not clusters.json";
+    let relaxed: Vec<Relaxation> = match model.meta.get("relaxed") {
+        None => Vec::new(),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| format!("meta.relaxed: malformed entry: {e}"))?,
+    };
+    for r in relaxed.iter().filter(|r| r.class == "P") {
+        let at = format!("{}.{}", r.cluster, r.element);
+        let c = model
+            .clusters
+            .iter()
+            .find(|c| c.name == r.cluster)
+            .ok_or_else(|| {
+                format!(
+                    "{at}: class-P meta.relaxed entry names {}, not a generated cluster; {FIX_AT}",
+                    r.cluster
+                )
+            })?;
+        let (owner, field) = r.element.split_once('.').ok_or_else(|| {
+            format!("{at}: class-P meta.relaxed element is not <Owner>.<Field>; {FIX_AT}")
+        })?;
+        // `Some(mandatory_on_write)` when `fields` has the named field.
+        let find = |fields: &[FieldDef]| {
+            fields
+                .iter()
+                .find(|f| f.name == field)
+                .map(|f| f.mandatory_on_write)
+        };
+        // Every place the field could live: its `mandatoryOnWrite`, and why we
+        // send it (`None`: decode-only).
+        let encoded = crate::codegen::rustgen::emit_codecs::encoded_struct_names(c);
+        let mut found: Vec<(bool, Option<String>)> = Vec::new();
+        for cmd in c.commands.iter().filter(|cmd| cmd.name == owner) {
+            if let Some(f) = find(&cmd.fields) {
+                let sent =
+                    (cmd.direction == "request").then(|| "a request command field".to_string());
+                found.push((f, sent));
+            }
+        }
+        for ev in c.events.iter().filter(|ev| ev.name == owner) {
+            if let Some(f) = find(&ev.fields) {
+                found.push((f, None));
+            }
+        }
+        for d in c
+            .datatypes
+            .iter()
+            .filter(|d| d.kind == "struct" && d.name == owner)
+        {
+            if let Some(f) = find(&d.fields) {
+                let sent = encoded
+                    .contains(d.name.as_str())
+                    .then(|| format!("a field of {owner}, which the emitter encodes"));
+                found.push((f, sent));
+            }
+        }
+        if found.is_empty() {
+            return Err(format!(
+                "{at}: class-P meta.relaxed entry names no command, event or struct field of {}; {FIX_AT}",
+                c.name
+            ));
+        }
+        for (mandatory_on_write, sent) in found {
+            if mandatory_on_write {
+                continue; // §5.4: encoders refuse None (check_struct_write_marker).
+            }
+            if let Some(sent) = sent {
+                return Err(format!(
+                    "{at}: class-P relaxation without mandatoryOnWrite (a field chip does not send, dumped optional) \
+                     of {sent}; its encoder could omit a field the model makes mandatory — review it; {FIX_AT}"
+                ));
+            }
         }
     }
     Ok(())
@@ -1053,11 +1146,91 @@ mod tests {
     }
 
     #[test]
-    fn other_relaxation_classes_are_not_checked_here() {
-        // Class P (fabric-sensitive, mandatoryOnWrite-guarded) legitimately
-        // sits on encoded struct fields; only class C is decode-only.
+    fn a_widening_relaxation_is_not_checked_here() {
+        // Class W (a recorded type widening of an attribute) has no
+        // <Owner>.<Field> element; neither field check applies to it.
         let mut m = relaxed_model("ScalarStruct.Label");
+        m.meta["relaxed"][0]["class"] = serde_json::json!("W");
+        assert_eq!(validate(&m), Ok(()));
+    }
+
+    // ---- class-P relaxations without mandatoryOnWrite are decode-only -----
+    // (M9-A3 B5 fix wave, T7 I1: the Rust twin of the dump's
+    // FIELD_RELAXATIONS check.)
+
+    /// [`relaxed_model`] with its one entry made class P (no
+    /// `mandatoryOnWrite` on any field): a `FIELD_RELAXATIONS` entry.
+    fn chip_omits_model(element: &str) -> Model {
+        let mut m = relaxed_model(element);
         m.meta["relaxed"][0]["class"] = serde_json::json!("P");
+        m
+    }
+
+    #[test]
+    fn rejects_a_chip_omits_relaxation_of_an_encoded_struct_field() {
+        // Negative control for the check: ScalarStruct is encoded (a writable
+        // attribute carries it), so relaxing Label would let its encoder omit it.
+        let err = validate(&chip_omits_model("ScalarStruct.Label")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ScalarStruct.Label") && err.contains("encodes"),
+            "got: {err}"
+        );
+        // Points at FIELD_RELAXATIONS, not at clusters.json.
+        assert!(
+            err.contains("FIELD_RELAXATIONS in xtask/scripts/dump-model/index.js")
+                && err.contains("not clusters.json"),
+            "got: {err}"
+        );
+        let err = validate(&chip_omits_model("SentStruct.Label")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.SentStruct.Label") && err.contains("encodes"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_chip_omits_relaxation_of_a_request_command_field() {
+        let err = validate(&chip_omits_model("ChangeToMode.NewMode")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ChangeToMode.NewMode") && err.contains("request command"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_chip_omits_relaxation_of_a_decoded_field() {
+        for element in [
+            "ChangeToModeResponse.StatusText",
+            "ModeChanged.NewMode",
+            "ReadStruct.Label",
+        ] {
+            assert_eq!(validate(&chip_omits_model(element)), Ok(()), "{element}");
+        }
+    }
+
+    #[test]
+    fn rejects_a_class_p_relaxation_naming_no_field() {
+        let err = validate(&chip_omits_model("ReadStruct.NoSuchField")).unwrap_err();
+        assert!(
+            err.contains("RvcRunMode.ReadStruct.NoSuchField") && err.contains("names no"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_fabric_sensitive_relaxation_of_an_encoded_struct_field() {
+        // Class P with mandatoryOnWrite (§5.4) legitimately sits on an encoded
+        // struct: its encoder refuses None instead of omitting the field.
+        let mut m = chip_omits_model("ScalarStruct.Label");
+        let scalar = &mut m.clusters[0].datatypes[0];
+        assert_eq!(scalar.name, "ScalarStruct");
+        scalar.fields[0].fabric_sensitive = true;
+        scalar.fields[0].mandatory_on_write = true;
+        scalar.fields.push(
+            serde_json::from_value(serde_json::json!({ "id": 254, "name": "FabricIndex",
+                "type": "fabric-idx", "metatype": "integer", "nullable": false, "optional": false }))
+            .unwrap(),
+        );
         assert_eq!(validate(&m), Ok(()));
     }
 
