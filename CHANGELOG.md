@@ -535,6 +535,37 @@ How each of these clusters was validated:
   Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
   rendering differs (it was never a stable format).
 
+### matter-controller: Fixed (security) — group and ICD keys stay out of `Debug` output
+
+- `GroupKeySet` (`epoch_key`), `GroupKeySetConfig` (`epoch_key`) and
+  `IcdRegistration` (`key`, the ICD Check-In key) derived `Debug`, so a `{:?}`
+  log of one printed its 16-byte symmetric key in full. Anyone holding a group
+  epoch key can read and forge that group's traffic; anyone holding a Check-In
+  key can forge that device's Check-In messages. All three types have leaked
+  this way in every published release, `0.1.0` through `0.18.1`. Each key now
+  prints as `<redacted>`; every other field prints as before, under the same
+  names and in the same order.
+- Not a breaking change: each type keeps the same traits (`Clone`, `Debug`,
+  `PartialEq`, `Eq`; `Debug` is now written by hand instead of derived), and
+  its fields, constructors and persisted snapshot bytes are unchanged. Only the
+  `{:?}` rendering differs (it was never a stable format). `FabricEntry`'s
+  `Debug` already printed only the number of key sets and registrations it
+  holds, so a `{:?}` of a whole fabric did not leak these keys.
+
+### matter-transport: Fixed (security) — session keys stay out of `Debug` output
+
+- `SessionKeys` derived `Debug`, and `Session` derives `Debug` and prints its
+  `keys` field, so a `{:?}` log of either printed the session's
+  initiator-to-responder and responder-to-initiator AES-CCM keys and its
+  attestation challenge in full. That was enough to decrypt and forge the
+  session's traffic. `SessionKeys` has leaked this way in every published
+  release, `0.1.0` through `0.7.3`. Its three fields now print as
+  `<redacted>`, under the same names and in the same order, and a `Session`
+  prints them that way too.
+- Not a breaking change: `SessionKeys` keeps the same traits (`Clone`,
+  `Debug`, `PartialEq`, `Eq`; `Debug` is now written by hand), and its
+  fields and the wire bytes are unchanged.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

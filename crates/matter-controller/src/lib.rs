@@ -132,6 +132,8 @@ pub mod builder;
 pub(crate) mod commission;
 pub mod controller;
 pub(crate) mod credentials;
+#[cfg(test)]
+mod debug_redaction_tests;
 pub mod error;
 pub mod fabric;
 pub(crate) mod fabric_info;

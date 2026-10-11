@@ -23,15 +23,31 @@ use crate::error::Error;
 /// `#[non_exhaustive]`: persisted record whose shape may grow (e.g. key policy
 /// epoch, security level flags); marking it keeps such additions non-breaking.
 /// Construct via [`GroupKeySetConfig::new`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `epoch_key` prints as `<redacted>`, as
+/// [`FabricEntry`]'s `Debug` already withholds the key sets it holds.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GroupKeySetConfig {
     /// Group Key Set ID (`GrpKeySetID`, 16-bit, spec §4.15).
     pub key_set_id: u16,
     /// 16-byte epoch key (`EpochKey0` / `EpochKey1` / `EpochKey2` per policy).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub epoch_key: [u8; 16],
     /// Epoch key start time in Matter epoch seconds (0 = unset / pre-operational).
     pub epoch_start_time: u64,
+}
+
+impl std::fmt::Debug for GroupKeySetConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Same name, fields and order as the derive this replaces; only the
+        // key's value is withheld.
+        f.debug_struct("GroupKeySetConfig")
+            .field("key_set_id", &self.key_set_id)
+            .field("epoch_key", &"<redacted>")
+            .field("epoch_start_time", &self.epoch_start_time)
+            .finish()
+    }
 }
 
 impl GroupKeySetConfig {

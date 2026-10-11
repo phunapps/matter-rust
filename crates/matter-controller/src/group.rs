@@ -35,15 +35,32 @@ pub(crate) const SECURITY_POLICY_TRUST_FIRST: u64 = 0;
 ///
 /// Only a single epoch key (key0) is populated; keys 1 and 2 are left as
 /// `Null` per the single-epoch provisioning pattern used by most controllers.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `epoch_key` prints as `<redacted>`:
+/// anyone holding the epoch key can read and forge the group's traffic, so it
+/// must never reach a log through a stray `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GroupKeySet {
     /// Key set id (must be ≥ 1; 0 is reserved for the IPK).
     pub key_set_id: u16,
     /// 16-byte epoch key (the group's symmetric key material).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub epoch_key: Vec<u8>,
     /// Epoch start time (Matter epoch microseconds).
     pub epoch_start_time: u64,
+}
+
+impl std::fmt::Debug for GroupKeySet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Same name, fields and order as the derive this replaces; only the
+        // key's value is withheld.
+        f.debug_struct("GroupKeySet")
+            .field("key_set_id", &self.key_set_id)
+            .field("epoch_key", &"<redacted>")
+            .field("epoch_start_time", &self.epoch_start_time)
+            .finish()
+    }
 }
 
 impl GroupKeySet {

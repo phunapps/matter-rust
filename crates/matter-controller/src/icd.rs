@@ -34,7 +34,11 @@ impl IcdClientType {
 /// A persisted ICD client registration — the controller registered itself as a
 /// check-in client with the device `node_id`, and holds the shared key needed to
 /// verify that device's Check-In messages.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that `key` prints as `<redacted>`: anyone
+/// holding it can forge this device's Check-In messages, so it must never
+/// reach a log through a stray `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct IcdRegistration {
     /// The ICD device this registration is with.
@@ -44,10 +48,25 @@ pub struct IcdRegistration {
     /// The subject the ICD monitors on our behalf (typically our node id).
     pub monitored_subject: u64,
     /// The 16-byte symmetric key protecting this device's Check-In messages.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub key: [u8; 16],
     /// The device's `ICDCounter` at registration time — the floor for the
     /// monotonicity (replay) check on inbound Check-Ins.
     pub start_counter: u32,
+}
+
+impl std::fmt::Debug for IcdRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Same name, fields and order as the derive this replaces; only the
+        // key's value is withheld.
+        f.debug_struct("IcdRegistration")
+            .field("node_id", &self.node_id)
+            .field("check_in_node_id", &self.check_in_node_id)
+            .field("monitored_subject", &self.monitored_subject)
+            .field("key", &"<redacted>")
+            .field("start_counter", &self.start_counter)
+            .finish()
+    }
 }
 
 impl IcdRegistration {

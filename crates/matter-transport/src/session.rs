@@ -45,14 +45,34 @@ pub enum SessionRole {
 }
 
 /// Symmetric key material for a single Matter session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is written by hand so that every key prints as `<redacted>`:
+/// [`Session`] derives `Debug` and prints this struct, and the keys decrypt
+/// and forge the session's traffic, so they must never reach a log through a
+/// stray `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionKeys {
     /// Encrypts traffic flowing initiator → responder.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub i2r_key: [u8; 16],
     /// Encrypts traffic flowing responder → initiator.
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub r2i_key: [u8; 16],
     /// Attestation challenge key (PASE) / attestation challenge (CASE).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub attestation_key: [u8; 16],
+}
+
+impl core::fmt::Debug for SessionKeys {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Same name, fields and order as the derive this replaces; every
+        // field is secret, so every value is withheld.
+        f.debug_struct("SessionKeys")
+            .field("i2r_key", &"<redacted>")
+            .field("r2i_key", &"<redacted>")
+            .field("attestation_key", &"<redacted>")
+            .finish()
+    }
 }
 
 impl From<PaseSessionKeys> for SessionKeys {
@@ -1585,5 +1605,139 @@ mod tests {
         );
         assert!(m.get(idle).is_none(), "the idle session is evicted first");
         assert!(m.get(fresh).is_some());
+    }
+
+    // ---- Session keys stay out of `Debug` --------------------------------
+    //
+    // `SessionKeys` holds the session's AES-CCM keys and attestation
+    // challenge, and `Session` (which derives `Debug`) prints it, so a
+    // `{:?}` log of either must show `<redacted>` and none of the bytes. No
+    // assertion below prints a rendering or a key on failure: a failing
+    // redaction would print the very bytes it failed to hide.
+
+    /// Sixteen distinct bytes starting at `first`, so each key's decimal and
+    /// hex renderings are unique within a `Session`'s `Debug` output.
+    fn synthetic_key(first: u8) -> [u8; 16] {
+        core::array::from_fn(|i| {
+            // `i < 16` and every `first` used below is at most 0xE0, so the
+            // cast is lossless and the sum cannot overflow.
+            #[allow(clippy::cast_possible_truncation)]
+            let offset = i as u8;
+            first + offset
+        })
+    }
+
+    /// Assert that `shown` carries `"<redacted>"` and none of `key`'s
+    /// renderings: the decimal `Debug` byte list, the `{:x?}`/`{:X?}` lists,
+    /// and the bytes as one run of hex digits. Never prints `shown` or `key`.
+    fn assert_key_absent(shown: &str, key: &[u8]) {
+        use core::fmt::Write as _;
+
+        assert!(
+            shown.contains("\"<redacted>\""),
+            "the placeholder is missing"
+        );
+        let decimal = format!("{key:?}");
+        let decimal = decimal.trim_start_matches('[').trim_end_matches(']');
+        assert!(!shown.contains(decimal), "a key's Debug byte list leaked");
+        let hex_lower = format!("{key:x?}");
+        let hex_lower = hex_lower.trim_start_matches('[').trim_end_matches(']');
+        assert!(
+            !shown.contains(hex_lower),
+            "a key's {{:x?}} byte list leaked"
+        );
+        let hex_upper = format!("{key:X?}");
+        let hex_upper = hex_upper.trim_start_matches('[').trim_end_matches(']');
+        assert!(
+            !shown.contains(hex_upper),
+            "a key's {{:X?}} byte list leaked"
+        );
+        let run = key.iter().fold(String::new(), |mut run, b| {
+            // Writing into a `String` cannot fail, so the `fmt::Result` is moot.
+            let _ = write!(run, "{b:02x}");
+            run
+        });
+        assert!(!shown.contains(&run), "a key leaked as lowercase hex");
+        assert!(
+            !shown.contains(&run.to_uppercase()),
+            "a key leaked as uppercase hex"
+        );
+    }
+
+    /// Every `Debug` flavour of `value` hides all three keys.
+    fn assert_keys_absent<T: core::fmt::Debug>(value: &T, keys: &[[u8; 16]; 3]) {
+        for shown in [
+            format!("{value:?}"),
+            format!("{value:#?}"),
+            format!("{value:x?}"),
+            format!("{value:X?}"),
+        ] {
+            for key in keys {
+                assert_key_absent(&shown, key);
+            }
+        }
+    }
+
+    #[test]
+    fn session_keys_debug_redacts_every_key() {
+        let keys = [
+            synthetic_key(0xC0),
+            synthetic_key(0xD0),
+            synthetic_key(0xE0),
+        ];
+        let session_keys = SessionKeys {
+            i2r_key: keys[0],
+            r2i_key: keys[1],
+            attestation_key: keys[2],
+        };
+
+        // Same struct name, field names and order as the old derive.
+        assert!(
+            format!("{session_keys:?}")
+                == "SessionKeys { i2r_key: \"<redacted>\", r2i_key: \"<redacted>\", \
+                    attestation_key: \"<redacted>\" }",
+            "unexpected SessionKeys rendering"
+        );
+        assert_keys_absent(&session_keys, &keys);
+        // Only the rendering is hidden; the keys themselves are untouched.
+        assert!(
+            session_keys.i2r_key == keys[0]
+                && session_keys.r2i_key == keys[1]
+                && session_keys.attestation_key == keys[2],
+            "a session key was altered"
+        );
+    }
+
+    #[test]
+    fn session_debug_does_not_leak_its_keys() {
+        // `Session` derives `Debug` and prints its `keys` field, so the leak
+        // reached every `{:?}` of a live session, not just of `SessionKeys`.
+        let keys = [
+            synthetic_key(0xC0),
+            synthetic_key(0xD0),
+            synthetic_key(0xE0),
+        ];
+        let mut mgr = SessionManager::new();
+        let id = mgr.register_pase(
+            PaseSessionKeys {
+                ke: [0u8; 16],
+                i2r_key: keys[0],
+                r2i_key: keys[1],
+                attestation_key: keys[2],
+            },
+            SessionRole::Initiator,
+            1,
+            PeerHint::default(),
+        );
+        let session = mgr.get(id).expect("just registered");
+
+        assert!(
+            format!("{session:?}").contains(
+                "keys: SessionKeys { i2r_key: \"<redacted>\", \
+                 r2i_key: \"<redacted>\", attestation_key: \"<redacted>\" }"
+            ),
+            "Session does not print its keys through the redacting Debug"
+        );
+        assert_keys_absent(session, &keys);
     }
 }
