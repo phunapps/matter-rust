@@ -22,6 +22,169 @@ From `0.1.0` onward the headings mean what they say, and
 while a crate is `0.x`, a **breaking change bumps the minor version** — these
 APIs have had no outside users yet and are expected to move.
 
+## Unreleased — security patches
+
+**Not released.** These fixes stop secrets reaching logs through `{:?}`, and
+stop a withheld ACL field from being read as a wildcard. None of them changes a
+public API, so each affected crate needs only a patch release:
+
+| Crate | Current | Patch |
+|---|---|---|
+| `matter-controller` | 0.18.1 | **0.18.2** |
+| `matter-transport` | 0.7.3 | **0.7.4** |
+| `matter-commissioning` | 0.10.0 | **0.10.1** |
+| `matter-interaction` | 0.4.2 | **0.4.3** |
+| `matter-crypto` | 0.5.0 | **0.5.1** (optional: latent hardening only, nothing observable changes) |
+
+None of these crates' public APIs uses a `matter-clusters` 0.6.0-only type, so
+they can ship ahead of the 0.6.0 release below. `matter-transport`,
+`matter-interaction` and `matter-crypto` do not depend on `matter-clusters` at
+all. `matter-controller` uses only `matter_clusters::gen` paths that exist in
+0.5.0. `matter-commissioning` uses `matter-clusters` only as a dev-dependency.
+
+`matter-controller` 0.18.2 should raise its requirements to
+`matter-transport` 0.7.4, `matter-commissioning` 0.10.1 and
+`matter-interaction` 0.4.3. Otherwise an application that upgrades only the
+controller keeps the leaking `Session`, `Action` and payload `Debug` impls
+from its lockfile.
+
+Every `Debug` change below follows one pattern. The type drops `Debug` from
+its derive and gains a hand-written impl. That impl prints the same type name,
+variant names, field names, field order and struct/tuple/`Option` shapes as
+the derive did, and only the secret values change. A secret prints as
+`"<redacted>"`, and a general-purpose payload prints as its length,
+`"<N bytes>"`. The trait set is unchanged (`Debug` is still implemented, just
+not derived), and fields, constructors, persisted bytes and wire bytes are
+untouched. `{:?}` output was never a stable format, so none of this is a
+breaking change.
+
+### matter-controller: Fixed (security) — group and ICD keys stay out of `Debug` output
+
+- `GroupKeySet` (`epoch_key`), `GroupKeySetConfig` (`epoch_key`) and
+  `IcdRegistration` (`key`, the ICD Check-In key) derived `Debug`, so a `{:?}`
+  log of one printed its 16-byte symmetric key in full. Anyone holding a group
+  epoch key can read and forge that group's traffic; anyone holding a Check-In
+  key can forge that device's Check-In messages. All three types have leaked
+  this way in every published release, `0.1.0` through `0.18.1`. Each key now
+  prints as `<redacted>`; every other field prints as before, under the same
+  names and in the same order.
+- Not a breaking change: each type keeps the same traits (`Clone`, `Debug`,
+  `PartialEq`, `Eq`; `Debug` is now written by hand instead of derived), and
+  its fields, constructors and persisted snapshot bytes are unchanged. Only the
+  `{:?}` rendering differs (it was never a stable format). `FabricEntry`'s
+  `Debug` already printed only the number of key sets and registrations it
+  holds, so a `{:?}` of a whole fabric did not leak these keys.
+
+### matter-controller: Fixed (security) — commissioning-window setup codes stay out of `Debug` output
+
+- `CommissioningWindow` (the result of `Node::open_commissioning_window`)
+  derived `Debug`, so a `{:?}` printed the freshly generated setup
+  `passcode`, plus the `manual_code` and `qr_code` that both encode it. Anyone
+  who reads that log line while the window is open can commission the device
+  onto their own fabric. All three now print as `<redacted>`, and `qr_code`
+  keeps its `Option` shape (`Some("<redacted>")` or `None`). `discriminator`,
+  `iterations` and `salt` still print, because the device advertises them or
+  sends them in the clear anyway. Leaked this way in every published release,
+  `0.1.0` through `0.18.1`.
+- Read the fields directly to show the codes to the person who needs them, as
+  the `open_window` example does. The trait set (`Clone`, `Debug`) and the
+  fields are unchanged.
+
+### matter-controller: Fixed (security) — a withheld ACL Subjects/Targets is never read as a wildcard
+
+`read_acl` used to read an entry with no Subjects (or Targets) field as a
+wildcard; written back by `write_acl`, such an entry would grant its privilege
+to every CASE node on the fabric. An entry missing either field is now
+dropped, as entries missing Privilege or AuthMode already were. Present-null
+still means wildcard. Conforming devices always send both fields for the
+reader's own fabric, so their results do not change.
+
+### matter-transport: Fixed (security) — session keys stay out of `Debug` output
+
+- `SessionKeys` derived `Debug`, and `Session` derives `Debug` and prints its
+  `keys` field, so a `{:?}` log of either printed the session's
+  initiator-to-responder and responder-to-initiator AES-CCM keys and its
+  attestation challenge in full. That was enough to decrypt and forge the
+  session's traffic. `SessionKeys` has leaked this way in every published
+  release, `0.1.0` through `0.7.3`. Its three fields now print as
+  `<redacted>`, under the same names and in the same order, and a `Session`
+  prints them that way too.
+- Not a breaking change: `SessionKeys` keeps the same traits (`Clone`,
+  `Debug`, `PartialEq`, `Eq`; `Debug` is now written by hand), and its
+  fields and the wire bytes are unchanged.
+
+### matter-transport: Fixed (security) — decrypted payloads stay out of `Debug` output
+
+- `DecodeInboundOutput::AppMessage` and `InboundOutcome::AppMessage` hold the
+  decrypted application payload. Both enums derived `Debug`, so a `{:?}` of
+  either printed that plaintext byte for byte, whether it was a
+  `NetworkPassphraseResponse`, a Thread dataset or anything else the session
+  protected. The payload now prints as its length (`"<N bytes>"`). Every other
+  field and variant prints as before, including the standalone-ack packet in
+  `DuplicateReliableAckResent`, which is ciphertext. Leaked this way in every
+  published release, `0.1.0` through `0.7.3`.
+- The trait set is unchanged (`Debug` only; it is now written by hand), and so
+  are the fields and wire bytes.
+
+### matter-commissioning: Fixed (security) — the setup passcode stays out of `Debug` output
+
+- `setup::Passcode` derived `Debug`, so a `{:?}` of it, or of the
+  `SetupPayload` parsed from a QR or manual code, printed the device's setup
+  PIN. Anyone holding it can commission the device while it is
+  commissionable. It now prints `Passcode("<redacted>")`, in the same tuple
+  shape, and `SetupPayload`'s derived `Debug` hides it through that impl. Use
+  `Passcode::as_u32` when you mean to show the value. Leaked this way in every
+  published release, `0.1.0` through `0.10.0`.
+- `Passcode` keeps `Clone`, `Copy`, `Debug`, `PartialEq`, `Eq` and `Hash`.
+  Construction, validation and the setup-code encodings are unchanged.
+
+### matter-commissioning: Fixed (security) — command payloads stay out of `Debug` output
+
+- `Action` derived `Debug`, so a `{:?}` of an `Action::Invoke` printed the
+  outbound command's plaintext TLV. `AddNOC` carries the IPK,
+  `AddOrUpdateWiFiNetwork` the Wi-Fi passphrase and `AddOrUpdateThreadNetwork`
+  the Thread dataset. Every `Invoke`'s `payload` now prints as its length
+  (`"<N bytes>"`), whatever the command. There is deliberately no allow-list,
+  so a future command that carries a secret cannot be missed. Every other
+  variant (`ReadAttribute`, `EvictCase`, `EstablishCase`, `Done`, `Abort`)
+  prints exactly as before.
+- The driver's `SecuredResponse` (a decrypted response payload) gets the same
+  length-only `payload`.
+- Both leaked this way in every published release, `0.1.0` through `0.10.0`.
+  Each keeps its traits (`Action`: `Clone`, `Debug`; `SecuredResponse`:
+  `Clone`, `Debug`, `PartialEq`, `Eq`), fields and wire bytes.
+- `CommissionerConfig`, `DriverConfig` and `BleDriverConfig` hold the IPK, the
+  passcode and the commissioner's operational PKCS#8 key. They implement no
+  `Debug`, and each now carries a comment saying not to derive one, and why.
+
+### matter-interaction: Fixed (security) — command and attribute payloads stay out of `Debug` output
+
+- `InvokeResponse::Command`'s `fields_tlv` (the device's response fields),
+  `InvokedCommand`'s `fields_tlv` (an inbound command's fields) and
+  `AttributeWriteRequest`'s `value_tlv` (a value being written) hold
+  plaintext TLV. Depending on the command or attribute, that can be a Wi-Fi
+  passphrase, a Thread dataset or key material. All three types derived
+  `Debug`, so a `{:?}` printed it in full, and so did a `{:?}` of an
+  `InvokeResponseEntry` or `ParsedInvokeRequest` holding one. Each byte field
+  now prints as its length (`"<N bytes>"`), and every other field and variant
+  prints as before. Leaked this way in every published release, `0.1.0`
+  through `0.4.2`.
+- Each type keeps `Clone`, `Debug`, `PartialEq` and `Eq` (`Debug` is now
+  written by hand), and its fields and wire bytes are unchanged.
+
+### matter-crypto: Fixed (security) — PASE/CASE handshake state prints its variant name only
+
+- The private `State` enums inside `PaseProver`, `PaseVerifier`,
+  `CaseInitiator` and `CaseResponder` derived `Debug` over the handshake's
+  secrets: the PIN, `w0`/`w1` and `L`, the ephemeral scalars, the operational
+  signing key and IPK, the ECDH shared secret and the session keys. Nothing
+  formats them, and none of the four public machines implements `Debug`, so
+  this never leaked. But a `Debug` added to one of those machines later would
+  have printed every secret of an in-flight handshake. `State` now prints its
+  variant name alone (for example `AwaitingSigma1`).
+- Latent hardening of private types: no public item changes, and nothing
+  observable does either, so this release is optional.
+
 ## Unreleased — matter-clusters 0.6.0 (in progress, M9-A3)
 
 **Not released.** This section collects changes on `main` that will ship
@@ -534,46 +697,6 @@ How each of these clusters was validated:
   and CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier.
   Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
   rendering differs (it was never a stable format).
-
-### matter-controller: Fixed (security) — group and ICD keys stay out of `Debug` output
-
-- `GroupKeySet` (`epoch_key`), `GroupKeySetConfig` (`epoch_key`) and
-  `IcdRegistration` (`key`, the ICD Check-In key) derived `Debug`, so a `{:?}`
-  log of one printed its 16-byte symmetric key in full. Anyone holding a group
-  epoch key can read and forge that group's traffic; anyone holding a Check-In
-  key can forge that device's Check-In messages. All three types have leaked
-  this way in every published release, `0.1.0` through `0.18.1`. Each key now
-  prints as `<redacted>`; every other field prints as before, under the same
-  names and in the same order.
-- Not a breaking change: each type keeps the same traits (`Clone`, `Debug`,
-  `PartialEq`, `Eq`; `Debug` is now written by hand instead of derived), and
-  its fields, constructors and persisted snapshot bytes are unchanged. Only the
-  `{:?}` rendering differs (it was never a stable format). `FabricEntry`'s
-  `Debug` already printed only the number of key sets and registrations it
-  holds, so a `{:?}` of a whole fabric did not leak these keys.
-
-### matter-transport: Fixed (security) — session keys stay out of `Debug` output
-
-- `SessionKeys` derived `Debug`, and `Session` derives `Debug` and prints its
-  `keys` field, so a `{:?}` log of either printed the session's
-  initiator-to-responder and responder-to-initiator AES-CCM keys and its
-  attestation challenge in full. That was enough to decrypt and forge the
-  session's traffic. `SessionKeys` has leaked this way in every published
-  release, `0.1.0` through `0.7.3`. Its three fields now print as
-  `<redacted>`, under the same names and in the same order, and a `Session`
-  prints them that way too.
-- Not a breaking change: `SessionKeys` keeps the same traits (`Clone`,
-  `Debug`, `PartialEq`, `Eq`; `Debug` is now written by hand), and its
-  fields and the wire bytes are unchanged.
-
-### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
-
-`read_acl` used to read an entry with no Subjects (or Targets) field as a
-wildcard; written back by `write_acl`, such an entry would grant its privilege
-to every CASE node on the fabric. An entry missing either field is now
-dropped, as entries missing Privilege or AuthMode already were. Present-null
-still means wildcard. Conforming devices always send both fields for the
-reader's own fabric, so their results do not change.
 
 ## matter-transport 0.7.3 + matter-controller 0.18.1
 
