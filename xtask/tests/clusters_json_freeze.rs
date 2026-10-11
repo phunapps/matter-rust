@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 111] = [
+const TARGET_CLUSTERS: [&str; 112] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -163,6 +163,8 @@ const TARGET_CLUSTERS: [&str; 111] = [
     "MediaPlayback",
     // M9-A3 B7, ContentLauncher:
     "ContentLauncher",
+    // M9-A3 B7, Channel:
+    "Channel",
 ];
 
 fn load() -> Value {
@@ -645,6 +647,25 @@ fn field_optionality(fields: &Value) -> Vec<(&str, bool)> {
             (
                 f["name"].as_str().unwrap(),
                 f["optional"].as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// `(name, id, type, optional, nullable)` for each field of a struct: the
+/// whole wire shape of a field, for comparing a copied datatype with its owner.
+fn field_shapes(fields: &Value) -> Vec<(&str, u64, &str, bool, bool)> {
+    fields
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            (
+                f["name"].as_str().unwrap(),
+                f["id"].as_u64().unwrap(),
+                f["type"].as_str().unwrap(),
+                f["optional"].as_bool().unwrap(),
+                f["nullable"].as_bool().unwrap(),
             )
         })
         .collect()
@@ -3081,5 +3102,54 @@ fn content_launcher_keeps_its_shapes_and_copies_characteristic_enum() {
     assert_eq!(
         element_names(c, "commands"),
         ["LaunchContent", "LaunchUrl", "LauncherResponse"]
+    );
+}
+
+#[test]
+fn channel_keeps_the_specifications_field_ids_and_copies_additional_info() {
+    // 1.4.2 Channel.xml. GetProgramGuide's fields are 0-3 and 5-7 (4 is not
+    // used); chip's codegen renumbers RecordingFlag, ExternalIDList and Data
+    // to 4, 5, 6 (both refs), matter.js keeps 5, 6, 7. The ExternalIdList
+    // fields reference ContentLauncher's AdditionalInfoStruct: the dump copies
+    // it into Channel (`copiedFrom`).
+    let v = load();
+    let c = cluster(&v, "Channel");
+    let ids: Vec<u64> = command(c, "GetProgramGuide")["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, [0, 1, 2, 3, 5, 6, 7]);
+    let copied = datatype(c, "AdditionalInfoStruct");
+    assert_eq!(copied["copiedFrom"], "ContentLauncher");
+    // Every field's name, id, type, optionality and nullability: a copy that
+    // kept the names but moved an id or changed a type would encode an
+    // ExternalIdList entry differently from ContentLauncher's.
+    assert_eq!(
+        field_shapes(&copied["fields"]),
+        field_shapes(&datatype(cluster(&v, "ContentLauncher"), "AdditionalInfoStruct")["fields"])
+    );
+    // No datatype the cluster owns carries copiedFrom.
+    for d in c["datatypes"].as_array().unwrap() {
+        assert_eq!(
+            d.get("copiedFrom").is_some(),
+            d["name"] == "AdditionalInfoStruct",
+            "{}",
+            d["name"]
+        );
+    }
+    for owner in ["GetProgramGuide", "RecordProgram", "CancelRecordProgram"] {
+        let f = command(c, owner)["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "ExternalIdList")
+            .unwrap();
+        assert_eq!(f["entryType"], "AdditionalInfoStruct", "{owner}");
+    }
+    assert_eq!(
+        field_optionality(&command(c, "ProgramGuideResponse")["fields"]),
+        [("Paging", false), ("ProgramList", false)]
     );
 }

@@ -102,6 +102,7 @@
       "ThreadBorderRouterManagement",
       "ThreadNetworkDirectory",
       "WakeOnLan",
+      "Channel",
       "TargetNavigator",
       "MediaPlayback",
       "MediaInput",
@@ -36674,6 +36675,903 @@
       "commands": [],
       "events": [],
       "datatypes": []
+    },
+    {
+      "id": 1284,
+      "name": "Channel",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CL",
+          "name": "ChannelList",
+          "description": "Provides list of available channels."
+        },
+        {
+          "bit": 1,
+          "code": "LI",
+          "name": "LineupInfo",
+          "description": "Provides lineup info, which is a reference to an external source of lineup information."
+        },
+        {
+          "bit": 2,
+          "code": "EG",
+          "name": "ElectronicGuide",
+          "description": "Provides electronic program guide information."
+        },
+        {
+          "bit": 3,
+          "code": "RP",
+          "name": "RecordProgram",
+          "description": "Provides ability to record program."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "ChannelList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "ChannelInfoStruct",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall provide the list of supported channels."
+        },
+        {
+          "id": 1,
+          "name": "Lineup",
+          "type": "LineupInfoStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall identify the channel lineup using external data sources."
+        },
+        {
+          "id": 2,
+          "name": "CurrentChannel",
+          "type": "ChannelInfoStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "This attribute shall contain the current channel. When supported but a channel is not currently tuned to (if a content application is in foreground), the value of the field shall be null."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "ChangeChannel",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Match",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain a user-input string to match in order to identify the target channel."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ChangeChannelResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the status of the command which resulted in this response."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "ChangeChannelByNumber",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "MajorNumber",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel major number value (ATSC format) to which the channel should change."
+            },
+            {
+              "id": 1,
+              "name": "MinorNumber",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel minor number value (ATSC format) to which the channel should change."
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "name": "SkipChannel",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Count",
+              "type": "int16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the number of steps to increase (Count is positive) or decrease (Count is negative) the current channel."
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "name": "GetProgramGuide",
+          "direction": "request",
+          "responseId": 5,
+          "fields": [
+            {
+              "id": 0,
+              "name": "StartTime",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the beginning of the time window for which program guide entries are to be retrieved, as a UTC time. Entries with a start time on or after this value will be included in the results."
+            },
+            {
+              "id": 1,
+              "name": "EndTime",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the end of the time window for which program guide entries are to be retrieved, as a UTC time. Entries with an end time on or before this value will be included in the results. This field can represent a past or future value but shall be greater than the StartTime."
+            },
+            {
+              "id": 2,
+              "name": "ChannelList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ChannelInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the set of channels for which program guide entries should be fetched. By providing a list of channels in this field, the response will only include entries corresponding to the specified channels."
+            },
+            {
+              "id": 3,
+              "name": "PageToken",
+              "type": "PageTokenStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the pagination token used for managing pagination progression."
+            },
+            {
+              "id": 5,
+              "name": "RecordingFlag",
+              "type": "RecordingFlagBitmap",
+              "metatype": "bitmap",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the flags of the programs for which entries should be fetched."
+            },
+            {
+              "id": 6,
+              "name": "ExternalIdList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AdditionalInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the list of additional external content identifiers."
+            },
+            {
+              "id": 7,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "name": "ProgramGuideResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Paging",
+              "type": "ChannelPagingStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the necessary pagination attributes that define information for both the succeeding and preceding data pages."
+            },
+            {
+              "id": 1,
+              "name": "ProgramList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ProgramStruct",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the list of programs."
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "name": "RecordProgram",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ProgramIdentifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the program identifier for the program that should be recorded. This value is provided by the identifier field in ProgramStruct."
+            },
+            {
+              "id": 1,
+              "name": "ShouldRecordSeries",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate whether the whole series associated to the program should be recorded. For example, invoking record program on an episode with that flag set to true, the target should schedule record the whole series."
+            },
+            {
+              "id": 2,
+              "name": "ExternalIdList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AdditionalInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate the list of additional external content identifiers."
+            },
+            {
+              "id": 3,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate app-specific data."
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "name": "CancelRecordProgram",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "ProgramIdentifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the program identifier for the program that should be cancelled from recording. This value is provided by the identifier field in ProgramStruct."
+            },
+            {
+              "id": 1,
+              "name": "ShouldRecordSeries",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate whether the whole series associated to the program should be cancelled from recording. For example, invoking record program on an episode with that flag set to true, the target should schedule record the whole series."
+            },
+            {
+              "id": 2,
+              "name": "ExternalIdList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AdditionalInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate the list of additional external content identifiers."
+            },
+            {
+              "id": 3,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field, if present, shall indicate app-specific data."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "AdditionalInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines additional name=value pairs that can be used for identifying content.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of external id, ex. \"musicbrainz\"."
+            },
+            {
+              "id": 1,
+              "name": "Value",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the value for external id, ex. \"ST0000000666661\"."
+            }
+          ],
+          "copiedFrom": "ContentLauncher"
+        },
+        {
+          "name": "ChannelInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This indicates a channel in a channel lineup.\nWhile the major and minor numbers in the ChannelInfoStruct support use of ATSC channel format, a lineup may use other formats which can map into these numeric values.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "MajorNumber",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel major number value (for example, using ATSC format). When the channel number is expressed as a string, such as \"13.1\" or \"256\", the major number would be 13 or 256, respectively. This field is required but shall be set to 0 for channels such as over-the-top channels that are not represented by a major or minor number."
+            },
+            {
+              "id": 1,
+              "name": "MinorNumber",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel minor number value (for example, using ATSC format). When the channel number is expressed as a string, such as \"13.1\" or \"256\", the minor number would be 1 or 0, respectively. This field is required but shall be set to 0 for channels such as over-the-top channels that are not represented by a major or minor number."
+            },
+            {
+              "id": 2,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the marketing name for the channel, such as “The CW\" or \"Comedy Central\". This field is optional, but SHOULD be provided when known."
+            },
+            {
+              "id": 3,
+              "name": "CallSign",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the call sign of the channel, such as \"PBS\". This field is optional, but SHOULD be provided when known."
+            },
+            {
+              "id": 4,
+              "name": "AffiliateCallSign",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the local affiliate call sign, such as \"KCTS\". This field is optional, but SHOULD be provided when known."
+            },
+            {
+              "id": 5,
+              "name": "Identifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This shall indicate the unique identifier for a specific channel. This field is optional, but SHOULD be provided when MajorNumber and MinorNumber are not available."
+            },
+            {
+              "id": 6,
+              "name": "Type",
+              "type": "ChannelTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": true,
+              "description": "This shall indicate the type or grouping of a specific channel. This field is optional, but SHOULD be provided when known."
+            }
+          ]
+        },
+        {
+          "name": "ChannelPagingStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines the paging structure that includes the previous and next pagination tokens.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "PreviousToken",
+              "type": "PageTokenStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the token to retrieve the preceding page. Absence of this field denotes the response as the initial page."
+            },
+            {
+              "id": 1,
+              "name": "NextToken",
+              "type": "PageTokenStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall indicate the token to retrieve the next page. Absence of this field denotes the response as the last page."
+            }
+          ]
+        },
+        {
+          "name": "ChannelTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Satellite",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Cable",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Terrestrial",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Ott",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "LineupInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "The Lineup Info allows references to external lineup sources like Gracenote. The combination of OperatorName, LineupName, and PostalCode shall uniquely identify a lineup.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "OperatorName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of the operator, for example “Comcast”."
+            },
+            {
+              "id": 1,
+              "name": "LineupName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the name of the provider lineup, for example \"Comcast King County\". This field is optional, but SHOULD be provided when known."
+            },
+            {
+              "id": 2,
+              "name": "PostalCode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the postal code (zip code) for the location of the device, such as \"98052\". This field is optional, but SHOULD be provided when known."
+            },
+            {
+              "id": 3,
+              "name": "LineupInfoType",
+              "type": "LineupInfoTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of lineup. This field is optional, but SHOULD be provided when known."
+            }
+          ]
+        },
+        {
+          "name": "LineupInfoTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Mso",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "PageTokenStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines the pagination structure.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Limit",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the maximum number of entries that should be retrieved from the program guide in a single response. It allows clients to specify the size of the paginated result set based on their needs."
+            },
+            {
+              "id": 1,
+              "name": "After",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the cursor that pinpoints the start of the upcoming data page. In a Cursor-based pagination system, the field acts as a reference point, ensuring the set of results corresponds directly to the data following the specified cursor. In a Offset-based pagination system, the field, along with limit, indicate the offset from which entries in the program guide will be retrieved."
+            },
+            {
+              "id": 2,
+              "name": "Before",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the cursor that pinpoints the end of the upcoming data page. In a Cursor-based pagination system, the field acts as a reference point, ensuring the set of results corresponds directly to the data preceding the specified cursor. In a Offset-based pagination system, the field, along with limit, indicate the offset from which entries in the program guide will be retrieved."
+            }
+          ]
+        },
+        {
+          "name": "ProgramCastStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object provides the cast information related to a program.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the name of the cast member."
+            },
+            {
+              "id": 1,
+              "name": "Role",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the role of the cast member. Ex. Actor, Director."
+            }
+          ]
+        },
+        {
+          "name": "ProgramCategoryStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object defines the category associated to a program.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Category",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the category or genre of the program. Ex. News."
+            },
+            {
+              "id": 1,
+              "name": "SubCategory",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent the sub-category or sub-genre of the program. Ex. Local."
+            }
+          ]
+        },
+        {
+          "name": "ProgramStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This indicates a program within an electronic program guide (EPG).",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Identifier",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate a unique identifier for a program within an electronic program guide list. The identifier shall be unique across multiple channels."
+            },
+            {
+              "id": 1,
+              "name": "Channel",
+              "type": "ChannelInfoStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the channel associated to the program."
+            },
+            {
+              "id": 2,
+              "name": "StartTime",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate an epoch time in seconds indicating the start time of a program, as a UTC time. This field can represent a past or future value."
+            },
+            {
+              "id": 3,
+              "name": "EndTime",
+              "type": "epoch-s",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate an epoch time in seconds indicating the end time of a program, as a UTC time. This field can represent a past or future value but shall be greater than the StartTime."
+            },
+            {
+              "id": 4,
+              "name": "Title",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the title or name for the specific program. For example, “MCIS: Los Angeles”."
+            },
+            {
+              "id": 5,
+              "name": "Subtitle",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the subtitle for the specific program. For example, “Maybe Today\" which is an episode name for “MCIS: Los Angeles”. This field is optional but shall be provided if applicable and known."
+            },
+            {
+              "id": 6,
+              "name": "Description",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the brief description for the specific program. For example, a description of an episode. This field is optional but shall be provided if known."
+            },
+            {
+              "id": 7,
+              "name": "AudioLanguages",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the audio language for the specific program. The value is a string containing one of the standard Tags for Identifying Languages RFC 5646. This field is optional but shall be provided if known."
+            },
+            {
+              "id": 8,
+              "name": "Ratings",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be used for indicating the level of parental guidance recommended for of a particular program. This can be any rating system used in the country or region where the program is broadcast. For example, in the United States “TV-PG” may contain material that parents can find not suitable for younger children but can be accepted in general for older children. This field is optional but shall be provided if known."
+            },
+            {
+              "id": 9,
+              "name": "ThumbnailUrl",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent a URL of a thumbnail that clients can use to render an image for the program. The syntax of this field shall follow the syntax as specified in RFC 1738 and shall use the https scheme."
+            },
+            {
+              "id": 10,
+              "name": "PosterArtUrl",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent a URL of a poster that clients can use to render an image for the program on the detail view. The syntax of this field shall follow the syntax as specified in RFC 1738 and shall use the https scheme."
+            },
+            {
+              "id": 11,
+              "name": "DvbiUrl",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent the DVB-I URL associated to the program. The syntax of this field shall follow the syntax as specified in RFC 1738 and shall use the https scheme."
+            },
+            {
+              "id": 12,
+              "name": "ReleaseDate",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall be a string, in ISO 8601 format, representing the date on which the program was released. This field is optional but when provided, the year shall be provided as part of the string."
+            },
+            {
+              "id": 13,
+              "name": "ParentalGuidanceText",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent a string providing additional information on the parental guidance. This field is optional."
+            },
+            {
+              "id": 14,
+              "name": "RecordingFlag",
+              "type": "RecordingFlagBitmap",
+              "metatype": "bitmap",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent the recording status of the program. This field is required if the RecordProgram feature is set."
+            },
+            {
+              "id": 15,
+              "name": "SeriesInfo",
+              "type": "SeriesInfoStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": true,
+              "description": "This field shall represent the information of a series such as season and episode number. This field is optional but SHOULD be provided if the program represents a series and this information is available."
+            },
+            {
+              "id": 16,
+              "name": "CategoryList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ProgramCategoryStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent the category of a particular program. This field is optional but shall be provided if known."
+            },
+            {
+              "id": 17,
+              "name": "CastList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "ProgramCastStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall represent a list of the cast or the crew on the program. A single cast member may have more than one role. This field is optional but shall be provided if known."
+            },
+            {
+              "id": 18,
+              "name": "ExternalIdList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "AdditionalInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the list of additional external content identifiers."
+            }
+          ]
+        },
+        {
+          "name": "RecordingFlagBitmap",
+          "base": "map8",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "Scheduled",
+              "description": null
+            },
+            {
+              "bit": 1,
+              "name": "RecordSeries",
+              "description": null
+            },
+            {
+              "bit": 2,
+              "name": "Recorded",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "SeriesInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This object provides the episode information related to a program.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Season",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the season of the series associated to the program."
+            },
+            {
+              "id": 1,
+              "name": "Episode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall represent the episode of the program."
+            }
+          ]
+        },
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "MultipleMatches",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "NoMatches",
+              "description": null
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 1285,

@@ -785,6 +785,18 @@ How each of these clusters was validated:
   mandatory and none of the preferences nullable, so chip's server refuses a
   null in them in `LaunchContent` (InvalidCommand). chip's `LaunchURL` has no
   `PlaybackPreferences` field, so its server skips one sent there.
+- **Channel (0x0504)**: every attribute, command and response.
+  `ExternalIdList` entries are ContentLauncher's `AdditionalInfoStruct`,
+  which the module carries as its own copy. `GetProgramGuide` follows the
+  specification and matter.js, where `RecordingFlag`, `ExternalIDList` and
+  `Data` are fields 5, 6 and 7; chip's codegen numbers them 4, 5 and 6 (both
+  refs). chip's server therefore reads a `RecordingFlag` at tag 5 as
+  `ExternalIDList` and an `ExternalIDList` at tag 6 as `Data`, and refuses
+  either with InvalidCommand; it skips a `Data` at tag 7. Requests without
+  the three work with both. chip's codegen also makes `PageToken`
+  non-nullable, so chip's server refuses a null one (InvalidCommand). chip's
+  zap XML marks `ProgramGuideResponse` provisional (both refs); the 1.4.2
+  spec XML and the model do not, so it carries no provisional note.
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 

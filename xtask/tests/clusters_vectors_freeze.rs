@@ -39,7 +39,7 @@ const ATTR_VECTORS: [&str; 11] = [
 ];
 
 /// Every command vector this milestone must capture (relative path).
-const CMD_VECTORS: [&str; 16] = [
+const CMD_VECTORS: [&str; 17] = [
     "on_off/cmd_toggle.json",
     "on_off/cmd_on_with_timed_off.json",
     "level_control/cmd_move_to_level.json",
@@ -56,6 +56,7 @@ const CMD_VECTORS: [&str; 16] = [
     "content_launcher/cmd_launch_content.json",
     "content_launcher/cmd_launch_url_preferences.json",
     "content_launcher/cmd_launch_content_data.json",
+    "channel/cmd_get_program_guide.json",
 ];
 
 #[test]

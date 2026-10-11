@@ -18,6 +18,7 @@ pub mod boolean_state_configuration;
 pub mod bridged_device_basic_information;
 pub mod carbon_dioxide_concentration_measurement;
 pub mod carbon_monoxide_concentration_measurement;
+pub mod channel;
 pub mod color_control;
 pub mod commissioner_control;
 pub mod content_app_observer;

@@ -6472,3 +6472,174 @@ fn content_launcher_request_structs_decode_what_they_encode() {
         );
     }
 }
+
+// ---- M9-A3 B7: Channel --------------------------------------------------------
+//
+// 1.4.2 Channel.xml. The channel, lineup and program values, and the
+// MultipleMatches response without data, are tv-app's ChannelManager (master
+// 5cd2917a and v1.4.2.0). The null CurrentChannel (tv-app always sends a
+// channel), the program's RecordingFlag, the external ids, the page tokens
+// and the series info are synthetic.
+
+/// A `ChannelInfoStruct` body: major, minor, and the three names tv-app sets.
+fn channel_info(w: &mut TlvWriter<'_>, major: u64, minor: u64, name: &str) {
+    w.put_uint(Tag::Context(0), major).unwrap();
+    w.put_uint(Tag::Context(1), minor).unwrap();
+    w.put_utf8(Tag::Context(2), name).unwrap();
+    w.put_utf8(Tag::Context(3), "KAAL-TV").unwrap();
+    w.put_utf8(Tag::Context(4), "KAAL").unwrap();
+}
+
+#[test]
+fn channel_attributes_and_change_channel_response_decode() {
+    use clusters::channel::{self as ch, ChangeChannelResponse, LineupInfoTypeEnum, StatusEnum};
+    let list = ch::decode_channel_list(&list_of(&[&|w: &mut TlvWriter<'_>| {
+        channel_info(w, 6, 0, "ABC");
+    }]))
+    .unwrap();
+    assert_eq!(
+        (
+            list[0].major_number,
+            list[0].name.as_deref(),
+            list[0].identifier.as_deref(),
+            list[0].r#type
+        ),
+        (6, Some("ABC"), None, None)
+    );
+    let Nullable::Value(lineup) = ch::decode_lineup(&struct_of(&|w| {
+        w.put_utf8(Tag::Context(0), "Comcast").unwrap();
+        w.put_utf8(Tag::Context(1), "Comcast King County").unwrap();
+        w.put_utf8(Tag::Context(2), "98052").unwrap();
+        w.put_uint(Tag::Context(3), 0).unwrap();
+    }))
+    .unwrap() else {
+        panic!("Lineup decoded as null");
+    };
+    assert_eq!(
+        (lineup.operator_name.as_str(), lineup.lineup_info_type),
+        ("Comcast", LineupInfoTypeEnum::Mso)
+    );
+    assert_eq!(
+        ch::decode_current_channel(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+    let multiple =
+        ChangeChannelResponse::decode(&struct_of(&|w| w.put_uint(Tag::Context(0), 1).unwrap()))
+            .unwrap();
+    assert_eq!(
+        (multiple.status, multiple.data),
+        (StatusEnum::MultipleMatches, None)
+    );
+    assert_eq!(
+        ch::encode_change_channel(&"PBS".to_string()),
+        struct_of(&|w| w.put_utf8(Tag::Context(0), "PBS").unwrap())
+    );
+    assert_eq!(
+        ch::encode_skip_channel(-3),
+        struct_of(&|w| w.put_int(Tag::Context(0), -3).unwrap())
+    );
+}
+
+#[test]
+fn program_guide_response_decodes_nested_programs() {
+    use clusters::channel::{ProgramGuideResponse, RecordingFlagBitmap};
+    let response = ProgramGuideResponse::decode(&struct_of(&|w| {
+        w.start_structure(Tag::Context(0)).unwrap();
+        w.put_null(Tag::Context(0)).unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        w.put_uint(Tag::Context(0), 10).unwrap();
+        w.put_utf8(Tag::Context(1), "next").unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.start_array(Tag::Context(1)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_utf8(Tag::Context(0), "progid-abc1").unwrap();
+        w.start_structure(Tag::Context(1)).unwrap();
+        channel_info(w, 6, 0, "ABC");
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.put_uint(Tag::Context(3), 1800).unwrap();
+        w.put_utf8(Tag::Context(4), "ABC Title1").unwrap();
+        w.put_utf8(Tag::Context(5), "My Program Subtitle1").unwrap();
+        w.put_uint(Tag::Context(14), 0b101).unwrap();
+        w.start_structure(Tag::Context(15)).unwrap();
+        w.put_utf8(Tag::Context(0), "1").unwrap();
+        w.put_utf8(Tag::Context(1), "2").unwrap();
+        w.end_container().unwrap();
+        w.start_array(Tag::Context(18)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        w.put_utf8(Tag::Context(0), "imdb").unwrap();
+        w.put_utf8(Tag::Context(1), "tt0001").unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+    }))
+    .unwrap();
+    assert_eq!(response.paging.previous_token, Some(Nullable::Null));
+    assert!(
+        matches!(&response.paging.next_token, Some(Nullable::Value(t)) if t.after.as_deref() == Some("next"))
+    );
+    let program = &response.program_list[0];
+    assert_eq!(
+        (
+            program.identifier.as_str(),
+            program.channel.major_number,
+            program.end_time,
+            program.title.as_str()
+        ),
+        ("progid-abc1", 6, 1800, "ABC Title1")
+    );
+    assert_eq!(
+        program.recording_flag,
+        Some(RecordingFlagBitmap::SCHEDULED | RecordingFlagBitmap::RECORDED)
+    );
+    assert!(matches!(&program.series_info, Some(Nullable::Value(s)) if s.episode == "2"));
+    let ids = program.external_id_list.as_ref().unwrap();
+    assert_eq!(
+        (ids[0].name.as_str(), ids[0].value.as_str()),
+        ("imdb", "tt0001")
+    );
+}
+
+#[test]
+fn get_program_guide_keeps_absent_and_null_page_tokens_apart() {
+    use clusters::channel::encode_get_program_guide;
+    let window = |w: &mut TlvWriter<'_>| {
+        w.put_uint(Tag::Context(0), 0).unwrap();
+        w.put_uint(Tag::Context(1), 3600).unwrap();
+    };
+    assert_eq!(
+        encode_get_program_guide(0, 3600, None, None, None, None, None),
+        struct_of(&window)
+    );
+    assert_eq!(
+        encode_get_program_guide(0, 3600, None, Some(Nullable::Null), None, None, None),
+        struct_of(&|w| {
+            window(w);
+            w.put_null(Tag::Context(3)).unwrap();
+        })
+    );
+}
+
+#[test]
+fn channel_additional_info_copy_matches_content_launchers() {
+    // Channel's AdditionalInfoStruct is a copy of ContentLauncher's: the two
+    // must encode the same bytes and each decode the other's.
+    use clusters::channel::AdditionalInfoStruct;
+    use clusters::content_launcher::AdditionalInfoStruct as Original;
+    let copy = AdditionalInfoStruct {
+        name: "imdb".to_string(),
+        value: "tt0001".to_string(),
+    };
+    let original = Original {
+        name: "imdb".to_string(),
+        value: "tt0001".to_string(),
+    };
+    assert_eq!(copy.encode(), original.encode());
+    assert_eq!(
+        AdditionalInfoStruct::decode(&original.encode()).unwrap(),
+        copy
+    );
+    assert_eq!(Original::decode(&copy.encode()).unwrap(), original);
+}

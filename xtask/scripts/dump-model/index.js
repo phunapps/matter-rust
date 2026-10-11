@@ -302,6 +302,11 @@ const ALLOWLIST = [
   // two doubles; TrackPreferenceStruct.Characteristics is a list of
   // MediaPlayback's CharacteristicEnum, copied in by copyForeignDatatypes):
   { id: 0x050a, name: 'ContentLauncher' },
+  // M9-A3 B7, Channel (the channel list, lineup and current channel structs;
+  // GetProgramGuide's optional nullable PageTokenStruct and its response's
+  // nested program structs; ExternalIdList fields are lists of
+  // ContentLauncher's AdditionalInfoStruct, copied in by copyForeignDatatypes):
+  { id: 0x0504, name: 'Channel' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

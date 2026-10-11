@@ -581,3 +581,48 @@ fn launch_content_encodes_data_empty_lists_and_null_output_index() {
         cmd("content_launcher/cmd_launch_content_data.json")
     );
 }
+
+#[test]
+fn get_program_guide_uses_the_specifications_field_ids() {
+    // M9-A3 B7: every GetProgramGuide field, against matter.js's own
+    // TlvGetProgramGuideRequest. RecordingFlag, ExternalIDList and Data are
+    // tags 5, 6 and 7 in the specification and matter.js; chip's codegen
+    // numbers them 4, 5 and 6 (both refs). ExternalIDList's entries are
+    // Channel's copy of ContentLauncher's AdditionalInfoStruct.
+    use clusters::channel::{
+        encode_get_program_guide, AdditionalInfoStruct, ChannelInfoStruct, PageTokenStruct,
+        RecordingFlagBitmap,
+    };
+    let abc = ChannelInfoStruct {
+        major_number: 6,
+        minor_number: 0,
+        name: Some("ABC".to_string()),
+        call_sign: None,
+        affiliate_call_sign: None,
+        identifier: None,
+        r#type: None,
+    };
+    let page = PageTokenStruct {
+        limit: Some(10),
+        after: Some("a".to_string()),
+        before: Some("b".to_string()),
+    };
+    let ids = vec![AdditionalInfoStruct {
+        name: "imdb".to_string(),
+        value: "tt0001".to_string(),
+    }];
+    assert_eq!(
+        encode_get_program_guide(
+            1000,
+            4600,
+            Some(vec![abc]),
+            Some(Nullable::Value(page)),
+            Some(Nullable::Value(
+                RecordingFlagBitmap::SCHEDULED | RecordingFlagBitmap::RECORD_SERIES
+            )),
+            Some(ids),
+            Some(vec![0x01, 0x02]),
+        ),
+        cmd("channel/cmd_get_program_guide.json")
+    );
+}

@@ -146,6 +146,17 @@ These are language-idiomatic differences. They do not affect interop.
 
 ## Where our generated surface follows chip, not matter.js
 
+- **A datatype another cluster owns is copied into the cluster that
+  references it** (`matter-clusters` 0.6.0, M9-A3 B7). ContentLauncher's
+  `TrackPreferenceStruct.Characteristics` lists MediaPlayback's
+  `CharacteristicEnum`, and Channel's `ExternalIdList` fields list
+  ContentLauncher's `AdditionalInfoStruct`. matter.js `@matter/types` 0.16.11
+  references the owner's type (`ContentLauncher.TlvAdditionalInfo` in
+  `clusters/channel.js`); chip's controller codegen declares a copy in each
+  cluster (`controller-clusters.matter`, both refs), and so do we:
+  `content_launcher::CharacteristicEnum` and `channel::AdditionalInfoStruct`
+  encode identically to the originals but are distinct Rust types.
+
 - **A feature a derived cluster disallows is not generated, nor is anything
   only it enables** (M9-A3 B2). ModeBase's OnOff dependency (DEPONOFF) is
   disallowed in every ModeBase-derived cluster, so they have no `Feature` flag

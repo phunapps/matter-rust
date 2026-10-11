@@ -52,6 +52,12 @@ import { Messages } from '@matter/types/clusters/messages';
 // and nullable lists, and a `double` (DimensionStruct).
 import { ContentLauncher } from '@matter/types/clusters/content-launcher';
 
+// matter.js's own Channel request schema (M9-A3 B7): GetProgramGuide's field
+// ids follow the specification (RecordingFlag 5, ExternalIDList 6, Data 7),
+// where chip's codegen numbers them 4, 5, 6; its ExternalIDList entries are
+// ContentLauncher's AdditionalInfoStruct, which the dump copies into Channel.
+import { Channel } from '@matter/types/clusters/channel';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -647,6 +653,41 @@ cmd('content_launcher', 'cmd_launch_content_data.json',
     playbackPreferences: {
       audioTracks: [{ languageCode: 'de', characteristics: [], audioOutputIndex: null }],
     },
+  }));
+
+// ---------------------------------------------------------------------------
+// Channel (0x0504) GetProgramGuide (0x04) — M9-A3 B7. Every field present: a
+// one-channel ChannelList, a PageToken with all three fields, RecordingFlag
+// (Scheduled | RecordSeries), an ExternalIDList of ContentLauncher's
+// AdditionalInfoStruct and Data. Pins the specification's field ids 5, 6 and 7
+// (matter.js agrees; chip's controller-clusters.matter uses 4, 5 and 6, at
+// v1.4.2.0 and master). Encoded with matter.js's own TlvGetProgramGuideRequest.
+// matter.js's TlvEpochS takes Unix seconds and writes Matter-epoch seconds
+// (2000-01-01): Unix 946685800 / 946689400 are Matter 1000 / 4600, the raw
+// values our encoder takes.
+// ---------------------------------------------------------------------------
+const MATTER_EPOCH_UNIX_S = 946684800;
+
+cmd('channel', 'cmd_get_program_guide.json',
+  { cluster: 'Channel', cluster_id: 0x0504, command: 'GetProgramGuide', command_id: 0x04,
+    fields: [
+      { name: 'StartTime', id: 0, value: 1000 },
+      { name: 'EndTime', id: 1, value: 4600 },
+      { name: 'ChannelList', id: 2, value: [{ majorNumber: 6, minorNumber: 0, name: 'ABC' }] },
+      { name: 'PageToken', id: 3, value: { limit: 10, after: 'a', before: 'b' } },
+      { name: 'RecordingFlag', id: 5, value: 3 },
+      { name: 'ExternalIDList', id: 6, value: [{ name: 'imdb', value: 'tt0001' }] },
+      { name: 'Data', id: 7, value: '0102' },
+    ],
+    note: 'every field, at the specification ids (RecordingFlag 5, ExternalIDList 6, Data 7), with a copied AdditionalInfoStruct list (encoded with matter.js TlvGetProgramGuideRequest)' },
+  Channel.TlvGetProgramGuideRequest.encode({
+    startTime: MATTER_EPOCH_UNIX_S + 1000,
+    endTime: MATTER_EPOCH_UNIX_S + 4600,
+    channelList: [{ majorNumber: 6, minorNumber: 0, name: 'ABC' }],
+    pageToken: { limit: 10, after: 'a', before: 'b' },
+    recordingFlag: { scheduled: true, recordSeries: true },
+    externalIdList: [{ name: 'imdb', value: 'tt0001' }],
+    data: Buffer.from([0x01, 0x02]),
   }));
 
 console.log('capture-clusters: all vectors written.');
