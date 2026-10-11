@@ -6059,35 +6059,42 @@ fn application_launcher_current_app_requests_and_response() {
 }
 
 #[test]
+#[allow(clippy::manual_assert_eq)] // assert_eq! would print the setup PIN on failure.
 fn account_login_requests_secret_response_and_event() {
     use clusters::account_login::{self as alog, GetSetupPinResponse, LoggedOutEvent};
     assert_eq!(
         alog::encode_get_setup_pin(&"AAAABBBBCCCCDDDD".to_string()),
         struct_of(&|w| w.put_utf8(Tag::Context(0), "AAAABBBBCCCCDDDD").unwrap())
     );
-    assert_eq!(
+    // Login's payload carries the setup PIN, so it is compared with assert!.
+    assert!(
         alog::encode_login(
             &"AAAABBBBCCCCDDDD".to_string(),
             &"20202021".to_string(),
             Some(0x1122)
-        ),
-        struct_of(&|w| {
+        ) == struct_of(&|w| {
             w.put_utf8(Tag::Context(0), "AAAABBBBCCCCDDDD").unwrap();
             w.put_utf8(Tag::Context(1), "20202021").unwrap();
             w.put_uint(Tag::Context(2), 0x1122).unwrap();
-        })
+        }),
+        "unexpected Login payload"
     );
     assert_eq!(alog::encode_logout(None), struct_of(&|_| {}));
     let pin = GetSetupPinResponse::decode(&struct_of(&|w| {
         w.put_utf8(Tag::Context(0), "20202021").unwrap();
     }))
     .unwrap();
-    // assert! rather than assert_eq!: a failure must not print the PIN.
-    #[allow(clippy::manual_assert_eq)]
-    {
-        assert!(pin.setup_pin == "20202021");
-    }
-    assert_redacted(&format!("{pin:?}"), b"20202021");
+    assert!(pin.setup_pin == "20202021");
+    // The whole rendering is pinned: a one-field struct prints nothing else.
+    let shown = format!("{pin:?}");
+    assert!(
+        shown == "GetSetupPinResponse { setup_pin: \"<redacted>\" }",
+        "unexpected GetSetupPinResponse rendering"
+    );
+    assert_redacted(&shown, b"20202021");
+    // `{:#?}` and `{:x?}` go through the same impl.
+    assert_redacted(&format!("{pin:#?}"), b"20202021");
+    assert_redacted(&format!("{pin:x?}"), b"20202021");
     // LoggedOut: Node optional. chip's codegen adds the implicit FabricIndex
     // (tag 254) of a fabric-sensitive event; the model has no such field, so
     // the decoder skips it.

@@ -485,7 +485,7 @@ const SECRET_FIELDS = new Map([
   ['ThreadBorderRouterManagement.DatasetResponse.Dataset', 'a Thread operational dataset, network key included'],
   ['ThreadNetworkDirectory.OperationalDatasetResponse.OperationalDataset', 'a Thread operational dataset, network key included'],
   ['WiFiNetworkManagement.NetworkPassphraseResponse.Passphrase', 'the Wi-Fi network passphrase'],
-  ['AccountLogin.GetSetupPinResponse.SetupPin', 'the setup PIN that commissions the Content App'],
+  ['AccountLogin.GetSetupPinResponse.SetupPin', 'the setup PIN for PASE with the Commissionee'],
 ]);
 const appliedSecretFields = new Set();
 

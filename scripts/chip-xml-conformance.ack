@@ -33,4 +33,4 @@ DoorLock.Command.GetUserType legacy !USR commands removed in 1.5.1; chip never g
 DoorLock.Command.GetUserTypeResponse legacy !USR commands removed in 1.5.1; chip never generated them (absent from controller-clusters.matter at v1.3.0.0, v1.4.2.0, master) — acknowledged gap (spec rev 6)
 
 # AccountLogin LoggedOut's implicit FabricIndex (M9-A3 B7).
-AccountLogin.LoggedOut.FabricIndex implicit in 1.4.2 (LoggedOut is fabricSensitive) but absent from @matter/model 0.17.1 and matter.js 0.16.11; chip's controller codegen carries it (both refs), yet chip's server never logs the event (it leaves FabricIndex unset and LogEvent refuses it: account-login-server.cpp, both refs); the generated decoder skips tag 254
+AccountLogin.LoggedOut.FabricIndex implicit in 1.4.2 (LoggedOut is fabricSensitive) but absent from @matter/model 0.17.1 and matter.js 0.16.11; chip's controller codegen carries it (both refs), yet chip's server never logs the event (account-login-server.cpp leaves FabricIndex unset, and LogEvent in EventLogging.h refuses a fabric-sensitive event with no fabric, both refs); the generated decoder skips tag 254
