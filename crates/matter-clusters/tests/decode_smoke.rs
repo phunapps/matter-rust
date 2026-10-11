@@ -6142,3 +6142,191 @@ fn content_app_observer_message_and_response() {
         (StatusEnum::UnexpectedData, Some("exampleData"), None)
     );
 }
+
+// ---- M9-A3 B7: MediaPlayback -------------------------------------------------
+//
+// 1.4.2 MediaPlayback.xml. tv-app's values (MediaPlaybackManager.h and .cpp, at
+// master 5cd2917a and v1.4.2.0): Duration 80000; the "activeAudioTrackId_0"
+// track with "languageCode1" and "displayName1"; the "activeAudioTrackId_1" id;
+// an ActiveTextTrack with an empty id and a null TrackAttributes; and the
+// SeekOutOfRange "data response" reply to a Seek past 80000. Every other value
+// is synthetic: the "en-main" track and its characteristics, CurrentState,
+// StartTime, SampledPosition, PlaybackSpeed, the Rewind and AudioOutputIndex
+// arguments, and the event.
+
+/// A `TrackStruct` with id `id` whose `TrackAttributes` is written by
+/// `attrs` (`None`: TLV null).
+fn track_struct(w: &mut TlvWriter<'_>, id: &str, attrs: Option<&dyn Fn(&mut TlvWriter<'_>)>) {
+    w.put_utf8(Tag::Context(0), id).unwrap();
+    match attrs {
+        Some(write) => {
+            w.start_structure(Tag::Context(1)).unwrap();
+            write(w);
+            w.end_container().unwrap();
+        }
+        None => w.put_null(Tag::Context(1)).unwrap(),
+    }
+}
+
+#[test]
+fn media_playback_tracks_decode_chip_and_spec_shapes() {
+    use clusters::media_playback::{self as mp, CharacteristicEnum};
+    // tv-app's ActiveTextTrack before a text track is activated: TrackAttributes
+    // is null, which chip's codegen allows and the specification does not
+    // (FIELD_RELAXATIONS class N).
+    let Nullable::Value(text) =
+        mp::decode_active_text_track(&struct_of(&|w| track_struct(w, "", None))).unwrap()
+    else {
+        panic!("ActiveTextTrack decoded as null");
+    };
+    assert_eq!(
+        (text.id.as_str(), text.track_attributes),
+        ("", Nullable::Null)
+    );
+    // chip numbers DisplayName at tag 1 (its TrackAttributesStruct has no
+    // Characteristics): tv-app's display name is a string at the tag where the
+    // specification has the Characteristics list, so it is skipped.
+    let Nullable::Value(audio) = mp::decode_active_audio_track(&struct_of(&|w| {
+        track_struct(
+            w,
+            "activeAudioTrackId_0",
+            Some(&|w| {
+                w.put_utf8(Tag::Context(0), "languageCode1").unwrap();
+                w.put_utf8(Tag::Context(1), "displayName1").unwrap();
+            }),
+        );
+    }))
+    .unwrap() else {
+        panic!("ActiveAudioTrack decoded as null");
+    };
+    let Nullable::Value(attrs) = &audio.track_attributes else {
+        panic!("TrackAttributes decoded as null");
+    };
+    assert_eq!(
+        (
+            attrs.language_code.as_str(),
+            attrs.characteristics.clone(),
+            attrs.display_name.clone()
+        ),
+        ("languageCode1", None, None)
+    );
+    // The specification's shape: Characteristics (MediaPlayback's own
+    // CharacteristicEnum) at tag 1, DisplayName at tag 2.
+    let tracks = mp::decode_available_audio_tracks(&list_of(&[&|w: &mut TlvWriter<'_>| {
+        track_struct(
+            w,
+            "en-main",
+            Some(&|w| {
+                w.put_utf8(Tag::Context(0), "en").unwrap();
+                w.start_array(Tag::Context(1)).unwrap();
+                w.put_uint(Tag::Anonymous, 4).unwrap();
+                w.put_uint(Tag::Anonymous, 17).unwrap();
+                w.end_container().unwrap();
+                w.put_null(Tag::Context(2)).unwrap();
+            }),
+        );
+    }]))
+    .unwrap();
+    let Nullable::Value(tracks) = tracks else {
+        panic!("AvailableAudioTracks decoded as null");
+    };
+    let Nullable::Value(attrs) = &tracks[0].track_attributes else {
+        panic!("TrackAttributes decoded as null");
+    };
+    assert_eq!(
+        attrs.characteristics,
+        Some(Nullable::Value(vec![
+            CharacteristicEnum::MainProgram,
+            CharacteristicEnum::Karaoke
+        ]))
+    );
+    assert_eq!(attrs.display_name, Some(Nullable::Null));
+    assert_eq!(
+        mp::decode_available_text_tracks(&null_attr()).unwrap(),
+        Nullable::Null
+    );
+}
+
+#[test]
+fn media_playback_attributes_requests_responses_and_event() {
+    use clusters::media_playback::{
+        self as mp, PlaybackResponse, PlaybackStateEnum, StateChangedEvent, StatusEnum,
+    };
+    assert_eq!(
+        mp::decode_current_state(&uint_attr(3)).unwrap(),
+        PlaybackStateEnum::Buffering
+    );
+    assert_eq!(
+        mp::decode_duration(&uint_attr(80_000)).unwrap(),
+        Nullable::Value(80_000)
+    );
+    assert_eq!(mp::decode_start_time(&null_attr()).unwrap(), Nullable::Null);
+    let Nullable::Value(position) = mp::decode_sampled_position(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1_700_000_000_000_000).unwrap();
+        w.put_null(Tag::Context(1)).unwrap();
+    }))
+    .unwrap() else {
+        panic!("SampledPosition decoded as null");
+    };
+    assert_eq!(
+        (position.updated_at, position.position),
+        (1_700_000_000_000_000, Nullable::Null)
+    );
+    assert!((mp::decode_playback_speed(&float_attr(-2.0)).unwrap() - -2.0).abs() < f32::EPSILON);
+    assert_eq!(
+        mp::encode_seek(80_001),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 80_001).unwrap())
+    );
+    assert_eq!(mp::encode_play(), struct_of(&|_| {}));
+    assert_eq!(
+        mp::encode_rewind(Some(true)),
+        struct_of(&|w| w.put_bool(Tag::Context(0), true).unwrap())
+    );
+    // AudioOutputIndex: absent, null and a value are three requests.
+    let track = "activeAudioTrackId_1".to_string();
+    let with = |index: Option<Nullable<u8>>| mp::encode_activate_audio_track(&track, index);
+    let id = |w: &mut TlvWriter<'_>| w.put_utf8(Tag::Context(0), "activeAudioTrackId_1").unwrap();
+    assert_eq!(with(None), struct_of(&id));
+    assert_eq!(
+        with(Some(Nullable::Null)),
+        struct_of(&|w| {
+            id(w);
+            w.put_null(Tag::Context(1)).unwrap();
+        })
+    );
+    assert_eq!(
+        with(Some(Nullable::Value(0))),
+        struct_of(&|w| {
+            id(w);
+            w.put_uint(Tag::Context(1), 0).unwrap();
+        })
+    );
+    let response = PlaybackResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 5).unwrap();
+        w.put_utf8(Tag::Context(1), "data response").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (response.status, response.data.as_deref()),
+        (StatusEnum::SeekOutOfRange, Some("data response"))
+    );
+    let ev = StateChangedEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.start_structure(Tag::Context(3)).unwrap();
+        w.put_uint(Tag::Context(0), 10).unwrap();
+        w.put_uint(Tag::Context(1), 1_000).unwrap();
+        w.end_container().unwrap();
+        w.put_bool(Tag::Context(8), false).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(ev.current_state, PlaybackStateEnum::Paused);
+    assert_eq!(
+        ev.sampled_position.map(|p| p.position),
+        Some(Nullable::Value(1_000))
+    );
+    assert_eq!((ev.duration, ev.audio_advance_unmuted), (None, Some(false)));
+    assert!(
+        StateChangedEvent::decode(&struct_of(&|_| {})).is_err(),
+        "CurrentState is mandatory"
+    );
+}

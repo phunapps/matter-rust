@@ -56,6 +56,7 @@ pub mod level_control;
 pub mod localization_configuration;
 pub mod low_power;
 pub mod media_input;
+pub mod media_playback;
 pub mod messages;
 pub mod microwave_oven_control;
 pub mod microwave_oven_mode;

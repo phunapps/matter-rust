@@ -103,6 +103,7 @@
       "ThreadNetworkDirectory",
       "WakeOnLan",
       "TargetNavigator",
+      "MediaPlayback",
       "MediaInput",
       "LowPower",
       "KeypadInput",
@@ -740,6 +741,12 @@
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
         "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "MediaPlayback",
+        "element": "TrackStruct.TrackAttributes",
+        "class": "N",
+        "reason": "chip declares it nullable (controller-clusters.matter and zap media-playback-cluster.xml, at v1.4.2.0 and master) and tv-app's ActiveTextTrack sends it null until a text track is activated (MediaPlaybackManager.h mActiveTextTrack = {}, both refs)"
       },
       {
         "cluster": "Messages",
@@ -36833,6 +36840,707 @@
               "nullable": false,
               "optional": false,
               "description": "This field shall contain a name string for the TargetInfoStruct."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1286,
+      "name": "MediaPlayback",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "AS",
+          "name": "AdvancedSeek",
+          "description": "This feature provides access to the time offset location within current playback media and allows for jumping to a specific location using time offsets. This enables clients to implement more advanced media seeking behavior in their user interface, for instance a \"seek bar\"."
+        },
+        {
+          "bit": 1,
+          "code": "VS",
+          "name": "VariableSpeed",
+          "description": "This feature is for a device which supports variable speed playback on media that supports it."
+        },
+        {
+          "bit": 2,
+          "code": "TT",
+          "name": "TextTracks",
+          "description": "This feature is for a device or app that supports Text Tracks."
+        },
+        {
+          "bit": 3,
+          "code": "AT",
+          "name": "AudioTracks",
+          "description": "This feature is for a device or app that supports Audio Tracks."
+        },
+        {
+          "bit": 4,
+          "code": "AA",
+          "name": "AudioAdvance",
+          "description": "This feature is for a device or app that supports playing audio during fast and slow advance and rewind (e.g., while playback speed is not 1). A device that supports this feature may only support playing audio during certain speeds.\nA cluster implementing AA shall implement AS."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "CurrentState",
+          "type": "PlaybackStateEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the current playback state of media.\nDuring fast-forward, rewind, and other seek operations; this attribute shall be set to PLAYING."
+        },
+        {
+          "id": 1,
+          "name": "StartTime",
+          "type": "epoch-us",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the start time of the media, in case the media has a fixed start time (for example, live stream or television broadcast), or null when start time does not apply to the current media (for example, video-on-demand). This time is a UTC time. The client needs to handle conversion to local time, as required, taking in account time zone and possible local DST offset."
+        },
+        {
+          "id": 2,
+          "name": "Duration",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the duration, in milliseconds, of the current media being played back or null when duration is not applicable (for example, in live streaming content with no known duration). This attribute shall never be 0."
+        },
+        {
+          "id": 3,
+          "name": "SampledPosition",
+          "type": "PlaybackPositionStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the position of playback (Position field) at the time (UpdateAt field) specified in the attribute. The client may use the SampledPosition attribute to compute the current position within the media stream based on the PlaybackSpeed, PlaybackPositionStruct.UpdatedAt and PlaybackPositionStruct.Position fields. To enable this, the SampledPosition attribute shall be updated whenever a change in either the playback speed or the playback position is triggered outside the normal playback of the media. The events which may cause this to happen include:\n  - Starting or resumption of playback\n  - Seeking\n  - Skipping forward or backward\n  - Fast-forwarding or rewinding\n  - Updating of playback speed as a result of explicit request, or as a result of buffering events"
+        },
+        {
+          "id": 4,
+          "name": "PlaybackSpeed",
+          "type": "single",
+          "metatype": "float",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the speed at which the current media is being played. The new PlaybackSpeed shall be reflected in this attribute whenever any of the following occurs:\n  - Starting of playback\n  - Resuming of playback\n  - Fast-forwarding\n  - Rewinding\nThe PlaybackSpeed shall reflect the ratio of time elapsed in the media to the actual time taken for the playback assuming no changes to media playback (for example buffering events or requests to pause/rewind/forward).\n  - A value for PlaybackSpeed of 1 shall indicate normal playback where, for example, playback for 1 second causes the media to advance by 1 second within the duration of the media.\n  - A value for PlaybackSpeed which is greater than 0 shall indicate that as playback is happening the media is currently advancing in time within the duration of the media.\n  - A value for PlaybackSpeed which is less than 0 shall indicate that as playback is happening the media is currently going back in time within the duration of the media.\n  - A value for PlaybackSpeed of 0 shall indicate that the media is currently not playing back. When the CurrentState attribute has the value of PAUSED, NOT_PLAYING or BUFFERING, the PlaybackSpeed shall be set to 0 to reflect that the media is not playing.\nFollowing examples illustrate the PlaybackSpeed attribute values in various conditions."
+        },
+        {
+          "id": 5,
+          "name": "SeekRangeEnd",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the furthest forward valid position to which a client may seek forward, in milliseconds from the start of the media. When the media has an associated StartTime, a value of null shall indicate that a seek forward is valid only until the current time within the media, using a position computed from the difference between the current time offset and StartTime, in milliseconds from start of the media, truncating fractional milliseconds towards 0. A value of NULL when StartTime is not specified shall indicate that seeking forward is not allowed."
+        },
+        {
+          "id": 6,
+          "name": "SeekRangeStart",
+          "type": "uint64",
+          "metatype": "integer",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the earliest valid position to which a client may seek back, in milliseconds from start of the media. A value of NULL shall indicate that seeking backwards is not allowed."
+        },
+        {
+          "id": 7,
+          "name": "ActiveAudioTrack",
+          "type": "TrackStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "ActiveTrack refers to the Audio track currently set and being used for the streaming media. A value of null shall indicate that no Audio Track corresponding to the current media is currently being played."
+        },
+        {
+          "id": 8,
+          "name": "AvailableAudioTracks",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TrackStruct",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "AvailableAudioTracks refers to the list of Audio tracks available for the current title being played. A value of null shall indicate that no Audio Tracks corresponding to the current media are selectable by the client."
+        },
+        {
+          "id": 9,
+          "name": "ActiveTextTrack",
+          "type": "TrackStruct",
+          "metatype": "object",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "ActiveTrack refers to the Text track currently set and being used for the streaming media. This can be nil. A value of null shall indicate that no Text Track corresponding to the current media is currently being displayed."
+        },
+        {
+          "id": 10,
+          "name": "AvailableTextTracks",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TrackStruct",
+          "nullable": true,
+          "optional": true,
+          "writable": false,
+          "description": "AvailableTextTracks refers to the list of Text tracks available for the current title being played. This can be an empty list. A value of null shall indicate that no Text Tracks corresponding to the current media are selectable by the client."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "Play",
+          "direction": "request",
+          "responseId": 10,
+          "fields": []
+        },
+        {
+          "id": 1,
+          "name": "Pause",
+          "direction": "request",
+          "responseId": 10,
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "Stop",
+          "direction": "request",
+          "responseId": 10,
+          "fields": []
+        },
+        {
+          "id": 3,
+          "name": "StartOver",
+          "direction": "request",
+          "responseId": 10,
+          "fields": []
+        },
+        {
+          "id": 4,
+          "name": "Previous",
+          "direction": "request",
+          "responseId": 10,
+          "fields": []
+        },
+        {
+          "id": 5,
+          "name": "Next",
+          "direction": "request",
+          "responseId": 10,
+          "fields": []
+        },
+        {
+          "id": 6,
+          "name": "Rewind",
+          "direction": "request",
+          "responseId": 10,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AudioAdvanceUnmuted",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate whether audio should be unmuted by the player during rewind.\nA value of true does not guarantee that audio can be heard by the user since the speaker may be muted, turned down to a low level and/or unplugged."
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "name": "FastForward",
+          "direction": "request",
+          "responseId": 10,
+          "fields": [
+            {
+              "id": 0,
+              "name": "AudioAdvanceUnmuted",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate whether audio should be unmuted by the player during fast forward.\nA value of true does not guarantee that audio can be heard by the user since the speaker may be muted, turned down to a low level and/or unplugged."
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "name": "SkipForward",
+          "direction": "request",
+          "responseId": 10,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DeltaPositionMilliseconds",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the duration of the time span to skip forward in the media, in milliseconds. In case the resulting position falls in the middle of a frame, the server shall set the position to the beginning of that frame and set the SampledPosition attribute on the cluster accordingly. If the resultant position falls beyond the furthest valid position in the media the client may seek forward to, the position should be set to that furthest valid position. If the SampledPosition attribute is supported it shall be updated on the cluster accordingly."
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "name": "SkipBackward",
+          "direction": "request",
+          "responseId": 10,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DeltaPositionMilliseconds",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the duration of the time span to skip backward in the media, in milliseconds. In case the resulting position falls in the middle of a frame, the server shall set the position to the beginning of that frame and set the SampledPosition attribute on the cluster accordingly. If the resultant position falls before the earliest valid position to which a client may seek back to, the position should be set to that earliest valid position. If the SampledPosition attribute is supported it shall be updated on the cluster accordingly."
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "name": "PlaybackResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the status of the command which resulted in this response."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "name": "Seek",
+          "direction": "request",
+          "responseId": 10,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Position",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the position (in milliseconds) in the media to seek to. In case the position falls in the middle of a frame, the server shall set the position to the beginning of that frame and set the SampledPosition attribute on the cluster accordingly. If the position falls before the earliest valid position or beyond the furthest valid position to which a client may seek back or forward to respectively, the status of SEEK_OUT_OF_RANGE shall be returned and no change shall be made to the position of the playback."
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "name": "ActivateAudioTrack",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TrackId",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Audio Track to activate."
+            },
+            {
+              "id": 1,
+              "name": "AudioOutputIndex",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": true,
+              "description": "This value is the index field of the OutputInfoStruct from the OutputList attribute (from the AudioOutput cluster) and indicates which audio output the Audio Track should be played on. This field is absent for Text Tracks and only present for Audio Tracks. A value of null shall indicate that the server can choose the audio output(s) to play the Audio Track on."
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "name": "ActivateTextTrack",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "TrackId",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Text Track to activate."
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "name": "DeactivateTextTrack",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "StateChanged",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "CurrentState",
+              "type": "PlaybackStateEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the updated playback state as defined by the CurrentState attribute, and has the same constraint as that attribute."
+            },
+            {
+              "id": 1,
+              "name": "StartTime",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the updated start time as defined by the StartTime attribute, and has the same constraint as that attribute.\nThis field value shall be 0 when the value of the StartTime attribute is NULL."
+            },
+            {
+              "id": 2,
+              "name": "Duration",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the updated duration as defined by the Duration attribute, and has the same constraint as that attribute.\nThis field value shall be 0 when the value of the Duration attribute is NULL."
+            },
+            {
+              "id": 3,
+              "name": "SampledPosition",
+              "type": "PlaybackPositionStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the updated position of playback as defined by the SampledPosition attribute, and has the same constraint as that attribute.\nThe UpdatedAt field value of the PlaybackPositionStruct shall be 0, and the Position field value of the PlaybackPositionStruct shall be NULL, when the value of the SampledPosition attribute is NULL."
+            },
+            {
+              "id": 4,
+              "name": "PlaybackSpeed",
+              "type": "single",
+              "metatype": "float",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the updated speed at which the current media is being played as defined by the PlaybackSpeed attribute, and has the same constraint as that attribute."
+            },
+            {
+              "id": 5,
+              "name": "SeekRangeEnd",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the updated start of the seek range end as defined by the SeekRangeEnd attribute, and has the same constraint as that attribute.\nThis field value shall be 0 when the value of the SeekRangeEnd attribute is NULL."
+            },
+            {
+              "id": 6,
+              "name": "SeekRangeStart",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the updated start of the seek range start as defined by the SeekRangeStart attribute, and has the same constraint as that attribute.\nThis field value shall be 0 when the value of the SeekRangeStart attribute is NULL."
+            },
+            {
+              "id": 7,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            },
+            {
+              "id": 8,
+              "name": "AudioAdvanceUnmuted",
+              "type": "bool",
+              "metatype": "boolean",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate whether audio is unmuted by the player due to a FF or REW command. This field is only meaningful when the PlaybackSpeed is present and not equal to 0 (paused) or 1 (normal playback). Typically the value will be false (muted), however, some players will play audio during certain fast forward and rewind speeds, and in these cases, the value will be true (not muted).\nA value of true does not guarantee that audio can be heard by the user since the speaker may be muted, turned down to a low level and/or unplugged."
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "CharacteristicEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "ForcedSubtitles",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "DescribesVideo",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "EasyToRead",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "FrameBased",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "MainProgram",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "OriginalContent",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "VoiceOverTranslation",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Caption",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Subtitle",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Alternate",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Supplementary",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Commentary",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "DubbedTranslation",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "Description",
+              "description": null
+            },
+            {
+              "value": 14,
+              "name": "Metadata",
+              "description": null
+            },
+            {
+              "value": 15,
+              "name": "EnhancedAudioIntelligibility",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "Emergency",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "Karaoke",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "PlaybackPositionStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure defines a playback position within a media stream being played.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "UpdatedAt",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the time when the position was last updated."
+            },
+            {
+              "id": 1,
+              "name": "Position",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the associated discrete position within the media stream, in milliseconds from the beginning of the stream, being associated with the time indicated by the UpdatedAt field. The Position shall NOT be greater than the duration of the media if duration is specified. The Position shall NOT be greater than the time difference between current time and start time of the media when start time is specified.\nA value of null shall indicate that playback position is not applicable for the current state of the media playback (For example : Live media with no known duration and where seek is not supported)."
+            }
+          ]
+        },
+        {
+          "name": "PlaybackStateEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Playing",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Paused",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "NotPlaying",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Buffering",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "InvalidStateForCommand",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "NotAllowed",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "NotActive",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "SpeedOutOfRange",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "SeekOutOfRange",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TrackAttributesStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure includes the attributes associated with a Text/Audio Track",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LanguageCode",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "The value is a String containing one of the standard Tags for Identifying Languages RFC 5646, which identifies the primary language used in the Track."
+            },
+            {
+              "id": 1,
+              "name": "Characteristics",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "CharacteristicEnum",
+              "nullable": true,
+              "optional": true,
+              "description": "This is a list of enumerated CharacteristicEnum values that indicate a purpose, trait or feature associated with the Track. A value of null shall indicate that there are no Characteristics corresponding to the Track."
+            },
+            {
+              "id": 2,
+              "name": "DisplayName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": true,
+              "optional": true,
+              "description": "The value is a String containing a user displayable name for the Track. A value of null shall indicate that there is no DisplayName corresponding to the Track."
+            }
+          ]
+        },
+        {
+          "name": "TrackStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This structure defines a uniquely identifiable Text Track or Audio Track.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Id",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Identifier for the Track which is unique within the Track catalog. The Track catalog contains all the Text/Audio tracks corresponding to the main media content."
+            },
+            {
+              "id": 1,
+              "name": "TrackAttributes",
+              "type": "TrackAttributesStruct",
+              "metatype": "object",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the Attributes associated to the Track, like languageCode.",
+              "nullableReason": "chip's servers may send it null (tv-app does in ActiveTextTrack while no text track is active)"
             }
           ]
         }

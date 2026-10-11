@@ -292,6 +292,11 @@ const ALLOWLIST = [
   { id: 0x050d, name: 'ApplicationBasic' },
   { id: 0x050e, name: 'AccountLogin' },
   { id: 0x0510, name: 'ContentAppObserver' },
+  // M9-A3 B7, MediaPlayback (nullable struct and list-of-struct attributes,
+  // fourteen requests answered by PlaybackResponse or a status, the
+  // StateChanged event; TrackStruct.TrackAttributes is nullable because chip
+  // sends it null, FIELD_RELAXATIONS class N):
+  { id: 0x0506, name: 'MediaPlayback' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -361,6 +366,9 @@ const EVENT_ALLOWLIST = new Set([
   'TargetNavigator',
   // M9-A3 B7, AccountLogin (LoggedOut: an optional Node):
   'AccountLogin',
+  // M9-A3 B7, MediaPlayback (StateChanged: CurrentState and eight optional
+  // fields, SampledPosition a struct):
+  'MediaPlayback',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's
@@ -457,11 +465,26 @@ const MESSAGES_EVENT_FABRIC_INDEX = {
   reason: MESSAGES_FABRIC_INDEX_REASON,
   doc: "chip's servers do not send it (the event is not fabric-scoped in chip)",
 };
+//
+// MediaPlayback (M9-A3 B7, class N): chip declares TrackStruct.TrackAttributes
+// nullable (controller-clusters.matter `nullable TrackAttributesStruct
+// trackAttributes = 1`, zap media-playback-cluster.xml `isNullable="true"`, at
+// v1.4.2.0 and master), and tv-app's delegate sends it null: its
+// ActiveTextTrack is a default TrackStruct (MediaPlaybackManager.h
+// `mActiveTextTrack = {}`, both refs) until a text track is activated.
+// matter.js keeps it non-nullable (docs/matter-js-comparison.md).
+const MEDIA_PLAYBACK_TRACK_ATTRIBUTES = {
+  class: 'N',
+  reason:
+    "chip declares it nullable (controller-clusters.matter and zap media-playback-cluster.xml, at v1.4.2.0 and master) and tv-app's ActiveTextTrack sends it null until a text track is activated (MediaPlaybackManager.h mActiveTextTrack = {}, both refs)",
+  doc: "chip's servers may send it null (tv-app does in ActiveTextTrack while no text track is active)",
+};
 const FIELD_RELAXATIONS = new Map([
   ['Messages.MessageStruct.FabricIndex', MESSAGES_STRUCT_FABRIC_INDEX],
   ['Messages.MessageQueued.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
   ['Messages.MessagePresented.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
   ['Messages.MessageComplete.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
+  ['MediaPlayback.TrackStruct.TrackAttributes', MEDIA_PLAYBACK_TRACK_ATTRIBUTES],
 ]);
 for (const [key, r] of FIELD_RELAXATIONS) {
   if (r.class !== 'P' && r.class !== 'N') fail(`FIELD_RELAXATIONS ${key}: class must be 'P' or 'N', got ${JSON.stringify(r.class)}`);

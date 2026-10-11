@@ -763,6 +763,17 @@ How each of these clusters was validated:
   codegen has the opposite. At v1.4.2.0 only, chip's zap XML and controller
   codegen mark ContentAppObserver provisional; master and the 1.4.2 spec XML
   at both refs do not, so it carries no provisional note.
+- **MediaPlayback (0x0506)**: every attribute, command and response, and the
+  `StateChanged` event. `TrackStruct.TrackAttributes` is nullable although
+  the specification says otherwise: chip declares it nullable and tv-app sends
+  it null for an inactive text track (a chip-wire relaxation, recorded in
+  `clusters.json` `meta.relaxed` as class N). chip numbers
+  `TrackAttributesStruct.DisplayName` at tag 1, where the specification has
+  `Characteristics`, so a display name a chip device sends is skipped and
+  reads as `None`. `ActivateAudioTrack`'s `AudioOutputIndex` is nullable in
+  the specification, and optional here as in matter.js (its conformance is
+  the AudioTracks feature); chip's codegen makes it a plain `uint8`, so
+  chip's server refuses a null one with InvalidCommand.
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 

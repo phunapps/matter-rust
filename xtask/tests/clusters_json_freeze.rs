@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 109] = [
+const TARGET_CLUSTERS: [&str; 110] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -159,6 +159,8 @@ const TARGET_CLUSTERS: [&str; 109] = [
     "ApplicationBasic",
     "AccountLogin",
     "ContentAppObserver",
+    // M9-A3 B7, MediaPlayback:
+    "MediaPlayback",
 ];
 
 fn load() -> Value {
@@ -490,7 +492,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 33] = [
+const EVENT_CLUSTERS: [&str; 34] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -541,6 +543,8 @@ const EVENT_CLUSTERS: [&str; 33] = [
     "TargetNavigator",
     // M9-A3 B7, AccountLogin:
     "AccountLogin",
+    // M9-A3 B7, MediaPlayback:
+    "MediaPlayback",
 ];
 
 #[test]
@@ -778,7 +782,12 @@ fn every_relaxation_is_fabric_sensitive_widened_or_conditional() {
                 || r["class"] == "C"
                 || (r["class"] == "P"
                     && (r["reason"] == "fabric-sensitive (withheld for other fabrics)"
-                        || r["reason"].as_str().unwrap().starts_with("chip does not "))),
+                        || r["reason"].as_str().unwrap().starts_with("chip does not ")))
+                || (r["class"] == "N"
+                    && r["reason"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("chip declares it nullable")),
             "unexpected relaxation {r}"
         );
     }
@@ -2916,4 +2925,99 @@ fn content_app_platform_keeps_its_shapes() {
         ),
         [("Data", false), ("EncodingHint", true)]
     );
+}
+
+/// The class-N `FIELD_RELAXATIONS` fields, as `(cluster, "<Owner>.<Field>",
+/// nullableReason)` (M9-A3 B7): fields chip's servers send null although the
+/// model makes them non-nullable. Each is nullable, decode-only, and carries
+/// the rustdoc clause. A new one is a review item.
+const CHIP_NULLS_RELAXED: [(&str, &str, &str); 1] = [(
+    "MediaPlayback",
+    "TrackStruct.TrackAttributes",
+    "chip's servers may send it null (tv-app does in ActiveTextTrack while no text track is active)",
+)];
+
+#[test]
+fn fields_chip_sends_null_are_nullable_and_recorded() {
+    let v = load();
+    let relaxed: Vec<(&str, &str)> = v["meta"]["relaxed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["class"] == "N")
+        .map(|r| {
+            (
+                r["cluster"].as_str().unwrap(),
+                r["element"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    let mut got: Vec<(&str, String, &str)> = Vec::new();
+    for c in clusters(&v) {
+        let cname = c["name"].as_str().unwrap();
+        for key in ["commands", "events", "datatypes"] {
+            for o in c[key].as_array().unwrap() {
+                for f in o["fields"].as_array().into_iter().flatten() {
+                    if let Some(reason) = f.get("nullableReason") {
+                        assert_eq!(f["nullable"], true, "{cname}.{}.{}", o["name"], f["name"]);
+                        let at = format!(
+                            "{}.{}",
+                            o["name"].as_str().unwrap(),
+                            f["name"].as_str().unwrap()
+                        );
+                        assert!(
+                            relaxed.contains(&(cname, at.as_str())),
+                            "{cname}.{at} not in meta.relaxed"
+                        );
+                        got.push((cname, at, reason.as_str().unwrap()));
+                    }
+                }
+            }
+        }
+    }
+    got.sort();
+    let got: Vec<(&str, &str, &str)> = got.iter().map(|(c, f, r)| (*c, f.as_str(), *r)).collect();
+    assert_eq!(got, CHIP_NULLS_RELAXED);
+    assert_eq!(relaxed.len(), CHIP_NULLS_RELAXED.len());
+}
+
+#[test]
+fn media_playback_keeps_its_shapes() {
+    // 1.4.2 MediaPlayback.xml: eleven attributes, fourteen requests (eleven
+    // answered by PlaybackResponse, three by a status), StateChanged.
+    let v = load();
+    let c = cluster(&v, "MediaPlayback");
+    assert_eq!(element_names(c, "attributes").len(), 11);
+    let answered: Vec<&str> = c["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|cmd| cmd["responseId"] == 10)
+        .map(|cmd| cmd["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(answered.len(), 11, "{answered:?}");
+    for name in [
+        "ActivateAudioTrack",
+        "ActivateTextTrack",
+        "DeactivateTextTrack",
+    ] {
+        assert!(command(c, name)["responseId"].is_null(), "{name}");
+    }
+    // AudioOutputIndex is nullable in the specification, and optional in the
+    // model and matter.js (its 1.4.2 conformance is the AudioTracks feature);
+    // chip's codegen has it mandatory and non-nullable.
+    let audio = &command(c, "ActivateAudioTrack")["fields"][1];
+    assert_eq!(
+        (audio["optional"].as_bool(), audio["nullable"].as_bool()),
+        (Some(true), Some(true))
+    );
+    assert_eq!(
+        field_optionality(&datatype(c, "TrackAttributesStruct")["fields"]),
+        [
+            ("LanguageCode", false),
+            ("Characteristics", true),
+            ("DisplayName", true)
+        ]
+    );
+    assert_eq!(element_names(c, "events"), ["StateChanged"]);
 }

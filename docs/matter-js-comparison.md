@@ -113,6 +113,21 @@ These are language-idiomatic differences. They do not affect interop.
   field 254 to tell another fabric's entry apart. `MessageStruct` is
   decode-only, since the attribute is read-only and no request carries it.
 
+- **MediaPlayback `TrackStruct.TrackAttributes` is nullable** (`matter-clusters`
+  0.6.0, M9-A3 B7). The 1.4.2 XML and matter.js `@matter/types` 0.16.11 make
+  it a non-nullable struct (`trackAttributes: TlvField(1, …)`,
+  `clusters/media-playback.js`). chip declares it nullable (zap
+  `media-playback-cluster.xml`; its controller codegen has `nullable
+  TrackAttributesStruct trackAttributes = 1`, at v1.4.2.0 and master), and
+  tv-app's `ActiveTextTrack` is a `TrackStruct` with an empty id and a null
+  `TrackAttributes` until a text track is activated (`MediaPlaybackManager.h`
+  `mActiveTextTrack = {}`, both refs). We decode it as
+  `Nullable<TrackAttributesStruct>` (the dump's `FIELD_RELAXATIONS`,
+  `meta.relaxed` class N). `TrackStruct` is decode-only. chip also numbers
+  `TrackAttributesStruct.DisplayName` at tag 1, where the specification and
+  matter.js have `Characteristics`; we follow the specification, so a display
+  name a chip device sends at tag 1 is skipped, not misread.
+
 - **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
   0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and
   matter.js `@matter/types` 0.16.11 declares it mandatory
