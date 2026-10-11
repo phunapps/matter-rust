@@ -15,7 +15,7 @@
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -158,9 +158,12 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
         },
         // M9-A3 B5: Messages, which only tv-app serves among chip's example
         // apps (B7 adds the media clusters). Nothing is stimulated: chip's
-        // Messages server logs no events, and tv-app reads no pipe, so it
-        // gets neither --enable-key nor --app-pipe. Like rvc-app, it does not
-        // build on Apple Silicon without Rosetta 2.
+        // Messages server logs no events, and tv-app takes no --app-pipe, so
+        // it gets neither --enable-key nor --app-pipe. tv-app does run chip's
+        // interactive shell on stdin (`chip_build_libshell = true` in its
+        // linux/args.gni, at v1.4.2.0 and master), which exits the app on
+        // EOF; spawn_dut keeps the DUT's stdin open for that reason. Like
+        // rvc-app, it does not build on Apple Silicon without Rosetta 2.
         "tv" => AppSpec {
             name: "tv",
             target_suffix: "tv-app",
@@ -261,10 +264,8 @@ pub(crate) fn run(app: Option<&str>) -> Result<(), String> {
     let app_pipe =
         (spec.events == EventStimulus::TriggersAndAppPipe).then(|| dut_dir.join(APP_PIPE_FILE));
     let args = launch_args(&spec, app_pipe.as_deref());
-    let child = spawn_dut(&binary, &kvs_path, &args, &log_path)?;
-
     // The Drop guard ensures the child is killed no matter how run() exits.
-    let mut guard = DutGuard(child);
+    let mut guard = spawn_dut(&binary, &kvs_path, &args, &log_path)?;
 
     wait_for_ready(&log_path)?;
     eprintln!("integration: DUT ready — Server Listening detected");
@@ -513,14 +514,20 @@ fn launch_args(spec: &AppSpec, app_pipe: Option<&Path>) -> Vec<String> {
     args
 }
 
-/// Spawn the all-clusters-app with the given KVS path.  stdout+stderr are
+/// Spawn the DUT app with the given KVS path.  stdout+stderr are
 /// redirected to `log_path` so the main terminal stays readable.
+///
+/// stdin is a pipe whose write end the returned [`DutGuard`] holds, unwritten,
+/// for the DUT's lifetime. An app built with chip's interactive shell (tv-app:
+/// `chip_build_libshell = true`) reads stdin and exits on EOF, which an
+/// inherited or null stdin gives it at once in a non-interactive run; an app
+/// that never reads stdin is unaffected.
 fn spawn_dut(
     binary: &Path,
     kvs_path: &Path,
     extra_args: &[String],
     log_path: &Path,
-) -> Result<Child, String> {
+) -> Result<DutGuard, String> {
     let log_file = fs::File::create(log_path)
         .map_err(|e| format!("create log file {}: {e}", log_path.display()))?;
     // Two separate file handles for stdout and stderr.
@@ -528,16 +535,24 @@ fn spawn_dut(
         .try_clone()
         .map_err(|e| format!("clone log file handle for stderr: {e}"))?;
 
-    let child = Command::new(binary)
+    let mut child = Command::new(binary)
         .arg("--KVS")
         .arg(kvs_path)
         .args(extra_args)
+        .stdin(Stdio::piped())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file2))
         .spawn()
         .map_err(|e| format!("spawn {}: {e}", binary.display()))?;
-
-    Ok(child)
+    // Taken out of the Child so that nothing (Child::wait closes the stdin it
+    // still owns) closes it before the guard does.
+    let stdin = child.stdin.take();
+    let mut guard = DutGuard { child, stdin };
+    if guard.stdin.is_none() {
+        guard.kill_and_wait();
+        return Err(format!("spawn {}: no stdin pipe", binary.display()));
+    }
+    Ok(guard)
 }
 
 /// Generate a `.ota` image under `dut_dir` with chip's image tool and return
@@ -588,21 +603,28 @@ fn generate_ota_image(
 // ---------------------------------------------------------------------------
 
 /// Holds a running DUT child process and kills it when dropped.
-struct DutGuard(Child);
+struct DutGuard {
+    child: Child,
+    /// The write end of the DUT's stdin pipe ([`spawn_dut`]), held open and
+    /// never written; closed only when the DUT is torn down.
+    stdin: Option<ChildStdin>,
+}
 
 impl DutGuard {
-    /// Kill the child and wait for it to exit.  Called explicitly before we
-    /// inspect the test exit status so the port is free for re-use.
+    /// Close the DUT's stdin, kill the child and wait for it to exit.  Called
+    /// explicitly before we inspect the test exit status so the port is free
+    /// for re-use.
     fn kill_and_wait(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        drop(self.stdin.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
 /// Print a warning (with the last 30 log lines) when the DUT exited before
 /// the harness tore it down. Diagnostic only: the tests decide pass or fail.
 fn report_dut_exit(guard: &mut DutGuard, log_path: &Path) {
-    match guard.0.try_wait() {
+    match guard.child.try_wait() {
         Ok(None) => {}
         Ok(Some(status)) => eprintln!(
             "integration: WARNING: the DUT exited during the test run ({status}); \
@@ -617,8 +639,7 @@ fn report_dut_exit(guard: &mut DutGuard, log_path: &Path) {
 impl Drop for DutGuard {
     fn drop(&mut self) {
         // Idempotent: kill() on an already-dead process is harmless.
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        self.kill_and_wait();
     }
 }
 
@@ -801,6 +822,37 @@ fn run_tests(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// `spawn_dut` holds the DUT's stdin open (M9-A3 B5 fix wave, T11 I1): a
+    /// stand-in DUT that exits on stdin EOF, as tv-app's chip shell does,
+    /// stays up while the guard lives, and exits cleanly once the guard
+    /// closes the pipe.
+    #[cfg(unix)]
+    #[test]
+    fn spawn_dut_holds_the_dut_stdin_open() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = std::env::temp_dir().join(format!("xtask-spawn-dut-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("eof-exits-dut.sh");
+        fs::write(&bin, "#!/bin/sh\ncat > /dev/null\n").unwrap();
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut guard = spawn_dut(&bin, &dir.join("kvs.json"), &[], &dir.join("app.log")).unwrap();
+        thread::sleep(Duration::from_millis(500));
+        let early = guard.child.try_wait().unwrap();
+        assert_eq!(early, None, "the DUT saw stdin EOF while the guard held it");
+        drop(guard.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = guard.child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "the DUT ignored stdin EOF");
+            thread::sleep(Duration::from_millis(50));
+        };
+        assert!(status.success(), "{status}");
+        drop(guard);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn event_hosts_launch_with_the_test_event_enable_key() {
