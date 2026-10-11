@@ -157,11 +157,11 @@ fn app_spec(app: Option<&str>) -> Result<AppSpec, String> {
             events: EventStimulus::None,
         },
         // M9-A3 B5: Messages, which only tv-app serves among chip's example
-        // apps; M9-A3 B7: the media and TV-platform clusters, which tv-app
-        // serves (all-clusters serves only WakeOnLan and LowPower of them).
+        // apps; M9-A3 B7: the media clusters on tv-app's endpoint 1
+        // (all-clusters serves only WakeOnLan and LowPower of them).
         // Nothing is stimulated: chip's Messages server logs no events, the
-        // B7 tests use no event trigger (chip's AccountLogin server fails to
-        // log LoggedOut, and the other B7 events have no stimulus), and
+        // media tests use no event trigger (TargetUpdated and StateChanged
+        // have no stimulus that reaches the log), and
         // tv-app takes no --app-pipe, so
         // it gets neither --enable-key nor --app-pipe. tv-app does run chip's
         // interactive shell on stdin (`chip_build_libshell = true` in its

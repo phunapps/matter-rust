@@ -10,8 +10,7 @@
 
 //! M9-A3 B7 media clusters on a live tv-app, its video-player endpoint 1:
 //! WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput, TargetNavigator,
-//! MediaPlayback and ContentLauncher (Channel, ApplicationLauncher,
-//! ContentControl and the Content App endpoints have their own test file).
+//! MediaPlayback and ContentLauncher.
 //! tv-app serves all of them on endpoint 1 at master 5cd2917a and v1.4.2.0
 //! (`examples/tv-app/tv-common/tv-app.matter`, the same cluster set at both
 //! refs). It is the one chip example app the harness drives that does:
@@ -38,6 +37,13 @@
 //! therefore runs the pool dry and the device drops a response. Each exchange
 //! here is followed by [`settle_acks`], so at most one response is unACKed at
 //! a time. The pacing changes no assertion.
+//!
+//! State left changed: the tests restore MediaInput, AudioOutput,
+//! ActiveTextTrack and CurrentState, but leave ActiveAudioTrack on
+//! `activeAudioTrackId_1`, PlaybackSpeed 1, SampledPosition 1000 and
+//! CurrentTarget 2 (tv-app refuses NavigateTarget(0), so CurrentTarget's
+//! initial 0 cannot be restored). No test asserts any of the four, so the
+//! tests still pass in any order.
 
 use integration_tests::dut::DutConfig;
 use integration_tests::fixture::settle_acks;
@@ -136,8 +142,10 @@ async fn response(
 }
 
 /// WakeOnLan serves only MACAddress (tv-app.matter: `ram attribute
-/// MACAddress`; tv-app's WakeOnLanManager writes the host's MAC there, 12
-/// upper-case hex digits); LinkLocalAddress is not served. LowPower's Sleep
+/// MACAddress`); LinkLocalAddress is not served. chip's `WakeOnLanAttrAccess`
+/// answers each read of MACAddress from tv-app's
+/// `WakeOnLanManager::HandleGetMacAddress`: the host's primary MAC as 12
+/// upper-case hex digits, or `"000000000000"` when there is none (both refs). LowPower's Sleep
 /// succeeds (LowPowerManager::HandleSleep returns true).
 #[tokio::test]
 async fn wake_on_lan_mac_and_low_power_sleep() {
@@ -518,7 +526,10 @@ async fn media_playback_decodes_tv_apps_tracks() {
 
 /// MediaPlayback commands: Play and Pause change CurrentState; Seek inside
 /// the seek range succeeds and past it answers SeekOutOfRange (chip's server
-/// checks SeekRangeEnd before the delegate); activating a text track fills
+/// passes Seek straight to the delegate; tv-app's
+/// `MediaPlaybackManager::HandleSeek` answers SeekOutOfRange when
+/// `positionMilliseconds > mDuration`, the same `mDuration` that
+/// `HandleGetSeekRangeEnd` reports, both refs); activating a text track fills
 /// ActiveTextTrack and an unknown track answers InvalidInState (chip's server,
 /// when the delegate returns false); an audio track with AudioOutputIndex 0
 /// succeeds, while a null AudioOutputIndex (nullable in the specification,

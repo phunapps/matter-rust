@@ -90,6 +90,9 @@ pub const ACK_SETTLE: Duration = Duration::from_millis(300);
 /// master 5cd2917a). Calling this after each exchange keeps at most one
 /// response unACKed. It waits on our own timer, not on the device, so there is
 /// no condition to poll.
+///
+/// This is a workaround, not the fix: remove it once matter-transport flushes
+/// the pending standalone ACK when an exchange closes.
 pub async fn settle_acks() {
     tokio::time::sleep(ACK_SETTLE).await;
 }
