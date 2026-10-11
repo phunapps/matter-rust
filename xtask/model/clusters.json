@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 9,
+    "dumpScriptVersion": 10,
     "generatedClusters": [
       "Identify",
       "Groups",

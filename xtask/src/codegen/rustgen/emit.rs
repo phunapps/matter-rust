@@ -34,6 +34,16 @@ pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable a
 pub const SECRET_DOC: &str =
     "Secret: this struct's `Debug` output shows `<redacted>` instead, even when it is null or absent.";
 
+/// The rustdoc paragraph on a datatype the dump copied from the cluster that
+/// owns it (`Datatype::copied_from`, M9-A3 B7): Channel's
+/// `AdditionalInfoStruct` is `ContentLauncher`'s, referenced by qualified name.
+pub(crate) fn copied_from_doc(owner: &str, name: &str) -> String {
+    format!(
+        "A copy of the `{owner}` cluster's `{name}`, which this cluster's elements reference. \
+         The two encode identically but are distinct Rust types."
+    )
+}
+
 /// The one rustdoc note of a generated feature, attribute or command item, or
 /// `None` (M9-A3 B4). An element added from the Matter 1.4 supplement
 /// (`supplemented`) gets a line saying where it comes from, whether 1.4 itself
@@ -474,6 +484,10 @@ fn emit_enum(s: &mut String, d: &Datatype) {
         line!(s, "///");
         line!(s, "/// {kept_for}");
     }
+    if let Some(owner) = &d.copied_from {
+        line!(s, "///");
+        line!(s, "/// {}", copied_from_doc(owner, &d.name));
+    }
     line!(s, "#[derive(Copy, Clone, Debug, PartialEq, Eq)]");
     // Members like `4V5`/`523` (PowerSource BatCommonDesignationEnum) get an
     // `_`-prefixed variant name (see `ident`), which is not upper-camel-case.
@@ -527,6 +541,10 @@ fn emit_bitmap(s: &mut String, d: &Datatype) {
     };
     line!(s, "bitflags::bitflags! {{");
     line!(s, "    /// `{}` ({}).", d.name, d.base);
+    if let Some(owner) = &d.copied_from {
+        line!(s, "    ///");
+        line!(s, "    /// {}", copied_from_doc(owner, &d.name));
+    }
     line!(s, "    #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]");
     line!(s, "    pub struct {}: {} {{", d.name, backing);
     for b in &d.bits {
@@ -553,6 +571,10 @@ fn emit_struct(
     if let Some(global) = &d.global_name {
         line!(s, "///");
         line!(s, "/// Generated from the Matter global type `{global}`.");
+    }
+    if let Some(owner) = &d.copied_from {
+        line!(s, "///");
+        line!(s, "/// {}", copied_from_doc(owner, &d.name));
     }
     for doc in choice_docs(&d.fields) {
         line!(s, "///");
@@ -644,6 +666,7 @@ mod tests {
             fields: vec![],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         }
     }
 
@@ -723,6 +746,7 @@ mod tests {
             ],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
@@ -826,6 +850,7 @@ mod tests {
             fields: vec![],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         }
     }
 
@@ -880,6 +905,7 @@ mod tests {
             fields: vec![],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         };
         // A normal data struct keeps #[non_exhaustive].
         let mut normal = String::new();
@@ -1043,6 +1069,7 @@ mod tests {
             ],
             global_name: Some("locationdesc".to_string()),
             kept_for: None,
+            copied_from: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
@@ -1156,6 +1183,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_copied_datatype_names_its_owning_cluster() {
+        // M9-A3 B7: Channel's copy of ContentLauncher's AdditionalInfoStruct,
+        // and ContentLauncher's of MediaPlayback's CharacteristicEnum.
+        let d = Datatype {
+            name: "AdditionalInfoStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![note_field("Name", false, None)],
+            global_name: None,
+            kept_for: None,
+            copied_from: Some("ContentLauncher".to_string()),
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
+        assert!(
+            s.starts_with(
+                "/// `AdditionalInfoStruct` struct.\n///\n/// A copy of the `ContentLauncher` \
+                 cluster's `AdditionalInfoStruct`, which this cluster's elements reference. The \
+                 two encode identically but are distinct Rust types.\n"
+            ),
+            "{s}"
+        );
+        let mut e = enum_dt("CharacteristicEnum", "enum8", &[(0, "ForcedSubtitles")]);
+        e.copied_from = Some("MediaPlayback".to_string());
+        let mut s = String::new();
+        emit_enum(&mut s, &e);
+        assert!(
+            s.starts_with(
+                "/// `CharacteristicEnum` (enum8).\n///\n/// A copy of the `MediaPlayback` \
+                 cluster's `CharacteristicEnum`"
+            ),
+            "{s}"
+        );
+        let mut b = enum_dt("FlagsBitmap", "map8", &[]);
+        b.kind = "bitmap".to_string();
+        b.copied_from = Some("Other".to_string());
+        let mut s = String::new();
+        emit_bitmap(&mut s, &b);
+        assert!(
+            s.contains("    /// `FlagsBitmap` (map8).\n    ///\n    /// A copy of the `Other` cluster's `FlagsBitmap`"),
+            "{s}"
+        );
+        // A datatype the cluster owns gets no such line.
+        let mut s = String::new();
+        emit_enum(&mut s, &enum_dt("OwnEnum", "enum8", &[(0, "A")]));
+        assert!(!s.contains("A copy of"), "{s}");
+    }
+
     // ---- M9-A3 B5: provisional clusters and presence dependencies ----------
 
     #[test]
@@ -1204,6 +1282,7 @@ mod tests {
             ],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
@@ -1251,6 +1330,7 @@ mod tests {
             fields: vec![note_field("Type", false, None), key],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
@@ -1309,6 +1389,7 @@ mod tests {
             fields: vec![note_field("Level", false, None)],
             global_name: None,
             kept_for: None,
+            copied_from: None,
         };
         let mut s = String::new();
         emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());

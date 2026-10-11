@@ -309,6 +309,11 @@ pub struct Datatype {
     /// sentence. Enums only (the dump and [`validate`] enforce it).
     #[serde(default, rename = "keptFor")]
     pub kept_for: Option<String>,
+    /// The cluster that owns this datatype, when the dump copied it into this
+    /// one for a qualified reference (`ContentLauncher.AdditionalInfoStruct`
+    /// in Channel; M9-A3 B7). Drives a generated rustdoc line.
+    #[serde(default, rename = "copiedFrom")]
+    pub copied_from: Option<String>,
 }
 
 /// An enum member.

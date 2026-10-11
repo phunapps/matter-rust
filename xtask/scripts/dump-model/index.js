@@ -31,6 +31,8 @@
 //     and deprecated? (true only) on a feature, attribute or command the
 //     Matter 1.4 supplement added (see the supplement section);
 //   globalName? on a datatype inlined from a lowercase model global;
+//   copiedFrom? on a datatype copied from the cluster that owns it (a
+//     qualified reference such as `ContentLauncher.AdditionalInfoStruct`);
 //   keptFor? on an enum KEEP_DATATYPES keeps (what raw integer it interprets);
 //   requiredWhen? { field, present, exclusive } (see presenceDependency).
 //
@@ -69,7 +71,9 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 //     (M9-A3 B5 fix wave).
 // v9: `secret` on fields (SECRET_FIELDS), for the generated redacting `Debug`
 //     (M9-A3 B6).
-const DUMP_SCRIPT_VERSION = 9;
+// v10: `copiedFrom` on a datatype copied from the cluster that owns it, for a
+//     qualified cross-cluster reference (M9-A3 B7).
+const DUMP_SCRIPT_VERSION = 10;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -1236,6 +1240,100 @@ function inlineGlobalDatatypes(clusterName, attributes, commands, datatypes) {
   }
 }
 
+// --- cross-cluster references (M9-A3 B7) ---------------------------------
+
+// A field may name another cluster's datatype by a qualified name: Channel's
+// ExternalIdList fields are lists of `ContentLauncher.AdditionalInfoStruct`,
+// and ContentLauncher's TrackPreferenceStruct.Characteristics is a list of
+// `MediaPlayback.CharacteristicEnum`. The emitter resolves a type only to a
+// datatype of the cluster it generates, so the referenced datatype is copied
+// into the referencing cluster under its own name, like an inlined global
+// (each cluster module stays self-contained), and every reference is
+// rewritten to that name. chip's controller codegen does the same:
+// controller-clusters.matter declares AdditionalInfoStruct in both Channel and
+// ContentLauncher, and CharacteristicEnum in both MediaPlayback and
+// ContentLauncher (master and v1.4.2.0). The copy carries `copiedFrom` (the
+// owning cluster) for its rustdoc line; scripts/chip-xml-conformance.py checks
+// it against the owning cluster's 1.4.2 XML.
+
+// The model datatype a qualified reference `Owner.Name` names, as
+// `{ owner, name, node }`, or `{ problem }` when it cannot be copied: the
+// owner or the datatype does not resolve, the datatype is not a struct, enum
+// or bitmap (a qualified scalar typedef, such as Matter 1.5's
+// `CameraAvStreamManagement.VideoStreamID`, would need its base resolved
+// instead), or a struct field has a composite type of the owning cluster
+// (copied alone it would resolve in the referencing cluster, to the wrong
+// datatype or none).
+function foreignDatatype(ref) {
+  const parts = ref.split('.');
+  if (parts.length !== 2) return { problem: `\`${ref}\` is not of the form Cluster.Datatype` };
+  const [owner, name] = parts;
+  const cluster = Matter.clusters(owner);
+  if (!cluster) return { problem: `\`${ref}\`: no cluster ${owner} in the model` };
+  const node = [...cluster.datatypes].find((d) => d.name === name);
+  if (!node) return { problem: `\`${ref}\`: ${owner} has no datatype ${name}` };
+  const meta = node.effectiveMetatype;
+  if (meta !== 'object' && meta !== 'enum' && meta !== 'bitmap') {
+    return { problem: `\`${ref}\` is a ${meta} datatype; only a struct, enum or bitmap is copied — extend the dump first` };
+  }
+  for (const m of node.members) {
+    for (const el of [m, m.listEntry]) {
+      if (!el) continue;
+      const t = el.effectiveType;
+      const local = [...cluster.datatypes].some((d) => d.name === t && ['object', 'enum', 'bitmap'].includes(d.effectiveMetatype));
+      if (local) return { problem: `\`${ref}\`: field ${m.name} has ${owner}'s own type ${t}, which a copy cannot resolve — extend the dump first` };
+    }
+  }
+  return { owner, name, node };
+}
+
+// Load-time self-check of foreignDatatype against the real model: each row
+// must resolve (or be refused) as stated.
+for (const [ref, want] of [
+  ['ContentLauncher.AdditionalInfoStruct', true],
+  ['MediaPlayback.CharacteristicEnum', true],
+  ['ContentLauncher.NoSuchStruct', false],
+  ['NoSuchCluster.AdditionalInfoStruct', false],
+  ['CameraAvStreamManagement.VideoStreamID', false], // a scalar typedef
+  ['ContentLauncher.BrandingInformationStruct', false], // fields of ContentLauncher's own StyleInformationStruct
+  ['AdditionalInfoStruct', false],
+]) {
+  const got = foreignDatatype(ref);
+  if ((got.problem === undefined) !== want) {
+    fail(`foreignDatatype self-check: \`${ref}\` should ${want ? '' : 'not '}resolve (${got.problem ?? 'resolved'})`);
+  }
+}
+
+// Copy every datatype a qualified reference in `elements` (dumped attributes
+// and fields, read for `type` / `entryType`) names into `datatypes`, and
+// rewrite each reference to the bare name. The dump stops when a reference
+// cannot be copied (foreignDatatype), when the bare name is already a datatype
+// of the cluster, or when two owners' datatypes share a name.
+function copyForeignDatatypes(clusterName, elements, datatypes) {
+  const copied = new Map(); // bare name -> owner
+  for (const el of elements) {
+    for (const key of ['type', 'entryType']) {
+      const ref = el[key];
+      if (typeof ref !== 'string' || !ref.includes('.')) continue;
+      const f = foreignDatatype(ref);
+      if (f.problem) fail(`${clusterName}: ${f.problem}`);
+      const seen = copied.get(f.name);
+      if (seen === undefined) {
+        if (datatypes.some((d) => d.name === f.name)) {
+          fail(`${clusterName}: \`${ref}\` would be copied as ${f.name}, which is already a datatype of the cluster`);
+        }
+        const dt = dumpDatatype(f.node, `${clusterName}.copy`);
+        dt.copiedFrom = f.owner;
+        datatypes.push(dt);
+        copied.set(f.name, f.owner);
+      } else if (seen !== f.owner) {
+        fail(`${clusterName}: \`${ref}\` and \`${seen}.${f.name}\` would both be copied as ${f.name}`);
+      }
+      el[key] = f.name;
+    }
+  }
+}
+
 // --- cluster walk ---------------------------------------------------------
 
 function dumpCluster(entry) {
@@ -1356,6 +1454,16 @@ function dumpCluster(entry) {
 
   // Merge synthesized anonymous-struct datatypes (e.g. ThermostatAttributeStatusEntryStruct).
   for (const d of _synthSink) if (!datatypes.some((x) => x.name === d.name)) datatypes.push(d);
+
+  // Copy datatypes other clusters own that this one references by qualified
+  // name (Channel -> ContentLauncher.AdditionalInfoStruct), before any pass
+  // that resolves type names.
+  copyForeignDatatypes(cluster.name, [
+    ...attributes,
+    ...commands.flatMap((cmd) => cmd.fields),
+    ...events.flatMap((ev) => ev.fields),
+    ...datatypes.flatMap((dt) => dt.fields || []),
+  ], datatypes);
 
   // Resolve cluster-local scalar typedefs (kind=scalar, e.g. SignedTemperature
   // -> int8) to their base primitive in every type reference — the Rust emitter

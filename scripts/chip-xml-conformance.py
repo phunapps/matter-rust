@@ -474,6 +474,9 @@ def load_chip_xml(chip):
             # The whole cluster is provisional (ContentControl,
             # EnergyPreference): checked against clusters.json (class V).
             t["provisional"] = cid.find("provisionalConform") is not None
+            # The cluster's name, for a datatype another cluster copies from
+            # it (clusters.json `copiedFrom`: with_copied_datatypes).
+            t["name"] = norm(cid.get("name") or root.get("name"))
             by_id[parse_int(cid.get("id"), f"{root.get('name')}: clusterId")] = t
     if not by_id:
         # Every cluster would land in UNCHECKABLE and the per-cluster
@@ -694,6 +697,34 @@ def excluded_elements(meta, cname):
             events_off = True
         excl.add((e.get("kind"), norm_path(e.get("element"))))
     return excl, events_off
+
+
+def with_copied_datatypes(rep, c, xt, xml):
+    """`xt` with each datatype the dump copied into cluster `c` from the
+    cluster that owns it (clusters.json `copiedFrom`, M9-A3 B7: Channel's
+    AdditionalInfoStruct is ContentLauncher's) taken from the owner's 1.4.2
+    tables, so the copy is checked against the owner's definition. 1.4.2
+    references it by its bare name from `c`'s own XML (`<entry
+    type="AdditionalInfoStruct"/>` in Channel.xml), which `c`'s tables alone
+    cannot resolve. A copy whose owner or definition is not in 1.4.2 is
+    UNCHECKABLE."""
+    copies = [d for d in c["datatypes"] if d.get("copiedFrom")]
+    if not copies:
+        return xt
+    out = dict(xt)
+    for kind in ("struct", "enum", "bitmap"):
+        out[kind] = dict(xt[kind])
+    owners = {t["name"]: t for t in xml.values()}
+    for d in copies:
+        owner = owners.get(norm(d["copiedFrom"]))
+        kind = d["kind"] if d["kind"] in ("struct", "enum", "bitmap") else None
+        key = norm(d["name"])
+        if owner is None or kind is None or key not in owner[kind]:
+            rep.uncheckable.append(
+                f"{c['name']}.{d['name']} (copied from {d['copiedFrom']}: not in its 1.4.2 XML)")
+            continue
+        out[kind][key] = owner[kind][key]
+    return out
 
 
 def check_cluster(rep, c, xt, zap, meta):
@@ -1022,6 +1053,7 @@ def main():
                 f"clusterId {'carries' if xt['provisional'] else 'has no'} <provisionalConform/> "
                 "(fix PROVISIONAL_CLUSTERS in xtask/scripts/dump-model/index.js)")
         try:
+            xt = with_copied_datatypes(rep, c, xt, xml)
             check_cluster(rep, c, xt, zap, meta)
             check_supplemented(rep, c, xt, zap, meta)
         except (KeyError, TypeError, AttributeError) as e:
