@@ -755,13 +755,14 @@ fn microwave_oven_mode_has_inherited_fields_and_no_commands() {
 }
 
 #[test]
-fn every_relaxation_is_fabric_sensitive_widened_or_conditional() {
+fn every_relaxation_is_fabric_sensitive_widened_conditional_or_chip_nullable() {
     // meta.relaxed holds exactly the §5.4 presence relaxations (class P), the
     // fields chip's servers leave out (class P, FIELD_RELAXATIONS: see
     // `fields_chip_omits_are_optional_and_recorded`), the §5.3 widenings
-    // (class W) and the §3.1 conditional-conformance relaxations (class C,
-    // decode-only: codegen's model.rs refuses one on a field we send). The one
-    // W today is ModeSelect StandardNamespace: model `namespace` is enum8,
+    // (class W), the §3.1 conditional-conformance relaxations (class C,
+    // decode-only: codegen's model.rs refuses one on a field we send) and the
+    // fields chip's servers send null (class N, FIELD_RELAXATIONS: see
+    // `fields_chip_sends_null_are_nullable_and_recorded`). The one W today is ModeSelect StandardNamespace: model `namespace` is enum8,
     // 1.4.2 is enum16.
     let v = load();
     let relaxed = v["meta"]["relaxed"].as_array().unwrap();
@@ -2929,8 +2930,12 @@ fn content_app_platform_keeps_its_shapes() {
 
 /// The class-N `FIELD_RELAXATIONS` fields, as `(cluster, "<Owner>.<Field>",
 /// nullableReason)` (M9-A3 B7): fields chip's servers send null although the
-/// model makes them non-nullable. Each is nullable, decode-only, and carries
-/// the rustdoc clause. A new one is a review item.
+/// model makes them non-nullable. The test checks that each is `nullable`,
+/// is in `meta.relaxed`, and has exactly this `nullableReason`. That a class-N
+/// field is decode-only is enforced elsewhere: by the dump and by codegen's
+/// `check_chip_omits_relaxations` (`xtask/src/codegen/model.rs`), which refuse
+/// one on a request field or a field of an encoded struct. A new one is a
+/// review item.
 const CHIP_NULLS_RELAXED: [(&str, &str, &str); 1] = [(
     "MediaPlayback",
     "TrackStruct.TrackAttributes",

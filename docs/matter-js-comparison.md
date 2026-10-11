@@ -125,8 +125,10 @@ These are language-idiomatic differences. They do not affect interop.
   `Nullable<TrackAttributesStruct>` (the dump's `FIELD_RELAXATIONS`,
   `meta.relaxed` class N). `TrackStruct` is decode-only. chip also numbers
   `TrackAttributesStruct.DisplayName` at tag 1, where the specification and
-  matter.js have `Characteristics`; we follow the specification, so a display
-  name a chip device sends at tag 1 is skipped, not misread.
+  matter.js have `Characteristics`; we follow the specification, so a
+  display-name string a chip device sends at tag 1 is skipped, and a null one
+  reads as a null `Characteristics` (tv-app always sends a string, at
+  v1.4.2.0 and master).
 
 - **ModeBase `ChangeToModeResponse.StatusText` is `Option`** (`matter-clusters`
   0.6.0, M9-A3 B2). Its 1.4 conformance is `[Status == Success], M`, and

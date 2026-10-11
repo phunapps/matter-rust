@@ -6210,6 +6210,28 @@ fn media_playback_tracks_decode_chip_and_spec_shapes() {
         ),
         ("languageCode1", None, None)
     );
+    // A null DisplayName at chip's tag 1 (its codegen allows one; tv-app always
+    // sends a string, both refs) is the specification's null Characteristics.
+    let Nullable::Value(nulled) = mp::decode_active_audio_track(&struct_of(&|w| {
+        track_struct(
+            w,
+            "activeAudioTrackId_0",
+            Some(&|w| {
+                w.put_utf8(Tag::Context(0), "languageCode1").unwrap();
+                w.put_null(Tag::Context(1)).unwrap();
+            }),
+        );
+    }))
+    .unwrap() else {
+        panic!("ActiveAudioTrack decoded as null");
+    };
+    let Nullable::Value(attrs) = &nulled.track_attributes else {
+        panic!("TrackAttributes decoded as null");
+    };
+    assert_eq!(
+        (attrs.characteristics.clone(), attrs.display_name.clone()),
+        (Some(Nullable::Null), None)
+    );
     // The specification's shape: Characteristics (MediaPlayback's own
     // CharacteristicEnum) at tag 1, DisplayName at tag 2.
     let tracks = mp::decode_available_audio_tracks(&list_of(&[&|w: &mut TlvWriter<'_>| {

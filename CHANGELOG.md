@@ -769,8 +769,9 @@ How each of these clusters was validated:
   it null for an inactive text track (a chip-wire relaxation, recorded in
   `clusters.json` `meta.relaxed` as class N). chip numbers
   `TrackAttributesStruct.DisplayName` at tag 1, where the specification has
-  `Characteristics`, so a display name a chip device sends is skipped and
-  reads as `None`. `ActivateAudioTrack`'s `AudioOutputIndex` is nullable in
+  `Characteristics`, so a display-name string a chip device sends there is
+  skipped (`DisplayName` reads as `None`), and a null one reads as a null
+  `Characteristics`; tv-app always sends a string. `ActivateAudioTrack`'s `AudioOutputIndex` is nullable in
   the specification, and optional here as in matter.js (its conformance is
   the AudioTracks feature); chip's codegen makes it a plain `uint8`, so
   chip's server refuses a null one with InvalidCommand.
