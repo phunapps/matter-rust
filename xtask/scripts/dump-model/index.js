@@ -216,6 +216,13 @@ const ALLOWLIST = [
   // CancelMessagesRequest's list<octstr>; FIELD_RELAXATIONS for chip's
   // FabricIndex-less MessageStruct and events):
   { id: 0x0097, name: 'Messages' },
+  // M9-A3 B6, localization and power-source configuration (attributes only:
+  // writable locale, hour format, calendar and temperature unit; lists of
+  // strings, enums and endpoints; no commands, no events):
+  { id: 0x002b, name: 'LocalizationConfiguration' },
+  { id: 0x002c, name: 'TimeFormatLocalization' },
+  { id: 0x002d, name: 'UnitLocalization' },
+  { id: 0x002e, name: 'PowerSourceConfiguration' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out

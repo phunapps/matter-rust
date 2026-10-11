@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 82] = [
+const TARGET_CLUSTERS: [&str; 86] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -123,6 +123,11 @@ const TARGET_CLUSTERS: [&str; 82] = [
     "EnergyEvse",
     // M9-A3 B5, Messages:
     "Messages",
+    // M9-A3 B6, localization and power-source configuration:
+    "LocalizationConfiguration",
+    "TimeFormatLocalization",
+    "UnitLocalization",
+    "PowerSourceConfiguration",
 ];
 
 fn load() -> Value {
@@ -2197,5 +2202,58 @@ fn messages_keeps_its_shapes() {
     assert_eq!(
         field_optionality(&datatype(c, "MessageResponseOptionStruct")["fields"]),
         [("MessageResponseId", false), ("Label", false)]
+    );
+}
+
+// ---- M9-A3 B6: diagnostics and infrastructure ------------------------------
+
+/// The names of `c`'s writable attributes, in id order.
+fn writable_attributes(c: &Value) -> Vec<&str> {
+    c["attributes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["writable"] == true)
+        .map(|a| a["name"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn localization_and_power_source_configuration_are_attribute_only() {
+    // 1.4.2 LocalizationConfiguration.xml, LocalizationTimeFormat.xml,
+    // LocalizationUnit.xml, PowerSourceConfigurationCluster.xml: attributes
+    // only. The four settings are writable; the lists are read-only.
+    let v = load();
+    let shapes: [(&str, &[&str], &[&str]); 4] = [
+        (
+            "LocalizationConfiguration",
+            &["ActiveLocale", "SupportedLocales"],
+            &["ActiveLocale"],
+        ),
+        (
+            "TimeFormatLocalization",
+            &["HourFormat", "ActiveCalendarType", "SupportedCalendarTypes"],
+            &["HourFormat", "ActiveCalendarType"],
+        ),
+        (
+            "UnitLocalization",
+            &["TemperatureUnit", "SupportedTemperatureUnits"],
+            &["TemperatureUnit"],
+        ),
+        ("PowerSourceConfiguration", &["Sources"], &[]),
+    ];
+    for (name, attributes, writable) in shapes {
+        let c = cluster(&v, name);
+        assert_eq!(element_names(c, "attributes"), attributes, "{name}");
+        assert_eq!(writable_attributes(c), writable, "{name}");
+        assert_eq!(element_names(c, "commands"), Vec::<&str>::new(), "{name}");
+        assert_eq!(element_names(c, "events"), Vec::<&str>::new(), "{name}");
+    }
+    // HourFormatEnum and CalendarTypeEnum keep UseActiveLocale (0xFF).
+    let tf = cluster(&v, "TimeFormatLocalization");
+    assert_eq!(enum_values(datatype(tf, "HourFormatEnum")), [0, 1, 0xFF]);
+    assert_eq!(
+        enum_values(datatype(tf, "CalendarTypeEnum")),
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0xFF]
     );
 }

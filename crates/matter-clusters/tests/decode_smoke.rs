@@ -4449,3 +4449,107 @@ fn present_messages_request_without_responses_omits_tag_6() {
         })
     );
 }
+
+// ---- M9-A3 B6: localization and power-source configuration ----------------
+//
+// Attributes only (1.4.2 LocalizationConfiguration.xml,
+// LocalizationTimeFormat.xml, LocalizationUnit.xml,
+// PowerSourceConfigurationCluster.xml). Values are all-clusters' as chip master
+// serves them (the device-info provider's locales and calendar, main-common.cpp's
+// temperature units; Sources lists the endpoints that carry PowerSource,
+// sorted by their Order, in chip's power-source-configuration-server.cpp).
+
+/// An anonymous array of anonymous UTF-8 strings (a `list<string>` value).
+fn str_array_attr(values: &[&str]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_array(Tag::Anonymous).unwrap();
+        for v in values {
+            w.put_utf8(Tag::Anonymous, v).unwrap();
+        }
+        w.end_container().unwrap();
+    }
+    buf
+}
+
+#[test]
+fn localization_configuration_attributes_decode() {
+    use clusters::localization_configuration::{
+        decode_active_locale, decode_supported_locales, encode_active_locale,
+    };
+    assert_eq!(
+        decode_supported_locales(&str_array_attr(&["en-US", "de-DE", "ja-JP"])).unwrap(),
+        ["en-US", "de-DE", "ja-JP"]
+    );
+    assert_eq!(decode_active_locale(&str_attr("en-US")).unwrap(), "en-US");
+    assert_eq!(
+        encode_active_locale(&"de-DE".to_string()),
+        str_attr("de-DE")
+    );
+    // A locale is a string; an integer is refused.
+    assert!(decode_active_locale(&uint_attr(1)).is_err());
+}
+
+#[test]
+fn time_format_and_unit_localization_attributes_decode() {
+    use clusters::time_format_localization::{
+        decode_active_calendar_type, decode_hour_format, decode_supported_calendar_types,
+        encode_active_calendar_type, encode_hour_format, CalendarTypeEnum, Feature as TimeFeature,
+        HourFormatEnum,
+    };
+    use clusters::unit_localization::{
+        decode_supported_temperature_units, decode_temperature_unit, encode_temperature_unit,
+        Feature as UnitFeature, TempUnitEnum,
+    };
+    assert_eq!(TimeFeature::CALFMT.bits(), 1);
+    assert_eq!(UnitFeature::TEMP.bits(), 1);
+    // The enum values are 12Hr = 0, 24Hr = 1, UseActiveLocale = 0xFF.
+    assert_eq!(
+        decode_hour_format(&uint_attr(1)).unwrap(),
+        HourFormatEnum::_24Hr
+    );
+    assert_eq!(
+        decode_hour_format(&uint_attr(0xFF)).unwrap(),
+        HourFormatEnum::UseActiveLocale
+    );
+    assert_eq!(encode_hour_format(HourFormatEnum::_12Hr), uint_attr(0));
+    assert_eq!(
+        decode_supported_calendar_types(&uint_array_attr(&[4, 0xFF, 42])).unwrap(),
+        [
+            CalendarTypeEnum::Gregorian,
+            CalendarTypeEnum::UseActiveLocale,
+            CalendarTypeEnum::Unknown(42)
+        ]
+    );
+    assert_eq!(
+        decode_active_calendar_type(&encode_active_calendar_type(CalendarTypeEnum::Japanese))
+            .unwrap(),
+        CalendarTypeEnum::Japanese
+    );
+    assert_eq!(
+        decode_supported_temperature_units(&uint_array_attr(&[0, 1])).unwrap(),
+        [TempUnitEnum::Fahrenheit, TempUnitEnum::Celsius]
+    );
+    assert_eq!(
+        decode_temperature_unit(&uint_attr(2)).unwrap(),
+        TempUnitEnum::Kelvin
+    );
+    assert_eq!(encode_temperature_unit(TempUnitEnum::Celsius), uint_attr(1));
+}
+
+#[test]
+fn power_source_configuration_sources_decode() {
+    use clusters::power_source_configuration::{attribute_id, decode_sources, CLUSTER_ID};
+    assert_eq!((CLUSTER_ID, attribute_id::SOURCES), (0x002E, 0x0000));
+    // Endpoints in source order (all-clusters: Order 1 on endpoint 2, 2 on
+    // endpoint 1, 3 on endpoint 0).
+    assert_eq!(
+        decode_sources(&uint_array_attr(&[2, 1, 0])).unwrap(),
+        [2, 1, 0]
+    );
+    assert_eq!(
+        decode_sources(&uint_array_attr(&[])).unwrap(),
+        Vec::<u16>::new()
+    );
+}

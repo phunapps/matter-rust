@@ -14,6 +14,10 @@
       "BasicInformation",
       "OtaSoftwareUpdateProvider",
       "OtaSoftwareUpdateRequestor",
+      "LocalizationConfiguration",
+      "TimeFormatLocalization",
+      "UnitLocalization",
+      "PowerSourceConfiguration",
       "PowerSource",
       "GeneralDiagnostics",
       "TimeSynchronization",
@@ -4199,6 +4203,269 @@
           ]
         }
       ]
+    },
+    {
+      "id": 43,
+      "name": "LocalizationConfiguration",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "ActiveLocale",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "The ActiveLocale attribute shall represent the locale that the Node is currently configured to use when conveying information. The ActiveLocale attribute shall be a Language Tag as defined by BCP47. The ActiveLocale attribute shall have a default value assigned by the Vendor and shall be a value contained within the SupportedLocales attribute.\nAn attempt to write a value to ActiveLocale that is not present in SupportedLocales shall result in a CONSTRAINT_ERROR error."
+        },
+        {
+          "id": 1,
+          "name": "SupportedLocales",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "string",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "The SupportedLocales attribute shall represent a list of locale strings that are valid values for the ActiveLocale attribute. The list shall NOT contain any duplicate entries. The ordering of items within the list SHOULD NOT express any meaning."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": []
+    },
+    {
+      "id": 44,
+      "name": "TimeFormatLocalization",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "CALFMT",
+          "name": "CalendarFormat",
+          "description": "The Node can be configured to use different calendar formats when conveying values to a user."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "HourFormat",
+          "type": "HourFormatEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": false,
+          "writable": true,
+          "description": "Indicates the format that the Node is currently configured to use when conveying the hour unit of time.\nIf not UseActiveLocale, this value shall take priority over any unit implied through the ActiveLocale attribute. If UseActiveLocale, any unit implied through the ActiveLocale attribute is used as the hour format, and if ActiveLocale is not present, the hour format is unknown."
+        },
+        {
+          "id": 1,
+          "name": "ActiveCalendarType",
+          "type": "CalendarTypeEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the calendar format that the Node is currently configured to use when conveying dates.\nIf not UseActiveLocale, this value shall take priority over any unit implied through the ActiveLocale attribute. If UseActiveLocale, any unit implied through the ActiveLocale attribute is used as the calendar type, and if ActiveLocale is not present, the calendar type is unknown."
+        },
+        {
+          "id": 2,
+          "name": "SupportedCalendarTypes",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "CalendarTypeEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a list of CalendarTypeEnum values that are supported by the Node. The list shall NOT contain any duplicate entries. The ordering of items within the list SHOULD NOT express any meaning. The maximum length of the SupportedCalendarTypes list shall be equivalent to the number of enumerations within CalendarTypeEnum."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "CalendarTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Buddhist",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Chinese",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Coptic",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Ethiopian",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Gregorian",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Hebrew",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Indian",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Islamic",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Japanese",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Korean",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Persian",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Taiwanese",
+              "description": null
+            },
+            {
+              "value": 255,
+              "name": "UseActiveLocale",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "HourFormatEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "12Hr",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "24Hr",
+              "description": null
+            },
+            {
+              "value": 255,
+              "name": "UseActiveLocale",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 45,
+      "name": "UnitLocalization",
+      "revision": 2,
+      "features": [
+        {
+          "bit": 0,
+          "code": "TEMP",
+          "name": "TemperatureUnit",
+          "description": "The Node can be configured to use different units of temperature when conveying values to a user."
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "TemperatureUnit",
+          "type": "TempUnitEnum",
+          "metatype": "enum",
+          "nullable": false,
+          "optional": true,
+          "writable": true,
+          "description": "Indicates the unit for the Node to use only when conveying temperature in communication to the user, for example such as via a user interface on the device. If provided, this value shall take priority over any unit implied through the ActiveLocale Attribute.\nAn attempt to write to this attribute with a value not included in the SupportedTemperatureUnits attribute list shall result in a CONSTRAINT_ERROR."
+        },
+        {
+          "id": 1,
+          "name": "SupportedTemperatureUnits",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TempUnitEnum",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates a list of units supported by the Node to be used when writing the TemperatureUnit attribute of this cluster. Each entry in the list shall be unique."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "TempUnitEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Fahrenheit",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Celsius",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Kelvin",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 46,
+      "name": "PowerSourceConfiguration",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "Sources",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "endpoint-no",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This list shall contain the set of all power sources capable of participating in the power system of this Node. Each entry in the list shall be the endpoint number of an endpoint having a Power Source cluster, which corresponds to a physical power source. The endpoint number shall be unique within the list.\nThe order of power sources on a Node is defined by the Order attribute of its associated Power Source cluster provided on the endpoint. List entries shall be sorted in increasing order, that is, an entry with a lower order shall have a lower index than any entry with a higher order. Multiple entries may have the same order, there are no restrictions on their relative sorting."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": []
     },
     {
       "id": 47,

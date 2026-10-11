@@ -25,7 +25,7 @@
 //!
 //! # Clusters
 //!
-//! 82 clusters are generated today. The full list is [`clusters`]; by area:
+//! 86 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
@@ -75,6 +75,8 @@
 //!   `AdministratorCommissioning`, `OperationalCredentials`,
 //!   `IcdManagement`, `TimeSynchronization`, `OtaSoftwareUpdateRequestor`,
 //!   `OtaSoftwareUpdateProvider`.
+//! - **Node configuration:** `LocalizationConfiguration`,
+//!   `TimeFormatLocalization`, `UnitLocalization`, `PowerSourceConfiguration`.
 //!
 //! Note that this crate holds **codecs only**. For the administration
 //! clusters in particular, encoding a command is not the same as running the

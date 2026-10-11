@@ -411,6 +411,19 @@ written but have not run, because tv-app, its only chip host, needs Rosetta
 to every fabric and no FabricIndex, so on a chip device every entry decodes
 in full with `fabric_index` `None`.
 
+### matter-clusters: Added — diagnostics and infrastructure clusters
+
+- **LocalizationConfiguration (0x002B)**, **TimeFormatLocalization
+  (0x002C)**, **UnitLocalization (0x002D)** and **PowerSourceConfiguration
+  (0x002E)**: every attribute, and the writers for `ActiveLocale`,
+  `HourFormat`, `ActiveCalendarType` and `TemperatureUnit`. Attributes only.
+
+chip's zap and controller codegen mark UnitLocalization's
+`SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so
+does v1.4.2.0's `data_model/1.4.2` XML (`P, TEMP`). Master's
+`data_model/1.4.2`, 1.5 and 1.5.1 XML and the matter.js model have it as
+`TEMP`, so, as with Messages, it carries no provisional note.
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a
