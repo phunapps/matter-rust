@@ -626,3 +626,35 @@ fn get_program_guide_uses_the_specifications_field_ids() {
         cmd("channel/cmd_get_program_guide.json")
     );
 }
+
+#[test]
+fn set_block_content_time_window_matches_matter_js() {
+    // M9-A3 B7: ContentControl's deepest request (a struct at tag 0 holding a
+    // nullable index, a map8 and a list of structs), against matter.js's own
+    // TlvSetBlockContentTimeWindowRequest, with the index null and set.
+    use clusters::content_control::{
+        encode_set_block_content_time_window, DayOfWeekBitmap, TimePeriodStruct, TimeWindowStruct,
+    };
+    let period = |start_hour, start_minute, end_hour, end_minute| TimePeriodStruct {
+        start_hour,
+        start_minute,
+        end_hour,
+        end_minute,
+    };
+    assert_eq!(
+        encode_set_block_content_time_window(TimeWindowStruct {
+            time_window_index: Nullable::Null,
+            day_of_week: DayOfWeekBitmap::MONDAY | DayOfWeekBitmap::SATURDAY,
+            time_period: vec![period(8, 30, 9, 0), period(22, 0, 23, 59)],
+        }),
+        cmd("content_control/cmd_set_block_content_time_window_null_index.json")
+    );
+    assert_eq!(
+        encode_set_block_content_time_window(TimeWindowStruct {
+            time_window_index: Nullable::Value(7),
+            day_of_week: DayOfWeekBitmap::SUNDAY,
+            time_period: vec![period(6, 15, 7, 45)],
+        }),
+        cmd("content_control/cmd_set_block_content_time_window_index.json")
+    );
+}

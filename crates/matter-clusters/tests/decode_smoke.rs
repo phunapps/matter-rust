@@ -6661,11 +6661,14 @@ fn channel_additional_info_copy_matches_content_launchers() {
 
 // ---- M9-A3 B7: ContentControl (provisional) ---------------------------------
 //
-// 1.4.2 ContentControl.xml, where the whole cluster is provisional. tv-app's
-// delegate is a stub, and chip's server registers no attribute-access handler,
-// so tv-app's callback rating lists have no reader (master 5cd2917a and
-// v1.4.2.0): every list value here is synthetic. The FeatureMap is tv-app's
-// (0x1C: BU, OCR, SCR; its `ram` default 28, master 5cd2917a and v1.4.2.0).
+// 1.4.2 ContentControl.xml, where the whole cluster is provisional. Only the
+// FeatureMap is tv-app's (0x1C: BU, OCR, SCR; its `ram` default 28, master
+// 5cd2917a and v1.4.2.0). Every other value here, scalar or list, request or
+// response, is synthetic. tv-app's delegate is a stub, and chip's server
+// registers no attribute-access handler, so tv-app's callback rating lists
+// have no reader; its `ram` ScreenDailyTime has no default (and ST is not in
+// its FeatureMap); its ResetPIN handler is empty, so it never sends a PIN
+// (all master 5cd2917a and v1.4.2.0).
 
 #[test]
 fn content_control_attributes_decode() {

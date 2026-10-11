@@ -58,6 +58,11 @@ import { ContentLauncher } from '@matter/types/clusters/content-launcher';
 // ContentLauncher's AdditionalInfoStruct, which the dump copies into Channel.
 import { Channel } from '@matter/types/clusters/channel';
 
+// matter.js's own ContentControl request schema (M9-A3 B7):
+// SetBlockContentTimeWindow nests a TimeWindowStruct (nullable index, map8
+// DayOfWeek, a list of TimePeriodStruct) at field 0.
+import { ContentControl } from '@matter/types/clusters/content-control';
+
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -688,6 +693,51 @@ cmd('channel', 'cmd_get_program_guide.json',
     recordingFlag: { scheduled: true, recordSeries: true },
     externalIdList: [{ name: 'imdb', value: 'tt0001' }],
     data: Buffer.from([0x01, 0x02]),
+  }));
+
+// ---------------------------------------------------------------------------
+// ContentControl (0x050F) SetBlockContentTimeWindow (0x0F) — M9-A3 B7. The
+// request's TimeWindowStruct at field 0, with a list of TimePeriodStruct:
+// once with the nullable TimeWindowIndex null (a new window) and two periods,
+// once with it set and one period. Encoded with matter.js's own
+// TlvSetBlockContentTimeWindowRequest. Values are synthetic.
+// ---------------------------------------------------------------------------
+cmd('content_control', 'cmd_set_block_content_time_window_null_index.json',
+  { cluster: 'ContentControl', cluster_id: 0x050F, command: 'SetBlockContentTimeWindow', command_id: 0x0F,
+    fields: [
+      { name: 'TimeWindow', id: 0, value: {
+        timeWindowIndex: null, dayOfWeek: 0x42,
+        timePeriod: [
+          { startHour: 8, startMinute: 30, endHour: 9, endMinute: 0 },
+          { startHour: 22, startMinute: 0, endHour: 23, endMinute: 59 },
+        ] } },
+    ],
+    note: 'TimeWindowStruct with a null TimeWindowIndex, DayOfWeek Monday | Saturday and two TimePeriodStruct entries (encoded with matter.js TlvSetBlockContentTimeWindowRequest)' },
+  ContentControl.TlvSetBlockContentTimeWindowRequest.encode({
+    timeWindow: {
+      timeWindowIndex: null,
+      dayOfWeek: { monday: true, saturday: true },
+      timePeriod: [
+        { startHour: 8, startMinute: 30, endHour: 9, endMinute: 0 },
+        { startHour: 22, startMinute: 0, endHour: 23, endMinute: 59 },
+      ],
+    },
+  }));
+
+cmd('content_control', 'cmd_set_block_content_time_window_index.json',
+  { cluster: 'ContentControl', cluster_id: 0x050F, command: 'SetBlockContentTimeWindow', command_id: 0x0F,
+    fields: [
+      { name: 'TimeWindow', id: 0, value: {
+        timeWindowIndex: 7, dayOfWeek: 0x01,
+        timePeriod: [{ startHour: 6, startMinute: 15, endHour: 7, endMinute: 45 }] } },
+    ],
+    note: 'TimeWindowStruct with TimeWindowIndex 7, DayOfWeek Sunday and one TimePeriodStruct entry (encoded with matter.js TlvSetBlockContentTimeWindowRequest)' },
+  ContentControl.TlvSetBlockContentTimeWindowRequest.encode({
+    timeWindow: {
+      timeWindowIndex: 7,
+      dayOfWeek: { sunday: true },
+      timePeriod: [{ startHour: 6, startMinute: 15, endHour: 7, endMinute: 45 }],
+    },
   }));
 
 console.log('capture-clusters: all vectors written.');

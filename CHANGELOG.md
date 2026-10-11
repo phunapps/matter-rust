@@ -804,9 +804,11 @@ How each of these clusters was validated:
   events. `ResetPinResponse`'s PIN is redacted in `Debug`. chip's zap XML and
   controller codegen mark the cluster provisional too (both refs). chip
   v1.4.2.0's codegen has an older shape of the cluster (five features,
-  attributes 0 to 7, no block lists, `UpdatePIN.OldPIN` and
-  `AddBonusTime.BonusTime` optional); master's matches the specification.
-  The generated encoders always send both, which either decoder accepts.
+  attributes 0 to 7, no block lists or block-list commands, one event (no
+  `EnteringBlockContentTimeWindow`), no `StatusCodeEnum`, and
+  `UpdatePIN.OldPIN` and `AddBonusTime.BonusTime` optional); master's
+  matches the specification. The generated encoders always send `OldPIN`
+  and `BonusTime`, which either decoder accepts.
 
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 
@@ -824,7 +826,8 @@ How each of these clusters was validated:
   `OperationalDatasetResponse` (Thread datasets, network key included),
   WiFiNetworkManagement `NetworkPassphraseResponse` (the Wi-Fi passphrase),
   CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier,
-  AccountLogin `GetSetupPinResponse` (the Content App's setup PIN) and
+  AccountLogin `GetSetupPinResponse` (a setup PIN for PASE with the
+  Commissionee) and
   ContentControl `ResetPinResponse` (the new content-control PIN).
   Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
   rendering differs (it was never a stable format).
