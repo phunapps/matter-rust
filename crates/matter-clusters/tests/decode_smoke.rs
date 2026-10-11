@@ -6382,12 +6382,14 @@ fn content_launcher_attributes_response_and_copied_enum() {
         (refused.status, refused.data),
         (StatusEnum::AuthFailed, None)
     );
-    // ContentLauncher's copy of MediaPlayback's CharacteristicEnum has the same
-    // values as the original.
+    // ContentLauncher's copy of MediaPlayback's CharacteristicEnum maps every
+    // value to the same variant name as the original (`Debug` prints the
+    // name, and `Unknown(18)` for the first value past the end). Comparing
+    // `to_raw` alone could not fail: every enum gives `from_raw(x).to_raw() == x`.
     for raw in 0..=18 {
         assert_eq!(
-            CharacteristicEnum::from_raw(raw).to_raw(),
-            Original::from_raw(raw).to_raw()
+            format!("{:?}", CharacteristicEnum::from_raw(raw)),
+            format!("{:?}", Original::from_raw(raw))
         );
     }
     assert_eq!(

@@ -428,47 +428,23 @@ proptest! {
     #[test]
     fn playback_preferences_reencode(
         position in proptest::option::of(proptest::option::of(any::<u64>())),
-        text in proptest::option::of(proptest::option::of((
-            "[a-z]{2}",
-            proptest::option::of(proptest::option::of(proptest::collection::vec(0u8..=20, 0..4))),
-            proptest::option::of(proptest::option::of(any::<u8>())),
-        ))),
-        audio in proptest::option::of(proptest::option::of(proptest::collection::vec("[a-z]{2}", 0..3))),
+        text in proptest::option::of(proptest::option::of(track_parts())),
+        audio in proptest::option::of(proptest::option::of(
+            proptest::collection::vec(track_parts(), 0..3),
+        )),
     ) {
         // PlaybackPreferencesStruct: a nested nullable struct (TextTrack) and a
         // nullable list of structs (AudioTracks), each optional, whose
-        // TrackPreferenceStruct holds an optional nullable enum list: the B7
-        // encoder paths. LaunchContent and LaunchURL send it: encode -> decode
-        // gives the same struct, absent and null kept apart. (`None` inside an
-        // `Option` stands for null.)
-        use clusters::content_launcher::{
-            CharacteristicEnum, PlaybackPreferencesStruct, TrackPreferenceStruct,
-        };
-        fn nullable<T>(v: Option<T>) -> Nullable<T> {
-            v.map_or(Nullable::Null, Nullable::Value)
-        }
+        // TrackPreferenceStruct holds an optional nullable enum list and an
+        // optional nullable uint8, varied in TextTrack and in every AudioTracks
+        // entry alike: the B7 encoder paths. LaunchContent and LaunchURL send
+        // it: encode -> decode gives the same struct, absent and null kept
+        // apart. (`None` inside an `Option` stands for null.)
+        use clusters::content_launcher::PlaybackPreferencesStruct;
         let prefs = PlaybackPreferencesStruct {
             playback_position: position.map(nullable),
-            text_track: text.map(|t| {
-                nullable(t.map(|(language, chars, index)| TrackPreferenceStruct {
-                    language_code: language,
-                    characteristics: chars.map(|c| {
-                        nullable(c.map(|v| v.into_iter().map(CharacteristicEnum::from_raw).collect()))
-                    }),
-                    audio_output_index: index.map(nullable),
-                }))
-            }),
-            audio_tracks: audio.map(|a| {
-                nullable(a.map(|ls| {
-                    ls.into_iter()
-                        .map(|language| TrackPreferenceStruct {
-                            language_code: language,
-                            characteristics: None,
-                            audio_output_index: None,
-                        })
-                        .collect()
-                }))
-            }),
+            text_track: text.map(|t| nullable(t.map(track))),
+            audio_tracks: audio.map(|a| nullable(a.map(|ls| ls.into_iter().map(track).collect()))),
         };
         let bytes = prefs.encode();
         let back = PlaybackPreferencesStruct::decode(&bytes).unwrap();
@@ -479,23 +455,29 @@ proptest! {
     #[test]
     fn branding_information_reencodes(
         provider in "[A-Za-z ]{0,12}",
-        sizes in proptest::collection::vec(
-            proptest::option::of((-1.0e9f64..1.0e9, -1.0e9f64..1.0e9, 0u8..=2)),
+        styles in proptest::collection::vec(
+            proptest::option::of((
+                proptest::option::of("[a-z:/.]{0,16}"),
+                proptest::option::of("#[0-9A-F]{6}"),
+                proptest::option::of((double(), double(), 0u8..=2)),
+            )),
             5,
         ),
     ) {
         // BrandingInformationStruct: five optional StyleInformationStructs,
-        // each with an optional DimensionStruct of two doubles (finite here:
-        // NaN is not equal to itself) and an enum: three levels of struct
-        // fields. LaunchURL sends it.
+        // each with an optional ImageUrl, Color and DimensionStruct (two
+        // doubles and an enum): three levels of struct fields. LaunchURL sends
+        // it. The doubles include -0.0, both infinities, NaN and any bit
+        // pattern, so the struct is compared with its doubles as bits: `==`
+        // would accept a lost sign on -0.0 and never accept NaN.
         use clusters::content_launcher::{
             BrandingInformationStruct, DimensionStruct, MetricTypeEnum, StyleInformationStruct,
         };
-        let style = |s: &Option<(f64, f64, u8)>| {
-            s.map(|(width, height, metric)| StyleInformationStruct {
-                image_url: None,
-                color: Some("#123456".to_string()),
-                size: Some(DimensionStruct {
+        let style = |s: &Option<StyleParts>| {
+            s.clone().map(|(image_url, color, size)| StyleInformationStruct {
+                image_url,
+                color,
+                size: size.map(|(width, height, metric)| DimensionStruct {
                     width,
                     height,
                     metric: MetricTypeEnum::from_raw(metric),
@@ -504,15 +486,98 @@ proptest! {
         };
         let branding = BrandingInformationStruct {
             provider_name: provider,
-            background: style(&sizes[0]),
-            logo: style(&sizes[1]),
-            progress_bar: style(&sizes[2]),
-            splash: style(&sizes[3]),
-            watermark: style(&sizes[4]),
+            background: style(&styles[0]),
+            logo: style(&styles[1]),
+            progress_bar: style(&styles[2]),
+            splash: style(&styles[3]),
+            watermark: style(&styles[4]),
         };
         let bytes = branding.encode();
         let back = BrandingInformationStruct::decode(&bytes).unwrap();
-        prop_assert_eq!(&back, &branding);
+        prop_assert_eq!(branding_bits(&back), branding_bits(&branding));
         prop_assert_eq!(back.encode(), bytes);
     }
+}
+
+// ---- M9-A3 B7: ContentLauncher proptest helpers ------------------------------
+
+/// `Some` as a value, `None` as null.
+fn nullable<T>(v: Option<T>) -> Nullable<T> {
+    v.map_or(Nullable::Null, Nullable::Value)
+}
+
+/// A `TrackPreferenceStruct`'s parts: language code, optional nullable
+/// Characteristics (raw values, some past the enum's end), optional nullable
+/// `AudioOutputIndex`.
+type TrackParts = (String, Option<Option<Vec<u8>>>, Option<Option<u8>>);
+
+fn track_parts() -> impl Strategy<Value = TrackParts> {
+    (
+        "[a-z]{2}",
+        proptest::option::of(proptest::option::of(proptest::collection::vec(
+            0u8..=20,
+            0..4,
+        ))),
+        proptest::option::of(proptest::option::of(any::<u8>())),
+    )
+}
+
+fn track(
+    (language, chars, index): TrackParts,
+) -> clusters::content_launcher::TrackPreferenceStruct {
+    use clusters::content_launcher::{CharacteristicEnum, TrackPreferenceStruct};
+    TrackPreferenceStruct {
+        language_code: language,
+        characteristics: chars.map(|c| {
+            nullable(c.map(|v| v.into_iter().map(CharacteristicEnum::from_raw).collect()))
+        }),
+        audio_output_index: index.map(nullable),
+    }
+}
+
+/// A double that is often an edge value (both zeros, both infinities, NaN)
+/// and otherwise any bit pattern.
+fn double() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        Just(0.0),
+        Just(-0.0),
+        Just(f64::INFINITY),
+        Just(f64::NEG_INFINITY),
+        Just(f64::NAN),
+        any::<u64>().prop_map(f64::from_bits),
+    ]
+}
+
+/// A `StyleInformationStruct`'s parts: `ImageUrl`, `Color`, and the `Size`
+/// dimension's width, height and raw metric.
+type StyleParts = (Option<String>, Option<String>, Option<(f64, f64, u8)>);
+
+/// The same parts with the doubles as bits, so equality tells -0.0 from 0.0
+/// and NaN equals itself.
+type StyleBits = (Option<String>, Option<String>, Option<(u64, u64, u8)>);
+
+fn branding_bits(
+    b: &clusters::content_launcher::BrandingInformationStruct,
+) -> (String, Vec<Option<StyleBits>>) {
+    let style = |s: &Option<clusters::content_launcher::StyleInformationStruct>| {
+        s.as_ref().map(|s| {
+            (
+                s.image_url.clone(),
+                s.color.clone(),
+                s.size
+                    .as_ref()
+                    .map(|d| (d.width.to_bits(), d.height.to_bits(), d.metric.to_raw())),
+            )
+        })
+    };
+    (
+        b.provider_name.clone(),
+        vec![
+            style(&b.background),
+            style(&b.logo),
+            style(&b.progress_bar),
+            style(&b.splash),
+            style(&b.watermark),
+        ],
+    )
 }

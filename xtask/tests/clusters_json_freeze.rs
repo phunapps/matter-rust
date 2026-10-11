@@ -650,6 +650,16 @@ fn field_optionality(fields: &Value) -> Vec<(&str, bool)> {
         .collect()
 }
 
+/// `(name, value)` for each value of an enum.
+fn enum_members(d: &Value) -> Vec<(&str, u64)> {
+    d["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| (v["name"].as_str().unwrap(), v["value"].as_u64().unwrap()))
+        .collect()
+}
+
 fn enum_values(d: &Value) -> Vec<u64> {
     d["values"]
         .as_array()
@@ -3038,9 +3048,11 @@ fn content_launcher_keeps_its_shapes_and_copies_characteristic_enum() {
     let c = cluster(&v, "ContentLauncher");
     let copied = datatype(c, "CharacteristicEnum");
     assert_eq!(copied["copiedFrom"], "MediaPlayback");
+    // Names and values both: a copy that kept the values but shuffled the
+    // names would decode every Characteristic as the wrong one.
     assert_eq!(
-        enum_values(copied),
-        enum_values(datatype(cluster(&v, "MediaPlayback"), "CharacteristicEnum"))
+        enum_members(copied),
+        enum_members(datatype(cluster(&v, "MediaPlayback"), "CharacteristicEnum"))
     );
     let characteristics = &datatype(c, "TrackPreferenceStruct")["fields"][1];
     assert_eq!(characteristics["entryType"], "CharacteristicEnum");

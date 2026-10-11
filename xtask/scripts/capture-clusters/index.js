@@ -610,4 +610,43 @@ cmd('content_launcher', 'cmd_launch_content.json',
     useCurrentContext: false,
   }));
 
+// The shapes the two vectors above leave out, split over one LaunchURL and
+// one LaunchContent: LaunchURL's own PlaybackPreferences (field 3) with a
+// non-null PlaybackPosition, a null nested struct (TextTrack) and a null
+// whole list (AudioTracks); LaunchContent's Data, an empty ParameterList, and
+// an AudioTracks entry with an empty Characteristics list and a null
+// AudioOutputIndex.
+
+cmd('content_launcher', 'cmd_launch_url_preferences.json',
+  { cluster: 'ContentLauncher', cluster_id: 0x050a, command: 'LaunchURL', command_id: 0x01,
+    fields: [
+      { name: 'ContentURL', id: 0, value: 'u' },
+      { name: 'PlaybackPreferences', id: 3,
+        value: { playbackPosition: 42, textTrack: null, audioTracks: null } },
+    ],
+    note: 'LaunchURL PlaybackPreferences: a non-null uint64, a null nested struct and a null whole list (encoded with matter.js TlvLaunchUrlRequest)' },
+  ContentLauncher.TlvLaunchUrlRequest.encode({
+    contentUrl: 'u',
+    playbackPreferences: { playbackPosition: 42, textTrack: null, audioTracks: null },
+  }));
+
+cmd('content_launcher', 'cmd_launch_content_data.json',
+  { cluster: 'ContentLauncher', cluster_id: 0x050a, command: 'LaunchContent', command_id: 0x00,
+    fields: [
+      { name: 'Search', id: 0, value: { parameterList: [] } },
+      { name: 'AutoPlay', id: 1, value: false },
+      { name: 'Data', id: 2, value: 'd' },
+      { name: 'PlaybackPreferences', id: 3,
+        value: { audioTracks: [{ languageCode: 'de', characteristics: [], audioOutputIndex: null }] } },
+    ],
+    note: 'LaunchContent Data, empty request lists, and a null uint8 in a list entry (encoded with matter.js TlvLaunchContentRequest)' },
+  ContentLauncher.TlvLaunchContentRequest.encode({
+    search: { parameterList: [] },
+    autoPlay: false,
+    data: 'd',
+    playbackPreferences: {
+      audioTracks: [{ languageCode: 'de', characteristics: [], audioOutputIndex: null }],
+    },
+  }));
+
 console.log('capture-clusters: all vectors written.');

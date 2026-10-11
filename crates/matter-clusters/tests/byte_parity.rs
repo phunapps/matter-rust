@@ -532,3 +532,52 @@ fn launch_content_encodes_optional_and_nullable_lists_in_structs() {
         cmd("content_launcher/cmd_launch_content.json")
     );
 }
+
+#[test]
+fn launch_url_encodes_playback_preferences_with_null_track_and_list() {
+    // M9-A3 B7: LaunchURL's PlaybackPreferences (field 3), with a non-null
+    // PlaybackPosition, a null nested struct (TextTrack) and a null whole
+    // list (AudioTracks), against matter.js's own TlvLaunchUrlRequest.
+    use clusters::content_launcher::{encode_launch_url, PlaybackPreferencesStruct};
+    let prefs = PlaybackPreferencesStruct {
+        playback_position: Some(Nullable::Value(42)),
+        text_track: Some(Nullable::Null),
+        audio_tracks: Some(Nullable::Null),
+    };
+    assert_eq!(
+        encode_launch_url(&"u".to_string(), None, None, Some(prefs)),
+        cmd("content_launcher/cmd_launch_url_preferences.json")
+    );
+}
+
+#[test]
+fn launch_content_encodes_data_empty_lists_and_null_output_index() {
+    // M9-A3 B7: LaunchContent's Data, an empty ParameterList, and an
+    // AudioTracks entry with an empty Characteristics list and a null
+    // AudioOutputIndex, against matter.js's own TlvLaunchContentRequest.
+    use clusters::content_launcher::{
+        encode_launch_content, ContentSearchStruct, PlaybackPreferencesStruct,
+        TrackPreferenceStruct,
+    };
+    let prefs = PlaybackPreferencesStruct {
+        playback_position: None,
+        text_track: None,
+        audio_tracks: Some(Nullable::Value(vec![TrackPreferenceStruct {
+            language_code: "de".to_string(),
+            characteristics: Some(Nullable::Value(Vec::new())),
+            audio_output_index: Some(Nullable::Null),
+        }])),
+    };
+    assert_eq!(
+        encode_launch_content(
+            ContentSearchStruct {
+                parameter_list: Vec::new(),
+            },
+            false,
+            Some("d".to_string()),
+            Some(prefs),
+            None,
+        ),
+        cmd("content_launcher/cmd_launch_content_data.json")
+    );
+}
