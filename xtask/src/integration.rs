@@ -338,10 +338,17 @@ fn chip_root() -> Result<PathBuf, String> {
 
 /// Return the host-specific build target string (e.g. `darwin-arm64`).
 fn host_target() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "darwin-arm64"
-    } else {
-        "linux-x64"
+    host_target_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// The `build_examples.py` host target for an OS / CPU pair, as
+/// `std::env::consts` names them: `darwin-arm64` on macOS, `linux-arm64` on
+/// an aarch64 Linux host (a Raspberry Pi; M9-A3 B6), `linux-x64` otherwise.
+fn host_target_for(os: &str, arch: &str) -> &'static str {
+    match (os, arch) {
+        ("macos", _) => "darwin-arm64",
+        ("linux", "aarch64") => "linux-arm64",
+        _ => "linux-x64",
     }
 }
 
@@ -460,12 +467,52 @@ fn locate_or_build_v2_requestor(chip_root: &Path) -> Result<PathBuf, String> {
 // Stale-process cleanup
 // ---------------------------------------------------------------------------
 
-/// Best-effort kill of any running chip-*-app processes (e.g. a DUT left over
-/// from a previous crashed run). pkill returns non-zero when nothing matched,
-/// so we silently ignore the exit status.
+/// Every app name [`app_spec`] accepts.
+const APP_NAMES: [&str; 8] = [
+    "all-clusters",
+    "lock",
+    "evse",
+    "icd",
+    "ota",
+    "rvc",
+    "microwave-oven",
+    "tv",
+];
+
+/// chip example-app binaries the harness has no [`AppSpec`] for yet but that
+/// are built on harness hosts (the Linux arm64 Pi, M9-A3 B6), so a stale one
+/// can still hold the DUT's port. Their `build_examples.py` targets are
+/// `<host>-network-manager`, `<host>-water-heater` and
+/// `<host>-fabric-bridge-rpc`: fabric-bridge builds only with the `-rpc`
+/// modifier (`'fabric-bridge' does not support '<host>-fabric-bridge' due to
+/// rule ONLY IF '-rpc'`), so its `AppSpec`, when one is added, needs
+/// `target_suffix: "fabric-bridge-rpc"`.
+const OTHER_DUT_BINARIES: [&str; 3] = [
+    "matter-network-manager-app",
+    "fabric-bridge-app",
+    "matter-water-heater-app",
+];
+
+/// The `pkill -f` pattern [`kill_stale_duts`] uses: every [`AppSpec`]
+/// binary and every [`OTHER_DUT_BINARIES`] name, as an alternation. The
+/// names hold only `[a-z0-9-]`, so none needs escaping. (The old pattern,
+/// `chip-.*-app`, missed `lit-icd-app` and the three names above.)
+fn stale_dut_pattern() -> String {
+    let mut names: Vec<&str> = APP_NAMES
+        .iter()
+        .filter_map(|app| app_spec(Some(app)).ok())
+        .map(|spec| spec.binary)
+        .collect();
+    names.extend(OTHER_DUT_BINARIES);
+    names.join("|")
+}
+
+/// Best-effort kill of any running DUT processes (e.g. a DUT left over from a
+/// previous crashed run), matched by [`stale_dut_pattern`]. pkill returns
+/// non-zero when nothing matched, so we silently ignore the exit status.
 fn kill_stale_duts() {
     let _ = Command::new("pkill")
-        .args(["-f", "chip-.*-app"])
+        .args(["-f", &stale_dut_pattern()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
@@ -877,8 +924,8 @@ mod tests {
 
     #[test]
     fn rvc_host_runs_only_its_own_suite_with_the_app_pipe() {
-        // `build_examples.py --target darwin-arm64-rvc` (linux-x64-rvc on
-        // Linux) builds out/<target>-rvc/chip-rvc-app. M9-A3 B3: the tests
+        // `build_examples.py --target darwin-arm64-rvc` (linux-x64-rvc or
+        // linux-arm64-rvc on Linux) builds out/<target>-rvc/chip-rvc-app. M9-A3 B3: the tests
         // reset rvc-app and stimulate its events over --app-pipe.
         let spec = app_spec(Some("rvc")).unwrap();
         assert_eq!(
@@ -902,7 +949,7 @@ mod tests {
     #[test]
     fn microwave_oven_host_runs_only_its_own_suite_with_plain_arguments() {
         // `build_examples.py --target darwin-arm64-microwave-oven`
-        // (linux-x64-microwave-oven on Linux) builds
+        // (linux-x64- or linux-arm64-microwave-oven on Linux) builds
         // out/<target>-microwave-oven/chip-microwave-oven-app
         // (examples/microwave-oven-app/linux/BUILD.gn). No events, no pipe:
         // neither --enable-key nor --app-pipe.
@@ -940,7 +987,7 @@ mod tests {
     #[test]
     fn tv_host_runs_only_its_own_suite_with_plain_arguments() {
         // `build_examples.py --target darwin-arm64-tv-app` (linux-x64-tv-app
-        // on Linux) builds out/<target>-tv-app/chip-tv-app
+        // or linux-arm64-tv-app on Linux) builds out/<target>-tv-app/chip-tv-app
         // (scripts/build/builders/host.py). No triggers, no pipe.
         let spec = app_spec(Some("tv")).unwrap();
         assert_eq!(
@@ -961,6 +1008,53 @@ mod tests {
             err.contains("rvc") && err.contains("microwave-oven") && err.contains("tv"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn host_target_follows_the_os_and_on_linux_the_cpu() {
+        // M9-A3 B6 (Pi report): an aarch64 Linux host builds linux-arm64-*.
+        assert_eq!(host_target_for("macos", "aarch64"), "darwin-arm64");
+        assert_eq!(host_target_for("macos", "x86_64"), "darwin-arm64");
+        assert_eq!(host_target_for("linux", "aarch64"), "linux-arm64");
+        assert_eq!(host_target_for("linux", "x86_64"), "linux-x64");
+        let expected = if cfg!(target_os = "macos") {
+            "darwin-arm64"
+        } else if cfg!(target_arch = "aarch64") {
+            "linux-arm64"
+        } else {
+            "linux-x64"
+        };
+        assert_eq!(host_target(), expected);
+    }
+
+    #[test]
+    fn stale_dut_pattern_names_every_dut_binary() {
+        let pattern = stale_dut_pattern();
+        let names: Vec<&str> = pattern.split('|').collect();
+        for app in APP_NAMES {
+            let binary = app_spec(Some(app)).unwrap().binary;
+            assert!(names.contains(&binary), "{app}: {binary} not in {pattern}");
+        }
+        for binary in [
+            "matter-network-manager-app",
+            "fabric-bridge-app",
+            "matter-water-heater-app",
+            "lit-icd-app",
+            "chip-all-clusters-app",
+            "chip-tv-app",
+        ] {
+            assert!(names.contains(&binary), "{binary} not in {pattern}");
+        }
+        // Unescaped in an ERE: no name may carry a regex metacharacter.
+        assert!(
+            names.iter().all(|n| !n.is_empty()
+                && n.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')),
+            "{pattern}"
+        );
+        // Every APP_NAMES entry resolved (filter_map drops one app_spec
+        // refuses), and nothing else crept in.
+        assert_eq!(names.len(), APP_NAMES.len() + OTHER_DUT_BINARIES.len());
     }
 
     #[test]
