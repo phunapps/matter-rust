@@ -5750,3 +5750,196 @@ fn secret_fields_are_redacted_in_debug_output() {
     assert_redacted(&shown, &key);
     assert!(!shown.contains("171"), "an epoch key byte leaked");
 }
+
+// ---- M9-A3 B7: media basics -----------------------------------------------
+//
+// WakeOnLan, LowPower, KeypadInput, MediaInput, AudioOutput and
+// TargetNavigator (1.4.2 WakeOnLAN.xml, LowPower.xml, KeypadInput.xml,
+// MediaInput.xml, AudioOutput.xml, TargetNavigator.xml). These values are
+// tv-app's, the same at master 5cd2917a and v1.4.2.0
+// (examples/tv-app/tv-common/clusters/): MediaInputManager's two HDMI inputs,
+// the first two of AudioOutputManager's three HDMI outputs and its current
+// output (1), TargetNavigatorManager's two targets and its NavigateTarget
+// refusal (TargetNotFound, "error"), KeypadInputManager's FeatureMap (7) and
+// its UnsupportedKey answer. Everything else is synthetic: the third output's
+// type (9, an unknown OutputTypeEnum value; tv-app's is HDMI), the MAC
+// address, the link-local address, the event payload, the
+// InvalidKeyInCurrentState answer, the input with no description, and every
+// request argument.
+
+#[test]
+fn wake_on_lan_low_power_and_keypad_input_codecs() {
+    use clusters::keypad_input::{
+        encode_send_key, CecKeyCodeEnum, Feature, SendKeyResponse, StatusEnum,
+    };
+    use clusters::{low_power, wake_on_lan};
+    assert_eq!(
+        wake_on_lan::decode_mac_address(&str_attr("0A1B2C3D4E5F")).unwrap(),
+        "0A1B2C3D4E5F"
+    );
+    let link_local = [
+        0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0x02, 0x1B, 0x2C, 0xFF, 0xFE, 0x3D, 0x4E, 0x5F,
+    ];
+    assert_eq!(
+        wake_on_lan::decode_link_local_address(&bytes_attr(&link_local)).unwrap(),
+        link_local
+    );
+    // Sleep has no fields: an empty anonymous structure.
+    assert_eq!(low_power::encode_sleep(), struct_of(&|_| {}));
+    assert_eq!(
+        (Feature::NV | Feature::LK | Feature::NK).bits(),
+        0x07,
+        "tv-app's KeypadInput FeatureMap"
+    );
+    // Key codes are not contiguous: Data (0x76) is the last, Number0OrNumber10 0x20.
+    assert_eq!(
+        encode_send_key(CecKeyCodeEnum::Data),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 0x76).unwrap())
+    );
+    assert_eq!(
+        CecKeyCodeEnum::from_raw(0x20),
+        CecKeyCodeEnum::Number0OrNumber10
+    );
+    assert_eq!(
+        CecKeyCodeEnum::from_raw(0x0E),
+        CecKeyCodeEnum::Unknown(0x0E)
+    );
+    let response = |status| struct_of(&|w| w.put_uint(Tag::Context(0), status).unwrap());
+    assert_eq!(
+        SendKeyResponse::decode(&response(1)).unwrap().status,
+        StatusEnum::UnsupportedKey
+    );
+    assert_eq!(
+        SendKeyResponse::decode(&response(2)).unwrap().status,
+        StatusEnum::InvalidKeyInCurrentState
+    );
+    assert!(SendKeyResponse::decode(&struct_of(&|_| {})).is_err());
+}
+
+#[test]
+fn media_input_and_audio_output_lists_and_requests() {
+    use clusters::audio_output::{self as ao, OutputTypeEnum};
+    use clusters::media_input::{self as mi, InputTypeEnum};
+    let input = |index: u64, name: &'static str| {
+        move |w: &mut TlvWriter<'_>| {
+            w.put_uint(Tag::Context(0), index).unwrap();
+            w.put_uint(Tag::Context(1), 4).unwrap(); // Hdmi
+            w.put_utf8(Tag::Context(2), name).unwrap();
+            w.put_utf8(Tag::Context(3), "High-Definition Multimedia Interface")
+                .unwrap();
+        }
+    };
+    let inputs = mi::decode_input_list(&list_of(&[&input(1, "HDMI"), &input(2, "HDMI")])).unwrap();
+    let got: Vec<(u8, InputTypeEnum, &str)> = inputs
+        .iter()
+        .map(|i| (i.index, i.input_type, i.name.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (1, InputTypeEnum::Hdmi, "HDMI"),
+            (2, InputTypeEnum::Hdmi, "HDMI")
+        ]
+    );
+    // Description is mandatory in InputInfoStruct.
+    let no_description = |w: &mut TlvWriter<'_>| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_uint(Tag::Context(1), 4).unwrap();
+        w.put_utf8(Tag::Context(2), "HDMI").unwrap();
+    };
+    assert!(mi::decode_input_list(&list_of(&[&no_description])).is_err());
+    assert_eq!(
+        mi::encode_rename_input(2, &"Console".to_string()),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 2).unwrap();
+            w.put_utf8(Tag::Context(1), "Console").unwrap();
+        })
+    );
+    assert_eq!(mi::encode_show_input_status(), struct_of(&|_| {}));
+    let output = |index: u64, kind: u64| {
+        move |w: &mut TlvWriter<'_>| {
+            w.put_uint(Tag::Context(0), index).unwrap();
+            w.put_uint(Tag::Context(1), kind).unwrap();
+            w.put_utf8(Tag::Context(2), "HDMI").unwrap();
+        }
+    };
+    let outputs =
+        ao::decode_output_list(&list_of(&[&output(1, 0), &output(2, 0), &output(3, 9)])).unwrap();
+    let got: Vec<(u8, OutputTypeEnum)> = outputs.iter().map(|o| (o.index, o.output_type)).collect();
+    assert_eq!(
+        got,
+        [
+            (1, OutputTypeEnum::Hdmi),
+            (2, OutputTypeEnum::Hdmi),
+            (3, OutputTypeEnum::Unknown(9))
+        ]
+    );
+    assert_eq!(ao::decode_current_output(&uint_attr(1)).unwrap(), 1);
+    assert_eq!(
+        ao::encode_select_output(3),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 3).unwrap())
+    );
+}
+
+#[test]
+fn target_navigator_list_response_and_event_decode() {
+    use clusters::target_navigator::{
+        self as tn, NavigateTargetResponse, StatusEnum, TargetUpdatedEvent,
+    };
+    let target = |id: u64, name: &'static str| {
+        move |w: &mut TlvWriter<'_>| {
+            w.put_uint(Tag::Context(0), id).unwrap();
+            w.put_utf8(Tag::Context(1), name).unwrap();
+        }
+    };
+    let targets = tn::decode_target_list(&list_of(&[
+        &target(1, "exampleName"),
+        &target(2, "exampleName"),
+    ]))
+    .unwrap();
+    let got: Vec<(u8, &str)> = targets
+        .iter()
+        .map(|t| (t.identifier, t.name.as_str()))
+        .collect();
+    assert_eq!(got, [(1, "exampleName"), (2, "exampleName")]);
+    assert_eq!(
+        tn::encode_navigate_target(2, Some("hint".to_string())),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 2).unwrap();
+            w.put_utf8(Tag::Context(1), "hint").unwrap();
+        })
+    );
+    assert_eq!(
+        tn::encode_navigate_target(1, None),
+        struct_of(&|w| w.put_uint(Tag::Context(0), 1).unwrap())
+    );
+    let refused = NavigateTargetResponse::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 1).unwrap();
+        w.put_utf8(Tag::Context(1), "error").unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (refused.status, refused.data.as_deref()),
+        (StatusEnum::TargetNotFound, Some("error"))
+    );
+    // TargetUpdated: all three fields optional (1.4.2); chip's server would
+    // send an empty list, target 0 and empty data (target-navigator-server.cpp).
+    let full = TargetUpdatedEvent::decode(&struct_of(&|w| {
+        w.start_array(Tag::Context(0)).unwrap();
+        w.start_structure(Tag::Anonymous).unwrap();
+        target(5, "menu")(w);
+        w.end_container().unwrap();
+        w.end_container().unwrap();
+        w.put_uint(Tag::Context(1), 5).unwrap();
+        w.put_bytes(Tag::Context(2), &[0xAB]).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(full.current_target, Some(5));
+    assert_eq!(full.target_list.as_ref().map(Vec::len), Some(1));
+    assert_eq!(full.data.as_deref(), Some(&[0xAB][..]));
+    let empty = TargetUpdatedEvent::decode(&struct_of(&|_| {})).unwrap();
+    assert_eq!(
+        (empty.target_list, empty.current_target, empty.data),
+        (None, None, None)
+    );
+}

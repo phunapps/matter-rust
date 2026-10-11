@@ -271,6 +271,17 @@ const ALLOWLIST = [
   { id: 0x0451, name: 'WiFiNetworkManagement' },
   { id: 0x0452, name: 'ThreadBorderRouterManagement' },
   { id: 0x0453, name: 'ThreadNetworkDirectory' },
+  // M9-A3 B7, media basics (tv-app's video-player endpoint): attribute-only
+  // WakeOnLan; fieldless or scalar requests (LowPower Sleep, KeypadInput
+  // SendKey and its response, MediaInput and AudioOutput selection and
+  // renaming); lists of flat structs (InputList, OutputList, TargetList); and
+  // TargetNavigator's NavigateTarget request, response and TargetUpdated event.
+  { id: 0x0503, name: 'WakeOnLan' },
+  { id: 0x0505, name: 'TargetNavigator' },
+  { id: 0x0507, name: 'MediaInput' },
+  { id: 0x0508, name: 'LowPower' },
+  { id: 0x0509, name: 'KeypadInput' },
+  { id: 0x050b, name: 'AudioOutput' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -335,6 +346,9 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B6, CommissionerControl (CommissioningRequestResult: request id,
   // client node id, status code, fabric index):
   'CommissionerControl',
+  // M9-A3 B7, TargetNavigator (TargetUpdated: TargetList, CurrentTarget and
+  // Data, all three optional):
+  'TargetNavigator',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

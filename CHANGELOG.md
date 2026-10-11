@@ -744,6 +744,15 @@ How each of these clusters was validated:
   network-manager-app; ThreadBorderRouterManagement also by thread-br-app and
   others).
 
+### matter-clusters: Added — media and TV-platform clusters
+
+- **WakeOnLan (0x0503)**, **LowPower (0x0508)**, **KeypadInput (0x0509)**,
+  **MediaInput (0x0507)**, **AudioOutput (0x050B)** and **TargetNavigator
+  (0x0505)**: every attribute, command and response, and TargetNavigator's
+  `TargetUpdated` event. chip's zap XML and controller codegen mark
+  WakeOnLan's `LinkLocalAddress` provisional (v1.4.2.0 and master); the 1.4.2
+  spec XML and the model do not, so it carries no provisional note.
+
 ### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
 
 - GroupKeyManagement `GroupKeySetStruct`'s derived `Debug` printed its three

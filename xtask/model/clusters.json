@@ -101,6 +101,12 @@
       "WiFiNetworkManagement",
       "ThreadBorderRouterManagement",
       "ThreadNetworkDirectory",
+      "WakeOnLan",
+      "TargetNavigator",
+      "MediaInput",
+      "LowPower",
+      "KeypadInput",
+      "AudioOutput",
       "EcosystemInformation",
       "CommissionerControl"
     ],
@@ -36621,6 +36627,1114 @@
               "nullable": false,
               "optional": false,
               "description": "This field shall indicate the Active Timestamp from the OperationalDataset for the given Thread network."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1283,
+      "name": "WakeOnLan",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "MacAddress",
+          "type": "string",
+          "metatype": "string",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current MAC address of the device. Only 48-bit MAC Addresses shall be used for this attribute as required by the Wake on LAN protocol.\nFormat of this attribute shall be an upper-case hex-encoded string representing the hex address, like 12345678ABCD."
+        },
+        {
+          "id": 1,
+          "name": "LinkLocalAddress",
+          "type": "ipv6adr",
+          "metatype": "bytes",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the current link-local address of the device. Only 128-bit IPv6 link-local addresses shall be used for this attribute.\n> [!NOTE]\n> NOTE: Some companies may consider MAC Address to be protected data subject to PII handling considerations and will therefore choose not to include it or read it. The MAC Address can often be determined using ARP in IPv4 or NDP in IPv6."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": []
+    },
+    {
+      "id": 1285,
+      "name": "TargetNavigator",
+      "revision": 2,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "TargetList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "TargetInfoStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates a list of targets that can be navigated to within the experience presented to the user by the Endpoint (Video Player or Content App). The list shall NOT contain any entries with the same Identifier in the TargetInfoStruct object."
+        },
+        {
+          "id": 1,
+          "name": "CurrentTarget",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": true,
+          "writable": false,
+          "description": "Indicates the Identifier for the target which is currently in foreground on the corresponding Endpoint (Video Player or Content App), or 0xFF to indicate that no target is in the foreground.\nWhen not 0xFF, the CurrentTarget shall be an Identifier value contained within one of the TargetInfoStruct objects in the TargetList attribute."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "NavigateTarget",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Target",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the Identifier for the target for UX navigation. The Target shall be an Identifier value contained within one of the TargetInfoStruct objects in the TargetList attribute."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "NavigateTargetResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the of the command."
+            },
+            {
+              "id": 1,
+              "name": "Data",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate Optional app-specific data."
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "TargetUpdated",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "TargetList",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "TargetInfoStruct",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "CurrentTarget",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Data",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "TargetNotFound",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "NotAllowed",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "TargetInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This indicates an object describing the navigable target.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Identifier",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain an unique id within the TargetList."
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall contain a name string for the TargetInfoStruct."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1287,
+      "name": "MediaInput",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "NU",
+          "name": "NameUpdates",
+          "description": "Supports updates to the input names"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "InputList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "InputInfoStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall provide a list of the media inputs supported by the device."
+        },
+        {
+          "id": 1,
+          "name": "CurrentInput",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain the value of the index field of the currently selected InputInfoStruct."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SelectInput",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Index",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the index field of the InputInfoStruct from the InputList attribute in which to change to."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "ShowInputStatus",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 2,
+          "name": "HideInputStatus",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        },
+        {
+          "id": 3,
+          "name": "RenameInput",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Index",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "InputInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This contains information about an input.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Index",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the unique index into the list of Inputs."
+            },
+            {
+              "id": 1,
+              "name": "InputType",
+              "type": "InputTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of input"
+            },
+            {
+              "id": 2,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the input name, such as “HDMI 1”. This field may be blank, but SHOULD be provided when known."
+            },
+            {
+              "id": 3,
+              "name": "Description",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the user editable input description, such as “Living room Playstation”. This field may be blank, but SHOULD be provided when known."
+            }
+          ]
+        },
+        {
+          "name": "InputTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Internal",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Aux",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Coax",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Composite",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Hdmi",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Input",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "Line",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "Optical",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "Video",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "Scart",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "Usb",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "Other",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1288,
+      "name": "LowPower",
+      "revision": 1,
+      "features": [],
+      "attributes": [],
+      "commands": [
+        {
+          "id": 0,
+          "name": "Sleep",
+          "direction": "request",
+          "responseId": null,
+          "fields": []
+        }
+      ],
+      "events": [],
+      "datatypes": []
+    },
+    {
+      "id": 1289,
+      "name": "KeypadInput",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "NV",
+          "name": "NavigationKeyCodes",
+          "description": "Supports UP, DOWN, LEFT, RIGHT, SELECT, BACK, EXIT, MENU"
+        },
+        {
+          "bit": 1,
+          "code": "LK",
+          "name": "LocationKeys",
+          "description": "Supports CEC keys 0x0A (Settings) and 0x09 (Home)"
+        },
+        {
+          "bit": 2,
+          "code": "NK",
+          "name": "NumberKeys",
+          "description": "Supports numeric input 0..9"
+        }
+      ],
+      "attributes": [],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SendKey",
+          "direction": "request",
+          "responseId": 1,
+          "fields": [
+            {
+              "id": 0,
+              "name": "KeyCode",
+              "type": "CecKeyCodeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the key code to process."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "SendKeyResponse",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Status",
+              "type": "StatusEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the status of the request."
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "CecKeyCodeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Select",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Up",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Down",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Left",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Right",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "RightUp",
+              "description": null
+            },
+            {
+              "value": 6,
+              "name": "RightDown",
+              "description": null
+            },
+            {
+              "value": 7,
+              "name": "LeftUp",
+              "description": null
+            },
+            {
+              "value": 8,
+              "name": "LeftDown",
+              "description": null
+            },
+            {
+              "value": 9,
+              "name": "RootMenu",
+              "description": null
+            },
+            {
+              "value": 10,
+              "name": "SetupMenu",
+              "description": null
+            },
+            {
+              "value": 11,
+              "name": "ContentsMenu",
+              "description": null
+            },
+            {
+              "value": 12,
+              "name": "FavoriteMenu",
+              "description": null
+            },
+            {
+              "value": 13,
+              "name": "Exit",
+              "description": null
+            },
+            {
+              "value": 16,
+              "name": "MediaTopMenu",
+              "description": null
+            },
+            {
+              "value": 17,
+              "name": "MediaContextSensitiveMenu",
+              "description": null
+            },
+            {
+              "value": 29,
+              "name": "NumberEntryMode",
+              "description": null
+            },
+            {
+              "value": 30,
+              "name": "Number11",
+              "description": null
+            },
+            {
+              "value": 31,
+              "name": "Number12",
+              "description": null
+            },
+            {
+              "value": 32,
+              "name": "Number0OrNumber10",
+              "description": null
+            },
+            {
+              "value": 33,
+              "name": "Numbers1",
+              "description": null
+            },
+            {
+              "value": 34,
+              "name": "Numbers2",
+              "description": null
+            },
+            {
+              "value": 35,
+              "name": "Numbers3",
+              "description": null
+            },
+            {
+              "value": 36,
+              "name": "Numbers4",
+              "description": null
+            },
+            {
+              "value": 37,
+              "name": "Numbers5",
+              "description": null
+            },
+            {
+              "value": 38,
+              "name": "Numbers6",
+              "description": null
+            },
+            {
+              "value": 39,
+              "name": "Numbers7",
+              "description": null
+            },
+            {
+              "value": 40,
+              "name": "Numbers8",
+              "description": null
+            },
+            {
+              "value": 41,
+              "name": "Numbers9",
+              "description": null
+            },
+            {
+              "value": 42,
+              "name": "Dot",
+              "description": null
+            },
+            {
+              "value": 43,
+              "name": "Enter",
+              "description": null
+            },
+            {
+              "value": 44,
+              "name": "Clear",
+              "description": null
+            },
+            {
+              "value": 47,
+              "name": "NextFavorite",
+              "description": null
+            },
+            {
+              "value": 48,
+              "name": "ChannelUp",
+              "description": null
+            },
+            {
+              "value": 49,
+              "name": "ChannelDown",
+              "description": null
+            },
+            {
+              "value": 50,
+              "name": "PreviousChannel",
+              "description": null
+            },
+            {
+              "value": 51,
+              "name": "SoundSelect",
+              "description": null
+            },
+            {
+              "value": 52,
+              "name": "InputSelect",
+              "description": null
+            },
+            {
+              "value": 53,
+              "name": "DisplayInformation",
+              "description": null
+            },
+            {
+              "value": 54,
+              "name": "Help",
+              "description": null
+            },
+            {
+              "value": 55,
+              "name": "PageUp",
+              "description": null
+            },
+            {
+              "value": 56,
+              "name": "PageDown",
+              "description": null
+            },
+            {
+              "value": 64,
+              "name": "Power",
+              "description": null
+            },
+            {
+              "value": 65,
+              "name": "VolumeUp",
+              "description": null
+            },
+            {
+              "value": 66,
+              "name": "VolumeDown",
+              "description": null
+            },
+            {
+              "value": 67,
+              "name": "Mute",
+              "description": null
+            },
+            {
+              "value": 68,
+              "name": "Play",
+              "description": null
+            },
+            {
+              "value": 69,
+              "name": "Stop",
+              "description": null
+            },
+            {
+              "value": 70,
+              "name": "Pause",
+              "description": null
+            },
+            {
+              "value": 71,
+              "name": "Record",
+              "description": null
+            },
+            {
+              "value": 72,
+              "name": "Rewind",
+              "description": null
+            },
+            {
+              "value": 73,
+              "name": "FastForward",
+              "description": null
+            },
+            {
+              "value": 74,
+              "name": "Eject",
+              "description": null
+            },
+            {
+              "value": 75,
+              "name": "Forward",
+              "description": null
+            },
+            {
+              "value": 76,
+              "name": "Backward",
+              "description": null
+            },
+            {
+              "value": 77,
+              "name": "StopRecord",
+              "description": null
+            },
+            {
+              "value": 78,
+              "name": "PauseRecord",
+              "description": null
+            },
+            {
+              "value": 80,
+              "name": "Angle",
+              "description": null
+            },
+            {
+              "value": 81,
+              "name": "SubPicture",
+              "description": null
+            },
+            {
+              "value": 82,
+              "name": "VideoOnDemand",
+              "description": null
+            },
+            {
+              "value": 83,
+              "name": "ElectronicProgramGuide",
+              "description": null
+            },
+            {
+              "value": 84,
+              "name": "TimerProgramming",
+              "description": null
+            },
+            {
+              "value": 85,
+              "name": "InitialConfiguration",
+              "description": null
+            },
+            {
+              "value": 86,
+              "name": "SelectBroadcastType",
+              "description": null
+            },
+            {
+              "value": 87,
+              "name": "SelectSoundPresentation",
+              "description": null
+            },
+            {
+              "value": 96,
+              "name": "PlayFunction",
+              "description": null
+            },
+            {
+              "value": 97,
+              "name": "PausePlayFunction",
+              "description": null
+            },
+            {
+              "value": 98,
+              "name": "RecordFunction",
+              "description": null
+            },
+            {
+              "value": 99,
+              "name": "PauseRecordFunction",
+              "description": null
+            },
+            {
+              "value": 100,
+              "name": "StopFunction",
+              "description": null
+            },
+            {
+              "value": 101,
+              "name": "MuteFunction",
+              "description": null
+            },
+            {
+              "value": 102,
+              "name": "RestoreVolumeFunction",
+              "description": null
+            },
+            {
+              "value": 103,
+              "name": "TuneFunction",
+              "description": null
+            },
+            {
+              "value": 104,
+              "name": "SelectMediaFunction",
+              "description": null
+            },
+            {
+              "value": 105,
+              "name": "SelectAvInputFunction",
+              "description": null
+            },
+            {
+              "value": 106,
+              "name": "SelectAudioInputFunction",
+              "description": null
+            },
+            {
+              "value": 107,
+              "name": "PowerToggleFunction",
+              "description": null
+            },
+            {
+              "value": 108,
+              "name": "PowerOffFunction",
+              "description": null
+            },
+            {
+              "value": 109,
+              "name": "PowerOnFunction",
+              "description": null
+            },
+            {
+              "value": 113,
+              "name": "F1Blue",
+              "description": null
+            },
+            {
+              "value": 114,
+              "name": "F2Red",
+              "description": null
+            },
+            {
+              "value": 115,
+              "name": "F3Green",
+              "description": null
+            },
+            {
+              "value": 116,
+              "name": "F4Yellow",
+              "description": null
+            },
+            {
+              "value": 117,
+              "name": "F5",
+              "description": null
+            },
+            {
+              "value": 118,
+              "name": "Data",
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "StatusEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": null,
+          "values": [
+            {
+              "value": 0,
+              "name": "Success",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "UnsupportedKey",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "InvalidKeyInCurrentState",
+              "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1291,
+      "name": "AudioOutput",
+      "revision": 1,
+      "features": [
+        {
+          "bit": 0,
+          "code": "NU",
+          "name": "NameUpdates",
+          "description": "Supports updates to output names"
+        }
+      ],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "OutputList",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "OutputInfoStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute provides the list of outputs supported by the device."
+        },
+        {
+          "id": 1,
+          "name": "CurrentOutput",
+          "type": "uint8",
+          "metatype": "integer",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute contains the value of the index field of the currently selected OutputInfoStruct."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "SelectOutput",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Index",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This shall indicate the index field of the OutputInfoStruct from the OutputList attribute in which to change to."
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "RenameOutput",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "Index",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "OutputInfoStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This contains information about an output.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "Index",
+              "type": "uint8",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the unique index into the list of outputs."
+            },
+            {
+              "id": 1,
+              "name": "OutputType",
+              "type": "OutputTypeEnum",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the type of output."
+            },
+            {
+              "id": 2,
+              "name": "Name",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "The device defined and user editable output name, such as “Soundbar”, “Speakers”. This field may be blank, but SHOULD be provided when known."
+            }
+          ]
+        },
+        {
+          "name": "OutputTypeEnum",
+          "base": "enum8",
+          "kind": "enum",
+          "description": "The type of output, expressed as an enum, with the following values:",
+          "values": [
+            {
+              "value": 0,
+              "name": "Hdmi",
+              "description": null
+            },
+            {
+              "value": 1,
+              "name": "Bt",
+              "description": null
+            },
+            {
+              "value": 2,
+              "name": "Optical",
+              "description": null
+            },
+            {
+              "value": 3,
+              "name": "Headphone",
+              "description": null
+            },
+            {
+              "value": 4,
+              "name": "Internal",
+              "description": null
+            },
+            {
+              "value": 5,
+              "name": "Other",
+              "description": null
             }
           ]
         }

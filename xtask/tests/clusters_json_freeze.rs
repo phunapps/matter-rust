@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 99] = [
+const TARGET_CLUSTERS: [&str; 105] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -147,6 +147,13 @@ const TARGET_CLUSTERS: [&str; 99] = [
     "WiFiNetworkManagement",
     "ThreadBorderRouterManagement",
     "ThreadNetworkDirectory",
+    // M9-A3 B7, media basics:
+    "WakeOnLan",
+    "TargetNavigator",
+    "MediaInput",
+    "LowPower",
+    "KeypadInput",
+    "AudioOutput",
 ];
 
 fn load() -> Value {
@@ -478,7 +485,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 31] = [
+const EVENT_CLUSTERS: [&str; 32] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -525,6 +532,8 @@ const EVENT_CLUSTERS: [&str; 31] = [
     "Actions",
     // M9-A3 B6, CommissionerControl:
     "CommissionerControl",
+    // M9-A3 B7, TargetNavigator:
+    "TargetNavigator",
 ];
 
 #[test]
@@ -2754,4 +2763,85 @@ fn secret_fields_are_exactly_these() {
     got.sort();
     let got: Vec<(&str, &str)> = got.iter().map(|(c, f)| (c.as_str(), f.as_str())).collect();
     assert_eq!(got, SECRET);
+}
+
+// ---- M9-A3 B7: media and TV-platform clusters ------------------------------
+
+#[test]
+fn every_generated_cluster_with_events_has_them_dumped() {
+    // M9-A3 spec §1 success criterion 2: once A3 is done, no generated cluster
+    // keeps the "event dump not enabled" exclusion; every one with events has
+    // them in clusters.json. EVENT_ALLOWLIST stays, to gate later additions.
+    let v = load();
+    let off: Vec<&str> = v["meta"]["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["reason"] == "event dump not enabled for this cluster")
+        .map(|e| e["cluster"].as_str().unwrap())
+        .collect();
+    assert_eq!(off, Vec::<&str>::new());
+}
+
+#[test]
+fn media_basics_keep_their_shapes() {
+    // 1.4.2 WakeOnLAN.xml, LowPower.xml, KeypadInput.xml, MediaInput.xml,
+    // AudioOutput.xml, TargetNavigator.xml.
+    let v = load();
+    let wol = cluster(&v, "WakeOnLan");
+    assert_eq!(
+        element_names(wol, "attributes"),
+        ["MacAddress", "LinkLocalAddress"]
+    );
+    assert_eq!(element_names(wol, "commands"), Vec::<&str>::new());
+    assert_eq!(
+        element_names(cluster(&v, "LowPower"), "commands"),
+        ["Sleep"]
+    );
+    let keypad = cluster(&v, "KeypadInput");
+    assert_eq!(
+        element_names(keypad, "commands"),
+        ["SendKey", "SendKeyResponse"]
+    );
+    assert_eq!(element_names(keypad, "attributes"), Vec::<&str>::new());
+    // CecKeyCodeEnum is not contiguous: 0x00..=0x0D, 0x10, 0x11, 0x1D..=0x2C,
+    // 0x2F..=0x38, 0x40..=0x4E, 0x50..=0x57, 0x60..=0x6D, 0x71..=0x76. The
+    // 1.4.2 XML also lists 0x4F as `Reserved`, which is not a key (the model
+    // leaves it out; it decodes as Unknown(0x4F)).
+    assert_eq!(enum_values(datatype(keypad, "CecKeyCodeEnum")).len(), 85);
+    for name in ["MediaInput", "AudioOutput"] {
+        let c = cluster(&v, name);
+        assert_eq!(writable_attributes(c), Vec::<&str>::new(), "{name}");
+        assert!(
+            c["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|cmd| cmd["responseId"].is_null()),
+            "{name}: every request answers with a status"
+        );
+    }
+    assert_eq!(
+        field_optionality(&datatype(cluster(&v, "MediaInput"), "InputInfoStruct")["fields"]),
+        [
+            ("Index", false),
+            ("InputType", false),
+            ("Name", false),
+            ("Description", false)
+        ]
+    );
+    let tn = cluster(&v, "TargetNavigator");
+    assert_eq!(element_names(tn, "events"), ["TargetUpdated"]);
+    assert_eq!(
+        field_optionality(&tn["events"][0]["fields"]),
+        [
+            ("TargetList", true),
+            ("CurrentTarget", true),
+            ("Data", true)
+        ]
+    );
+    assert_eq!(
+        field_optionality(&command(tn, "NavigateTargetResponse")["fields"]),
+        [("Status", false), ("Data", true)]
+    );
 }
