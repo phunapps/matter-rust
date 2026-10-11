@@ -97,7 +97,9 @@
       "Pm1ConcentrationMeasurement",
       "Pm10ConcentrationMeasurement",
       "TotalVolatileOrganicCompoundsConcentrationMeasurement",
-      "RadonConcentrationMeasurement"
+      "RadonConcentrationMeasurement",
+      "EcosystemInformation",
+      "CommissionerControl"
     ],
     "excluded": [
       {
@@ -659,6 +661,42 @@
         "element": "ChangeToModeResponse.StatusText",
         "class": "C",
         "reason": "conditional conformance \"[Status == Success], M\" (spec §3.1: only an unconditional M is mandatory)"
+      },
+      {
+        "cluster": "EcosystemInformation",
+        "element": "EcosystemDeviceStruct.DeviceTypes",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "EcosystemInformation",
+        "element": "EcosystemDeviceStruct.UniqueLocationIDs",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "EcosystemInformation",
+        "element": "EcosystemDeviceStruct.UniqueLocationIDsLastEdit",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "EcosystemInformation",
+        "element": "EcosystemLocationStruct.LocationDescriptor",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "EcosystemInformation",
+        "element": "EcosystemLocationStruct.LocationDescriptorLastEdit",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
+      },
+      {
+        "cluster": "EcosystemInformation",
+        "element": "EcosystemLocationStruct.UniqueLocationId",
+        "class": "P",
+        "reason": "fabric-sensitive (withheld for other fabrics)"
       },
       {
         "cluster": "EnergyEvseMode",
@@ -36209,6 +36247,452 @@
               "value": 7,
               "name": "Bqm3",
               "description": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 1872,
+      "name": "EcosystemInformation",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "DeviceDirectory",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "EcosystemDeviceStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain the list of logical devices represented by a Bridged Node. Most of the time this will contain a single entry, but may grow with more complex device compositions (e.g. another bridge.) An empty list indicates that the information is not available."
+        },
+        {
+          "id": 1,
+          "name": "LocationDirectory",
+          "type": "list",
+          "metatype": "array",
+          "entryType": "EcosystemLocationStruct",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "This attribute shall contain the list of rooms, areas and groups associated with the DeviceDirectory entries, and shall NOT contain locations which are dynamically generated and removed by an ecosystem. (E.g. a location that is generated and removed based on the user being home is not permitted. However, an initially generated location name that does not quickly change is acceptable.) An empty list indicates that the information is not available.\nLocationDirectory entries shall be removed if there is no DeviceDirectory that references it."
+        }
+      ],
+      "commands": [],
+      "events": [],
+      "datatypes": [
+        {
+          "name": "DeviceTypeStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "The device type and revision define endpoint conformance to a release of a device type definition. See the Data Model specification for more information.",
+          "fields": [
+            {
+              "id": 0,
+              "name": "DeviceType",
+              "type": "devtype-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This shall indicate the device type definition."
+            },
+            {
+              "id": 1,
+              "name": "Revision",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": "This is the implemented revision of the device type definition."
+            }
+          ]
+        },
+        {
+          "name": "EcosystemDeviceStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "DeviceName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the device's name, which is provided externally if the user consents. (For example, provided by the user in an ecosystem specific interface.)",
+              "fabricSensitive": true
+            },
+            {
+              "id": 1,
+              "name": "DeviceNameLastEdit",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the timestamp of when the DeviceName was last modified.",
+              "requiredWhen": {
+                "field": "DeviceName",
+                "present": true,
+                "exclusive": true
+              },
+              "fabricSensitive": true
+            },
+            {
+              "id": 2,
+              "name": "BridgedEndpoint",
+              "type": "endpoint-no",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the endpoint this EcosystemDeviceStruct is associated with on this Bridge.\nThis field shall be present if the device is accessible through the bridge. If present, this field shall be set to a valid endpoint.",
+              "fabricSensitive": true
+            },
+            {
+              "id": 3,
+              "name": "OriginalEndpoint",
+              "type": "endpoint-no",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the endpoint this EcosystemDeviceStruct is associated with on the original device represented by this bridge's Bridged Node. If this bridge is receiving the device from another bridge, then the OriginalEndpoint field value would be the same on both bridges. This field shall be present if the original device is a Matter device. If present, this field shall be set to a valid endpoint on the original device.",
+              "fabricSensitive": true
+            },
+            {
+              "id": 4,
+              "name": "DeviceTypes",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "DeviceTypeStruct",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate all of the DeviceTypes within the DeviceTypeList in the Descriptor Cluster associated with this EcosystemDeviceStruct entry.\nThis field shall contain a list of valid device type ids.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 5,
+              "name": "UniqueLocationIDs",
+              "type": "list",
+              "metatype": "array",
+              "entryType": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall specify the EcosystemLocationStruct entries in the LocationDirectory attribute associated with this EcosystemDeviceStruct.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 6,
+              "name": "UniqueLocationIDsLastEdit",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the timestamp of when the UniqueLocationIDs was last modified.\n> [!NOTE]\n> NOTE: If multiple server instances update the UniqueLocationIDs field at the same time, it is possible one of the updates will be missed. This is considered an acceptable limitation to reduce the complexity of the design. Since this is meant to be provided from user input, it is unlikely these signals would be happening at one time.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "EcosystemLocationStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "UniqueLocationId",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate a unique identifier for a specific Ecosystem Information Cluster server instance representing the location independent of its LocationDescriptor field.\nUniqueLocationID can be used by the client to determine if the change is a relocation of the device or just a renaming of the location.\nNo guarantees are given for consistency of the ID between server instances. The same location may be represented by different IDs on different Ecosystem Information Cluster server instances, so only the history from a single server instance should be considered when evaluating a change.\nUniqueLocationID shall be changed when the LocationDescriptor changes from one existing location to another location as a result of an external interaction. (For example, the user changes the location assignment.)\nUniqueLocationID shall NOT be changed when the LocationDescriptor changes name, but still represents the same location. (For example, the user renames a room.) UniqueLocationID shall be changed when LocationDescriptor changes as a result of another Ecosystem Information Cluster server instance changing and the UniqueLocationID on the remote server instance also changes.\nUniqueLocationID shall NOT be changed when LocationDescriptor changes as a result of another Ecosystem Information Cluster server instance changing and the UniqueLocationID on the remote server instance does not change.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 1,
+              "name": "LocationDescriptor",
+              "type": "LocationDescriptorStruct",
+              "metatype": "object",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the location (e.g. living room, driveway) and associated metadata that is provided externally if the user consents. (For example, provided by the user in an ecosystem specific interface.) \"Location\" in this context is typically used by the user's grouping into rooms, areas or other logical groupings of how devices are used. So a device might be part of multiple such \"Locations\"s.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 2,
+              "name": "LocationDescriptorLastEdit",
+              "type": "epoch-us",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": true,
+              "description": "This field shall indicate the timestamp of when the LocationDescriptor was last modified.",
+              "fabricSensitive": true,
+              "mandatoryOnWrite": true
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "name": "LocationDescriptorStruct",
+          "base": "struct",
+          "kind": "struct",
+          "description": "This data type shall be represented by the following structure:",
+          "fields": [
+            {
+              "id": 0,
+              "name": "LocationName",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": false,
+              "description": "This field shall indicate the name of the location. For example, \"blue room\".\nIf the location name is not user provided, the logic that generates it (clients, devices etc.) SHOULD utilize synthesized user-friendly, understandable, names for the location, rather than opaque values such as \"private\" or \"2fe7c241-a50a-4863-896e-c5878da5ed68\"."
+            },
+            {
+              "id": 1,
+              "name": "FloorNumber",
+              "type": "int16",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall indicate the level number. Negative values correspond to basement levels.\nValue zero indicates this is the main floor, which typically includes the main entrance to the user's home. For a building with multiple levels, it is the client's responsibility to map each level to/from a FloorNumber tag value, using the level numbering convention of the region where the client operates. For example, if the client operates in Europe, building level 1, which is one level up from the street level, SHOULD be mapped to FloorNumber tag value 0x1. If the client operates in North America, building level 1, which is at street level, SHOULD be mapped to FloorNumber tag value 0x0.\nA NULL value indicates that this information is not available.\nWhen the clients present the level information for user selection, they SHOULD use the operating region to determine how to render and map this data. For example, if the client operates in North America it SHOULD present the user a list that includes entries labeled \"basement\", \"first\", \"second\", and internally mapped to floor numbers -1, 0, and 1. If operating in Europe, the client SHOULD present a list that includes entries labeled \"basement\", \"ground\", \"first\", internally mapped to floor numbers -1, 0, and 1.\nThe floor number information is expected to be mostly useful to the clients, rather than the devices, such as for grouping devices that are located on the same level. For example, an automation may be defined for all devices located at the basement level (floor number -1).\n> [!NOTE]\n> NOTE: Handling complex level situations, such as half levels (side split houses), or the levels from an apartment building, is up to the client and/or user."
+            },
+            {
+              "id": 2,
+              "name": "AreaType",
+              "type": "tag",
+              "metatype": "integer",
+              "nullable": true,
+              "optional": false,
+              "description": "This field shall be the ID of an area semantic tag, located within the Common Area Namespace. For example, this tag may indicate that the location refers to a bedroom.\nIf this field is NULL, that indicates that the area type information is not available.\n> [!NOTE]\n> NOTE: This field only indicates the type of the area. Multiple areas of the same type, such as bedrooms, may exist in a user's home."
+            }
+          ],
+          "globalName": "locationdesc"
+        }
+      ]
+    },
+    {
+      "id": 1873,
+      "name": "CommissionerControl",
+      "revision": 1,
+      "features": [],
+      "attributes": [
+        {
+          "id": 0,
+          "name": "SupportedDeviceCategories",
+          "type": "SupportedDeviceCategoryBitmap",
+          "metatype": "bitmap",
+          "nullable": false,
+          "optional": false,
+          "writable": false,
+          "description": "Indicates the device categories specified in SupportedDeviceCategoryBitmap that are supported by this Commissioner Control Cluster server.\nA client shall NOT send the RequestCommissioningApproval command if the intended node to be commissioned does not conform to any of the values specified in SupportedDeviceCategories."
+        }
+      ],
+      "commands": [
+        {
+          "id": 0,
+          "name": "RequestCommissioningApproval",
+          "direction": "request",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "RequestId",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "VendorId",
+              "type": "vendor-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "ProductId",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "Label",
+              "type": "string",
+              "metatype": "string",
+              "nullable": false,
+              "optional": true,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "name": "CommissionNode",
+          "direction": "request",
+          "responseId": 2,
+          "fields": [
+            {
+              "id": 0,
+              "name": "RequestId",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ResponseTimeoutSeconds",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "name": "ReverseOpenCommissioningWindow",
+          "direction": "response",
+          "responseId": null,
+          "fields": [
+            {
+              "id": 0,
+              "name": "CommissioningTimeout",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "PakePasscodeVerifier",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "Discriminator",
+              "type": "uint16",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 3,
+              "name": "Iterations",
+              "type": "uint32",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 4,
+              "name": "Salt",
+              "type": "octstr",
+              "metatype": "bytes",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": 0,
+          "name": "CommissioningRequestResult",
+          "priority": "info",
+          "fields": [
+            {
+              "id": 0,
+              "name": "RequestId",
+              "type": "uint64",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 1,
+              "name": "ClientNodeId",
+              "type": "node-id",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 2,
+              "name": "StatusCode",
+              "type": "status",
+              "metatype": "enum",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            },
+            {
+              "id": 254,
+              "name": "FabricIndex",
+              "type": "fabric-idx",
+              "metatype": "integer",
+              "nullable": false,
+              "optional": false,
+              "description": null
+            }
+          ]
+        }
+      ],
+      "datatypes": [
+        {
+          "name": "SupportedDeviceCategoryBitmap",
+          "base": "map32",
+          "kind": "bitmap",
+          "description": null,
+          "bits": [
+            {
+              "bit": 0,
+              "name": "FabricSynchronization",
+              "description": "The FabricSynchronization bit shall be set to 1 if and only if the server supports commissioning nodes that support Fabric Synchronization."
             }
           ]
         }

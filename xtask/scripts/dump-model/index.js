@@ -246,6 +246,14 @@ const ALLOWLIST = [
   // twelve requests of an action id with an optional invoke id and a
   // transition time or duration; StateChanged and ActionFailed events):
   { id: 0x0025, name: 'Actions' },
+  // M9-A3 B6, Fabric Synchronization: EcosystemInformation (fabric-scoped
+  // DeviceDirectory and LocationDirectory, spec §5.4; the global
+  // `locationdesc` inlined as LocationDescriptorStruct, GLOBAL_DATATYPE_NAMES)
+  // and CommissionerControl (the approval request, the reverse commissioning
+  // window response, and the fabric-sensitive CommissioningRequestResult
+  // event):
+  { id: 0x0750, name: 'EcosystemInformation' },
+  { id: 0x0751, name: 'CommissionerControl' },
 ];
 
 // Clusters whose EVENTS are dumped for codegen. Event codegen is rolled out
@@ -307,6 +315,9 @@ const EVENT_ALLOWLIST = new Set([
   // M9-A3 B6, Actions (StateChanged, ActionFailed: the action, the invoke id,
   // the new state and, for ActionFailed, the error):
   'Actions',
+  // M9-A3 B6, CommissionerControl (CommissioningRequestResult: request id,
+  // client node id, status code, fabric index):
+  'CommissionerControl',
 ]);
 
 // Clusters the Matter specification marks provisional as a whole: chip's

@@ -439,12 +439,29 @@ in full with `fabric_index` `None`.
   flow's own decoders accept them missing.
 - **Actions (0x0025)**: `ActionList`, `EndpointLists`, `SetupURL`, the twelve
   action commands, and the `StateChanged` and `ActionFailed` events.
+- **EcosystemInformation (0x0750)**: `DeviceDirectory` and
+  `LocationDirectory`. Both are fabric-scoped lists, so other fabrics'
+  entries decode with their fabric-sensitive fields `None` (spec §5.4). The
+  global location struct is generated as
+  `ecosystem_information::LocationDescriptorStruct`. No chip example app
+  fills its directories (fabric-bridge-app adds the cluster, empty, to its
+  bridged-device endpoints), so it is checked by decode smoke only.
+- **CommissionerControl (0x0751)**: `SupportedDeviceCategories`,
+  `RequestCommissioningApproval`, `CommissionNode` and its
+  `ReverseOpenCommissioningWindow` response, and the
+  `CommissioningRequestResult` event. Codecs only: the approval flow is not
+  implemented.
 
 chip's zap and controller codegen mark UnitLocalization's
 `SupportedTemperatureUnits` provisional (at v1.4.2.0 and master), and so
 does v1.4.2.0's `data_model/1.4.2` XML (`P, TEMP`). Master's
 `data_model/1.4.2`, 1.5 and 1.5.1 XML and the matter.js model have it as
-`TEMP`, so, as with Messages, it carries no provisional note.
+`TEMP`, so, as with Messages, it carries no provisional note. At v1.4.2.0
+only, chip's zap XML marks the EcosystemInformation cluster and its
+`EcosystemLocationStruct` provisional and its controller codegen declares
+`provisional cluster EcosystemInformation`; master and the 1.4.2 spec XML at
+both refs do not, so it carries no provisional note either (CommissionerControl
+is marked provisional at neither ref).
 
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 

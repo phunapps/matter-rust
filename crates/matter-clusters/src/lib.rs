@@ -25,13 +25,19 @@
 //!
 //! # Clusters
 //!
-//! 94 clusters are generated today. The full list is [`clusters`]; by area:
+//! 96 clusters are generated today. The full list is [`clusters`]; by area:
 //!
 //! - **Core / identity:** `BasicInformation`, `Descriptor`, `Identify`,
 //!   `Groups`, `Binding`, `FixedLabel`, `UserLabel`, `PowerSource`,
 //!   `GeneralDiagnostics`, `BridgedDeviceBasicInformation` (per-bridged-
 //!   endpoint identity behind a bridge/aggregator), `Actions` (a bridge's
 //!   actions and endpoint lists, with its events).
+//! - **Fabric Synchronization:** `EcosystemInformation` (other fabrics'
+//!   `DeviceDirectory` and `LocationDirectory` entries decode with their
+//!   fabric-sensitive fields `None`; the global location struct is generated
+//!   as `ecosystem_information::LocationDescriptorStruct`),
+//!   `CommissionerControl` (with its event; the approval flow itself is not
+//!   implemented).
 //! - **Lighting and actuators:** `OnOff`, `LevelControl`, `ColorControl`,
 //!   `DoorLock` (Aliro features excluded), `WindowCovering` (with the Matter
 //!   1.4 absolute position), `Thermostat` (with the Matter 1.4 weekly

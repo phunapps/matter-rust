@@ -15,7 +15,7 @@ use std::path::PathBuf;
 /// pilot batch (read-only sensors + Switch), the M9-A2.2 energy batch,
 /// M9-A2.3 actuator batch, M9-A2.4 utility batch, M9-A2.5 mgmt batch, M9-D2
 /// operational credentials, and the concentration measurement family (#112).
-const TARGET_CLUSTERS: [&str; 94] = [
+const TARGET_CLUSTERS: [&str; 96] = [
     "BasicInformation",
     "Descriptor",
     "Identify",
@@ -140,6 +140,9 @@ const TARGET_CLUSTERS: [&str; 94] = [
     "NetworkCommissioning",
     // M9-A3 B6, Actions:
     "Actions",
+    // M9-A3 B6, Fabric Synchronization:
+    "EcosystemInformation",
+    "CommissionerControl",
 ];
 
 fn load() -> Value {
@@ -258,7 +261,7 @@ fn doorlock_aliro_surface_is_excluded_and_recorded() {
 /// for other fabrics' entries: `(cluster, struct, field)`. Each is
 /// `fabricSensitive`, `optional` (for decode) and `mandatoryOnWrite`. A model
 /// change that adds or drops one must be reviewed, so the set is pinned exactly.
-const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 20] = [
+const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 26] = [
     ("AccessControl", "AccessControlEntryStruct", "AuthMode"),
     ("AccessControl", "AccessControlEntryStruct", "Privilege"),
     ("AccessControl", "AccessControlEntryStruct", "Subjects"),
@@ -270,6 +273,39 @@ const FABRIC_SENSITIVE_RELAXED: [(&str, &str, &str); 20] = [
         "AccessControl",
         "AccessRestrictionEntryStruct",
         "Restrictions",
+    ),
+    // M9-A3 B6: born with the rule (DeviceName, DeviceNameLastEdit,
+    // BridgedEndpoint and OriginalEndpoint are optional in the model, so they
+    // are not relaxed).
+    (
+        "EcosystemInformation",
+        "EcosystemDeviceStruct",
+        "DeviceTypes",
+    ),
+    (
+        "EcosystemInformation",
+        "EcosystemDeviceStruct",
+        "UniqueLocationIDs",
+    ),
+    (
+        "EcosystemInformation",
+        "EcosystemDeviceStruct",
+        "UniqueLocationIDsLastEdit",
+    ),
+    (
+        "EcosystemInformation",
+        "EcosystemLocationStruct",
+        "LocationDescriptor",
+    ),
+    (
+        "EcosystemInformation",
+        "EcosystemLocationStruct",
+        "LocationDescriptorLastEdit",
+    ),
+    (
+        "EcosystemInformation",
+        "EcosystemLocationStruct",
+        "UniqueLocationId",
     ),
     (
         "IcdManagement",
@@ -438,7 +474,7 @@ fn no_event_or_command_field_is_marked_fabric_sensitive() {
 
 /// The clusters whose events are dumped (`EVENT_ALLOWLIST` in the dump script),
 /// grown batch by batch.
-const EVENT_CLUSTERS: [&str; 30] = [
+const EVENT_CLUSTERS: [&str; 31] = [
     "Switch",
     // M9-A3 B1, scalar-field payloads:
     "BasicInformation",
@@ -483,6 +519,8 @@ const EVENT_CLUSTERS: [&str; 30] = [
     "ThreadNetworkDiagnostics",
     // M9-A3 B6, Actions:
     "Actions",
+    // M9-A3 B6, CommissionerControl:
+    "CommissionerControl",
 ];
 
 #[test]
@@ -1329,15 +1367,39 @@ fn provisional_and_choice_notes_are_exactly_these() {
 #[test]
 fn service_area_location_struct_records_its_global_name() {
     let v = load();
-    let d = datatype(cluster(&v, "ServiceArea"), "LocationDescriptorStruct");
-    assert_eq!(d["globalName"], "locationdesc");
-    let named: Vec<&str> = clusters(&v)
+    // ServiceArea (B3) and EcosystemInformation (B6) each inline their own
+    // copy of the global `locationdesc` under chip's name.
+    let named: Vec<(&str, &str)> = clusters(&v)
         .iter()
-        .flat_map(|c| c["datatypes"].as_array().unwrap())
-        .filter(|d| !d["globalName"].is_null())
-        .map(|d| d["name"].as_str().unwrap())
+        .flat_map(|c| {
+            c["datatypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|d| !d["globalName"].is_null())
+                .map(move |d| (c["name"].as_str().unwrap(), d["name"].as_str().unwrap()))
+        })
         .collect();
-    assert_eq!(named, ["LocationDescriptorStruct"]);
+    assert_eq!(
+        named,
+        [
+            ("ServiceArea", "LocationDescriptorStruct"),
+            ("EcosystemInformation", "LocationDescriptorStruct")
+        ]
+    );
+    for c in ["ServiceArea", "EcosystemInformation"] {
+        let d = datatype(cluster(&v, c), "LocationDescriptorStruct");
+        assert_eq!(d["globalName"], "locationdesc", "{c}");
+        assert_eq!(
+            field_optionality(&d["fields"]),
+            [
+                ("LocationName", false),
+                ("FloorNumber", false),
+                ("AreaType", false)
+            ],
+            "{c}"
+        );
+    }
 }
 
 // ---- M9-A3 B4: the Matter 1.4 supplement ------------------------------------
@@ -1767,10 +1829,18 @@ const PROVISIONAL_CLUSTERS: [&str; 1] = ["EnergyPreference"];
 /// mandatory when it holds and disallowed when it does not; an otherwise-form
 /// (`TargetReheat, [TP]`) is not exclusive. Each gets a generated "Required
 /// when ..." rustdoc line; nothing enforces it.
-const REQUIRED_WHEN: [(&str, &str, &str, bool, bool); 10] = [
+const REQUIRED_WHEN: [(&str, &str, &str, bool, bool); 11] = [
     ("Binding", "TargetStruct.Endpoint", "Group", false, true),
     ("Binding", "TargetStruct.Group", "Endpoint", false, true),
     ("Binding", "TargetStruct.Node", "Endpoint", true, true),
+    // M9-A3 B6 (`DeviceName`: a bare name, so exclusive):
+    (
+        "EcosystemInformation",
+        "EcosystemDeviceStruct.DeviceNameLastEdit",
+        "DeviceName",
+        true,
+        true,
+    ),
     (
         "ElectricalPowerMeasurement",
         "MeasurementRangeStruct.MaxSystime",
@@ -2490,4 +2560,48 @@ fn actions_keeps_its_shapes() {
         ]
     );
     assert_eq!(writable_attributes(c), Vec::<&str>::new());
+}
+
+#[test]
+fn fabric_synchronization_clusters_keep_their_shapes() {
+    // 1.4.2 EcosystemInformationCluster.xml, CommissionerControlCluster.xml.
+    let v = load();
+    let eco = cluster(&v, "EcosystemInformation");
+    assert_eq!(
+        element_names(eco, "attributes"),
+        ["DeviceDirectory", "LocationDirectory"]
+    );
+    assert_eq!(element_names(eco, "commands"), Vec::<&str>::new());
+    assert_eq!(writable_attributes(eco), Vec::<&str>::new());
+    // Every field but FabricIndex is fabric-sensitive (§5.4: all Option).
+    for name in ["EcosystemDeviceStruct", "EcosystemLocationStruct"] {
+        for f in datatype(eco, name)["fields"].as_array().unwrap() {
+            let fabric_index = f["id"] == 254;
+            assert_eq!(
+                f["fabricSensitive"] == true,
+                !fabric_index,
+                "{name}.{}",
+                f["name"]
+            );
+            assert_eq!(f["optional"] == true, !fabric_index, "{name}.{}", f["name"]);
+        }
+    }
+    let cc = cluster(&v, "CommissionerControl");
+    assert_eq!(
+        field_optionality(&command(cc, "RequestCommissioningApproval")["fields"]),
+        [
+            ("RequestId", false),
+            ("VendorId", false),
+            ("ProductId", false),
+            ("Label", true)
+        ]
+    );
+    // CommissionNode answers with ReverseOpenCommissioningWindow (0x02).
+    assert_eq!(command(cc, "CommissionNode")["responseId"], 2);
+    assert_eq!(element_names(cc, "events"), ["CommissioningRequestResult"]);
+    // The event's fields are fabric-sensitive in the specification, but
+    // events are exempt (§5.4): chip sends them only to their own fabric.
+    let payload = cc["events"][0]["fields"].as_array().unwrap();
+    assert!(payload.iter().all(|f| f["fabricSensitive"].is_null()));
+    assert!(payload.iter().all(|f| f["optional"] == false));
 }

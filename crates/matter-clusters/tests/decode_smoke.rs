@@ -5274,3 +5274,189 @@ fn actions_events_decode() {
         [0x00, 0x01]
     );
 }
+
+// ---- M9-A3 B6: EcosystemInformation and CommissionerControl ----------------
+//
+// 1.4.2 EcosystemInformationCluster.xml, CommissionerControlCluster.xml. No
+// chip example app fills EcosystemInformation's directories (fabric-bridge-app
+// and fabric-sync add the cluster to bridged-device endpoints at runtime but
+// never call AddDeviceInfo / AddLocationInfo, at v1.4.2.0 and master), so the
+// entries are hand-built to match chip's encoding (zzz_generated/app-common/
+// clusters/EcosystemInformation/Structs.ipp, the same at v1.4.2.0 and master):
+// our own fabric's entry carries every field; another fabric's carries
+// FabricIndex only (spec §5.4).
+
+/// Our fabric's `EcosystemDeviceStruct`, as chip encodes it for its own fabric.
+fn own_ecosystem_device(w: &mut TlvWriter<'_>) {
+    w.put_utf8(Tag::Context(0), "Kitchen lamp").unwrap();
+    w.put_uint(Tag::Context(1), 1_700_000_000_000_000).unwrap();
+    w.put_uint(Tag::Context(2), 3).unwrap();
+    w.put_uint(Tag::Context(3), 1).unwrap();
+    w.start_array(Tag::Context(4)).unwrap();
+    w.start_structure(Tag::Anonymous).unwrap();
+    w.put_uint(Tag::Context(0), 0x0100).unwrap();
+    w.put_uint(Tag::Context(1), 3).unwrap();
+    w.end_container().unwrap();
+    w.end_container().unwrap();
+    w.start_array(Tag::Context(5)).unwrap();
+    w.put_utf8(Tag::Anonymous, "kitchen").unwrap();
+    w.end_container().unwrap();
+    w.put_uint(Tag::Context(6), 1_700_000_000_000_001).unwrap();
+    w.put_uint(Tag::Context(254), 1).unwrap();
+}
+
+#[test]
+fn ecosystem_device_directory_decodes_own_and_other_fabric_entries() {
+    use clusters::ecosystem_information::decode_device_directory;
+    let devices =
+        decode_device_directory(&list_of(&[&own_ecosystem_device, &other_fabric_entry])).unwrap();
+    let own = &devices[0];
+    assert_eq!(own.device_name.as_deref(), Some("Kitchen lamp"));
+    assert_eq!(own.device_name_last_edit, Some(1_700_000_000_000_000));
+    assert_eq!(
+        (own.bridged_endpoint, own.original_endpoint),
+        (Some(3), Some(1))
+    );
+    let types = own.device_types.as_ref().unwrap();
+    assert_eq!((types[0].device_type, types[0].revision), (0x0100, 3));
+    assert_eq!(
+        own.unique_location_i_ds.as_deref(),
+        Some(&["kitchen".to_string()][..])
+    );
+    assert_eq!(own.fabric_index, 1);
+    // Another fabric's entry: every fabric-sensitive field withheld.
+    let other = &devices[1];
+    assert_eq!(other.fabric_index, 2);
+    assert_eq!(
+        (
+            &other.device_name,
+            other.device_name_last_edit,
+            other.bridged_endpoint,
+            other.original_endpoint
+        ),
+        (&None, None, None, None)
+    );
+    assert_eq!(
+        (
+            &other.device_types,
+            &other.unique_location_i_ds,
+            other.unique_location_i_ds_last_edit
+        ),
+        (&None, &None, None)
+    );
+}
+
+#[test]
+fn ecosystem_location_directory_decodes_the_global_location_struct() {
+    use clusters::ecosystem_information::decode_location_directory;
+    let locations = decode_location_directory(&list_of(&[
+        &|w| {
+            w.put_utf8(Tag::Context(0), "kitchen").unwrap();
+            // LocationDescriptor: the global `locationdesc`, generated as
+            // LocationDescriptorStruct (as in ServiceArea).
+            w.start_structure(Tag::Context(1)).unwrap();
+            w.put_utf8(Tag::Context(0), "Kitchen").unwrap();
+            w.put_int(Tag::Context(1), 0).unwrap();
+            w.put_null(Tag::Context(2)).unwrap();
+            w.end_container().unwrap();
+            w.put_uint(Tag::Context(2), 1_700_000_000_000_002).unwrap();
+            w.put_uint(Tag::Context(254), 1).unwrap();
+        },
+        &other_fabric_entry,
+    ]))
+    .unwrap();
+    let own = &locations[0];
+    assert_eq!(own.unique_location_id.as_deref(), Some("kitchen"));
+    let place = own.location_descriptor.as_ref().unwrap();
+    assert_eq!(
+        (
+            place.location_name.as_str(),
+            place.floor_number,
+            place.area_type
+        ),
+        ("Kitchen", Nullable::Value(0), Nullable::Null)
+    );
+    let other = &locations[1];
+    assert_eq!(
+        (
+            &other.unique_location_id,
+            &other.location_descriptor,
+            other.location_descriptor_last_edit,
+            other.fabric_index
+        ),
+        (&None, &None, None, 2)
+    );
+}
+
+#[test]
+fn commissioner_control_requests_response_and_event_decode() {
+    use clusters::commissioner_control::{
+        command_id, decode_supported_device_categories, encode_commission_node,
+        encode_request_commissioning_approval, event_id, CommissioningRequestResultEvent,
+        ReverseOpenCommissioningWindow, SupportedDeviceCategoryBitmap,
+    };
+    assert_eq!(
+        decode_supported_device_categories(&uint_attr(1)).unwrap(),
+        SupportedDeviceCategoryBitmap::FABRIC_SYNCHRONIZATION
+    );
+    assert_eq!(
+        encode_request_commissioning_approval(0x1122, 0xFFF1, 0x8000, None),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0x1122).unwrap();
+            w.put_uint(Tag::Context(1), 0xFFF1).unwrap();
+            w.put_uint(Tag::Context(2), 0x8000).unwrap();
+        })
+    );
+    assert_eq!(
+        encode_commission_node(0x1122, 30),
+        struct_of(&|w| {
+            w.put_uint(Tag::Context(0), 0x1122).unwrap();
+            w.put_uint(Tag::Context(1), 30).unwrap();
+        })
+    );
+    // CommissionNode answers with ReverseOpenCommissioningWindow (0x02).
+    assert_eq!(
+        (
+            command_id::COMMISSION_NODE,
+            command_id::REVERSE_OPEN_COMMISSIONING_WINDOW
+        ),
+        (0x01, 0x02)
+    );
+    let window = ReverseOpenCommissioningWindow::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 180).unwrap();
+        w.put_bytes(Tag::Context(1), &[0xAB; 97]).unwrap();
+        w.put_uint(Tag::Context(2), 3840).unwrap();
+        w.put_uint(Tag::Context(3), 1000).unwrap();
+        w.put_bytes(Tag::Context(4), &[0x5A; 32]).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            window.commissioning_timeout,
+            window.pake_passcode_verifier.len(),
+            window.discriminator,
+            window.iterations,
+            window.salt.len()
+        ),
+        (180, 97, 3840, 1000, 32)
+    );
+    // A fabric-sensitive event: chip sends it only to its own fabric, in full
+    // (spec §5.4, events exempt).
+    let result = CommissioningRequestResultEvent::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 0x1122).unwrap();
+        w.put_uint(Tag::Context(1), 0x0102_0304_0506_0708).unwrap();
+        w.put_uint(Tag::Context(2), 0).unwrap();
+        w.put_uint(Tag::Context(254), 1).unwrap();
+    }))
+    .unwrap();
+    assert_eq!(
+        (
+            result.request_id,
+            result.client_node_id,
+            result.status_code,
+            result.fabric_index
+        ),
+        (0x1122, 0x0102_0304_0506_0708, 0, 1)
+    );
+    assert_eq!(event_id::COMMISSIONING_REQUEST_RESULT, 0x00);
+}
