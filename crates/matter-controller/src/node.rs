@@ -108,7 +108,8 @@ impl std::fmt::Debug for InvokeResult {
 /// The source list is the cluster dump's `SECRET_FIELDS`
 /// (`xtask/scripts/dump-model/index.js`), which marks the fields whose
 /// generated `matter-clusters` types redact: every string-typed entry there
-/// needs a row here. The ids are written out rather than taken from
+/// needs a row here. The xtask test `controller_string_secret_table` reads
+/// this table from source and fails when the two disagree. The ids are written out rather than taken from
 /// `matter-clusters` so this table builds against every `matter-clusters`
 /// release the controller supports, including ones that predate these
 /// clusters.
