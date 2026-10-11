@@ -88,11 +88,20 @@ pub fn encode_network_passphrase_request() -> Vec<u8> {
 }
 
 /// Decoded `NetworkPassphraseResponse` payload.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct NetworkPassphraseResponse {
     /// Field Passphrase (tag 0).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub passphrase: Vec<u8>,
+}
+
+impl core::fmt::Debug for NetworkPassphraseResponse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("NetworkPassphraseResponse")
+            .field("passphrase", &"<redacted>")
+            .finish()
+    }
 }
 
 impl NetworkPassphraseResponse {

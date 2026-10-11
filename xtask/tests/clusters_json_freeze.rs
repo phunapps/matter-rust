@@ -385,8 +385,8 @@ fn level_control_with_on_off_commands_carry_their_base_fields() {
 }
 
 #[test]
-fn dump_script_version_is_8() {
-    assert_eq!(load()["meta"]["dumpScriptVersion"], 8);
+fn dump_script_version_is_9() {
+    assert_eq!(load()["meta"]["dumpScriptVersion"], 9);
 }
 
 #[test]
@@ -2647,4 +2647,61 @@ fn network_infrastructure_clusters_keep_their_shapes() {
     for c in [wifi, tbrm] {
         assert_eq!(writable_attributes(c), Vec::<&str>::new());
     }
+}
+
+/// The fields the dump marks `secret` (`SECRET_FIELDS`), as `(cluster,
+/// "<Owner>.<Field>")`: their structs keep them out of the generated `Debug`
+/// output. A new one (a widening, a model upgrade) is a review item.
+const SECRET: [(&str, &str); 7] = [
+    (
+        "CommissionerControl",
+        "ReverseOpenCommissioningWindow.PakePasscodeVerifier",
+    ),
+    ("GroupKeyManagement", "GroupKeySetStruct.EpochKey0"),
+    ("GroupKeyManagement", "GroupKeySetStruct.EpochKey1"),
+    ("GroupKeyManagement", "GroupKeySetStruct.EpochKey2"),
+    ("ThreadBorderRouterManagement", "DatasetResponse.Dataset"),
+    (
+        "ThreadNetworkDirectory",
+        "OperationalDatasetResponse.OperationalDataset",
+    ),
+    (
+        "WiFiNetworkManagement",
+        "NetworkPassphraseResponse.Passphrase",
+    ),
+];
+
+#[test]
+fn secret_fields_are_exactly_these() {
+    let v = load();
+    let mut got: Vec<(String, String)> = Vec::new();
+    for c in clusters(&v) {
+        for key in ["commands", "events", "datatypes"] {
+            for e in c[key].as_array().unwrap() {
+                for f in e["fields"].as_array().into_iter().flatten() {
+                    if f["secret"] == true {
+                        assert!(
+                            f["metatype"] == "bytes" || f["metatype"] == "string",
+                            "{}.{}",
+                            e["name"],
+                            f["name"]
+                        );
+                        got.push((
+                            c["name"].as_str().unwrap().to_string(),
+                            format!(
+                                "{}.{}",
+                                e["name"].as_str().unwrap(),
+                                f["name"].as_str().unwrap()
+                            ),
+                        ));
+                    }
+                    // The key is written only when true.
+                    assert!(f["secret"] != false, "{}.{}", e["name"], f["name"]);
+                }
+            }
+        }
+    }
+    got.sort();
+    let got: Vec<(&str, &str)> = got.iter().map(|(c, f)| (c.as_str(), f.as_str())).collect();
+    assert_eq!(got, SECRET);
 }

@@ -466,6 +466,23 @@ only, chip's zap XML marks the EcosystemInformation cluster and its
 both refs do not, so it carries no provisional note either (CommissionerControl
 is marked provisional at neither ref).
 
+### matter-clusters: Fixed (security) — `Debug` output leaves secrets out
+
+- GroupKeyManagement `GroupKeySetStruct`'s derived `Debug` printed its three
+  epoch keys (`EpochKey0`/`1`/`2`) in full, in every release since the
+  cluster was generated (M9-A2.5; 0.5.0 included), so a `{:?}` log of a key
+  set leaked the group keys. It now prints `<redacted>` for each key. Not a
+  breaking change: the struct still implements `Clone`, `Debug` and
+  `PartialEq` (`Debug` is now written by hand instead of derived), and its
+  fields, types and wire bytes are unchanged.
+- The same applies to the structs this release adds that carry a secret:
+  ThreadBorderRouterManagement `DatasetResponse` and ThreadNetworkDirectory
+  `OperationalDatasetResponse` (Thread datasets, network key included),
+  WiFiNetworkManagement `NetworkPassphraseResponse` (the Wi-Fi passphrase)
+  and CommissionerControl `ReverseOpenCommissioningWindow`'s PAKE verifier.
+  Each secret field's rustdoc says so. Values are untouched; only the `{:?}`
+  rendering differs (it was never a stable format).
+
 ### matter-controller: Fixed — a withheld ACL Subjects/Targets is never read as a wildcard
 
 `read_acl` used to read an entry with no Subjects (or Targets) field as a

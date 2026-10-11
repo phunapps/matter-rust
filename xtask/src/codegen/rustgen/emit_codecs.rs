@@ -1,7 +1,10 @@
 //! Codec emission: struct, attribute, and command encode/decode.
 
 use crate::codegen::model::{Attribute, Cluster, CommandDef, Datatype, EventDef, FieldDef};
-use crate::codegen::rustgen::emit::{choice_docs, element_note, line, PROVISIONAL_DOC};
+use crate::codegen::rustgen::emit::{
+    choice_docs, element_note, emit_redacting_debug, line, struct_derive, PROVISIONAL_DOC,
+    SECRET_DOC,
+};
 use crate::codegen::rustgen::types::{base_type, ident, rust_type, snake, Position};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -971,6 +974,7 @@ fn clone_field(f: &FieldDef) -> FieldDef {
         choice: f.choice.clone(),
         required_when: f.required_when.clone(),
         relaxed_reason: f.relaxed_reason.clone(),
+        secret: f.secret,
     }
 }
 
@@ -1073,7 +1077,7 @@ fn emit_struct_decl_and_codec(
             line!(s, "///");
             line!(s, "/// {note}");
         }
-        line!(s, "#[derive(Clone, Debug, PartialEq)]");
+        line!(s, "{}", struct_derive(&d.fields));
         line!(s, "#[non_exhaustive]");
         line!(s, "pub struct {} {{", d.name);
         for f in &d.fields {
@@ -1091,9 +1095,13 @@ fn emit_struct_decl_and_codec(
             if let Some(reason) = &f.relaxed_reason {
                 line!(s, "    /// {}", super::emit::relaxed_reason_doc(reason));
             }
+            if f.secret {
+                line!(s, "    /// {SECRET_DOC}");
+            }
             line!(s, "    pub {}: {},", field_ident(&f.name), ty);
         }
         line!(s, "}}\n");
+        emit_redacting_debug(s, &d.name, &d.fields);
     }
 
     line!(s, "impl {} {{", d.name);
@@ -1518,6 +1526,7 @@ mod tests {
             choice: None,
             required_when: None,
             relaxed_reason: None,
+            secret: false,
         }
     }
 
@@ -1649,6 +1658,35 @@ mod tests {
         assert!(s.contains("for el in self.tokens.iter() {"), "{s}");
         assert!(s.contains("w.put_bytes(Tag::Anonymous, el)"), "{s}");
         assert!(!s.contains(".copied()"), "{s}");
+    }
+
+    #[test]
+    fn a_response_with_a_secret_field_redacts_it_in_its_debug() {
+        // M9-A3 B6: WiFiNetworkManagement NetworkPassphraseResponse.Passphrase.
+        let mut passphrase = field(0, "Passphrase", "octstr", "bytes", None);
+        passphrase.secret = true;
+        let cmd = CommandDef {
+            id: 1,
+            name: "NetworkPassphraseResponse".to_string(),
+            direction: "response".to_string(),
+            response_id: None,
+            fields: vec![passphrase],
+            provisional: false,
+            deprecated: false,
+            supplemented: None,
+        };
+        let mut s = String::new();
+        emit_response_decoder(&mut s, &cmd, &HashMap::new(), None);
+        assert!(
+            s.contains("#[derive(Clone, PartialEq)]\n#[non_exhaustive]"),
+            "{s}"
+        );
+        assert!(
+            s.contains("impl core::fmt::Debug for NetworkPassphraseResponse {"),
+            "{s}"
+        );
+        assert!(s.contains(".field(\"passphrase\", &\"<redacted>\")"), "{s}");
+        assert!(s.contains(&format!("    /// {SECRET_DOC}\n")), "{s}");
     }
 
     #[test]

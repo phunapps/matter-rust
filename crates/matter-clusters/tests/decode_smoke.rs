@@ -5607,3 +5607,127 @@ fn thread_network_directory_networks_requests_and_response_decode() {
     .unwrap();
     assert!(response.operational_dataset == [0x0e, 0x08]);
 }
+
+// ---- M9-A3 B6: secrets stay out of `Debug` ----------------------------------
+//
+// A Thread dataset, a Wi-Fi passphrase, a group epoch key or a PAKE verifier
+// logged with `{:?}` must not leak: their structs print `<redacted>` there
+// (the dump's SECRET_FIELDS). The values themselves are untouched. The values
+// below are synthetic; no assertion prints a `{:?}` rendering or a secret
+// value on failure, since a failing redaction would print the very bytes it
+// failed to hide.
+
+/// Assert that `shown` (a `{:?}` rendering) carries the `"<redacted>"`
+/// placeholder and none of `secret`'s renderings: its `Debug` byte list
+/// (decimal, as `Vec<u8>` prints), that list in hex (`{:x?}`), and the bytes
+/// read as text. Never prints `shown`.
+fn assert_redacted(shown: &str, secret: &[u8]) {
+    assert!(
+        shown.contains("\"<redacted>\""),
+        "the placeholder is missing"
+    );
+    let decimal = format!("{secret:?}");
+    let decimal = decimal.trim_start_matches('[').trim_end_matches(']');
+    assert!(
+        !shown.contains(decimal),
+        "the secret's Debug byte list leaked"
+    );
+    let hex = format!("{secret:x?}");
+    let hex = hex.trim_start_matches('[').trim_end_matches(']');
+    assert!(!shown.contains(hex), "the secret's hex byte list leaked");
+    let text = String::from_utf8_lossy(secret);
+    assert!(!shown.contains(text.as_ref()), "the secret's text leaked");
+}
+
+#[test]
+#[allow(clippy::manual_assert_eq)] // assert_eq! would print secret bytes on failure.
+fn secret_fields_are_redacted_in_debug_output() {
+    use clusters::commissioner_control::ReverseOpenCommissioningWindow;
+    use clusters::group_key_management::{GroupKeySecurityPolicyEnum, GroupKeySetStruct};
+    use clusters::thread_border_router_management::DatasetResponse;
+    use clusters::thread_network_directory::OperationalDatasetResponse;
+    use clusters::wi_fi_network_management::NetworkPassphraseResponse;
+
+    // WiFiNetworkManagement: the passphrase. The whole rendering is pinned:
+    // a one-field struct prints nothing else.
+    let passphrase = NetworkPassphraseResponse::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), b"correct horse").unwrap();
+    }))
+    .unwrap();
+    assert!(passphrase.passphrase == b"correct horse");
+    let shown = format!("{passphrase:?}");
+    assert!(
+        shown == "NetworkPassphraseResponse { passphrase: \"<redacted>\" }",
+        "unexpected NetworkPassphraseResponse rendering"
+    );
+    assert_redacted(&shown, b"correct horse");
+    // `{:#?}` and `{:x?}` go through the same impl.
+    assert_redacted(&format!("{passphrase:#?}"), b"correct horse");
+    assert_redacted(&format!("{passphrase:x?}"), b"correct horse");
+
+    // ThreadBorderRouterManagement and ThreadNetworkDirectory: a dataset; its
+    // network key (TLV type 5) is among the bytes.
+    let dataset_bytes = [0x05, 0x10, 0xAA, 0xBB, 0xCC];
+    let dataset = DatasetResponse::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &dataset_bytes).unwrap();
+    }))
+    .unwrap();
+    assert!(dataset.dataset == dataset_bytes);
+    let shown = format!("{dataset:?}");
+    assert!(shown == "DatasetResponse { dataset: \"<redacted>\" }");
+    assert_redacted(&shown, &dataset_bytes);
+    let operational = OperationalDatasetResponse::decode(&struct_of(&|w| {
+        w.put_bytes(Tag::Context(0), &dataset_bytes).unwrap();
+    }))
+    .unwrap();
+    assert!(operational.operational_dataset == dataset_bytes);
+    let shown = format!("{operational:?}");
+    assert!(shown == "OperationalDatasetResponse { operational_dataset: \"<redacted>\" }");
+    assert_redacted(&shown, &dataset_bytes);
+
+    // CommissionerControl: the PAKE verifier; the salt and the rest print.
+    let verifier = [0xC4; 97];
+    let window = ReverseOpenCommissioningWindow::decode(&struct_of(&|w| {
+        w.put_uint(Tag::Context(0), 180).unwrap();
+        w.put_bytes(Tag::Context(1), &verifier).unwrap();
+        w.put_uint(Tag::Context(2), 3840).unwrap();
+        w.put_uint(Tag::Context(3), 1000).unwrap();
+        w.put_bytes(Tag::Context(4), &[0x01, 0x02]).unwrap();
+    }))
+    .unwrap();
+    assert!(window.pake_passcode_verifier == verifier);
+    let shown = format!("{window:?}");
+    assert!(
+        shown
+            == "ReverseOpenCommissioningWindow { commissioning_timeout: 180, \
+                pake_passcode_verifier: \"<redacted>\", discriminator: 3840, \
+                iterations: 1000, salt: [1, 2] }",
+        "unexpected ReverseOpenCommissioningWindow rendering"
+    );
+    assert_redacted(&shown, &verifier);
+
+    // GroupKeyManagement: the three epoch keys; the start times and the rest
+    // print as the derive printed them.
+    let key = [0xAB; 16];
+    let keys = GroupKeySetStruct {
+        group_key_set_id: 0x0042,
+        group_key_security_policy: GroupKeySecurityPolicyEnum::from_raw(0),
+        epoch_key0: Nullable::Value(key.to_vec()),
+        epoch_start_time0: Nullable::Value(1234),
+        epoch_key1: Nullable::Value(key.to_vec()),
+        epoch_start_time1: Nullable::Value(5678),
+        epoch_key2: Nullable::Null,
+        epoch_start_time2: Nullable::Null,
+        group_key_multicast_policy: None,
+        fabric_index: None,
+    };
+    let shown = format!("{keys:?}");
+    assert!(shown.starts_with("GroupKeySetStruct { group_key_set_id: 66, "));
+    assert!(shown.contains(", epoch_key0: \"<redacted>\", epoch_start_time0: Value(1234), "));
+    assert!(shown.contains(", epoch_key1: \"<redacted>\", epoch_start_time1: Value(5678), "));
+    assert!(shown.contains(", epoch_key2: \"<redacted>\", epoch_start_time2: Null, "));
+    assert!(shown.ends_with(", group_key_multicast_policy: None, fabric_index: None }"));
+    assert_eq!(shown.matches("\"<redacted>\"").count(), 3);
+    assert_redacted(&shown, &key);
+    assert!(!shown.contains("171"), "an epoch key byte leaked");
+}

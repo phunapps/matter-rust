@@ -2,7 +2,7 @@
   "meta": {
     "matterJsModelVersion": "0.17.1",
     "specRevision": "1.5.1",
-    "dumpScriptVersion": 8,
+    "dumpScriptVersion": 9,
     "generatedClusters": [
       "Identify",
       "Groups",
@@ -12934,7 +12934,8 @@
               "metatype": "bytes",
               "nullable": true,
               "optional": false,
-              "description": "This field, if not null, shall be the root credential used in the derivation of an operational group key for epoch slot 0 of the given group key set. If EpochKey0 is not null, EpochStartTime0 shall NOT be null."
+              "description": "This field, if not null, shall be the root credential used in the derivation of an operational group key for epoch slot 0 of the given group key set. If EpochKey0 is not null, EpochStartTime0 shall NOT be null.",
+              "secret": true
             },
             {
               "id": 3,
@@ -12952,7 +12953,8 @@
               "metatype": "bytes",
               "nullable": true,
               "optional": false,
-              "description": "This field, if not null, shall be the root credential used in the derivation of an operational group key for epoch slot 1 of the given group key set. If EpochKey1 is not null, EpochStartTime1 shall NOT be null."
+              "description": "This field, if not null, shall be the root credential used in the derivation of an operational group key for epoch slot 1 of the given group key set. If EpochKey1 is not null, EpochStartTime1 shall NOT be null.",
+              "secret": true
             },
             {
               "id": 5,
@@ -12970,7 +12972,8 @@
               "metatype": "bytes",
               "nullable": true,
               "optional": false,
-              "description": "This field, if not null, shall be the root credential used in the derivation of an operational group key for epoch slot 2 of the given group key set. If EpochKey2 is not null, EpochStartTime2 shall NOT be null."
+              "description": "This field, if not null, shall be the root credential used in the derivation of an operational group key for epoch slot 2 of the given group key set. If EpochKey2 is not null, EpochStartTime2 shall NOT be null.",
+              "secret": true
             },
             {
               "id": 7,
@@ -36303,7 +36306,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "This field shall indicate the current WPA-Personal passphrase or PSK associated with the primary Wi-Fi network provided by this device, in one of the following formats:\n  - 8..63 bytes: WPA/WPA2/WPA3 passphrase.\n  - 64 bytes: WPA/WPA2/WPA3 raw hex PSK. Each byte shall be a ASCII hexadecimal digit.\nThis matches the formats defined for WPA networks by the Credentials field in the Network Commissioning cluster (see [[MatterCore]](#ref_MatterCore)).\n> [!NOTE]\n> NOTE: WPA3-Personal permits passphrases shorter than 8 or longer than 63 characters, however the Network Commissioning cluster does not currently support configuring Matter devices to connect to operational networks utilizing such a passphrase."
+              "description": "This field shall indicate the current WPA-Personal passphrase or PSK associated with the primary Wi-Fi network provided by this device, in one of the following formats:\n  - 8..63 bytes: WPA/WPA2/WPA3 passphrase.\n  - 64 bytes: WPA/WPA2/WPA3 raw hex PSK. Each byte shall be a ASCII hexadecimal digit.\nThis matches the formats defined for WPA networks by the Credentials field in the Network Commissioning cluster (see [[MatterCore]](#ref_MatterCore)).\n> [!NOTE]\n> NOTE: WPA3-Personal permits passphrases shorter than 8 or longer than 63 characters, however the Network Commissioning cluster does not currently support configuring Matter devices to connect to operational networks utilizing such a passphrase.",
+              "secret": true
             }
           ]
         }
@@ -36413,7 +36417,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": "If no dataset (active or pending as requested) is configured, this field shall be set to empty.\nOtherwise, this field shall contain the active or pending dataset of the Thread network to which the Border Router is connected as an octet string containing the raw Thread TLV value of the dataset, as defined in the Thread specification."
+              "description": "If no dataset (active or pending as requested) is configured, this field shall be set to empty.\nOtherwise, this field shall contain the active or pending dataset of the Thread network to which the Border Router is connected as an octet string containing the raw Thread TLV value of the dataset, as defined in the Thread specification.",
+              "secret": true
             }
           ]
         },
@@ -36567,7 +36572,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": null
+              "description": null,
+              "secret": true
             }
           ]
         }
@@ -36973,7 +36979,8 @@
               "metatype": "bytes",
               "nullable": false,
               "optional": false,
-              "description": null
+              "description": null,
+              "secret": true
             },
             {
               "id": 2,

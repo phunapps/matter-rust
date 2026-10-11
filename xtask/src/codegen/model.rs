@@ -238,6 +238,13 @@ pub struct FieldDef {
     /// the field's rustdoc. Only on an `optional` field.
     #[serde(default, rename = "relaxedReason")]
     pub relaxed_reason: Option<String>,
+    /// The field carries a secret (a key, a Thread dataset, a passphrase, a
+    /// PAKE verifier; the dump's `SECRET_FIELDS`, M9-A3 B6). The generated
+    /// struct keeps it out of its `Debug` output, like the hand-written
+    /// redactions elsewhere in the workspace. Absent in the JSON means
+    /// `false`.
+    #[serde(default)]
+    pub secret: bool,
 }
 
 /// A presence dependency between two fields of one struct (M9-A3 B5): the

@@ -263,11 +263,20 @@ pub fn encode_get_operational_dataset(extended_pan_id: &Vec<u8>) -> Vec<u8> {
 }
 
 /// Decoded `OperationalDatasetResponse` payload.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct OperationalDatasetResponse {
     /// Field OperationalDataset (tag 0).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub operational_dataset: Vec<u8>,
+}
+
+impl core::fmt::Debug for OperationalDatasetResponse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OperationalDatasetResponse")
+            .field("operational_dataset", &"<redacted>")
+            .finish()
+    }
 }
 
 impl OperationalDatasetResponse {

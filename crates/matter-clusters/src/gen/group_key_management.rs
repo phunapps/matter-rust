@@ -150,21 +150,24 @@ impl GroupKeySecurityPolicyEnum {
 }
 
 /// `GroupKeySetStruct` struct.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct GroupKeySetStruct {
     /// Field GroupKeySetId (tag 0).
     pub group_key_set_id: u16,
     /// Field GroupKeySecurityPolicy (tag 1).
     pub group_key_security_policy: GroupKeySecurityPolicyEnum,
     /// Field EpochKey0 (tag 2).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub epoch_key0: Nullable<Vec<u8>>,
     /// Field EpochStartTime0 (tag 3).
     pub epoch_start_time0: Nullable<u64>,
     /// Field EpochKey1 (tag 4).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub epoch_key1: Nullable<Vec<u8>>,
     /// Field EpochStartTime1 (tag 5).
     pub epoch_start_time1: Nullable<u64>,
     /// Field EpochKey2 (tag 6).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub epoch_key2: Nullable<Vec<u8>>,
     /// Field EpochStartTime2 (tag 7).
     pub epoch_start_time2: Nullable<u64>,
@@ -172,6 +175,26 @@ pub struct GroupKeySetStruct {
     pub group_key_multicast_policy: Option<GroupKeyMulticastPolicyEnum>,
     /// Field FabricIndex (tag 254).
     pub fabric_index: Option<u8>,
+}
+
+impl core::fmt::Debug for GroupKeySetStruct {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("GroupKeySetStruct")
+            .field("group_key_set_id", &self.group_key_set_id)
+            .field("group_key_security_policy", &self.group_key_security_policy)
+            .field("epoch_key0", &"<redacted>")
+            .field("epoch_start_time0", &self.epoch_start_time0)
+            .field("epoch_key1", &"<redacted>")
+            .field("epoch_start_time1", &self.epoch_start_time1)
+            .field("epoch_key2", &"<redacted>")
+            .field("epoch_start_time2", &self.epoch_start_time2)
+            .field(
+                "group_key_multicast_policy",
+                &self.group_key_multicast_policy,
+            )
+            .field("fabric_index", &self.fabric_index)
+            .finish()
+    }
 }
 
 impl GroupInfoMapStruct {

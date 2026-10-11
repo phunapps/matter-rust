@@ -24,7 +24,7 @@
 //   field = { id, name, type, metatype, entryType?, nullable, optional, description,
 //             fabricSensitive?, mandatoryOnWrite?, requiredWhen?,
 //                                     (all three: datatype struct fields only)
-//             provisional?, choice? }
+//             provisional?, choice?, secret? (SECRET_FIELDS) }
 //   provisional? (true only) also on clusters (PROVISIONAL_CLUSTERS), features,
 //   attributes, commands, events;
 //   supplemented? { from, removedIn, removedInRevision, feature, conformance }
@@ -67,7 +67,9 @@ const SUPPLEMENT_PATH = join(__dirname, 'supplement-1.4.json');
 //     datatype struct fields (M9-A3 B5).
 // v8: `relaxedReason` on each FIELD_RELAXATIONS field, for generated rustdoc
 //     (M9-A3 B5 fix wave).
-const DUMP_SCRIPT_VERSION = 8;
+// v9: `secret` on fields (SECRET_FIELDS), for the generated redacting `Debug`
+//     (M9-A3 B6).
+const DUMP_SCRIPT_VERSION = 9;
 // @matter/model 0.17.x tracks Matter spec 1.5.1. Recorded for provenance;
 // the freeze test only asserts it is a non-empty string, so correcting it
 // later does not break the gate.
@@ -423,6 +425,26 @@ const FIELD_RELAXATIONS = new Map([
   ['Messages.MessageComplete.FabricIndex', MESSAGES_EVENT_FABRIC_INDEX],
 ]);
 const appliedFieldRelaxations = new Set();
+
+// M9-A3 B6: fields that carry a secret. The dump marks each `secret: true` and
+// the emitter keeps it out of the struct's generated `Debug` output (it prints
+// `<redacted>`), the discipline matter-commissioning's ThreadDataset and
+// WiFiCredentials already follow: a key logged with `{:?}` must not leak. Wire
+// bytes, types and the public API are unchanged. Keys use the checker's
+// spelling, `<Cluster>.<Struct|Command|Event>.<Field>`. The dump fails when a
+// key whose cluster is allowlisted matches no field, when the field is not a
+// byte or character string, or when it is a request field (a request has no
+// generated struct, so there is no `Debug` to redact).
+const SECRET_FIELDS = new Map([
+  ['CommissionerControl.ReverseOpenCommissioningWindow.PakePasscodeVerifier', 'a PAKE passcode verifier: the setup passcode can be brute-forced from it offline'],
+  ['GroupKeyManagement.GroupKeySetStruct.EpochKey0', 'an operational group epoch key'],
+  ['GroupKeyManagement.GroupKeySetStruct.EpochKey1', 'an operational group epoch key'],
+  ['GroupKeyManagement.GroupKeySetStruct.EpochKey2', 'an operational group epoch key'],
+  ['ThreadBorderRouterManagement.DatasetResponse.Dataset', 'a Thread operational dataset, network key included'],
+  ['ThreadNetworkDirectory.OperationalDatasetResponse.OperationalDataset', 'a Thread operational dataset, network key included'],
+  ['WiFiNetworkManagement.NetworkPassphraseResponse.Passphrase', 'the Wi-Fi network passphrase'],
+]);
+const appliedSecretFields = new Set();
 
 function fail(msg) {
   throw new Error(`dump-model: ${msg}`);
@@ -854,6 +876,14 @@ function dumpField(f, where, ctx) {
   );
   const cluster = where.split('.')[0];
   const relaxKey = `${cluster}.${ctx.element}.${f.name}`;
+  if (SECRET_FIELDS.has(relaxKey)) {
+    if (ctx.role === 'request') fail(`SECRET_FIELDS ${relaxKey} is a request field — no generated struct holds it`);
+    if (out.metatype !== 'bytes' && out.metatype !== 'string') {
+      fail(`SECRET_FIELDS ${relaxKey} has metatype ${out.metatype}, not a byte or character string — review the entry`);
+    }
+    out.secret = true;
+    appliedSecretFields.add(relaxKey);
+  }
   const relaxation = FIELD_RELAXATIONS.get(relaxKey);
   if (relaxation) {
     if (ctx.role === 'request') fail(`FIELD_RELAXATIONS ${relaxKey} is a request field — we send it, so it cannot be relaxed`);
@@ -2026,6 +2056,12 @@ for (const key of FIELD_RELAXATIONS.keys()) {
   const owner = key.split('.')[0];
   if (ALLOWLIST.some((e) => e.name === owner) && !appliedFieldRelaxations.has(key)) {
     fail(`FIELD_RELAXATIONS ${key} matched no field — model drift; review FIELD_RELAXATIONS`);
+  }
+}
+for (const key of SECRET_FIELDS.keys()) {
+  const owner = key.split('.')[0];
+  if (ALLOWLIST.some((e) => e.name === owner) && !appliedSecretFields.has(key)) {
+    fail(`SECRET_FIELDS ${key} matched no field — model drift; review SECRET_FIELDS`);
   }
 }
 for (const key of TYPE_WIDENINGS.keys()) {

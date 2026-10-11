@@ -116,12 +116,13 @@ pub fn encode_commission_node(request_id: u64, response_timeout_seconds: u16) ->
 }
 
 /// Decoded `ReverseOpenCommissioningWindow` payload.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct ReverseOpenCommissioningWindow {
     /// Field CommissioningTimeout (tag 0).
     pub commissioning_timeout: u16,
     /// Field PakePasscodeVerifier (tag 1).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub pake_passcode_verifier: Vec<u8>,
     /// Field Discriminator (tag 2).
     pub discriminator: u16,
@@ -129,6 +130,18 @@ pub struct ReverseOpenCommissioningWindow {
     pub iterations: u32,
     /// Field Salt (tag 4).
     pub salt: Vec<u8>,
+}
+
+impl core::fmt::Debug for ReverseOpenCommissioningWindow {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReverseOpenCommissioningWindow")
+            .field("commissioning_timeout", &self.commissioning_timeout)
+            .field("pake_passcode_verifier", &"<redacted>")
+            .field("discriminator", &self.discriminator)
+            .field("iterations", &self.iterations)
+            .field("salt", &self.salt)
+            .finish()
+    }
 }
 
 impl ReverseOpenCommissioningWindow {

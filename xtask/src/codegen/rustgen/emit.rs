@@ -29,6 +29,10 @@ pub const PROVISIONAL_DOC: &str =
 pub const WRITABLE_ATTRIBUTE_ENCODER_DOC: &str = "Encodable because a writable attribute carries \
      it; `#[non_exhaustive]`, so outside this crate only a decoded value can be re-encoded.";
 
+/// The rustdoc line on a field that carries a secret (`FieldDef::secret`,
+/// M9-A3 B6): its struct's `Debug` output shows a placeholder instead.
+pub const SECRET_DOC: &str = "Secret: this struct's `Debug` output shows `<redacted>` instead.";
+
 /// The one rustdoc note of a generated feature, attribute or command item, or
 /// `None` (M9-A3 B4). An element added from the Matter 1.4 supplement
 /// (`supplemented`) gets a line saying where it comes from, whether 1.4 itself
@@ -226,6 +230,52 @@ macro_rules! line {
 }
 #[allow(unused_imports)]
 pub(crate) use line;
+
+/// The `#[derive(..)]` line of a generated struct with these fields: `Debug`
+/// is derived unless a field is secret, in which case
+/// [`emit_redacting_debug`] writes it by hand (M9-A3 B6). Every other derived
+/// trait is the same either way, so marking a field secret never changes a
+/// struct's trait set.
+pub(crate) fn struct_derive(fields: &[FieldDef]) -> &'static str {
+    if fields.iter().any(|f| f.secret) {
+        "#[derive(Clone, PartialEq)]"
+    } else {
+        "#[derive(Clone, Debug, PartialEq)]"
+    }
+}
+
+/// Emit (into `s`) a hand-written `Debug` impl for struct `name` when one of
+/// its `fields` is secret, nothing otherwise (M9-A3 B6). It prints what the
+/// derive would, except that each secret field reads `"<redacted>"`: a Thread
+/// dataset or a Wi-Fi passphrase logged with `{:?}` must not leak (the same
+/// discipline as `matter-commissioning`'s `ThreadDataset` and
+/// `WiFiCredentials`).
+pub(crate) fn emit_redacting_debug(s: &mut String, name: &str, fields: &[FieldDef]) {
+    if !fields.iter().any(|f| f.secret) {
+        return;
+    }
+    line!(s, "impl core::fmt::Debug for {name} {{");
+    line!(
+        s,
+        "    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {{"
+    );
+    line!(s, "        f.debug_struct(\"{name}\")");
+    for field in fields {
+        let shown = snake(&field.name);
+        if field.secret {
+            line!(s, "            .field(\"{shown}\", &\"<redacted>\")");
+        } else {
+            line!(
+                s,
+                "            .field(\"{shown}\", &self.{})",
+                ident(&shown)
+            );
+        }
+    }
+    line!(s, "            .finish()");
+    line!(s, "    }}");
+    line!(s, "}}\n");
+}
 
 fn emit_header(s: &mut String, c: &Cluster) {
     line!(s, "//! {} cluster (0x{:04X}).", c.name, c.id);
@@ -513,7 +563,7 @@ fn emit_struct(
         line!(s, "///");
         line!(s, "/// {WRITABLE_ATTRIBUTE_ENCODER_DOC}");
     }
-    line!(s, "#[derive(Clone, Debug, PartialEq)]");
+    line!(s, "{}", struct_derive(&d.fields));
     // `#[non_exhaustive]` future-proofs decode-only data structs, but blocks the
     // struct-literal construction that command-encode callers need; skip it for
     // structs reachable from a request command (they are built to be encoded).
@@ -559,11 +609,15 @@ fn emit_struct(
                 line!(s, "    /// withheld for another fabric's entry.");
             }
         }
+        if f.secret {
+            line!(s, "    /// {SECRET_DOC}");
+        }
         // Escape reserved-word field names (`Type` -> `r#type`); see field_ident
         // in emit_codecs (the codec pass uses the same rule).
         line!(s, "    pub {}: {},", ident(&snake(&f.name)), ty);
     }
     line!(s, "}}\n");
+    emit_redacting_debug(s, &d.name, &d.fields);
     // The struct's encode/decode impls are emitted by the codec pass (next
     // task), since they share the scalar read/write helpers.
     let _ = base_type; // keep import used regardless of branch
@@ -653,6 +707,7 @@ mod tests {
             choice: None,
             required_when: None,
             relaxed_reason: None,
+            secret: false,
         };
         let d = Datatype {
             name: "ScopedStruct".to_string(),
@@ -712,6 +767,7 @@ mod tests {
             choice: None,
             required_when: None,
             relaxed_reason: reason.map(str::to_string),
+            secret: false,
         };
         let want = "    /// Field FabricIndex (tag 254).\n    /// Optional: chip's servers do not send it.\n    pub fabric_index: Option<u8>,";
         let d = Datatype {
@@ -875,6 +931,7 @@ mod tests {
             }),
             required_when: None,
             relaxed_reason: None,
+            secret: false,
         }
     }
 
@@ -1173,5 +1230,66 @@ mod tests {
         );
         assert_eq!(s.matches("Required when").count(), 3, "{s}");
         assert_eq!(s.matches("must be omitted").count(), 2, "{s}");
+    }
+
+    // ---- M9-A3 B6: secret fields stay out of `Debug` ----------------------
+
+    #[test]
+    fn a_struct_with_a_secret_field_redacts_it_in_a_hand_written_debug() {
+        let key = FieldDef {
+            ty: "octstr".to_string(),
+            metatype: "bytes".to_string(),
+            secret: true,
+            ..note_field("EpochKey0", false, None)
+        };
+        let d = Datatype {
+            name: "KeySetStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![note_field("Type", false, None), key],
+            global_name: None,
+            kept_for: None,
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
+        assert!(s.contains("#[derive(Clone, PartialEq)]\n"), "{s}");
+        assert!(!s.contains("Debug, PartialEq"), "{s}");
+        assert!(
+            s.contains(&format!(
+                "/// Field EpochKey0 (tag 0).\n    /// {SECRET_DOC}\n"
+            )),
+            "{s}"
+        );
+        assert!(
+            s.contains("impl core::fmt::Debug for KeySetStruct {"),
+            "{s}"
+        );
+        assert!(s.contains("f.debug_struct(\"KeySetStruct\")"), "{s}");
+        // A non-secret field prints as the derive would, reserved words
+        // included (`r#type` prints as `type`).
+        assert!(s.contains(".field(\"type\", &self.r#type)"), "{s}");
+        assert!(s.contains(".field(\"epoch_key0\", &\"<redacted>\")"), "{s}");
+        assert!(!s.contains("&self.epoch_key0"), "{s}");
+    }
+
+    #[test]
+    fn a_struct_without_secrets_keeps_the_derived_debug() {
+        let d = Datatype {
+            name: "PlainStruct".to_string(),
+            base: "struct".to_string(),
+            kind: "struct".to_string(),
+            values: vec![],
+            bits: vec![],
+            fields: vec![note_field("Level", false, None)],
+            global_name: None,
+            kept_for: None,
+        };
+        let mut s = String::new();
+        emit_struct(&mut s, &d, &HashSet::new(), &HashSet::new());
+        assert!(s.contains("#[derive(Clone, Debug, PartialEq)]\n"), "{s}");
+        assert!(!s.contains("impl core::fmt::Debug"), "{s}");
+        assert!(!s.contains(SECRET_DOC), "{s}");
     }
 }

@@ -195,11 +195,20 @@ pub fn encode_get_pending_dataset_request() -> Vec<u8> {
 }
 
 /// Decoded `DatasetResponse` payload.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub struct DatasetResponse {
     /// Field Dataset (tag 0).
+    /// Secret: this struct's `Debug` output shows `<redacted>` instead.
     pub dataset: Vec<u8>,
+}
+
+impl core::fmt::Debug for DatasetResponse {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DatasetResponse")
+            .field("dataset", &"<redacted>")
+            .finish()
+    }
 }
 
 impl DatasetResponse {
