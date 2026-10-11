@@ -4454,10 +4454,15 @@ fn present_messages_request_without_responses_omits_tag_6() {
 //
 // Attributes only (1.4.2 LocalizationConfiguration.xml,
 // LocalizationTimeFormat.xml, LocalizationUnit.xml,
-// PowerSourceConfigurationCluster.xml). Values are all-clusters' as chip master
-// serves them (the device-info provider's locales and calendar, main-common.cpp's
-// temperature units; Sources lists the endpoints that carry PowerSource,
-// sorted by their Order, in chip's power-source-configuration-server.cpp).
+// PowerSourceConfigurationCluster.xml). Values from all-clusters, the same at
+// v1.4.2.0 and master: the locales are 3 of the 8 its device-info provider
+// serves (AllClustersExampleDeviceInfoProviderImpl.cpp), Gregorian (4) is its
+// only calendar, [Fahrenheit, Celsius] are linux/main-common.cpp's
+// temperature units, and Sources [2, 1, 0] lists the endpoints that carry
+// PowerSource, sorted by their Order (chip's
+// power-source-configuration-server.cpp). The rest is synthetic: the
+// calendar list's 0xFF and 42 entries, the Japanese calendar, the hour
+// formats and Kelvin.
 
 /// An anonymous array of anonymous UTF-8 strings (a `list<string>` value).
 fn str_array_attr(values: &[&str]) -> Vec<u8> {
@@ -5323,6 +5328,10 @@ fn ecosystem_device_directory_decodes_own_and_other_fabric_entries() {
         own.unique_location_i_ds.as_deref(),
         Some(&["kitchen".to_string()][..])
     );
+    assert_eq!(
+        own.unique_location_i_ds_last_edit,
+        Some(1_700_000_000_000_001)
+    );
     assert_eq!(own.fabric_index, 1);
     // Another fabric's entry: every fabric-sensitive field withheld.
     let other = &devices[1];
@@ -5375,6 +5384,10 @@ fn ecosystem_location_directory_decodes_the_global_location_struct() {
             place.area_type
         ),
         ("Kitchen", Nullable::Value(0), Nullable::Null)
+    );
+    assert_eq!(
+        own.location_descriptor_last_edit,
+        Some(1_700_000_000_000_002)
     );
     let other = &locations[1];
     assert_eq!(
@@ -5464,8 +5477,10 @@ fn commissioner_control_requests_response_and_event_decode() {
 // ---- M9-A3 B6: network infrastructure ---------------------------------------
 //
 // 1.4.2 WiFiNetworkManagement.xml, ThreadBorderRouterManagement.xml,
-// ThreadNetworkDirectory.xml. network-manager-app is chip's only host of all
-// three and is not built here (it needs ZAP at build time), so these values
+// ThreadNetworkDirectory.xml. network-manager-app is chip's only example app
+// that hosts all three (thread-br-app and others also host
+// ThreadBorderRouterManagement); none is built here (they need ZAP at build
+// time), so these values
 // are hand-built to the 1.4.2 shapes. The passphrase and the datasets are
 // secrets on a real network: the values here are synthetic, and they are
 // compared with `assert!(a == b)` so a failure never prints them.
@@ -5567,7 +5582,11 @@ fn thread_network_directory_networks_requests_and_response_decode() {
         (n.network_name.as_str(), n.channel, n.active_timestamp),
         ("MyHome", 15, 1)
     );
-    assert_eq!(n.extended_pan_id.len(), 8);
+    // The extended PAN id is not a secret: compared by value.
+    assert_eq!(
+        n.extended_pan_id,
+        [0xDE, 0xAD, 0, 0xBE, 0xEF, 0, 0xCA, 0xFE]
+    );
     assert_eq!(
         decode_thread_network_table_size(&uint_attr(10)).unwrap(),
         10

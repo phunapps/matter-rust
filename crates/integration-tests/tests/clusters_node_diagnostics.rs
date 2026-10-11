@@ -226,9 +226,13 @@ async fn wifi_diagnostics_decode_reset_and_report_their_events() {
 /// ember server takes it from the block's `ram attribute clusterRevision
 /// default = 2;` and serves only the listed attributes. master's code-driven
 /// server (ThreadNetworkDiagnosticsCluster.cpp) declares the attribute
-/// `callback`, reports the cluster's own revision (the `revision 3;` of the
-/// `cluster ThreadNetworkDiagnostics = 53 {` definition) and serves the whole
-/// 0x0000..=0x0040 range whatever the block lists.
+/// `callback`, reports the generated `ThreadNetworkDiagnostics::kRevision`
+/// (3, zzz_generated/.../ThreadNetworkDiagnostics/Metadata.h) and serves the
+/// whole 0x0000..=0x0040 range whatever the block lists. With no `ram`
+/// revision in the block, this reads the `revision 3;` of the `cluster
+/// ThreadNetworkDiagnostics = 53 {` definition, generated from the same XML.
+/// A reshaped block also falls back to the definition's revision; the test's
+/// live ClusterRevision assert catches a wrong pick.
 ///
 /// # Panics
 ///

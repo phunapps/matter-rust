@@ -38,7 +38,7 @@
 //! interface name differs between macOS and the Linux nightly), so the test
 //! checks shapes, not names.
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use integration_tests::dut::DutConfig;
 use integration_tests::events::payload_tlv;
 use integration_tests::sweep::{
@@ -96,10 +96,13 @@ async fn feature_map(node: &Node, cluster: u32) -> u32 {
 /// fail-safe test collects results without panicking until it has disarmed).
 async fn try_breadcrumb(node: &Node) -> Result<u64> {
     let attrs = read_cluster_attributes(node, 0, gc::CLUSTER_ID).await?;
-    Ok(gc::decode_breadcrumb(attribute_tlv(
-        &attrs,
-        gc::attribute_id::BREADCRUMB,
-    ))?)
+    // Not `attribute_tlv`, which panics on a missing attribute: this runs
+    // between the arm and the disarm.
+    let (_, tlv) = attrs
+        .iter()
+        .find(|(id, _)| *id == gc::attribute_id::BREADCRUMB)
+        .context("Breadcrumb not in the wildcard read")?;
+    Ok(gc::decode_breadcrumb(tlv)?)
 }
 
 /// The current Breadcrumb.

@@ -2355,6 +2355,48 @@ fn localization_and_power_source_configuration_are_attribute_only() {
         assert_eq!(element_names(c, "commands"), Vec::<&str>::new(), "{name}");
         assert_eq!(element_names(c, "events"), Vec::<&str>::new(), "{name}");
     }
+    // Optionality: LocalizationConfiguration, HourFormat and Sources are
+    // mandatory; the calendar attributes hang on CALFMT and the temperature
+    // attributes on TEMP, so they are optional.
+    let optionality: [(&str, &[(&str, bool)]); 4] = [
+        (
+            "LocalizationConfiguration",
+            &[("ActiveLocale", false), ("SupportedLocales", false)],
+        ),
+        (
+            "TimeFormatLocalization",
+            &[
+                ("HourFormat", false),
+                ("ActiveCalendarType", true),
+                ("SupportedCalendarTypes", true),
+            ],
+        ),
+        (
+            "UnitLocalization",
+            &[
+                ("TemperatureUnit", true),
+                ("SupportedTemperatureUnits", true),
+            ],
+        ),
+        ("PowerSourceConfiguration", &[("Sources", false)]),
+    ];
+    for (name, expected) in optionality {
+        assert_eq!(
+            field_optionality(&cluster(&v, name)["attributes"]),
+            expected,
+            "{name}"
+        );
+    }
+    // UnitLocalization is at revision 2 (1.4.2 LocalizationUnit.xml); the
+    // other three at 1.
+    for (name, revision) in [
+        ("LocalizationConfiguration", 1),
+        ("TimeFormatLocalization", 1),
+        ("UnitLocalization", 2),
+        ("PowerSourceConfiguration", 1),
+    ] {
+        assert_eq!(cluster(&v, name)["revision"], revision, "{name}");
+    }
     // HourFormatEnum and CalendarTypeEnum keep UseActiveLocale (0xFF).
     let tf = cluster(&v, "TimeFormatLocalization");
     assert_eq!(enum_values(datatype(tf, "HourFormatEnum")), [0, 1, 0xFF]);
@@ -2388,13 +2430,21 @@ fn flat_diagnostics_and_diagnostic_logs_keep_their_shapes() {
         element_names(wifi, "events"),
         ["Disconnection", "AssociationFailure", "ConnectionStatus"]
     );
-    // Every Wi-Fi attribute is nullable (null when not connected).
-    assert!(wifi["attributes"]
+    // Every Wi-Fi attribute is nullable (null when not connected), all 13.
+    let wifi_attributes = wifi["attributes"].as_array().unwrap();
+    assert_eq!(wifi_attributes.len(), 13);
+    assert!(wifi_attributes.iter().all(|a| a["nullable"] == true));
+    let eth = cluster(&v, "EthernetNetworkDiagnostics");
+    // Ethernet: exactly PhyRate, FullDuplex and CarrierDetect are nullable;
+    // the counters and TimeSinceReset are not.
+    let eth_nullable: Vec<&str> = eth["attributes"]
         .as_array()
         .unwrap()
         .iter()
-        .all(|a| a["nullable"] == true));
-    let eth = cluster(&v, "EthernetNetworkDiagnostics");
+        .filter(|a| a["nullable"] == true)
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(eth_nullable, ["PhyRate", "FullDuplex", "CarrierDetect"]);
     assert_eq!(element_names(eth, "commands"), ["ResetCounts"]);
     assert_eq!(element_names(eth, "events"), Vec::<&str>::new());
     let logs = cluster(&v, "DiagnosticLogs");
