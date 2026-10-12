@@ -19,6 +19,8 @@
 //!   `SII`/`SAI`/`SAT` ([`MrpConfig::for_peer`]), so a sleepy device is not
 //!   hammered with active-interval spacing.
 //! - [`protocol_header`] — the Matter application protocol header codec.
+//! - [`secure_channel`] — the Secure Channel `CloseSession` status report:
+//!   encode one for a session, and recognise one in a decrypted message.
 //! - [`transport`] and [`discovery`] — the sans-IO [`Transport`] and
 //!   [`Discovery`] traits, plus the service-record types for Matter's
 //!   commissionable and operational mDNS records.
@@ -60,6 +62,7 @@ pub mod framing;
 pub mod local_addr;
 pub mod mrp;
 pub mod protocol_header;
+pub mod secure_channel;
 pub mod session;
 pub mod transport;
 
