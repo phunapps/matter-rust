@@ -1421,6 +1421,11 @@ pub(crate) struct Actor<T: AsyncDatagram, D: Discovery> {
     transport: T,
     discovery: D,
     sessions: SessionManager,
+    /// Standalone ACKs a deliberate session release took before removing the
+    /// session ([`Self::release_session`]), with the address each goes to,
+    /// waiting for [`Self::send_queued_acks`] at the top of the next loop turn
+    /// (or the channel-close flush).
+    queued_acks: Vec<(SocketAddr, Vec<u8>)>,
     store: Arc<dyn ControllerStore>,
     rng: Arc<dyn NocRng>,
     state: ControllerState,
@@ -2236,6 +2241,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             transport,
             discovery,
             sessions: SessionManager::new(),
+            queued_acks: Vec::new(),
             store,
             rng,
             state,
@@ -2413,6 +2419,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// at `debug` — is diagnosable at default log levels.
     pub(crate) async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         loop {
+            // ACKs a deliberate session release queued from a synchronous path
+            // (`release_session`).
+            if !self.queued_acks.is_empty() {
+                self.send_queued_acks().await;
+            }
             let now = Instant::now();
 
             // Retire an elapsed recv backoff BEFORE the deadline is computed.
@@ -2455,11 +2466,24 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 next_deadline.map_or(IDLE_PARK_MAX, |d| d.saturating_duration_since(now));
             tokio::select! {
                 biased;
-                maybe = rx.recv() => match maybe {
-                    Some(cmd) => self.dispatch(cmd).await,
-                    // Every controller handle is gone: shut down.
-                    None => return self.shutdown_discovery(),
-                },
+                maybe = rx.recv() => {
+                    let Some(cmd) = maybe else {
+                        // Every controller handle is gone: send any ACK still
+                        // owed, then shut down. chip needs no such flush
+                        // because every close already flushed
+                        // (`ExchangeMgr.cpp:90-103`); here it covers a
+                        // release's queued ACK or a displaced ACK not yet
+                        // pumped. Best effort: it does not run if the runtime
+                        // is being dropped, which is why every terminal branch
+                        // flushes before answering its caller.
+                        self.send_queued_acks().await;
+                        for event in self.sessions.flush_pending_acks() {
+                            self.send_ack_event(event, None).await;
+                        }
+                        return self.shutdown_discovery();
+                    };
+                    self.dispatch(cmd).await;
+                }
                 // M9-G-d: a spawned commission finished — persist + resolve its
                 // reply. This arm keeps the loop responsive to other sessions
                 // for the whole commission window.
@@ -2827,6 +2851,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                 // Drop all LOCAL state for this node — no device round-trip, so
                 // it works even when the device is unreachable or already reset.
                 let mut removed = false;
+                let mut released = Vec::new();
                 for fabric in &mut self.state.fabrics {
                     let before = fabric.devices.len();
                     let fabric_id = fabric.fabric_id;
@@ -2835,9 +2860,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                         removed = true;
                         // Evict the cached session (+ its dead MRP retransmits).
                         if let Some(c) = self.cache.remove(&(fabric_id, node_id)) {
-                            self.sessions.remove(c.session_id);
+                            released.push(c.session_id);
                         }
                     }
+                }
+                // Released after the loop, which borrows `self.state`.
+                for sid in released {
+                    self.release_session(sid);
                 }
                 // This node's resubscribe waiters are deleted below (the
                 // `resubscribes.retain`), so drop them here rather than let
@@ -2939,11 +2968,11 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             Command::CancelSubscription { key } => {
                 self.remove_subscription(key);
                 // Also drop the subscription's resubscribe wherever it sits:
-                // queued, on the wire (purged, its exchange closed), or waiting
+                // queued, on the wire (purged, its exchange aborted), or waiting
                 // on a connect (its waiter dropped). Nothing of it survives to
                 // send a request or re-insert a SubEntry later.
                 self.resubscribes.retain(|pr| pr.sub_id != key);
-                self.purge_inflight_resubscribe(key);
+                self.purge_inflight_resubscribe(key).await;
                 self.resubscribe_pulled_at.remove(&key);
             }
             Command::ResubscribeNow { node_id, reply } => {
@@ -4245,8 +4274,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// Drop every in-flight trace of `sub_id`'s resubscribe (spec §4.5):
     ///
     /// - an attempt on the wire (a `Subscribe` pending with no reply) is
-    ///   removed and its MRP exchange — the purged pending's own key — closed,
-    ///   which drops its pending retransmits and buffered ack: the
+    ///   removed and its MRP exchange — the purged pending's own key — aborted
+    ///   ([`Self::abort_exchange`]), which sends the ack it still owes and
+    ///   drops its pending retransmits: the
     ///   `SubscribeRequest` stops retransmitting and cannot be late-delivered
     ///   to create a subscription nobody reads (or, with
     ///   `KeepSubscriptions = false`, to terminate a sibling);
@@ -4256,7 +4286,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     ///
     /// Matter has no unsubscribe message; this is what chip's `ReadClient`
     /// destructor does (it releases its exchange, aborting MRP retries).
-    fn purge_inflight_resubscribe(&mut self, sub_id: SubId) {
+    async fn purge_inflight_resubscribe(&mut self, sub_id: SubId) {
         let keys: Vec<(SessionId, u16)> = self
             .pending
             .iter()
@@ -4269,9 +4299,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             .map(|(key, _)| *key)
             .collect();
         for (sid, exchange) in keys {
-            self.pending.remove(&(sid, exchange));
-            if let Some(session) = self.sessions.get_mut(sid) {
-                session.mrp.close_exchange(exchange);
+            if let Some(p) = self.pending.remove(&(sid, exchange)) {
+                // chip's abort still flushes the ACK before it drops the
+                // exchange's retransmits (`Abort()` → `DoClose(true)`).
+                self.abort_exchange(sid, exchange, p.peer).await;
             }
         }
         for waiters in self.pending_connects.values_mut() {
@@ -4536,11 +4567,13 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
     /// still reporting there gets no ack and closes its subscription itself. A
     /// later MRP retransmit for a removed session finds no peer and is skipped;
     /// a later expiry finds no pending and returns.
+    ///
+    /// The session's owed ACKs are sent first ([`Self::release_session`]).
     fn remove_session_if_orphaned(&mut self, sid: SessionId) -> bool {
         let referenced = self.cache.values().any(|c| c.session_id == sid)
             || self.subscriptions.values().any(|e| e.session_id == sid)
             || self.pending.keys().any(|(s, _)| *s == sid);
-        !referenced && self.sessions.remove(sid).is_some()
+        !referenced && self.release_session(sid)
     }
 
     /// Every subscription id currently in a resubscribe episode, live consumer
@@ -5078,7 +5111,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // and rescue any subscription stranded on the replaced session.
         let old_session = self.cache.get(&(fabric_id, node_id)).map(|c| c.session_id);
         if let Some(old) = old_session {
-            self.sessions.remove(old);
+            self.release_session(old);
         }
         // Persist the fresh CASE resumption record alongside the address hint.
         // The device stores the same (id, secret) pair from this handshake, so
@@ -5384,7 +5417,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         // dead MRP retransmits stop; we keep only the freshly-established one.
         let old_session = self.cache.get(&(fabric_id, node_id)).map(|c| c.session_id);
         if let Some(old) = old_session {
-            self.sessions.remove(old);
+            self.release_session(old);
         }
         // `run_case` registers the session internally and does not expose the
         // `CaseSessionOutput`, so this fallback path cannot persist a
@@ -7193,6 +7226,47 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         }
     }
 
+    /// [`Self::finish_exchange`] with abort semantics (chip's `Abort()` →
+    /// `DoClose(true)`): send the exchange's owed ACK, then drop our own
+    /// retransmits on it. For an exchange we are abandoning.
+    async fn abort_exchange(&mut self, sid: SessionId, exchange: u16, peer: SocketAddr) {
+        for event in self.sessions.abort_exchange(sid, exchange) {
+            self.send_ack_event(event, Some(peer)).await;
+        }
+    }
+
+    /// Remove session `sid` on purpose, first taking the standalone ACKs it
+    /// still owes (`SessionManager::flush_session_acks`) and queueing them for
+    /// [`Self::send_queued_acks`]. Returns whether a session was removed.
+    ///
+    /// matter.js sends these when it closes a session (`Session.ts:279-284`).
+    /// chip, in effect, does not: its release path reaches `FlushAcks` only
+    /// after the session holder is released (`Session.h:178-184`), so the send
+    /// fails with `CHIP_ERROR_CONNECTION_ABORTED` (`ExchangeContext.cpp:101` at
+    /// master 5cd2917a, `:99` at v1.4.2.0). Best effort, like every flush.
+    ///
+    /// Synchronous because `remove_session_if_orphaned` is, and its callers
+    /// (`check_liveness`, `find_report_subscription`) too: the packets are
+    /// built and addressed while the session still exists (its stamped
+    /// `peer_addr`, set at CASE registration), and sent on the next loop turn.
+    fn release_session(&mut self, sid: SessionId) -> bool {
+        for event in self.sessions.flush_session_acks(sid) {
+            if let MrpEvent::SendStandaloneAck { packet, .. } = event {
+                if let Some(to) = self.peer_for_session(sid) {
+                    self.queued_acks.push((to, packet));
+                }
+            }
+        }
+        self.sessions.remove(sid).is_some()
+    }
+
+    /// Send the ACKs [`Self::release_session`] queued. Best effort.
+    async fn send_queued_acks(&mut self) {
+        for (to, packet) in std::mem::take(&mut self.queued_acks) {
+            let _ = self.transport.send_to(&packet, to).await;
+        }
+    }
+
     /// Put one flushed or timer-fired standalone ACK on the wire, best effort:
     /// chip ignores a failed `FlushAcks` too, because a lost ACK only makes
     /// the device retransmit, and the duplicate path ACKs that.
@@ -7237,9 +7311,6 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             match event {
                 MrpEvent::Retransmit {
                     session_id, packet, ..
-                }
-                | MrpEvent::SendStandaloneAck {
-                    session_id, packet, ..
                 } => {
                     if let Some(peer) = self.peer_for_session(session_id) {
                         let _ = self.transport.send_to(&packet, peer).await;
@@ -7253,9 +7324,10 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
                     self.on_pending_timeout(session_id, exchange_id, SubscribeFailure::MrpExpired)
                         .await;
                 }
-                // `MrpEvent` is `#[non_exhaustive]`; ignore future timer
-                // events in the controller's MRP pump.
-                _ => {}
+                // Standalone ACKs and an exhausted counter take the same path
+                // as a close's flush. `MrpEvent` is `#[non_exhaustive]`;
+                // `send_ack_event` ignores what it does not know.
+                other => self.send_ack_event(other, None).await,
             }
         }
     }
@@ -7344,6 +7416,7 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
             let Some(p) = self.pending.remove(&key) else {
                 continue;
             };
+            self.finish_exchange(key.0, key.1, p.peer).await;
             let node_id = p.node_id;
             let after = self.response_deadline;
             tracing::debug!(
@@ -7371,6 +7444,9 @@ impl<T: AsyncDatagram, D: Discovery> Actor<T, D> {
         let Some(p) = self.pending.remove(&(session_id, exchange_id)) else {
             return;
         };
+        // The exchange is over whatever happens next (a retry uses a new
+        // one); send anything it still owes.
+        self.finish_exchange(session_id, exchange_id, p.peer).await;
         // A resubscribe attempt (no oneshot reply) reschedules on the backoff
         // rather than failing — chip retries forever. An INITIAL subscribe
         // (reply `Some`) does not come here: it falls through to the
@@ -13128,8 +13204,14 @@ mod tests {
     /// nothing to retransmit, because the ACK left before the read resolved.
     /// Before, the actor exited on the closed command channel with the ACK
     /// still waiting on its 200 ms timer.
-    #[tokio::test]
-    async fn dropping_the_controller_right_after_a_read_still_acks_the_response() {
+    ///
+    /// The controller's runtime is dropped with the read's result in hand, so
+    /// the actor is never polled again: neither its 200 ms timer nor the flush
+    /// on the closed command channel can send the ACK. Only a flush made
+    /// before the read resolved can. The device runs on a runtime of its own
+    /// and watches for 500 ms, or until the actor's endpoint is dropped.
+    #[test]
+    fn dropping_the_controller_right_after_a_read_still_acks_the_response() {
         let Harness {
             store,
             ctrl_io,
@@ -13141,7 +13223,12 @@ mod tests {
             device_node_id,
         } = loopback_harness();
         let report_blob = build_report_data(1, 0x06, 0x0000, &matter_codec::Value::Bool(true));
-        let device = tokio::spawn(run_reliable_reply_device(
+        let device_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let device = device_rt.spawn(run_reliable_reply_device(
             dev_io,
             ctrl_addr,
             device_creds,
@@ -13150,24 +13237,31 @@ mod tests {
             report_blob,
             Duration::from_millis(500),
         ));
-        let controller = crate::controller::MatterController::with_components(
-            store,
-            ctrl_io,
-            discovery,
-            Arc::new(SystemNocRng),
-            None,
-            crate::builder::DEFAULT_ADMIN_VENDOR_ID,
-        )
-        .expect("open");
-        let node = controller.node(device_node_id);
-        let report = node
-            .read(&[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)])
-            .await
-            .expect("read");
-        assert_eq!(report.len(), 1);
-        drop(node);
-        drop(controller);
-        let acks = device.await.unwrap();
+        let controller_rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        controller_rt.block_on(async move {
+            let controller = crate::controller::MatterController::with_components(
+                store,
+                ctrl_io,
+                discovery,
+                Arc::new(SystemNocRng),
+                None,
+                crate::builder::DEFAULT_ADMIN_VENDOR_ID,
+            )
+            .expect("open");
+            let node = controller.node(device_node_id);
+            let report = node
+                .read(&[matter_interaction::ReadPath::concrete(1, 0x06, 0x0000)])
+                .await
+                .expect("read");
+            assert_eq!(report.len(), 1);
+            // `node` and `controller` drop here, closing the command channel;
+            // `block_on` then returns without polling the actor again.
+        });
+        drop(controller_rt);
+        let acks = device_rt.block_on(device).unwrap();
         assert_eq!(
             acks.len(),
             1,
@@ -23136,6 +23230,253 @@ mod tests {
         );
         assert_eq!(w.next_frame(NOTHING_QUEUED_WITHIN).await, None);
         assert!(w.actor.pending.contains_key(&(w.sid, 0x64)));
+    }
+
+    impl Wired {
+        /// Encode a reliable device message on `exchange` and hand it to the
+        /// actor's session table directly, bypassing its inbound handler: the
+        /// ACK stays buffered, as on an exchange no handler has finished with.
+        fn buffer_device_message(&mut self, exchange: u16) -> matter_transport::MessageCounter {
+            let out = self
+                .device
+                .encode_outbound(
+                    self.dev_sid,
+                    Some(exchange),
+                    OP_REPORT_DATA,
+                    ProtocolId::INTERACTION_MODEL,
+                    &[0x15, 0x18],
+                    MrpFlags { reliable: true },
+                    Instant::now(),
+                )
+                .unwrap();
+            self.actor
+                .sessions
+                .decode_inbound(&out.wire_bytes, Instant::now())
+                .unwrap();
+            out.message_counter
+        }
+    }
+
+    /// Abort: cancelling a subscription whose resubscribe is on the wire
+    /// aborts its exchange, and the abort sends the owed ACK first (chip
+    /// `Abort()` → `DoClose(true)` → `FlushAcks`). Before, it dropped it.
+    #[tokio::test]
+    async fn cancelling_a_resubscribe_flushes_its_pending_ack() {
+        let mut w = wired_actor();
+        let counter = w.buffer_device_message(0x70);
+        let (pr, _reports, _ctrl) = test_pending_resubscribe(1, 0x42, 0, Instant::now());
+        seed_inflight_resubscribe(&mut w.actor, (w.sid, 0x70), pr, far_future());
+        tokio::time::timeout(
+            SENT_WITHIN,
+            w.actor
+                .dispatch_ready(Command::CancelSubscription { key: SubId(1) }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            w.next_frame(Duration::from_millis(50)).await,
+            Some(Sent::Ack {
+                exchange: 0x70,
+                counter
+            })
+        );
+    }
+
+    /// A request abandoned on its response deadline closes its exchange, and
+    /// the close sends what it owes.
+    #[tokio::test]
+    async fn a_timed_out_pending_flushes_its_ack() {
+        let mut w = wired_actor();
+        let counter = w.buffer_device_message(0x72);
+        let _reply_rx = seed_expired_pending(&mut w.actor, w.sid, 0x72, 0x42);
+        w.actor.drive_response_deadlines().await;
+        assert_eq!(
+            w.next_frame(Duration::from_millis(50)).await,
+            Some(Sent::Ack {
+                exchange: 0x72,
+                counter
+            })
+        );
+    }
+
+    /// Deliberate release (forget-node, orphan cleanup, replacement by a
+    /// fresh CASE session): the session's owed ACK is taken before it is
+    /// removed and sent to its last address, as matter.js does when it closes
+    /// a session. chip reaches `FlushAcks` on release too, but only after the
+    /// session is released, so its send fails.
+    #[tokio::test]
+    async fn a_released_sessions_pending_ack_still_goes_out() {
+        let mut w = wired_actor();
+        let counter = w.buffer_device_message(0x74);
+        let dev_addr = w.dev.local_addr();
+        w.actor.sessions.get_mut(w.sid).unwrap().peer_addr = Some(dev_addr);
+        assert!(w.actor.release_session(w.sid), "the session was registered");
+        assert!(w.actor.sessions.get(w.sid).is_none(), "and is gone");
+        w.actor.send_queued_acks().await;
+        assert_eq!(
+            w.next_frame(Duration::from_millis(50)).await,
+            Some(Sent::Ack {
+                exchange: 0x74,
+                counter
+            })
+        );
+    }
+
+    /// When every controller handle is gone the actor sends any ACK still
+    /// owed before it exits (best effort; there is no public `shutdown()`).
+    /// The same arm sends a release's queued ACKs first.
+    #[tokio::test]
+    async fn closing_the_command_channel_flushes_acks_still_pending() {
+        let Wired {
+            mut actor,
+            dev,
+            mut device,
+            sid,
+            dev_sid,
+        } = wired_actor();
+        let out = device
+            .encode_outbound(
+                dev_sid,
+                Some(0x76),
+                OP_REPORT_DATA,
+                ProtocolId::INTERACTION_MODEL,
+                &[0x15, 0x18],
+                MrpFlags { reliable: true },
+                Instant::now(),
+            )
+            .unwrap();
+        actor
+            .sessions
+            .decode_inbound(&out.wire_bytes, Instant::now())
+            .unwrap();
+        actor.sessions.get_mut(sid).unwrap().peer_addr = Some(dev.local_addr());
+        let (tx, rx) = mpsc::channel(1);
+        drop(tx);
+        tokio::time::timeout(SENT_WITHIN, actor.run(rx))
+            .await
+            .expect("the actor exits on a closed channel");
+        let (wire, _) = tokio::time::timeout(Duration::from_millis(50), dev.recv_from())
+            .await
+            .expect("an ACK before the actor exited")
+            .unwrap();
+        match device.decode_inbound(&wire, Instant::now()).unwrap() {
+            DecodeInboundOutput::AckOnly { acked_counter, .. } => {
+                assert_eq!(acked_counter, out.message_counter);
+            }
+            other => panic!("expected a standalone ACK, got {other:?}"),
+        }
+    }
+
+    /// Guard: the MRP pump still sends a standalone ACK whose 200 ms timer
+    /// fired, now through `send_ack_event`, to the session's address.
+    ///
+    /// Margin: the deadline is set when the actor's table decodes the
+    /// message, before the sleep starts, and tokio sleeps never end early, so
+    /// after 300 ms the ACK is 100 ms overdue.
+    #[tokio::test]
+    async fn the_mrp_pump_still_sends_a_timer_fired_ack() {
+        let mut w = wired_actor();
+        let counter = w.buffer_device_message(0x7C);
+        let dev_addr = w.dev.local_addr();
+        w.actor.sessions.get_mut(w.sid).unwrap().peer_addr = Some(dev_addr);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        w.actor.drive_mrp().await;
+        assert_eq!(
+            w.next_frame(Duration::from_millis(50)).await,
+            Some(Sent::Ack {
+                exchange: 0x7C,
+                counter
+            })
+        );
+    }
+
+    /// A request given up on MRP expiry closes its exchange first
+    /// (`on_pending_timeout`), and the close sends what it owes.
+    #[tokio::test]
+    async fn an_mrp_expired_pending_flushes_its_ack() {
+        let mut w = wired_actor();
+        let counter = w.buffer_device_message(0x78);
+        let (reply, _reply_rx) = oneshot::channel();
+        // `retried`, so the timeout fails the op rather than reconnecting.
+        w.seed(0x78, 0x02, PendingReply::RoundTrip(reply));
+        w.actor
+            .on_pending_timeout(w.sid, 0x78, SubscribeFailure::MrpExpired)
+            .await;
+        assert_eq!(
+            w.next_frame(Duration::from_millis(50)).await,
+            Some(Sent::Ack {
+                exchange: 0x78,
+                counter
+            })
+        );
+    }
+
+    /// End to end through the run loop: forgetting a node releases its
+    /// cached session, and the ACK the release queued goes out at the top of
+    /// the next loop turn, with the command channel still open (so the
+    /// channel-close flush cannot be what sent it).
+    #[tokio::test]
+    async fn forgetting_a_node_sends_its_sessions_pending_ack_on_the_next_loop_turn() {
+        let mut w = wired_actor();
+        let counter = w.buffer_device_message(0x7A);
+        let dev_addr = w.dev.local_addr();
+        w.actor.sessions.get_mut(w.sid).unwrap().peer_addr = Some(dev_addr);
+        let fabric_id = w.actor.state.fabrics[0].fabric_id;
+        w.actor.state.fabrics[0]
+            .devices
+            .push(crate::state::DeviceEntry {
+                node_id: 0x42,
+                peer_noc_public_key: [0u8; 65],
+                resumption_record: None,
+                last_known_addr: None,
+                vendor_id: None,
+                product_id: None,
+                label: None,
+            });
+        w.actor.cache.insert(
+            (fabric_id, 0x42),
+            CachedSession {
+                session_id: w.sid,
+                peer: dev_addr,
+            },
+        );
+        let Wired {
+            actor,
+            dev,
+            mut device,
+            ..
+        } = w;
+        let (tx, rx) = mpsc::channel(1);
+        let actor_task = tokio::spawn(actor.run(rx));
+        let (reply, reply_rx) = oneshot::channel();
+        tx.send(Command::ForgetNode {
+            node_id: 0x42,
+            reply,
+        })
+        .await
+        .unwrap();
+        assert!(
+            tokio::time::timeout(SENT_WITHIN, reply_rx)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            "the node was known"
+        );
+        let (wire, _) = tokio::time::timeout(SENT_WITHIN, dev.recv_from())
+            .await
+            .expect("the released session's ACK, sent with the channel still open")
+            .unwrap();
+        match device.decode_inbound(&wire, Instant::now()).unwrap() {
+            DecodeInboundOutput::AckOnly {
+                exchange_id,
+                acked_counter,
+                ..
+            } => assert_eq!((exchange_id, acked_counter), (0x7A, counter)),
+            other => panic!("expected a standalone ACK, got {other:?}"),
+        }
+        drop(tx);
+        actor_task.await.unwrap();
     }
 
     /// Stamp session `sid` with the peer identity a CASE session on the sole
