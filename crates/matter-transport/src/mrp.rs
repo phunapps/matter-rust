@@ -734,6 +734,14 @@ impl MrpState {
     /// exchange-table lookup because both were populated from the same
     /// `!peer_is_initiator` computation during `process_inbound`.
     ///
+    /// This records the exchange and drains the ACK at once, before the
+    /// caller has framed anything; a caller whose framing then fails cannot
+    /// undo either. [`SessionManager::encode_outbound`](crate::SessionManager::encode_outbound)
+    /// therefore does not call it: it builds the payload without changing
+    /// anything and commits these two changes only once encryption has
+    /// succeeded, so a failed send (`PayloadTooLarge`, for one) leaves the
+    /// exchange table and the owed ACK as they were.
+    ///
     /// # Errors
     ///
     /// Currently infallible in practice — returns `Result` for forward
@@ -747,24 +755,53 @@ impl MrpState {
         mrp_flags: MrpFlags,
         _now: Instant,
     ) -> Result<PreparedOutbound> {
+        let prepared = self.build_outbound(
+            opcode,
+            protocol_id,
+            exchange_id,
+            false,
+            app_payload,
+            mrp_flags,
+        );
+        self.commit_outbound(&prepared);
+        Ok(prepared)
+    }
+
+    /// Build the wire payload [`Self::prepare_outbound`] would, changing
+    /// nothing: the exchange is not recorded and its owed ACK, if any, is
+    /// copied into the header but stays owed. Pair it with
+    /// [`Self::commit_outbound`] once the message is certain to be sent.
+    ///
+    /// `new_local_exchange` is true for an id the caller has just allocated
+    /// for an exchange we start: it sets the `I` flag whatever the table holds
+    /// for that id, as [`Self::note_local_exchange`] followed by
+    /// [`Self::prepare_outbound`] does. Otherwise the table decides, and an id
+    /// it does not hold is a response (`I=0`).
+    pub(crate) fn build_outbound(
+        &self,
+        opcode: u8,
+        protocol_id: ProtocolId,
+        exchange_id: u16,
+        new_local_exchange: bool,
+        app_payload: &[u8],
+        mrp_flags: MrpFlags,
+    ) -> PreparedOutbound {
         // Resolve is_local_initiator via the exchange table. An id we have not
         // seen means we are responding (safe default: I=0); a locally-initiated
-        // exchange is announced up front via `note_local_exchange`, because the
-        // id itself is allocated one level up -- see
-        // [`SessionManager::allocate_exchange_id`], which owns the per-node
-        // counter the spec requires.
-        let is_local_initiator = self
-            .exchanges
-            .entry(exchange_id)
-            .or_insert(ExchangeState {
-                is_local_initiator: false,
-            })
-            .is_local_initiator;
+        // exchange is flagged by the caller, because the id itself is allocated
+        // one level up, from the per-node counter the spec requires
+        // (`SessionManager::encode_outbound`).
+        let is_local_initiator = new_local_exchange
+            || self
+                .exchanges
+                .get(&exchange_id)
+                .is_some_and(|state| state.is_local_initiator);
 
-        // Drain the buffered piggyback for THIS exchange, if any. Other
-        // exchanges' buffered acks are untouched.
+        // Copy the buffered piggyback for THIS exchange, if any, leaving it
+        // buffered: `commit_outbound` drains it once the send is certain.
+        // Other exchanges' buffered acks are untouched.
         let (ack_flag, ack_counter, piggyback_acked) =
-            if let Some(p) = self.pending_outbound_acks.remove(&exchange_id) {
+            if let Some(p) = self.pending_outbound_acks.get(&exchange_id) {
                 (ExchangeFlags::ACK, Some(p.ack_counter), true)
             } else {
                 (ExchangeFlags::empty(), None, false)
@@ -788,12 +825,35 @@ impl MrpState {
         encode_protocol_header(&header, &mut wire_payload);
         wire_payload.extend_from_slice(app_payload);
 
-        Ok(PreparedOutbound {
+        PreparedOutbound {
             wire_payload,
             exchange_id,
             is_local_initiator,
             piggyback_acked,
-        })
+        }
+    }
+
+    /// Apply the two changes [`Self::build_outbound`] left out, now that
+    /// `prepared` is certain to be sent: record its exchange (with the `I`
+    /// flag it was built with) and, if it carries this exchange's owed ACK,
+    /// drain that ACK.
+    ///
+    /// Call it with no other change to this state between the build and the
+    /// commit, so the ACK drained is the one the header carries. The caller
+    /// then calls [`Self::mark_packet_sent`].
+    pub(crate) fn commit_outbound(&mut self, prepared: &PreparedOutbound) {
+        // For an existing entry this rewrites the flag the build just read
+        // from it; for a fresh local exchange it records `I=1`, and for an id
+        // the table did not hold it records a response (`I=0`).
+        self.exchanges.insert(
+            prepared.exchange_id,
+            ExchangeState {
+                is_local_initiator: prepared.is_local_initiator,
+            },
+        );
+        if prepared.piggyback_acked {
+            self.pending_outbound_acks.remove(&prepared.exchange_id);
+        }
     }
 
     /// Register the encrypted wire bytes of a just-sent message. Caller
@@ -1308,6 +1368,13 @@ impl MrpState {
         if self.exchange_is_idle(exchange_id) {
             self.exchanges.remove(&exchange_id);
         }
+    }
+
+    /// How many exchanges the table holds, for tests outside this module
+    /// that check a code path neither leaks nor drops an entry.
+    #[cfg(test)]
+    pub(crate) fn exchange_count(&self) -> usize {
+        self.exchanges.len()
     }
 }
 

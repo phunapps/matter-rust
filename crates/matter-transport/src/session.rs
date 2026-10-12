@@ -478,15 +478,27 @@ impl SessionManager {
         }
     }
 
-    /// Hand out the next exchange id for a locally-initiated exchange, from the
-    /// node-wide counter (spec §4.10.2).
+    /// Move the node-wide exchange-id counter (spec §4.10.2) past the id it
+    /// holds, once that id has been used for a locally-initiated exchange.
     ///
     /// Wraps **through** zero: the spec says the id "rolls over to zero when its
     /// maximum value is exceeded", so 0 is a legal id and skipping it would be a
     /// gratuitous deviation.
+    ///
+    /// Takes the field, not `&mut self`, so [`Self::encode_outbound`] can call
+    /// it while it holds a session borrowed from the table. It reads the id
+    /// first and spends it only once the message has been encrypted, so a
+    /// failed send spends none.
+    fn advance_exchange_id(next_exchange_id: &mut u16) {
+        *next_exchange_id = next_exchange_id.wrapping_add(1);
+    }
+
+    /// Hand out the next exchange id, the way [`Self::encode_outbound`] does
+    /// for a send that succeeds (read the counter, then advance it).
+    #[cfg(test)]
     fn allocate_exchange_id(&mut self) -> u16 {
         let id = self.next_exchange_id;
-        self.next_exchange_id = self.next_exchange_id.wrapping_add(1);
+        Self::advance_exchange_id(&mut self.next_exchange_id);
         id
     }
 
@@ -790,13 +802,21 @@ impl SessionManager {
     ///
     /// The pipeline is:
     /// 1. MRP builds the wire payload (protocol header || `app_payload`),
-    ///    allocating a new exchange id if `exchange_id` is `None` and
-    ///    draining any pending piggyback-ack that targets the same
-    ///    exchange.
+    ///    on a new exchange id if `exchange_id` is `None`, and copies into
+    ///    it any piggyback ACK still owed on the same exchange.
     /// 2. Framing encrypts the payload under the session keys, producing
     ///    the secured-message wire bytes.
-    /// 3. MRP records the packet for retransmit if `mrp_flags.reliable` is
+    /// 3. Only now, with the message certain to go out, does anything
+    ///    change: the exchange id is spent, MRP records the exchange and
+    ///    drains the ACK the message carries, and the outbound counter
+    ///    advances.
+    /// 4. MRP records the packet for retransmit if `mrp_flags.reliable` is
     ///    set, and updates the idle/active timing baseline regardless.
+    ///
+    /// On any error nothing has changed: the node's next exchange id, the
+    /// session's exchange table, the ACK it owes and its outbound counter
+    /// are as they were, so a failed send leaks no exchange slot and loses
+    /// no ACK, and the next send reuses the counter nothing was sent under.
     ///
     /// # Errors
     ///
@@ -806,6 +826,8 @@ impl SessionManager {
     ///   CASE handshake) to continue.
     /// - [`Error::PayloadTooLarge`] if the encoded wire payload (protocol
     ///   header + `app_payload`) exceeds the framing cap.
+    /// - [`Error::Crypto`] if the AES-CCM cipher fails (not expected for a
+    ///   payload under the cap).
     #[allow(clippy::too_many_arguments)] // Threaded protocol-header inputs.
     pub fn encode_outbound(
         &mut self,
@@ -817,13 +839,11 @@ impl SessionManager {
         mrp_flags: MrpFlags,
         now: Instant,
     ) -> Result<EncodeOutboundOutput> {
-        // Allocate BEFORE borrowing the session: the exchange-id counter lives
-        // on the manager (one per node, spec §4.10.2), not on the session.
+        // A fresh exchange takes the next id from the node-wide counter (spec
+        // §4.10.2), which lives on the manager, not the session. It is only
+        // read here and spent in step 3, so a failed send spends no id.
         let is_new_local_exchange = exchange_id.is_none();
-        let exchange_id = match exchange_id {
-            Some(id) => id,
-            None => self.allocate_exchange_id(),
-        };
+        let exchange_id = exchange_id.unwrap_or(self.next_exchange_id);
 
         let session = self
             .sessions
@@ -832,12 +852,6 @@ impl SessionManager {
 
         if session.outbound_counter == u32::MAX {
             return Err(Error::CounterOverflow);
-        }
-
-        // A caller-supplied id continues an existing exchange; a freshly
-        // allocated one is ours, so record it as locally-initiated (sets `I`).
-        if is_new_local_exchange {
-            session.mrp.note_local_exchange(exchange_id);
         }
 
         // A transport_reliable session (BTP) forces MRP off regardless of
@@ -849,17 +863,20 @@ impl SessionManager {
             reliable: mrp_flags.reliable && !session.transport_reliable,
         };
 
-        // 1. MRP builds the wire payload (protocol header || app_payload).
-        let prepared = session.mrp.prepare_outbound(
+        // 1. MRP builds the wire payload (protocol header || app_payload),
+        //    changing nothing. A freshly allocated id is ours, so it sets `I`;
+        //    a caller-supplied one continues an existing exchange.
+        let prepared = session.mrp.build_outbound(
             opcode,
             protocol_id,
             exchange_id,
+            is_new_local_exchange,
             app_payload,
             effective_mrp_flags,
-            now,
-        )?;
+        );
 
-        // 2. Framing encrypts.
+        // 2. Framing encrypts. Its size check runs before it encrypts, and
+        //    every error returns here, before step 3 changes anything.
         let secured_header = SecuredMessageHeader {
             flags: SecuredMessageFlags::empty(),
             session_id: session.peer_id,
@@ -878,10 +895,18 @@ impl SessionManager {
             session.outbound_cipher(),
             nonce_node_id,
         )?;
+
+        // 3. The message will be sent: commit. Spend the exchange id, record
+        //    the exchange and drain the ACK the header carries, then advance
+        //    the counter.
+        if is_new_local_exchange {
+            Self::advance_exchange_id(&mut self.next_exchange_id);
+        }
+        session.mrp.commit_outbound(&prepared);
         let counter = MessageCounter(session.outbound_counter);
         session.outbound_counter = session.outbound_counter.wrapping_add(1);
 
-        // 3. Record the send. mark_packet_sent always updates the
+        // 4. Record the send. mark_packet_sent always updates the
         //    idle/active timing baseline; pending-ack registration is gated
         //    internally by the `reliable` flag (already folded down to
         //    `effective_mrp_flags` above, so a transport_reliable session
@@ -1930,6 +1955,212 @@ mod tests {
         a.set_transport_reliable(SessionId(1), true).unwrap();
         assert_eq!(a.is_transport_reliable(SessionId(1)), Some(true));
         assert_eq!(a.is_transport_reliable(SessionId(99)), None);
+    }
+
+    /// An application payload over the framing cap (1024 bytes, including
+    /// the protocol header), so `encode_outbound` fails with
+    /// `PayloadTooLarge`.
+    const OVERSIZED: [u8; 2000] = [0u8; 2000];
+
+    /// A send that fails with `PayloadTooLarge` leaves the exchange table as
+    /// it was, whether it asked for a fresh exchange (`None`) or named one the
+    /// table has never seen. It used to record the exchange before framing
+    /// failed, and nothing ever removed it: more than
+    /// `MAX_EXCHANGES_PER_SESSION` such failures filled the table, and the
+    /// session then refused every exchange the device started
+    /// (`ExchangeTableFull`), so a subscription's reports stopped arriving.
+    #[test]
+    fn oversized_sends_leak_no_exchange_slots() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let reliable = MrpFlags { reliable: true };
+        let im = ProtocolId::INTERACTION_MODEL;
+        let tries = crate::mrp::MAX_EXCHANGES_PER_SESSION + 44;
+        let before = a.get(sid).unwrap().mrp.exchange_count();
+
+        for _ in 0..tries {
+            let result = a.encode_outbound(sid, None, 0x08, im, &OVERSIZED, reliable, now);
+            assert!(
+                matches!(result, Err(Error::PayloadTooLarge { .. })),
+                "got {:?}",
+                result.map(|out| out.exchange_id)
+            );
+        }
+        assert_eq!(
+            a.get(sid).unwrap().mrp.exchange_count(),
+            before,
+            "a fresh exchange whose first send failed must not stay in the table"
+        );
+
+        for i in 0..tries {
+            let unseen = 0x8000 + u16::try_from(i).unwrap();
+            let result = a.encode_outbound(sid, Some(unseen), 0x08, im, &OVERSIZED, reliable, now);
+            assert!(matches!(result, Err(Error::PayloadTooLarge { .. })));
+        }
+        assert_eq!(
+            a.get(sid).unwrap().mrp.exchange_count(),
+            before,
+            "a named exchange the table had not seen must not be recorded by a failed send"
+        );
+
+        // The device can still start an exchange (a subscription report).
+        let report = b
+            .encode_outbound(sid, None, 0x05, im, b"report", reliable, now)
+            .unwrap();
+        assert!(
+            matches!(
+                a.decode_inbound(&report.wire_bytes, now),
+                Ok(DecodeInboundOutput::AppMessage { .. })
+            ),
+            "a device-initiated reliable message must still be accepted"
+        );
+    }
+
+    /// `b` starts a reliable exchange, so `a` owes it an ACK, and `a`'s
+    /// first answer fails with `PayloadTooLarge`. Returns the request.
+    fn owe_an_ack_then_fail_to_answer(
+        a: &mut SessionManager,
+        b: &mut SessionManager,
+        now: Instant,
+    ) -> EncodeOutboundOutput {
+        let sid = SessionId(1);
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let request = b
+            .encode_outbound(sid, None, 0x02, im, b"request", reliable, now)
+            .unwrap();
+        a.decode_inbound(&request.wire_bytes, now).unwrap();
+        let result = a.encode_outbound(
+            sid,
+            Some(request.exchange_id),
+            0x05,
+            im,
+            &OVERSIZED,
+            reliable,
+            now,
+        );
+        assert!(matches!(result, Err(Error::PayloadTooLarge { .. })));
+        request
+    }
+
+    /// The ACK an exchange owes survives a failed answer and rides the next
+    /// one. It used to be taken for the failed message and lost, so the
+    /// device kept retransmitting until the duplicate path re-ACKed it.
+    /// (chip loses it too: `ExchangeMessageDispatch::SendMessage` takes the
+    /// pending ACK before `PrepareMessage`'s length check, at master 5cd2917a
+    /// and v1.4.2.0.)
+    #[test]
+    fn an_oversized_send_keeps_the_owed_ack_for_the_next_message() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let request = owe_an_ack_then_fail_to_answer(&mut a, &mut b, now);
+
+        let answer = a
+            .encode_outbound(
+                sid,
+                Some(request.exchange_id),
+                0x05,
+                ProtocolId::INTERACTION_MODEL,
+                b"answer",
+                MrpFlags { reliable: true },
+                now,
+            )
+            .unwrap();
+        assert!(answer.piggyback_acked, "the owed ACK rides the answer");
+
+        // `b` takes it as the ACK of its request: no retransmit is left.
+        b.decode_inbound(&answer.wire_bytes, now).unwrap();
+        let later = b.handle_timeout(now + std::time::Duration::from_secs(60));
+        assert!(
+            !later.iter().any(|e| matches!(
+                e,
+                MrpEvent::Retransmit { counter, .. } | MrpEvent::Expired { counter, .. }
+                    if *counter == request.message_counter
+            )),
+            "the request was ACKed, so it is not retransmitted: {later:?}"
+        );
+    }
+
+    /// The same ACK, after the failed answer, is still there for
+    /// `finish_exchange` to send, and the device accepts it.
+    #[test]
+    fn an_oversized_send_leaves_the_owed_ack_for_the_flush() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let request = owe_an_ack_then_fail_to_answer(&mut a, &mut b, now);
+
+        let events = a.finish_exchange(sid, request.exchange_id);
+        let [MrpEvent::SendStandaloneAck { packet, .. }] = events.as_slice() else {
+            panic!("expected the owed standalone ACK, got {events:?}");
+        };
+        match b.decode_inbound(packet, now).unwrap() {
+            DecodeInboundOutput::AckOnly { acked_counter, .. } => {
+                assert_eq!(acked_counter, request.message_counter);
+            }
+            other => panic!("expected AckOnly, got {other:?}"),
+        }
+    }
+
+    /// A failed send spends neither a message counter nor an exchange id:
+    /// nothing reached the wire, so the next send uses both. Reusing a
+    /// counter is forbidden only once it has been sent (its AES-CCM nonce
+    /// used); the framing cap is checked before anything is encrypted.
+    #[test]
+    fn a_failed_send_spends_no_counter_and_no_exchange_id() {
+        let (mut a, mut b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        let counter_before = a.get(sid).unwrap().outbound_counter;
+        let next_id_before = a.next_exchange_id;
+
+        let result = a.encode_outbound(sid, None, 0x08, im, &OVERSIZED, reliable, now);
+        assert!(matches!(result, Err(Error::PayloadTooLarge { .. })));
+        assert_eq!(a.get(sid).unwrap().outbound_counter, counter_before);
+        assert_eq!(a.next_exchange_id, next_id_before);
+        assert_eq!(a.poll_timeout(), None, "nothing to retransmit");
+
+        let sent = a
+            .encode_outbound(sid, None, 0x08, im, b"fits", reliable, now)
+            .unwrap();
+        assert_eq!(sent.message_counter, MessageCounter(counter_before));
+        assert_eq!(sent.exchange_id, next_id_before);
+        assert!(b.decode_inbound(&sent.wire_bytes, now).is_ok());
+    }
+
+    /// An exhausted counter (spec §4.6.2: it cannot wrap) or an unknown
+    /// session fails before anything changes: no exchange id is spent and an
+    /// owed ACK stays owed.
+    #[test]
+    fn counter_overflow_and_unknown_session_change_nothing() {
+        let (mut a, _b) = paired_sessions();
+        let sid = SessionId(1);
+        let now = Instant::now();
+        let im = ProtocolId::INTERACTION_MODEL;
+        let reliable = MrpFlags { reliable: true };
+        buffer_reliable_inbound(&mut a, sid, 0x4242, MessageCounter(100), now);
+        a.sessions.get_mut(&sid).unwrap().outbound_counter = u32::MAX;
+        let table_before = a.get(sid).unwrap().mrp.exchange_count();
+        let next_id_before = a.next_exchange_id;
+
+        let fresh = a.encode_outbound(sid, None, 0x08, im, b"x", reliable, now);
+        assert!(matches!(fresh, Err(Error::CounterOverflow)));
+        let answer = a.encode_outbound(sid, Some(0x4242), 0x05, im, b"x", reliable, now);
+        assert!(matches!(answer, Err(Error::CounterOverflow)));
+        let unknown = a.encode_outbound(SessionId(99), None, 0x08, im, b"x", reliable, now);
+        assert!(matches!(unknown, Err(Error::UnknownSession(99))));
+
+        assert_eq!(a.next_exchange_id, next_id_before);
+        assert_eq!(a.get(sid).unwrap().mrp.exchange_count(), table_before);
+        assert_eq!(a.get(sid).unwrap().outbound_counter, u32::MAX);
+        assert!(
+            a.get(sid).unwrap().mrp.has_pending(),
+            "the ACK owed on 0x4242 is still owed"
+        );
     }
 
     // TRAN-1: the duplicate-reliable re-ack decision must be made only AFTER

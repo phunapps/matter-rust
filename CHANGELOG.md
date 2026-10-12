@@ -28,7 +28,9 @@ APIs have had no outside users yet and are expected to move.
 through `matter-commissioning`'s `tracing` feature, stop a withheld ACL field
 from being read as a wildcard, and make the controller acknowledge every
 reliable response as soon as its exchange ends, instead of up to 200 ms later
-or never (the MRP entries, last in each crate's list). Only
+or never (the MRP entries, last in each crate's list). `matter-transport` also
+stops an oversized send from leaking an exchange slot, which could leave a
+session refusing every report the device sent. Only
 `matter-transport` adds public API, and only additively, so each affected
 crate needs only a patch release:
 
@@ -233,11 +235,44 @@ published release, `0.1.0` through `0.18.1`.
 - A retransmit of a message whose ACK was still buffered was ACKed at once by
   the duplicate path, and the buffered ACK was sent again later. The buffered
   one is now dropped, as chip clears its pending flag there.
-- Known limitation: if `SessionManager::encode_outbound` fails with
-  `PayloadTooLarge`, the exchange's buffered ACK was already taken to ride
-  that message and is lost; the peer's retransmit recovers it, through the
-  duplicate path.
 - Affected: every published release through `0.7.3`.
+
+### matter-transport: Fixed — a failed send no longer leaks an exchange slot
+
+- `SessionManager::encode_outbound` recorded the message's exchange in the
+  session's MRP exchange table, and took the ACK that exchange owed to ride
+  the message, before framing could fail. When it then failed with
+  `PayloadTooLarge` (an encoded message over the 1024-byte framing cap),
+  nothing removed the exchange: each such failure leaked one of the
+  session's 256 exchange slots (`MAX_EXCHANGES_PER_SESSION`), and the owed
+  ACK was lost until the peer's retransmit went through the duplicate path.
+  Once the leaked slots filled the table, the session refused every exchange
+  the device started, with `ExchangeTableFull`, so its subscription reports
+  stopped arriving: the same symptom as the leak fixed in 0.7.1. Through
+  `matter-controller`, any request whose message is over the cap reaches it,
+  for example an `invoke_tlv` or `write` carrying more than about 1 KB of
+  fields.
+- `encode_outbound` now builds and encrypts the message before it changes
+  anything, and records the exchange, drains the ACK, spends the exchange id
+  and advances the outbound counter only once encryption has succeeded. On
+  any error (`PayloadTooLarge`, `CounterOverflow`, `UnknownSession`,
+  `Crypto`) the session and the manager are as they were: no slot is
+  leaked, the owed ACK rides the next message on that exchange or the next
+  flush, and the next send uses the counter and exchange id nothing was sent
+  under. A counter must never be reused once a message has gone out under
+  it (Matter Core Spec §4.6.2); here none has, because the size check runs
+  before anything is encrypted. chip would lose that ACK here too
+  (`ExchangeMessageDispatch::SendMessage` takes it before
+  `SessionManager::PrepareMessage` checks the length, at master 5cd2917a and
+  at v1.4.2.0), but it leaks no exchange, because the caller closes the
+  exchange context that failed to send.
+- `MrpState::prepare_outbound` is unchanged and still records the exchange
+  and drains its ACK as it builds; its documentation now says
+  `encode_outbound` no longer calls it.
+- Affected: every published release, `0.1.0` through `0.7.3`. The table has
+  been bounded since before `0.1.0`, and a fresh exchange has been recorded
+  before framing since then (in `MrpState::prepare_outbound` through 0.4.0,
+  then, from 0.5.0, in `encode_outbound` through `note_local_exchange`).
 
 ### matter-commissioning: Fixed (security) — the setup passcode stays out of `Debug` output
 
