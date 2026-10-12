@@ -320,6 +320,11 @@ async fn run_loopback_commission() {
         device_outcome.complete_response_acked,
         "the controller must ACK the CommissioningCompleteResponse before commission() returns"
     );
+    assert!(
+        device_outcome.case_session_closed,
+        "after the ACK, the controller must close its CASE session with a CloseSession \
+         (new exchange, R clear) before commission() returns"
+    );
     let commissioned = commission_result.expect("commission() reached Done");
 
     assert_eq!(
@@ -504,6 +509,11 @@ async fn run_loopback_commission_with_icac() {
     assert!(
         device_outcome.complete_response_acked,
         "the controller must ACK the CommissioningCompleteResponse before commission() returns"
+    );
+    assert!(
+        device_outcome.case_session_closed,
+        "after the ACK, the controller must close its CASE session with a CloseSession \
+         (new exchange, R clear) before commission() returns"
     );
     let commissioned = commission_result.expect("commission() reached Done");
 
@@ -709,6 +719,18 @@ async fn loopback_commission_emits_wire_trace() {
         secured_sessions.len() >= 2,
         "expected PASE + CASE secured sessions, got {secured_sessions:?}"
     );
+
+    // The dialogue ends with our CloseSession: the last record that is not a
+    // standalone ack is a tx Secure Channel StatusReport on a secured session.
+    let last = records
+        .iter()
+        .rev()
+        .find(|r| r["opcode"] != 0x10)
+        .expect("a last non-ack record");
+    assert_eq!(last["dir"], "tx");
+    assert_eq!(last["protocol"], 0);
+    assert_eq!(last["opcode"], 0x40);
+    assert_ne!(last["session_id"], 0);
 }
 
 // ── No payload bytes under plain `tracing` ────────────────────────────────────

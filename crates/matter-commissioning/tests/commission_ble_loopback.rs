@@ -356,6 +356,11 @@ async fn commission_ble_reaches_done_over_two_transports() {
         device_outcome.complete_response_acked,
         "the controller must ACK the CommissioningCompleteResponse on the UDP leg before commission_ble() returns"
     );
+    assert!(
+        device_outcome.case_session_closed,
+        "after the ACK, the controller must close its CASE session with a CloseSession \
+         on the UDP leg before commission_ble() returns"
+    );
     let commissioned = commission_result.expect("commission_ble reached Done");
     assert_eq!(commissioned.terminated_at, Stage::Cleanup);
     assert_eq!(commissioned.peer_node_id, ASSIGNED_NODE_ID);
@@ -400,6 +405,15 @@ async fn commission_ble_reaches_done_over_two_transports() {
         btp_has_secured,
         "the pre-operational secured IM stages must run on the BTP pair"
     );
+    // Nothing CASE-encrypted, the CloseSession included, ever rides BTP: every
+    // secured BTP frame targets the device's PASE session.
+    for f in btp_frames.iter().filter(|f| frame_session_id(f) != 0) {
+        assert_eq!(
+            frame_session_id(f),
+            PASE_RESPONDER_SESSION_ID,
+            "a secured frame on the BTP pair addressed a session other than PASE"
+        );
+    }
 
     // UDP pair: CASE Sigma1/Sigma3 with the R-bit SET (MRP on), a standalone
     // ack for the closing StatusReport, no PASE opcode leaks, and the
@@ -555,6 +569,11 @@ async fn commission_ble_thread_reaches_done() {
     assert!(
         device_outcome.complete_response_acked,
         "the controller must ACK the CommissioningCompleteResponse on the UDP leg before commission_ble() returns"
+    );
+    assert!(
+        device_outcome.case_session_closed,
+        "after the ACK, the controller must close its CASE session with a CloseSession \
+         on the UDP leg before commission_ble() returns"
     );
     let commissioned = commission_result.expect("commission_ble reached Done");
     assert_eq!(commissioned.terminated_at, Stage::Cleanup);

@@ -812,6 +812,15 @@ where
 /// still owed over its session's transport ([`flush_owed_acks`]): the device
 /// would otherwise retransmit the last response until it gave up.
 ///
+/// ## Closing the CASE session
+///
+/// Then, on success and failure alike, it closes the CASE session with a
+/// `CloseSession` over `op_transport` ([`close_case_session`]), so the device
+/// does not keep a session nobody reads. The PASE session is left to the
+/// device, which clears it on `CommissioningComplete`. As with the disarm, a
+/// dropped (cancelled) future sends no `CloseSession`: the device keeps the
+/// session until it evicts it on its own.
+///
 /// # Errors
 ///
 /// See [`commission`] / [`commission_ble`].
@@ -952,6 +961,8 @@ where
         &mut sessions,
     )
     .await;
+    // Then, ACKs out, tell the device we are done with the CASE session.
+    close_case_session(op_transport, case_slot, &mut sessions).await;
     result
 }
 
@@ -998,6 +1009,63 @@ async fn flush_owed_acks<P: AsyncDatagram, O: AsyncDatagram>(
             _ => {}
         }
     }
+}
+
+/// Close the commissioning CASE session: send the device a `CloseSession`
+/// (Matter 1.4 Core §4.11.1.4) over `op_transport` to the session's
+/// operational address, then remove the session, as the spec requires of a
+/// node that has sent one.
+///
+/// Without it the device keeps an active CASE session that no one reads once
+/// this run's socket is gone. A device that later opens an exchange to the
+/// commissioner's node id may pick it: chip's OTA requestor reuses the
+/// session with the most recent peer activity
+/// (`SessionManager::FindSecureSessionForNode`) and, after one failed retry,
+/// waits 24 hours. matter.js sends a `CloseSession` whenever it closes a
+/// session gracefully (`ExchangeManager.ts:632-643`), unreliably. chip never
+/// sends one, but evicts a session that receives one
+/// (`UnsolicitedStatusHandler.cpp:52-56`, at master 5cd2917a and at
+/// v1.4.2.0).
+///
+/// Runs after [`flush_owed_acks`], so the `CommissioningComplete` response's
+/// ACK is already out, and on every exit that has a CASE session: on a
+/// failure the device usually expires it with the fail-safe anyway, but not
+/// if `CommissioningComplete` had already succeeded on the device. It waits for
+/// nothing (the message asks for no ACK) and is best effort: a failed encode
+/// or send leaves the device as it was. If the session is no longer in
+/// `sessions` (the device closed it first and the exchange helpers removed
+/// it), the encode fails with `UnknownSession` and nothing is sent back. The
+/// PASE session is never closed here: the device
+/// clears it on `CommissioningComplete`, and a `CloseSession` on it would
+/// expire the fail-safe (spec §5.5).
+async fn close_case_session<O: AsyncDatagram>(
+    op_transport: &O,
+    case_slot: Option<(SessionId, SocketAddr)>,
+    sessions: &mut SessionManager,
+) {
+    let Some((sid, addr)) = case_slot else {
+        return;
+    };
+    if let Ok(out) = matter_transport::secure_channel::encode_close_session(
+        sessions,
+        sid,
+        std::time::Instant::now(),
+    ) {
+        // M6 wire-trace capture: feeds JsonlLayer / cargo xtask trace-diff.
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            target: "matter_wire",
+            dir = "tx",
+            session_id = u64::from(sid.0),
+            exchange_id = u64::from(out.exchange_id),
+            protocol = u64::from(ProtocolId::SECURE_CHANNEL.protocol),
+            opcode = u64::from(matter_transport::protocol_header::opcode::secure_channel::STATUS_REPORT),
+            payload = crate::hexdump::payload(&matter_transport::secure_channel::CLOSE_SESSION_PAYLOAD),
+            "wire"
+        );
+        let _ = op_transport.send_to(&out.wire_bytes, addr).await;
+    }
+    sessions.remove(sid);
 }
 
 /// Apply a BLE-path response deadline to a secured dispatch future.
@@ -2547,6 +2615,93 @@ mod tests {
             }
         }
         assert_eq!(ctrl.poll_timeout(), None);
+    }
+
+    /// One controller/device session pair over an in-memory datagram pair,
+    /// standing in for the commissioning CASE session.
+    fn case_pair() -> (SessionManager, SessionId, SessionManager, SessionId) {
+        let keys = PaseSessionKeys {
+            ke: [0u8; 16],
+            i2r_key: [4u8; 16],
+            r2i_key: [5u8; 16],
+            attestation_key: [6u8; 16],
+        };
+        let mut ctrl = SessionManager::new();
+        let mut dev = SessionManager::new();
+        let sid = ctrl.register_pase(keys.clone(), SessionRole::Initiator, 1, PeerHint::default());
+        let dev_sid = dev.register_pase(keys, SessionRole::Responder, sid.0, PeerHint::default());
+        (ctrl, sid, dev, dev_sid)
+    }
+
+    /// The device receives a `CloseSession` on the CASE session, on an exchange
+    /// the controller started, and owes no ACK for it; the controller has
+    /// forgotten the session.
+    #[tokio::test]
+    async fn close_case_session_tells_the_device_and_forgets_the_session() {
+        let (mut ctrl, sid, mut dev, dev_sid) = case_pair();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        close_case_session(&ctrl_io, Some((sid, dev_io.local_addr())), &mut ctrl).await;
+
+        let (pkt, _) = tokio::time::timeout(Duration::from_secs(1), dev_io.recv_from())
+            .await
+            .expect("a CloseSession on the operational transport")
+            .unwrap();
+        match dev.decode_inbound(&pkt, Instant::now()).unwrap() {
+            DecodeInboundOutput::AppMessage {
+                session_id,
+                is_initiator,
+                protocol_id,
+                opcode,
+                payload,
+                ..
+            } => {
+                assert_eq!(session_id, dev_sid);
+                assert!(is_initiator, "a new exchange the controller started");
+                assert!(matter_transport::secure_channel::is_close_session(
+                    protocol_id,
+                    opcode,
+                    &payload
+                ));
+            }
+            other => panic!("expected the CloseSession, got {other:?}"),
+        }
+        assert_eq!(dev.poll_timeout(), None, "R clear: no ACK owed");
+        assert!(ctrl.get(sid).is_none(), "the controller forgot the session");
+    }
+
+    /// No CASE session, nothing sent; a session already removed (the device
+    /// closed it first), nothing sent back.
+    #[tokio::test]
+    async fn close_case_session_sends_nothing_without_a_live_case_session() {
+        let (mut ctrl, sid, _dev, _dev_sid) = case_pair();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        close_case_session(&ctrl_io, None, &mut ctrl).await;
+        ctrl.remove(sid);
+        close_case_session(&ctrl_io, Some((sid, dev_io.local_addr())), &mut ctrl).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), dev_io.recv_from())
+                .await
+                .is_err(),
+            "nothing may be sent"
+        );
+    }
+
+    /// A device that is gone (its end of the channel dropped, so the send
+    /// fails) costs nothing: the call returns at once and the session is
+    /// still forgotten.
+    #[tokio::test]
+    async fn close_case_session_does_not_wait_when_the_device_is_gone() {
+        let (mut ctrl, sid, _dev, _dev_sid) = case_pair();
+        let (ctrl_io, dev_io) = InMemoryDatagram::pair();
+        let dev_addr = dev_io.local_addr();
+        drop(dev_io);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            close_case_session(&ctrl_io, Some((sid, dev_addr)), &mut ctrl),
+        )
+        .await
+        .expect("returns without waiting");
+        assert!(ctrl.get(sid).is_none());
     }
 
     /// `establish_case_session` drives `resolve_operational` + `run_case` and

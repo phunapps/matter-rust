@@ -2245,6 +2245,14 @@ pub struct MockDeviceOutcome {
     /// device holds that response in a packet buffer and retransmits it until
     /// the ACK arrives (chip `ReliableMessageMgr`), so `false` is a bug.
     pub complete_response_acked: bool,
+    /// Whether, after that ACK, the controller sent a `CloseSession` on the
+    /// CASE session (Matter 1.4 Core §4.11.1.4) within [`COMPLETE_ACK_WAIT`].
+    /// It must be an encrypted Secure Channel `StatusReport` (SUCCESS,
+    /// `SECURE_CHANNEL`, `CLOSE_SESSION`) on a new exchange the controller
+    /// started, not the `CommissioningComplete` exchange, with R clear (the
+    /// device owes no ACK for it). Checked only after the ACK, so it also pins
+    /// the order: ACK first, then `CloseSession`.
+    pub case_session_closed: bool,
 }
 
 /// How long the mock waits for that ACK. The controller sends it before
@@ -2252,12 +2260,42 @@ pub struct MockDeviceOutcome {
 /// the margin only absorbs a loaded test machine.
 pub const COMPLETE_ACK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Wait up to [`COMPLETE_ACK_WAIT`] for a standalone ACK naming `counter`,
-/// decoding on the device's `sessions`; other frames are skipped.
+/// Wait up to [`COMPLETE_ACK_WAIT`] for a standalone ACK naming `counter`;
+/// returns the exchange it acknowledges.
+/// Decodes on the device's `sessions`; other frames are skipped.
 async fn await_ack_for(
     dev_io: &InMemoryDatagram,
     sessions: &mut SessionManager,
     counter: MessageCounter,
+) -> Option<u16> {
+    let deadline = tokio::time::Instant::now() + COMPLETE_ACK_WAIT;
+    loop {
+        let Ok(Ok((packet, _))) = tokio::time::timeout_at(deadline, dev_io.recv_from()).await
+        else {
+            return None;
+        };
+        if let Ok(DecodeInboundOutput::AckOnly {
+            exchange_id,
+            acked_counter,
+            ..
+        }) = sessions.decode_inbound(&packet, std::time::Instant::now())
+        {
+            if acked_counter == counter {
+                return Some(exchange_id);
+            }
+        }
+    }
+}
+
+/// Wait up to [`COMPLETE_ACK_WAIT`] for the controller's `CloseSession` on
+/// `case_sid`. See [`MockDeviceOutcome::case_session_closed`] for what counts.
+/// The first application message decides: anything else there is a failure.
+/// Standalone ACKs and undecodable frames are skipped.
+async fn await_close_session(
+    dev_io: &InMemoryDatagram,
+    sessions: &mut SessionManager,
+    case_sid: SessionId,
+    complete_exchange: u16,
 ) -> bool {
     let deadline = tokio::time::Instant::now() + COMPLETE_ACK_WAIT;
     loop {
@@ -2265,12 +2303,24 @@ async fn await_ack_for(
         else {
             return false;
         };
-        if let Ok(DecodeInboundOutput::AckOnly { acked_counter, .. }) =
-            sessions.decode_inbound(&packet, std::time::Instant::now())
+        if let Ok(DecodeInboundOutput::AppMessage {
+            session_id,
+            exchange_id,
+            is_initiator,
+            protocol_id,
+            opcode,
+            payload,
+        }) = sessions.decode_inbound(&packet, std::time::Instant::now())
         {
-            if acked_counter == counter {
-                return true;
-            }
+            return session_id == case_sid
+                && exchange_id != complete_exchange
+                && is_initiator
+                && matter_transport::secure_channel::is_close_session(
+                    protocol_id,
+                    opcode,
+                    &payload,
+                )
+                && sessions.flush_session_acks(case_sid).is_empty();
         }
     }
 }
@@ -2695,10 +2745,17 @@ pub async fn run_mock_device(
                 // ACK it before commission() returns.
                 let response_counter =
                     MessageCounter(sessions.get(case_sid).unwrap().outbound_counter - 1);
-                let complete_response_acked =
-                    await_ack_for(dev_io, &mut sessions, response_counter).await;
+                let acked = await_ack_for(dev_io, &mut sessions, response_counter).await;
+                let case_session_closed = match acked {
+                    Some(complete_exchange) => {
+                        await_close_session(dev_io, &mut sessions, case_sid, complete_exchange)
+                            .await
+                    }
+                    None => false,
+                };
                 return Ok(MockDeviceOutcome {
-                    complete_response_acked,
+                    complete_response_acked: acked.is_some(),
+                    case_session_closed,
                 });
             }
         }
@@ -3094,10 +3151,17 @@ pub async fn run_mock_device_dual(
                 // must ACK it, on the UDP leg, before commission_ble() returns.
                 let response_counter =
                     MessageCounter(sessions.get(case_sid).unwrap().outbound_counter - 1);
-                let complete_response_acked =
-                    await_ack_for(udp_dev, &mut sessions, response_counter).await;
+                let acked = await_ack_for(udp_dev, &mut sessions, response_counter).await;
+                let case_session_closed = match acked {
+                    Some(complete_exchange) => {
+                        await_close_session(udp_dev, &mut sessions, case_sid, complete_exchange)
+                            .await
+                    }
+                    None => false,
+                };
                 return Ok(MockDeviceOutcome {
-                    complete_response_acked,
+                    complete_response_acked: acked.is_some(),
+                    case_session_closed,
                 });
             }
         }
