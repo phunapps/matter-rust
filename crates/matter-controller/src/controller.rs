@@ -366,14 +366,24 @@ impl MatterController {
             build_operational_service(compressed, node_id, advertise_addrs(local), local.port());
         matter_transport::Discovery::publish(&mut discovery, &service)?;
 
-        // Announce FIRST (a client invoke to the device over a fresh CASE
-        // connect), and only then build the server: the requestor's QueryImage
-        // Sigma1 requests RESUMPTION of the session the announce just
-        // established, so the server must be seeded with the resumption
-        // record that connect persisted — which exists only after the
-        // announce completes. The provider socket is already bound and
-        // advertised above, so a Sigma1 arriving in the gap merely waits in
-        // the socket buffer (and chip MRP-retransmits it regardless).
+        // Announce FIRST, then build the server. The announce is an ordinary
+        // invoke on the actor's socket: it rides the node's cached CASE
+        // session if there is one (right after `commission()`, the one its
+        // post-commission Basic Information read opened) and opens one
+        // otherwise. That socket ACKs an inbound QueryImage but never answers
+        // it, so chip's requestor, which reuses the existing session with the
+        // most recent peer activity (`SessionManager::FindSecureSessionForNode`),
+        // first sends QueryImage there, times out after about 10 s and marks
+        // the session defunct. Its one retry (`kMaxInvalidSessionRetries = 1`,
+        // `DefaultOTARequestorDriver.cpp:50`) resolves the provider record
+        // advertised above and opens a new CASE session to this server only
+        // if it holds no other active session to this node id; the
+        // commissioning driver closes its own with a CloseSession for that
+        // reason. That Sigma1 may ask to resume the announce's session, so the
+        // server is seeded with the resumption record the announce's connect
+        // persisted, which exists only once the announce completes. A Sigma1
+        // arriving in the gap waits in the socket buffer (chip MRP-retransmits
+        // it regardless).
         let node = self.node(target_node_id);
         let announce_res = node
             .announce_ota_provider(node_id, crate::builder::DEFAULT_ADMIN_VENDOR_ID, 0)
