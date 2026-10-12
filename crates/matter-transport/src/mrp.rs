@@ -22,7 +22,7 @@ use crate::protocol_header::{encode_protocol_header, ExchangeFlags, ProtocolHead
 /// (up to 65 536) and never reclaim them — a slow memory-exhaustion denial
 /// of service. An
 /// exchange is reclaimed automatically once it goes idle (no pending
-/// retransmit and no buffered outbound ack), so this cap only ever bites a
+/// retransmit and no ACK it still owes), so this cap only ever bites a
 /// peer that holds an abnormal number of exchanges open simultaneously.
 ///
 /// 256 sits far above any realistic concurrent-exchange count for a
@@ -36,7 +36,8 @@ pub const MAX_EXCHANGES_PER_SESSION: usize = 256;
 /// reliable messages on one exchange, so this only bounds a misbehaving one;
 /// past it the displaced ACK is dropped, and the duplicate path
 /// ([`MrpState::check_duplicate_reliable`]) ACKs the peer's retransmit of
-/// that message instead.
+/// that message instead, while the message is still in the 32-entry
+/// recent-reliable cache (a peer that keeps flooding can evict it first).
 const MAX_DISPLACED_ACKS: usize = 32;
 
 /// Spec §4.12.8. Growth factor applied per retransmit beyond the threshold.
@@ -862,8 +863,9 @@ impl MrpState {
             || !self.displaced_acks.is_empty()
     }
 
-    /// Earliest pending deadline across retransmits and the
-    /// piggyback-ack flush deadline, or `None` if nothing pending.
+    /// Earliest pending deadline across retransmits, the piggyback-ack flush
+    /// deadline and displaced ACKs (due at once), or `None` if nothing
+    /// pending.
     #[must_use]
     pub fn poll_timeout(&self) -> Option<Instant> {
         let retransmit = self.pending_acks.values().map(|p| p.next_attempt).min();
@@ -968,7 +970,7 @@ impl MrpState {
         }
 
         // Reclaim any exchange whose last piece of live work cleared this
-        // tick and is now idle (no pending retransmit, no buffered ack).
+        // tick and is now idle (no pending retransmit, no ACK still owed).
         for exchange_id in reclaim_candidates {
             self.reclaim_if_idle(exchange_id);
         }
@@ -1085,6 +1087,16 @@ impl MrpState {
                             ..older
                         },
                     ));
+                } else {
+                    // Only a misbehaving peer gets here (a conformant one
+                    // never has two unacknowledged reliable messages on one
+                    // exchange); make it diagnosable.
+                    tracing::debug!(
+                        target: "matter_transport::mrp",
+                        exchange_id,
+                        dropped_ack_counter = older.ack_counter.0,
+                        "displaced-ACK queue full; dropping the displaced ACK"
+                    );
                 }
             }
             // Insertion-order eviction into the 32-entry ring buffer.
@@ -1266,8 +1278,9 @@ impl MrpState {
     }
 
     /// Returns `true` if `exchange_id` has no live work attached: no pending
-    /// retransmit and no buffered outbound (piggyback) ack. Such an exchange
-    /// is genuinely complete and its [`ExchangeState`] can be reclaimed.
+    /// retransmit, no buffered outbound (piggyback) ack and no displaced ACK.
+    /// Such an exchange is genuinely complete and its [`ExchangeState`] can be
+    /// reclaimed.
     ///
     /// `recent_reliable` entries are intentionally NOT consulted: they are a
     /// fixed-size ring buffer (bounded memory) whose dedup-resend semantics
@@ -1286,8 +1299,9 @@ impl MrpState {
     /// Reclaim `exchange_id`'s [`ExchangeState`] if it is now idle (see
     /// [`Self::exchange_is_idle`]). Called at each point where an exchange's
     /// last piece of live work clears (an ack is received, a retransmit
-    /// expires, a buffered ack is flushed as a standalone ack, or an
-    /// unreliable message — which nothing will ack — is sent), so completed exchanges
+    /// expires, a buffered or displaced ack is flushed as a standalone ack or
+    /// dropped by the duplicate path, or an unreliable message — which
+    /// nothing will ack — is sent), so completed exchanges
     /// are evicted automatically rather than depending on a caller invoking
     /// [`Self::close_exchange`].
     fn reclaim_if_idle(&mut self, exchange_id: u16) {
@@ -3031,7 +3045,8 @@ mod tests {
 
     /// A peer that floods one exchange with reliable messages cannot grow the
     /// displaced queue without bound; past the cap, the duplicate path ACKs
-    /// its retransmits instead.
+    /// its retransmits instead, while they are still in the recent-reliable
+    /// cache.
     #[test]
     fn displaced_acks_are_bounded() {
         let mut mrp = MrpState::new(cfg());
@@ -3048,6 +3063,9 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(mrp.handle_timeout(now).len(), MAX_DISPLACED_ACKS);
+        // Counter 32 was the first displaced past the cap; it is still in the
+        // recent-reliable cache, so its retransmit takes the duplicate path.
+        assert!(mrp.check_duplicate_reliable(MessageCounter(32)).is_some());
     }
 
     /// A displaced ACK keeps the I flag of its own exchange: on an exchange
@@ -3155,6 +3173,87 @@ mod tests {
         assert_eq!(
             acked(mrp.handle_timeout(due)),
             vec![(0x20, MessageCounter(2)), (0x10, MessageCounter(1))]
+        );
+    }
+
+    /// Leave `0x4242` owing only a displaced ACK (for counter 100): two
+    /// reliable inbounds, then an unreliable answer that piggybacks the newer
+    /// ACK (101).
+    fn owe_only_a_displaced_ack(mrp: &mut MrpState, now: Instant) {
+        for counter in [100u32, 101] {
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x02,
+                0x4242,
+                None,
+                b"",
+            );
+            mrp.process_inbound(inbound, MessageCounter(counter), now)
+                .unwrap();
+        }
+        mrp.prepare_outbound(
+            0x05,
+            ProtocolId::INTERACTION_MODEL,
+            0x4242,
+            b"resp",
+            MrpFlags::default(),
+            now,
+        )
+        .unwrap();
+        mrp.mark_packet_sent(MessageCounter(1), 0x4242, vec![1u8; 4], false, now);
+    }
+
+    /// Once the timer sends an exchange's last owed ACK, a displaced one, the
+    /// exchange is reclaimed rather than held in the table for good.
+    #[test]
+    fn a_displaced_ack_sent_by_the_timer_reclaims_its_exchange() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_only_a_displaced_ack(&mut mrp, now);
+        assert_eq!(
+            acked(mrp.handle_timeout(now)),
+            vec![(0x4242, MessageCounter(100))]
+        );
+        assert_eq!(mrp.exchanges.len(), 0);
+    }
+
+    /// Once the duplicate path drops an exchange's last owed ACK, a displaced
+    /// one, the exchange is reclaimed rather than held in the table for good.
+    #[test]
+    fn forgetting_a_displaced_ack_reclaims_its_exchange() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        owe_only_a_displaced_ack(&mut mrp, now);
+        mrp.forget_ack_for(MessageCounter(100));
+        assert!(!mrp.has_pending());
+        assert_eq!(mrp.exchanges.len(), 0);
+    }
+
+    /// Finishing one exchange takes only its own displaced ACKs; another
+    /// exchange's stay queued, and its exchange stays live until they go.
+    #[test]
+    fn flushing_one_exchange_leaves_anothers_displaced_ack() {
+        let mut mrp = MrpState::new(cfg());
+        let now = t0();
+        for (exchange, counter) in [(0x10u16, 1u32), (0x10, 2), (0x20, 3), (0x20, 4)] {
+            let inbound = build_inbound_payload(
+                ExchangeFlags::INITIATOR | ExchangeFlags::RELIABLE,
+                0x02,
+                exchange,
+                None,
+                b"",
+            );
+            mrp.process_inbound(inbound, MessageCounter(counter), now)
+                .unwrap();
+        }
+        assert_eq!(
+            acked(mrp.flush_exchange_acks(0x10)),
+            vec![(0x10, MessageCounter(1)), (0x10, MessageCounter(2))]
+        );
+        assert!(mrp.exchanges.contains_key(&0x20));
+        assert_eq!(
+            acked(mrp.handle_timeout(now)),
+            vec![(0x20, MessageCounter(3))]
         );
     }
 
